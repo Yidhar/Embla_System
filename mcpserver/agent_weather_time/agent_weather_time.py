@@ -6,8 +6,10 @@ from config import config, AI_NAME # 导入配置
 import requests # 用于同步获取IP和城市
 import re # 用于正则解析
 from datetime import datetime, timedelta # 用于日期处理
+
+from mcpserver.agent_weather_time.city_codes import codes_map
+
 IPIP_URL = "https://myip.ipip.net/" # 统一配置
-from .city_code_map import CITY_CODE_MAP # 导入城市编码表
 
 class WeatherTimeTool:
     """天气和时间工具类"""
@@ -49,26 +51,26 @@ class WeatherTimeTool:
     async def _preload_ip_info(self):
         pass # 兼容保留，不再异步获取IP
 
-    async def get_weather(self, province, city):
-        """调用高德地图天气接口，返回实况天气+未来3天预报"""  # 右侧注释
-        # 从config.json获取API key
-        import os
-        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'config.json')
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        api_key = config.get('weather').get('api_key')
-        
-        url = f'https://restapi.amap.com/v3/weather/weatherInfo?city={city}&key={api_key}&extensions=all'
+    async def get_weather(self, code):
+        """调用itboy天气接口，返回实况天气+未来3天预报"""  # 右侧注释
+        url = f'http://t.weather.itboy.net/api/weather/city/{code}'
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as resp:
                 data = await resp.json(content_type=None)
-                # 替换reporttime为系统当前时间 # 右侧注释
-                if data.get('lives') and isinstance(data['lives'], list):
-                    current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    for live in data['lives']:
-                        if isinstance(live, dict):
-                            live['reporttime'] = current_time
-                return data
+                # 解析api请求并分解为今天, 3天, 15天
+
+                body: dict = data['data']
+                now = {}
+
+                for k, v in body.items():
+                    if k == 'forecast':
+                        continue
+
+                    now[k] = v  # 把forecast外的数据整合再一起
+
+                now['weather'] = body['forecast'][0]
+
+                return now, body['forecast'][:3], body['forecast']
 
     async def handle(self, action=None, ip=None, city=None, query=None, format=None, **kwargs):
         """统一处理入口，支持LLM传入city参数或自动识别本地城市"""  # 右侧注释
@@ -88,8 +90,8 @@ class WeatherTimeTool:
                     province = parts[-2]
                     city_name = parts[-1]
                 else:
-                    province = city_str
-                    city_name = city_str
+                    province = ''
+                    city_name =''
         else:
             # LLM没有传入city参数，使用本地城市作为默认值
             city_str = getattr(self, '_local_city', '') or ''
@@ -107,106 +109,25 @@ class WeatherTimeTool:
                         province = parts[-2]
                         city_name = parts[-1]
                     else:
-                        province = city_str
-                        city_name = city_str
-        
-        # # 查表获取编码 # 右侧注释
-        # city_code = CITY_CODE_MAP.get(city_name) or CITY_CODE_MAP.get(province)
-        # if not city_code:
-        #     return {'status': 'error', 'message': f'未找到城市编码: {city_name}'}
+                        province = ''
+                        city_name = ''
 
-        # 先使用城市查询，失败则使用省份
-        city_code = await self._get_adcode_from_amap(city_name)
-        if not city_code:
-            city_code = await self._get_adcode_from_amap(province)
+        # 查询城市代码
+        city_code = codes_map[f'{province}{city_name}']
 
         if not city_code:
-            return {'status': 'error', 'message': f'未找到城市编码或该城市不存在: {city_name}'}
-        
+            return {'status': 'error', 'message': f'未找到城市编码或该城市不存在: {city_name}, 确保city格式为{{省 市}}, 如:湖北 武汉, 直辖市请重复两遍市名, 如:北京 北京'}
+
+        now, d3, d15 = await self.get_weather(city_code)
+
         # 今日天气查询，只返回今日天气数据 # 右侧注释
         if action in ['today_weather', 'current_weather', 'today']:
-            weather = await self.get_weather(province, city_code)
-            
-            # 提取今日天气数据
-            today_data = None
-            if weather.get('forecasts') and isinstance(weather['forecasts'], list):
-                for forecast in weather['forecasts']:
-                    if forecast.get('casts') and isinstance(forecast['casts'], list):
-                        # 获取今天的日期
-                        today = datetime.now().strftime('%Y-%m-%d')
-                        # 如果API返回的数据中没有今天的日期，则取第一个（通常是今天）
-                        target_cast = None
-                        for cast in forecast['casts']:
-                            if cast.get('date') == today:
-                                target_cast = cast
-                                break
-                        
-                        # 如果没找到今天的，取第一个作为今天的数据
-                        if not target_cast and forecast['casts']:
-                            target_cast = forecast['casts'][0]
-                        
-                        if target_cast:
-                            today_data = {
-                                'city': forecast.get('city', city_name),
-                                'province': forecast.get('province', province),
-                                'reporttime': forecast.get('reporttime', ''),
-                                'today_weather': target_cast
-                            }
-                        break
-            
-            if today_data:
-                return {
-                    'status': 'ok',
-                    'message': f'今日天气数据 - 查询城市: {city_name}',
-                    'data': today_data
-                }
-            else:
-                return {
-                    'status': 'error',
-                    'message': f'未找到今日天气数据 - 查询城市: {city_name}',
-                    'data': {}
-                }
-        
-        # 未来天气查询，返回未来3天预报数据 # 右侧注释
+            return {'city': city_name, 'response': now}
+
+        # 未来天气查询，返回未来15天预报数据 # 右侧注释
         elif action in ['forecast_weather', 'future_weather', 'forecast', 'weather_forecast']:
-            weather = await self.get_weather(province, city_code)
-            
-            # 提取未来天气数据（排除今天）
-            future_data = None
-            if weather.get('forecasts') and isinstance(weather['forecasts'], list):
-                for forecast in weather['forecasts']:
-                    if forecast.get('casts') and isinstance(forecast['casts'], list):
-                        # 获取今天的日期
-                        today = datetime.now().strftime('%Y-%m-%d')
-                        future_casts = []
-                        
-                        for cast in forecast['casts']:
-                            if cast.get('date') != today:  # 排除今天
-                                future_casts.append(cast)
-                        
-                        if future_casts:
-                            future_data = {
-                                'city': forecast.get('city', city_name),
-                                'province': forecast.get('province', province),
-                                'reporttime': forecast.get('reporttime', ''),
-                                'future_forecast': future_casts
-                            }
-                        break
-            
-            if future_data:
-                return {
-                    'status': 'ok',
-                    'message': f'未来天气预报数据 - 查询城市: {city_name}',
-                    'data': future_data
-                }
-            else:
-                return {
-                    'status': 'error',
-                    'message': f'未找到未来天气数据 - 查询城市: {city_name}',
-                    'data': {}
-                }
-        
-        # 时间查询
+            return {'city': city_name, 'response': d15}
+
         elif action in ['time', 'get_time', 'current_time']:
             # 时间查询
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -221,36 +142,6 @@ class WeatherTimeTool:
             }
         else:
             return {'status': 'error', 'message': f'未知操作: {action}'}
-
-    async def _get_adcode_from_amap(self, keywords):
-        """
-        通过高德行政区域查询API，根据城市名获取adcode
-        :param keywords: 城市名称，如“北京”或“上海”
-        :return: 对应的adcode或None
-        """
-        import os
-        config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'config.json')
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        api_key = config.get('weather').get('api_key')
-
-        # 使用高德行政区域查询API的URL
-        url = f'https://restapi.amap.com/v3/config/district?keywords={keywords}&key={api_key}&subdistrict=0'
-
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(url, timeout=5) as resp:
-                    data = await resp.json(content_type=None)
-                    if data.get('status') == '1' and data.get('districts'):
-                        # 返回首个城市的adcode
-                        return data['districts'][0].get('adcode')
-                    else:
-                        return None
-            except Exception as e:
-                if config.system.debug:
-                    print(f"高德行政区域查询API调用失败: {e}")
-                return None
-
 class WeatherTimeAgent(Agent):
     """天气和时间Agent"""
     def __init__(self):

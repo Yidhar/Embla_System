@@ -405,11 +405,7 @@ class NagaConversation: # 对话主类
                             params = []
                             for key, value in example_data.items():
                                 if key != 'tool_name':
-                                    # 特殊处理city参数，注入本地城市信息
-                                    if key == 'city' and name == 'WeatherTimeAgent':
-                                        params.append(f"{key}: {local_city}")
-                                    else:
-                                        params.append(f"{key}: {value}")
+                                    params.append(f"{key}: {value}")  # 不再需要对天气进行特殊处理
                             
                             # 构建调用格式
                             format_str = f"  {tool_name}: ｛\n"
@@ -419,10 +415,7 @@ class NagaConversation: # 对话主类
                             for param in params:
                                 # 将中文参数名转换为英文
                                 param_key, param_value = param.split(': ', 1)
-                                if param_key == 'city' and name == 'WeatherTimeAgent':
-                                    format_str += f"    \"{param_key}\": \"{local_city}\",\n"
-                                else:
-                                    format_str += f"    \"{param_key}\": \"{param_value}\",\n"
+                                format_str += f"    \"{param_key}\": \"{param_value}\",\n"
                             format_str += f"  ｝\n"
                             
                             mcp_list.append(format_str)
@@ -570,6 +563,14 @@ class NagaConversation: # 对话主类
                 
                 # 处理流式响应
                 async for chunk in resp:
+                    # 原始增量日志（AI 原始输出）
+                    try:
+                        delta = getattr(chunk.choices[0], 'delta', None) if chunk.choices else None
+                        if delta is not None:
+                            logger.info("openai.delta: %r", getattr(delta, 'content', None))
+                    except Exception:
+                        pass
+
                     # 安全检查：确保chunk.choices不为空且有内容
                     if (chunk.choices and 
                         len(chunk.choices) > 0 and 
