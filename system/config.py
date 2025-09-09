@@ -1,9 +1,10 @@
-﻿# config.py - 简化配置系统
+# config.py - 简化配置系统
 """
 NagaAgent 配置系统 - 基于Pydantic实现类型安全和验证
 支持配置热更新和变更通知
 """
 import os
+import socket
 import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
@@ -444,3 +445,12 @@ if config.system.debug:
     print(f"NagaAgent {config.system.version} 配置已加载")
     print(f"API服务器: {'启用' if config.api_server.enabled else '禁用'} ({config.api_server.host}:{config.api_server.port})")
     print(f"GRAG记忆系统: {'启用' if config.grag.enabled else '禁用'}")
+
+# 启动时设置用户显示名为电脑名 #
+try:
+    computer_name = os.environ.get('COMPUTERNAME') or socket.gethostname() or ''  # 获取电脑名优先用环境变量 #
+    if computer_name:
+        config.ui.user_name = computer_name  # 覆盖UI用户名为电脑名 #
+except Exception:
+    pass  # 失败静默忽略 #
+
