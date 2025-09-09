@@ -79,4 +79,5 @@ opensimplex>=0.4.5.1
 
 # 搜索工具依赖
 langchain-community>=0.3.29
-
+crawl4ai
+onnxruntime

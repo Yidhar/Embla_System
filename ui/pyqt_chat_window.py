@@ -5,7 +5,7 @@ from PyQt5.QtCore import Qt, QRect, QParallelAnimationGroup, QPropertyAnimation,
 from PyQt5.QtGui import QColor, QPainter, QBrush, QFont, QPen
 from conversation_core import NagaConversation
 import os
-from config import config, AI_NAME # 导入统一配置
+from config import config, AI_NAME, Live2DConfig # 导入统一配置
 from ui.response_utils import extract_message  # 新增：引入消息提取工具
 from ui.styles.progress_widget import EnhancedProgressWidget  # 导入进度组件
 from ui.enhanced_worker import StreamingWorker, BatchWorker  # 导入增强Worker
@@ -302,8 +302,8 @@ class ChatWindow(QWidget):
         s._img_inited = False  # 标志变量，图片自适应只在初始化时触发一次
         
         # Live2D相关配置
-        s.live2d_enabled = getattr(getattr(config, 'live2d', None), 'enabled', False)
-        s.live2d_model_path = getattr(getattr(config, 'live2d', None), 'model_path', False)
+        s.live2d_enabled = config.live2d.enabled  # 是否启用Live2D
+        s.live2d_model_path = config.live2d.model_path  # Live2D模型路径
         
         # 初始化消息存储
         s._messages = {}

@@ -85,11 +85,10 @@ dependencies = [
     # 其他依赖
     "python-docx>=1.2.0",
     "mqtt-tool>=0.1.1",
-
     "crawl4ai>=0.7.4",
     "langchain-community>=0.3.21",
     "langchain>=0.3.27",
-
+    "onnxruntime>=1.22.1",
 ]
 
 # 可选依赖组
