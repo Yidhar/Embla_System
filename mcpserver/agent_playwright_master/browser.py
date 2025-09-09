@@ -1,5 +1,5 @@
 from typing import Any, Dict, Callable
-from config import *  # 配置参数统一管理 #
+from system.config import *  # 配置参数统一管理 #
 import asyncio
 import html2text  # 用于HTML转Markdown #
 import os
@@ -8,7 +8,7 @@ from agents import Agent, AgentHooks, RunContextWrapper
 # 移除循环导入
 # from .controller import BrowserAgent
 # from .browser import ContentAgent
-from config import config  # 使用新的配置系统
+from system.config import config  # 使用新的配置系统
 
 AD_SELECTORS = [
     'script', 'style', 'iframe', 'ins', '.ads', '[class*="ads"]', '[id*="ads"]',

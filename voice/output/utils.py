@@ -4,7 +4,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))  # 加入项目根�
 # utils.py
 from flask import request, jsonify
 from functools import wraps
-from config import config  # 使用统一配置系统
+from system.config import config  # 使用统一配置系统
 DEFAULT_LANGUAGE = config.tts.default_language # 统一配置
 
 

@@ -4,7 +4,7 @@ import asyncio  # 异步 #
 import httpx  # HTTP客户端 #
 import webbrowser  # 浏览器 #
 from typing import Any, Dict, Optional  # 类型 #
-from config import config  # 全局配置 #
+from system.config import config  # 全局配置 #
 from .portal_login_manager import get_cookies, get_user_id  # 登录管理器 #
 
 class NagaPortalAgent:

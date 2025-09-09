@@ -4,7 +4,7 @@ from agents import Agent, AgentHooks, RunContextWrapper
 # 移除循环导入，使用延迟导入
 # from .controller import BrowserAgent
 # from .browser import ContentAgent
-from config import config  # 使用新的配置系统
+from system.config import config  # 使用新的配置系统
 
 load_dotenv()
 # 从config中获取API配置

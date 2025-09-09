@@ -8,7 +8,7 @@ import os
 # 添加项目根目录到路径，以便导入config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
-from config import config
+from system.config import config
 API_KEY = config.api.api_key
 API_URL = f"{config.api.base_url.rstrip('/')}/chat/completions"
 

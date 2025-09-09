@@ -2,7 +2,7 @@ import os  # 系统 #
 from typing import Optional  # 类型 #
 import numpy as np  # 数值 #
 
-from config import config  # 统一配置 #
+from system.config import config  # 统一配置 #
 
 
 def transcribe_wav_bytes(audio_bytes: bytes) -> Optional[str]:

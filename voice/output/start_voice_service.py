@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from config import config
+from system.config import config
 
 def start_http_server():
     """启动HTTP语音输出服务器"""

@@ -61,7 +61,7 @@ class AgentManager:
         self.agent_sessions: Dict[str, Dict[str, AgentSession]] = {}
         # 从配置文件读取最大历史轮数
         try:
-            from config import config, AI_NAME
+            from system.config import config, AI_NAME
             self.max_history_rounds = config.api.max_history_rounds
         except ImportError:
             self.max_history_rounds = 10  # 默认值

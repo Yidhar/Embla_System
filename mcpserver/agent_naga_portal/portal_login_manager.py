@@ -3,7 +3,7 @@ import asyncio  # 异步 #
 import logging  # 日志 #
 from typing import Optional, Dict, Any  # 类型 #
 from .client import NagaPortalClient  # 客户端 #
-from config import config  # 配置 #
+from system.config import config  # 配置 #
 
 logger = logging.getLogger("NagaPortalLoginManager")
 

@@ -81,7 +81,7 @@ def load_mqtt_config():
     try:
         # 添加项目根目录到路径，以便导入config
         sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-        from config import config
+        from system.config import config
         
         # 检查是否启用物联网通讯
         if not config.mqtt.enabled:
@@ -196,31 +196,31 @@ class DeviceSwitchManager:
             
             # 尝试连接
             if self.connect():
-                logger.info("✅ MQTT初始化连接成功")
+                logger.info("✅ 物联网模块初始化连接成功")
             else:
-                logger.warning("⚠️ MQTT初始化连接失败，将在使用时重试")
+                logger.warning("⚠️ 物联网模块初始化连接失败，将在使用时重试")
                 
         except Exception as e:
-            logger.error(f"MQTT初始化连接异常: {e}")
+            logger.error(f"物联网模块初始化连接异常: {e}")
 
     def _on_connect(self, client, userdata, flags, rc, properties=None, *args):
         if rc == 0:
             self.connected = True
             self.reconnect_attempt = 0
             self.reconnect_delay = 1
-            logger.info(f"已连接到MQTT服务器 {client._host}:{client._port}")
+            logger.info(f"已连接到物联网服务器 {client._host}:{client._port}")
             # 订阅主题以接收设备状态反馈
             client.subscribe(f"{mqtt_config['topic']}/status")
         else:
             self.connected = False
-            logger.error(f"MQTT连接失败，错误代码: {rc}")
+            logger.error(f"物联网模块连接失败，错误代码: {rc}")
             if self.reconnect_enabled:
                 self._start_reconnect()
 
     def _on_disconnect(self, client, userdata, rc, reasonCode=None, properties=None, *args):
         """断开连接回调"""
         self.connected = False
-        logger.warning(f"MQTT连接断开，错误代码: {rc}")
+        logger.warning(f"物联网模块连接断开，错误代码: {rc}")
         
         if rc != 0 and self.reconnect_enabled:
             self._start_reconnect()
@@ -256,20 +256,20 @@ class DeviceSwitchManager:
         self.should_reconnect = True
         self.reconnect_thread = threading.Thread(target=self._reconnect_loop, daemon=True)
         self.reconnect_thread.start()
-        logger.info("启动自动重连线程")
+        logger.info("启动物联网模块自动重连线程")
 
     def _reconnect_loop(self):
         """重连循环"""
         while self.should_reconnect and self.reconnect_attempt < self.max_reconnect_attempts:
             try:
-                logger.info(f"尝试重连 ({self.reconnect_attempt + 1}/{self.max_reconnect_attempts})，延迟 {self.reconnect_delay} 秒")
+                logger.info(f"物联网模块尝试重连 ({self.reconnect_attempt + 1}/{self.max_reconnect_attempts})，延迟 {self.reconnect_delay} 秒")
                 time.sleep(self.reconnect_delay)
                 
                 self.client.reconnect()
                 
                 for _ in range(10):
                     if self.connected:
-                        logger.info("重连成功")
+                        logger.info("物联网模块重连成功")
                         return
                     time.sleep(0.5)
                 
@@ -277,12 +277,12 @@ class DeviceSwitchManager:
                 self.reconnect_delay = min(self.reconnect_delay * 2, self.max_reconnect_delay)
                 
             except Exception as e:
-                logger.error(f"重连失败: {e}")
+                logger.error(f"物联网模块重连失败: {e}")
                 self.reconnect_attempt += 1
                 self.reconnect_delay = min(self.reconnect_delay * 2, self.max_reconnect_delay)
         
         if self.reconnect_attempt >= self.max_reconnect_attempts:
-            logger.error("达到最大重连次数，停止重连")
+            logger.error("物联网模块达到最大重连次数，停止重连")
             self.should_reconnect = False
 
     def stop_reconnect(self):
@@ -325,7 +325,7 @@ class DeviceSwitchManager:
                 
                 return False
             except Exception as e:
-                logger.error(f"MQTT连接失败: {e}")
+                logger.error(f"物联网模块连接失败: {e}")
                 if self.reconnect_enabled:
                     self._start_reconnect()
                 return False
@@ -334,16 +334,16 @@ class DeviceSwitchManager:
     def switch_devices(self, device1: int, device2: int, device3: int):
         """控制三个设备的开关"""
         if not self.available:
-            return False, "MQTT功能不可用"
+            return False, "物联网模块功能不可用"
             
         with self._lock:
             # 检查是否已连接，如果未连接则尝试连接（保底方案）
             if not self.connected:
-                logger.info("MQTT未连接，尝试连接...")
+                logger.info("物联网模块未连接，尝试连接...")
                 if not self.connect():
-                    return False, "MQTT连接失败"
+                    return False, "物联网模块连接失败"
             else:
-                logger.debug("MQTT已连接，跳过连接步骤")
+                logger.debug("物联网模块已连接，跳过连接步骤")
             
             try:
                 # 使用标准化工具创建JSON
@@ -351,7 +351,7 @@ class DeviceSwitchManager:
                 payload_bytes = payload_str.encode('ascii')
                 
                 # 记录发送的标准化JSON
-                logger.info(f"发送标准化MQTT消息: {payload_str}")
+                logger.info(f"发送标准化物联网消息: {payload_str}")
                 
                 result = self.client.publish(mqtt_config['topic'], payload_bytes)
                 
@@ -386,10 +386,10 @@ class DeviceSwitchManager:
                 self.client.disconnect()
                 self.client.loop_stop()
                 self.connected = False
-                logger.info("MQTT连接已断开")
+                logger.info("物联网模块连接已断开")
                 
         except Exception as e:
-            logger.error(f"清理MQTT连接时出错: {e}")
+            logger.error(f"清理物联网模块连接时出错: {e}")
 
     def get_connection_status(self):
         """获取连接状态信息"""
@@ -420,7 +420,7 @@ def switch_devices(device1: int, device2: int, device3: int) -> dict:
         if not device_manager.available:
             return {
                 "success": False,
-                "message": "MQTT功能未启用或配置缺失",
+                "message": "物联网模块功能未启用或配置缺失",
                 "data": {"device1": device1, "device2": device2, "device3": device3}
             }
         
@@ -459,7 +459,7 @@ def get_device_status() -> dict:
         if not device_manager.available:
             return {
                 "success": False,
-                "message": "MQTT功能未启用或配置缺失",
+                "message": "物联网模块功能未启用或配置缺失",
                 "data": {}
             }
             
@@ -493,7 +493,7 @@ def connect_mqtt(broker: str = None, port: int = None) -> dict:
         if not device_manager.available:
             return {
                 "success": False,
-                "message": "MQTT功能未启用或配置缺失",
+                "message": "物联网模块功能未启用或配置缺失",
                 "data": {}
             }
         
@@ -509,21 +509,21 @@ def connect_mqtt(broker: str = None, port: int = None) -> dict:
         if success:
             return {
                 "success": True,
-                "message": f"已连接到MQTT服务器 {mqtt_config['broker']}:{mqtt_config['port']}",
+                "message": f"已连接到物联网服务器 {mqtt_config['broker']}:{mqtt_config['port']}",
                 "data": {"broker": mqtt_config['broker'], "port": mqtt_config['port']}
             }
         else:
             return {
                 "success": False,
-                "message": f"连接MQTT服务器失败 {mqtt_config['broker']}:{mqtt_config['port']}",
+                "message": f"连接物联网服务器失败 {mqtt_config['broker']}:{mqtt_config['port']}",
                 "data": {"broker": mqtt_config['broker'], "port": mqtt_config['port']}
             }
             
     except Exception as e:
-        logger.error(f"MQTT连接异常: {e}")
+        logger.error(f"物联网模块连接异常: {e}")
         return {
             "success": False,
-            "message": f"MQTT连接异常: {str(e)}",
+            "message": f"物联网模块连接异常: {str(e)}",
             "data": {}
         }
 

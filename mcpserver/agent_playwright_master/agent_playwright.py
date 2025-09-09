@@ -6,7 +6,7 @@ import os
 import platform
 from playwright.async_api import async_playwright
 from agents import Agent
-from config import config
+from system.config import config
 
 print = lambda *a, **k: sys.stderr.write('[print] ' + (' '.join(map(str, a))) + '\n')
 

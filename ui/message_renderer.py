@@ -3,7 +3,7 @@ import sys, os; sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + '
 from PyQt5.QtWidgets import QFrame, QVBoxLayout, QLabel, QWidget, QSizePolicy, QPushButton, QHBoxLayout
 from PyQt5.QtCore import Qt, QPropertyAnimation, QEasingCurve, QTimer
 from PyQt5.QtGui import QFont
-from config import config
+from system.config import config
 
 # 使用统一配置系统
 BG_ALPHA = config.ui.bg_alpha
@@ -478,7 +478,7 @@ class MessageRenderer:
             if role == "user":
                 # 从配置获取用户名
                 try:
-                    from config import config
+                    from system.config import config
                     user_name = config.ui.user_name
                 except ImportError:
                     user_name = "用户"
@@ -486,7 +486,7 @@ class MessageRenderer:
             elif role == "assistant":
                 # 从配置获取AI名称
                 try:
-                    from config import config
+                    from system.config import config
                     ai_name = config.system.ai_name
                 except ImportError:
                     ai_name = "娜迦"

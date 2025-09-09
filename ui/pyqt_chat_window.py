@@ -881,9 +881,10 @@ class ChatWindow(QWidget):
         """处理设置变化"""
         print(f"设置变化: {setting_key} = {value}")
         
-        # 这里可以实时应用某些设置变化
+        # 透明度设置将在保存时统一应用，避免动画卡顿
         if setting_key in ("all", "ui.bg_alpha", "ui.window_bg_alpha"):  # UI透明度变化 #
-            s.apply_opacity_from_config()  # 立即应用 #
+            # 保存时应用透明度设置
+            s.apply_opacity_from_config()
             return
         if setting_key in ("system.stream_mode", "STREAM_MODE"):
             s.streaming_mode = value if setting_key == "system.stream_mode" else value  # 兼容新旧键名 #
@@ -972,49 +973,6 @@ class ChatWindow(QWidget):
         # 更新主窗口背景 #
         s.set_window_background_alpha(WINDOW_BG_ALPHA)
     
-    def apply_transparency_preview(s, bg_alpha=None, window_bg_alpha=None):
-        """应用透明度预览（临时值，不修改配置）"""
-        try:
-            # 使用传入的临时值或当前配置值
-            temp_bg_alpha = bg_alpha if bg_alpha is not None else config.ui.bg_alpha
-            temp_window_bg_alpha = window_bg_alpha if window_bg_alpha is not None else config.ui.window_bg_alpha
-            
-            # 计算alpha值
-            alpha_px = int(temp_bg_alpha * 255)
-            window_alpha_px = temp_window_bg_alpha if isinstance(temp_window_bg_alpha, int) else int(temp_window_bg_alpha * 255)
-
-            # 更新输入框背景
-            fontfam, fontsize = 'Lucida Console', 16
-            s.input.setStyleSheet(f"""
-                QTextEdit {{
-                    background: rgba(17,17,17,{alpha_px});
-                    color: #fff;
-                    border-radius: 15px;
-                    border: 1px solid rgba(255, 255, 255, 50);
-                    font: {fontsize}pt '{fontfam}';
-                    padding: 8px;
-                }}
-            """)
-
-            # 更新侧栏背景
-            if hasattr(s, 'side') and isinstance(s.side, QWidget):
-                try:
-                    s.side.set_background_alpha(alpha_px)
-                except Exception:
-                    pass
-
-            # 更新主窗口背景
-            s.setStyleSheet(f"""
-                ChatWindow {{
-                    background: rgba(25, 25, 25, {window_alpha_px});
-                    border-radius: 20px;
-                    border: 1px solid rgba(255, 255, 255, 30);
-                }}
-            """)
-            s.update()
-            
-        except Exception as e:
-            print(f"透明度预览应用失败: {e}")
 
     def showEvent(s, event):
         """窗口显示事件"""

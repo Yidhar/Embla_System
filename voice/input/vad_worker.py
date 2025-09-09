@@ -9,7 +9,7 @@ from scipy.signal import resample  # 重采样 #
 import onnxruntime as ort  # VAD推理 #
 import io  # 内存流 #
 
-from config import config  # 统一配置 #
+from system.config import config  # 统一配置 #
 
 try:
     import noisereduce as nr  # 降噪 #

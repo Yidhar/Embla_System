@@ -7,12 +7,12 @@ import tempfile
 import subprocess
 import os
 from pathlib import Path
-from config import config # 顶部引入
+from system.config import config # 顶部引入
 
 # 语言默认值（环境变量）
 DEFAULT_LANGUAGE = config.tts.default_language # 统一配置
 from voice.output.utils import DETAILED_ERROR_LOGGING
-# from config import DEFAULT_CONFIGS
+# from system.config import DEFAULT_CONFIGS
 
 
 # OpenAI voice names mapped to edge-tts equivalents

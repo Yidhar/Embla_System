@@ -3,7 +3,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))  # 加入项目根�
 from flask import Flask, request, send_file, jsonify
 from voice.output.tts_handler import generate_speech
 from voice.output.utils import require_api_key, AUDIO_FORMAT_MIME_TYPES
-from config import config
+from system.config import config
 
 app = Flask(__name__)
 

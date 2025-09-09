@@ -7,7 +7,7 @@ from fastapi import WebSocket, WebSocketDisconnect  # WebSocket #
 from io import BytesIO  # 内存流 #
 import soundfile as sf  # 音频 #
 
-from config import config  # 配置 #
+from system.config import config  # 配置 #
 from .asr_client import transcribe_wav_bytes  # 转写 #
 from .vad_utils import VADIterator  # VAD工具 #
 

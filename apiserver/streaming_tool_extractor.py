@@ -17,11 +17,11 @@ from typing import Callable, Optional, Dict, Any, Union
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
-    from config import config, AI_NAME  # 导入配置系统
+    from system.config import config, AI_NAME  # 导入配置系统
 except ImportError:
     # 如果直接导入失败，尝试从父目录导入
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from config import config, AI_NAME
+    from system.config import config, AI_NAME
 
 from .tool_call_utils import parse_tool_calls, execute_tool_calls
 

@@ -5,7 +5,7 @@ import re
 import json
 import urllib.parse
 from typing import List, Dict, Any
-from config import config
+from system.config import config
 
 class SearchEngine:
     """搜索引擎适配器，支持多种搜索引擎"""
@@ -199,7 +199,7 @@ async def search_web(query: str, engine: str = "google") -> Dict[str, Any]:
     
     # 尝试从config导入，如果失败则使用默认值
     try:
-        from config import config
+        from system.config import config
     except ImportError:
         PLAYWRIGHT_HEADLESS = True
     

@@ -1,5 +1,5 @@
 from agents import Agent
-from config import config  # 统一变量管理 #
+from system.config import config  # 统一变量管理 #
 import asyncio
 import json
 try:

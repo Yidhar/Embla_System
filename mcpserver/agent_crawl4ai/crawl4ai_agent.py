@@ -3,7 +3,7 @@ import os
 import asyncio
 from pathlib import Path
 from typing import Dict, Any, Optional
-from config import config
+from system.config import config
 
 try:
     from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig

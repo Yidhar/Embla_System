@@ -1,7 +1,7 @@
 from playwright.async_api import async_playwright, Page
 import asyncio, re, json
 from typing import Any, Dict, List
-from config import config  # 使用新的配置系统
+from system.config import config  # 使用新的配置系统
 import os
 from dotenv import load_dotenv
 from agents import Agent, AgentHooks, RunContextWrapper

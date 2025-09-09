@@ -4,7 +4,7 @@ import base64  # b64 #
 from typing import Optional  # 类型 #
 import sounddevice as sd  # 音频设备 #
 
-from config import config  # 配置 #
+from system.config import config  # 配置 #
 from .schemas import TranscriptionResult  # 数据模型 #
 from .asr_client import transcribe_wav_bytes  # 转写 #
 from .vad_worker import VADWorker  # 采集线程 #

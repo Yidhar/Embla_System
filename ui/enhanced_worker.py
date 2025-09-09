@@ -7,8 +7,7 @@ import asyncio
 import time
 from PyQt5.QtCore import QThread, pyqtSignal
 from ui.response_utils import extract_message
-import config  # 导入配置模块
-from config import AI_NAME
+from system.config import config, AI_NAME  # 导入配置模块
 
 class EnhancedWorker(QThread):
     """增强版工作线程"""

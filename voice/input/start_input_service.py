@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """语音输入服务启动脚本 # 一行说明 #"""
 import argparse  # 参数 #
-from config import config  # 配置 #
+from system.config import config  # 配置 #
 
 
 def check_dependencies() -> bool:

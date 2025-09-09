@@ -62,7 +62,7 @@ class PromptLogger:
         """
         try:
             # 检查是否启用prompt保存
-            from config import config, AI_NAME
+            from system.config import config, AI_NAME
             if not getattr(config.system, 'save_prompts', False):
                 return
             

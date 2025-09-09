@@ -41,12 +41,12 @@ from .prompt_logger import prompt_logger  # 导入prompt日志记录器
 
 # 导入配置系统
 try:
-    from config import config, AI_NAME  # 使用新的配置系统
+    from system.config import config, AI_NAME  # 使用新的配置系统
 except ImportError:
     import sys
     import os
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from config import config, AI_NAME  # 使用新的配置系统
+    from system.config import config, AI_NAME  # 使用新的配置系统
 from ui.response_utils import extract_message  # 导入消息提取工具
 from agents.extensions.handoff_prompt import RECOMMENDED_PROMPT_PREFIX  # handoff提示词
 

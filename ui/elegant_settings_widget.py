@@ -16,7 +16,7 @@ import json
 # 添加项目根目录到path，以便导入配置
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + '/..'))
 
-from config import config, AI_NAME
+from system.config import config, AI_NAME
 
 class SettingCard(QWidget):
     """单个设置卡片"""
@@ -277,7 +277,7 @@ class ElegantSettingsWidget(QWidget):
         self.load_current_settings()
         
         # 添加配置变更监听器，实现实时更新
-        from config import add_config_listener
+        from system.config import add_config_listener
         add_config_listener(self.on_config_reloaded)
         
     def on_config_reloaded(self):
@@ -857,31 +857,9 @@ class ElegantSettingsWidget(QWidget):
         self.pending_changes[normalized_key] = value
         self.update_status_label(f"● {normalized_key} 已修改")
         
-        # 实时应用透明度变化（无需保存即可预览）
-        if normalized_key in ["ui.bg_alpha", "ui.window_bg_alpha"]:
-            self.apply_transparency_preview(normalized_key, value)
+        # 移除实时透明度预览，避免动画卡顿
+        # 透明度设置将在保存时统一应用
         
-    def apply_transparency_preview(self, setting_key, value):
-        """实时应用透明度预览（无需保存）"""
-        try:
-            # 获取主窗口引用
-            main_window = self.parent()
-            while main_window and not hasattr(main_window, 'apply_opacity_from_config'):
-                main_window = main_window.parent()
-            
-            if main_window and hasattr(main_window, 'apply_opacity_from_config'):
-                # 直接调用主窗口的透明度应用方法，传递临时值
-                if setting_key == "ui.bg_alpha":
-                    # 滑块值范围是30-100，需要转换为0.0-1.0
-                    temp_value = value / 100.0
-                    # 直接应用透明度，不修改全局配置
-                    main_window.apply_transparency_preview(temp_value, None)
-                elif setting_key == "ui.window_bg_alpha":
-                    # 直接使用整数值
-                    main_window.apply_transparency_preview(None, value)
-                    
-        except Exception as e:
-            print(f"透明度预览应用失败: {e}")
     
     def update_status_label(self, text):
         """更新状态标签"""

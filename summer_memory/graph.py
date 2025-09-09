@@ -9,7 +9,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 # 从config模块读取Neo4j配置
 try:
-    from config import config
+    from system.config import config
     GRAG_ENABLED = config.grag.enabled
     NEO4J_URI = config.grag.neo4j_uri
     NEO4J_USER = config.grag.neo4j_user

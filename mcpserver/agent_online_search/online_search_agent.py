@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any, List
 from langchain_community.utilities import SearxSearchWrapper
-from config import config
+from system.config import config
 
 class OnlineSearchAgent:
     

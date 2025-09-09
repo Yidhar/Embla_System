@@ -11,7 +11,7 @@ except Exception as e:
 
 class AgentMqttTool(Agent):
     name = "agent_mqtt_tool"  # Agent名称
-    instructions = "设备开关控制MCP Agent，仅支持通过MQTT控制三个设备的开关状态"  # 角色描述
+    instructions = "设备开关控制MCP Agent，仅支持通过物联网模块控制三个设备的开关状态"  # 角色描述
     def __init__(self):
         super().__init__(
             name=self.name,

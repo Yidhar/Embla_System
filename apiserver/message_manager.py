@@ -19,7 +19,7 @@ class MessageManager:
         self.sessions: Dict[str, Dict] = {}
         # 从配置文件读取最大历史轮数，默认为10轮
         try:
-            from config import config
+            from system.config import config
             self.max_history_rounds = config.api.max_history_rounds
             self.max_messages_per_session = self.max_history_rounds * 2  # 每轮对话包含用户和助手各一条消息
             self.persistent_context = config.api.persistent_context

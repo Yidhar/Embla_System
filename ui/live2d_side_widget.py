@@ -30,7 +30,7 @@ class Live2DSideWidget(QWidget):
         try:
             import sys, os
             sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + '/..'))
-            from config import config
+            from system.config import config
             # 使用配置中的透明度，转换为0-255范围
             self.bg_alpha = int(config.ui.bg_alpha * 255)  # 背景透明度
             self.border_alpha = 50  # 边框透明度（保持固定值）

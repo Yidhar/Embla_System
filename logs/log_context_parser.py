@@ -25,7 +25,7 @@ class LogContextParser:
         """
         if log_dir is None:
             try:
-                from config import config
+                from system.config import config
                 self.log_dir = config.system.log_dir
             except ImportError:
                 self.log_dir = Path(__file__).parent  # 现在文件就在logs目录中
@@ -37,7 +37,7 @@ class LogContextParser:
         
         # 用户和AI名称，用于解析日志
         try:
-            from config import config
+            from system.config import config
             self.ai_name = config.system.ai_name
             # 从配置读取持久化上下文相关参数
             self.context_load_days = config.api.context_load_days
@@ -202,7 +202,7 @@ class LogContextParser:
             # 计算最大消息数量
             if max_messages is None:
                 try:
-                    from config import config
+                    from system.config import config
                     max_messages = config.api.max_history_rounds * 2
                 except ImportError:
                     max_messages = 20  # 默认值

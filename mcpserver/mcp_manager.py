@@ -15,7 +15,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcpserver.mcp_registry import MCP_REGISTRY # MCP服务注册表
 
-from config import config, AI_NAME
+from system.config import config, AI_NAME
 
 # 配置日志
 logging.basicConfig(

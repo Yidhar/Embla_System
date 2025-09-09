@@ -35,7 +35,7 @@ set_tracing_disabled(True)
 
 # 从config.json文件中读取配置
 try:
-    from config import load_config
+    from system.config import load_config
     config = load_config()
     API_KEY = config.api.api_key # 从config.json中读取API_KEY
     BASE_URL = config.api.base_url # 从config.json中读取BASE_URL

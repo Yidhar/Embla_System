@@ -2,7 +2,7 @@
 import asyncio  # 异步 #
 from typing import Any, Dict, Optional  # 类型 #
 import httpx  # HTTP客户端 #
-from config import config  # 全局配置 #
+from system.config import config  # 全局配置 #
 
 
 class NagaPortalClient:

@@ -13,7 +13,7 @@ import sys
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 try:
-    from config import config
+    from system.config import config
 except ImportError:
     logger = logging.getLogger(__name__)
     logger.warning("无法导入 config 模块，使用默认设置")

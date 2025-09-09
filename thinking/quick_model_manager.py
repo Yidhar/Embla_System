@@ -10,7 +10,7 @@ import time
 import re
 from typing import Dict, Any, Optional, Union, List
 from openai import AsyncOpenAI
-from config import (
+from system.config import (
     QUICK_MODEL_CONFIG, 
     OUTPUT_FILTER_CONFIG,
     DIFFICULTY_JUDGMENT_CONFIG,

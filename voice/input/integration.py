@@ -4,7 +4,7 @@ import base64  # base64 #
 from typing import AsyncGenerator, Optional  # 类型 #
 import aiohttp  # HTTP客户端 #
 
-from config import config  # 配置 #
+from system.config import config  # 配置 #
 from .asr_client import transcribe_wav_bytes  # 转写 #
 from .vad_worker import VADWorker  # 采集线程 #
 

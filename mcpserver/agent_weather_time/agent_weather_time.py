@@ -2,7 +2,7 @@
 import json # 导入json模块
 import aiohttp # 异步HTTP请求
 from agents import Agent, ComputerTool # 导入Agent和工具基类
-from config import config, AI_NAME # 导入配置
+from system.config import config, AI_NAME # 导入配置
 import requests # 用于同步获取IP和城市
 import re # 用于正则解析
 from datetime import datetime, timedelta # 用于日期处理

@@ -14,7 +14,7 @@ from typing import Dict, Any, Optional
 # 添加项目根目录到路径
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from config import config
+from system.config import config
 
 class VoiceServiceStatus:
     """语音服务状态检查器"""

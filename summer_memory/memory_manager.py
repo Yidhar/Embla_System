@@ -7,7 +7,7 @@ from .quintuple_extractor import extract_quintuples
 from .quintuple_graph import store_quintuples, query_graph_by_keywords, get_all_quintuples
 from .quintuple_rag_query import query_knowledge, set_context
 from .task_manager import task_manager, start_auto_cleanup, start_task_manager
-from config import config, AI_NAME
+from system.config import config, AI_NAME
 
 logger = logging.getLogger(__name__)
 
