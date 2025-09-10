@@ -1,4 +1,4 @@
-﻿# config.py - 简化配置系统
+# config.py - 简化配置系统
 """
 NagaAgent 配置系统 - 基于Pydantic实现类型安全和验证
 支持配置热更新和变更通知
@@ -453,3 +453,4 @@ try:
         config.ui.user_name = computer_name  # 覆盖UI用户名为电脑名 #
 except Exception:
     pass  # 失败静默忽略 #
+

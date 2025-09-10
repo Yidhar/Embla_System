@@ -76,20 +76,6 @@ class MQTTJsonStandardizer:
             return False
 
 # 从config模块读取MQTT配置
-def is_config_empty(config_dict):
-    """检查MQTT配置是否为空或无效"""
-    if not config_dict:
-        return True
-    
-    # 检查关键配置项是否为空
-    required_fields = ['broker', 'topic', 'client_id']
-    for field in required_fields:
-        value = config_dict.get(field, '')
-        if not value or value.strip() == '' or value.strip() == ' ':
-            return True
-    
-    return False
-
 def load_mqtt_config():
     """从config模块加载MQTT配置"""
     try:
@@ -101,8 +87,8 @@ def load_mqtt_config():
         if not config.mqtt.enabled:
             logger.info("物联网通讯功能未启用，跳过初始化")
             return None
-        
-        config_dict = {
+            
+        return {
             'broker': config.mqtt.broker,
             'port': config.mqtt.port,
             'topic': config.mqtt.topic,
@@ -110,13 +96,31 @@ def load_mqtt_config():
             'username': config.mqtt.username,
             'password': config.mqtt.password
         }
-        
-        # 检查配置是否为空
-        if is_config_empty(config_dict):
-            logger.info("物联网通讯配置为空，自动关闭物联网模块")
-            return None
+    except ImportError:
+        # 兼容旧版本，从config.json读取MQTT配置
+        try:
+            config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.json')
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config_data = json.load(f)
             
-        return config_dict
+            mqtt_config = config_data.get('mqtt', {})
+            
+            # 检查是否启用物联网通讯
+            if not mqtt_config.get('enabled', False):
+                logger.info("物联网通讯功能未启用，跳过初始化")
+                return None
+            
+            return {
+                'broker': mqtt_config.get('broker', 'broker.emqx.io'),
+                'port': mqtt_config.get('port', 1883),
+                'topic': mqtt_config.get('topic', 'device/switch'),
+                'client_id': mqtt_config.get('client_id', 'mcp_mqtt_tool'),
+                'username': mqtt_config.get('username', ''),
+                'password': mqtt_config.get('password', '')
+            }
+        except Exception as e:
+            logger.warning(f"无法加载MQTT配置: {e}")
+            return None
     except Exception as e:
         logger.warning(f"无法加载MQTT配置: {e}")
         return None
@@ -159,7 +163,7 @@ class DeviceSwitchManager:
         # 自动重连设置
         self.reconnect_enabled = True
         self.reconnect_attempt = 0
-        self.max_reconnect_attempts = 10
+        self.max_reconnect_attempts = 5  # 改为5次重连
         self.reconnect_delay = 1
         self.max_reconnect_delay = 60
         self.reconnect_thread = None
@@ -266,6 +270,8 @@ class DeviceSwitchManager:
                 for _ in range(10):
                     if self.connected:
                         logger.info("物联网模块重连成功")
+                        self.reconnect_attempt = 0  # 重置重连计数器
+                        self.reconnect_delay = 1  # 重置延迟时间
                         return
                     time.sleep(0.5)
                 

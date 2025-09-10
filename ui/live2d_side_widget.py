@@ -149,6 +149,7 @@ class Live2DSideWidget(QWidget):
                 self.load_image(default_image)
         
         self.model_loaded.emit(False)
+        print("🔄 已回退到图片模式")
     
     def load_image(self, image_path):
         """加载图片"""
