@@ -76,6 +76,20 @@ class MQTTJsonStandardizer:
             return False
 
 # 从config模块读取MQTT配置
+def is_config_empty(config_dict):
+    """检查MQTT配置是否为空或无效"""
+    if not config_dict:
+        return True
+    
+    # 检查关键配置项是否为空
+    required_fields = ['broker', 'topic', 'client_id']
+    for field in required_fields:
+        value = config_dict.get(field, '')
+        if not value or value.strip() == '' or value.strip() == ' ':
+            return True
+    
+    return False
+
 def load_mqtt_config():
     """从config模块加载MQTT配置"""
     try:
@@ -87,8 +101,8 @@ def load_mqtt_config():
         if not config.mqtt.enabled:
             logger.info("物联网通讯功能未启用，跳过初始化")
             return None
-            
-        return {
+        
+        config_dict = {
             'broker': config.mqtt.broker,
             'port': config.mqtt.port,
             'topic': config.mqtt.topic,
@@ -96,31 +110,13 @@ def load_mqtt_config():
             'username': config.mqtt.username,
             'password': config.mqtt.password
         }
-    except ImportError:
-        # 兼容旧版本，从config.json读取MQTT配置
-        try:
-            config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.json')
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-            
-            mqtt_config = config_data.get('mqtt', {})
-            
-            # 检查是否启用物联网通讯
-            if not mqtt_config.get('enabled', False):
-                logger.info("物联网通讯功能未启用，跳过初始化")
-                return None
-            
-            return {
-                'broker': mqtt_config.get('broker', 'broker.emqx.io'),
-                'port': mqtt_config.get('port', 1883),
-                'topic': mqtt_config.get('topic', 'device/switch'),
-                'client_id': mqtt_config.get('client_id', 'mcp_mqtt_tool'),
-                'username': mqtt_config.get('username', ''),
-                'password': mqtt_config.get('password', '')
-            }
-        except Exception as e:
-            logger.warning(f"无法加载MQTT配置: {e}")
+        
+        # 检查配置是否为空
+        if is_config_empty(config_dict):
+            logger.info("物联网通讯配置为空，自动关闭物联网模块")
             return None
+            
+        return config_dict
     except Exception as e:
         logger.warning(f"无法加载MQTT配置: {e}")
         return None
