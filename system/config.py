@@ -446,11 +446,13 @@ if config.system.debug:
     print(f"API服务器: {'启用' if config.api_server.enabled else '禁用'} ({config.api_server.host}:{config.api_server.port})")
     print(f"GRAG记忆系统: {'启用' if config.grag.enabled else '禁用'}")
 
-# 启动时设置用户显示名为电脑名 #
+# 启动时设置用户显示名：优先config.json，其次系统用户名 #
 try:
-    computer_name = os.environ.get('COMPUTERNAME') or socket.gethostname() or ''  # 获取电脑名优先用环境变量 #
-    if computer_name:
-        config.ui.user_name = computer_name  # 覆盖UI用户名为电脑名 #
+    # 检查 config.json 中的 user_name 是否为空白或未填写
+    if not config.ui.user_name or not config.ui.user_name.strip():
+        # 如果是，则尝试获取系统登录用户名并覆盖
+        config.ui.user_name = os.getlogin()
 except Exception:
-    pass  # 失败静默忽略 #
+    # 获取系统用户名失败时，将保留默认值 "用户" 或 config.json 中的空值
+    pass
 
