@@ -2,7 +2,7 @@
   "name": "系统控制服务",
   "displayName": "系统控制服务",
   "version": "1.0.0",
-  "description": "支持电脑控制：定时关机、定时重启、屏幕亮度调节、音量调节。",
+  "description": "支持电脑控制：执行指令、屏幕亮度调节、音量调节。",
   "author": "NagaAgent",
   "agentType": "mcp",
   "entryPoint": {
@@ -19,33 +19,29 @@
   "capabilities": {
     "invocationCommands": [
       {
-        "command": "定时关机",
-        "description": "定时关机；参数：time（定时关机秒数，可选，默认0立即）",
-        "example": "{\"tool_name\":\"定时关机\",\"time\":60}"
+        "command": "command",
+        "description": "执行系统指令; 参数: command:str (指令内容), cwd:str (工作目录)",
+        "example": "{\"tool_name\":\"command\",\"command\":\"echo helloworld\",\"cwd\":\"/home/\"}"
       },
       {
-        "command": "定时重启",
-        "description": "定时重启；参数：time（定时重启秒数，可选，默认0立即）",
-        "example": "{\"tool_name\":\"定时重启\",\"time\":60}"
-      },
-      {
-        "command": "设置亮度",
+        "command": "brightness",
         "description": "设置屏幕亮度；参数：value（亮度值，0-100）",
-        "example": "{\"tool_name\":\"设置亮度\",\"value\":80}"
+        "example": "{\"tool_name\":\"brightness\",\"value\":80}"
       },
       {
-        "command": "设置音量",
+        "command": "volume",
         "description": "设置系统音量；参数：value（音量值，0-100）",
-        "example": "{\"tool_name\":\"设置音量\",\"value\":50}"
+        "example": "{\"tool_name\":\"volume\",\"value\":50}"
       }
     ]
   },
   "inputSchema": {
     "type": "object",
     "properties": {
-      "tool_name": {"type": "string", "description": "工具名称：定时关机/定时重启/设置亮度/设置音量"},
-      "time": {"type": "integer", "description": "定时关机或重启秒数（定时关机/定时重启时可选）"},
-      "value": {"type": "integer", "description": "亮度或音量值（0-100，设置亮度/设置音量时必需）"}
+      "tool_name": {"type": "string", "description": "工具名称：command/brightness/volume"},
+      "command": {"type": "string", "description": "要执行的系统指令（command时必需）"},
+      "cwd": {"type": "string", "description": "工作目录（command时可选）"},
+      "value": {"type": "integer", "description": "亮度或音量值（0-100，brightness/volume时必需）"}
     },
     "required": ["tool_name"]
   },

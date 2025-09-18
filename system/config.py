@@ -1,4 +1,4 @@
-# config.py - 简化配置系统
+﻿# config.py - 简化配置系统
 """
 NagaAgent 配置系统 - 基于Pydantic实现类型安全和验证
 支持配置热更新和变更通知
@@ -372,7 +372,7 @@ class NagaConfig(BaseModel):
     def __init__(self, **kwargs):
         setup_environment()
         super().__init__(**kwargs)
-        self.system.log_dir.mkdir(exist_ok=True)
+        self.system.log_dir.mkdir(parents=True, exist_ok=True)  # 确保递归创建日志目录 #
 
 # 全局配置实例
 ENCF = 0  # 编码修复计数器

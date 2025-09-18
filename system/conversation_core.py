@@ -324,13 +324,13 @@ class NagaConversation: # 对话主类
         t = datetime.now().strftime('%H:%M:%S')
         
         # 确保日志目录存在
-        log_dir = config.system.log_dir
+        log_dir = str(config.system.log_dir)  # 统一为字符串路径 #
         if not os.path.exists(log_dir):
             os.makedirs(log_dir, exist_ok=True)
             logger.info(f"已创建日志目录: {log_dir}")
         
         # 保存对话日志
-        log_file = os.path.join(log_dir, f"{d}.log")
+        log_file = os.path.join(log_dir, f"{d}.log")  # 组合日志文件路径 #
         try:
             with open(log_file, 'a', encoding='utf-8') as f:
                 f.write(f"[{t}] 用户: {u}\n")
