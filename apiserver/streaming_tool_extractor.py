@@ -133,9 +133,7 @@ class StreamingToolCallExtractor:
                         self.is_in_tool_call = False
                         
                         # 处理工具调用 - 只提取，不执行
-                        result = await self._extract_tool_call(tool_call)
-                        if result:
-                            results.append(result)
+                        await self._extract_tool_call(tool_call)
                         
             else:  # 普通字符
                 if self.is_in_tool_call:
@@ -225,16 +223,12 @@ class StreamingToolCallExtractor:
                     except Exception as e:
                         logger.error(f"发送工具调用检测信号失败: {e}")
                 
-                # 返回工具调用检测提示 - 使用HTML格式与普通消息保持一致
-                return (AI_NAME, f"<span style='color:#888;font-size:14pt;font-family:Lucida Console;'>🔧 检测到工具调用，正在执行...</span>")
             else:
                 logger.warning("工具调用解析失败")
                 
         except Exception as e:
             error_msg = f"工具调用提取失败: {str(e)}"
             logger.error(error_msg)
-        
-        return None
     
     async def finish_processing(self):
         """完成处理，清理剩余内容"""

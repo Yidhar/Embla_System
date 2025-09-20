@@ -502,12 +502,10 @@ class ChatWindow(QWidget):
                 print("📝 持久化上下文功能已禁用，跳过历史记录加载")
                 return
                 
-            # 导入日志解析器
-            from logs.log_context_parser import get_log_parser
-            parser = get_log_parser()
+            # 使用消息渲染器加载历史对话到UI
+            from ui.message_renderer import MessageRenderer
             
-            # 使用新的方法加载历史对话到UI
-            ui_messages = parser.load_persistent_context_to_ui(
+            ui_messages = MessageRenderer.load_persistent_context_to_ui(
                 parent_widget=s.chat_content,
                 max_messages=config.api.max_history_rounds * 2
             )
@@ -611,6 +609,11 @@ class ChatWindow(QWidget):
     
     def append_response_chunk(s, chunk):
         """追加响应片段（流式模式）- 实时显示"""
+        # 检查是否为工具调用检测标记
+        if chunk.startswith("data: [TOOL_CALL]"):
+            # 这是工具调用检测，不累积到娜迦消息中
+            return
+        
         # 实时更新显示 - 立即显示到UI
         if not hasattr(s, '_current_message_id'):
             # 第一次收到chunk时，创建新消息

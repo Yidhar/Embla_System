@@ -500,6 +500,64 @@ class MessageRenderer:
         return dialogs
     
     @staticmethod
+    def load_persistent_context_to_ui(parent_widget, max_messages: int = None) -> List[tuple]:
+        """
+        将持久化上下文加载到前端UI
+        
+        Args:
+            parent_widget: 父级容器widget
+            max_messages: 最大消息数量限制
+            
+        Returns:
+            List[tuple]: 返回(消息ID, 消息信息, 对话框组件)的元组列表
+        """
+        try:
+            # 导入消息管理器
+            from apiserver.message_manager import message_manager
+            
+            # 计算最大消息数量
+            if max_messages is None:
+                try:
+                    from system.config import config
+                    max_messages = config.api.max_history_rounds * 2
+                except ImportError:
+                    max_messages = 20  # 默认值
+            
+            # 加载历史对话
+            recent_messages = message_manager.load_recent_context(
+                days=message_manager.context_load_days,
+                max_messages=max_messages
+            )
+            
+            if not recent_messages:
+                print("📝 未找到历史对话记录，跳过前端UI加载")
+                return []
+            
+            # 批量创建历史消息对话框
+            history_dialogs = MessageRenderer.batch_create_history_messages(
+                recent_messages, parent_widget
+            )
+            
+            # 构建返回结果
+            ui_messages = []
+            for i, (msg, dialog) in enumerate(zip(recent_messages, history_dialogs)):
+                message_id = f"history_{i}"
+                message_info = {
+                    'name': msg.get('role', 'user'),
+                    'content': msg.get('content', ''),
+                    'full_content': msg.get('content', ''),
+                    'dialog_widget': dialog
+                }
+                ui_messages.append((message_id, message_info, dialog))
+            
+            print(f"✅ 前端UI已加载 {len(ui_messages)} 条历史对话")
+            return ui_messages
+            
+        except Exception as e:
+            print(f"❌ 前端加载持久化上下文失败: {e}")
+            return []
+    
+    @staticmethod
     def update_message_content(dialog, new_content):
         """更新消息内容"""
         if hasattr(dialog, 'update_content'):

@@ -53,6 +53,68 @@ from agents.extensions.handoff_prompt import RECOMMENDED_PROMPT_PREFIX  # handof
 # 全局NagaAgent实例 - 延迟导入避免循环依赖
 naga_agent = None
 
+# 回调工厂类 - 统一管理重复的回调函数
+class CallbackFactory:
+    """回调函数工厂类 - 消除重复定义"""
+    
+    @staticmethod
+    def create_text_chunk_callback(pure_text_content_ref, is_streaming=False):
+        """创建文本块回调函数"""
+        def on_text_chunk(text: str, chunk_type: str):
+            """处理文本块 - 累积纯文本内容"""
+            if chunk_type == "chunk":
+                pure_text_content_ref[0] += text
+                if is_streaming:
+                    return f"data: {text}\n\n"
+            return None
+        return on_text_chunk
+    
+    @staticmethod
+    def create_sentence_callback(is_streaming=False):
+        """创建句子回调函数"""
+        def on_sentence(sentence: str, sentence_type: str):
+            """处理完整句子"""
+            if sentence_type == "sentence":
+                if is_streaming:
+                    return f"data: [SENTENCE] {sentence}\n\n"
+            return None
+        return on_sentence
+    
+    @staticmethod
+    def create_tool_call_callback(is_streaming=False):
+        """创建工具调用回调函数"""
+        def on_tool_call(tool_call: str, tool_type: str):
+            """处理工具调用 - 不累积到纯文本"""
+            if tool_type == "tool_call":
+                if is_streaming:
+                    return f"data: [TOOL_CALL] 正在执行工具调用...\n\n"
+            return None
+        return on_tool_call
+    
+    @staticmethod
+    def create_tool_result_callback(is_streaming=False):
+        """创建工具结果回调函数"""
+        def on_tool_result(result: str, result_type: str):
+            """处理工具结果 - 不累积到纯文本"""
+            if result_type == "tool_result":
+                if is_streaming:
+                    return f"data: [TOOL_RESULT] {result}\n\n"
+            elif result_type == "tool_error":
+                if is_streaming:
+                    return f"data: [TOOL_ERROR] {result}\n\n"
+            return None
+        return on_tool_result
+    
+    @classmethod
+    def create_callbacks(cls, pure_text_content_ref, is_streaming=False):
+        """创建完整的回调函数集合"""
+        return {
+            'on_text_chunk': cls.create_text_chunk_callback(pure_text_content_ref, is_streaming),
+            'on_sentence': cls.create_sentence_callback(is_streaming),
+            'on_tool_call': cls.create_tool_call_callback(is_streaming),
+            'on_tool_result': cls.create_tool_result_callback(is_streaming)
+        }
+
 # WebSocket连接管理
 class ConnectionManager:
     def __init__(self):
@@ -257,35 +319,13 @@ async def chat(request: ChatRequest):
         tool_extractor = StreamingToolCallExtractor(naga_agent.mcp)
         
         # 用于累积纯文本内容（不包含工具调用）
-        pure_text_content = ""
+        pure_text_content = [""]  # 使用列表引用，便于在回调中修改
         
-        # 设置回调函数
-        def on_text_chunk(text: str, chunk_type: str):
-            """处理文本块 - 累积纯文本内容"""
-            if chunk_type == "chunk":
-                nonlocal pure_text_content
-                pure_text_content += text
-            return None
-        
-        def on_sentence(sentence: str, sentence_type: str):
-            """处理完整句子"""
-            return None
-        
-        def on_tool_call(tool_call: str, tool_type: str):
-            """处理工具调用 - 不累积到纯文本"""
-            return None
-        
-        def on_tool_result(result: str, result_type: str):
-            """处理工具结果 - 不累积到纯文本"""
-            return None
+        # 使用回调工厂创建回调函数
+        callbacks = CallbackFactory.create_callbacks(pure_text_content, is_streaming=False)
         
         # 设置回调
-        tool_extractor.set_callbacks(
-            on_text_chunk=on_text_chunk,
-            on_sentence=on_sentence,
-            on_tool_call=on_tool_call,
-            on_tool_result=on_tool_result
-        )
+        tool_extractor.set_callbacks(**callbacks)
         
         # 调用LLM API - 流式模式
         async with aiohttp.ClientSession() as session:
@@ -343,13 +383,13 @@ async def chat(request: ChatRequest):
         
         # 保存对话历史到消息管理器（使用纯文本内容）
         message_manager.add_message(session_id, "user", request.message)
-        message_manager.add_message(session_id, "assistant", pure_text_content)
+        message_manager.add_message(session_id, "assistant", pure_text_content[0])
         
         # 保存成功的prompt日志
-        prompt_logger.log_prompt(session_id, messages, {"content": pure_text_content}, api_status="success")
+        prompt_logger.log_prompt(session_id, messages, {"content": pure_text_content[0]}, api_status="success")
         
         return ChatResponse(
-            response=extract_message(pure_text_content) if pure_text_content else pure_text_content,
+            response=extract_message(pure_text_content[0]) if pure_text_content[0] else pure_text_content[0],
             session_id=session_id,
             status="success"
         )
@@ -392,7 +432,7 @@ async def chat_stream(request: ChatRequest):
             tool_extractor = StreamingToolCallExtractor(naga_agent.mcp)
             
             # 用于累积纯文本内容（不包含工具调用）
-            pure_text_content = ""
+            pure_text_content = [""]  # 使用列表引用，便于在回调中修改
             
             # 初始化语音集成（如果启用）
             voice_integration = None
@@ -403,41 +443,12 @@ async def chat_stream(request: ChatRequest):
                 except Exception as e:
                     print(f"语音集成初始化失败: {e}")
             
-            # 设置回调函数
-            def on_text_chunk(text: str, chunk_type: str):
-                """处理文本块 - 发送到前端并累积纯文本"""
-                if chunk_type == "chunk":
-                    nonlocal pure_text_content
-                    pure_text_content += text
-                    return f"data: {text}\n\n"
-                return None
-            
-            def on_sentence(sentence: str, sentence_type: str):
-                """处理完整句子"""
-                if sentence_type == "sentence":
-                    return f"data: [SENTENCE] {sentence}\n\n"
-                return None
-            
-            def on_tool_call(tool_call: str, tool_type: str):
-                """处理工具调用 - 不累积到纯文本"""
-                if tool_type == "tool_call":
-                    return f"data: [TOOL_CALL] 正在执行工具调用...\n\n"
-                return None
-            
-            def on_tool_result(result: str, result_type: str):
-                """处理工具结果 - 不累积到纯文本"""
-                if result_type == "tool_result":
-                    return f"data: [TOOL_RESULT] {result}\n\n"
-                elif result_type == "tool_error":
-                    return f"data: [TOOL_ERROR] {result}\n\n"
-                return None
+            # 使用回调工厂创建回调函数
+            callbacks = CallbackFactory.create_callbacks(pure_text_content, is_streaming=True)
             
             # 设置回调
             tool_extractor.set_callbacks(
-                on_text_chunk=on_text_chunk,
-                on_sentence=on_sentence,
-                on_tool_call=on_tool_call,
-                on_tool_result=on_tool_result,
+                **callbacks,
                 voice_integration=voice_integration
             )
             
@@ -518,10 +529,10 @@ async def chat_stream(request: ChatRequest):
             
             # 保存对话历史到消息管理器（使用纯文本内容）
             message_manager.add_message(session_id, "user", request.message)
-            message_manager.add_message(session_id, "assistant", pure_text_content)
+            message_manager.add_message(session_id, "assistant", pure_text_content[0])
             
             # 保存成功的prompt日志
-            prompt_logger.log_prompt(session_id, messages, {"content": pure_text_content}, api_status="success")
+            prompt_logger.log_prompt(session_id, messages, {"content": pure_text_content[0]}, api_status="success")
             
             yield "data: [DONE]\n\n"
             
@@ -971,6 +982,37 @@ async def list_uploaded_documents():
         print(f"获取文档列表错误: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"获取文档列表失败: {str(e)}")
+
+# 新增：日志解析相关API接口
+@app.get("/logs/context/statistics")
+async def get_log_context_statistics(days: int = 7):
+    """获取日志上下文统计信息"""
+    try:
+        statistics = message_manager.get_context_statistics(days)
+        return {
+            "status": "success",
+            "statistics": statistics
+        }
+    except Exception as e:
+        print(f"获取日志上下文统计错误: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取统计信息失败: {str(e)}")
+
+@app.get("/logs/context/load")
+async def load_log_context(days: int = 3, max_messages: int = None):
+    """加载日志上下文"""
+    try:
+        messages = message_manager.load_recent_context(days=days, max_messages=max_messages)
+        return {
+            "status": "success",
+            "messages": messages,
+            "count": len(messages),
+            "days": days
+        }
+    except Exception as e:
+        print(f"加载日志上下文错误: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"加载上下文失败: {str(e)}")
 
 if __name__ == "__main__":
     import argparse

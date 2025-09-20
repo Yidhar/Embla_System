@@ -349,7 +349,6 @@ class ElegantSettingsWidget(QWidget):
         self.create_interface_group(scroll_layout)
         self.create_xiayuan_group(scroll_layout)
         self.create_tts_group(scroll_layout)
-        self.create_weather_group(scroll_layout)
         self.create_mqtt_group(scroll_layout)
         self.create_save_section(scroll_layout)
         
@@ -644,16 +643,6 @@ class ElegantSettingsWidget(QWidget):
 
         parent_layout.addWidget(group)
 
-    def create_weather_group(self, parent_layout):
-        group = SettingGroup("天气服务配置")
-        if hasattr(config.weather, "api_key"):
-            weather_api_input = QLineEdit()
-            weather_api_input.setText(config.weather.api_key)
-            weather_api_input.setStyleSheet(self.get_input_style() + "color: #fff;")
-            weather_api_card = SettingCard("天气API Key", "天气服务API密钥", weather_api_input, "weather.api_key")
-            weather_api_card.value_changed.connect(self.on_setting_changed)
-            group.add_card(weather_api_card)
-        parent_layout.addWidget(group)
 
     def create_mqtt_group(self, parent_layout):
         group = SettingGroup("MQTT 配置")
