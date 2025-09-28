@@ -1,5 +1,5 @@
-from fastapi import FastAPI, UploadFile, File, WebSocket  # Web框架 #
-from fastapi.responses import JSONResponse  # 响应 #
+from nagaagent_core.api import FastAPI, UploadFile, File, WebSocket  # Web框架 #
+from nagaagent_core.api import JSONResponse  # 响应 #
 import base64  # b64 #
 from typing import Optional  # 类型 #
 import sounddevice as sd  # 音频设备 #

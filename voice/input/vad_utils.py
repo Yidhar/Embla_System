@@ -1,4 +1,4 @@
-import numpy as np  # 数值 #
+import nagaagent_core.vendors.numpy as np  # 数值 #
 import onnxruntime as ort  # 推理 #
 from typing import Iterator, Dict, Tuple  # 类型 #
 

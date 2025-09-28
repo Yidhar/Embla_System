@@ -200,9 +200,12 @@ class StreamingToolCallExtractor:
                 logger.error(f"语音集成错误: {e}")
     
     async def _extract_tool_call(self, tool_call_text: str):
-        """提取工具调用 - 不执行，只提取到队列"""
+        """提取工具调用 - 流式执行并反馈结果"""
         try:
             logger.info(f"检测到工具调用: {tool_call_text[:100]}...")
+            
+            # 发送工具调用开始信号
+            await self.callback_manager.call_callback("tool_call", tool_call_text, "tool_call")
             
             # 解析JSON
             tool_calls = parse_tool_calls(tool_call_text)
@@ -210,25 +213,46 @@ class StreamingToolCallExtractor:
             if tool_calls:
                 logger.info(f"解析到 {len(tool_calls)} 个工具调用")
                 
-                # 将工具调用添加到队列，供工具调用循环处理
-                if self.tool_calls_queue:
-                    for tool_call in tool_calls:
-                        self.tool_calls_queue.put(tool_call)
-                    logger.info(f"已将 {len(tool_calls)} 个工具调用添加到队列")
-                
-                # 发送工具调用检测信号
-                if self.tool_call_detected_signal:
+                # 流式执行工具调用
+                for i, tool_call in enumerate(tool_calls):
                     try:
-                        self.tool_call_detected_signal("正在执行工具调用...")
+                        # 发送工具调用执行开始信号
+                        await self.callback_manager.call_callback(
+                            "tool_result", f"正在执行工具: {tool_call['name']}", "tool_start"
+                        )
+                        
+                        # 执行工具调用
+                        result = await self._execute_single_tool_call(tool_call)
+                        
+                        # 发送工具调用结果
+                        await self.callback_manager.call_callback(
+                            "tool_result", result, "tool_result"
+                        )
+                        
                     except Exception as e:
-                        logger.error(f"发送工具调用检测信号失败: {e}")
+                        error_msg = f"工具 {tool_call['name']} 执行失败: {str(e)}"
+                        logger.error(error_msg)
+                        await self.callback_manager.call_callback(
+                            "tool_result", error_msg, "tool_error"
+                        )
                 
             else:
                 logger.warning("工具调用解析失败")
+                await self.callback_manager.call_callback(
+                    "tool_result", "工具调用解析失败", "tool_error"
+                )
                 
         except Exception as e:
             error_msg = f"工具调用提取失败: {str(e)}"
             logger.error(error_msg)
+            await self.callback_manager.call_callback(
+                "tool_result", error_msg, "tool_error"
+            )
+    
+    async def _execute_single_tool_call(self, tool_call: dict) -> str:
+        """执行单个工具调用 - 使用统一的工具调用执行函数"""
+        from .tool_call_utils import execute_single_tool_call
+        return await execute_single_tool_call(tool_call, self.mcp_manager)
     
     async def finish_processing(self):
         """完成处理，清理剩余内容"""
@@ -243,7 +267,11 @@ class StreamingToolCallExtractor:
         # 处理未完成的工具调用
         if self.is_in_tool_call and self.tool_call_buffer:
             logger.warning(f"检测到未完成的工具调用: {self.tool_call_buffer}")
-            # 可以选择丢弃或特殊处理
+            # 尝试解析未完成的工具调用
+            try:
+                await self._extract_tool_call(self.tool_call_buffer)
+            except Exception as e:
+                logger.error(f"处理未完成工具调用失败: {e}")
         
         return results if results else None
     
@@ -254,44 +282,3 @@ class StreamingToolCallExtractor:
         self.brace_count = 0
         self.text_buffer = ""
 
-class StreamingResponseProcessor:
-    """流式响应处理器 - 集成工具调用提取和文本处理"""
-    
-    def __init__(self, mcp_manager=None):
-        self.tool_extractor = StreamingToolCallExtractor(mcp_manager)
-        self.response_buffer = ""
-        self.is_processing = False
-        
-    async def process_ai_response(self, response_stream, callbacks: Dict[str, Callable]):
-        """处理AI流式响应"""
-        self.is_processing = True
-        self.response_buffer = ""
-        
-        # 设置回调函数
-        self.tool_extractor.set_callbacks(**callbacks)
-        
-        try:
-            async for chunk in response_stream:
-                if not self.is_processing:
-                    break
-                    
-                chunk_text = str(chunk)
-                self.response_buffer += chunk_text
-                
-                # 使用工具调用提取器处理
-                await self.tool_extractor.process_text_chunk(chunk_text)
-                
-        except Exception as e:
-            logger.error(f"AI流式响应处理错误: {e}")
-        finally:
-            self.is_processing = False
-            # 完成处理
-            await self.tool_extractor.finish_processing()
-    
-    def stop_processing(self):
-        """停止处理"""
-        self.is_processing = False
-    
-    def get_response_buffer(self) -> str:
-        """获取响应缓冲区内容"""
-        return self.response_buffer

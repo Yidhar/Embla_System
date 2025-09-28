@@ -1,0 +1,176 @@
+"""
+NagaAgent Game 配置管理
+"""
+
+from dataclasses import dataclass, field
+from typing import Dict, List, Any
+import os
+from pathlib import Path
+
+
+@dataclass
+class PhilossConfig:
+    """Philoss配置"""
+    model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct"  # 模型名称
+    model_path: str = ""  # 模型本地路径
+    device: str = "cuda"  # 设备类型
+    max_memory: str = "8GB"  # 最大内存使用
+    token_block_size: int = 100  # 文本块大小（token数）
+    hidden_size: int = 768  # 隐藏层大小
+    mlp_hidden_size: int = 256  # MLP隐藏层大小
+    prediction_threshold: float = 0.6  # 预测阈值
+    novelty_threshold: float = 0.6  # 创新性阈值
+    
+    def __post_init__(self):
+        # 如果没有指定本地路径,使用默认路径
+        if not self.model_path:
+            self.model_path = os.path.expanduser(f"~/.cache/huggingface/transformers/{self.model_name}")
+
+
+@dataclass  
+class SelfGameConfig:
+    """自博弈配置"""
+    max_iterations: int = 10  # 最大迭代次数
+    max_critics: int = 3  # 最大批判者数量
+    timeout_seconds: int = 300  # 超时时间
+    convergence_threshold: float = 0.8  # 收敛阈值
+    quality_threshold: float = 0.7  # 质量阈值
+    enable_thinking_vector: bool = True  # 是否启用思维向量
+    thinking_vector_max_depth: int = 5  # 思维向量最大深度
+
+
+@dataclass
+class InteractionGraphConfig:
+    """交互图配置"""
+    max_agents: int = 10  # 最大智能体数量
+    min_agents: int = 2  # 最小智能体数量
+    role_templates_path: str = "templates/roles"  # 角色模板路径
+    collaboration_rules_path: str = "templates/collaboration"  # 协作规则路径
+    enable_dynamic_routing: bool = True  # 是否启用动态路由
+    max_routing_hops: int = 3  # 最大路由跳数
+
+
+@dataclass
+class SystemConfig:
+    """系统配置"""
+    log_level: str = "INFO"  # 日志级别
+    save_intermediate_results: bool = True  # 是否保存中间结果
+    results_dir: str = "results"  # 结果保存目录
+    enable_async: bool = True  # 是否启用异步处理
+    max_concurrent_tasks: int = 5  # 最大并发任务数
+    checkpoint_interval: int = 10  # 检查点间隔（秒）
+
+
+@dataclass  
+class GameConfig:
+    """博弈系统总配置"""
+    philoss: PhilossConfig = field(default_factory=PhilossConfig)
+    self_game: SelfGameConfig = field(default_factory=SelfGameConfig) 
+    interaction_graph: InteractionGraphConfig = field(default_factory=InteractionGraphConfig)
+    system: SystemConfig = field(default_factory=SystemConfig)
+    
+    def __post_init__(self):
+        # 确保结果目录存在
+        Path(self.system.results_dir).mkdir(parents=True, exist_ok=True)
+        
+        # 确保角色模板目录存在
+        Path(self.interaction_graph.role_templates_path).mkdir(parents=True, exist_ok=True)
+        Path(self.interaction_graph.collaboration_rules_path).mkdir(parents=True, exist_ok=True)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式"""
+        return {
+            'philoss': self.philoss.__dict__,
+            'self_game': self.self_game.__dict__,
+            'interaction_graph': self.interaction_graph.__dict__,
+            'system': self.system.__dict__
+        }
+    
+    @classmethod
+    def from_dict(cls, config_dict: Dict[str, Any]) -> 'GameConfig':
+        """从字典创建配置"""
+        config = cls()
+        
+        if 'philoss' in config_dict:
+            config.philoss = PhilossConfig(**config_dict['philoss'])
+        if 'self_game' in config_dict:
+            config.self_game = SelfGameConfig(**config_dict['self_game'])
+        if 'interaction_graph' in config_dict:
+            config.interaction_graph = InteractionGraphConfig(**config_dict['interaction_graph'])
+        if 'system' in config_dict:
+            config.system = SystemConfig(**config_dict['system'])
+            
+        return config
+    
+    def save_to_file(self, file_path: str):
+        """保存配置到文件"""
+        import json
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+    
+    @classmethod
+    def load_from_file(cls, file_path: str) -> 'GameConfig':
+        """从文件加载配置"""
+        import json
+        with open(file_path, 'r', encoding='utf-8') as f:
+            config_dict = json.load(f)
+        return cls.from_dict(config_dict)
+
+
+# 默认配置实例
+DEFAULT_CONFIG = GameConfig()
+
+
+# 领域特定配置模板
+DOMAIN_CONFIGS = {
+    "游戏开发": {
+        "interaction_graph": {
+            "max_agents": 6,
+            "min_agents": 4
+        },
+        "self_game": {
+            "max_iterations": 15,
+            "convergence_threshold": 0.85
+        }
+    },
+    "学术研究": {
+        "interaction_graph": {
+            "max_agents": 8,
+            "min_agents": 3  
+        },
+        "self_game": {
+            "max_iterations": 12,
+            "quality_threshold": 0.8
+        }
+    },
+    "产品设计": {
+        "interaction_graph": {
+            "max_agents": 5,
+            "min_agents": 3
+        },
+        "self_game": {
+            "max_iterations": 10,
+            "convergence_threshold": 0.75
+        }
+    }
+}
+
+
+def get_domain_config(domain: str) -> GameConfig:
+    """获取领域特定配置"""
+    base_config = GameConfig()
+    
+    if domain in DOMAIN_CONFIGS:
+        domain_settings = DOMAIN_CONFIGS[domain]
+        
+        # 更新交互图配置
+        if "interaction_graph" in domain_settings:
+            for key, value in domain_settings["interaction_graph"].items():
+                setattr(base_config.interaction_graph, key, value)
+                
+        # 更新自博弈配置
+        if "self_game" in domain_settings:
+            for key, value in domain_settings["self_game"].items():
+                setattr(base_config.self_game, key, value)
+    
+    return base_config 

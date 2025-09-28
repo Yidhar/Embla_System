@@ -14,9 +14,9 @@ from typing import Dict, List, Optional
 try:
     import opensimplex as noise
     NOISE_AVAILABLE = True
-except ImportError:
+except Exception:
     NOISE_AVAILABLE = False
-    print("⚠️ opensimplex模块未找到，动画将使用简化模式")
+    print("⚠️ opensimplex不可用(可能是 numba/llvmlite 初始化失败)，动画将使用简化模式")
 
 class BaseAnimator:
     """基础动画器类"""

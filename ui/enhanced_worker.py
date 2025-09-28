@@ -5,7 +5,7 @@
 
 import asyncio
 import time
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtCore import QThread, pyqtSignal  # 直接依赖 #
 from ui.response_utils import extract_message
 from system.config import config, AI_NAME  # 导入配置模块
 
@@ -225,27 +225,17 @@ class StreamingWorker(EnhancedWorker):
             # print(f"完成句子: {sentence}")  # 调试输出，已注释
             pass  # 可以在这里添加语音合成逻辑
     
-    async def _on_tool_result(self, result: str, result_type: str):
-        """处理工具结果回调"""
-        if result_type == "tool_result":
-            # 发送工具结果信号
-            self.tool_result_received.emit(f"工具执行结果: {result[:100]}...")
-            print(f"工具执行完成: {result[:100]}...")
-        elif result_type == "tool_error":
-            # 发送错误信号
-            self.tool_result_received.emit(f"工具执行错误: {result}")
-            print(f"工具执行错误: {result}")
-    
     def _on_tool_result_sync(self, result: str, result_type: str):
         """同步处理工具结果回调（用于非异步环境）"""
-        if result_type == "tool_result":
-            # 发送工具结果信号
-            self.tool_result_received.emit(f"工具执行结果: {result[:100]}...")
-            print(f"工具执行完成: {result[:100]}...")
+        if result_type == "tool_start":
+            # 工具调用开始 - 发送到工具调用专用渲染框
+            self.tool_call_detected.emit(f"🔧 {result}")
+        elif result_type == "tool_result":
+            # 工具调用结果 - 发送到工具调用专用渲染框
+            self.tool_result_received.emit(f"✅ {result}")
         elif result_type == "tool_error":
-            # 发送错误信号
-            self.tool_result_received.emit(f"工具执行错误: {result}")
-            print(f"工具执行错误: {result}")
+            # 工具调用错误 - 发送到工具调用专用渲染框
+            self.tool_result_received.emit(f"❌ {result}")
         
     async def process_with_progress(self):
         """流式处理优化版本 - 支持流式工具调用提取"""
@@ -281,7 +271,7 @@ class StreamingWorker(EnhancedWorker):
                             try:
                                 # 处理文本块，获取结果
                                 results = await self.tool_extractor.process_text_chunk(content_str)
-                                # 文本通过回调函数发送，不需要额外处理
+                                # 文本通过回调函数发送到普通消息框，工具调用通过专用信号发送
                             except Exception as e:
                                 print(f"工具调用提取器错误: {e}")
                                 # 回退到原始处理方式

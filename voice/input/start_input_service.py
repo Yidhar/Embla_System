@@ -28,13 +28,18 @@ def check_dependencies() -> bool:
     except Exception:
         missing.append("uvicorn")  # 记录 #
     try:
-        import numpy  # noqa: F401 #
+        import nagaagent_core.vendors.numpy as numpy  # noqa: F401 #
     except Exception:
         missing.append("numpy")  # 记录 #
     try:
-        import scipy  # noqa: F401 #
+        import nagaagent_core.vendors.scipy as scipy  # noqa: F401 #
     except Exception:
         missing.append("scipy")  # 记录 #
+    try:
+        from nagaagent_core.vendors.httpx import Client as _HttpxClient  # 占位以检查可用性 #
+        import nagaagent_core.vendors.httpx as httpx
+    except Exception:
+        httpx = None
     
     if missing:
         print("❌ 语音输入服务缺少依赖: " + ", ".join(missing))  # 打印 #

@@ -3,12 +3,12 @@
 统一风格的设置界面，包含API配置、系统配置等多个选项
 """
 
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+from nagaagent_core.vendors.PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                             QPushButton, QLineEdit, QCheckBox, QSpinBox, 
                             QDoubleSpinBox, QComboBox, QFrame, QScrollArea,
-                            QSlider, QTextEdit, QGroupBox, QGridLayout, QFileDialog)
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve
-from PyQt5.QtGui import QFont, QPainter, QColor
+                            QSlider, QTextEdit, QGroupBox, QGridLayout, QFileDialog)  # 统一入口 #
+from nagaagent_core.vendors.PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve  # 统一入口 #
+from nagaagent_core.vendors.PyQt5.QtGui import QFont, QPainter, QColor  # 统一入口 #
 import sys
 import os
 import json
@@ -1044,7 +1044,7 @@ class ElegantSettingsWidget(QWidget):
 
 
 if __name__ == "__main__":
-    from PyQt5.QtWidgets import QApplication
+    from nagaagent_core.vendors.PyQt5.QtWidgets import QApplication  # 统一入口 #
     
     app = QApplication([])
     

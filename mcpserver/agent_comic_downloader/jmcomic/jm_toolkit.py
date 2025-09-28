@@ -1,4 +1,4 @@
-from PIL import Image
+from nagaagent_core.vendors.pil import Image
 
 from .jm_exception import *
 

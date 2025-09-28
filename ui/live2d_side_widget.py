@@ -4,9 +4,9 @@ import json
 import time
 import threading
 from pathlib import Path
-from PyQt5.QtWidgets import QWidget, QStackedLayout, QLabel, QSizePolicy
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QPixmap, QPainter, QColor, QBrush, QPen
+from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget, QStackedLayout, QLabel, QSizePolicy  # 统一入口 #
+from nagaagent_core.vendors.PyQt5.QtCore import Qt, QTimer, pyqtSignal  # 统一入口 #
+from nagaagent_core.vendors.PyQt5.QtGui import QPixmap, QPainter, QColor, QBrush, QPen  # 统一入口 #
 
 # 导入独立的Live2D模块
 try:
@@ -45,6 +45,7 @@ class Live2DSideWidget(QWidget):
         self.display_mode = 'image'
         self.live2d_model_path = None
         self.fallback_image_path = None
+        self._original_pixmap = None  # 原图缓存，防止重复缩放导致画质下降 #
         
         # 创建堆叠布局
         self.stack_layout = QStackedLayout(self)
@@ -163,8 +164,9 @@ class Live2DSideWidget(QWidget):
                 print(f"❌ 无法加载图片: {image_path}")
                 return False
             
-            # 自适应缩放图片
-            self.resize_image(pixmap)
+            # 缓存原图并自适应缩放
+            self._original_pixmap = pixmap  # 缓存原图 #
+            self.resize_image(self._original_pixmap)
             return True
             
         except Exception as e:
@@ -173,11 +175,10 @@ class Live2DSideWidget(QWidget):
     
     def resize_image(self, pixmap=None):
         """调整图片大小"""
-        if not pixmap:
-            if hasattr(self.image_widget, 'pixmap'):
-                pixmap = self.image_widget.pixmap()
-            else:
-                return
+        if pixmap is None:
+            pixmap = self._original_pixmap  # 始终从原图缩放 #
+        if pixmap is None:
+            return
         
         if pixmap.isNull():
             return

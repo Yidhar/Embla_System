@@ -9,7 +9,7 @@ import json
 import time
 import re
 from typing import Dict, Any, Optional, Union, List
-from openai import AsyncOpenAI
+from nagaagent_core.core import AsyncOpenAI
 from system.config import (
     QUICK_MODEL_CONFIG, 
     OUTPUT_FILTER_CONFIG,

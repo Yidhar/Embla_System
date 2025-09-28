@@ -6,7 +6,7 @@ authors = [
     {name = "柏斯阔落", email = "1781393885@qq.com"},
 ]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.12" 
 dependencies = [
     # 核心依赖
     "mcp>=1.6.0",
@@ -89,6 +89,9 @@ dependencies = [
     "langchain-community>=0.3.21",
     "langchain>=0.3.27",
     "onnxruntime>=1.22.1",
+    "neo4j>=5.28.2",
+    "opensimplex>=0.4.5.1",
+    "live2d-py>=0.5.4",
 ]
 
 # 可选依赖组

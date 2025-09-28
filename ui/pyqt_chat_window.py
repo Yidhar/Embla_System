@@ -1,8 +1,8 @@
 import sys, os; sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + '/..'))
 from .styles.button_factory import ButtonFactory
-from PyQt5.QtWidgets import QApplication, QWidget, QTextEdit, QSizePolicy, QHBoxLayout, QLabel, QVBoxLayout, QStackedLayout, QPushButton, QStackedWidget, QDesktopWidget, QScrollArea, QSplitter, QFileDialog, QMessageBox, QFrame
-from PyQt5.QtCore import Qt, QRect, QParallelAnimationGroup, QPropertyAnimation, QEasingCurve, QTimer
-from PyQt5.QtGui import QColor, QPainter, QBrush, QFont, QPen
+from nagaagent_core.vendors.PyQt5.QtWidgets import QApplication, QWidget, QTextEdit, QSizePolicy, QHBoxLayout, QLabel, QVBoxLayout, QStackedLayout, QPushButton, QStackedWidget, QDesktopWidget, QScrollArea, QSplitter, QFileDialog, QMessageBox, QFrame  # 统一入口 #
+from nagaagent_core.vendors.PyQt5.QtCore import Qt, QRect, QParallelAnimationGroup, QPropertyAnimation, QEasingCurve, QTimer  # 统一入口 #
+from nagaagent_core.vendors.PyQt5.QtGui import QColor, QPainter, QBrush, QFont, QPen  # 统一入口 #
 from system.conversation_core import NagaConversation
 import os
 from system.config import config, AI_NAME, Live2DConfig # 导入统一配置
@@ -13,7 +13,7 @@ from ui.elegant_settings_widget import ElegantSettingsWidget
 from ui.message_renderer import MessageRenderer  # 导入消息渲染器
 from ui.live2d_side_widget import Live2DSideWidget  # 导入Live2D侧栏组件
 import json
-import requests
+from nagaagent_core.core import requests
 from pathlib import Path
 import time
 
@@ -240,6 +240,12 @@ class ChatWindow(QWidget):
         # 添加心智云图按钮
         s.mind_map_btn = ButtonFactory.create_action_button("mind_map", s.input_wrap)
         hlay.addWidget(s.mind_map_btn)
+
+        # 添加博弈论启动/关闭按钮
+        s.self_game_enabled = False
+        s.self_game_btn = ButtonFactory.create_action_button("self_game", s.input_wrap)
+        s.self_game_btn.setToolTip("启动/关闭博弈论流程")
+        hlay.addWidget(s.self_game_btn)
         
         vlay.addWidget(s.input_wrap,0)
         
@@ -337,6 +343,8 @@ class ChatWindow(QWidget):
         
         # 连接心智云图按钮
         s.mind_map_btn.clicked.connect(s.open_mind_map)
+        # 连接博弈论按钮
+        s.self_game_btn.clicked.connect(s.toggle_self_game)
         
         s.setLayout(main)
         s.titlebar = TitleBar('NAGA AGENT', s)
@@ -572,12 +580,26 @@ class ChatWindow(QWidget):
                 s.worker = None
             
             # 根据模式选择Worker类型，创建全新实例
-            if s.streaming_mode:
+            if s.streaming_mode and not s.self_game_enabled:
                 s.worker = StreamingWorker(s.naga, u)
                 s.setup_streaming_worker()
             else:
-                s.worker = BatchWorker(s.naga, u)
-                s.setup_batch_worker()
+                # 走API服务器统一入口，带上use_self_game开关
+                try:
+                    api_url = "http://localhost:8000/chat"
+                    data = {"message": u, "stream": False, "use_self_game": bool(s.self_game_enabled)}
+                    resp = requests.post(api_url, json=data, timeout=120)
+                    if resp.status_code == 200:
+                        result = resp.json()
+                        from ui.response_utils import extract_message
+                        final_message = extract_message(result.get("response", ""))
+                        s.add_user_message(AI_NAME, final_message)
+                    else:
+                        s.add_user_message("系统", f"❌ 调用失败: {resp.text}")
+                except Exception as e:
+                    s.add_user_message("系统", f"❌ 调用错误: {str(e)}")
+                s.progress_widget.stop_loading()
+                return
             
             # 启动进度显示 - 恢复原来的调用方式
             s.progress_widget.set_thinking_mode()
@@ -608,14 +630,20 @@ class ChatWindow(QWidget):
         s.worker.finished.connect(s.on_batch_response_finished)
     
     def append_response_chunk(s, chunk):
-        """追加响应片段（流式模式）- 实时显示"""
-        # 检查是否为工具调用检测标记
-        if chunk.startswith("data: [TOOL_CALL]"):
-            # 这是工具调用检测，不累积到娜迦消息中
+        """追加响应片段（流式模式）- 实时显示到普通消息框"""
+        # 检查是否为工具调用相关标记
+        if any(marker in chunk for marker in ["[TOOL_CALL]", "[TOOL_START]", "[TOOL_RESULT]", "[TOOL_ERROR]"]):
+            # 这是工具调用相关标记，不累积到普通消息中
             return
         
+        # 检查是否在工具调用过程中，如果是则创建新的消息框
+        if hasattr(s, '_in_tool_call_mode') and s._in_tool_call_mode:
+            # 工具调用模式结束，创建新的消息框
+            s._in_tool_call_mode = False
+            s._current_message_id = None
+        
         # 实时更新显示 - 立即显示到UI
-        if not hasattr(s, '_current_message_id'):
+        if not hasattr(s, '_current_message_id') or s._current_message_id is None:
             # 第一次收到chunk时，创建新消息
             s._current_message_id = s.add_user_message(AI_NAME, chunk)
             s.current_response = chunk
@@ -654,6 +682,12 @@ class ChatWindow(QWidget):
             final_message = extract_message(response)
             s.add_user_message(AI_NAME, final_message)
         s.progress_widget.stop_loading()
+
+    def toggle_self_game(s):
+        """切换博弈论流程开关"""
+        s.self_game_enabled = not s.self_game_enabled
+        status = '启用' if s.self_game_enabled else '禁用'
+        s.add_user_message("系统", f"● 博弈论流程已{status}")
     
     def on_batch_response_finished(s, response):
         """处理完成的响应（批量模式）"""
@@ -671,7 +705,10 @@ class ChatWindow(QWidget):
         s.progress_widget.stop_loading()
     
     def handle_tool_call(s, notification):
-        """处理工具调用通知"""
+        """处理工具调用通知 - 创建工具调用专用渲染框"""
+        # 标记进入工具调用模式
+        s._in_tool_call_mode = True
+        
         # 创建专门的工具调用内容对话框（没有用户名）
         tool_call_dialog = MessageRenderer.create_tool_call_content_message(notification, s.chat_content)
         
@@ -699,7 +736,8 @@ class ChatWindow(QWidget):
             'name': '工具调用',
             'content': notification,
             'full_content': notification,
-            'dialog_widget': tool_call_dialog
+            'dialog_widget': tool_call_dialog,
+            'is_tool_call': True  # 标记为工具调用消息
         }
         
         # 在弹性空间之前插入工具调用对话框
@@ -714,7 +752,7 @@ class ChatWindow(QWidget):
         print(f"工具调用: {notification}")
     
     def handle_tool_result(s, result):
-        """处理工具执行结果"""
+        """处理工具执行结果 - 更新工具调用专用渲染框"""
         # 查找最近的工具调用对话框并更新
         if hasattr(s, '_messages'):
             for message_id, message_info in reversed(list(s._messages.items())):
@@ -735,6 +773,9 @@ class ChatWindow(QWidget):
                             """.strip()
                             dialog_widget.set_nested_content(nested_title, nested_content)
                         break
+        
+        # 工具调用完成，退出工具调用模式，准备接收后续内容
+        s._in_tool_call_mode = False
         
         # 在状态栏也显示工具执行结果
         s.progress_widget.status_label.setText(f"✅ {result[:50]}...")
@@ -1060,9 +1101,9 @@ class ChatWindow(QWidget):
     
     def show_document_options(s, file_path, filename):
         """显示文档处理选项"""
-        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QFrame, QPushButton
-        from PyQt5.QtCore import Qt
-        from PyQt5.QtGui import QFont
+        from nagaagent_core.vendors.PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QFrame, QPushButton  # 统一入口 #
+        from nagaagent_core.vendors.PyQt5.QtCore import Qt  # 统一入口 #
+        from nagaagent_core.vendors.PyQt5.QtGui import QFont  # 统一入口 #
         
         dialog = QDialog(s)
         dialog.setWindowTitle("文档处理选项")

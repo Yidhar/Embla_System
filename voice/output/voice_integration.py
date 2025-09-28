@@ -15,7 +15,7 @@ import re
 import io
 import base64
 from typing import Optional, List, Dict, Any
-import aiohttp
+from nagaagent_core.core import aiohttp
 import sys
 from pathlib import Path
 from queue import Queue, Empty
@@ -77,7 +77,7 @@ class VoiceIntegration:
     def _init_pygame_audio(self):
         """初始化pygame音频系统"""
         try:
-            import pygame
+            import nagaagent_core.vendors.pygame as pygame
             pygame.init()
             
             try:
@@ -280,7 +280,7 @@ class VoiceIntegration:
         
         # 在工作线程中检查pygame是否已初始化
         try:
-            import pygame
+            import nagaagent_core.vendors.pygame as pygame
             if not pygame.mixer.get_init():
                 pygame.init()
                 pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
@@ -319,7 +319,7 @@ class VoiceIntegration:
     def _play_audio_data_sync(self, audio_data: bytes):
         """同步播放音频数据"""
         try:
-            import pygame
+            import nagaagent_core.vendors.pygame as pygame
             import io
             import time
             

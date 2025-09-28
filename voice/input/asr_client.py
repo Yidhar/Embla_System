@@ -1,6 +1,6 @@
 import os  # 系统 #
 from typing import Optional  # 类型 #
-import numpy as np  # 数值 #
+import nagaagent_core.vendors.numpy as np  # 数值 #
 
 from system.config import config  # 统一配置 #
 

@@ -11,7 +11,7 @@ from .config import TREE_THINKING_CONFIG
 
 # numpy导入（可选，用于统计计算）
 try:
-    import numpy as np
+    import nagaagent_core.vendors.numpy as np
     HAS_NUMPY = True
 except ImportError:
     HAS_NUMPY = False

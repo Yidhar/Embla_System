@@ -1,10 +1,10 @@
 from typing import Any, Dict, Callable
 from system.config import *  # 配置参数统一管理 #
 import asyncio
-import html2text  # 用于HTML转Markdown #
+import nagaagent_core.vendors.html2text as html2text  # 用于HTML转Markdown #
 import os
-from dotenv import load_dotenv
-from agents import Agent, AgentHooks, RunContextWrapper
+from nagaagent_core.core import load_dotenv
+from nagaagent_core.vendors.agents import Agent, AgentHooks, RunContextWrapper  # 统一代理 #
 # 移除循环导入
 # from .controller import BrowserAgent
 # from .browser import ContentAgent

@@ -1,4 +1,4 @@
-import requests
+from nagaagent_core.core import requests
 import json
 import logging
 import re

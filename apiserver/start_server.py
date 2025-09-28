@@ -13,7 +13,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from apiserver.api_server import app
-import uvicorn
+from nagaagent_core.api import uvicorn
 
 async def main():
     """主函数"""

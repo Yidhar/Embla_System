@@ -1,7 +1,7 @@
 # agent_mqtt_tool.py # 设备开关控制Agent，仅保留开关控制功能
 import json
 import time
-from agents import Agent
+from nagaagent_core.vendors.agents import Agent  # 统一代理 #
 
 # 导入设备开关工具
 try:

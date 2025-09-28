@@ -9,7 +9,7 @@ import traceback # 用于捕获和打印详细的异常信息
 from typing import Any # 导入类型提示工具，增加代码的类型安全，在本项目中用于标记函数参数和返回值的类型
 
 # OpenAI Agents SDK 相关导入
-from agents import (
+from nagaagent_core.vendors.agents import (
   Agent, # Agent类，用于定义和执行Agent任务，本项目中我们需要构建浏览器、文档处理和控制器代理
   Model, # Model类，用于定义我们自定义的模型提供商函数返回的类型
   ModelSettings, # ModelSettings类，用于配置模型参数，如温度等，在本项目中用于调整各代理的行为特征
@@ -23,9 +23,12 @@ from agents import (
   AgentHooks, # agent 生命周期钩子接口，用于监控和干预 agent 执行过程，在本项目中用于追踪执行进度和提取执行结果
 )
 
-from agents.mcp import MCPServerStdio # 使用本地通信，标准输入输出与MCP服务通信，在本项目中创建Playwright MCP 服务的连接
-from openai import AsyncOpenAI # 导入OpenAI 异步客户端，在本项目中用于创建于 Deepseek API 的异步通信客户端
-from dotenv import load_dotenv # 导入dotenv库，在本项目中用于加载环境变量文件
+try:
+    from nagaagent_core.vendors.agents.mcp import MCPServerStdio  # 优先从代理导入 #
+except Exception:
+    MCPServerStdio = None  # 兼容缺失 #
+from nagaagent_core.core import AsyncOpenAI # 导入OpenAI 异步客户端，在本项目中用于创建于 Deepseek API 的异步通信客户端
+from nagaagent_core.core import load_dotenv # 导入dotenv库，在本项目中用于加载环境变量文件
 
 load_dotenv() # 加载环境变量文件
 
@@ -275,6 +278,8 @@ async def create_browser_agent():
         tuple: (浏览器代理实例, Playwright MCP服务器连接实例)
     """
     # 创建 playwright MCP 服务连接实例,使用 MCPServerStdio 标准输入输出通信。
+    if MCPServerStdio is None:
+        raise RuntimeError("MCPServerStdio 不可用，请安装 agents SDK 或提供本地替代实现")
     playwright_server = MCPServerStdio(
         name="playwright",  # 服务名称，用于标识此MCP服务
         params={

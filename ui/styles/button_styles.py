@@ -71,5 +71,11 @@ BUTTON_CONFIGS = {
         "tooltip": "心智云图",
         "size": (44, 44),
         "style": MIND_MAP_BUTTON_STYLE
+    },
+    "self_game": {  # 自我博弈入口 #
+        "icon": "🎮",
+        "tooltip": "自我博弈",
+        "size": (44, 44),
+        "style": UPLOAD_BUTTON_STYLE
     }
 } 

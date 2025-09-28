@@ -1,0 +1,146 @@
+{
+  "system": {
+    "log_level": "INFO",
+    "save_intermediate_results": true,
+    "results_dir": "game/results",
+    "enable_async": true,
+    "max_concurrent_tasks": 5,
+    "checkpoint_interval": 10
+  },
+  "philoss": {
+    "model_name": "Qwen/Qwen2.5-VL-7B-Instruct",
+    "model_path": "",
+    "device": "cuda",
+    "max_memory": "8GB",
+    "token_block_size": 100,
+    "hidden_size": 768,
+    "mlp_hidden_size": 256,
+    "prediction_threshold": 0.6,
+    "novelty_threshold": 0.6
+  },
+  "self_game": {
+    "max_iterations": 10,
+    "max_critics": 3,
+    "timeout_seconds": 300,
+    "convergence_threshold": 0.8,
+    "quality_threshold": 0.7,
+    "enable_thinking_vector": true,
+    "thinking_vector_max_depth": 5
+  },
+  "interaction_graph": {
+    "max_agents": 10,
+    "min_agents": 2,
+    "role_templates_path": "game/templates/roles",
+    "collaboration_rules_path": "game/templates/collaboration",
+    "enable_dynamic_routing": true,
+    "max_routing_hops": 3
+  },
+  "domain_configs": {
+    "游戏开发": {
+      "interaction_graph": {
+        "max_agents": 6,
+        "min_agents": 4
+      },
+      "self_game": {
+        "max_iterations": 15,
+        "convergence_threshold": 0.85
+      }
+    },
+    "学术研究": {
+      "interaction_graph": {
+        "max_agents": 8,
+        "min_agents": 3
+      },
+      "self_game": {
+        "max_iterations": 12,
+        "quality_threshold": 0.8
+      }
+    },
+    "产品设计": {
+      "interaction_graph": {
+        "max_agents": 5,
+        "min_agents": 3
+      },
+      "self_game": {
+        "max_iterations": 10,
+        "convergence_threshold": 0.75
+      }
+    }
+  }
+} 
+ 
+  "system": {
+    "log_level": "INFO",
+    "save_intermediate_results": true,
+    "results_dir": "game/results",
+    "enable_async": true,
+    "max_concurrent_tasks": 5,
+    "checkpoint_interval": 10
+  },
+  "philoss": {
+    "model_name": "Qwen/Qwen2.5-VL-7B-Instruct",
+    "model_path": "",
+    "device": "cuda",
+    "max_memory": "8GB",
+    "token_block_size": 100,
+    "hidden_size": 768,
+    "mlp_hidden_size": 256,
+    "prediction_threshold": 0.6,
+    "novelty_threshold": 0.6
+  },
+  "self_game": {
+    "max_iterations": 10,
+    "max_critics": 3,
+    "timeout_seconds": 300,
+    "convergence_threshold": 0.8,
+    "quality_threshold": 0.7,
+    "enable_thinking_vector": true,
+    "thinking_vector_max_depth": 5
+  },
+  "interaction_graph": {
+    "max_agents": 10,
+    "min_agents": 2,
+    "role_templates_path": "game/templates/roles",
+    "collaboration_rules_path": "game/templates/collaboration",
+    "enable_dynamic_routing": true,
+    "max_routing_hops": 3
+  },
+  "domain_configs": {
+    "游戏开发": {
+      "interaction_graph": {
+        "max_agents": 6,
+        "min_agents": 4
+      },
+      "self_game": {
+        "max_iterations": 15,
+        "convergence_threshold": 0.85
+      }
+    },
+    "学术研究": {
+      "interaction_graph": {
+        "max_agents": 8,
+        "min_agents": 3
+      },
+      "self_game": {
+        "max_iterations": 12,
+        "quality_threshold": 0.8
+      }
+    },
+    "产品设计": {
+      "interaction_graph": {
+        "max_agents": 5,
+        "min_agents": 3
+      },
+      "self_game": {
+        "max_iterations": 10,
+        "convergence_threshold": 0.75
+      }
+    }
+  }
+} 
+ 
+ 
+ 
+ 
+ 
+ 

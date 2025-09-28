@@ -2,10 +2,10 @@ import threading  # 线程 #
 import time  # 时间 #
 from typing import Callable, Optional, List  # 类型 #
 
-import numpy as np  # 数值 #
+import nagaagent_core.vendors.numpy as np  # 数值 #
 import sounddevice as sd  # 录音 #
 import soundfile as sf  # 写wav #
-from scipy.signal import resample  # 重采样 #
+from nagaagent_core.vendors.scipy.signal import resample  # 重采样 #
 import onnxruntime as ort  # VAD推理 #
 import io  # 内存流 #
 

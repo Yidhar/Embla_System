@@ -1,10 +1,10 @@
-from playwright.async_api import async_playwright, Page
+from nagaagent_core.vendors.playwright.async_api import async_playwright, Page
 import asyncio, re, json
 from typing import Any, Dict, List
 from system.config import config  # 使用新的配置系统
 import os
-from dotenv import load_dotenv
-from agents import Agent, AgentHooks, RunContextWrapper
+from nagaagent_core.core import load_dotenv
+from nagaagent_core.vendors.agents import Agent, AgentHooks, RunContextWrapper  # 统一代理 #
 # 移除循环导入，延迟导入
 # from .browser import PlaywrightBrowser
 

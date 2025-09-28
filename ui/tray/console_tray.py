@@ -8,9 +8,9 @@ import platform
 import threading
 import subprocess
 import time
-from PyQt5.QtWidgets import QSystemTrayIcon, QMenu, QAction, QApplication
-from PyQt5.QtCore import QTimer, pyqtSignal, QObject
-from PyQt5.QtGui import QIcon
+from PyQt5.QtWidgets import QSystemTrayIcon, QMenu, QAction, QApplication  # 直接依赖 #
+from PyQt5.QtCore import QTimer, pyqtSignal, QObject  # 直接依赖 #
+from PyQt5.QtGui import QIcon  # 直接依赖 #
 
 # 平台特定导入
 if platform.system() == 'Windows':

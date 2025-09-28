@@ -1,5 +1,5 @@
 import json
-from agents import Agent
+from nagaagent_core.vendors.agents import Agent  # 统一代理 #
 import asyncio
 
 # 直接导入summer_memory的memory_manager

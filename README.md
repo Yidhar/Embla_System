@@ -221,6 +221,26 @@ NagaAgent/
 
 ## 🛠️ 详细安装指南
 
+### 📦 依赖整合说明
+
+NagaAgent 3.1 已将核心依赖和API服务器相关依赖整合到 `nagaagent-core==1.0.1` 包中，以减少依赖下载负担：
+
+**已整合的依赖包：**
+- **核心依赖**: `mcp`, `openai`, `python-dotenv`, `requests`, `aiohttp`
+- **API服务器依赖**: `flask`, `gevent`, `fastapi`, `uvicorn`
+
+**安装方式：**
+```bash
+# 自动安装 nagaagent-core 包（包含所有核心依赖）
+pip install -r requirements.txt
+```
+
+**优势：**
+- ✅ 减少依赖下载时间
+- ✅ 统一版本管理
+- ✅ 简化安装流程
+- ✅ 提高稳定性
+
 ### 🔍 系统环境检测
 
 NagaAgent 3.1 内置了完整的系统环境检测功能，自动检测Python版本、虚拟环境、依赖包等：
@@ -811,7 +831,7 @@ AgentManager是一个独立的Agent注册和调用系统，支持从配置文件
 
 #### 基本调用
 ```python
-from mcpserver.agent_manager import get_agent_manager
+from agentserver.core.agent_manager import get_agent_manager
 
 # 获取AgentManager实例
 agent_manager = get_agent_manager()
@@ -826,7 +846,7 @@ result = await agent_manager.call_agent(
 
 #### 便捷函数调用
 ```python
-from mcpserver.agent_manager import call_agent, list_agents, get_agent_info
+from agentserver.core.agent_manager import call_agent, list_agents, get_agent_info
 
 # 便捷调用
 result = await call_agent("ExampleAgent", "你好")

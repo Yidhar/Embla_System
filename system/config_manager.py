@@ -55,7 +55,7 @@ class ConfigManager:
     
     def _on_config_changed(self):
         """配置变更时的处理"""
-        print("配置已变更，开始重新加载相关模块...")  
+        print("配置已变更，开始重新加载相关模块...")  # 去除Emoji #
         
         # 执行所有重新加载回调
         self._execute_reload_callbacks()
@@ -63,32 +63,32 @@ class ConfigManager:
         # 重新加载注册的模块
         self._reload_registered_modules()
         
-        print("配置变更处理完成")  
+        print("配置变更处理完成")  # 去除Emoji #
     
     def _execute_reload_callbacks(self):
         """执行所有重新加载回调"""
         if not self._reload_callbacks:
-            print("没有注册的重新加载回调")  
+            print("没有注册的重新加载回调")  # 去除Emoji #
             return
         
-        print(f"执行 {len(self._reload_callbacks)} 个重新加载回调...")  
+        print(f"执行 {len(self._reload_callbacks)} 个重新加载回调...")  # 去除Emoji #
         
         for i, callback in enumerate(self._reload_callbacks, 1):
             try:
                 callback()
                 callback_name = callback.__name__ if hasattr(callback, '__name__') else f'callback_{i}'
-                print(f"回调执行成功: {callback_name}")  
+                print(f"回调执行成功: {callback_name}")  # 去除Emoji #
             except Exception as e:
                 callback_name = callback.__name__ if hasattr(callback, '__name__') else f'callback_{i}'
-                print(f"回调执行失败: {callback_name} - {e}")  
+                print(f"回调执行失败: {callback_name} - {e}")  # 去除Emoji #
     
     def _reload_registered_modules(self):
         """重新加载注册的模块"""
         if not self._modules_to_reload:
-            print("没有注册的模块需要重新加载")  
+            print("没有注册的模块需要重新加载")  # 去除Emoji #
             return
         
-        print(f"重新加载 {len(self._modules_to_reload)} 个模块...")  
+        print(f"重新加载 {len(self._modules_to_reload)} 个模块...")  # 去除Emoji #
         
         for module_name in self._modules_to_reload:
             self._reload_single_module(module_name)
@@ -106,10 +106,10 @@ class ConfigManager:
                 return
             
             module.reload_config()
-            print(f"模块重新加载成功: {module_name}")  
+            print(f"模块重新加载成功: {module_name}")  # 去除Emoji #
             
         except Exception as e:
-            print(f"模块重新加载失败: {module_name} - {e}")  
+            print(f"模块重新加载失败: {module_name} - {e}")  # 去除Emoji #
     
     def start_config_watcher(self, config_file: str = None):
         """启动配置文件监视器"""
@@ -126,14 +126,14 @@ class ConfigManager:
             daemon=True
         )
         self._config_watcher_thread.start()
-        print(f"配置文件监视器已启动: {config_file}")  
+        print(f"配置文件监视器已启动: {config_file}")  # 去除Emoji #
     
     def stop_config_watcher(self):
         """停止配置文件监视器"""
         self._stop_watching = True
         if self._config_watcher_thread:
             self._config_watcher_thread.join(timeout=1)
-        print("配置文件监视器已停止")  
+        print("配置文件监视器已停止")  # 去除Emoji #
     
     def _watch_config_file(self, config_file: str):
         """监视配置文件变化"""
@@ -145,7 +145,7 @@ class ConfigManager:
                     current_modified = os.path.getmtime(config_file)
                     if current_modified > last_modified:
                         last_modified = current_modified
-                        print(f"检测到配置文件变更: {config_file}")  
+                        print(f"检测到配置文件变更: {config_file}")  # 去除Emoji #
                         
                         # 等待文件写入完成
                         time.sleep(0.1)
@@ -168,7 +168,7 @@ class ConfigManager:
             bool: 更新是否成功
         """
         try:
-            print(f"开始更新配置，共 {len(updates)} 项...")  
+            print(f"开始更新配置，共 {len(updates)} 项...")  # 去除Emoji #
             
             # 验证配置文件存在性
             config_path = str(Path(__file__).parent.parent / "config.json")
@@ -196,10 +196,11 @@ class ConfigManager:
             # 等待配置重新加载完成
             time.sleep(0.1)
             
-            print(f"配置更新成功: {len(updates)} 项")
+            print(f"配置更新成功: {len(updates)} 项")  # 去除Emoji #
+            return True
             
         except Exception as e:
-            print(f"配置更新失败: {e}")
+            print(f"配置更新失败: {e}")  # 去除Emoji #
             return False
     
     def _load_config_file(self, config_path: str) -> Optional[Dict[str, Any]]:
@@ -208,7 +209,7 @@ class ConfigManager:
             with open(config_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            print(f"加载配置文件失败: {e}") 
+            print(f"加载配置文件失败: {e}")  # 去除Emoji #
             return None
     
     def _save_config_file(self, config_path: str, config_data: Dict[str, Any]) -> bool:
@@ -218,7 +219,7 @@ class ConfigManager:
                 json.dump(config_data, f, ensure_ascii=False, indent=2)
             return True
         except Exception as e:
-            print(f"保存配置文件失败: {e}")  
+            print(f"保存配置文件失败: {e}")  # 去除Emoji #
             return False
     
     def _recursive_update(self, target: Dict[str, Any], updates: Dict[str, Any]):
@@ -239,7 +240,7 @@ class ConfigManager:
             with open(config_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            print(f"获取配置快照失败: {e}")  
+            print(f"获取配置快照失败: {e}")  # 去除Emoji #
             # 如果读取失败，返回一个基本的配置结构
             return {
                 "system": {"version": "3.0"},
@@ -264,10 +265,10 @@ class ConfigManager:
                 json.dump(snapshot, f, ensure_ascii=False, indent=2)
             
             hot_reload_config()
-            print("配置快照恢复成功")  
+            print("配置快照恢复成功")  # 去除Emoji #
             return True
         except Exception as e:
-            print(f"配置快照恢复失败: {e}")  
+            print(f"配置快照恢复失败: {e}")  # 去除Emoji #
             return False
 
 # 全局配置管理器实例
@@ -368,7 +369,7 @@ def restore_config_snapshot(snapshot: Dict[str, Any]) -> bool:
 
 if __name__ == "__main__":
     # 测试配置管理器
-    print("测试配置管理器...")  
+    print("测试配置管理器...")  # 去除Emoji #
     
     # 注册一些测试回调
     def test_callback1():

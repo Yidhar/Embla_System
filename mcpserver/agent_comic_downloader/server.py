@@ -7,10 +7,10 @@ import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import uvicorn
+from nagaagent_core.api import FastAPI, HTTPException
+from nagaagent_core.api import CORSMiddleware
+from nagaagent_core.vendors.pydantic import BaseModel
+from nagaagent_core.api import uvicorn
 
 try:
     from .comic_service import download_comic, search_comic_by_name, search_comic_by_author, get_comic_detail

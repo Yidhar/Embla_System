@@ -47,7 +47,7 @@ class AgentSession:
     session_id: str = "default_user_session"
 
 class AgentManager:
-    """Agent管理器"""
+    """Agent管理器 - 增强版，支持任务规划和多智能体协作"""
     
     def __init__(self, config_dir: str = None):
         """
@@ -59,6 +59,11 @@ class AgentManager:
         self.config_dir = Path(config_dir) if config_dir else None
         self.agents: Dict[str, AgentConfig] = {}
         self.agent_sessions: Dict[str, Dict[str, AgentSession]] = {}
+        
+        # 任务规划相关
+        self.task_planner = None
+        self.task_executor = None
+        
         # 从配置文件读取最大历史轮数
         try:
             from system.config import config, AI_NAME
@@ -85,6 +90,9 @@ class AgentManager:
         except RuntimeError:
             # 没有运行的事件循环，跳过定期清理任务
             pass
+        
+        # 初始化任务规划器
+        self._init_task_planner()
         
         logger.info(f"AgentManager初始化完成，已加载 {len(self.agents)} 个Agent")
     
@@ -556,6 +564,124 @@ class AgentManager:
             return f"请执行动作 '{action}'，参数: {args_str}"
         else:
             return f"请执行动作 '{action}'"
+    
+    def _init_task_planner(self):
+        """初始化任务规划器"""
+        try:
+            from .task_planner import TaskPlanner
+            from .task_executor import TaskExecutor
+            
+            # 创建任务规划器
+            self.task_planner = TaskPlanner(
+                agent_manager=self,
+                mcp_manager=None  # 稍后设置
+            )
+            
+            # 创建任务执行器
+            self.task_executor = TaskExecutor(self.task_planner)
+            
+            logger.info("任务规划器和执行器初始化完成")
+            
+        except Exception as e:
+            logger.warning(f"任务规划器初始化失败: {e}")
+            self.task_planner = None
+            self.task_executor = None
+    
+    async def process_intelligent_task(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        智能任务处理 - 新增的核心方法
+        
+        Args:
+            query: 用户查询
+            context: 上下文信息
+            
+        Returns:
+            Dict[str, Any]: 处理结果
+        """
+        if not self.task_planner or not self.task_executor:
+            # 降级到传统Agent调用
+            return await self.call_agent("default", query)
+        
+        try:
+            # 1. 任务规划
+            task = await self.task_planner.analyze_and_plan(query, context)
+            logger.info(f"任务规划完成: {task.id} - {task.task_type}")
+            
+            # 2. 任务执行
+            result = await self.task_executor.execute_task(task)
+            
+            return {
+                "status": "success" if result.success else "error",
+                "result": result.result,
+                "error": result.error,
+                "task_id": task.id,
+                "execution_time": result.execution_time,
+                "task_type": task.task_type
+            }
+            
+        except Exception as e:
+            logger.error(f"智能任务处理失败: {e}")
+            return {
+                "status": "error",
+                "error": str(e)
+            }
+    
+    async def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """获取任务状态"""
+        if not self.task_planner:
+            return None
+        
+        task = self.task_planner.get_task(task_id)
+        if not task:
+            return None
+        
+        return {
+            "task_id": task.id,
+            "title": task.title,
+            "task_type": task.task_type,
+            "status": task.status,
+            "priority": task.priority,
+            "created_at": task.created_at.isoformat(),
+            "steps": task.steps,
+            "meta": task.meta
+        }
+    
+    async def get_task_list(self, status_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+        """获取任务列表"""
+        if not self.task_planner:
+            return []
+        
+        tasks = self.task_planner.get_task_list(status_filter)
+        return [
+            {
+                "task_id": task.id,
+                "title": task.title,
+                "task_type": task.task_type,
+                "status": task.status,
+                "priority": task.priority,
+                "created_at": task.created_at.isoformat()
+            }
+            for task in tasks
+        ]
+    
+    async def get_execution_stats(self) -> Dict[str, Any]:
+        """获取执行统计信息"""
+        if not self.task_executor:
+            return {}
+        
+        return self.task_executor.get_execution_stats()
+    
+    async def cancel_task(self, task_id: str) -> bool:
+        """取消任务"""
+        if not self.task_executor:
+            return False
+        
+        try:
+            await self.task_executor._terminate_task(task_id)
+            return True
+        except Exception as e:
+            logger.error(f"取消任务失败: {e}")
+            return False
 
 # 全局Agent管理器实例
 _AGENT_MANAGER = None
@@ -581,4 +707,30 @@ def list_agents() -> List[Dict[str, Any]]:
 def get_agent_info(agent_name: str) -> Optional[Dict[str, Any]]:
     """便捷的Agent信息获取函数"""
     manager = get_agent_manager()
-    return manager.get_agent_info(agent_name) 
+    return manager.get_agent_info(agent_name)
+
+# 新增的智能任务处理函数
+async def process_intelligent_task(query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """便捷的智能任务处理函数"""
+    manager = get_agent_manager()
+    return await manager.process_intelligent_task(query, context)
+
+async def get_task_status(task_id: str) -> Optional[Dict[str, Any]]:
+    """便捷的任务状态获取函数"""
+    manager = get_agent_manager()
+    return await manager.get_task_status(task_id)
+
+async def get_task_list(status_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+    """便捷的任务列表获取函数"""
+    manager = get_agent_manager()
+    return await manager.get_task_list(status_filter)
+
+async def get_execution_stats() -> Dict[str, Any]:
+    """便捷的执行统计获取函数"""
+    manager = get_agent_manager()
+    return await manager.get_execution_stats()
+
+async def cancel_task(task_id: str) -> bool:
+    """便捷的任务取消函数"""
+    manager = get_agent_manager()
+    return await manager.cancel_task(task_id) 

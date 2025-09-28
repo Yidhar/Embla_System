@@ -4,8 +4,8 @@ import json
 import sys
 import os
 import platform
-from playwright.async_api import async_playwright
-from agents import Agent
+from nagaagent_core.vendors.playwright.async_api import async_playwright
+from nagaagent_core.vendors.agents import Agent  # 统一代理 #
 from system.config import config
 
 print = lambda *a, **k: sys.stderr.write('[print] ' + (' '.join(map(str, a))) + '\n')

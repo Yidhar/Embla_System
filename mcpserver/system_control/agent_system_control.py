@@ -1,5 +1,5 @@
-from agents import Agent
 from system.config import config  # 统一变量管理 #
+from nagaagent_core.vendors.agents import Agent  # 统一代理 #
 import asyncio
 import json
 import subprocess
@@ -9,10 +9,10 @@ try:
 except ImportError:
     sbc = None
 try:
-    from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-    from ctypes import cast, POINTER
-    from comtypes import CLSCTX_ALL
-    import comtypes  # COM组件初始化 #
+    from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume  # 直接依赖 #
+    from ctypes import cast, POINTER  # 标准库 #
+    from comtypes import CLSCTX_ALL  # 直接依赖 #
+    import comtypes as comtypes  # COM组件初始化 #
 except ImportError:
     AudioUtilities = None
 

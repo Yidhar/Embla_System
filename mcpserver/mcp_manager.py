@@ -11,7 +11,7 @@ from datetime import datetime
 import importlib,os,inspect # 自动注册相关
 from pathlib import Path
 
-from mcp import ClientSession, StdioServerParameters
+from nagaagent_core.core import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcpserver.mcp_registry import MCP_REGISTRY # MCP服务注册表
 

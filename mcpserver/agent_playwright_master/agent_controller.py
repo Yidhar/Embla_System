@@ -1,6 +1,6 @@
 import os
-from dotenv import load_dotenv
-from agents import Agent, AgentHooks, RunContextWrapper
+from nagaagent_core.core import load_dotenv
+from nagaagent_core.vendors.agents import Agent, AgentHooks, RunContextWrapper  # 统一代理 #
 # 移除循环导入，使用延迟导入
 # from .controller import BrowserAgent
 # from .browser import ContentAgent

@@ -1,6 +1,6 @@
 import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))  # 加入项目根目录到模块查找路径
-from flask import Flask, request, send_file, jsonify
+from nagaagent_core.api import Flask, request, send_file, jsonify
 from voice.output.tts_handler import generate_speech
 from voice.output.utils import require_api_key, AUDIO_FORMAT_MIME_TYPES
 from system.config import config

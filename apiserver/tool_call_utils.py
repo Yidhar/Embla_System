@@ -80,7 +80,7 @@ async def execute_tool_calls(tool_calls: list, mcp_manager) -> str:
             
             if agent_type == 'agent':
                 try:
-                    from mcpserver.agent_manager import get_agent_manager
+                    from agentserver.core.agent_manager import get_agent_manager
                     agent_manager = get_agent_manager()
                     
                     agent_name = args.get('agent_name')
@@ -125,11 +125,10 @@ async def execute_tool_calls(tool_calls: list, mcp_manager) -> str:
             results.append(error_result)
     return "\n\n---\n\n".join(results)
 
-async def tool_call_loop(messages: List[Dict], mcp_manager, llm_caller, is_streaming: bool = False, max_recursion: int = None, tool_calls_queue=None) -> Dict:
-    """工具调用循环主流程 - 支持流式和非流式处理"""
+async def tool_call_loop(messages: List[Dict], mcp_manager, llm_caller, is_streaming: bool = False, max_recursion: int = None, tool_calls_queue=None, callback_manager=None) -> Dict:
+    """工具调用循环主流程 - 仅支持非流式处理（流式处理已移至StreamingToolCallExtractor）"""
     if max_recursion is None:
-        # 默认配置
-        max_recursion = 5 if is_streaming else 5
+        max_recursion = 5
     
     recursion_depth = 0
     current_messages = messages.copy()
@@ -137,40 +136,23 @@ async def tool_call_loop(messages: List[Dict], mcp_manager, llm_caller, is_strea
     
     while recursion_depth < max_recursion:
         try:
-            if is_streaming and tool_calls_queue:
-                # 流式模式：从队列中获取工具调用
-                tool_calls = []
-                while not tool_calls_queue.empty():
-                    try:
-                        tool_call = tool_calls_queue.get_nowait()
-                        tool_calls.append(tool_call)
-                    except:
-                        break
-                
-                if tool_calls:
-                    print(f"[DEBUG] 流式模式：从队列获取到 {len(tool_calls)} 个工具调用")
-                else:
-                    # 没有工具调用，退出循环
-                    print(f"[DEBUG] 流式模式：无工具调用，退出循环")
-                    break
+            # 非流式模式：调用LLM获取完整内容
+            if hasattr(llm_caller, '__code__') and llm_caller.__code__.co_argcount > 1:
+                resp = await llm_caller(current_messages, use_stream=is_streaming)
             else:
-                # 非流式模式：调用LLM获取完整内容
-                if hasattr(llm_caller, '__code__') and llm_caller.__code__.co_argcount > 1:
-                    resp = await llm_caller(current_messages, use_stream=is_streaming)
-                else:
-                    resp = await llm_caller(current_messages)
-                
-                current_ai_content = resp.get('content', '')
-                
-                print(f"[DEBUG] 第{recursion_depth + 1}轮LLM回复:")
-                print(f"[DEBUG] 回复内容: {current_ai_content}")
-                
-                tool_calls = parse_tool_calls(current_ai_content)
-                print(f"[DEBUG] 解析到工具调用数量: {len(tool_calls)}")
-                
-                if not tool_calls:
-                    print(f"[DEBUG] 无工具调用，退出循环")
-                    break
+                resp = await llm_caller(current_messages)
+            
+            current_ai_content = resp.get('content', '')
+            
+            print(f"[DEBUG] 第{recursion_depth + 1}轮LLM回复:")
+            print(f"[DEBUG] 回复内容: {current_ai_content}")
+            
+            tool_calls = parse_tool_calls(current_ai_content)
+            print(f"[DEBUG] 解析到工具调用数量: {len(tool_calls)}")
+            
+            if not tool_calls:
+                print(f"[DEBUG] 无工具调用，退出循环")
+                break
             
             # 执行工具调用
             for i, tool_call in enumerate(tool_calls):
@@ -179,18 +161,8 @@ async def tool_call_loop(messages: List[Dict], mcp_manager, llm_caller, is_strea
             tool_results = await execute_tool_calls(tool_calls, mcp_manager)
             
             # 工具调用执行完成，将结果传递给LLM继续处理
-            if not is_streaming:
-                # 非流式模式：添加到消息历史
-                current_messages.append({'role': 'assistant', 'content': current_ai_content})
-                current_messages.append({'role': 'user', 'content': tool_results})
-            else:
-                # 流式模式：返回工具结果，让上层处理
-                return {
-                    'content': tool_results,
-                    'recursion_depth': recursion_depth,
-                    'messages': current_messages,
-                    'has_tool_results': True
-                }
+            current_messages.append({'role': 'assistant', 'content': current_ai_content})
+            current_messages.append({'role': 'user', 'content': tool_results})
             recursion_depth += 1
         except Exception as e:
             print(f"工具调用循环错误: {e}")
@@ -201,4 +173,53 @@ async def tool_call_loop(messages: List[Dict], mcp_manager, llm_caller, is_strea
         'recursion_depth': recursion_depth,
         'messages': current_messages,
         'has_tool_results': False
-    } 
+    }
+
+async def execute_single_tool_call(tool_call: dict, mcp_manager) -> str:
+    """执行单个工具调用"""
+    try:
+        tool_name = tool_call['name']
+        args = tool_call['args']
+        agent_type = args.get('agentType', 'mcp').lower()
+        
+        if agent_type == 'agent':
+            # Agent调用
+            try:
+                from agentserver.core.agent_manager import get_agent_manager
+                agent_manager = get_agent_manager()
+                
+                agent_name = args.get('agent_name')
+                prompt = args.get('prompt')
+                
+                if not agent_name or not prompt:
+                    return "Agent调用失败: 缺少agent_name或prompt参数"
+                
+                result = await agent_manager.call_agent(agent_name, prompt)
+                if result.get("status") == "success":
+                    return result.get("result", "")
+                else:
+                    return f"Agent调用失败: {result.get('error', '未知错误')}"
+                    
+            except Exception as e:
+                return f"Agent调用失败: {str(e)}"
+                
+        else:
+            # MCP调用
+            service_name = args.get('service_name')
+            actual_tool_name = args.get('tool_name', tool_name)
+            tool_args = {k: v for k, v in args.items() 
+                       if k not in ['service_name', 'agentType']}
+            
+            if not service_name:
+                return "MCP服务调用失败: 缺少service_name参数"
+            
+            result = await mcp_manager.unified_call(
+                service_name=service_name,
+                tool_name=actual_tool_name,
+                args=tool_args
+            )
+            
+            return f"来自工具 \"{tool_name}\" 的结果:\n{result}"
+            
+    except Exception as e:
+        return f"执行工具 {tool_call['name']} 时发生错误：{str(e)}" 

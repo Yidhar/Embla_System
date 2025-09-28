@@ -6,7 +6,7 @@
 import sys
 import os
 import asyncio
-import aiohttp
+from nagaagent_core.core import aiohttp
 import socket
 import time
 from typing import Dict, Any, Optional
