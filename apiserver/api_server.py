@@ -27,7 +27,7 @@ from nagaagent_core.api import CORSMiddleware
 from nagaagent_core.api import StreamingResponse, JSONResponse, HTMLResponse
 from nagaagent_core.api import WebSocket, WebSocketDisconnect
 from nagaagent_core.api import StaticFiles
-from nagaagent_core.vendors.pydantic import BaseModel
+from pydantic import BaseModel
 from nagaagent_core.core import aiohttp
 import shutil
 from pathlib import Path
@@ -65,58 +65,15 @@ class CallbackFactory:
             """处理文本块 - 累积纯文本内容"""
             if chunk_type == "chunk":
                 pure_text_content_ref[0] += text
-                if is_streaming:
-                    return f"data: {text}\n\n"
+                # 不再向前端推送分句事件；SSE 增量由主循环直接推送
             return None
         return on_text_chunk
-    
-    @staticmethod
-    def create_sentence_callback(is_streaming=False):
-        """创建句子回调函数"""
-        def on_sentence(sentence: str, sentence_type: str):
-            """处理完整句子"""
-            if sentence_type == "sentence":
-                if is_streaming:
-                    return f"data: [SENTENCE] {sentence}\n\n"
-            return None
-        return on_sentence
-    
-    @staticmethod
-    def create_tool_call_callback(is_streaming=False):
-        """创建工具调用回调函数"""
-        def on_tool_call(tool_call: str, tool_type: str):
-            """处理工具调用 - 不累积到纯文本"""
-            if tool_type == "tool_call":
-                if is_streaming:
-                    return f"data: [TOOL_CALL] 正在执行工具调用...\n\n"
-            return None
-        return on_tool_call
-    
-    @staticmethod
-    def create_tool_result_callback(is_streaming=False):
-        """创建工具结果回调函数"""
-        def on_tool_result(result: str, result_type: str):
-            """处理工具结果 - 不累积到纯文本"""
-            if result_type == "tool_start":
-                if is_streaming:
-                    return f"data: [TOOL_START] {result}\n\n"
-            elif result_type == "tool_result":
-                if is_streaming:
-                    return f"data: [TOOL_RESULT] {result}\n\n"
-            elif result_type == "tool_error":
-                if is_streaming:
-                    return f"data: [TOOL_ERROR] {result}\n\n"
-            return None
-        return on_tool_result
     
     @classmethod
     def create_callbacks(cls, pure_text_content_ref, is_streaming=False):
         """创建完整的回调函数集合"""
         return {
-            'on_text_chunk': cls.create_text_chunk_callback(pure_text_content_ref, is_streaming),
-            'on_sentence': cls.create_sentence_callback(is_streaming),
-            'on_tool_call': cls.create_tool_call_callback(is_streaming),
-            'on_tool_result': cls.create_tool_result_callback(is_streaming)
+            'on_text_chunk': cls.create_text_chunk_callback(pure_text_content_ref, is_streaming)
         }
 
 # WebSocket连接管理
@@ -171,7 +128,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="NagaAgent API",
     description="智能对话助手API服务",
-    version="3.0",
+    version="4.0.0",
     lifespan=lifespan
 )
 
@@ -266,7 +223,7 @@ async def root():
     """API根路径"""
     return {
         "name": "NagaAgent API",
-        "version": "3.0",
+        "version": "4.0.0",
         "status": "running",
         "docs": "/docs",
         "websocket": "/ws/mcplog"
@@ -288,7 +245,7 @@ async def get_system_info():
         raise HTTPException(status_code=503, detail="NagaAgent未初始化")
     
     return SystemInfoResponse(
-        version="3.0",
+        version="4.0.0",
         status="running",
         available_services=naga_agent.mcp.list_mcps(),
         api_key_configured=bool(config.api.api_key and config.api.api_key != "sk-placeholder-key-not-set")
@@ -335,10 +292,8 @@ async def chat(request: ChatRequest):
         # 获取或创建会话ID
         session_id = message_manager.create_session(request.session_id)
         
-        # 构建系统提示词
-        available_services = naga_agent.mcp.get_available_services_filtered()
-        services_text = naga_agent._format_services_for_prompt(available_services)
-        system_prompt = get_prompt("naga_system_prompt", ai_name=AI_NAME, **services_text)
+        # 构建系统提示词（不再注入服务信息）
+        system_prompt = get_prompt("naga_system_prompt", ai_name=AI_NAME)
         
         # 使用消息管理器构建完整的对话消息
         messages = message_manager.build_conversation_messages(
@@ -354,11 +309,11 @@ async def chat(request: ChatRequest):
         # 用于累积纯文本内容（不包含工具调用）
         pure_text_content = [""]  # 使用列表引用，便于在回调中修改
         
-        # 使用回调工厂创建回调函数
+        # 使用回调工厂创建回调函数（禁用向前端发送句子切割，仅保留TTS侧切割）
         callbacks = CallbackFactory.create_callbacks(pure_text_content, is_streaming=False)
         
-        # 设置回调
-        tool_extractor.set_callbacks(**callbacks)
+        # 设置回调（仅文本块与TTS）
+        tool_extractor.set_callbacks(**{'on_text_chunk': callbacks['on_text_chunk']})
         
         # 调用LLM API - 流式模式
         async with aiohttp.ClientSession() as session:
@@ -406,7 +361,8 @@ async def chat(request: ChatRequest):
                                 delta = data['choices'][0].get('delta', {})
                                 if 'content' in delta:
                                     content = delta['content']
-                                    # 使用流式工具调用提取器处理内容
+                                    # 直接累积给前端使用的纯文本内容，并仅将切割发送给TTS
+                                    pure_text_content[0] += content
                                     await tool_extractor.process_text_chunk(content)
                         except json.JSONDecodeError:
                             continue
@@ -462,10 +418,8 @@ async def chat_stream(request: ChatRequest):
             # 发送会话ID信息
             yield f"data: session_id: {session_id}\n\n"
             
-            # 构建系统提示词
-            available_services = naga_agent.mcp.get_available_services_filtered()
-            services_text = naga_agent._format_services_for_prompt(available_services)
-            system_prompt = get_prompt("naga_system_prompt", ai_name=AI_NAME, **services_text)
+            # 构建系统提示词（不再注入服务信息）
+            system_prompt = get_prompt("naga_system_prompt", ai_name=AI_NAME)
             
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(
@@ -493,9 +447,9 @@ async def chat_stream(request: ChatRequest):
             # 使用回调工厂创建回调函数
             callbacks = CallbackFactory.create_callbacks(pure_text_content, is_streaming=True)
             
-            # 设置回调
+            # 设置回调（仅文本块与TTS）
             tool_extractor.set_callbacks(
-                **callbacks,
+                on_text_chunk=callbacks['on_text_chunk'],
                 voice_integration=voice_integration
             )
             
@@ -547,11 +501,10 @@ async def chat_stream(request: ChatRequest):
                                         delta = data['choices'][0].get('delta', {})
                                         if 'content' in delta:
                                             content = delta['content']
-                                            # 使用流式工具调用提取器处理内容
-                                            results = await tool_extractor.process_text_chunk(content)
-                                            if results:
-                                                for result in results:
-                                                    yield result
+                                            # 直接将增量内容推送给前端用于消息渲染
+                                            yield f"data: {content}\n\n"
+                                            # 同步送入TTS切割器（仅TTS，不再向前端回推分句事件）
+                                            await tool_extractor.process_text_chunk(content)
                                             
                                 except json.JSONDecodeError:
                                     continue

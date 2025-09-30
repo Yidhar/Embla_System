@@ -2,7 +2,7 @@
 
 ## 概述
 
-AgentManager是NagaAgent 3.1中独立的Agent注册和调用系统，支持从配置文件动态加载Agent定义，提供统一的调用接口和完整的生命周期管理。参考了JavaScript版本的AgentAssistant机制，实现了类似的功能。
+AgentManager是NagaAgent 4.0中独立的Agent注册和调用系统，支持从配置文件动态加载Agent定义，提供统一的调用接口和完整的生命周期管理。参考了JavaScript版本的AgentAssistant机制，实现了类似的功能。
 
 ## 主要特性
 

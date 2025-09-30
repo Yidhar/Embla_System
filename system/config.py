@@ -13,6 +13,11 @@ from pydantic import BaseModel, Field, field_validator
 # 配置变更监听器
 _config_listeners: List[Callable] = []
 
+# 为了向后兼容，提供AI_NAME常量
+def get_ai_name() -> str:
+    """获取AI名称"""
+    return config.system.ai_name
+
 def add_config_listener(callback: Callable):
     """添加配置变更监听器"""
     _config_listeners.append(callback)
@@ -47,7 +52,7 @@ def setup_environment():
 
 class SystemConfig(BaseModel):
     """系统基础配置"""
-    version: str = Field(default="3.0", description="系统版本号")
+    version: str = Field(default="4.0.0", description="系统版本号")
     ai_name: str = Field(default="娜杰日达", description="AI助手名称")
     base_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent, description="项目根目录")
     log_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "logs", description="日志目录")
@@ -396,4 +401,7 @@ try:
 except Exception:
     # 获取系统用户名失败时，将保留默认值 "用户" 或 config.json 中的空值
     pass
+
+# 向后兼容的AI_NAME常量
+AI_NAME = config.system.ai_name
 

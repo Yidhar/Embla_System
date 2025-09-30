@@ -89,103 +89,126 @@ class ServiceManager:
         except OSError:
             return False
     
-    def start_api_server(self):
-        """启动API服务器"""
+    def start_all_servers(self):
+        """并行启动所有服务：API(可选)、MCP、Agent、TTS"""
+        print("🚀 正在并行启动所有服务...")
+        threads = []
+        
         try:
-            if not self.check_port_available(config.api_server.host, config.api_server.port):
-                print(f"⚠️ 端口 {config.api_server.port} 已被占用，跳过API服务器启动")
-                return
+            # API服务器（可选）
+            if config.api_server.enabled and config.api_server.auto_start:
+                if self.check_port_available(config.api_server.host, config.api_server.port):
+                    api_thread = threading.Thread(target=self._start_api_server, daemon=True)
+                    threads.append(("API", api_thread))
+                else:
+                    print(f"⚠️ 端口 {config.api_server.port} 已被占用，跳过API服务器启动")
             
-            from nagaagent_core.api import uvicorn  # 统一入口 #
+            # MCP服务器
+            if self.check_port_available("0.0.0.0", 8003):
+                mcp_thread = threading.Thread(target=self._start_mcp_server, daemon=True)
+                threads.append(("MCP", mcp_thread))
+            else:
+                print(f"⚠️ 端口 8003 已被占用，跳过MCP Server启动")
+            
+            # Agent服务器
+            if self.check_port_available("0.0.0.0", 8001):
+                agent_thread = threading.Thread(target=self._start_agent_server, daemon=True)
+                threads.append(("Agent", agent_thread))
+            else:
+                print(f"⚠️ 端口 8001 已被占用，跳过Agent Server启动")
+            
+            # TTS服务器
+            if self.check_port_available("0.0.0.0", config.tts.port):
+                tts_thread = threading.Thread(target=self._start_tts_server, daemon=True)
+                threads.append(("TTS", tts_thread))
+            else:
+                print(f"⚠️ 端口 {config.tts.port} 已被占用，跳过TTS服务启动")
+            
+            # 启动所有线程
+            for name, thread in threads:
+                thread.start()
+                print(f"✅ {name} Server启动线程已创建")
+            
+            print(f"🎉 已启动 {len(threads)} 个服务线程")
+            
+        except Exception as e:
+            print(f"❌ 并行启动服务异常: {e}")
+    
+    def _start_api_server(self):
+        """内部API服务器启动方法"""
+        try:
+            from nagaagent_core.api import uvicorn
             
             print("🚀 正在启动夏园API服务器...")
             print(f"📍 地址: http://{config.api_server.host}:{config.api_server.port}")
             print(f"📚 文档: http://{config.api_server.host}:{config.api_server.port}/docs")
             
-            def run_server():
-                try:
-                    uvicorn.run(
-                        "apiserver.api_server:app",
-                        host=config.api_server.host,
-                        port=config.api_server.port,
-                        log_level="error",
-                        access_log=False,
-                        reload=False
-                    )
-                except Exception as e:
-                    print(f"❌ API服务器启动失败: {e}")
-            
-            self.api_thread = threading.Thread(target=run_server, daemon=True)
-            self.api_thread.start()
-            print("✅ API服务器已在后台启动")
-            time.sleep(1)
-            
+            uvicorn.run(
+                "apiserver.api_server:app",
+                host=config.api_server.host,
+                port=config.api_server.port,
+                log_level="error",
+                access_log=False,
+                reload=False
+            )
         except ImportError as e:
             print(f"⚠️ API服务器依赖缺失: {e}")
-            print("   请运行: pip install fastapi uvicorn")
         except Exception as e:
-            print(f"❌ API服务器启动异常: {e}")
+            print(f"❌ API服务器启动失败: {e}")
     
-    def start_agent_server(self):
-        """启动Agent Server服务"""
+    def _start_mcp_server(self):
+        """内部MCP服务器启动方法"""
         try:
-            if not self.check_port_available("0.0.0.0", 8001):
-                print(f"⚠️ 端口 8001 已被占用，跳过Agent Server启动")
-                return
+            import uvicorn
+            from mcpserver.mcp_server import app
+            
+            print("🚀 正在启动MCP Server...")
+            print(f"📍 地址: http://127.0.0.1:8003")
+            print(f"📚 文档: http://127.0.0.1:8003/docs")
+            
+            uvicorn.run(
+                app,
+                host="0.0.0.0",
+                port=8003,
+                log_level="error",
+                access_log=False,
+                reload=False
+            )
+        except Exception as e:
+            print(f"❌ MCP Server启动失败: {e}")
+    
+    def _start_agent_server(self):
+        """内部Agent服务器启动方法"""
+        try:
+            import uvicorn
+            from agentserver.agent_server import app
             
             print("🚀 正在启动Agent Server...")
             print(f"📍 地址: http://127.0.0.1:8001")
             print(f"📚 文档: http://127.0.0.1:8001/docs")
             
-            def run_agent_server():
-                try:
-                    import uvicorn
-                    from agentserver.agent_server import app
-                    
-                    uvicorn.run(
-                        app,
-                        host="0.0.0.0",
-                        port=8001,
-                        log_level="error",
-                        access_log=False,
-                        reload=False
-                    )
-                except Exception as e:
-                    print(f"❌ Agent Server启动失败: {e}")
-            
-            self.agent_thread = threading.Thread(target=run_agent_server, daemon=True)
-            self.agent_thread.start()
-            print("✅ Agent Server已在后台启动")
-            time.sleep(1)
-            
-        except ImportError as e:
-            print(f"⚠️ Agent Server依赖缺失: {e}")
-            print("   请确保agentserver模块可用")
+            uvicorn.run(
+                app,
+                host="0.0.0.0",
+                port=8001,
+                log_level="error",
+                access_log=False,
+                reload=False
+            )
         except Exception as e:
-            print(f"❌ Agent Server启动异常: {e}")
+            print(f"❌ Agent Server启动失败: {e}")
     
-    def start_tts_server(self):
-        """启动语音输出服务（TTS）"""
+    def _start_tts_server(self):
+        """内部TTS服务器启动方法"""
         try:
-            if not self.check_port_available("0.0.0.0", config.tts.port):
-                print(f"⚠️ 端口 {config.tts.port} 已被占用，跳过语音输出服务启动")
-                return
-            
+            print(f"🚀 正在启动TTS服务...")
             print(f"📍 地址: http://127.0.0.1:{config.tts.port}")
             
-            def run_tts():
-                try:
-                    from voice.output.start_voice_service import start_http_server
-                    start_http_server()
-                except Exception as e:
-                    print(f"❌ 语音输出服务启动失败: {e}")
-            
-            self.tts_thread = threading.Thread(target=run_tts, daemon=True)
-            self.tts_thread.start()
-            print("✅ 语音输出服务已在后台启动")
-            time.sleep(1)
+            from voice.output.start_voice_service import start_http_server
+            start_http_server()
         except Exception as e:
-            print(f"❌ 语音输出服务启动异常: {e}")
+            print(f"❌ TTS服务启动失败: {e}")
+    
     
     def show_naga_portal_status(self):
         """显示NagaPortal配置状态（手动调用）"""
@@ -264,14 +287,8 @@ print("=" * 30)
 print(f'{AI_NAME}系统已启动')
 print("=" * 30)
 
-# 启动服务
-if config.api_server.enabled and config.api_server.auto_start:
-    service_manager.start_api_server()
-
-# 启动Agent Server（基于博弈论架构的意图分析和任务调度服务）
-service_manager.start_agent_server()
-
-service_manager.start_tts_server()
+# 启动服务（并行异步）
+service_manager.start_all_servers()
 
 # 物联网通讯连接已在后台异步执行，连接完成后会自动显示状态
 print("⏳ 物联网通讯正在后台初始化连接...")

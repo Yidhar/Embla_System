@@ -11,14 +11,18 @@ __author__ = "NagaAgent Team"
 # 导入核心组件
 from .core.agent_manager import get_agent_manager, process_intelligent_task
 from .core.task_planner import TaskPlanner
-from .core.task_executor import TaskExecutor
+from .task_scheduler import TaskScheduler, get_task_scheduler
+from .parallel_executor import ParallelExecutor, get_parallel_executor
 from .core.multi_agent_coordinator import get_coordinator, coordinate_task
 
 __all__ = [
     "get_agent_manager",
     "process_intelligent_task", 
     "TaskPlanner",
-    "TaskExecutor",
+    "TaskScheduler",
+    "get_task_scheduler",
+    "ParallelExecutor",
+    "get_parallel_executor",
     "get_coordinator",
     "coordinate_task"
 ]

@@ -1,4 +1,4 @@
-# NagaAgent 3.1
+# NagaAgent 4.0
 
 ![NagaAgent Logo](https://img.shields.io/badge/NagaAgent-3.1-blue?style=for-the-badge&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-green?style=for-the-badge)
@@ -34,188 +34,48 @@
 ✅ **🌳 深度思考**: 基于遗传算法的多分支思考引擎  
 ✅ **🔄 配置热更新**: 实时配置变更，无需重启应用  
 ✅ **💾 持久化上下文**: 重启后自动恢复历史对话上下文  
-✅ **🔧 系统检测**: 内置完整的系统环境检测和依赖验证功能  
+✅ **🔧 系统检测**: 内置完整的系统环境检测和依赖验证功能
 
 ---
 
-## 🚀 快速开始
-
-### 📋 系统要求
-
-- **操作系统**: Windows 10/11, macOS 10.15+, Linux
-- **Python**: 3.10+ (推荐 3.11)
-- **内存**: 建议 4GB 以上
-- **存储**: 建议 2GB 以上可用空间
-
-### 🔧 一键安装
-
-<details>
-<summary><strong>Windows 用户</strong></summary>
-
-```powershell
-# 克隆项目
-git clone https://github.com/Xxiii8322766509/NagaAgent.git
-cd NagaAgent
-
-# 一键配置
-.\setup.ps1
-```
-</details>
-
-<details>
-<summary><strong>macOS 用户</strong></summary>
+## 🚀 快速安装与启动（简版）
 
 ```bash
-# 克隆项目
+# 克隆并进入目录
 git clone https://github.com/Xxiii8322766509/NagaAgent.git
 cd NagaAgent
 
-# 一键配置
-chmod +x setup_mac.sh
-./setup_mac.sh
-```
-</details>
-
-<details>
-<summary><strong>Linux 用户</strong></summary>
-
-```bash
-# 克隆项目
-git clone https://github.com/Xxiii8322766509/NagaAgent.git
-cd NagaAgent
-
-# 创建虚拟环境
-python3 -m venv .venv
-source .venv/bin/activate
-
-# 安装依赖
+# 安装依赖（已整合到 nagaagent-core）
 pip install -r requirements.txt
-```
-</details>
 
-### 🗄️ 启动 Neo4j 服务
-
-```bash
-# 启动 Neo4j 容器
-docker run -d \
-  --restart always \
-  --publish=7474:7474 \
-  --publish=7687:7687 \
-  --env NEO4J_AUTH=neo4j/your_password \
-  --volume=neo4j_data:/data \
-  neo4j:latest
+# 生成配置
+copy config.json.example config.json   # Windows
+# cp config.json.example config.json   # macOS/Linux
 ```
 
-> **端口冲突解决**: 如果端口被占用，可以使用其他端口：
-> ```bash
-> --publish=8474:7474 --publish=8687:7687
-> ```
+最少配置（编辑 config.json）：
 
-### ⚙️ 配置文件
+```json
+{
+  "api": {
+    "api_key": "your-api-key-here",
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat"
+  }
+}
+```
 
-1. 复制配置模板：
-   ```bash
-   cp config.json.example config.json
-   ```
-
-2. 编辑配置文件，设置API密钥和其他参数
-
-### 🚀 启动应用
-
-<details>
-<summary><strong>Windows 启动方式</strong></summary>
+启动方式：
 
 ```powershell
-# 普通模式
-.\start.bat
+# Windows（推荐托盘模式）
+./start_with_tray.bat
 
-# 托盘模式 (推荐)
-.\start_with_tray.bat
-```
-</details>
-
-<details>
-<summary><strong>macOS 启动方式</strong></summary>
-
-```bash
-./start_mac.sh
-```
-</details>
-
-<details>
-<summary><strong>Linux 启动方式</strong></summary>
-
-```bash
-./start.sh
-```
-</details>
-
-启动后将自动开启：
-- 🖥️ PyQt5 图形界面
-- 🌐 RESTful API 服务器
-- 🎤 语音交互服务
-- 🧠 GRAG 知识图谱记忆系统
-- 🔄 配置热更新系统
-
----
-
-## 📁 项目结构
-
-NagaAgent 3.1 采用模块化架构设计，各功能模块独立且可扩展：
-
-```
-NagaAgent/
-├── 📁 apiserver/              # API服务器模块
-│   ├── api_server.py          # FastAPI服务器
-│   ├── streaming_tool_extractor.py  # 流式工具调用提取器
-│   └── tool_call_utils.py     # 工具调用工具类
-├── 📁 system/                 # 系统核心模块
-│   ├── system_checker.py      # 系统环境检测器
-│   ├── config_manager.py      # 配置管理器
-│   └── conversation_core.py   # 对话核心引擎
-├── 📁 ui/                     # 用户界面模块
-│   ├── live2d/                # Live2D集成模块
-│   │   ├── renderer.py        # Live2D渲染器
-│   │   ├── animator.py        # 动画系统
-│   │   └── widget.py          # Live2D组件
-│   ├── live2d_side_widget.py  # Live2D侧栏容器
-│   ├── pyqt_chat_window.py    # 主聊天窗口
-│   └── message_renderer.py    # 消息渲染器
-├── 📁 voice/                  # 语音处理模块
-│   ├── input/                 # 语音输入服务
-│   │   ├── server.py          # ASR服务器
-│   │   ├── vad_worker.py      # VAD端点检测
-│   │   └── asr_client.py      # ASR客户端
-│   └── output/                # 语音输出服务
-│       ├── tts_handler.py     # TTS处理器
-│       └── voice_integration.py # 语音集成
-├── 📁 mcpserver/              # MCP服务模块
-│   ├── agent_manager.py       # Agent管理器
-│   ├── agent_*/               # 各种Agent服务
-│   └── mcp_manager.py         # MCP管理器
-├── 📁 thinking/               # 思考引擎模块
-│   ├── tree_thinking.py       # 树形思考引擎
-│   ├── genetic_pruning.py     # 遗传算法剪枝
-│   └── thinking_node.py       # 思考节点
-├── 📁 summer_memory/          # 记忆系统模块
-│   ├── memory_manager.py      # 记忆管理器
-│   ├── quintuple_extractor.py # 五元组提取器
-│   └── graph.py               # 图数据库操作
-├── 📁 logs/                   # 日志和存储
-│   ├── knowledge_graph/       # 知识图谱数据
-│   └── prompts/               # 提示词存储
-├── 📁 mqtt_tool/              # MQTT通信工具
-├── 📁 ui/tray/                # 系统托盘模块
-└── 📄 main.py                 # 主程序入口
+# 或直接运行主程序（四大服务将并行启动）
+python main.py
 ```
 
-**核心模块说明：**
-- **system/**: 系统核心功能，包括环境检测、配置管理、对话引擎
-- **ui/**: 用户界面，支持Live2D、PyQt5、系统托盘等
-- **voice/**: 语音处理，分离输入/输出，支持ASR和TTS
-- **mcpserver/**: MCP服务生态，支持多种Agent和工具
-- **thinking/**: 智能思考引擎，支持多分支推理
-- **summer_memory/**: 知识图谱记忆系统，基于Neo4j
+可选：如需 GRAG 记忆（Neo4j），再单独启动 Neo4j 并在 `config.json` 填写 `grag` 段。
 
 ---
 
@@ -223,7 +83,7 @@ NagaAgent/
 
 ### 📦 依赖整合说明
 
-NagaAgent 3.1 已将核心依赖和API服务器相关依赖整合到 `nagaagent-core==1.0.1` 包中，以减少依赖下载负担：
+NagaAgent 4.0 已将核心依赖和API服务器相关依赖整合到 `nagaagent-core==1.0.1` 包中，以减少依赖下载负担：
 
 **已整合的依赖包：**
 - **核心依赖**: `mcp`, `openai`, `python-dotenv`, `requests`, `aiohttp`
@@ -234,156 +94,6 @@ NagaAgent 3.1 已将核心依赖和API服务器相关依赖整合到 `nagaagent-
 # 自动安装 nagaagent-core 包（包含所有核心依赖）
 pip install -r requirements.txt
 ```
-
-**优势：**
-- ✅ 减少依赖下载时间
-- ✅ 统一版本管理
-- ✅ 简化安装流程
-- ✅ 提高稳定性
-
-### 🔍 系统环境检测
-
-NagaAgent 3.1 内置了完整的系统环境检测功能，自动检测Python版本、虚拟环境、依赖包等：
-
-```bash
-# 运行系统环境检测
-python -c "from system.system_checker import SystemChecker; SystemChecker().check_all()"
-
-# 或者通过主程序自动检测
-python main.py --check-env
-```
-
-**检测项目包括：**
-- ✅ Python版本兼容性检查
-- ✅ 虚拟环境状态检测
-- ✅ 核心依赖包完整性验证
-- ✅ 可选依赖包可用性检查
-- ✅ 配置文件格式验证
-- ✅ 目录结构完整性检查
-- ✅ 文件权限和访问性测试
-- ✅ 系统资源使用情况监控
-
-### 📦 依赖说明
-
-项目依赖主要包括：
-
-| 类别 | 依赖包 | 用途 |
-|------|--------|------|
-| **核心框架** | `openai`, `mcp`, `fastapi` | AI对话和API服务 |
-| **搜索工具** | `langchain-community` | SearXNG搜索集成 |
-| **GUI界面** | `PyQt5`, `pygame` | 图形用户界面 |
-| **语音处理** | `edge-tts`, `pyaudio`, `sounddevice` | 语音合成和识别 |
-| **知识图谱** | `py2neo`, `pyvis`, `matplotlib` | Neo4j图数据库操作 |
-| **浏览器自动化** | `playwright` | 网页操作自动化 |
-| **MCP工具** | `jmcomic`, `fastmcp` | 多种扩展工具 |
-| **系统控制** | `pycaw`, `screen-brightness-control` | 系统功能控制 |
-| **通信协议** | `paho-mqtt`, `websockets` | MQTT和WebSocket通信 |
-| **数据处理** | `numpy`, `pandas`, `scikit-learn` | 数据处理和机器学习 |
-| **文档处理** | `python-docx` | Word文档处理 |
-
-### ⚠️ 常见问题解决
-
-<details>
-<summary><strong>Windows 安装问题</strong></summary>
-
-**C++ 编译工具缺失：**
-```powershell
-# 下载并安装 Microsoft Visual C++ Build Tools
-# https://visualstudio.microsoft.com/visual-cpp-build-tools/
-```
-
-**Numpy 警告并且程序崩溃：**
-```powershell
-# 安装 Visual Studio 后，在 Developer Command Prompt 中执行
-uv pip uninstall numpy
-uv sync --no-cache --reinstall
-```
-
-**权限问题：**
-```powershell
-# 以管理员身份运行 PowerShell
-Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
-```
-</details>
-
-<details>
-<summary><strong>macOS 安装问题</strong></summary>
-
-**Python 版本过低：**
-```bash
-brew install python@3.11
-echo 'export PATH="/usr/local/opt/python@3.11/bin:$PATH"' >> ~/.zshrc
-```
-
-**PyAudio 安装失败：**
-```bash
-brew install portaudio
-pip install pyaudio
-```
-
-**权限问题：**
-```bash
-chmod +x *.sh
-```
-</details>
-
-<details>
-<summary><strong>Linux 安装问题</strong></summary>
-
-**系统依赖：**
-```bash
-# Ubuntu/Debian
-sudo apt update
-sudo apt install python3-dev portaudio19-dev
-
-# CentOS/RHEL
-sudo yum install python3-devel portaudio-devel
-```
-
-**Docker 权限：**
-```bash
-sudo usermod -aG docker $USER
-newgrp docker
-```
-</details>
-
----
-
-## ⚙️ 配置说明
-
-### 🔄 配置热更新系统
-
-NagaAgent 3.1 引入了强大的配置热更新系统，支持实时配置变更而无需重启应用。
-
-#### 核心特性
-- **实时更新**: 配置变更立即生效，无需重启
-- **配置快照**: 支持配置的保存和恢复
-- **自动监视**: 自动检测配置文件变化
-- **模块重载**: 支持动态模块重新加载
-- **错误处理**: 完善的异常处理机制
-
-#### 使用方法
-
-```python
-from config_manager import update_config, get_config_snapshot
-
-# 更新配置
-success = update_config({
-    "system": {"debug": True},
-    "api": {"temperature": 0.8}
-})
-
-# 获取配置快照
-snapshot = get_config_snapshot()
-
-# 恢复配置
-restore_config_snapshot(snapshot)
-```
-
-#### 详细文档
-- 📖 [配置热更新使用指南](CONFIG_HOT_RELOAD_GUIDE.md)
-- 📊 [配置热更新测试报告](CONFIG_HOT_RELOAD_TEST_REPORT.md)
-
 ### API 配置
 修改 `config.json` 文件中的 `api` 部分：
 ```json
@@ -400,15 +110,6 @@ restore_config_snapshot(snapshot)
     "context_parse_logs": true
   }
 }
-```
-
-#### 持久化上下文配置说明
-- **persistent_context**: 是否启用持久化上下文功能（默认：true）
-- **context_load_days**: 从最近几天的日志文件中加载历史对话（默认：3天）
-- **context_parse_logs**: 是否从日志文件解析上下文（默认：true）
-
-**前端历史记录显示**: 启用持久化上下文后，重启应用时前端UI会自动加载并显示历史聊天记录，无需手动操作。
-
 ### API服务器配置
 ```json
 {
@@ -459,44 +160,54 @@ restore_config_snapshot(snapshot)
   }
 }
 ```
-
-#### Live2D模块特性
-- **独立模块设计**: 不依赖外部Live2D项目，完全自主实现
-- **完整动画系统**: 支持眨眼、眼球跟踪、身体摆动、呼吸、情绪等动画
-- **自动回退机制**: Live2D不可用时自动切换到图片模式
-- **鼠标交互**: 支持点击触发动作和眼球跟踪
-- **资源管理**: 完整的资源加载和清理机制
-
-#### Live2D模块结构
-```
-ui/live2d/
-├── __init__.py          # 模块初始化
-├── renderer.py          # Live2D渲染器
-├── animator.py          # 动画系统
-├── widget.py            # Live2D Widget组件
-└── README.md            # 详细文档
-```
-
-#### Live2D配置说明
-- **enabled**: 是否启用Live2D功能
-- **model_path**: Live2D模型文件路径（.model3.json格式）
-- **fallback_image**: 回退图片路径（Live2D不可用时使用）
-
-### 获取 API 密钥
-1. 访问对应的LLM服务商官网（如DeepSeek、OpenAI等）
-2. 注册账号并创建 API 密钥
-3. 将密钥填入 `config.json` 文件的 `api.api_key` 字段
-
----
-
 ## 🌟 核心功能
 
-### 🧠 智能对话系统
-- **多模型支持**: 兼容 OpenAI、DeepSeek、Anthropic 等主流 LLM 提供商
-- **上下文记忆**: 智能维护对话历史，支持多轮对话上下文
-- **流式输出**: 实时显示 AI 回复，提升交互体验
-- **工具调用**: 自动解析和执行 LLM 返回的工具调用指令
-- **深度思考**: 基于遗传算法的多分支思考引擎，提供更高质量的回答
+### 🧠 Server架构与并行启动
+
+四项 Server 职责清晰、并行启动、相互解耦但有序协作：
+
+1) API Server（FastAPI，默认 8000）
+   - 职责：
+     - 对外 REST API 与流式 SSE 接口
+     - 使用 `streaming_tool_extractor` 仅做句子级切割并投递给语音侧（前端直接 append 增量，不再接收分句事件）
+     - 会话管理与日志记录（`message_manager`、`prompt_logger`）
+     - 不向 `naga_system_prompt` 注入 MCP 服务清单，主对话流程保持纯净
+   - 关键接口（示例）：
+     - `/chat` 普通对话；`/chat/stream` 流式对话（直接下发 `content` 增量）
+     - `/health`、`/system/info`（含可用 MCP 服务统计）
+     - 会话管理：`/sessions`、`/sessions/{id}`、`DELETE /sessions*`
+   - 相关实现：`apiserver/api_server.py`
+
+2) Agent Server（FastAPI，默认 8001）
+   - 职责：
+     - 意图识别与任务编排中枢（后台异步触发，不阻塞前台对话）
+     - 运行 MCP 工具调用循环：`_run_intent_mcp_loop(session_id, messages, initial_analysis, max_iterations=2)`
+       - 解析意图识别产出的 `tool_calls`
+       - 逐条调度至 MCP（见 MCP Server），结果回灌到上下文，再次迭代识别
+     - 电脑控制、能力刷新、任务列表与状态查询等（基于博弈论的调度器）
+   - 关键接口（示例）：`/tasks`、`/tasks/{id}`、`/capabilities`、`/mcp/availability`、`/computer-use/*`
+   - 相关实现：`agentserver/agent_server.py`、`agentserver/task_scheduler.py`
+
+3) MCP Server（FastAPI，默认 8003）
+   - 职责：
+     - 唯一 MCP 工具执行通道与调度层
+     - 通过 `mcp_scheduler` → `mcp_manager.unified_call(service, tool, args)` 执行单次工具调用
+     - 以 `mcp_registry` 为唯一能力元数据来源，已移除冗余 `MCPCapabilityManager` 与重复执行入口
+   - 特性：
+     - 支持服务/工具列表、统计、能力查询（详见 `mcpserver/mcp_server.py` 暴露的 API）
+     - 与 Agent Server 紧密协同：Agent 的工具调用循环通过此处统一落地执行
+   - 相关实现：`mcpserver/mcp_server.py`、`mcpserver/mcp_scheduler.py`、`mcpserver/mcp_manager.py`、`mcpserver/mcp_registry.py`
+
+4) TTS Server（HTTP，端口见 `config.tts.port`）
+   - 职责：
+     - 独立语音输出服务，只关心句子级文本输入与合成播放
+     - 与 API Server 的分工：API 侧负责切句并投递，TTS 负责音频生成与播放，二者完全解耦
+   - 相关实现：`voice/output/start_voice_service.py`、`voice/output/voice_integration.py`
+
+并行启动与端口占用回退：
+- 在 `main.py` 中通过 `ServiceManager.start_all_servers()` 并行拉起 API/Agent/MCP/TTS 四个服务；
+- 自动检测端口占用，已占用即跳过并打印提示，不阻塞其它服务启动；
+- 线程方式后台运行，显著缩短整体启动耗时。
 
 ### 🔍 在线搜索系统
 - **SearXNG集成**: 基于 SearXNG 的隐私保护搜索引擎
@@ -512,23 +223,11 @@ ui/live2d/
 - **配置快照**: 安全的配置保存和恢复功能
 - **错误处理**: 完善的异常处理机制，确保系统稳定性
 
-### 🔧 MCP 服务生态
-- **动态服务发现**: 自动扫描和注册所有 MCP 服务
-- **即插即用**: 新增服务无需重启系统
-- **服务管理**: 统一的服务池查询和管理接口
-- **多服务协作**: 支持多个 Agent 协同工作
-
 ### 🗺️ GRAG 知识图谱
 - **五元组提取**: 自动从对话中提取实体-关系-属性
 - **智能检索**: 基于相似度的上下文召回机制
 - **可视化展示**: 支持知识图谱的可视化展示
 - **历史导入**: 兼容旧版对话记录的批量导入
-
-### 🎤 语音交互系统
-- **流式合成**: 基于 Edge-TTS 的实时语音合成
-- **智能分句**: 自动识别句子边界，优化播放体验
-- **异步处理**: 文本显示和音频播放完全分离
-- **多引擎支持**: 兼容多种 TTS 引擎
 
 ### 🖥️ 用户界面
 - **现代化 GUI**: 基于 PyQt5 的精美图形界面
@@ -540,26 +239,6 @@ ui/live2d/
 - **主题定制**: 支持界面主题、透明度等自定义
 - **响应式设计**: 自适应不同屏幕尺寸
 - **流式更新**: 实时流式消息更新和自动滚动
-
-### 🌐 API 服务
-- **RESTful API**: 完整的 HTTP API 接口
-- **流式支持**: Server-Sent Events 流式输出
-- **自动文档**: 交互式 API 文档 (Swagger)
-- **跨域支持**: 完整的 CORS 配置
-
-### 📱 系统托盘
-- **后台运行**: 支持最小化到系统托盘
-- **自动隐藏**: 启动后自动隐藏控制台窗口
-- **快捷操作**: 托盘图标右键菜单
-- **自启动**: 支持注册表方式的自启动功能
-
-### 🔍 智能 Agent 系统
-- **AgentManager**: 独立的 Agent 注册和调用系统
-- **配置管理**: 统一的 Agent 配置和动态加载
-- **会话隔离**: 多用户会话完全隔离和TTL管理
-- **占位符替换**: 支持Agent配置、环境变量、时间信息等占位符
-- **生命周期管理**: 完整的 Agent 生命周期管理和热插拔
-- **多Agent协作**: 支持多个 Agent 协同工作和任务分配
 
 ---
 
@@ -902,7 +581,7 @@ agents = list_agents()
 #### 托盘模式启动
 ```bash
 # Windows
-.\start_with_tray.bat
+./start_with_tray.bat
 ```
 
 #### 托盘菜单功能
@@ -924,51 +603,6 @@ agents = list_agents()
 4. **启动方式**: 使用`start_with_tray.bat`启动以启用托盘功能
 
 ---
-
-## 🌐 RESTful API 服务
-
-NagaAgent内置完整的RESTful API服务器，启动时自动开启，支持所有对话功能：
-
-### API接口说明
-
-- **基础地址**: `http://127.0.0.1:8000` (可在config.py中配置)
-- **交互式文档**: `http://127.0.0.1:8000/docs`
-- **OpenAPI规范**: `http://127.0.0.1:8000/openapi.json`
-
-### 主要接口
-
-#### 健康检查
-```bash
-GET /health
-```
-
-#### 对话接口
-```bash
-# 普通对话
-POST /chat
-{
-  "message": "你好，娜迦",
-  "session_id": "optional-session-id"
-}
-
-# 流式对话 (Server-Sent Events)
-POST /chat/stream
-{
-  "message": "请介绍一下人工智能的发展历程"
-}
-```
-
-#### 系统管理接口
-```bash
-# 获取系统信息
-GET /system/info
-
-# 切换开发者模式
-POST /system/devmode
-
-# 获取记忆统计
-GET /memory/stats
-```
 
 ## MCP服务Agent化升级说明
 
@@ -1023,7 +657,7 @@ GET /memory/stats
 
 ## 🌳 深度思考引擎
 
-NagaAgent 3.1 引入了基于遗传算法的多分支思考引擎，提供更高质量的AI回答。
+NagaAgent 4.0 引入了基于遗传算法的多分支思考引擎，提供更高质量的AI回答。
 
 ### 核心特性
 
@@ -1210,33 +844,6 @@ python check_env.py
 - **模块重新加载失败**: 确认模块有`reload_config`方法，检查模块依赖
 - **配置监视器不工作**: 确认使用`start_config_watcher()`启动监视器
 - **配置文件被损坏**: 使用备份文件恢复，或重新生成配置文件
-
-### 通用问题
-- **浏览器无法启动**: 检查playwright安装与网络
-- **主题树/索引/参数/密钥全部在`config.py`统一管理**
-- **聊天输入`#devmode`进入开发者模式**: 后续对话不写入GRAG记忆，仅用于工具调用测试
-
-### 最佳实践
-
-#### Agent配置最佳实践
-1. **使用环境变量**: 敏感信息如API密钥应使用环境变量
-2. **合理设置参数**: 根据任务需求调整temperature和max_output_tokens
-3. **优化提示词**: 使用占位符实现动态内容，提高灵活性
-4. **会话管理**: 合理设置会话TTL，避免内存泄漏
-
-#### 性能优化建议
-1. **缓存配置**: 启用配置缓存，减少文件读取开销
-2. **并发控制**: 合理控制并发Agent调用数量
-3. **资源清理**: 定期清理过期会话和临时数据
-4. **监控日志**: 启用调试模式监控系统性能
-5. **配置热更新**: 使用批量更新减少重新加载次数，避免频繁配置变更
-
-#### 安全建议
-1. **API密钥管理**: 使用环境变量或密钥管理服务
-2. **输入验证**: 对用户输入进行验证和清理
-3. **错误处理**: 避免在错误信息中泄露敏感信息
-4. **访问控制**: 实现适当的访问控制机制
-5. **配置备份**: 定期备份配置文件，使用配置快照功能
 
 ---
 

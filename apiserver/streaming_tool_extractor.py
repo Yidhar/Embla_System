@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-流式工具调用提取器
-实时检测和提取AI输出中的工具调用，支持中英文括号
+流式文本切割器
+负责将LLM流式输出按句切割并发送给语音集成（TTS）。不再检测或处理工具调用。
 """
 
 import re
@@ -23,7 +23,7 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from system.config import config, AI_NAME
 
-from .tool_call_utils import parse_tool_calls, execute_tool_calls
+# 工具调用解析/执行已不再需要
 
 logger = logging.getLogger("StreamingToolCallExtractor")
 
@@ -61,12 +61,9 @@ class CallbackManager:
             return None
 
 class StreamingToolCallExtractor:
-    """流式工具调用提取器"""
+    """流式文本切割器（仅TTS）"""
     
     def __init__(self, mcp_manager=None):
-        self.tool_call_buffer = ""  # 工具调用缓冲区
-        self.is_in_tool_call = False  # 是否在工具调用中
-        self.brace_count = 0  # 括号计数
         self.mcp_manager = mcp_manager
         self.text_buffer = ""  # 普通文本缓冲区
         self.sentence_endings = r"[。？！；\.\?\!\;]"  # 断句标点
@@ -77,113 +74,43 @@ class StreamingToolCallExtractor:
         # 语音集成（可选）
         self.voice_integration = None
         
-        # 工具调用队列（用于与工具调用循环通信）
+        # 工具调用相关已移除
         self.tool_calls_queue = None
         
     def set_callbacks(self, 
                      on_text_chunk: Optional[Callable] = None,
-                     on_sentence: Optional[Callable] = None,
-                     on_tool_result: Optional[Callable] = None,
-                     voice_integration=None,
-                     tool_calls_queue=None,
-                     tool_call_detected_signal=None):
+                     voice_integration=None):
         """设置回调函数"""
-        # 注册回调函数
+        # 注册回调函数（仅文本块）
         self.callback_manager.register_callback("text_chunk", on_text_chunk)
-        self.callback_manager.register_callback("sentence", on_sentence)
-        self.callback_manager.register_callback("tool_result", on_tool_result)
-        
         self.voice_integration = voice_integration
-        self.tool_calls_queue = tool_calls_queue
-        self.tool_call_detected_signal = tool_call_detected_signal
     
     async def process_text_chunk(self, text_chunk: str):
-        """处理文本块，分离普通文本和工具调用"""
+        """处理文本块，仅进行文本积累与按句切割并发送给语音集成"""
         if not text_chunk:
             return None
             
-        results = []
-        
+        # 仅按句切割并发送到TTS，不再向前端返回分句事件
         for char in text_chunk:
-            if char in '{｛':  # 检测到开始括号
-                if not self.is_in_tool_call:
-                    # 开始工具调用，先处理累积的普通文本
-                    if self.text_buffer:
-                        result = await self._flush_text_buffer()
-                        if result:
-                            results.append(result)
-                    
-                    self.is_in_tool_call = True
-                    self.tool_call_buffer = char
-                    self.brace_count = 1
-                else:
-                    # 嵌套括号
-                    self.tool_call_buffer += char
-                    self.brace_count += 1
-                    
-            elif char in '}｝':  # 检测到结束括号
-                if self.is_in_tool_call:
-                    self.tool_call_buffer += char
-                    self.brace_count -= 1
-                    
-                    if self.brace_count == 0:  # 工具调用结束
-                        # 提取完整的工具调用
-                        tool_call = self.tool_call_buffer
-                        self.tool_call_buffer = ""
-                        self.is_in_tool_call = False
-                        
-                        # 处理工具调用 - 只提取，不执行
-                        await self._extract_tool_call(tool_call)
-                        
-            else:  # 普通字符
-                if self.is_in_tool_call:
-                    self.tool_call_buffer += char
-                else:
-                    # 普通文本，累积到缓冲区
-                    self.text_buffer += char
-                    
-                    # 检查是否形成完整句子
-                    if re.search(self.sentence_endings, char):
-                        # 提取完整句子
-                        sentences = re.split(self.sentence_endings, self.text_buffer)
-                        if len(sentences) > 1:
-                            complete_sentence = sentences[0] + char  # 包含标点
-                            if complete_sentence.strip():
-                                # 发送文本块回调（用于前端显示）
-                                result = await self.callback_manager.call_callback(
-                                    "text_chunk", complete_sentence, "chunk"
-                                )
-                                if result:
-                                    results.append(result)
-                                
-                                # 发送句子回调（用于其他处理）
-                                await self.callback_manager.call_callback(
-                                    "sentence", complete_sentence, "sentence"
-                                )
-                                
-                                # 发送到语音集成（普通文本，非工具调用）
-                                await self._send_to_voice_integration(complete_sentence)
-                            
-                            # 更新缓冲区，过滤空字符串
-                            remaining_sentences = [s for s in sentences[1:] if s.strip()]
-                            self.text_buffer = "".join(remaining_sentences)
-        
-        # 返回所有结果
-        return results
+            self.text_buffer += char
+            if re.search(self.sentence_endings, char):
+                sentences = re.split(self.sentence_endings, self.text_buffer)
+                if len(sentences) > 1:
+                    complete_sentence = sentences[0] + char
+                    if complete_sentence.strip():
+                        await self._send_to_voice_integration(complete_sentence)
+                    remaining_sentences = [s for s in sentences[1:] if s.strip()]
+                    self.text_buffer = "".join(remaining_sentences)
+        return None
     
     async def _flush_text_buffer(self):
         """刷新文本缓冲区"""
         if self.text_buffer:
-            # 发送文本块
-            result = await self.callback_manager.call_callback(
-                "text_chunk", self.text_buffer, "chunk"
-            )
-            
             # 发送到语音集成（普通文本，非工具调用）
             await self._send_to_voice_integration(self.text_buffer)
             
             self.text_buffer = ""
-            return result
+            return None
         return None
     
     async def _send_to_voice_integration(self, text: str):
@@ -199,60 +126,7 @@ class StreamingToolCallExtractor:
             except Exception as e:
                 logger.error(f"语音集成错误: {e}")
     
-    async def _extract_tool_call(self, tool_call_text: str):
-        """提取工具调用 - 流式执行并反馈结果"""
-        try:
-            logger.info(f"检测到工具调用: {tool_call_text[:100]}...")
-            
-            # 发送工具调用开始信号
-            await self.callback_manager.call_callback("tool_call", tool_call_text, "tool_call")
-            
-            # 解析JSON
-            tool_calls = parse_tool_calls(tool_call_text)
-            
-            if tool_calls:
-                logger.info(f"解析到 {len(tool_calls)} 个工具调用")
-                
-                # 流式执行工具调用
-                for i, tool_call in enumerate(tool_calls):
-                    try:
-                        # 发送工具调用执行开始信号
-                        await self.callback_manager.call_callback(
-                            "tool_result", f"正在执行工具: {tool_call['name']}", "tool_start"
-                        )
-                        
-                        # 执行工具调用
-                        result = await self._execute_single_tool_call(tool_call)
-                        
-                        # 发送工具调用结果
-                        await self.callback_manager.call_callback(
-                            "tool_result", result, "tool_result"
-                        )
-                        
-                    except Exception as e:
-                        error_msg = f"工具 {tool_call['name']} 执行失败: {str(e)}"
-                        logger.error(error_msg)
-                        await self.callback_manager.call_callback(
-                            "tool_result", error_msg, "tool_error"
-                        )
-                
-            else:
-                logger.warning("工具调用解析失败")
-                await self.callback_manager.call_callback(
-                    "tool_result", "工具调用解析失败", "tool_error"
-                )
-                
-        except Exception as e:
-            error_msg = f"工具调用提取失败: {str(e)}"
-            logger.error(error_msg)
-            await self.callback_manager.call_callback(
-                "tool_result", error_msg, "tool_error"
-            )
-    
-    async def _execute_single_tool_call(self, tool_call: dict) -> str:
-        """执行单个工具调用 - 使用统一的工具调用执行函数"""
-        from .tool_call_utils import execute_single_tool_call
-        return await execute_single_tool_call(tool_call, self.mcp_manager)
+    # 工具调用相关方法已移除
     
     async def finish_processing(self):
         """完成处理，清理剩余内容"""
@@ -264,21 +138,9 @@ class StreamingToolCallExtractor:
             if result:
                 results.append(result)
         
-        # 处理未完成的工具调用
-        if self.is_in_tool_call and self.tool_call_buffer:
-            logger.warning(f"检测到未完成的工具调用: {self.tool_call_buffer}")
-            # 尝试解析未完成的工具调用
-            try:
-                await self._extract_tool_call(self.tool_call_buffer)
-            except Exception as e:
-                logger.error(f"处理未完成工具调用失败: {e}")
-        
         return results if results else None
     
     def reset(self):
         """重置提取器状态"""
-        self.tool_call_buffer = ""
-        self.is_in_tool_call = False
-        self.brace_count = 0
         self.text_buffer = ""
 

@@ -14,7 +14,6 @@ from typing import List, Dict, Any
 from nagaagent_core.core import AsyncOpenAI
 
 # 本地模块导入
-from apiserver.tool_call_utils import tool_call_loop
 from system.config import config, AI_NAME
 from mcpserver.mcp_manager import get_mcp_manager
 from system.background_analyzer import get_background_analyzer
@@ -81,7 +80,7 @@ class NagaConversation: # 对话主类
         self.dev_mode = False
         self.async_client = AsyncOpenAI(api_key=config.api.api_key, base_url=config.api.base_url.rstrip('/') + '/')
         
-        # 初始化意图分析器（使用新的Agent Server架构）
+        # 初始化Agent Server客户端（包含意图分析和MCP调度功能）
         self.agent_server_client = None
         self._init_agent_server_client()
         
@@ -116,25 +115,7 @@ class NagaConversation: # 对话主类
         
         # 禁用树状思考系统
         self.tree_thinking = None
-        # 注释掉树状思考系统初始化
-        # if not SystemState._tree_thinking_initialized:
-        #     try:
-        #         self.tree_thinking = TreeThinkingEngine(api_client=self, memory_manager=self.memory_manager)
-        #         print("[TreeThinkingEngine] ✅ 树状外置思考系统初始化成功")
-        #         SystemState._tree_thinking_initialized = True
-        #     except Exception as e:
-        #         logger.warning(f"树状思考系统初始化失败: {e}")
-        #         self.tree_thinking = None
-        # else:
-        #     # 如果子系统已经初始化过，创建新实例但不重新初始化子系统（静默处理）
-        #     try:
-        #         self.tree_thinking = TreeThinkingEngine(api_client=self, memory_manager=self.memory_manager)
-        #     except Exception as e:
-        #         logger.warning(f"树状思考系统实例创建失败: {e}")
-        #         self.tree_thinking = None
-
-        # self.loop = asyncio.get_event_loop()  # 已废弃，不再使用
-
+     
     def _init_agent_server_client(self):
         """初始化Agent Server客户端"""
         try:
@@ -151,7 +132,7 @@ class NagaConversation: # 对话主类
             if not self.agent_server_client:
                 return {"has_tasks": False, "reason": "Agent Server客户端未初始化", "tasks": [], "priority": "low"}
             
-            # 调用Agent Server的意图分析接口
+            # 调用Agent Server的意图分析接口（端口8002）
             url = "http://localhost:8001/analyze_and_plan"
             payload = {
                 "messages": messages,
@@ -178,6 +159,142 @@ class NagaConversation: # 对话主类
         except Exception as e:
             logger.error(f"调用Agent Server失败: {e}")
             return {"has_tasks": False, "reason": f"调用失败: {e}", "tasks": [], "priority": "low"}
+    
+    async def _call_mcp_server(self, query: str, tool_calls: List[Dict[str, Any]], session_id: str = None) -> Dict[str, Any]:
+        """调用MCP服务器执行工具调用"""
+        try:
+            if not self.agent_server_client:
+                return {"success": False, "error": "HTTP客户端未初始化", "message": "无法执行MCP任务"}
+
+            # 调用独立的MCP服务器
+            url = "http://localhost:8003/schedule"
+            payload = {
+                "query": query,
+                "tool_calls": tool_calls,
+                "session_id": session_id
+            }
+
+            async with self.agent_server_client.post(url, json=payload) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return result
+                else:
+                    error_text = await response.text()
+                    logger.error(f"MCP服务器调用失败: {response.status} - {error_text}")
+                    return {
+                        "success": False,
+                        "error": f"HTTP {response.status}",
+                        "message": error_text
+                    }
+
+        except Exception as e:
+            logger.error(f"调用MCP服务器失败: {e}")
+            return {"success": False, "error": f"调用失败: {e}", "message": f"MCP服务器调用失败: {e}"}
+
+    async def _process_streaming_tool_calls(self, text_chunk: str, session_id: str = "main_session") -> List[str]:
+        """处理流式工具调用"""
+        try:
+            if not self.agent_server_client:
+                return []
+
+            # 调用MCPServer的流式处理接口
+            url = "http://localhost:8003/stream/process"
+            payload = {
+                "text_chunk": text_chunk,
+                "session_id": session_id
+            }
+
+            async with self.agent_server_client.post(url, json=payload) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return result.get("results", [])
+                else:
+                    logger.error(f"流式工具调用处理失败: {response.status}")
+                    return []
+
+        except Exception as e:
+            logger.error(f"流式工具调用处理失败: {e}")
+            return []
+
+    async def _finish_streaming_processing(self, session_id: str = "main_session") -> List[str]:
+        """完成流式处理"""
+        try:
+            if not self.agent_server_client:
+                return []
+
+            # 调用MCPServer的完成处理接口
+            url = "http://localhost:8003/stream/finish"
+            payload = {
+                "session_id": session_id
+            }
+
+            async with self.agent_server_client.post(url, json=payload) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return result.get("final_results", [])
+                else:
+                    logger.error(f"完成流式处理失败: {response.status}")
+                    return []
+
+        except Exception as e:
+            logger.error(f"完成流式处理失败: {e}")
+            return []
+    
+    async def _call_agent_server_task(self, query: str, task_type: str, session_id: str = None) -> Dict[str, Any]:
+        """调用AgentServer执行多智能体任务"""
+        try:
+            if not self.agent_server_client:
+                return {"success": False, "error": "HTTP客户端未初始化", "message": "无法执行智能体任务"}
+            
+            # 调用AgentServer的任务调度接口
+            url = "http://localhost:8001/tasks/schedule"
+            payload = {
+                "query": query,
+                "task_type": task_type,
+                "session_id": session_id
+            }
+            
+            async with self.agent_server_client.post(url, json=payload) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return result
+                else:
+                    error_text = await response.text()
+                    logger.error(f"AgentServer调用失败: {response.status} - {error_text}")
+                    return {
+                        "success": False,
+                        "error": f"HTTP {response.status}",
+                        "message": error_text
+                    }
+                    
+        except Exception as e:
+            logger.error(f"调用AgentServer失败: {e}")
+            return {"success": False, "error": f"调用失败: {e}", "message": f"AgentServer调用失败: {e}"}
+    
+    def _route_task(self, tool_calls: List[Dict[str, Any]]) -> str:
+        """根据工具调用类型路由到合适的服务器"""
+        if not tool_calls:
+            return "none"
+        
+        # 检查工具调用类型
+        for tool_call in tool_calls:
+            agent_type = tool_call.get("agentType", "")
+            service_name = tool_call.get("service_name", "")
+            
+            # MCP工具调用
+            if agent_type == "mcp":
+                return "mcp"
+            
+            # 电脑控制任务
+            if agent_type == "agent" and "computer" in service_name.lower():
+                return "agent"
+            
+            # 其他智能体任务
+            if agent_type == "agent":
+                return "agent"
+        
+        # 默认路由到MCP
+        return "mcp"
 
     def _load_persistent_context(self):
         """从日志文件加载历史对话上下文"""
@@ -390,23 +507,6 @@ class NagaConversation: # 对话主类
                 f.write("-" * 50 + "\n")
         except Exception as e:
             logger.error(f"保存日志失败: {e}")
-    
-    # 已废弃的方法 - 统一使用message_manager进行消息管理
-    # def add_message(self, role: str, content: str):
-    #     """添加消息到对话历史 - 已废弃，使用message_manager"""
-    #     pass
-
-    # async def _call_llm(self, messages: List[Dict], use_stream: bool = None) -> Dict:
-    #     """调用LLM API - 已废弃，直接使用async_client"""
-    #     pass
-
-    # 工具调用循环相关方法 - 已废弃，使用流式工具调用提取器替代
-    # def handle_llm_response(self, a, mcp):
-    #     # 只保留普通文本流式输出逻辑 #
-    #     async def text_stream():
-    #         for line in a.splitlines():
-    #             yield ("娜迦", line)
-    #     return text_stream()
 
     def _format_services_for_prompt(self, available_services: dict, intent_analysis: dict = None) -> str:
         """格式化可用服务列表为prompt字符串，MCP服务和Agent服务分开，包含具体调用格式"""
@@ -590,10 +690,9 @@ class NagaConversation: # 对话主类
                 except Exception as e:
                     logger.debug(f"获取意图分析结果失败: {e}")
             
-            services_text = self._format_services_for_prompt(available_services, intent_analysis)
-            
-            # 添加handoff提示词 - 先获取服务信息再格式化
-            system_prompt = get_prompt("naga_system_prompt", ai_name=AI_NAME, **services_text)
+            # 生成可用服务片段（已不再拼接能力摘要，信息来源于最新意图分析）
+            # 生成系统提示词（不再注入服务占位符）
+            system_prompt = get_prompt("naga_system_prompt", ai_name=AI_NAME)
             
             # 使用消息管理器统一的消息拼接逻辑（UI界面使用）
             from apiserver.message_manager import message_manager
@@ -605,14 +704,6 @@ class NagaConversation: # 对话主类
             )
 
             print(f"GTP请求发送：{now()}")  # AI请求前
-            
-            # 禁用非线性思考判断
-            # thinking_task = None
-            # if hasattr(self, 'tree_thinking') and self.tree_thinking and getattr(self.tree_thinking, 'is_enabled', False):
-            #     # 启动异步思考判断任务
-            #     import asyncio
-            #     thinking_task = asyncio.create_task(self._async_thinking_judgment(u))
-            
             # 流式处理：实时检测工具调用，使用统一的工具调用循环
             try:
                 # 导入流式工具调用提取器
@@ -702,26 +793,72 @@ class NagaConversation: # 对话主类
                 
                 # 检查是否有工具调用需要处理
                 if not tool_calls_queue.empty():
-                    # 使用统一的工具调用循环处理
-                    async def llm_caller(messages, use_stream=False):
-                        """LLM调用函数，用于工具调用循环"""
-                        # 这里不需要实际调用LLM，因为工具调用已经提取完成
-                        return {'content': '', 'status': 'success'}
+                    # 收集所有工具调用
+                    tool_calls = []
+                    while not tool_calls_queue.empty():
+                        try:
+                            tool_call = tool_calls_queue.get_nowait()
+                            tool_calls.append(tool_call)
+                        except Exception as e:
+                            logger.error(f"获取工具调用失败: {e}")
+                            break
                     
-                    # 使用工具调用循环处理工具调用
-                    result = await tool_call_loop(msgs, self.mcp, llm_caller, is_streaming=True, tool_calls_queue=tool_calls_queue)
-                    
-                    if result.get('has_tool_results'):
-                        # 有工具执行结果，让LLM继续处理
-                        tool_results = result['content']
+                    if tool_calls and self.agent_server_client:
+                        # 根据工具调用类型进行路由决策
+                        route_type = self._route_task(tool_calls)
+                        print(f"🔧 路由决策: {route_type} -> 执行 {len(tool_calls)} 个工具调用")
                         
-                        # 构建包含工具结果的消息（使用统一的消息拼接逻辑）
-                        tool_messages = message_manager.build_conversation_messages_from_memory(
-                            memory_messages=self.messages,
-                            system_prompt=system_prompt,
-                            current_message=f"工具执行结果：{tool_results}",
-                            max_history_rounds=config.api.max_history_rounds
-                        )
+                        if route_type == "mcp":
+                            # 路由到MCP服务器
+                            result = await self._call_mcp_server(u, tool_calls, "main_session")
+                        elif route_type == "agent":
+                            # 路由到AgentServer
+                            result = await self._call_agent_server_task(u, "multi_agent", "main_session")
+                        else:
+                            # 默认路由到MCP
+                            result = await self._call_mcp_server(u, tool_calls, "main_session")
+                        
+                        if result.get("success", False):
+                            raw_result_str = json.dumps(result.get("result", {}), ensure_ascii=False)
+                            # 对工具结果进行摘要，便于后续对话继续
+                            try:
+                                summarized = get_prompt("mcp_result_summarizer_prompt", raw_results=raw_result_str)
+                                tool_results = summarized
+                            except Exception:
+                                tool_results = result.get("result", {}).get("message", "")
+                            print(f"✅ {route_type.upper()}服务器执行成功: {tool_results[:100]}...")
+                            
+                            # 构建包含工具结果的消息
+                            tool_messages = message_manager.build_conversation_messages_from_memory(
+                                memory_messages=self.messages,
+                                system_prompt=system_prompt,
+                                current_message=f"工具执行结果：{tool_results}",
+                                max_history_rounds=config.api.max_history_rounds
+                            )
+                        else:
+                            error_msg = result.get("error", f"{route_type.upper()}服务器执行失败")
+                            print(f"❌ {route_type.upper()}服务器执行失败: {error_msg}")
+                            tool_results = f"{route_type.upper()}工具调用失败: {error_msg}"
+                            
+                            # 构建包含错误结果的消息
+                            tool_messages = message_manager.build_conversation_messages_from_memory(
+                                memory_messages=self.messages,
+                                system_prompt=system_prompt,
+                                current_message=f"工具执行结果：{tool_results}",
+                                max_history_rounds=config.api.max_history_rounds
+                            )
+                    else:
+                        # 回退到本地工具调用循环处理
+                        async def llm_caller(messages, use_stream=False):
+                            """LLM调用函数，用于工具调用循环"""
+                            return {'content': '', 'status': 'success'}
+                        
+                        # 重新构建工具调用队列
+                        for tool_call in tool_calls:
+                            tool_calls_queue.put(tool_call)
+                        
+                        # 已移除本地工具调用循环，主流程不再解析工具调用
+                        tool_results = ""
                         
                         # 调用LLM继续处理工具结果
                         try:
@@ -790,40 +927,6 @@ class NagaConversation: # 对话主类
                     except Exception as e:
                         logger.error(f"GRAG记忆存储失败: {e}")
                 
-                # 禁用异步思考判断结果检查
-                # if thinking_task and not thinking_task.done():
-                #     # 等待思考判断完成（最多等待3秒）
-                #     try:
-                #         await asyncio.wait_for(thinking_task, timeout=3.0)
-                #         if thinking_task.result():
-                #             yield ("娜迦", "\n💡 这个问题较为复杂，下面我会更详细地解释这个流程...")
-                #             # 启动深度思考
-                #             try:
-                #                 thinking_result = await self.tree_thinking.think_deeply(u)
-                #                 if thinking_result and "answer" in thinking_result:
-                #                     # 直接使用thinking系统的结果，避免重复处理
-                #                     yield ("娜迦", f"\n{thinking_result['answer']}")
-                #                     
-                #                     # 更新对话历史
-                #                     final_thinking_answer = thinking_result['answer']
-                #                     self.messages[-1] = {"role": "assistant", "content": final_content + "\n\n" + final_thinking_answer}
-                #                     self.save_log(u, final_content + "\n\n" + final_thinking_answer)
-                #                     
-                #                     # GRAG记忆存储（开发者模式不写入）
-                #                     if self.memory_manager and not self.dev_mode:
-                #                         try:
-                #                             await self.memory_manager.add_conversation_memory(u, final_content + "\n\n" + final_thinking_answer)
-                #                         except Exception as e:
-                #                             logger.error(f"GRAG记忆存储失败: {e}")
-                #             except Exception as e:
-                #                 logger.error(f"深度思考处理失败: {e}")
-                #                 yield ("娜迦", f"🌳 深度思考系统出错: {str(e)}")
-                #     except asyncio.TimeoutError:
-                #         # 超时取消任务
-                #         thinking_task.cancel()
-                #     except Exception as e:
-                #         logger.debug(f"思考判断任务异常: {e}")
-                
             except Exception as e:
                 print(f"工具调用循环失败: {e}")
                 # 区分API错误和MCP错误
@@ -873,34 +976,6 @@ class NagaConversation: # 对话主类
         except Exception as e:
             logger.error(f"API调用失败: {e}")
             return f"API调用出错: {str(e)}"
-
-    # async def _async_thinking_judgment(self, question: str) -> bool:
-    #     """异步判断问题是否需要深度思考
-        
-    #     Args:
-    #         question: 用户问题
-            
-    #     Returns:
-    #         bool: 是否需要深度思考
-    #     """
-    #     try:
-    #         if not self.tree_thinking:
-    #             return False
-            
-    #         # 使用thinking文件夹中现成的难度判断器
-    #         difficulty_assessment = await self.tree_thinking.difficulty_judge.assess_difficulty(question)
-    #         difficulty = difficulty_assessment.get("difficulty", 3)
-            
-    #         # 根据难度判断是否需要深度思考
-    #         # 难度4-5（复杂/极难）建议深度思考
-    #         should_think_deeply = difficulty >= 4
-            
-    #         logger.info(f"难度判断：{difficulty}/5，建议深度思考：{should_think_deeply}")
-    #         return should_think_deeply
-                   
-    #     except Exception as e:
-    #         logger.debug(f"异步思考判断失败: {e}")
-    #         return False
 
 async def process_user_message(s,msg):
     if config.system.voice_enabled and not msg: #无文本输入时启动语音识别

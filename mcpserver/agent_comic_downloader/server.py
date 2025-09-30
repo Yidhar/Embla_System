@@ -9,7 +9,7 @@ import logging
 from typing import Any, Dict, List, Optional
 from nagaagent_core.api import FastAPI, HTTPException
 from nagaagent_core.api import CORSMiddleware
-from nagaagent_core.vendors.pydantic import BaseModel
+from pydantic import BaseModel
 from nagaagent_core.api import uvicorn
 
 try:

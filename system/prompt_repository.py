@@ -52,117 +52,48 @@ class PromptRepository:
 2. 使用简单标点（逗号，句号，问号）传达语气
 3. 禁止使用括号()或其他符号表达状态、语气或动作
 
-【意图分析处理】
-如果系统检测到用户有潜在的任务意图，请优先考虑使用工具调用来执行任务，而不是仅提供建议。
-当检测到可执行任务时，应该主动使用相应的工具来完成任务。
-
-【工具调用格式要求】
-如需调用某个工具，直接严格输出下面的格式（可多次出现）：
-
-｛
-"agentType": "mcp",
-"service_name": "MCP服务名称",
-"tool_name": "工具名称",
-"param_name": "参数值"
-｝
-
-｛
-"agentType": "agent",
-"agent_name": "Agent名称",
-"prompt": "任务内容"
-｝
-
-服务类型说明：
-- agentType: "mcp" - MCP服务，使用工具调用格式
-- agentType: "agent" - Agent服务，使用Agent调用格式
-
-【可用服务信息】
-MCP服务：
-{available_mcp_services}
-Agent服务：
-{available_agent_services}
-
-调用说明：
-- MCP服务：使用service_name和tool_name，支持多个参数
-- Agent服务：使用agent_name和prompt，prompt为本次任务内容
-- 服务名称：使用英文服务名（如AppLauncherAgent）作为service_name或agent_name
-- 当用户请求需要执行具体操作时，优先使用工具调用而不是直接回答
-- 如果检测到多个任务，可以并行调用多个工具
+【对话行为原则】
+不在主对话中直接输出任何工具调用；当需要执行操作时，由意图分析阶段与后续调度器负责下发与执行，主对话仅进行自然语言交流与结果反馈。
 
 
 """,
             
-            "next_question_prompt": """你是一个问题设计专家，根据当前不完整的思考结果，设计下一级需要深入思考的核心问题。
-要求：
-- 问题应该针对当前思考的不足之处
-- 问题应该能推进整体思考进程
-- 问题应该具体明确，易于思考
+            "conversation_analyzer_prompt": """你是对话任务意图分析器。请从对话片段中提取可执行的任务查询，并在可行时直接生成 MCP 工具调用。
 
-请设计一个简洁的核心问题。
-【重要】：只输出问题本身，不要包含思考过程或解释。""",
-            
-            "intent_analysis_prompt": """你是一个精确的任务意图提取器。分析对话内容，提取用户可能想要执行的具体任务。
+【输出一】：严格 JSON（必填）
+{
+  "reason": "简要说明你提取这些任务的依据",
+  "tasks": ["任务查询1", "任务查询2"]
+}
 
-对话内容：
+【输出二】：MCP 工具调用（可选，可多次出现）
+每个调用单独输出一个 JSON，对格式严格如下：
+{
+"agentType": "mcp",
+"service_name": "MCP服务名称",
+"tool_name": "工具名称",
+"param_name": "参数值"
+}
+
+【输入对话】
 {conversation}
 
-请分析上述对话，提取出用户可能想要执行的具体任务。只提取那些可以通过工具或服务完成的任务，忽略闲聊内容。
+【可用MCP工具】
+{available_tools}
 
-返回JSON格式：
-{{
-    "has_tasks": true/false,
-    "reason": "分析原因",
-    "tasks": ["任务1", "任务2", ...],
-    "priority": "high/medium/low"
-}}
+【要求】
+- 仅提取可以交给工具执行的任务，忽略闲聊  
+- 若能直接完成任务，请附带 MCP 调用块（可多个）  
+- 工具参数尽量完整、具体。""",
+            "mcp_result_summarizer_prompt": """请将下列多个工具调用结果进行结构化总结，供用户快速理解与决策。
 
-分析标准：
-1. 只提取明确可执行的任务
-2. 忽略纯聊天和询问
-3. 优先提取需要工具调用的任务
-4. 如果只是普通对话，has_tasks设为false""",
-            
-            "conversation_analyzer_prompt": """You analyze conversation snippets and extract potential actionable task queries from the user.
-Return JSON: {{reason: string, tasks: string[]}}.
-Only include tasks that can be delegated to tools; avoid chit-chat.
+【原始结果】
+{raw_results}
 
-Conversation:
-{conversation}""",
-            
-            "task_planner_mcp_prompt": """You are a planning agent. Decide ONLY based on MCP server capabilities whether the task is executable.
-Do NOT consider GUI or computer-use in this step.
-Output strict JSON: {{can_execute: bool, reason: string, server_id: string|null, steps: string[]}}
-steps should be granular tool queries for the MCP processor.
-
-Capabilities:
-{tools_brief}
-
-Task: {query}""",
-            
-            "task_planner_computer_use_prompt": """You are deciding whether a GUI computer-use agent that can control mouse/keyboard, open/close
-apps, browse the web, and interact with typical Windows UI can accomplish the task.
-Ignore any MCP tools; ONLY decide feasibility of GUI agent. Output strict JSON:
-{{use_computer: bool, reason: string}}
-
-Task: {query}""",
-            
-            "memory_router_prompt": """请分析以下查询，并确定它属于哪种类型:
-1. time_query - 基于时间的查询（例如"上周我做了什么？"）
-2. semantic_query - 基于语义的查询（例如"关于Python的讨论"）
-3. semantic_query_with_time_constraint - 基于语义的查询（例如"昨天我们讨论玩什么"）
-
-查询: {query}
-
-只返回类型名称，不要有其他文本。""",
-            
-            "time_extraction_prompt": """从以下查询中提取时间范围:
-{query}
-
-以JSON格式返回，格式为:
-{{
-    "start_time": "YYYY-MM-DD HH:MM:SS",
-    "end_time": "YYYY-MM-DD HH:MM:SS"
-}}"""
+输出要求（中文）：
+1) 关键信息要点（列表）；
+2) 结论与建议（2-3条）；
+3) 可继续的下一步操作（1-2条）。"""
         }
         
         # 保存默认提示词到文件
@@ -241,7 +172,7 @@ Task: {query}""",
             
             # 检查文件是否被修改
             current_mtime = prompt_file.stat().st_mtime
-            if name in self._last_modified and self._last_modified[name] >= current_mtime:
+            if name in self._last_modified and self._last_modified[name].timestamp() >= current_mtime:
                 return self._cache.get(name)
             
             # 读取文件

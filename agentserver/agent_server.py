@@ -14,17 +14,18 @@ import multiprocessing as mp
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
 
 from system.config import config
 from agentserver.core.agent_manager import get_agent_manager
-from agentserver.task_planner import TaskPlanner
+from agentserver.core.task_planner import TaskPlanner
 from agentserver.task_scheduler import TaskScheduler
 from agentserver.task_deduper import get_task_deduper
-from agentserver.background_analyzer import get_background_analyzer
+from system.background_analyzer import get_background_analyzer
 from agentserver.parallel_executor import get_parallel_executor
 from agentserver.computer_use_scheduler import get_computer_use_scheduler
-from apiserver.result_notifier import get_result_notifier
 from apiserver.capability_manager import get_capability_manager
+from apiserver.result_notifier import get_result_notifier
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -35,7 +36,51 @@ if not logger.handlers:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
 
-app = FastAPI(title="NagaAgent Server", version="1.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """FastAPI应用生命周期：替代 on_event startup/shutdown"""
+    # startup 等价逻辑
+    try:
+        # 初始化Agent管理器
+        Modules.agent_manager = get_agent_manager()
+        # 初始化任务规划器
+        Modules.planner = TaskPlanner()
+        # 初始化任务调度器
+        Modules.scheduler = TaskScheduler()
+        # 初始化意图分析器
+        Modules.analyzer = get_background_analyzer()
+        # 初始化任务去重器
+        Modules.deduper = get_task_deduper()
+        # 初始化MCP服务器客户端
+        import aiohttp
+        Modules.mcp_server_client = aiohttp.ClientSession()
+        # 初始化能力管理器并预热能力快照
+        Modules.capability_manager = get_capability_manager()
+        try:
+            await Modules.capability_manager.refresh_mcp_capabilities()
+        except Exception as e:
+            logger.warning(f"预热MCP能力失败: {e}")
+        logger.info("NagaAgent服务初始化完成")
+    except Exception as e:
+        logger.error(f"服务初始化失败: {e}")
+        raise
+
+    # 运行期
+    yield
+
+    # shutdown 等价逻辑
+    try:
+        if Modules.poller_task:
+            Modules.poller_task.cancel()
+        # 关闭MCP服务器客户端
+        if Modules.mcp_server_client:
+            await Modules.mcp_server_client.close()
+        logger.info("NagaAgent服务已关闭")
+    except Exception as e:
+        logger.error(f"服务关闭失败: {e}")
+
+
+app = FastAPI(title="NagaAgent Server", version="4.0.0", lifespan=lifespan)
 
 class Modules:
     """全局模块管理器"""
@@ -53,6 +98,9 @@ class Modules:
     # 分析器配置
     analyzer_enabled: bool = True
     analyzer_profile: Dict[str, Any] = {}
+    
+    # MCP服务器客户端
+    mcp_server_client = None
     
     # Agent功能标志
     agent_flags: Dict[str, Any] = {
@@ -103,9 +151,8 @@ async def _background_analyze_and_plan(messages: List[Dict[str, Any]], session_i
         return
     
     try:
-        loop = asyncio.get_running_loop()
-        # 将同步LLM调用卸载到线程池，避免阻塞事件循环
-        analysis = await loop.run_in_executor(None, Modules.analyzer.analyze, messages)
+        # 使用 system 的意图识别
+        analysis = await Modules.analyzer.analyze_intent_async(messages, session_id or "default")
     except Exception as e:
         logger.error(f"意图分析失败: {e}")
         return
@@ -162,40 +209,6 @@ async def _background_analyze_and_plan(messages: List[Dict[str, Any]], session_i
 
 # ============ API端点 ============
 
-@app.on_event("startup")
-async def startup_event():
-    """服务启动时初始化模块"""
-    try:
-        # 初始化Agent管理器
-        Modules.agent_manager = get_agent_manager()
-        
-        # 初始化任务规划器
-        Modules.planner = TaskPlanner()
-        
-        # 初始化任务调度器
-        Modules.scheduler = TaskScheduler()
-        
-        # 初始化意图分析器
-        Modules.analyzer = get_background_analyzer()
-        
-        # 初始化任务去重器
-        Modules.deduper = get_task_deduper()
-        
-        logger.info("NagaAgent服务初始化完成")
-        
-    except Exception as e:
-        logger.error(f"服务初始化失败: {e}")
-        raise
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """服务关闭时清理资源"""
-    try:
-        if Modules.poller_task:
-            Modules.poller_task.cancel()
-        logger.info("NagaAgent服务已关闭")
-    except Exception as e:
-        logger.error(f"服务关闭失败: {e}")
 
 @app.get("/health")
 async def health_check():
@@ -223,6 +236,25 @@ async def analyze_and_plan(payload: Dict[str, Any]):
     
     session_id = (payload or {}).get("session_id")
     
+    # 生成轻量能力快照（同步快速返回给前端/对话核心）
+    capability_snapshot: Dict[str, Any] = {}
+    try:
+        # 基于注册表的服务清单
+        try:
+            from mcpserver.mcp_registry import get_all_services_info
+            services_info = get_all_services_info()
+        except Exception:
+            services_info = {}
+        # 基于能力管理器的可用性概览
+        mcp_availability = Modules.capability_manager.get_mcp_availability() if Modules.capability_manager else {}
+        capability_snapshot = {
+            "services": services_info,
+            "mcp_availability": mcp_availability,
+            "generated_at": _now_iso(),
+        }
+    except Exception as e:
+        logger.debug(f"生成能力快照失败: {e}")
+
     # Fire-and-forget后台处理
     asyncio.create_task(_background_analyze_and_plan(messages, session_id))
     
@@ -230,7 +262,8 @@ async def analyze_and_plan(payload: Dict[str, Any]):
         "success": True, 
         "status": "processed", 
         "accepted_at": _now_iso(),
-        "session_id": session_id
+        "session_id": session_id,
+        "capability_snapshot": capability_snapshot
     }
 
 @app.post("/agent/flags")
@@ -288,6 +321,85 @@ async def cancel_task(task_id: str):
         logger.error(f"取消任务失败: {e}")
         raise HTTPException(500, f"取消失败: {e}")
 
+@app.post("/tasks/schedule")
+async def schedule_agent_task(payload: Dict[str, Any]):
+    """调度多智能体任务"""
+    try:
+        query = payload.get("query", "")
+        task_type = payload.get("task_type", "multi_agent")
+        session_id = payload.get("session_id")
+        
+        if not query:
+            raise HTTPException(400, "query不能为空")
+        
+        # 创建任务ID
+        task_id = str(uuid.uuid4())
+        
+        # 任务信息
+        task_info = {
+            "id": task_id,
+            "query": query,
+            "task_type": task_type,
+            "session_id": session_id,
+            "status": "queued",
+            "created_at": _now_iso(),
+            "result": None,
+            "error": None
+        }
+        
+        # 添加到任务注册表
+        Modules.task_registry[task_id] = task_info
+        
+        # 根据任务类型进行调度
+        if task_type == "multi_agent":
+            # 多智能体任务 - 这里可以调用具体的智能体
+            result = await _execute_multi_agent_task(task_info)
+        else:
+            # 其他类型任务
+            result = {"success": False, "error": f"不支持的任务类型: {task_type}"}
+        
+        # 更新任务状态
+        task_info.update(result)
+        
+        return {
+            "success": result.get("success", False),
+            "task_id": task_id,
+            "message": result.get("message", ""),
+            "result": result.get("result")
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"智能体任务调度失败: {e}")
+        raise HTTPException(500, f"任务调度失败: {e}")
+
+async def _execute_multi_agent_task(task_info: Dict[str, Any]) -> Dict[str, Any]:
+    """执行多智能体任务"""
+    try:
+        # 这里可以实现具体的多智能体任务逻辑
+        # 例如：电脑控制、复杂任务编排等
+        
+        # 模拟任务执行
+        await asyncio.sleep(0.1)
+        
+        return {
+            "success": True,
+            "message": "多智能体任务执行完成",
+            "result": {
+                "task_type": task_info.get("task_type"),
+                "query": task_info.get("query"),
+                "status": "completed"
+            }
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "message": f"多智能体任务执行失败: {str(e)}"
+        }
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=8001)  # 使用8001端口

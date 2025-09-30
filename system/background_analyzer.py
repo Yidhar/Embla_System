@@ -45,24 +45,89 @@ class ConversationAnalyzer:
             text = m.get('text', '')
             lines.append(f"{role}: {text}")
         conversation = "\n".join(lines)
+        
+        # 获取可用的MCP工具信息，注入到意图识别中
+        try:
+            from mcpserver.mcp_registry import get_all_services_info
+            services_info = get_all_services_info()
+            
+            # 构建工具信息摘要
+            tools_summary = []
+            for name, info in services_info.items():
+                display_name = info.get("display_name", name)
+                description = info.get("description", "")
+                tools = [t.get("name") for t in info.get("available_tools", [])]
+                
+                if tools:
+                    tools_summary.append(f"- {display_name}: {description} (工具: {', '.join(tools)})")
+                else:
+                    tools_summary.append(f"- {display_name}: {description}")
+            
+            if tools_summary:
+                available_tools = "\n".join(tools_summary)
+                # 将工具信息注入到对话分析提示词中
+                return get_prompt("conversation_analyzer_prompt", 
+                                conversation=conversation,
+                                available_tools=f"\n\n【可用MCP工具】\n{available_tools}\n")
+        except Exception as e:
+            logger.debug(f"获取MCP工具信息失败: {e}")
+        
         return get_prompt("conversation_analyzer_prompt", conversation=conversation)
 
     def analyze(self, messages: List[Dict[str, str]]):
         prompt = self._build_prompt(messages)
         resp = self.llm.invoke([
-            {"role": "system", "content": "You are a precise task intent extractor."},
+            {"role": "system", "content": "你是精确的任务意图提取器与MCP调用规划器。"},
             {"role": "user", "content": prompt},
         ])
         text = resp.content.strip()
-        import json
+        import json, re
+        tool_calls: List[Dict[str, Any]] = []
+
+        # 提取可能出现的多个 MCP 调用 JSON 对象（宽松匹配，逐个解析）
         try:
-            if text.startswith("```"):
-                text = text.replace("```json", "").replace("```", "").strip()
-            data = json.loads(text)
+            code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+            # 若没有代码块，尝试直接匹配花括号对象
+            if not code_blocks:
+                code_blocks = re.findall(r"\{[\s\S]*?\}", text)
+
+            parsed_objects = []
+            for blk in code_blocks:
+                blk_clean = blk.strip()
+                try:
+                    parsed = json.loads(blk_clean)
+                    parsed_objects.append(parsed)
+                except Exception:
+                    continue
+
+            # 第一个对象预期为主 JSON（reason/tasks），其余可能为 MCP 调用块
+            main_obj = {"tasks": [], "reason": ""}
+            for obj in parsed_objects:
+                if isinstance(obj, dict) and "tasks" in obj and "reason" in obj:
+                    main_obj = obj
+                    break
+
+            for obj in parsed_objects:
+                if isinstance(obj, dict) and obj.get("agentType") == "mcp":
+                    tool_calls.append(obj)
+
+            if not main_obj.get("tasks") and not tool_calls:
+                # 若未能可靠解析，退回整体尝试
+                try:
+                    main_obj = json.loads(text)
+                except Exception:
+                    pass
+
+            if tool_calls:
+                main_obj["tool_calls"] = tool_calls
+
+            if not main_obj.get("reason"):
+                main_obj["reason"] = main_obj.get("reason", "") or ""
+
+            return main_obj
         except Exception as e:
-            print(f"Analyzer parse error: {e}")
-            data = {"tasks": [], "reason": "parse error", "raw": text}
-        return data
+            logger.error(f"解析MCP调用块失败: {e}")
+            return {"tasks": [], "reason": f"parse error: {e}", "raw": text, "tool_calls": []}
 
 
 class BackgroundAnalyzer:

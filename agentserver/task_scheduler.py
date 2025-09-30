@@ -8,12 +8,14 @@
 import asyncio
 import logging
 from typing import Dict, Any, List, Optional
-from agentserver.background_analyzer import get_background_analyzer
+import uuid
+from system.background_analyzer import get_background_analyzer
 from agentserver.parallel_executor import get_parallel_executor
 from agentserver.task_deduper import get_task_deduper
 from agentserver.computer_use_scheduler import get_computer_use_scheduler
 from apiserver.result_notifier import get_result_notifier
 from apiserver.capability_manager import get_capability_manager
+from agentserver.agent_mcp_scheduler import MCPSchedulerAgent
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,7 @@ class TaskScheduler:
         self.computer_use_scheduler = get_computer_use_scheduler()
         self.result_notifier = get_result_notifier()
         self.capability_manager = get_capability_manager()
+        self.mcp_scheduler = MCPSchedulerAgent()
         self.scheduled_tasks = {}
         self.task_registry: Dict[str, Dict[str, Any]] = {}
     
@@ -36,12 +39,47 @@ class TaskScheduler:
             logger.info(f"开始后台分析会话 {session_id}")
             
             # 异步执行意图分析
-            await self.analyzer.analyze_intent_async(messages, session_id)
+            analysis = await self.analyzer.analyze_intent_async(messages, session_id)
+            
+            # 引入工具调用循环：意图识别 → 执行工具 → 更新上下文 → 继续识别（最多2轮） # 注释
+            await self._run_intent_mcp_loop(session_id, messages, initial_analysis=analysis, max_iterations=2)
             
             logger.info(f"会话 {session_id} 后台分析完成")
             
         except Exception as e:
             logger.error(f"后台分析失败: {e}")
+
+    async def _run_intent_mcp_loop(self, session_id: str, messages: List[Dict[str, str]], initial_analysis: Optional[Dict[str, Any]] = None, max_iterations: int = 2):
+        """意图识别-工具调用循环（最多N轮）"""  # 注释
+        try:
+            history = list(messages)  # 浅拷贝，避免外部引用受影响 # 注释
+            analysis = initial_analysis or {}
+            for _ in range(max_iterations):  # 迭代次数 # 注释
+                tool_calls = (analysis or {}).get("tool_calls") or []
+                if not tool_calls:
+                    break  # 无工具调用时结束 # 注释
+                # 取最近一条用户消息作为query # 注释
+                query = ""
+                for m in reversed(history):
+                    if m.get("role") == "user":
+                        query = m.get("content") or m.get("text") or ""
+                        if query:
+                            break
+                task_id = str(uuid.uuid4())
+                result = await self.schedule_mcp_task(
+                    task_id=task_id,
+                    query=query,
+                    tool_calls=tool_calls,
+                    session_id=session_id,
+                    capability_snapshot=(analysis or {}).get("capability_snapshot")
+                )
+                # 将工具结果追加到上下文，供下一轮识别 # 注释
+                result_text = str(result.get("result")) if isinstance(result, dict) else str(result)
+                history.append({"role": "assistant", "content": f"工具执行结果：{result_text}"})
+                # 下一轮意图识别 # 注释
+                analysis = await self.analyzer.analyze_intent_async(history[-6:], session_id)
+        except Exception as e:
+            logger.error(f"意图-工具循环失败: {e}")
     
     async def schedule_parallel_execution(self, tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """调度并行执行"""
@@ -57,6 +95,43 @@ class TaskScheduler:
         except Exception as e:
             logger.error(f"并行执行失败: {e}")
             return []
+
+    async def schedule_mcp_task(self, task_id: str, query: str, tool_calls: List[Dict[str, Any]], session_id: Optional[str] = None, priority: int = 1, capability_snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """调度MCP任务：统一入口，纳入任务注册、优先级、去重与结果通知"""
+        try:
+            # 去重
+            is_duplicate, matched_id = self._is_duplicate_task(query, session_id)
+            if is_duplicate:
+                msg = f"任务重复，跳过: {query} (匹配: {matched_id})"
+                logger.info(msg)
+                return {"success": True, "duplicate": True, "message": msg}
+
+            # 注册任务
+            self.task_registry[task_id] = {
+                "id": task_id,
+                "type": "mcp",
+                "status": "queued",
+                "params": {"query": query, "tool_calls": tool_calls, "priority": priority, "capability_snapshot": capability_snapshot},
+                "session_id": session_id
+            }
+
+            # 调用调度器执行
+            result = await self.mcp_scheduler.handle_mcp_request({
+                "task_id": task_id,
+                "query": query,
+                "tool_calls": tool_calls,
+                "session_id": session_id,
+                "capability_snapshot": capability_snapshot
+            })
+
+            # 更新状态并通知
+            self.task_registry[task_id]["status"] = "completed" if result.get("success") else "failed"
+            await self.result_notifier.notify_task_completion(task_id, {"type": "mcp", "result": result})
+
+            return result
+        except Exception as e:
+            logger.error(f"MCP任务调度失败: {e}")
+            return {"success": False, "error": str(e)}
     
     async def get_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
         """获取任务状态"""

@@ -1,6 +1,6 @@
 # NagaAgent 语音输入服务 🎤
 
-基于 MoeChat 语音识别技术的独立输入服务，为 NagaAgent 3.1 提供高质量的语音转文本功能。支持本地麦克风采集、Silero VAD 端点检测、实时 WebSocket 推送和 HTTP API 调用。
+基于 MoeChat 语音识别技术的独立输入服务，为 NagaAgent 4.0 提供高质量的语音转文本功能。支持本地麦克风采集、Silero VAD 端点检测、实时 WebSocket 推送和 HTTP API 调用。
 
 ## 🚀 核心功能特性
 
