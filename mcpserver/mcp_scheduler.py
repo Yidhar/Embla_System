@@ -24,6 +24,7 @@ class MCPTask:
     tool_calls: List[Dict[str, Any]]
     session_id: Optional[str] = None
     request_id: Optional[str] = None
+    callback_url: Optional[str] = None
     status: str = "queued"
     created_at: str = ""
     started_at: Optional[str] = None
@@ -114,6 +115,8 @@ class MCPScheduler:
             }
             
             logger.info(f"MCP任务完成: {task.id}")
+            # 回调通知（可选）
+            await self._maybe_callback(task)
             
         except Exception as e:
             logger.error(f"MCP任务执行失败: {task.id} - {e}")
@@ -125,12 +128,46 @@ class MCPScheduler:
                 "error": str(e),
                 "message": f"任务执行失败: {str(e)}"
             }
+            # 回调失败也尝试通知
+            try:
+                await self._maybe_callback(task)
+            except Exception:
+                pass
         
         finally:
             # 移动到已完成任务
             if task.id in self.active_tasks:
                 del self.active_tasks[task.id]
             self.completed_tasks[task.id] = task
+
+    async def _maybe_callback(self, task: MCPTask) -> None:
+        """如果提供了callback_url，则POST回传任务结果"""
+        if not task.callback_url:
+            return
+        try:
+            import aiohttp
+            payload = {
+                "task_id": task.id,
+                "session_id": task.session_id,
+                "success": task.result.get("success") if task.result else False,
+                "result": task.result,
+                "error": task.error,
+                "completed_at": task.completed_at,
+            }
+            async with aiohttp.ClientSession() as session:
+                # 调用MCPServer内部的工具结果回调端点
+                callback_url = task.callback_url
+                if not callback_url.startswith('http'):
+                    # 如果是相对路径，构建完整URL
+                    callback_url = f"http://localhost:8003/tool_result_callback"
+                
+                async with session.post(callback_url, json=payload) as response:
+                    if response.status == 200:
+                        logger.info(f"工具结果回调成功: {task.id}")
+                    else:
+                        logger.error(f"工具结果回调失败: {response.status}")
+        except Exception as e:
+            logger.error(f"回调通知失败: {e}")
     
     async def _execute_single_tool_call(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
         """执行单个工具调用（优先通过mcp_manager统一调用）"""
@@ -167,6 +204,7 @@ class MCPScheduler:
                 tool_calls=task_info["tool_calls"],
                 session_id=task_info.get("session_id"),
                 request_id=task_info.get("request_id"),
+                callback_url=task_info.get("callback_url"),
                 created_at=task_info["created_at"]
             )
             

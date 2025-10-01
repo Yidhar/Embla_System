@@ -147,8 +147,6 @@ class StreamingWorker(EnhancedWorker):
     # 额外信号
     stream_chunk = pyqtSignal(str)  # 流式数据块
     stream_complete = pyqtSignal()  # 流式完成
-    tool_call_detected = pyqtSignal(str)  # 工具调用检测信号
-    tool_result_received = pyqtSignal(str)  # 工具结果信号
     
     def __init__(self, naga, user_input, parent=None):
         super().__init__(naga, user_input, parent)
@@ -167,9 +165,7 @@ class StreamingWorker(EnhancedWorker):
             self.tool_extractor = StreamingToolCallExtractor(self.naga.mcp if hasattr(self.naga, 'mcp') else None)
             self.tool_extractor.set_callbacks(
                 on_text_chunk=self._on_text_chunk_sync,
-                on_sentence=self._on_sentence_sync,
-                on_tool_result=self._on_tool_result_sync,
-                tool_call_detected_signal=self.tool_call_detected.emit
+                voice_integration=self.voice_integration
             )
         except ImportError as e:
             print(f"流式工具调用提取器导入失败: {e}")
@@ -211,31 +207,6 @@ class StreamingWorker(EnhancedWorker):
                 except Exception as e:
                     print(f"语音集成错误: {e}")
     
-    async def _on_sentence(self, sentence: str, sentence_type: str):
-        """处理完整句子回调"""
-        if sentence_type == "sentence":
-            # 句子级别的特殊处理
-            print(f"完成句子: {sentence}")
-            # 可以在这里添加语音合成逻辑
-    
-    def _on_sentence_sync(self, sentence: str, sentence_type: str):
-        """同步处理句子回调（用于非异步环境）"""
-        if sentence_type == "sentence":
-            # 句子级别的特殊处理
-            # print(f"完成句子: {sentence}")  # 调试输出，已注释
-            pass  # 可以在这里添加语音合成逻辑
-    
-    def _on_tool_result_sync(self, result: str, result_type: str):
-        """同步处理工具结果回调（用于非异步环境）"""
-        if result_type == "tool_start":
-            # 工具调用开始 - 发送到工具调用专用渲染框
-            self.tool_call_detected.emit(f"🔧 {result}")
-        elif result_type == "tool_result":
-            # 工具调用结果 - 发送到工具调用专用渲染框
-            self.tool_result_received.emit(f"✅ {result}")
-        elif result_type == "tool_error":
-            # 工具调用错误 - 发送到工具调用专用渲染框
-            self.tool_result_received.emit(f"❌ {result}")
         
     async def process_with_progress(self):
         """流式处理优化版本 - 支持流式工具调用提取"""

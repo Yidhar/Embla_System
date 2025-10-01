@@ -115,13 +115,14 @@ class TaskScheduler:
                 "session_id": session_id
             }
 
-            # 调用调度器执行
+            # 调用调度器执行（传递回调URL到MCPServer）
             result = await self.mcp_scheduler.handle_mcp_request({
                 "task_id": task_id,
                 "query": query,
                 "tool_calls": tool_calls,
                 "session_id": session_id,
-                "capability_snapshot": capability_snapshot
+                "capability_snapshot": capability_snapshot,
+                "callback_url": "http://localhost:8003/tool_result_callback"  # 回调到MCPServer内部
             })
 
             # 更新状态并通知

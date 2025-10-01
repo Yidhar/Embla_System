@@ -121,3 +121,7 @@ async def _call_agent_server_analyze(self, messages, session_id):
 2. **网络延迟**：HTTP调用会增加少量延迟
 3. **错误处理**：需要处理网络异常和服务不可用情况
 4. **资源管理**：需要合理配置任务并发数和超时时间
+
+## 更新记录
+
+- 2025-09-30: 修复导入路径，将 `apiserver.task_scheduler` 更正为 `agentserver.task_scheduler`（影响 `core/agent_manager.py` 与 `core/multi_agent_coordinator.py`），避免导入解析失败。

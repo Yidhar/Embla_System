@@ -6,6 +6,15 @@ import socket
 import sys
 import threading
 import time
+import warnings
+
+# 过滤弃用警告，提升启动体验
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="websockets")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="uvicorn")
+warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*websockets.legacy.*")
+warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*WebSocketServerProtocol.*")
+warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*websockets.*")
+warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*uvicorn.*")
 
 # 第三方库导入
 # 优先使用仓库内的本地包，防止导入到系统已安装的旧版 nagaagent_core #
@@ -45,9 +54,10 @@ class ServiceManager:
         self.api_thread = None
         self.agent_thread = None
         self.tts_thread = None
+        self._services_ready = False  # 服务就绪状态
     
     def start_background_services(self):
-        """启动后台服务"""
+        """启动后台服务 - 异步非阻塞"""
         logger.info("正在启动后台服务...")
         
         # 启动后台任务管理器
@@ -55,8 +65,8 @@ class ServiceManager:
         self.bg_thread.start()
         logger.info(f"后台服务线程已启动: {self.bg_thread.name}")
         
-        # 短暂等待服务初始化
-        time.sleep(1)
+        # 移除阻塞等待，改为异步检查
+        # time.sleep(1)  # 删除阻塞等待
     
     def _run_event_loop(self):
         """运行事件循环"""
@@ -65,13 +75,14 @@ class ServiceManager:
         logger.info("后台服务事件循环已启动")
     
     async def _init_background_services(self):
-        """初始化后台服务"""
+        """初始化后台服务 - 优化启动流程"""
         logger.info("正在启动后台服务...")
         try:
             # 启动任务管理器
             await start_task_manager()
             
-            # 添加状态检查
+            # 标记服务就绪
+            self._services_ready = True
             logger.info(f"任务管理器状态: running={task_manager.is_running}")
             
             # 保持事件循环活跃
@@ -90,46 +101,77 @@ class ServiceManager:
             return False
     
     def start_all_servers(self):
-        """并行启动所有服务：API(可选)、MCP、Agent、TTS"""
+        """并行启动所有服务：API(可选)、MCP、Agent、TTS - 优化版本"""
         print("🚀 正在并行启动所有服务...")
+        print("=" * 50)
         threads = []
+        service_status = {}  # 服务状态跟踪
         
         try:
+            # 预检查所有端口，减少重复检查
+            port_checks = {
+                'api': config.api_server.enabled and config.api_server.auto_start and 
+                      self.check_port_available(config.api_server.host, config.api_server.port),
+                'mcp': self.check_port_available("0.0.0.0", 8003),
+                'agent': self.check_port_available("0.0.0.0", 8001),
+                'tts': self.check_port_available("0.0.0.0", config.tts.port)
+            }
+            
             # API服务器（可选）
-            if config.api_server.enabled and config.api_server.auto_start:
-                if self.check_port_available(config.api_server.host, config.api_server.port):
-                    api_thread = threading.Thread(target=self._start_api_server, daemon=True)
-                    threads.append(("API", api_thread))
-                else:
-                    print(f"⚠️ 端口 {config.api_server.port} 已被占用，跳过API服务器启动")
+            if port_checks['api']:
+                api_thread = threading.Thread(target=self._start_api_server, daemon=True)
+                threads.append(("API", api_thread))
+                service_status['API'] = "准备启动"
+            elif config.api_server.enabled and config.api_server.auto_start:
+                print(f"⚠️  API服务器: 端口 {config.api_server.port} 已被占用，跳过启动")
+                service_status['API'] = "端口占用"
             
             # MCP服务器
-            if self.check_port_available("0.0.0.0", 8003):
+            if port_checks['mcp']:
                 mcp_thread = threading.Thread(target=self._start_mcp_server, daemon=True)
                 threads.append(("MCP", mcp_thread))
+                service_status['MCP'] = "准备启动"
             else:
-                print(f"⚠️ 端口 8003 已被占用，跳过MCP Server启动")
+                print(f"⚠️  MCP服务器: 端口 8003 已被占用，跳过启动")
+                service_status['MCP'] = "端口占用"
             
             # Agent服务器
-            if self.check_port_available("0.0.0.0", 8001):
+            if port_checks['agent']:
                 agent_thread = threading.Thread(target=self._start_agent_server, daemon=True)
                 threads.append(("Agent", agent_thread))
+                service_status['Agent'] = "准备启动"
             else:
-                print(f"⚠️ 端口 8001 已被占用，跳过Agent Server启动")
+                print(f"⚠️  Agent服务器: 端口 8001 已被占用，跳过启动")
+                service_status['Agent'] = "端口占用"
             
             # TTS服务器
-            if self.check_port_available("0.0.0.0", config.tts.port):
+            if port_checks['tts']:
                 tts_thread = threading.Thread(target=self._start_tts_server, daemon=True)
                 threads.append(("TTS", tts_thread))
+                service_status['TTS'] = "准备启动"
             else:
-                print(f"⚠️ 端口 {config.tts.port} 已被占用，跳过TTS服务启动")
+                print(f"⚠️  TTS服务器: 端口 {config.tts.port} 已被占用，跳过启动")
+                service_status['TTS'] = "端口占用"
             
-            # 启动所有线程
+            # 显示服务启动计划
+            print("\n📋 服务启动计划:")
+            for service, status in service_status.items():
+                if status == "准备启动":
+                    print(f"   🔄 {service}服务器: 正在启动...")
+                else:
+                    print(f"   ⚠️  {service}服务器: {status}")
+            
+            print("\n🚀 开始启动服务...")
+            print("-" * 30)
+            
+            # 批量启动所有线程
             for name, thread in threads:
                 thread.start()
-                print(f"✅ {name} Server启动线程已创建")
+                print(f"✅ {name}服务器: 启动线程已创建")
             
-            print(f"🎉 已启动 {len(threads)} 个服务线程")
+            print("-" * 30)
+            print(f"🎉 服务启动完成: {len(threads)} 个服务正在后台运行")
+            print("=" * 50)
             
         except Exception as e:
             print(f"❌ 并行启动服务异常: {e}")
@@ -139,22 +181,20 @@ class ServiceManager:
         try:
             from nagaagent_core.api import uvicorn
             
-            print("🚀 正在启动夏园API服务器...")
-            print(f"📍 地址: http://{config.api_server.host}:{config.api_server.port}")
-            print(f"📚 文档: http://{config.api_server.host}:{config.api_server.port}/docs")
-            
             uvicorn.run(
                 "apiserver.api_server:app",
                 host=config.api_server.host,
                 port=config.api_server.port,
                 log_level="error",
                 access_log=False,
-                reload=False
+                reload=False,
+                ws_ping_interval=None,  # 禁用WebSocket ping
+                ws_ping_timeout=None    # 禁用WebSocket ping超时
             )
         except ImportError as e:
-            print(f"⚠️ API服务器依赖缺失: {e}")
+            print(f"   ❌ API服务器依赖缺失: {e}")
         except Exception as e:
-            print(f"❌ API服务器启动失败: {e}")
+            print(f"   ❌ API服务器启动失败: {e}")
     
     def _start_mcp_server(self):
         """内部MCP服务器启动方法"""
@@ -162,20 +202,18 @@ class ServiceManager:
             import uvicorn
             from mcpserver.mcp_server import app
             
-            print("🚀 正在启动MCP Server...")
-            print(f"📍 地址: http://127.0.0.1:8003")
-            print(f"📚 文档: http://127.0.0.1:8003/docs")
-            
             uvicorn.run(
                 app,
                 host="0.0.0.0",
                 port=8003,
                 log_level="error",
                 access_log=False,
-                reload=False
+                reload=False,
+                ws_ping_interval=None,  # 禁用WebSocket ping
+                ws_ping_timeout=None    # 禁用WebSocket ping超时
             )
         except Exception as e:
-            print(f"❌ MCP Server启动失败: {e}")
+            print(f"   ❌ MCP服务器启动失败: {e}")
     
     def _start_agent_server(self):
         """内部Agent服务器启动方法"""
@@ -183,31 +221,26 @@ class ServiceManager:
             import uvicorn
             from agentserver.agent_server import app
             
-            print("🚀 正在启动Agent Server...")
-            print(f"📍 地址: http://127.0.0.1:8001")
-            print(f"📚 文档: http://127.0.0.1:8001/docs")
-            
             uvicorn.run(
                 app,
                 host="0.0.0.0",
                 port=8001,
                 log_level="error",
                 access_log=False,
-                reload=False
+                reload=False,
+                ws_ping_interval=None,  # 禁用WebSocket ping
+                ws_ping_timeout=None    # 禁用WebSocket ping超时
             )
         except Exception as e:
-            print(f"❌ Agent Server启动失败: {e}")
+            print(f"   ❌ Agent服务器启动失败: {e}")
     
     def _start_tts_server(self):
         """内部TTS服务器启动方法"""
         try:
-            print(f"🚀 正在启动TTS服务...")
-            print(f"📍 地址: http://127.0.0.1:{config.tts.port}")
-            
             from voice.output.start_voice_service import start_http_server
             start_http_server()
         except Exception as e:
-            print(f"❌ TTS服务启动失败: {e}")
+            print(f"   ❌ TTS服务器启动失败: {e}")
     
     
     def show_naga_portal_status(self):
@@ -265,42 +298,51 @@ def show_index():
 def clear():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-# 初始化服务管理器
-service_manager = ServiceManager()
-service_manager.start_background_services()
+# 延迟初始化 - 避免启动时阻塞
+def _lazy_init_services():
+    """延迟初始化服务 - 在需要时才初始化"""
+    global service_manager, n
+    if not hasattr(_lazy_init_services, '_initialized'):
+        # 初始化服务管理器
+        service_manager = ServiceManager()
+        service_manager.start_background_services()
+        
+        # 创建对话实例（只创建一次）
+        n = NagaConversation()
+        
+        # 初始化进度文件
+        with open('./ui/styles/progress.txt', 'w') as f:
+            f.write('0')
+        
+        # 显示系统状态
+        print("=" * 30)
+        print(f"GRAG状态: {'启用' if memory_manager.enabled else '禁用'}")
+        if memory_manager.enabled:
+            stats = memory_manager.get_memory_stats()
+            from summer_memory.quintuple_graph import graph, GRAG_ENABLED
+            print(f"Neo4j连接: {'成功' if graph and GRAG_ENABLED else '失败'}")
+        print("=" * 30)
+        print(f'{AI_NAME}系统已启动')
+        print("=" * 30)
+        
+        # 启动服务（并行异步）
+        service_manager.start_all_servers()
+        
+        # 物联网通讯连接已在后台异步执行，连接完成后会自动显示状态
+        print("⏳ 物联网通讯正在后台初始化连接...")
+        
+        # NagaPortal自动登录已在后台异步执行，登录完成后会自动显示状态
+        print("⏳ NagaPortal正在后台自动登录...")
+        show_help()
+        
+        _lazy_init_services._initialized = True
 
-# 创建对话实例
-n = NagaConversation()
-
-# 初始化进度文件
-with open('./ui/styles/progress.txt', 'w') as f:
-    f.write('0')
-
-# 显示系统状态
-print("=" * 30)
-print(f"GRAG状态: {'启用' if memory_manager.enabled else '禁用'}")
-if memory_manager.enabled:
-    stats = memory_manager.get_memory_stats()
-    from summer_memory.quintuple_graph import graph, GRAG_ENABLED
-    print(f"Neo4j连接: {'成功' if graph and GRAG_ENABLED else '失败'}")
-print("=" * 30)
-print(f'{AI_NAME}系统已启动')
-print("=" * 30)
-
-# 启动服务（并行异步）
-service_manager.start_all_servers()
-
-# 物联网通讯连接已在后台异步执行，连接完成后会自动显示状态
-print("⏳ 物联网通讯正在后台初始化连接...")
-
-# NagaPortal自动登录已在后台异步执行，登录完成后会自动显示状态
-print("⏳ NagaPortal正在后台自动登录...")
-show_help()
-
-# NagaAgent适配器
+# NagaAgent适配器 - 优化重复初始化
 class NagaAgentAdapter:
     def __init__(s):
-        s.naga = NagaConversation()  # 第二次初始化：NagaAgentAdapter构造函数中创建
+        # 使用全局实例，避免重复初始化
+        _lazy_init_services()  # 确保服务已初始化
+        s.naga = n  # 使用全局实例
     
     async def respond_stream(s, txt):
         async for resp in s.naga.process(txt):
@@ -325,6 +367,7 @@ if __name__ == "__main__":
     if not asyncio.get_event_loop().is_running():
         asyncio.set_event_loop(asyncio.new_event_loop())
     
+    # 快速启动UI，后台服务延迟初始化
     app = QApplication(sys.argv)
     icon_path = os.path.join(os.path.dirname(__file__), "ui", "window_icon.png")
     app.setWindowIcon(QIcon(icon_path))
@@ -332,8 +375,21 @@ if __name__ == "__main__":
     # 集成控制台托盘功能
     console_tray = integrate_console_tray()
     
+    # 立即显示UI，提升用户体验
     win = ChatWindow()
     win.setWindowTitle("NagaAgent")
     win.show()
+    
+    # 在UI显示后异步初始化后台服务
+    def init_services_async():
+        """异步初始化后台服务"""
+        try:
+            _lazy_init_services()
+        except Exception as e:
+            print(f"⚠️ 后台服务初始化异常: {e}")
+    
+    # 使用定时器延迟初始化，避免阻塞UI
+    from PyQt5.QtCore import QTimer
+    QTimer.singleShot(100, init_services_async)  # 100ms后初始化
     
     sys.exit(app.exec_())

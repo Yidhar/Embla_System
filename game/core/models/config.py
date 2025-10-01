@@ -23,6 +23,7 @@ class PhilossConfig:
     cache_dir: str = "models"  # 模型缓存目录（仅忽略仓库根目录 /models）
     local_files_only: bool = False  # 仅使用本地权重（不联网下载）
     exclusive_model_loading: bool = True  # 禁止回退到其他模型
+    hf_token: str = ""  # HuggingFace token（可选，用于需要鉴权的模型）
     
     def __post_init__(self):
         # 如果没有指定本地路径,使用默认路径
@@ -46,7 +47,7 @@ class SelfGameConfig:
     enable_thinking_vector: bool = True  # 是否启用思维向量
     thinking_vector_max_depth: int = 5  # 思维向量最大深度
     max_self_route_iterations: int = 10  # 单节点自指最大迭代轮次
-    branches_per_agent: int = 5  # 每个角色并行的自博弈分支数
+    branches_per_agent: int = 1  # 每个角色并行的自博弈分支数（默认1，避免重复执行五次）
 
 
 @dataclass
@@ -69,6 +70,8 @@ class SystemConfig:
     enable_async: bool = True  # 是否启用异步处理
     max_concurrent_tasks: int = 5  # 最大并发任务数
     checkpoint_interval: int = 10  # 检查点间隔（秒）
+    max_concurrent_api: int = 10  # API限流-最大并发
+    min_api_interval_seconds: float = 0.0  # API限流-最小调用间隔
 
 
 @dataclass  

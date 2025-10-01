@@ -40,11 +40,11 @@ class CapabilityManager:
             }
             
             self.mcp_capabilities = capabilities
-            logger.info(f"MCP能力已刷新: {len(capabilities)} 个能力")
+            logger.info(f"Agent能力快照已刷新: {len(capabilities)} 个能力")
             return capabilities
             
         except Exception as e:
-            logger.error(f"MCP能力刷新失败: {e}")
+            logger.error(f"Agent能力快照刷新失败: {e}")
             return {}
     
     def get_mcp_availability(self) -> Dict[str, Any]:

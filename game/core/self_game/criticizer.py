@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from ..models.data_models import Agent, Task
 from ..models.config import GameConfig
 from .actor import ActorOutput
+from ..utils.api_pool import get_api_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -114,18 +115,8 @@ class GameCriticizer:
 
         except Exception as e:
             logger.error(f"Criticizer批判失败:{e}")
-            return CriticOutput(
-                target_output_id=actor_output.target_output_id,
-                critic_agent_id=critic_agent.agent_id,
-                overall_score=0.5,
-                satisfaction_score=0.5,
-                dimension_scores=[],
-                summary_critique=f"批判过程出错:{str(e)}",
-                improvement_suggestions=["请重试本轮批判"],
-                critique_time=time.time() - start_time,
-                iteration=self.current_iteration,
-                metadata={'error': True, 'error_message': str(e)},
-            )
+            # 将错误上抛，让引擎感知失败
+            raise
 
     def _build_critique_prompt(
         self,
@@ -174,7 +165,8 @@ class GameCriticizer:
     async def _call_llm_for_critique(self, prompt: str) -> str:
         if self.naga_conversation is None:
             raise RuntimeError("LLM不可用，无法执行批判")
-        return await self.naga_conversation.get_response(prompt, temperature=0.4)
+        limiter = get_api_limiter()
+        return await limiter.call(self.naga_conversation.get_response, prompt, temperature=0.4)
 
     def _parse_llm_json(self, text: str, has_previous: bool) -> tuple:
         import json, re

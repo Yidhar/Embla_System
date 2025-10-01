@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from ..models.data_models import Agent, Task
 from ..models.config import GameConfig
+from ..utils.api_pool import get_api_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +80,8 @@ class GameActor:
                 # 降级模式: 生成一个基于角色信息的结构化占位输出
                 content = self._fallback_generate(agent, task, context, previous_outputs or [])
             else:
-                content = await self.naga_conversation.get_response(
-                    prompt,
-                    temperature=0.7
-                )
+                limiter = get_api_limiter()
+                content = await limiter.call(self.naga_conversation.get_response, prompt, temperature=0.7)
 
             generation_time = time.time() - start_time
 

@@ -706,49 +706,25 @@ class NagaConversation: # 对话主类
             print(f"GTP请求发送：{now()}")  # AI请求前
             # 流式处理：实时检测工具调用，使用统一的工具调用循环
             try:
-                # 导入流式工具调用提取器
+                # 导入流式文本切割器（不再解析或执行工具） # 保持纯聊天流式
                 from apiserver.streaming_tool_extractor import StreamingToolCallExtractor
-                import queue
                 
-                # 创建工具调用队列
-                tool_calls_queue = queue.Queue()
-                tool_extractor = StreamingToolCallExtractor(self.mcp)
+                tool_extractor = StreamingToolCallExtractor(self.mcp)  # 仅用于TTS分句 #
                 
-                # 用于累积前端显示的纯文本（不包含工具调用）
+                # 用于累积前端显示的纯文本（不包含工具调用） #
                 display_text = ""
                 
-                # 设置回调函数
+                # 设置回调函数（仅文本块） #
                 def on_text_chunk(text: str, chunk_type: str):
-                    """处理文本块 - 发送到前端显示"""
                     if chunk_type == "chunk":
                         nonlocal display_text
                         display_text += text
                         return (AI_NAME, text)
                     return None
                 
-                def on_sentence(sentence: str, sentence_type: str):
-                    """处理完整句子"""
-                    if sentence_type == "sentence":
-                        print(f"完成句子: {sentence}")
-                    return None
+                tool_extractor.set_callbacks(on_text_chunk=on_text_chunk)
                 
-                def on_tool_result(result: str, result_type: str):
-                    """处理工具结果 - 不发送到前端"""
-                    if result_type == "tool_result":
-                        print(f"✅ 工具执行完成: {result[:100]}...")
-                    elif result_type == "tool_error":
-                        print(f"❌ 工具执行错误: {result}")
-                    return None
-                
-                # 设置回调
-                tool_extractor.set_callbacks(
-                    on_text_chunk=on_text_chunk,
-                    on_sentence=on_sentence,
-                    on_tool_result=on_tool_result,
-                    tool_calls_queue=tool_calls_queue
-                )
-                
-                # 调用LLM API - 流式模式
+                # 调用LLM API - 流式模式（仅聊天） #
                 resp = await self.async_client.chat.completions.create(
                     model=config.api.model,
                     messages=msgs,
@@ -757,9 +733,8 @@ class NagaConversation: # 对话主类
                     stream=True
                 )
                 
-                # 处理流式响应
+                # 处理流式响应 #
                 async for chunk in resp:
-                    # 原始增量日志（AI 原始输出）
                     try:
                         delta = getattr(chunk.choices[0], 'delta', None) if chunk.choices else None
                         if delta is not None:
@@ -767,140 +742,19 @@ class NagaConversation: # 对话主类
                     except Exception:
                         pass
 
-                    # 安全检查：确保chunk.choices不为空且有内容
                     if (chunk.choices and 
                         len(chunk.choices) > 0 and 
                         hasattr(chunk.choices[0], 'delta') and 
                         chunk.choices[0].delta.content):
                         content = chunk.choices[0].delta.content
-                        # 使用流式工具调用提取器处理内容
-                        results = await tool_extractor.process_text_chunk(content)
-                        if results:
-                            for result in results:
-                                if isinstance(result, tuple) and len(result) == 2:
-                                    yield result
-                                elif isinstance(result, str):
-                                    yield (AI_NAME, result)
+                        await tool_extractor.process_text_chunk(content)
+                        # 将文本块直接推送前端 #
+                        yield (AI_NAME, content)
                 
-                # 完成处理
-                final_results = await tool_extractor.finish_processing()
-                if final_results:
-                    for result in final_results:
-                        if isinstance(result, tuple) and len(result) == 2:
-                            yield result
-                        elif isinstance(result, str):
-                            yield (AI_NAME, result)
+                # 完成处理 #
+                await tool_extractor.finish_processing()
                 
-                # 检查是否有工具调用需要处理
-                if not tool_calls_queue.empty():
-                    # 收集所有工具调用
-                    tool_calls = []
-                    while not tool_calls_queue.empty():
-                        try:
-                            tool_call = tool_calls_queue.get_nowait()
-                            tool_calls.append(tool_call)
-                        except Exception as e:
-                            logger.error(f"获取工具调用失败: {e}")
-                            break
-                    
-                    if tool_calls and self.agent_server_client:
-                        # 根据工具调用类型进行路由决策
-                        route_type = self._route_task(tool_calls)
-                        print(f"🔧 路由决策: {route_type} -> 执行 {len(tool_calls)} 个工具调用")
-                        
-                        if route_type == "mcp":
-                            # 路由到MCP服务器
-                            result = await self._call_mcp_server(u, tool_calls, "main_session")
-                        elif route_type == "agent":
-                            # 路由到AgentServer
-                            result = await self._call_agent_server_task(u, "multi_agent", "main_session")
-                        else:
-                            # 默认路由到MCP
-                            result = await self._call_mcp_server(u, tool_calls, "main_session")
-                        
-                        if result.get("success", False):
-                            raw_result_str = json.dumps(result.get("result", {}), ensure_ascii=False)
-                            # 对工具结果进行摘要，便于后续对话继续
-                            try:
-                                summarized = get_prompt("mcp_result_summarizer_prompt", raw_results=raw_result_str)
-                                tool_results = summarized
-                            except Exception:
-                                tool_results = result.get("result", {}).get("message", "")
-                            print(f"✅ {route_type.upper()}服务器执行成功: {tool_results[:100]}...")
-                            
-                            # 构建包含工具结果的消息
-                            tool_messages = message_manager.build_conversation_messages_from_memory(
-                                memory_messages=self.messages,
-                                system_prompt=system_prompt,
-                                current_message=f"工具执行结果：{tool_results}",
-                                max_history_rounds=config.api.max_history_rounds
-                            )
-                        else:
-                            error_msg = result.get("error", f"{route_type.upper()}服务器执行失败")
-                            print(f"❌ {route_type.upper()}服务器执行失败: {error_msg}")
-                            tool_results = f"{route_type.upper()}工具调用失败: {error_msg}"
-                            
-                            # 构建包含错误结果的消息
-                            tool_messages = message_manager.build_conversation_messages_from_memory(
-                                memory_messages=self.messages,
-                                system_prompt=system_prompt,
-                                current_message=f"工具执行结果：{tool_results}",
-                                max_history_rounds=config.api.max_history_rounds
-                            )
-                    else:
-                        # 回退到本地工具调用循环处理
-                        async def llm_caller(messages, use_stream=False):
-                            """LLM调用函数，用于工具调用循环"""
-                            return {'content': '', 'status': 'success'}
-                        
-                        # 重新构建工具调用队列
-                        for tool_call in tool_calls:
-                            tool_calls_queue.put(tool_call)
-                        
-                        # 已移除本地工具调用循环，主流程不再解析工具调用
-                        tool_results = ""
-                        
-                        # 调用LLM继续处理工具结果
-                        try:
-                            resp2 = await self.async_client.chat.completions.create(
-                                model=config.api.model,
-                                messages=tool_messages,
-                                temperature=config.api.temperature,
-                                max_tokens=config.api.max_tokens,
-                                stream=True
-                            )
-                            
-                            # 处理LLM的继续响应 - 也需要通过流式工具调用提取器处理
-                            async for chunk in resp2:
-                                # 安全检查：确保chunk.choices不为空且有内容
-                                if (chunk.choices and 
-                                    len(chunk.choices) > 0 and 
-                                    hasattr(chunk.choices[0], 'delta') and 
-                                    chunk.choices[0].delta.content):
-                                    content = chunk.choices[0].delta.content
-                                    # 使用流式工具调用提取器处理内容
-                                    results = await tool_extractor.process_text_chunk(content)
-                                    if results:
-                                        for result in results:
-                                            if isinstance(result, tuple) and len(result) == 2:
-                                                yield result
-                                            elif isinstance(result, str):
-                                                yield (AI_NAME, result)
-                                    
-                                    # 注意：文本内容通过 on_text_chunk 回调函数已经累积到 display_text 中
-                        except Exception as e:
-                            print(f"LLM继续处理工具结果失败: {e}")
-                
-                # 完成所有处理，获取最终的纯文本内容
-                final_results = await tool_extractor.finish_processing()
-                if final_results:
-                    for result in final_results:
-                        if isinstance(result, tuple) and len(result) == 2:
-                            yield result
-                        elif isinstance(result, str):
-                            yield (AI_NAME, result)
-                
-                # 等待意图分析完成（最多等待2秒）
+                # 等待意图分析完成（最多等待2秒） #
                 if intent_analysis_task and not intent_analysis_task.done():
                     try:
                         await asyncio.wait_for(intent_analysis_task, timeout=2.0)

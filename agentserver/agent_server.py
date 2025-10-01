@@ -54,12 +54,12 @@ async def lifespan(app: FastAPI):
         # 初始化MCP服务器客户端
         import aiohttp
         Modules.mcp_server_client = aiohttp.ClientSession()
-        # 初始化能力管理器并预热能力快照
+        # 初始化能力管理器并预热Agent能力快照
         Modules.capability_manager = get_capability_manager()
         try:
             await Modules.capability_manager.refresh_mcp_capabilities()
         except Exception as e:
-            logger.warning(f"预热MCP能力失败: {e}")
+            logger.warning(f"预热Agent能力快照失败: {e}")
         logger.info("NagaAgent服务初始化完成")
     except Exception as e:
         logger.error(f"服务初始化失败: {e}")

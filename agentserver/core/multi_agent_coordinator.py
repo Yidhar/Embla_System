@@ -379,9 +379,9 @@ class MultiAgentCoordinator:
             if agent.agent_id == "general_assistant":
                 return await self.agent_manager.call_agent("default", query)
             elif agent.agent_id == "task_planner":
-                # 通过apiserver的task_scheduler处理任务规划
+                # 通过agentserver的task_scheduler处理任务规划
                 try:
-                    from apiserver.task_scheduler import get_task_scheduler
+                    from agentserver.task_scheduler import get_task_scheduler
                     task_scheduler = get_task_scheduler()
                     
                     # 创建任务并调度
@@ -406,9 +406,9 @@ class MultiAgentCoordinator:
                 except Exception as e:
                     return {"error": f"任务规划器调用失败: {e}"}
             elif agent.agent_id == "tool_executor":
-                # 通过apiserver的task_scheduler处理工具执行
+                # 通过agentserver的task_scheduler处理工具执行
                 try:
-                    from apiserver.task_scheduler import get_task_scheduler
+                    from agentserver.task_scheduler import get_task_scheduler
                     task_scheduler = get_task_scheduler()
                     
                     # 调度工具执行任务

@@ -6,6 +6,7 @@ MCP服务器 - 独立的MCP工具调度服务
 """
 
 import asyncio
+import json
 import logging
 import uuid
 from datetime import datetime
@@ -95,6 +96,7 @@ async def schedule_mcp_task(payload: Dict[str, Any]):
         tool_calls = payload.get("tool_calls", [])
         session_id = payload.get("session_id")
         request_id = payload.get("request_id", str(uuid.uuid4()))
+        callback_url = payload.get("callback_url")
         
         if not query and not tool_calls:
             raise HTTPException(400, "query或tool_calls不能同时为空")
@@ -131,6 +133,7 @@ async def schedule_mcp_task(payload: Dict[str, Any]):
             "tool_calls": tool_calls,
             "session_id": session_id,
             "request_id": request_id,
+            "callback_url": callback_url,
             "status": "queued",
             "created_at": _now_iso(),
             "result": None,
@@ -248,6 +251,60 @@ async def refresh_capabilities():
     
     await Modules.capability_manager.refresh_capabilities()
     return {"success": True, "message": "能力已刷新"}
+
+@app.post("/tool_result_callback")
+async def tool_result_callback(payload: Dict[str, Any]):
+    """接收工具执行结果回调，使用主提示词拼接并流式返回"""
+    try:
+        session_id = payload.get("session_id")
+        task_id = payload.get("task_id")
+        result = payload.get("result", {})
+        success = payload.get("success", False)
+        
+        if not session_id:
+            raise HTTPException(400, "缺少session_id")
+        
+        # 构建主提示词和消息
+        from system.prompt_repository import get_prompt
+        from system.config import config, AI_NAME
+        from apiserver.message_manager import message_manager
+        
+        system_prompt = get_prompt("naga_system_prompt", ai_name=AI_NAME)
+        current_message = f"工具执行结果：{json.dumps(result, ensure_ascii=False)}"
+        
+        # 构建对话消息
+        messages = message_manager.build_conversation_messages(
+            session_id=session_id,
+            system_prompt=system_prompt,
+            current_message=current_message
+        )
+        
+        # 调用主对话流式接口
+        from system.conversation_core import NagaConversation
+        naga_conversation = NagaConversation()
+        
+        # 使用流式处理生成回复
+        response_text = ""
+        async for chunk in naga_conversation.process(current_message, is_voice_input=False):
+            if isinstance(chunk, tuple) and len(chunk) == 2:
+                speaker, content = chunk
+                if speaker == AI_NAME:
+                    response_text += content
+        
+        # 保存到历史
+        message_manager.add_message(session_id, "user", current_message)
+        message_manager.add_message(session_id, "assistant", response_text)
+        
+        return {
+            "success": True,
+            "message": "工具结果已处理并流式返回",
+            "response": response_text,
+            "task_id": task_id
+        }
+        
+    except Exception as e:
+        logger.error(f"工具结果回调处理失败: {e}")
+        raise HTTPException(500, f"处理失败: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

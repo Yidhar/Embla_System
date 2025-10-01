@@ -157,6 +157,7 @@ class ChatResponse(BaseModel):
     session_id: Optional[str] = None
     status: str = "success"
 
+
 class MCPRequest(BaseModel):
     service_name: str
     task: Dict
@@ -295,7 +296,7 @@ async def chat(request: ChatRequest):
         # 构建系统提示词（不再注入服务信息）
         system_prompt = get_prompt("naga_system_prompt", ai_name=AI_NAME)
         
-        # 使用消息管理器构建完整的对话消息
+        # 使用消息管理器构建完整的对话消息（纯聊天，不触发工具）
         messages = message_manager.build_conversation_messages(
             session_id=session_id,
             system_prompt=system_prompt,
@@ -571,6 +572,7 @@ async def chat_stream(request: ChatRequest):
             "Content-Type": "text/event-stream"
         }
     )
+
 
 @app.post("/mcp/handoff")
 async def mcp_handoff(request: MCPRequest):

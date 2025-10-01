@@ -16,6 +16,7 @@ from .core.models.config import GameConfig, get_domain_config
 from .core.interaction_graph import RoleGenerator, SignalRouter, DynamicDispatcher
 from .core.interaction_graph.user_interaction_handler import UserInteractionHandler, SystemResponse
 from .core.self_game import GameEngine, GameActor, GameCriticizer, PhilossChecker
+from game.core.utils.api_pool import ApiRateLimiter, set_api_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,16 @@ class NagaGameSystem:
         # 系统状态
         self.system_state = SystemState(current_phase="空闲")
         self.execution_history: List[GameSystemResult] = []
+        
+        # 初始化全局API限流器
+        try:
+            limiter = ApiRateLimiter(
+                max_concurrent=self.config.system.max_concurrent_api,
+                min_interval_seconds=self.config.system.min_api_interval_seconds,
+            )
+            set_api_limiter(limiter)
+        except Exception:
+            pass
         
         logger.info("NagaGameSystem 初始化完成")
     

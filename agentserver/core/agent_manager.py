@@ -580,8 +580,8 @@ class AgentManager:
             Dict[str, Any]: 处理结果
         """
         try:
-            # 通过apiserver的task_scheduler处理智能任务
-            from apiserver.task_scheduler import get_task_scheduler
+            # 通过agentserver的task_scheduler处理智能任务
+            from agentserver.task_scheduler import get_task_scheduler
             task_scheduler = get_task_scheduler()
             
             # 创建任务并调度
@@ -661,7 +661,7 @@ async def process_intelligent_task(query: str, context: Optional[Dict[str, Any]]
 async def get_task_status(task_id: str) -> Optional[Dict[str, Any]]:
     """便捷的任务状态获取函数 - 通过apiserver处理"""
     try:
-        from apiserver.task_scheduler import get_task_scheduler
+        from agentserver.task_scheduler import get_task_scheduler
         task_scheduler = get_task_scheduler()
         return await task_scheduler.get_task_status(task_id)
     except Exception as e:
@@ -671,7 +671,7 @@ async def get_task_status(task_id: str) -> Optional[Dict[str, Any]]:
 async def get_task_list(status_filter: Optional[str] = None) -> List[Dict[str, Any]]:
     """便捷的任务列表获取函数 - 通过apiserver处理"""
     try:
-        from apiserver.task_scheduler import get_task_scheduler
+        from agentserver.task_scheduler import get_task_scheduler
         task_scheduler = get_task_scheduler()
         return await task_scheduler.get_running_tasks()
     except Exception as e:
@@ -681,7 +681,7 @@ async def get_task_list(status_filter: Optional[str] = None) -> List[Dict[str, A
 async def get_execution_stats() -> Dict[str, Any]:
     """便捷的执行统计获取函数 - 通过apiserver处理"""
     try:
-        from apiserver.task_scheduler import get_task_scheduler
+        from agentserver.task_scheduler import get_task_scheduler
         task_scheduler = get_task_scheduler()
         return {
             "total_tasks": len(task_scheduler.task_registry),
@@ -695,7 +695,7 @@ async def get_execution_stats() -> Dict[str, Any]:
 async def cancel_task(task_id: str) -> bool:
     """便捷的任务取消函数 - 通过apiserver处理"""
     try:
-        from apiserver.task_scheduler import get_task_scheduler
+        from agentserver.task_scheduler import get_task_scheduler
         task_scheduler = get_task_scheduler()
         if task_id in task_scheduler.task_registry:
             task_scheduler.task_registry[task_id]["status"] = "cancelled"

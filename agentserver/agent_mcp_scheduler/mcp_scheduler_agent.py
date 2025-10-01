@@ -44,9 +44,39 @@ class MCPSchedulerAgent:
             query = request.get("query", "")
             tool_calls = request.get("tool_calls", [])
             session_id = request.get("session_id", "default")
+            callback_url = request.get("callback_url")
             
             logger.info(f"收到MCP调度请求: {task_id}, 查询: {query[:100]}...")
             
+            # 如果有回调URL，直接调用MCPServer
+            if callback_url:
+                import aiohttp
+                payload = {
+                    "query": query,
+                    "tool_calls": tool_calls,
+                    "session_id": session_id,
+                    "request_id": task_id,
+                    "callback_url": callback_url
+                }
+                
+                async with aiohttp.ClientSession() as session:
+                    async with session.post("http://localhost:8003/schedule", json=payload) as response:
+                        if response.status == 200:
+                            result = await response.json()
+                            return {
+                                "success": result.get("success", False),
+                                "task_id": task_id,
+                                "result": result,
+                                "message": "MCP任务已提交到MCPServer"
+                            }
+                        else:
+                            return {
+                                "success": False,
+                                "error": f"MCPServer调用失败: {response.status}",
+                                "message": "MCP任务提交失败"
+                            }
+            
+            # 否则使用本地调度逻辑（保持兼容性）
             # 分析MCP能力
             capabilities = await self.capability_analyzer.analyze_capabilities(query, tool_calls)
             
