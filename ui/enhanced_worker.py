@@ -142,11 +142,12 @@ class EnhancedWorker(QThread):
 
 
 class StreamingWorker(EnhancedWorker):
-    """流式处理Worker，专门优化流式对话体验 - 支持流式工具调用提取"""
+    """流式处理Worker，专门优化流式对话体验 - 支持流式文本切割和语音集成"""
     
     # 额外信号
     stream_chunk = pyqtSignal(str)  # 流式数据块
     stream_complete = pyqtSignal()  # 流式完成
+    # 注意：工具调用现在通过API通讯处理，不再使用UI信号
     
     def __init__(self, naga, user_input, parent=None):
         super().__init__(naga, user_input, parent)

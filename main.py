@@ -29,7 +29,7 @@ from nagaagent_core.vendors.PyQt5.QtWidgets import QApplication  # 统一入口 
 # 本地模块导入
 from system.system_checker import run_system_check
 from system.config import config, AI_NAME
-from system.conversation_core import NagaConversation
+# conversation_core已删除，相关功能已迁移到apiserver
 from summer_memory.memory_manager import memory_manager
 from summer_memory.task_manager import start_task_manager, task_manager
 from ui.pyqt_chat_window import ChatWindow
@@ -242,6 +242,204 @@ class ServiceManager:
         except Exception as e:
             print(f"   ❌ TTS服务器启动失败: {e}")
     
+    def _start_naga_portal_auto_login(self):
+        """启动NagaPortal自动登录（异步）"""
+        try:
+            # 检查是否配置了NagaPortal
+            if not config.naga_portal.username or not config.naga_portal.password:
+                return  # 静默跳过，不输出日志
+            
+            # 在新线程中异步执行登录
+            def run_auto_login():
+                try:
+                    import sys
+                    import os
+                    # 添加项目根目录到Python路径
+                    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    sys.path.insert(0, project_root)
+                    
+                    from mcpserver.agent_naga_portal.portal_login_manager import auto_login_naga_portal
+                    
+                    # 创建新的事件循环
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
+                    try:
+                        # 执行自动登录
+                        result = loop.run_until_complete(auto_login_naga_portal())
+                        
+                        if result['success']:
+                            # 登录成功，显示状态
+                            print("✅ NagaPortal自动登录成功")
+                            self._show_naga_portal_status()
+                        else:
+                            # 登录失败，显示错误
+                            error_msg = result.get('message', '未知错误')
+                            print(f"❌ NagaPortal自动登录失败: {error_msg}")
+                            self._show_naga_portal_status()
+                    finally:
+                        loop.close()
+                        
+                except Exception as e:
+                    # 登录异常，显示错误
+                    print(f"❌ NagaPortal自动登录异常: {e}")
+                    self._show_naga_portal_status()
+            
+            # 启动后台线程
+            import threading
+            login_thread = threading.Thread(target=run_auto_login, daemon=True)
+            login_thread.start()
+            
+        except Exception as e:
+            # 启动异常，显示错误
+            print(f"❌ NagaPortal自动登录启动失败: {e}")
+            self._show_naga_portal_status()
+
+    def _show_naga_portal_status(self):
+        """显示NagaPortal状态（登录完成后调用）"""
+        try:
+            from mcpserver.agent_naga_portal.portal_login_manager import get_portal_login_manager
+            login_manager = get_portal_login_manager()
+            status = login_manager.get_status()
+            cookies = login_manager.get_cookies()
+            
+            print(f"🌐 NagaPortal状态:")
+            print(f"   地址: {config.naga_portal.portal_url}")
+            print(f"   用户: {config.naga_portal.username[:3]}***{config.naga_portal.username[-3:] if len(config.naga_portal.username) > 6 else '***'}")
+            
+            if cookies:
+                print(f"🍪 Cookie信息 ({len(cookies)}个):")
+                for name, value in cookies.items():
+                    print(f"   {name}: {value}")
+            else:
+                print(f"🍪 Cookie: 未获取到")
+            
+            user_id = status.get('user_id')
+            if user_id:
+                print(f"👤 用户ID: {user_id}")
+            else:
+                print(f"👤 用户ID: 未获取到")
+                
+            # 显示登录状态
+            if status.get('is_logged_in'):
+                print(f"✅ 登录状态: 已登录")
+            else:
+                print(f"❌ 登录状态: 未登录")
+                if status.get('login_error'):
+                    print(f"   错误: {status.get('login_error')}")
+                    
+        except Exception as e:
+            print(f"🍪 NagaPortal状态获取失败: {e}")
+    
+    def _start_mqtt_status_check(self):
+        """启动物联网通讯连接并显示状态（异步）"""
+        try:
+            # 检查是否配置了物联网通讯
+            if not config.mqtt.enabled:
+                return  # 静默跳过，不输出日志
+            
+            # 在新线程中异步执行物联网通讯连接
+            def run_mqtt_connection():
+                try:
+                    import sys
+                    import os
+                    import time
+                    # 添加项目根目录到Python路径
+                    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    sys.path.insert(0, project_root)
+                    
+                    try:
+                        from mqtt_tool.device_switch import device_manager
+                        
+                        # 尝试连接物联网设备
+                        if hasattr(device_manager, 'connect'):
+                            success = device_manager.connect()
+                            if success:
+                                print("🔗 物联网通讯状态: 已连接")
+                            else:
+                                print("⚠️ 物联网通讯状态: 连接失败（将在使用时重试）")
+                        else:
+                            print("❌ 物联网通讯功能不可用")
+                            
+                    except Exception as e:
+                        print(f"⚠️ 物联网通讯连接失败: {e}")
+                        
+                except Exception as e:
+                    print(f"❌ 物联网通讯连接异常: {e}")
+            
+            # 启动后台线程
+            import threading
+            mqtt_thread = threading.Thread(target=run_mqtt_connection, daemon=True)
+            mqtt_thread.start()
+            
+        except Exception as e:
+            print(f"❌ 物联网通讯连接启动失败: {e}")
+    
+    def _load_persistent_context(self):
+        """从日志文件加载历史对话上下文"""
+        if not config.api.context_parse_logs:
+            return
+            
+        try:
+            from apiserver.message_manager import message_manager
+            
+            # 计算最大消息数量
+            max_messages = config.api.max_history_rounds * 2
+            
+            # 加载历史对话
+            recent_messages = message_manager.load_recent_context(
+                days=config.api.context_load_days,
+                max_messages=max_messages
+            )
+            
+            if recent_messages:
+                logger.info(f"✅ 从日志文件加载了 {len(recent_messages)} 条历史对话")
+                
+                # 显示统计信息
+                try:
+                    from apiserver.message_manager import parser
+                    stats = parser.get_context_statistics(config.api.context_load_days)
+                    logger.info(f"📊 上下文统计: {stats['total_files']}个文件, {stats['total_messages']}条消息")
+                except ImportError:
+                    logger.info("📊 上下文统计: 日志解析器不可用")
+            else:
+                logger.info("📝 未找到历史对话记录，将开始新的对话")
+                
+        except ImportError:
+            logger.warning("⚠️ 日志解析器模块未找到，跳过持久化上下文加载")
+        except Exception as e:
+            logger.error(f"❌ 加载持久化上下文失败: {e}")
+            # 失败时不影响正常使用，继续使用空上下文
+    
+    def _init_voice_system(self):
+        """初始化语音处理系统"""
+        try:
+            if config.system.voice_enabled:
+                logger.info("语音功能已启用（语音输入+输出），由UI层管理")
+            else:
+                logger.info("语音功能已禁用")
+        except Exception as e:
+            logger.warning(f"语音系统初始化失败: {e}")
+    
+    def _init_memory_system(self):
+        """初始化记忆系统"""
+        try:
+            if memory_manager and memory_manager.enabled:
+                logger.info("夏园记忆系统已初始化")
+            else:
+                logger.info("夏园记忆系统已禁用")
+        except Exception as e:
+            logger.warning(f"记忆系统初始化失败: {e}")
+    
+    def _init_mcp_services(self):
+        """初始化MCP服务系统"""
+        try:
+            # MCP服务现在由mcpserver独立管理，这里只需要记录日志
+            logger.info("MCP服务系统由mcpserver独立管理")
+        except Exception as e:
+            logger.error(f"MCP服务系统初始化失败: {e}")
+    
     
     def show_naga_portal_status(self):
         """显示NagaPortal配置状态（手动调用）"""
@@ -307,8 +505,14 @@ def _lazy_init_services():
         service_manager = ServiceManager()
         service_manager.start_background_services()
         
-        # 创建对话实例（只创建一次）
-        n = NagaConversation()
+        # conversation_core已删除，相关功能已迁移到apiserver
+        n = None
+        
+        # 初始化各个系统（conversation_core已删除，直接初始化服务）
+        service_manager._init_mcp_services()
+        service_manager._init_voice_system()
+        service_manager._init_memory_system()
+        service_manager._load_persistent_context()
         
         # 初始化进度文件
         with open('./ui/styles/progress.txt', 'w') as f:
@@ -328,11 +532,14 @@ def _lazy_init_services():
         # 启动服务（并行异步）
         service_manager.start_all_servers()
         
-        # 物联网通讯连接已在后台异步执行，连接完成后会自动显示状态
+        # 启动NagaPortal自动登录
+        service_manager._start_naga_portal_auto_login()
+        print("⏳ NagaPortal正在后台自动登录...")
+        
+        # 启动物联网通讯连接
+        service_manager._start_mqtt_status_check()
         print("⏳ 物联网通讯正在后台初始化连接...")
         
-        # NagaPortal自动登录已在后台异步执行，登录完成后会自动显示状态
-        print("⏳ NagaPortal正在后台自动登录...")
         show_help()
         
         _lazy_init_services._initialized = True

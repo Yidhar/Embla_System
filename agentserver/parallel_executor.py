@@ -88,7 +88,7 @@ class ParallelExecutor:
         """处理器工作进程 - 基于博弈论的处理器机制"""
         try:
             # Lazy import to avoid heavy init in parent
-            from agentserver.core.agent_manager import get_agent_manager
+            from agentserver.agent_manager import get_agent_manager
             import asyncio as _aio
             
             agent_manager = get_agent_manager()

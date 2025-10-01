@@ -37,8 +37,7 @@ class MCPTask:
 class MCPScheduler:
     """MCP调度器 - 负责任务调度和执行"""
     
-    def __init__(self, capability_manager=None, mcp_manager=None):
-        self.capability_manager = capability_manager  # 兼容旧参数，不再强依赖
+    def __init__(self, mcp_manager=None):
         self.mcp_manager = mcp_manager
         self.active_tasks: Dict[str, MCPTask] = {}
         self.completed_tasks: Dict[str, MCPTask] = {}

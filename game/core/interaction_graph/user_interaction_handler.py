@@ -91,11 +91,12 @@ class UserInteractionHandler:
     def _init_naga_api(self):
         if self.naga_conversation is None:
             try:
-                from system.conversation_core import NagaConversation
-                self.naga_conversation = NagaConversation()
-                logger.info("UserInteractionHandler 已接入 NagaConversation")
+                # 使用apiserver的LLM服务
+                from apiserver.llm_service import get_llm_service
+                self.naga_conversation = get_llm_service()
+                logger.info("UserInteractionHandler 已接入 LLMService")
             except Exception as e:
-                logger.warning(f"UserInteractionHandler 未能接入NagaConversation, 将在必要时使用降级方案: {e}")
+                logger.warning(f"UserInteractionHandler 未能接入LLMService, 将在必要时使用降级方案: {e}")
                 self.naga_conversation = None
     
     async def process_user_request(self, 

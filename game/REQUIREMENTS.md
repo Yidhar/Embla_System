@@ -134,7 +134,7 @@
 - 输出格式要求
 
 **API集成方案**：
-- 复用NagaAgent的`system.conversation_core.NagaConversation`
+- 复用NagaAgent的`apiserver.llm_service.LLMService`
 - 使用相同的配置系统和API密钥
 - 保持与主系统的统一日志和错误处理
 
@@ -392,7 +392,7 @@ class PromptTemplate:
 ### 4.3 集成要求
 
 #### 4.3.1 NagaAgent API集成
-- **复用现有LLM调用接口**: 使用`system.conversation_core.NagaConversation.get_response()`
+- **复用现有LLM调用接口**: 使用`apiserver.llm_service.LLMService.get_response()`
 - **集成配置系统**: 使用`system.config.config.api`的API配置
 - **统一异步架构**: 保持与现有系统的异步调用一致性
 - **错误处理机制**: 复用现有的API异常处理和重试机制

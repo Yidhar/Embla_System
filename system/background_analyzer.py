@@ -9,7 +9,7 @@ import asyncio
 import logging
 from typing import Dict, Any, List
 from langchain_openai import ChatOpenAI
-from system.prompt_repository import get_prompt
+from system.config import get_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,8 @@ class ConversationAnalyzer:
         for m in messages[-20:]:
             role = m.get('role', 'user')
             text = m.get('text', '')
+            # 清理文本，移除可能导致格式化问题的字符
+            text = text.replace('{', '{{').replace('}', '}}')
             lines.append(f"{role}: {text}")
         conversation = "\n".join(lines)
         

@@ -94,7 +94,7 @@ uvicorn agentserver.agent_server:app --host 0.0.0.0 --port 8001
 主对话流程通过HTTP客户端调用Agent Server：
 
 ```python
-# 在conversation_core.py中
+# 在apiserver/api_server.py中
 async def _call_agent_server_analyze(self, messages, session_id):
     url = "http://localhost:8001/analyze_and_plan"
     payload = {"messages": messages, "session_id": session_id}

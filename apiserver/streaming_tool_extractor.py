@@ -61,11 +61,12 @@ class CallbackManager:
             return None
 
 class StreamingToolCallExtractor:
-    """流式文本切割器（仅TTS）"""
+    """流式文本切割器 - 实时按句切割并发送给TTS"""
     
     def __init__(self, mcp_manager=None):
         self.mcp_manager = mcp_manager
         self.text_buffer = ""  # 普通文本缓冲区
+        self.complete_text = ""  # 完整文本内容
         self.sentence_endings = r"[。？！；\.\?\!\;]"  # 断句标点
         
         # 使用回调管理器
@@ -86,27 +87,42 @@ class StreamingToolCallExtractor:
         self.voice_integration = voice_integration
     
     async def process_text_chunk(self, text_chunk: str):
-        """处理文本块，仅进行文本积累与按句切割并发送给语音集成"""
+        """
+        处理文本块，实时按句切割并发送给语音集成
+        
+        处理流程：
+        1. 累积完整文本（用于最终保存）
+        2. 逐字符检查句子结束符
+        3. 遇到结束符时立即切割并发送完整句子到TTS
+        4. 保留未完成的句子部分继续累积
+        """
         if not text_chunk:
             return None
+        
+        # 累积完整文本（用于最终保存到数据库）
+        self.complete_text += text_chunk
             
-        # 仅按句切割并发送到TTS，不再向前端返回分句事件
+        # 实时按句切割并发送到TTS
         for char in text_chunk:
             self.text_buffer += char
+            # 检查是否遇到句子结束符（。？！；等）
             if re.search(self.sentence_endings, char):
+                # 立即切割并发送完整句子到TTS
                 sentences = re.split(self.sentence_endings, self.text_buffer)
                 if len(sentences) > 1:
                     complete_sentence = sentences[0] + char
                     if complete_sentence.strip():
+                        # 立即发送到语音集成进行TTS合成
                         await self._send_to_voice_integration(complete_sentence)
+                    # 保留未完成的句子部分，继续累积
                     remaining_sentences = [s for s in sentences[1:] if s.strip()]
                     self.text_buffer = "".join(remaining_sentences)
         return None
     
     async def _flush_text_buffer(self):
-        """刷新文本缓冲区"""
+        """刷新文本缓冲区 - 处理流式结束时的剩余文本"""
         if self.text_buffer:
-            # 发送到语音集成（普通文本，非工具调用）
+            # 发送剩余的未完成句子到语音集成
             await self._send_to_voice_integration(self.text_buffer)
             
             self.text_buffer = ""
@@ -140,7 +156,12 @@ class StreamingToolCallExtractor:
         
         return results if results else None
     
+    def get_complete_text(self) -> str:
+        """获取完整文本内容"""
+        return self.complete_text
+    
     def reset(self):
         """重置提取器状态"""
         self.text_buffer = ""
+        self.complete_text = ""
 

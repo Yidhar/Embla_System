@@ -52,37 +52,30 @@ class TaskPlanner:
     async def assess_and_plan(self, task_id: str, query: str, register: bool = True) -> Task:
         """评估任务可执行性并制定计划"""
         try:
-            # 阶段1: MCP服务评估
+            # 只评估Agent服务（MCP已分离）
             capabilities = await self.refresh_capabilities()
-            mcp_services = capabilities.get("mcp_services", [])
             agent_services = capabilities.get("agent_services", [])
             
-            # 构建服务能力描述
-            tools_brief = self._build_capabilities_brief(mcp_services, agent_services)
+            # 构建Agent服务能力描述
+            tools_brief = self._build_agent_capabilities_brief(agent_services)
             
-            logger.info(f"[规划器] 任务 {task_id} - 发现 {len(mcp_services)} 个MCP服务, {len(agent_services)} 个Agent服务")
+            logger.info(f"[规划器] 任务 {task_id} - 发现 {len(agent_services)} 个Agent服务")
             
-            # MCP服务决策
-            mcp_decision = await self._assess_mcp_executability(query, tools_brief)
-            
-            # Agent服务决策（如果MCP无法执行）
-            agent_decision = None
-            if not mcp_decision.get('can_execute'):
-                agent_decision = await self._assess_agent_executability(query, agent_services)
+            # Agent服务决策
+            agent_decision = await self._assess_agent_executability(query, agent_services)
             
             # 确定执行状态
-            status = self._determine_task_status(mcp_decision, agent_decision)
+            status = self._determine_task_status(agent_decision)
             
             # 创建任务对象
             task = Task(
                 id=task_id,
                 title=query[:50],
                 original_query=query,
-                server_id=mcp_decision.get('server_id'),
-                steps=mcp_decision.get('steps', []),
+                server_id=None,  # Agent任务不需要server_id
+                steps=[query],  # Agent任务直接使用原始查询
                 status=status,
                 meta={
-                    "mcp": mcp_decision,
                     "agent": agent_decision
                 }
             )
@@ -104,27 +97,9 @@ class TaskPlanner:
                 meta={"error": str(e)}
             )
     
-    def _build_capabilities_brief(self, mcp_services: List[Dict], agent_services: List[Dict]) -> str:
-        """构建服务能力描述"""
+    def _build_agent_capabilities_brief(self, agent_services: List[Dict]) -> str:
+        """构建Agent服务能力描述"""
         brief_lines = []
-        
-        # MCP服务
-        for service in mcp_services:
-            name = service.get("name", "")
-            description = service.get("description", "")
-            tools = service.get("available_tools", [])
-            
-            if description:
-                brief_lines.append(f"- MCP {name}: {description}")
-            else:
-                brief_lines.append(f"- MCP {name}")
-            
-            # 添加工具详情
-            for tool in tools:
-                tool_name = tool.get('name', '')
-                tool_desc = tool.get('description', '')
-                if tool_name and tool_desc:
-                    brief_lines.append(f"  - {tool_name}: {tool_desc}")
         
         # Agent服务
         for service in agent_services:
@@ -139,48 +114,7 @@ class TaskPlanner:
         
         return "\n".join(brief_lines)
     
-    async def _assess_mcp_executability(self, query: str, tools_brief: str) -> Dict[str, Any]:
-        """评估MCP服务可执行性"""
-        try:
-            system_prompt = """你是一个任务规划代理。仅基于MCP服务器能力判断任务是否可执行。
-不要考虑GUI或计算机使用。输出严格JSON格式: {can_execute: bool, reason: string, server_id: string|null, steps: string[]}
-steps应该是MCP处理器的细粒度工具查询。"""
-            
-            user_prompt = f"能力列表:\n{tools_brief}\n\n任务: {query}"
-            
-            response = self.llm.invoke([
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ])
-            
-            text = response.content.strip()
-            if text.startswith("```"):
-                text = text.replace("```json", "").replace("```", "").strip()
-            
-            import json
-            result = json.loads(text)
-            
-            # 记录决策结果
-            if result.get('can_execute'):
-                server_id = result.get('server_id', 'unknown')
-                steps_count = len(result.get('steps', []))
-                logger.info(f"[MCP] ✅ 任务可由MCP服务器 '{server_id}' 执行，共 {steps_count} 步")
-                for i, step in enumerate(result.get('steps', []), 1):
-                    logger.info(f"[MCP]   步骤 {i}: {step}")
-            else:
-                reason = result.get('reason', '未提供原因')
-                logger.info(f"[MCP] ❌ 任务无法由MCP执行: {reason}")
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"MCP可执行性评估失败: {e}")
-            return {
-                "can_execute": False,
-                "reason": f"评估失败: {e}",
-                "server_id": None,
-                "steps": []
-            }
+    # MCP评估方法已移除，MCP和Agent已分离
     
     async def _assess_agent_executability(self, query: str, agent_services: List[Dict]) -> Dict[str, Any]:
         """评估Agent服务可执行性"""
@@ -228,11 +162,9 @@ steps应该是MCP处理器的细粒度工具查询。"""
                 "agent_name": None
             }
     
-    def _determine_task_status(self, mcp_decision: Dict, agent_decision: Dict) -> str:
-        """确定任务状态"""
-        if mcp_decision.get('can_execute'):
-            return "queued"
-        elif agent_decision and agent_decision.get('can_execute'):
+    def _determine_task_status(self, agent_decision: Dict) -> str:
+        """确定任务状态（只基于Agent决策）"""
+        if agent_decision and agent_decision.get('can_execute'):
             return "queued"
         else:
             return "failed"

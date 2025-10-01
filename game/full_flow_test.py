@@ -206,8 +206,8 @@ class FullFlowTestLogger:
         with open(self.result_file, 'w', encoding='utf-8') as f:
             f.write(report)
 
-class MockNagaConversation:
-    """模拟NagaConversation（已弃用）"""
+class MockLLMService:
+    """模拟LLMService（已弃用）"""
     pass
 
 async def run_full_flow_test(user_question: str):
@@ -232,7 +232,7 @@ async def run_full_flow_test(user_question: str):
             config_data = {}
             test_logger.log_step("使用默认配置")
         
-        # 创建游戏系统（使用真实 NagaConversation，由系统内自动初始化）
+        # 创建游戏系统（使用真实 LLMService，由系统内自动初始化）
         game_config = GameConfig()
         naga_system = NagaGameSystem(game_config)
         

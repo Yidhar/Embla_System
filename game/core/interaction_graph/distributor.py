@@ -33,9 +33,9 @@ class Distributor:
         """初始化NagaAgent API连接"""
         if self.naga_conversation is None:
             try:
-                # 导入NagaAgent的对话核心
-                from system.conversation_core import NagaConversation
-                self.naga_conversation = NagaConversation()
+                # 使用apiserver的LLM服务
+                from apiserver.llm_service import get_llm_service
+                self.naga_conversation = get_llm_service()
                 logger.info("成功初始化NagaAgent API连接")
             except ImportError as e:
                 logger.warning(f"无法导入NagaAgent API, 将使用回退逻辑: {e}")

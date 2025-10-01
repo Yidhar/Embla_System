@@ -71,34 +71,7 @@ def scan_and_register_mcp_agents(mcp_dir: str = 'mcpserver') -> list:
                     MCP_REGISTRY[agent_name] = agent_instance
                     registered_agents.append(agent_name)
                     
-            elif agent_type == 'agent':
-                # Agent类型：转交给AgentManager处理
-                try:
-                    from agentserver.core.agent_manager import get_agent_manager
-                    agent_manager = get_agent_manager()
-                    
-                    # 从manifest构建Agent配置
-                    agent_config = {
-                        'model_id': manifest.get('modelId', 'deepseek-chat'),
-                        'name': manifest.get('displayName', agent_name),
-                        'base_name': agent_name,
-                        'system_prompt': manifest.get('systemPrompt', f'You are a helpful AI assistant named {manifest.get("displayName", agent_name)}.'),
-                        'max_output_tokens': manifest.get('maxOutputTokens', 8192),
-                        'temperature': manifest.get('temperature', 0.7),
-                        'description': manifest.get('description', f'Assistant {manifest.get("displayName", agent_name)}.'),
-                        'model_provider': manifest.get('modelProvider', 'openai'),
-                        'api_base_url': manifest.get('apiBaseUrl', ''),
-                        'api_key': manifest.get('apiKey', '')
-                    }
-                    
-                    # 注册到AgentManager
-                    agent_manager._register_agent_from_manifest(agent_name, agent_config)
-                    registered_agents.append(f"agent:{agent_name}")
-                    sys.stderr.write(f"✅ 已注册Agent到AgentManager: {agent_name}\n")
-                    
-                except Exception as e:
-                    sys.stderr.write(f"注册Agent到AgentManager失败 {agent_name}: {e}\n")
-                    continue
+            # 只处理MCP类型，Agent类型已分离到agentserver
                     
         except Exception as e:
             sys.stderr.write(f"处理manifest文件失败 {manifest_file}: {e}\n")

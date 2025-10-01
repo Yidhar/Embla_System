@@ -17,15 +17,13 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
 from system.config import config
-from agentserver.core.agent_manager import get_agent_manager
-from agentserver.core.task_planner import TaskPlanner
+from agentserver.agent_manager import get_agent_manager
+from agentserver.task_planner import TaskPlanner
 from agentserver.task_scheduler import TaskScheduler
 from agentserver.task_deduper import get_task_deduper
 from system.background_analyzer import get_background_analyzer
 from agentserver.parallel_executor import get_parallel_executor
 from agentserver.computer_use_scheduler import get_computer_use_scheduler
-from apiserver.capability_manager import get_capability_manager
-from apiserver.result_notifier import get_result_notifier
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -54,12 +52,6 @@ async def lifespan(app: FastAPI):
         # 初始化MCP服务器客户端
         import aiohttp
         Modules.mcp_server_client = aiohttp.ClientSession()
-        # 初始化能力管理器并预热Agent能力快照
-        Modules.capability_manager = get_capability_manager()
-        try:
-            await Modules.capability_manager.refresh_mcp_capabilities()
-        except Exception as e:
-            logger.warning(f"预热Agent能力快照失败: {e}")
         logger.info("NagaAgent服务初始化完成")
     except Exception as e:
         logger.error(f"服务初始化失败: {e}")
@@ -183,20 +175,12 @@ async def _background_analyze_and_plan(messages: List[Dict[str, Any]], session_i
                 if session_id:
                     task_plan.meta["session_id"] = session_id
                 
-                # 根据规划结果调度任务
-                if task_plan.meta.get("mcp", {}).get("can_execute") and Modules.agent_flags.get("mcp_enabled", False):
-                    # MCP任务调度
-                    for step in task_plan.steps:
-                        step_id = str(uuid.uuid4())
-                        await Modules.scheduler.schedule_mcp_task(step_id, step, session_id)
-                        logger.info(f"已调度MCP任务: {step}")
-                
-                elif task_plan.meta.get("agent", {}).get("can_execute") and Modules.agent_flags.get("agent_enabled", False):
+                # 根据规划结果调度任务（只处理Agent任务）
+                if task_plan.meta.get("agent", {}).get("can_execute") and Modules.agent_flags.get("agent_enabled", False):
                     # Agent任务调度
                     agent_task_id = str(uuid.uuid4())
                     await Modules.scheduler.schedule_agent_task(agent_task_id, task_query, session_id)
                     logger.info(f"已调度Agent任务: {task_query}")
-                
                 else:
                     logger.info(f"任务无法执行: {task_query}")
                     
@@ -245,11 +229,9 @@ async def analyze_and_plan(payload: Dict[str, Any]):
             services_info = get_all_services_info()
         except Exception:
             services_info = {}
-        # 基于能力管理器的可用性概览
-        mcp_availability = Modules.capability_manager.get_mcp_availability() if Modules.capability_manager else {}
+        # 基于服务的可用性概览
         capability_snapshot = {
             "services": services_info,
-            "mcp_availability": mcp_availability,
             "generated_at": _now_iso(),
         }
     except Exception as e:

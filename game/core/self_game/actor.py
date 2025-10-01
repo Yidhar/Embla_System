@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from ..models.data_models import Agent, Task
 from ..models.config import GameConfig
 from ..utils.api_pool import get_api_limiter
+from ..llm_adapter import get_llm_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +47,9 @@ class GameActor:
         """初始化 NagaAgent API 连接(若未提供则尝试创建)"""
         if self.naga_conversation is None:
             try:
-                from system.conversation_core import NagaConversation
-                self.naga_conversation = NagaConversation()
+                # 使用apiserver的LLM服务
+                from apiserver.llm_service import get_llm_service
+                self.naga_conversation = get_llm_service()
                 logger.info("GameActor 成功初始化 NagaAgent API 连接")
             except Exception as e:
                 logger.warning(f"GameActor 无法初始化 NagaAgent API, 将使用降级模式: {e}")
@@ -80,8 +82,9 @@ class GameActor:
                 # 降级模式: 生成一个基于角色信息的结构化占位输出
                 content = self._fallback_generate(agent, task, context, previous_outputs or [])
             else:
-                limiter = get_api_limiter()
-                content = await limiter.call(self.naga_conversation.get_response, prompt, temperature=0.7)
+                # 使用新的LLM适配器
+                llm_adapter = get_llm_adapter()
+                content = await llm_adapter.get_response(prompt, temperature=0.7)
 
             generation_time = time.time() - start_time
 

@@ -8,6 +8,7 @@ import socket
 import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
+from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 
 # 配置变更监听器
@@ -161,7 +162,6 @@ class FilterConfig(BaseModel):
     filter_patterns: List[str] = Field(
         default=[
             r'<think>.*?</think>',
-            r'<thinking>.*?</thinking>',
             r'<reflection>.*?</reflection>',
             r'<internal>.*?</internal>',
         ],
@@ -175,7 +175,6 @@ class DifficultyConfig(BaseModel):
     use_small_model: bool = Field(default=False, description="使用小模型进行难度判断")
     pre_assessment: bool = Field(default=False, description="是否启用前置难度判断")
     assessment_timeout: float = Field(default=1.0, ge=0.1, le=5.0, description="难度判断超时时间（秒）")
-    deep_thinking_threshold: int = Field(default=3, ge=1, le=5, description="启用深度思考的难度阈值")
     difficulty_levels: List[str] = Field(
         default=["简单", "中等", "困难", "极难"],
         description="难度级别"
@@ -203,17 +202,6 @@ class ScoringConfig(BaseModel):
     min_results_required: int = Field(default=2, ge=1, le=10, description="最少保留结果数量")
     strict_filtering: bool = Field(default=True, description="严格过滤模式")
 
-class ThinkingConfig(BaseModel):
-    """思考完整性判断配置"""
-    enabled: bool = Field(default=False, description="是否启用思考完整性判断")
-    use_small_model: bool = Field(default=False, description="使用小模型判断思考完整性")
-    completeness_criteria: List[str] = Field(
-        default=["问题分析充分", "解决方案明确", "逻辑链条完整", "结论清晰合理"],
-        description="完整性评估标准"
-    )
-    completeness_threshold: float = Field(default=0.8, ge=0.0, le=1.0, description="完整性阈值")
-    max_thinking_depth: int = Field(default=5, ge=1, le=10, description="最大思考深度层级")
-    next_question_generation: bool = Field(default=False, description="生成下一级问题")
 
 # 天气服务使用免费API，无需配置
 
@@ -282,7 +270,120 @@ class SystemCheckConfig(BaseModel):
     python_version: str = Field(default="", description="Python版本")
     project_path: str = Field(default="", description="项目路径")
 
-# 提示词配置已迁移到 system/prompt_repository.py
+# 提示词管理功能已集成到config.py中
+
+class PromptManager:
+    """提示词管理器 - 统一管理所有提示词模板"""
+    
+    def __init__(self, prompts_dir: str = None):
+        """初始化提示词管理器"""
+        if prompts_dir is None:
+            # 默认使用system目录下的prompts文件夹
+            prompts_dir = Path(__file__).parent / "prompts"
+        
+        self.prompts_dir = Path(prompts_dir)
+        self.prompts_dir.mkdir(exist_ok=True)
+        
+        # 内存缓存
+        self._cache = {}
+        self._last_modified = {}
+        
+        # 初始化默认提示词
+        self._init_default_prompts()
+    
+    def _init_default_prompts(self):
+        """初始化默认提示词 - 现在从文件加载，不再硬编码"""
+        # 检查是否存在默认提示词文件，如果不存在则创建
+        default_prompts = ["naga_system_prompt", "conversation_analyzer_prompt"]
+        
+        for prompt_name in default_prompts:
+            prompt_file = self.prompts_dir / f"{prompt_name}.txt"
+            if not prompt_file.exists():
+                print(f"警告：提示词文件 {prompt_name}.txt 不存在，请手动创建")
+    
+    def get_prompt(self, name: str, **kwargs) -> str:
+        """获取提示词模板"""
+        try:
+            # 从缓存或文件加载
+            content = self._load_prompt(name)
+            if content is None:
+                print(f"警告：提示词 '{name}' 不存在，使用默认值")
+                return f"[提示词 {name} 未找到]"
+            
+            # 格式化模板
+            if kwargs:
+                try:
+                    return content.format(**kwargs)
+                except KeyError as e:
+                    print(f"错误：提示词 '{name}' 格式化失败，缺少参数: {e}")
+                    return content
+            else:
+                return content
+                
+        except Exception as e:
+            print(f"错误：获取提示词 '{name}' 失败: {e}")
+            return f"[提示词 {name} 加载失败: {e}]"
+    
+    def save_prompt(self, name: str, content: str):
+        """保存提示词到文件"""
+        try:
+            prompt_file = self.prompts_dir / f"{name}.txt"
+            with open(prompt_file, 'w', encoding='utf-8') as f:
+                f.write(content)
+            
+            # 更新缓存
+            self._cache[name] = content
+            self._last_modified[name] = datetime.now()
+            
+            print(f"提示词 '{name}' 已保存")
+            
+        except Exception as e:
+            print(f"错误：保存提示词 '{name}' 失败: {e}")
+    
+    def _load_prompt(self, name: str) -> Optional[str]:
+        """从文件加载提示词"""
+        try:
+            prompt_file = self.prompts_dir / f"{name}.txt"
+            
+            if not prompt_file.exists():
+                return None
+            
+            # 检查文件是否被修改
+            current_mtime = prompt_file.stat().st_mtime
+            if name in self._last_modified and self._last_modified[name].timestamp() >= current_mtime:
+                return self._cache.get(name)
+            
+            # 读取文件
+            with open(prompt_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # 更新缓存
+            self._cache[name] = content
+            self._last_modified[name] = datetime.now()
+            
+            return content
+            
+        except Exception as e:
+            print(f"错误：加载提示词 '{name}' 失败: {e}")
+            return None
+
+# 全局提示词管理器实例
+_prompt_manager = None
+
+def get_prompt_manager() -> PromptManager:
+    """获取全局提示词管理器实例"""
+    global _prompt_manager
+    if _prompt_manager is None:
+        _prompt_manager = PromptManager()
+    return _prompt_manager
+
+def get_prompt(name: str, **kwargs) -> str:
+    """便捷函数：获取提示词"""
+    return get_prompt_manager().get_prompt(name, **kwargs)
+
+def save_prompt(name: str, content: str):
+    """便捷函数：保存提示词"""
+    get_prompt_manager().save_prompt(name, content)
 
 class GameModuleConfig(BaseModel):
     """博弈论模块配置"""
@@ -302,7 +403,6 @@ class NagaConfig(BaseModel):
     filter: FilterConfig = Field(default_factory=FilterConfig)
     difficulty: DifficultyConfig = Field(default_factory=DifficultyConfig)
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
-    thinking: ThinkingConfig = Field(default_factory=ThinkingConfig)
     # prompts: 提示词配置已迁移到 system/prompt_repository.py
     game: GameModuleConfig = Field(default_factory=GameModuleConfig)
     # weather: 天气服务使用免费API，无需配置

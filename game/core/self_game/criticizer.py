@@ -61,8 +61,9 @@ class GameCriticizer:
     def _init_naga_api(self):
         if self.naga_conversation is None:
             try:
-                from system.conversation_core import NagaConversation
-                self.naga_conversation = NagaConversation()
+                # 使用apiserver的LLM服务
+                from apiserver.llm_service import get_llm_service
+                self.naga_conversation = get_llm_service()
                 logger.info("GameCriticizer成功初始化NagaAgent API连接")
             except ImportError as e:
                 logger.error(f"GameCriticizer无法导入NagaAgent API: {e}")

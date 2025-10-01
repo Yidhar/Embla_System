@@ -3,7 +3,7 @@ from .styles.button_factory import ButtonFactory
 from nagaagent_core.vendors.PyQt5.QtWidgets import QApplication, QWidget, QTextEdit, QSizePolicy, QHBoxLayout, QLabel, QVBoxLayout, QStackedLayout, QPushButton, QStackedWidget, QDesktopWidget, QScrollArea, QSplitter, QFileDialog, QMessageBox, QFrame  # 统一入口 #
 from nagaagent_core.vendors.PyQt5.QtCore import Qt, QRect, QParallelAnimationGroup, QPropertyAnimation, QEasingCurve, QTimer  # 统一入口 #
 from nagaagent_core.vendors.PyQt5.QtGui import QColor, QPainter, QBrush, QFont, QPen  # 统一入口 #
-from system.conversation_core import NagaConversation
+# conversation_core已删除，相关功能已迁移到apiserver
 import os
 from system.config import config, AI_NAME, Live2DConfig # 导入统一配置
 from ui.response_utils import extract_message  # 新增：引入消息提取工具
@@ -313,7 +313,7 @@ class ChatWindow(QWidget):
         main.addWidget(s.main_splitter)
         
         s.nick=nick
-        s.naga=NagaConversation()  # 第三次初始化：ChatWindow构造函数中创建
+        s.naga=None  # conversation_core已删除，相关功能已迁移到apiserver
         s.worker=None
         s.full_img=0 # 立绘展开标志，0=收缩状态，1=展开状态
         s.streaming_mode = config.system.stream_mode  # 根据配置决定是否使用流式模式
@@ -432,7 +432,7 @@ class ChatWindow(QWidget):
             if event.key()==Qt.Key_Return and not (event.modifiers()&Qt.ShiftModifier):
                 s.on_send();return True
         return False
-    def add_user_message(s, name, content):
+    def add_user_message(s, name, content, is_streaming=False):
         """添加用户消息"""
         from ui.response_utils import extract_message
         msg = extract_message(content)
@@ -563,6 +563,7 @@ class ChatWindow(QWidget):
     def on_send(s):
         u = s.input.toPlainText().strip()
         if u:
+            # 立即显示用户消息
             s.add_user_message(USER_NAME, u)
             s.input.clear()
             
@@ -579,12 +580,24 @@ class ChatWindow(QWidget):
                 s.worker.deleteLater()
                 s.worker = None
             
-            # 根据模式选择Worker类型，创建全新实例
+            # 统一走API服务器流程，支持流式和非流式
             if s.streaming_mode and not s.self_game_enabled:
-                s.worker = StreamingWorker(s.naga, u)
-                s.setup_streaming_worker()
+                # 流式模式：调用API服务器的流式接口
+                try:
+                    api_url = "http://localhost:8000/chat/stream"
+                    data = {"message": u, "stream": True, "use_self_game": False}
+                    resp = requests.post(api_url, json=data, timeout=120, stream=True)
+                    if resp.status_code == 200:
+                        # 处理流式响应
+                        s.handle_streaming_response(resp)
+                    else:
+                        s.add_user_message("系统", f"❌ 流式调用失败: {resp.text}")
+                except Exception as e:
+                    s.add_user_message("系统", f"❌ 流式调用错误: {str(e)}")
+                s.progress_widget.stop_loading()
+                return
             else:
-                # 走API服务器统一入口，带上use_self_game开关
+                # 非流式模式：调用API服务器的普通接口
                 try:
                     api_url = "http://localhost:8000/chat"
                     data = {"message": u, "stream": False, "use_self_game": bool(s.self_game_enabled)}
@@ -600,13 +613,49 @@ class ChatWindow(QWidget):
                     s.add_user_message("系统", f"❌ 调用错误: {str(e)}")
                 s.progress_widget.stop_loading()
                 return
-            
-            # 启动进度显示 - 恢复原来的调用方式
+    
+    def handle_streaming_response(s, resp):
+        """处理流式响应"""
+        try:
+            # 启动进度显示
             s.progress_widget.set_thinking_mode()
             
-            # 启动Worker
-            s.worker.start()
-    
+            # 累积响应内容
+            response_content = ""
+            message_started = False
+            
+            # 处理流式数据
+            for line in resp.iter_lines():
+                if line:
+                    line_str = line.decode('utf-8')
+                    if line_str.startswith('data: '):
+                        data_str = line_str[6:]
+                        if data_str == '[DONE]':
+                            break
+                        elif data_str.startswith('session_id: '):
+                            # 处理会话ID
+                            session_id = data_str[12:]
+                            print(f"会话ID: {session_id}")
+                        else:
+                            # 处理内容数据
+                            response_content += data_str
+                            
+                            # 如果是第一条消息，创建新消息并设置当前消息ID
+                            if not message_started:
+                                message_id = s.add_user_message(AI_NAME, data_str)
+                                s._current_message_id = message_id  # 设置当前消息ID
+                                message_started = True
+                            else:
+                                # 更新最后一条消息
+                                s.update_last_message(AI_NAME, response_content)
+            
+            # 完成处理
+            s.progress_widget.stop_loading()
+            
+        except Exception as e:
+            s.add_user_message("系统", f"❌ 流式处理错误: {str(e)}")
+            s.progress_widget.stop_loading()
+
     def setup_streaming_worker(s):
         """配置流式Worker的信号连接"""
         s.worker.progress_updated.connect(s.progress_widget.update_progress)
@@ -618,9 +667,8 @@ class ChatWindow(QWidget):
         s.worker.stream_complete.connect(s.finalize_streaming_response)
         s.worker.finished.connect(s.on_response_finished)
         
-        # 工具调用相关信号
-        s.worker.tool_call_detected.connect(s.handle_tool_call)
-        s.worker.tool_result_received.connect(s.handle_tool_result)
+        # 注意：工具调用现在通过API通讯处理，不再使用UI信号
+        # 工具调用流程：UI -> API Server -> MCP Server -> 工具执行 -> 回调
     
     def setup_batch_worker(s):
         """配置批量Worker的信号连接"""

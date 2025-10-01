@@ -34,8 +34,6 @@ async def lifespan(app: FastAPI):
     # startup
     logger.info("MCP服务器启动中...")
     
-    # （可选）能力管理器已移除，如需能力信息请从注册中心读取
-    Modules.capability_manager = None
     
     # 初始化MCP管理器（用于工具调用执行）
     try:
@@ -47,7 +45,7 @@ async def lifespan(app: FastAPI):
         Modules.mcp_manager = None
     
     # 初始化调度器（注入mcp_manager）
-    Modules.scheduler = MCPScheduler(None, Modules.mcp_manager)
+    Modules.scheduler = MCPScheduler(Modules.mcp_manager)
     
     logger.info("MCP服务器启动完成")
     
@@ -70,7 +68,6 @@ app = FastAPI(
 class Modules:
     """全局模块管理"""
     scheduler: Optional[MCPScheduler] = None
-    capability_manager: Optional[Any] = None
     # 任务注册表
     task_registry: Dict[str, Dict[str, Any]] = {}
     # 幂等性缓存
@@ -232,25 +229,7 @@ async def cancel_task(task_id: str):
     
     return {"success": True, "message": "任务已取消"}
 
-@app.get("/capabilities")
-async def get_capabilities():
-    """获取MCP能力列表"""
-    if not Modules.capability_manager:
-        raise HTTPException(500, "能力管理器未初始化")
-    
-    capabilities = await Modules.capability_manager.get_capabilities()
-    return {"capabilities": capabilities}
-
 # 已移除流式处理相关端点，统一通过 /schedule 进入调度流程
-
-@app.post("/capabilities/refresh")
-async def refresh_capabilities():
-    """刷新MCP能力"""
-    if not Modules.capability_manager:
-        raise HTTPException(500, "能力管理器未初始化")
-    
-    await Modules.capability_manager.refresh_capabilities()
-    return {"success": True, "message": "能力已刷新"}
 
 @app.post("/tool_result_callback")
 async def tool_result_callback(payload: Dict[str, Any]):
@@ -265,7 +244,7 @@ async def tool_result_callback(payload: Dict[str, Any]):
             raise HTTPException(400, "缺少session_id")
         
         # 构建主提示词和消息
-        from system.prompt_repository import get_prompt
+        from system.config import get_prompt
         from system.config import config, AI_NAME
         from apiserver.message_manager import message_manager
         
@@ -279,17 +258,14 @@ async def tool_result_callback(payload: Dict[str, Any]):
             current_message=current_message
         )
         
-        # 调用主对话流式接口
-        from system.conversation_core import NagaConversation
-        naga_conversation = NagaConversation()
-        
-        # 使用流式处理生成回复
-        response_text = ""
-        async for chunk in naga_conversation.process(current_message, is_voice_input=False):
-            if isinstance(chunk, tuple) and len(chunk) == 2:
-                speaker, content = chunk
-                if speaker == AI_NAME:
-                    response_text += content
+        # 直接调用LLM服务进行总结
+        try:
+            from apiserver.llm_service import get_llm_service
+            llm_service = get_llm_service()
+            response_text = await llm_service.get_response(current_message, temperature=0.7)
+        except Exception as e:
+            logger.error(f"调用LLM服务失败: {e}")
+            response_text = f"处理工具结果时出错: {str(e)}"
         
         # 保存到历史
         message_manager.add_message(session_id, "user", current_message)

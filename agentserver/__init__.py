@@ -9,11 +9,11 @@ __version__ = "1.0.0"
 __author__ = "NagaAgent Team"
 
 # 导入核心组件
-from .core.agent_manager import get_agent_manager, process_intelligent_task
-from .core.task_planner import TaskPlanner
+from .agent_manager import get_agent_manager, process_intelligent_task
+from .task_planner import TaskPlanner
 from .task_scheduler import TaskScheduler, get_task_scheduler
 from .parallel_executor import ParallelExecutor, get_parallel_executor
-from .core.multi_agent_coordinator import get_coordinator, coordinate_task
+from .multi_agent_coordinator import get_coordinator, coordinate_task
 
 __all__ = [
     "get_agent_manager",
