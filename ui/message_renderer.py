@@ -94,6 +94,9 @@ class MessageDialog(QFrame):
         """更新对话内容"""
         self.content = new_content
         self.content_label.setText(new_content)
+        # 确保立即更新显示
+        self.content_label.setTextFormat(Qt.RichText)  # 确保HTML格式
+        self.content_label.setWordWrap(True)  
         # 强制重新计算大小
         self.content_label.adjustSize()
         self.adjustSize()

@@ -16,6 +16,21 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*WebSoc
 warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*websockets.*")
 warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*uvicorn.*")
 
+# 修复Windows socket兼容性问题
+if not hasattr(socket, 'EAI_ADDRFAMILY'):
+    # Windows系统缺少这些错误码，添加兼容性常量
+    socket.EAI_ADDRFAMILY = -9
+    socket.EAI_AGAIN = -3
+    socket.EAI_BADFLAGS = -1
+    socket.EAI_FAIL = -4
+    socket.EAI_MEMORY = -10
+    socket.EAI_NODATA = -5
+    socket.EAI_NONAME = -2
+    socket.EAI_OVERFLOW = -12
+    socket.EAI_SERVICE = -8
+    socket.EAI_SOCKTYPE = -7
+    socket.EAI_SYSTEM = -11
+
 # 第三方库导入
 # 优先使用仓库内的本地包，防止导入到系统已安装的旧版 nagaagent_core #
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))  # 统一入口 #
@@ -29,6 +44,9 @@ from nagaagent_core.vendors.PyQt5.QtWidgets import QApplication  # 统一入口 
 # 本地模块导入
 from system.system_checker import run_system_check
 from system.config import config, AI_NAME
+
+# V14版本已移除早期拦截器，采用运行时猴子补丁
+
 # conversation_core已删除，相关功能已迁移到apiserver
 from summer_memory.memory_manager import memory_manager
 from summer_memory.task_manager import start_task_manager, task_manager

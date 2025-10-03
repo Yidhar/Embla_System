@@ -99,6 +99,13 @@ class StreamingToolCallExtractor:
         if not text_chunk:
             return None
         
+        
+        # 调用文本块回调，将文本发送到前端
+        results = []
+        result = await self.callback_manager.call_callback("text_chunk", text_chunk, "chunk")
+        if result:
+            results.append(result)
+
         # 累积完整文本（用于最终保存到数据库）
         self.complete_text += text_chunk
             
@@ -117,7 +124,7 @@ class StreamingToolCallExtractor:
                     # 保留未完成的句子部分，继续累积
                     remaining_sentences = [s for s in sentences[1:] if s.strip()]
                     self.text_buffer = "".join(remaining_sentences)
-        return None
+        return results if results else None
     
     async def _flush_text_buffer(self):
         """刷新文本缓冲区 - 处理流式结束时的剩余文本"""
