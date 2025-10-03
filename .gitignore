@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -7,38 +7,201 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.manifest
+*.spec
 
-# 日志文件
-logs/
-*.log
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+nagaagent-core/
 
-# 环境变量
-.env
-
-# 缓存
-cache/
-.pytest_cache/
-.coverage
-htmlcov/
-
-# 模型文件（大文件）
-/models/
-
-# IDE配置
+# IDE
+.vscode/
 .idea/
 *.swp
 *.swo
-
-# 系统文件
+*~
 .DS_Store
-Thumbs.db
 
-# 临时文件
+# Logs
+logs/*.log
+logs/**/*.log
+*.log
+logs/knowledge_graph/quintuples.json
+logs/knowledge_graph/graph.html
+
+# Audio temporary files
+logs/audio_temp/*.mp3
+logs/audio_temp/*.wav
+logs/audio_temp/*.m4a
+logs/audio_temp/*.opus
+logs/audio_temp/*.ogg
+logs/audio_temp/*.flac
+!logs/audio_temp/README.md
+
+# Session and history
+*.session
+*.history
+*.cache
 *.tmp
 *.temp
+
+# Configuration
+config.json
+config.json.local
+config.local.json
+*.env
+.env.local
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Neo4j
+*.graphdb/
+
+# Socket patch (Windows specific)
+socket_patch.py
+system/socket_patch.py
+
+# Test and diagnostic files
+test_v*.py
+diagnose_v*.py
+V*_*.md
+V*_*.txt
+
+# System
+Thumbs.db
+desktop.ini
+.Spotlight-V100
+.Trashes
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+~$*
 uv.lock
 
-# 配置文件
-config.json
-nagaagent-core/
-.venv/
+# API Keys and Secrets (never commit these!)
+*api_key*
+*secret*
+*token*
+*credential*
+!**/prompts/**
+
+# Generated documentation
+docs/_build/
+site/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+.directory
+.Trash-*
+
+# JetBrains
+.idea/
+*.iml
+out/
+.idea_modules/
+
+# Visual Studio Code
+.vscode/
+.history/
+*.code-workspace
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Distribution / packaging
+.Python
+develop-eggs/
+downloads/
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# pytest
+.pytest_cache/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Models (large files)
+/models/
+
+# Pyre type checker
+.pyre/
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# Django stuff:
+local_settings.py
+db.sqlite3
+media
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+target/
+
+# PyBuilder
+target/
+
+# IPython
+profile_default/
+ipython_config.py

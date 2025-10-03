@@ -9,7 +9,6 @@ import json
 
 from .computer_use_adapter import ComputerUseAdapter
 from .visual_analyzer import VisualAnalyzer
-from .task_planner import TaskPlanner, TaskStep
 from .action_executor import ActionExecutor, ActionResult
 
 # 配置日志
@@ -22,7 +21,6 @@ class ComputerControlAgent:
         """初始化电脑控制Agent"""
         self.adapter = ComputerUseAdapter()
         self.analyzer = VisualAnalyzer()
-        self.planner = TaskPlanner()
         self.executor = ActionExecutor(
             computer_adapter=self.adapter,
             visual_analyzer=self.analyzer
@@ -198,41 +196,13 @@ class ComputerControlAgent:
         """处理自动化任务"""
         try:
             logger.info(f"开始自动化任务: {target}")
-            
-            # 规划任务步骤
-            steps = await self.planner.plan_task(target)
-            if not steps:
-                return json.dumps({
-                    "success": False,
-                    "error": "任务规划失败",
-                    "message": "无法规划任务步骤"
-                }, ensure_ascii=False)
-            
-            # 优化步骤
-            optimized_steps = await self.planner.optimize_steps(steps)
-            
-            # 执行步骤序列
-            results = await self.executor.execute_step_sequence(optimized_steps)
-            
-            # 统计结果
-            success_count = sum(1 for r in results if r.success)
-            total_count = len(results)
-            
+            # 直接调用电脑控制适配器执行自然语言指令
+            exec_result = await self.adapter.run_instruction(target)
+            success = bool(exec_result.get("success")) if isinstance(exec_result, dict) else False
             return json.dumps({
-                "success": success_count > 0,
-                "message": f"自动化任务完成: {success_count}/{total_count} 步骤成功",
-                "data": {
-                    "total_steps": total_count,
-                    "successful_steps": success_count,
-                    "failed_steps": total_count - success_count,
-                    "results": [
-                        {
-                            "success": r.success,
-                            "message": r.message,
-                            "error": r.error
-                        } for r in results
-                    ]
-                }
+                "success": success,
+                "message": "任务执行完成" if success else exec_result.get("error", "任务执行失败"),
+                "data": exec_result
             }, ensure_ascii=False)
             
         except Exception as e:

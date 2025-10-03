@@ -33,14 +33,14 @@
 
 ## API接口
 
-### 意图分析
+### 意图识别与电脑控制执行
 ```http
-POST /analyze_and_plan
+POST /analyze_and_execute
 Content-Type: application/json
 
 {
     "messages": [
-        {"role": "user", "content": "帮我查一下天气"}
+        {"role": "user", "content": "帮我打开浏览器并搜索Python教程"}
     ],
     "session_id": "main_session"
 }

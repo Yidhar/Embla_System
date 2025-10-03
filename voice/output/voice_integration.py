@@ -120,6 +120,16 @@ class VoiceIntegration:
             logger.debug(f"接收文本片段: {text[:50]}...")
             self._process_text_stream(text.strip())
 
+    def receive_audio_url(self, audio_url: str):
+        """接收音频URL - 直接播放apiserver生成的音频"""
+        if not config.system.voice_enabled:
+            return
+            
+        if audio_url and audio_url.strip():
+            logger.info(f"接收音频URL: {audio_url}")
+            # 直接播放音频
+            self._play_audio_from_url(audio_url)
+
     def _process_text_stream(self, text: str):
         """处理文本流 - 直接接收apiserver处理好的普通文本"""
         if not text:
@@ -418,6 +428,46 @@ class VoiceIntegration:
             "is_playing": self.is_playing,
             "temp_files": len(list(self.audio_temp_dir.glob(f"*.{config.tts.default_format}")))
         }
+
+    def _play_audio_from_url(self, audio_url: str):
+        """从URL播放音频"""
+        try:
+            import requests
+            import tempfile
+            import os
+            
+            # 判断是URL还是本地文件
+            if audio_url.startswith("http://") or audio_url.startswith("https://"):
+                # 下载音频文件
+                logger.info(f"下载音频文件: {audio_url}")
+                resp = requests.get(audio_url)
+                temp_file = tempfile.mktemp(suffix=".mp3")
+                with open(temp_file, 'wb') as f:
+                    f.write(resp.content)
+                audio_file = temp_file
+            else:
+                # 本地文件路径
+                audio_file = audio_url
+
+            # 检查文件是否存在
+            if not os.path.exists(audio_file):
+                logger.error(f"音频文件不存在: {audio_file}")
+                return
+
+            # 读取音频文件并播放
+            with open(audio_file, 'rb') as f:
+                audio_data = f.read()
+            self._play_audio_data_sync(audio_data)
+            
+            # 清理临时文件
+            if audio_file != audio_url:
+                try:
+                    os.unlink(audio_file)
+                except:
+                    pass
+
+        except Exception as e:
+            logger.error(f"播放音频URL失败: {e}")
 
 def get_voice_integration() -> VoiceIntegration:
     """获取语音集成实例"""

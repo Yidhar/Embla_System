@@ -236,6 +236,35 @@ class Live2DConfig(BaseModel):
     animation_enabled: bool = Field(default=True, description="是否启用动画")
     touch_interaction: bool = Field(default=True, description="是否启用触摸交互")
 
+class VoiceRealtimeConfig(BaseModel):
+    """实时语音配置"""
+    enabled: bool = Field(default=False, description="是否启用实时语音功能")
+    provider: str = Field(default="qwen", description="语音服务提供商 (qwen/openai/local)")
+    api_key: str = Field(default="", description="语音服务API密钥")
+    model: str = Field(default="qwen3-omni-flash-realtime", description="语音模型名称")
+    voice: str = Field(default="Cherry", description="语音角色")
+    input_sample_rate: int = Field(default=16000, description="输入采样率")
+    output_sample_rate: int = Field(default=24000, description="输出采样率")
+    chunk_size_ms: int = Field(default=200, description="音频块大小（毫秒）")
+    vad_threshold: float = Field(default=0.02, ge=0.0, le=1.0, description="静音检测阈值")
+    echo_suppression: bool = Field(default=True, description="回声抑制")
+    min_user_interval: float = Field(default=2.0, ge=0.5, le=10.0, description="用户输入最小间隔（秒）")
+    cooldown_duration: float = Field(default=1.0, ge=0.5, le=5.0, description="冷却期时长（秒）")
+    max_user_speech: float = Field(default=30.0, ge=5.0, le=120.0, description="最大说话时长（秒）")
+    debug: bool = Field(default=False, description="是否启用调试模式")
+    integrate_with_memory: bool = Field(default=True, description="是否集成到记忆系统")
+    show_in_chat: bool = Field(default=True, description="是否在聊天界面显示对话内容")
+    use_api_server: bool = Field(default=False, description="是否通过API Server处理（支持MCP调用）")
+    voice_mode: str = Field(default="auto", description="语音模式：auto/local/end2end/hybrid（auto会根据provider自动选择）")
+    asr_host: str = Field(default="localhost", description="本地ASR服务地址")
+    asr_port: int = Field(default=5000, description="本地ASR服务端口")
+    record_duration: int = Field(default=10, ge=5, le=60, description="本地模式最大录音时长（秒）")
+    tts_voice: str = Field(default="zh-CN-XiaoyiNeural", description="TTS语音选择（本地/混合模式）")
+    tts_host: str = Field(default="localhost", description="TTS服务地址")
+    tts_port: int = Field(default=5061, ge=1, le=65535, description="TTS服务端口")
+    auto_play: bool = Field(default=True, description="AI回复后自动播放语音")
+    interrupt_playback: bool = Field(default=True, description="用户说话时自动打断AI语音播放")
+
 class NagaPortalConfig(BaseModel):
     """娜迦官网账户配置"""
     portal_url: str = Field(default="https://naga.furina.chat/", description="娜迦官网地址")
@@ -409,6 +438,7 @@ class NagaConfig(BaseModel):
     mqtt: MQTTConfig = Field(default_factory=MQTTConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     live2d: Live2DConfig = Field(default_factory=Live2DConfig)
+    voice_realtime: VoiceRealtimeConfig = Field(default_factory=VoiceRealtimeConfig)  # 实时语音配置
     naga_portal: NagaPortalConfig = Field(default_factory=NagaPortalConfig)
     online_search: OnlineSearchConfig = Field(default_factory=OnlineSearchConfig)
     system_check: SystemCheckConfig = Field(default_factory=SystemCheckConfig)

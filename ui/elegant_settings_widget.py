@@ -348,7 +348,8 @@ class ElegantSettingsWidget(QWidget):
         self.create_api_group(scroll_layout)
         self.create_interface_group(scroll_layout)
         self.create_xiayuan_group(scroll_layout)
-        self.create_tts_group(scroll_layout)
+        self.create_voice_input_group(scroll_layout)  # 语音输入设置（ASR）
+        self.create_voice_output_group(scroll_layout)  # 语音输出设置（TTS）
         self.create_mqtt_group(scroll_layout)
         self.create_save_section(scroll_layout)
         
@@ -470,15 +471,6 @@ class ElegantSettingsWidget(QWidget):
         naga_api_btn.clicked.connect(self.open_naga_api)
         naga_api_card = SettingCard("娜迦API", "访问娜迦API官方网站", naga_api_btn, None)
         group.add_card(naga_api_card)
-        # voice_enabled
-        if hasattr(config.system, "voice_enabled"):
-            voice_checkbox = QCheckBox()
-            voice_checkbox.setChecked(config.system.voice_enabled)
-            voice_checkbox.setStyleSheet(self.get_checkbox_style() + "color: #fff;")
-            voice_card = SettingCard("语音交互", "启用语音输入（ASR+VAD）和输出（TTS）功能", voice_checkbox, "system.voice_enabled")
-            voice_card.value_changed.connect(self.on_setting_changed)
-            group.add_card(voice_card)
-            self.voice_checkbox = voice_checkbox
 
         # debug
         if hasattr(config.system, "debug"):
@@ -623,25 +615,258 @@ class ElegantSettingsWidget(QWidget):
             
         parent_layout.addWidget(group)
 
-    def create_tts_group(self, parent_layout):
-        group = SettingGroup("TTS 配置")
-        if hasattr(config.tts, "api_key"):
-            tts_api_input = QLineEdit()
-            tts_api_input.setText(config.tts.api_key)
-            tts_api_input.setStyleSheet(self.get_input_style() + "color: #fff;")
-            tts_api_card = SettingCard("TTS API Key", "TTS服务API密钥", tts_api_input, "tts.api_key")
-            tts_api_card.value_changed.connect(self.on_setting_changed)
-            group.add_card(tts_api_card)
-        if hasattr(config.tts, "port"):
-            tts_port_spin = QSpinBox()
-            tts_port_spin.setRange(1, 65535)
-            tts_port_spin.setValue(config.tts.port)
-            tts_port_spin.setStyleSheet(self.get_spin_style() + "color: #fff;")
-            tts_port_card = SettingCard("TTS端口", "TTS服务端口", tts_port_spin, "tts.port")
-            tts_port_card.value_changed.connect(self.on_setting_changed)
-            group.add_card(tts_port_card)
+    def create_voice_input_group(self, parent_layout):
+        """创建语音输入设置组（ASR）"""
+        group = SettingGroup("语音输入设置")
+        
+        # 如果配置存在，显示语音输入设置
+        if hasattr(config, "voice_realtime"):
+            # === 基础设置 ===
+            # 启用语音输入
+            voice_input_enabled_checkbox = QCheckBox()
+            voice_input_enabled_checkbox.setChecked(config.voice_realtime.enabled)
+            voice_input_enabled_checkbox.setStyleSheet(self.get_checkbox_style() + "color: #fff;")
+            voice_input_enabled_card = SettingCard(
+                "启用语音输入", 
+                "启用语音识别（ASR）功能，支持实时语音转文本", 
+                voice_input_enabled_checkbox, 
+                "voice_realtime.enabled"
+            )
+            voice_input_enabled_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(voice_input_enabled_card)
+
+            # 语音模式选择
+            mode_combo = QComboBox()
+            mode_combo.addItems(["auto", "local", "end2end", "hybrid"])
+            current_mode = getattr(config.voice_realtime, 'voice_mode', 'auto')
+            mode_combo.setCurrentText(current_mode)
+            mode_combo.setStyleSheet(self.get_combo_style() + "color: #fff;")
+            mode_card = SettingCard(
+                "语音模式",
+                "auto:自动选择 | local:本地离线 | end2end:端到端 | hybrid:混合模式",
+                mode_combo,
+                "voice_realtime.voice_mode"
+            )
+            mode_card.value_changed.connect(self.on_setting_changed)
+            mode_card.value_changed.connect(self.on_voice_mode_changed)  # 监听模式变化
+            group.add_card(mode_card)
+            self.voice_mode_combo = mode_combo  # 保存引用
+
+            # 服务提供商
+            provider_combo = QComboBox()
+            provider_combo.addItems(["local", "qwen", "openai"])
+            provider_combo.setCurrentText(config.voice_realtime.provider)
+            provider_combo.setStyleSheet(self.get_combo_style() + "color: #fff;")
+            self.provider_card = SettingCard(
+                "ASR服务提供商",
+                "local:本地FunASR | qwen:通义千问 | openai:OpenAI",
+                provider_combo,
+                "voice_realtime.provider"
+            )
+            self.provider_card.value_changed.connect(self.on_setting_changed)
+            self.provider_card.value_changed.connect(self.on_voice_provider_changed)  # 监听提供商变化
+            group.add_card(self.provider_card)
+            self.voice_provider_combo = provider_combo  # 保存引用
+
+            # === 本地模式专用设置 ===
+            # ASR服务地址（本地模式）
+            asr_host_input = QLineEdit()
+            asr_host_input.setText(getattr(config.voice_realtime, 'asr_host', 'localhost'))
+            asr_host_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            self.asr_host_card = SettingCard(
+                "ASR服务地址",
+                "本地FunASR服务地址（仅本地模式）",
+                asr_host_input,
+                "voice_realtime.asr_host"
+            )
+            self.asr_host_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(self.asr_host_card)
+
+            # ASR服务端口（本地模式）
+            asr_port_spin = QSpinBox()
+            asr_port_spin.setRange(1, 65535)
+            asr_port_spin.setValue(getattr(config.voice_realtime, 'asr_port', 5000))
+            asr_port_spin.setStyleSheet(self.get_spin_style() + "color: #fff;")
+            self.asr_port_card = SettingCard(
+                "ASR服务端口",
+                "本地FunASR服务端口（仅本地模式）",
+                asr_port_spin,
+                "voice_realtime.asr_port"
+            )
+            self.asr_port_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(self.asr_port_card)
+
+            # 录音时长（本地模式）
+            record_duration_spin = QSpinBox()
+            record_duration_spin.setRange(5, 60)
+            record_duration_spin.setValue(getattr(config.voice_realtime, 'record_duration', 10))
+            record_duration_spin.setStyleSheet(self.get_spin_style() + "color: #fff;")
+            self.record_duration_card = SettingCard(
+                "最大录音时长",
+                "本地模式最大录音时长（秒）",
+                record_duration_spin,
+                "voice_realtime.record_duration"
+            )
+            self.record_duration_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(self.record_duration_card)
+
+            # === 云端模式设置 ===
+            # API密钥（云端模式）
+            api_key_input = QLineEdit()
+            api_key_input.setText(config.voice_realtime.api_key)
+            api_key_input.setEchoMode(QLineEdit.Password)
+            api_key_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            self.api_key_card = SettingCard(
+                "API密钥",
+                "语音服务API密钥（云端模式）",
+                api_key_input,
+                "voice_realtime.api_key"
+            )
+            self.api_key_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(self.api_key_card)
+
+            # 模型选择（云端模式）
+            model_input = QLineEdit()
+            model_input.setText(config.voice_realtime.model)
+            model_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            self.model_card = SettingCard(
+                "ASR模型名称",
+                "语音识别模型名称（云端模式）",
+                model_input,
+                "voice_realtime.model"
+            )
+            self.model_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(self.model_card)
+
+
+            # VAD阈值（云端模式）
+            vad_slider = QSlider(Qt.Horizontal)
+            vad_slider.setRange(0, 100)
+            vad_slider.setValue(int(config.voice_realtime.vad_threshold * 100))
+            vad_slider.setStyleSheet(self.get_slider_style())
+            vad_label = QLabel(f"{config.voice_realtime.vad_threshold:.2f}")
+            vad_label.setStyleSheet("color: #fff; font: 10pt 'Lucida Console';")
+            vad_slider.valueChanged.connect(lambda v: vad_label.setText(f"{v/100:.2f}"))
+            vad_container = QWidget()
+            vad_layout = QHBoxLayout(vad_container)
+            vad_layout.setContentsMargins(0, 0, 0, 0)
+            vad_layout.addWidget(vad_slider)
+            vad_layout.addWidget(vad_label)
+            self.vad_card = SettingCard(
+                "静音检测阈值",
+                "VAD静音检测灵敏度（云端模式）",
+                vad_container,
+                "voice_realtime.vad_threshold"
+            )
+            self.vad_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(self.vad_card)
+
+
+            # 初始化显示状态
+            self.update_voice_cards_visibility()
+
+            # 初始化时检查模式，如果是local模式则禁用provider选择
+            if hasattr(self, 'voice_mode_combo') and hasattr(self, 'voice_provider_combo'):
+                if self.voice_mode_combo.currentText() == 'local':
+                    self.voice_provider_combo.setCurrentText('local')
+                    self.voice_provider_combo.setEnabled(False)
+                    # 应用禁用样式
+                    self.voice_provider_combo.setStyleSheet(self.get_combo_style() + """
+                        QComboBox:disabled {
+                            background: rgba(50, 50, 50, 150);
+                            color: rgba(255, 255, 255, 100);
+                        }
+                    """)
 
         parent_layout.addWidget(group)
+
+    def create_voice_output_group(self, parent_layout):
+        """创建语音输出设置组（TTS）"""
+        group = SettingGroup("语音输出设置")
+        
+        # 如果配置存在，显示语音输出设置
+        if hasattr(config, "voice_realtime"):
+            # === TTS基础设置 ===
+            # TTS语音选择
+            tts_voice_combo = QComboBox()
+            tts_voices = [
+                "zh-CN-XiaoyiNeural",     # 中文女声
+                "zh-CN-YunxiNeural",      # 中文男声
+                "zh-CN-XiaoxiaoNeural",   # 中文女童
+                "en-US-JennyNeural",      # 英文女声
+                "en-US-GuyNeural",        # 英文男声
+            ]
+            tts_voice_combo.addItems(tts_voices)
+            current_tts_voice = getattr(config.voice_realtime, 'tts_voice', 'zh-CN-XiaoyiNeural')
+            tts_voice_combo.setCurrentText(current_tts_voice)
+            tts_voice_combo.setStyleSheet(self.get_combo_style() + "color: #fff;")
+            self.tts_voice_card = SettingCard(
+                "TTS语音",
+                "文本转语音的声音选择",
+                tts_voice_combo,
+                "voice_realtime.tts_voice"
+            )
+            self.tts_voice_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(self.tts_voice_card)
+
+
+            # === TTS服务设置 ===
+            # TTS服务地址
+            tts_host_input = QLineEdit()
+            tts_host_input.setText(getattr(config.voice_realtime, 'tts_host', 'localhost'))
+            tts_host_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            self.tts_host_card = SettingCard(
+                "TTS服务地址",
+                "本地TTS服务地址",
+                tts_host_input,
+                "voice_realtime.tts_host"
+            )
+            self.tts_host_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(self.tts_host_card)
+
+            # TTS服务端口
+            tts_port_spin = QSpinBox()
+            tts_port_spin.setRange(1, 65535)
+            tts_port_spin.setValue(getattr(config.voice_realtime, 'tts_port', 5061))
+            tts_port_spin.setStyleSheet(self.get_spin_style() + "color: #fff;")
+            self.tts_port_card = SettingCard(
+                "TTS服务端口",
+                "本地TTS服务端口",
+                tts_port_spin,
+                "voice_realtime.tts_port"
+            )
+            self.tts_port_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(self.tts_port_card)
+
+            # === 高级设置 ===
+            # 自动播放
+            auto_play_checkbox = QCheckBox()
+            auto_play_checkbox.setChecked(getattr(config.voice_realtime, 'auto_play', True))
+            auto_play_checkbox.setStyleSheet(self.get_checkbox_style() + "color: #fff;")
+            auto_play_card = SettingCard(
+                "自动播放",
+                "AI回复后自动播放语音",
+                auto_play_checkbox,
+                "voice_realtime.auto_play"
+            )
+            auto_play_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(auto_play_card)
+
+            # 打断播放
+            interrupt_playback_checkbox = QCheckBox()
+            interrupt_playback_checkbox.setChecked(getattr(config.voice_realtime, 'interrupt_playback', True))
+            interrupt_playback_checkbox.setStyleSheet(self.get_checkbox_style() + "color: #fff;")
+            interrupt_playback_card = SettingCard(
+                "允许打断",
+                "用户说话时自动打断AI语音播放",
+                interrupt_playback_checkbox,
+                "voice_realtime.interrupt_playback"
+            )
+            interrupt_playback_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(interrupt_playback_card)
+
+        parent_layout.addWidget(group)
+
 
 
     def create_mqtt_group(self, parent_layout):
@@ -851,15 +1076,144 @@ class ElegantSettingsWidget(QWidget):
         key_map = {
             "STREAM_MODE": "system.stream_mode",
             "BG_ALPHA": "ui.bg_alpha",
-            "VOICE_ENABLED": "system.voice_enabled",
             "DEBUG": "system.debug",
         }
         normalized_key = key_map.get(setting_key, setting_key)
         self.pending_changes[normalized_key] = value
         self.update_status_label(f"● {normalized_key} 已修改")
-        
+
         # 移除实时透明度预览，避免动画卡顿
         # 透明度设置将在保存时统一应用
+
+    def on_voice_mode_changed(self, setting_key, value):
+        """处理语音模式变化，动态显示/隐藏相关设置"""
+        # 先调用通用处理
+        self.on_setting_changed(setting_key, value)
+
+        # 处理不同模式的逻辑
+        if value == 'local' and hasattr(self, 'voice_provider_combo'):
+            # local模式：强制设置provider为local并禁用
+            self.voice_provider_combo.setCurrentText('local')
+            self.voice_provider_combo.setEnabled(False)
+            # 更新样式显示禁用状态
+            self.voice_provider_combo.setStyleSheet(self.get_combo_style() + """
+                QComboBox:disabled {
+                    background: rgba(50, 50, 50, 150);
+                    color: rgba(255, 255, 255, 100);
+                }
+            """)
+            # 同时更新配置
+            self.on_setting_changed('voice_realtime.provider', 'local')
+
+        elif value == 'auto' and hasattr(self, 'voice_provider_combo'):
+            # auto模式：允许选择provider，根据provider自动决定实际模式
+            self.voice_provider_combo.setEnabled(True)
+            self.voice_provider_combo.setStyleSheet(self.get_combo_style() + "color: #fff;")
+            # auto模式不改变当前provider选择
+
+        elif value in ['end2end', 'hybrid'] and hasattr(self, 'voice_provider_combo'):
+            # end2end和hybrid模式：需要云端provider
+            self.voice_provider_combo.setEnabled(True)
+            self.voice_provider_combo.setStyleSheet(self.get_combo_style() + "color: #fff;")
+            # 如果当前是local，切换到qwen
+            if self.voice_provider_combo.currentText() == 'local':
+                self.voice_provider_combo.setCurrentText('qwen')
+                self.on_setting_changed('voice_realtime.provider', 'qwen')
+
+        # 更新卡片显示状态
+        self.update_voice_cards_visibility()
+
+    def on_voice_provider_changed(self, setting_key, value):
+        """处理语音提供商变化，动态显示/隐藏相关设置"""
+        # 先调用通用处理
+        self.on_setting_changed(setting_key, value)
+
+        # 如果在auto模式下选择了local provider，可以提示用户考虑切换到local模式
+        if hasattr(self, 'voice_mode_combo'):
+            current_mode = self.voice_mode_combo.currentText()
+            if current_mode == 'auto' and value == 'local':
+                # 可选：自动切换到local模式
+                # self.voice_mode_combo.setCurrentText('local')
+                # self.on_voice_mode_changed('voice_realtime.voice_mode', 'local')
+                pass  # 保持auto模式，让系统自动选择
+
+        # 更新卡片显示状态
+        self.update_voice_cards_visibility()
+
+    def update_voice_cards_visibility(self):
+        """根据当前语音模式和提供商动态显示/隐藏设置卡片"""
+        if not hasattr(self, 'voice_mode_combo'):
+            return
+
+        # 获取当前模式和提供商
+        mode = self.voice_mode_combo.currentText() if hasattr(self, 'voice_mode_combo') else 'auto'
+        provider = self.voice_provider_combo.currentText() if hasattr(self, 'voice_provider_combo') else 'qwen'
+
+        # 如果是auto模式，根据provider推断实际模式
+        if mode == 'auto':
+            if provider == 'local':
+                actual_mode = 'local'
+            elif hasattr(self, 'pending_changes') and self.pending_changes.get('voice_realtime.use_api_server'):
+                actual_mode = 'hybrid'
+            else:
+                actual_mode = 'end2end'
+        else:
+            actual_mode = mode
+
+        # 本地模式专用设置
+        local_cards = [
+            getattr(self, 'asr_host_card', None),
+            getattr(self, 'asr_port_card', None),
+            getattr(self, 'record_duration_card', None),
+        ]
+
+        # 云端模式专用设置
+        cloud_cards = [
+            getattr(self, 'api_key_card', None),
+            getattr(self, 'model_card', None),
+            getattr(self, 'voice_role_card', None),
+            getattr(self, 'vad_card', None),
+        ]
+
+        # TTS设置（本地和混合模式）
+        tts_cards = [
+            getattr(self, 'tts_voice_card', None),
+        ]
+
+        # 根据模式显示/隐藏卡片
+        if actual_mode == 'local':
+            # 本地模式：显示本地设置和TTS，隐藏云端设置
+            for card in local_cards:
+                if card:
+                    card.setVisible(True)
+            for card in cloud_cards:
+                if card:
+                    card.setVisible(False)
+            for card in tts_cards:
+                if card:
+                    card.setVisible(True)
+        elif actual_mode == 'end2end':
+            # 端到端模式：显示云端设置，隐藏本地和TTS设置
+            for card in local_cards:
+                if card:
+                    card.setVisible(False)
+            for card in cloud_cards:
+                if card:
+                    card.setVisible(True)
+            for card in tts_cards:
+                if card:
+                    card.setVisible(False)
+        elif actual_mode == 'hybrid':
+            # 混合模式：显示云端设置和TTS，隐藏本地设置
+            for card in local_cards:
+                if card:
+                    card.setVisible(False)
+            for card in cloud_cards:
+                if card:
+                    card.setVisible(True)
+            for card in tts_cards:
+                if card:
+                    card.setVisible(True)
         
     
     def update_status_label(self, text):

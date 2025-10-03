@@ -5,8 +5,13 @@
 # from voice.input.integration import get_voice_integration
 # from voice.output.voice_integration import get_voice_integration
 
+# 移除全局导入，避免语音输入模块的onnxruntime依赖影响语音输出
+# 用户需要时直接从具体模块导入：
+# from voice.input.integration import get_voice_integration
+# from voice.output.voice_integration import get_voice_integration
+
 __all__ = [
-    # 不再提供全局导入，避免依赖冲突
+    # 不再提供其他全局导入，避免依赖冲突
 ]
 
 

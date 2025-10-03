@@ -32,6 +32,7 @@ sounddevice>=0.4.6
 pyaudio>=0.2.14
 edge-tts>=7.0.2
 emoji>=2.8.0
+pygame>=2.5.0  # 音频播放支持 #
 
 # 系统托盘相关依赖（部分迁移到 nagaagent-core==1.0.1）
 pystray>=0.19.4  # 仅安装脚本与托盘文档涉及 #

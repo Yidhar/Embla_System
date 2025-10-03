@@ -6,13 +6,11 @@
 from .computer_control_agent import ComputerControlAgent
 from .computer_use_adapter import ComputerUseAdapter
 from .visual_analyzer import VisualAnalyzer
-from .task_planner import TaskPlanner
 from .action_executor import ActionExecutor
 
 __all__ = [
     'ComputerControlAgent',
     'ComputerUseAdapter', 
     'VisualAnalyzer',
-    'TaskPlanner',
     'ActionExecutor'
 ]

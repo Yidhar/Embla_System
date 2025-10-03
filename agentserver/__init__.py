@@ -1,28 +1,16 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-AgentServer - 多智能体协作服务器
-基于博弈论项目设计的多智能体协作框架
+NagaAgent独立服务 - 基于博弈论的电脑控制智能体
+提供意图识别和电脑控制任务执行功能
 """
 
-__version__ = "1.0.0"
-__author__ = "NagaAgent Team"
-
-# 导入核心组件
-from .agent_manager import get_agent_manager, process_intelligent_task
-from .task_planner import TaskPlanner
-from .task_scheduler import TaskScheduler, get_task_scheduler
-from .parallel_executor import ParallelExecutor, get_parallel_executor
-from .multi_agent_coordinator import get_coordinator, coordinate_task
+from .agent_server import app, Modules
+from .agent_computer_control import ComputerControlAgent, ComputerUseAdapter, VisualAnalyzer, ActionExecutor
 
 __all__ = [
-    "get_agent_manager",
-    "process_intelligent_task", 
-    "TaskPlanner",
-    "TaskScheduler",
-    "get_task_scheduler",
-    "ParallelExecutor",
-    "get_parallel_executor",
-    "get_coordinator",
-    "coordinate_task"
+    'app',
+    'Modules', 
+    'ComputerControlAgent',
+    'ComputerUseAdapter',
+    'VisualAnalyzer',
+    'ActionExecutor'
 ]
