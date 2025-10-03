@@ -121,6 +121,8 @@ class ChatRequest(BaseModel):
     stream: bool = False
     session_id: Optional[str] = None
     use_self_game: bool = False
+    disable_tts: bool = False  # V17: 支持禁用服务器端TTS
+    return_audio: bool = False  # V19: 支持返回音频URL供客户端播放
 
 class ChatResponse(BaseModel):
     response: str
@@ -326,6 +328,7 @@ async def chat_stream(request: ChatRequest):
         raise HTTPException(status_code=400, detail="消息内容不能为空")
     
     async def generate_response() -> AsyncGenerator[str, None]:
+        complete_text = ""  # V19: 用于累积完整文本以生成音频
         try:
             # 获取或创建会话ID
             session_id = message_manager.create_session(request.session_id)
@@ -345,32 +348,54 @@ async def chat_stream(request: ChatRequest):
 
             # 流式文本处理完全交给streaming_tool_extractor
             # apiserver不再负责累积文本内容
-            
-            # 初始化语音集成（如果启用）
+
+            # 初始化语音集成（根据voice_mode和return_audio决定）
+            # V19: 如果客户端请求返回音频，则在服务器端生成
             voice_integration = None
-            if config.system.voice_enabled:
+
+            # V19: 混合模式下，如果请求return_audio，则在服务器生成音频
+            # 修复双音频问题：return_audio时不启用实时TTS，只在最后生成完整音频
+            should_enable_tts = (
+                config.system.voice_enabled
+                and not request.return_audio  # 修复：return_audio时不启用实时TTS
+                and config.voice_realtime.voice_mode != "hybrid"
+                and not request.disable_tts  # 兼容旧版本的disable_tts
+            )
+
+            if should_enable_tts:
                 try:
                     from voice.output.voice_integration import get_voice_integration
                     voice_integration = get_voice_integration()
+                    logger.info(f"[API Server] 实时语音集成已启用 (return_audio={request.return_audio}, voice_mode={config.voice_realtime.voice_mode})")
                 except Exception as e:
                     print(f"语音集成初始化失败: {e}")
-            
+            else:
+                if request.return_audio:
+                    logger.info("[API Server] return_audio模式，将在最后生成完整音频")
+                elif config.voice_realtime.voice_mode == "hybrid" and not request.return_audio:
+                    logger.info("[API Server] 混合模式下且未请求音频，不处理TTS")
+                elif request.disable_tts:
+                    logger.info("[API Server] 客户端禁用了TTS (disable_tts=True)")
+
             # 初始化流式文本切割器（负责文本处理和TTS）
+            # 修复：始终创建tool_extractor以累积文本内容，确保日志保存
             tool_extractor = None
-            if voice_integration:
-                try:
-                    from .streaming_tool_extractor import StreamingToolCallExtractor
-                    tool_extractor = StreamingToolCallExtractor()
+            try:
+                from .streaming_tool_extractor import StreamingToolCallExtractor
+                tool_extractor = StreamingToolCallExtractor()
+                # 只有在需要实时TTS且不是return_audio模式时，才设置voice_integration
+                if voice_integration and not request.return_audio:
                     tool_extractor.set_callbacks(
                         on_text_chunk=None,  # 不需要回调，直接处理TTS
                         voice_integration=voice_integration
                     )
-                except Exception as e:
-                    print(f"流式文本切割器初始化失败: {e}")
+            except Exception as e:
+                print(f"流式文本切割器初始化失败: {e}")
             
             # 定义LLM调用函数 - 支持真正的流式输出
             async def call_llm_stream(messages: List[Dict]) -> AsyncGenerator[str, None]:
                 """调用LLM API - 流式模式"""
+                nonlocal complete_text  # V19: 声明使用外层函数的变量
                 async with aiohttp.ClientSession() as session:
                     
                     async with session.post(
@@ -414,8 +439,13 @@ async def chat_stream(request: ChatRequest):
                                             content = delta['content']
                                             # 直接将增量内容推送给前端用于消息渲染
                                             yield f"data: {content}\n\n"
-                                            
-                                            # 发送到流式文本切割器进行文本处理和TTS
+
+                                            # V19: 如果需要返回音频，累积文本
+                                            if request.return_audio:
+                                                complete_text += content
+
+                                            # 发送到流式文本切割器进行文本处理
+                                            # 修复：始终发送到tool_extractor以累积完整文本
                                             if tool_extractor:
                                                 try:
                                                     await tool_extractor.process_text_chunk(content)
@@ -430,16 +460,45 @@ async def chat_stream(request: ChatRequest):
                 yield chunk
             
             # 处理完成
-            
-            # 完成流式文本切割器处理
-            if tool_extractor:
+
+            # V19: 如果请求返回音频，在这里生成并返回音频URL
+            if request.return_audio and complete_text:
+                try:
+                    logger.info(f"[API Server V19] 生成音频，文本长度: {len(complete_text)}")
+
+                    # 使用服务器端的TTS生成音频
+                    from voice.tts_wrapper import generate_speech_safe
+                    import tempfile
+                    import uuid
+
+                    # 生成音频文件
+                    tts_voice = config.voice_realtime.tts_voice or "zh-CN-XiaoyiNeural"
+                    audio_file = generate_speech_safe(
+                        text=complete_text,
+                        voice=tts_voice,
+                        response_format="mp3",
+                        speed=1.0
+                    )
+
+                    # 返回音频文件路径（客户端可以直接访问）
+                    yield f"data: audio_url: {audio_file}\n\n"
+                    logger.info(f"[API Server V19] 音频文件已生成: {audio_file}")
+
+                except Exception as e:
+                    logger.error(f"[API Server V19] 音频生成失败: {e}")
+                    # traceback已经在文件顶部导入，直接使用
+                    print(f"[API Server V19] 详细错误信息:")
+                    traceback.print_exc()
+
+            # 完成流式文本切割器处理（非return_audio模式）
+            if tool_extractor and not request.return_audio:
                 try:
                     await tool_extractor.finish_processing()
                 except Exception as e:
                     print(f"流式文本切割器完成处理错误: {e}")
             
             # 完成语音处理
-            if voice_integration:
+            if voice_integration and not request.return_audio:  # V19: return_audio模式不需要这里的处理
                 try:
                     import threading
                     threading.Thread(
@@ -448,18 +507,19 @@ async def chat_stream(request: ChatRequest):
                     ).start()
                 except Exception as e:
                     print(f"语音集成完成处理错误: {e}")
-            
-            # 流式处理完成后，从streaming_tool_extractor获取完整文本
+
+            # 流式处理完成后，获取完整文本用于保存
             complete_response = ""
             if tool_extractor:
                 try:
-                    # 完成流式文本切割器处理
-                    await tool_extractor.finish_processing()
                     # 获取完整文本内容
                     complete_response = tool_extractor.get_complete_text()
                 except Exception as e:
                     print(f"获取完整响应文本失败: {e}")
-            
+            elif request.return_audio:
+                # V19: 如果是return_audio模式，使用累积的文本
+                complete_response = complete_text
+
             # 保存对话历史到消息管理器
             message_manager.add_message(session_id, "user", request.message)
             message_manager.add_message(session_id, "assistant", complete_response)
@@ -490,6 +550,7 @@ async def chat_stream(request: ChatRequest):
             
         except Exception as e:
             print(f"流式对话处理错误: {e}")
+            # 使用顶部导入的traceback
             traceback.print_exc()
             yield f"data: 错误: {str(e)}\n\n"
     

@@ -5,8 +5,12 @@
 # from voice.input.integration import get_voice_integration
 # from voice.output.voice_integration import get_voice_integration
 
+# 导出线程安全的语音集成组件
+from .voice_thread_safe_simple import ThreadSafeVoiceIntegration
+
 __all__ = [
-    # 不再提供全局导入，避免依赖冲突
+    'ThreadSafeVoiceIntegration',
+    # 不再提供其他全局导入，避免依赖冲突
 ]
 
 
