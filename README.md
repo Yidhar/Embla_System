@@ -8,6 +8,11 @@
 
 ![Star History](https://img.shields.io/github/stars/Xxiii8322766509/NagaAgent?style=social)![Forks](https://img.shields.io/github/forks/Xxiii8322766509/NagaAgent?style=social)![Issues](https://img.shields.io/github/issues/Xxiii8322766509/NagaAgent)![Pull Requests](https://img.shields.io/github/issues-pr/Xxiii8322766509/NagaAgent)
 
+![UI 预览](ui/README.jpg)
+
+---
+
+**🐍 智能对话助手 | 多平台支持 | 丰富生态 | 易于扩展**
 <a href="https://www.star-history.com/#Xxiii8322766509/NagaAgent&Date">
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Xxiii8322766509/NagaAgent&type=Date&theme=dark" />
@@ -16,11 +21,7 @@
  </picture>
 </a>
 
-![UI 预览](ui/README.jpg)
-
 ---
-
-**🐍 智能对话助手 | 多平台支持 | 丰富生态 | 易于扩展**
 
 ## 🎬 快速入门视频
 
