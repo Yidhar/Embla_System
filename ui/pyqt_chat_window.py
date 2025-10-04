@@ -419,26 +419,94 @@ class ChatWindow(QWidget):
         def run(self):
             try:
                 import requests
+                from requests.adapters import HTTPAdapter
+                from urllib3.util.retry import Retry
+
                 self.status.emit("连接到AI...")
-                resp = requests.post(self.url, json=self.payload, timeout=120, stream=True)
+
+                # 设置重试策略 - 增加重试次数
+                retry_strategy = Retry(
+                    total=3,  # 增加重试次数
+                    backoff_factor=1,  # 增加退避时间
+                    status_forcelist=[429, 500, 502, 503, 504],
+                    allowed_methods=["POST"]  # 明确允许POST方法重试
+                )
+
+                # 创建session并配置重试
+                session = requests.Session()
+                adapter = HTTPAdapter(max_retries=retry_strategy)
+                session.mount("http://", adapter)
+                session.mount("https://", adapter)
+
+                # 设置headers以支持更好的连接管理
+                headers = {
+                    'Connection': 'keep-alive',
+                    'Content-Type': 'application/json',
+                    'Accept': 'text/event-stream',  # 明确接受SSE
+                    'Accept-Encoding': 'gzip, deflate',  # 支持压缩
+                    'User-Agent': 'NagaAgent-Client/1.0'  # 添加User-Agent
+                }
+
+                # 增加超时时间并配置流式请求
+                timeout = (30, 120)  # (连接超时, 读取超时)
+                resp = session.post(
+                    self.url,
+                    json=self.payload,
+                    headers=headers,
+                    timeout=timeout,
+                    stream=True,
+                    verify=False  # 如果有SSL问题可以临时禁用
+                )
+
                 if resp.status_code != 200:
-                    self.error.emit(f"流式调用失败: {resp.text}")
+                    self.error.emit(f"流式调用失败: HTTP {resp.status_code} - {resp.text[:200]}")
                     return
+
                 self.status.emit("正在生成回复...")
-                for line in resp.iter_lines():
+
+                # 使用更大的块大小来读取流
+                buffer = []
+                for line in resp.iter_lines(chunk_size=8192, decode_unicode=False):
                     if self._cancelled:
-                        return
+                        break
+
                     if line:
-                        line_str = line.decode('utf-8')
-                        if line_str.startswith('data: '):
-                            data_str = line_str[6:]
-                            if data_str == '[DONE]':
-                                break
-                            # 直接把内容行交回主线程，由现有逻辑处理
-                            self.chunk.emit(data_str)
-                self.done.emit()
+                        # 处理可能的编码问题
+                        try:
+                            # 使用UTF-8解码，忽略错误字符
+                            line_str = line.decode('utf-8', errors='ignore').strip()
+                            if line_str.startswith('data: '):
+                                data_str = line_str[6:]
+                                if data_str == '[DONE]':
+                                    break
+                                # 过滤掉心跳包
+                                if data_str and data_str != '':
+                                    # 直接把内容行交回主线程
+                                    self.chunk.emit(data_str)
+                        except Exception as e:
+                            print(f"解码错误: {e}")
+                            continue
+                    else:
+                        # 处理空行（SSE中心跳）
+                        continue
+
+                # 检查响应是否正常结束
+                if not self._cancelled:
+                    resp.close()  # 显式关闭响应
+                    self.done.emit()
+
+            except requests.exceptions.ChunkedEncodingError as e:
+                self.error.emit(f"流式数据解码错误: {str(e)}")
+            except requests.exceptions.ConnectionError as e:
+                self.error.emit(f"连接错误: {str(e)}")
+            except requests.exceptions.ReadTimeout as e:
+                self.error.emit(f"读取超时: {str(e)}")
+            except requests.exceptions.RequestException as e:
+                self.error.emit(f"请求异常: {str(e)}")
             except Exception as e:
-                self.error.emit(str(e))
+                import traceback
+                error_msg = f"未知错误: {str(e)}\n详细信息: {traceback.format_exc()}"
+                self.error.emit(error_msg)
 
     class _NonStreamHttpWorker(QThread):
         finished_text = pyqtSignal(str)
@@ -457,8 +525,31 @@ class ChatWindow(QWidget):
         def run(self):
             try:
                 import requests
+                from requests.adapters import HTTPAdapter
+                from urllib3.util.retry import Retry
+
                 self.status.emit("正在思考...")
-                resp = requests.post(self.url, json=self.payload, timeout=120)
+
+                # 设置重试策略
+                retry_strategy = Retry(
+                    total=2,
+                    backoff_factor=0.5,
+                    status_forcelist=[429, 500, 502, 503, 504],
+                )
+
+                # 创建session并配置重试
+                session = requests.Session()
+                adapter = HTTPAdapter(max_retries=retry_strategy)
+                session.mount("http://", adapter)
+                session.mount("https://", adapter)
+
+                # 设置headers以支持更好的连接管理
+                headers = {
+                    'Connection': 'keep-alive',
+                    'Content-Type': 'application/json'
+                }
+
+                resp = session.post(self.url, json=self.payload, headers=headers, timeout=120)
                 if self._cancelled:
                     return
                 if resp.status_code != 200:
@@ -761,7 +852,8 @@ class ChatWindow(QWidget):
             # 博弈论模式必须使用非流式（需要完整响应进行多轮思考）
             if s.self_game_enabled:
                 # 博弈论模式：使用非流式接口（放入后台线程）
-                api_url = "http://localhost:8000/chat"
+                # 使用配置中的API服务器地址和端口
+                api_url = f"http://{config.api_server.host}:{config.api_server.port}/chat"
                 data = {"message": u, "stream": False, "use_self_game": True}
 
                 from system.config import config as _cfg
@@ -779,30 +871,49 @@ class ChatWindow(QWidget):
                 s.worker.start()
                 return
             else:
-                # 普通模式：统一使用流式接口（放入后台线程）
-                api_url = "http://localhost:8000/chat/stream"
-                data = {"message": u, "stream": True, "use_self_game": False}
+                # 普通模式：根据配置决定使用流式还是非流式接口
+                if s.streaming_mode:
+                    # 流式模式
+                    # 使用配置中的API服务器地址和端口
+                    api_url = f"http://{config.api_server.host}:{config.api_server.port}/chat/stream"
+                    data = {"message": u, "stream": True, "use_self_game": False}
+                else:
+                    # 非流式模式
+                    # 使用配置中的API服务器地址和端口
+                    api_url = f"http://{config.api_server.host}:{config.api_server.port}/chat"
+                    data = {"message": u, "stream": False, "use_self_game": False}
 
                 from system.config import config as _cfg
                 if _cfg.system.voice_enabled and _cfg.voice_realtime.voice_mode in ["hybrid", "end2end"]:
                     data["return_audio"] = True
 
-                # 创建并启动流式worker
-                s.worker = ChatWindow._StreamHttpWorker(api_url, data)
-                # 复用现有的流式UI更新逻辑
-                s.worker.status.connect(lambda st: s.progress_widget.status_label.setText(st))
-                s.worker.error.connect(lambda err: (s.progress_widget.stop_loading(), s.add_user_message("系统", f"❌ 流式调用错误: {err}")))
-                # 将返回的data_str包裹成伪SSE处理路径，直接复用append_response_chunk节流更新
-                def _on_chunk(data_str):
-                    # 过滤session_id与audio_url行，保持与handle_streaming_response一致
-                    if data_str.startswith('session_id: '):
-                        return
-                    if data_str.startswith('audio_url: '):
-                        return
-                    s.append_response_chunk(data_str)
-                s.worker.chunk.connect(_on_chunk)
-                s.worker.done.connect(s.finalize_streaming_response)
-                s.worker.start()
+                if s.streaming_mode:
+                    # 创建并启动流式worker
+                    s.worker = ChatWindow._StreamHttpWorker(api_url, data)
+                    # 复用现有的流式UI更新逻辑
+                    s.worker.status.connect(lambda st: s.progress_widget.status_label.setText(st))
+                    s.worker.error.connect(lambda err: (s.progress_widget.stop_loading(), s.add_user_message("系统", f"❌ 流式调用错误: {err}")))
+                    # 将返回的data_str包裹成伪SSE处理路径，直接复用append_response_chunk节流更新
+                    def _on_chunk(data_str):
+                        # 过滤session_id与audio_url行，保持与handle_streaming_response一致
+                        if data_str.startswith('session_id: '):
+                            return
+                        if data_str.startswith('audio_url: '):
+                            return
+                        s.append_response_chunk(data_str)
+                    s.worker.chunk.connect(_on_chunk)
+                    s.worker.done.connect(s.finalize_streaming_response)
+                    s.worker.start()
+                else:
+                    # 创建并启动非流式worker
+                    s.worker = ChatWindow._NonStreamHttpWorker(api_url, data)
+                    s.worker.status.connect(lambda st: s.progress_widget.status_label.setText(st))
+                    s.worker.error.connect(lambda err: (s.progress_widget.stop_loading(), s.add_user_message("系统", f"❌ 非流式调用错误: {err}")))
+                    def _on_finish_text(text):
+                        s.progress_widget.stop_loading()
+                        s._start_non_stream_typewriter(text)
+                    s.worker.finished_text.connect(_on_finish_text)
+                    s.worker.start()
                 return
     
 # PyQt不再处理语音输出，由apiserver直接交给voice/output处理
@@ -825,7 +936,8 @@ class ChatWindow(QWidget):
             # 处理流式数据
             for line in resp.iter_lines():
                 if line:
-                    line_str = line.decode('utf-8')
+                    # 使用UTF-8解码，忽略错误字符
+                    line_str = line.decode('utf-8', errors='ignore')
                     if line_str.startswith('data: '):
                         data_str = line_str[6:]
                         if data_str == '[DONE]':
@@ -1499,7 +1611,8 @@ class ChatWindow(QWidget):
             s.progress_widget.status_label.setText("上传文档中...")
             
             # 准备上传数据
-            api_url = "http://localhost:8000/upload/document"
+            # 使用配置中的API服务器地址和端口
+            api_url = f"http://{config.api_server.host}:{config.api_server.port}/upload/document"
             
             with open(file_path, 'rb') as f:
                 files = {'file': (Path(file_path).name, f, 'application/octet-stream')}
@@ -1605,7 +1718,8 @@ class ChatWindow(QWidget):
             s.progress_widget.status_label.setText("处理文档中...")
             
             # 调用API处理文档
-            api_url = "http://localhost:8000/document/process"
+            # 使用配置中的API服务器地址和端口
+            api_url = f"http://{config.api_server.host}:{config.api_server.port}/document/process"
             data = {
                 "file_path": file_path,
                 "action": action
