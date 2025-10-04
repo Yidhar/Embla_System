@@ -42,7 +42,7 @@ from nagaagent_core.vendors.PyQt5.QtGui import QIcon  # 统一入口 #
 from nagaagent_core.vendors.PyQt5.QtWidgets import QApplication  # 统一入口 #
 
 # 本地模块导入
-from system.system_checker import run_system_check
+from system.system_checker import run_system_check, run_quick_check
 from system.config import config, AI_NAME
 
 # V14版本已移除早期拦截器，采用运行时猴子补丁
@@ -575,17 +575,35 @@ class NagaAgentAdapter:
 
 # 主程序入口
 if __name__ == "__main__":
+    import argparse
+
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description="NagaAgent - 智能对话助手")
+    parser.add_argument("--check-env", action="store_true", help="运行系统环境检测")
+    parser.add_argument("--quick-check", action="store_true", help="运行快速环境检测")
+    parser.add_argument("--force-check", action="store_true", help="强制运行环境检测（忽略缓存）")
+
+    args = parser.parse_args()
+
+    # 处理检测命令
+    if args.check_env or args.quick_check:
+        if args.quick_check:
+            success = run_quick_check()
+        else:
+            success = run_system_check(force_check=args.force_check)
+        sys.exit(0 if success else 1)
+
     # 系统环境检测
     print("🚀 正在启动NagaAgent...")
     print("=" * 50)
-    
+
     # 执行系统检测（只在第一次启动时检测）
     if not run_system_check():
         print("\n❌ 系统环境检测失败，程序无法启动")
         print("请根据上述建议修复问题后重新启动")
         input("按回车键退出...")
         sys.exit(1)
-    
+
     print("\n🎉 系统环境检测通过，正在启动应用...")
     print("=" * 50)
     
