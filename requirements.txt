@@ -3,6 +3,7 @@
 
 # Core dependency (integrated into nagaagent-core)
 nagaagent-core>=1.0.5
+psutil>=5.9.0             # 系统资源监控
 
 # GRAG knowledge graph related dependencies
 py2neo>=2021.2.3
