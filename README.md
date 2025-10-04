@@ -7,6 +7,15 @@
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=for-the-badge)
 
 ![Star History](https://img.shields.io/github/stars/Xxiii8322766509/NagaAgent?style=social)![Forks](https://img.shields.io/github/forks/Xxiii8322766509/NagaAgent?style=social)![Issues](https://img.shields.io/github/issues/Xxiii8322766509/NagaAgent)![Pull Requests](https://img.shields.io/github/issues-pr/Xxiii8322766509/NagaAgent)
+
+<a href="https://www.star-history.com/#Xxiii8322766509/NagaAgent&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Xxiii8322766509/NagaAgent&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Xxiii8322766509/NagaAgent&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Xxiii8322766509/NagaAgent&type=Date" />
+ </picture>
+</a>
+
 ![UI 预览](ui/README.jpg)
 
 ---
@@ -798,6 +807,5 @@ A: 修改 `config.json`：
 
 ---
 
-<div align="center">
-**⭐ 如果这个项目对您有帮助，请考虑给我们一个 Star！**
+<div align="center">⭐ 如果这个项目对您有帮助，请考虑给我们一个 Star！
 </div>
