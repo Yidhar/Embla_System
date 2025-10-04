@@ -267,15 +267,6 @@ try {
     Write-Host "Warning: Tray functionality test failed" -ForegroundColor Yellow
 }
 
-# Generate installed requirements file
-Write-Host "Generating installed requirements file..." -ForegroundColor Green
-try {
-    pip freeze > requirements_installed.txt
-    Write-Host "requirements_installed.txt generated successfully" -ForegroundColor Green
-} catch {
-    Write-Host "Warning: Failed to generate requirements file" -ForegroundColor Yellow
-}
-
 Write-Host "`nEnvironment setup completed!" -ForegroundColor Green
 Write-Host "To install other browser drivers, run:" -ForegroundColor Cyan
 Write-Host "python -m playwright install firefox  # Install Firefox" -ForegroundColor Cyan
