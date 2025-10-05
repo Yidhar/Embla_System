@@ -255,10 +255,7 @@ class SystemChecker:
             ("mcpserver", "MCP服务器"),
             ("summer_memory", "记忆系统"),
             ("voice", "语音模块"),
-            ("system", "系统核心"),
-            ("thinking", "思考引擎"),
-            ("logs", "日志目录"),
-            ("data", "数据存储")
+            ("system", "系统核心")
         ]
 
         all_exist = True
