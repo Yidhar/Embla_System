@@ -1,7 +1,5 @@
 # NagaAgent 3.0 Setup Script
 # Version managed by config.py
-# 优化版本 - 基于实际安装经验改进
-# 自动删除现有虚拟环境，重新创建干净的安装环境
 $ErrorActionPreference = "Stop"
 $pythonMinVersion = "3.10"
 $venvPath = ".venv"
@@ -267,15 +265,6 @@ try {
     Write-Host "Tray functionality test passed" -ForegroundColor Green
 } catch {
     Write-Host "Warning: Tray functionality test failed" -ForegroundColor Yellow
-}
-
-# Generate installed requirements file
-Write-Host "Generating installed requirements file..." -ForegroundColor Green
-try {
-    pip freeze > requirements_installed.txt
-    Write-Host "requirements_installed.txt generated successfully" -ForegroundColor Green
-} catch {
-    Write-Host "Warning: Failed to generate requirements file" -ForegroundColor Yellow
 }
 
 Write-Host "`nEnvironment setup completed!" -ForegroundColor Green

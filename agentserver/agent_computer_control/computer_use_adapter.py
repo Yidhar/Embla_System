@@ -8,12 +8,12 @@ import time
 import platform
 import logging
 from typing import Dict, Any, Optional, Tuple
-from PIL import Image
+from nagaagent_core.vendors.pil import Image
 import asyncio
 
 # 尝试导入依赖包
 try:
-    import pyautogui
+    import nagaagent_core.vendors.pyautogui as pyautogui
     PYAUTOGUI_AVAILABLE = True
 except ImportError:
     PYAUTOGUI_AVAILABLE = False
@@ -182,12 +182,15 @@ class ComputerUseAdapter:
         return scaled_x, scaled_y
     
     def _create_scaled_pyautogui(self):
-        """创建缩放版本的pyautogui代理，基于博弈论的_ScaledPyAutoGUI实现"""
+        """创建缩放版本的pyautogui代理"""
         if not PYAUTOGUI_AVAILABLE:
             return None
         
         class _ScaledPyAutoGUI:
-            """轻量级代理，将逻辑坐标空间缩放到物理屏幕坐标"""
+            """
+            轻量级代理，将逻辑坐标空间缩放到物理屏幕坐标
+            支持多种坐标格式
+            """
             def __init__(self, backend, scale_x: float, scale_y: float):
                 self._backend = backend
                 self._scale_x = scale_x
@@ -198,11 +201,13 @@ class ComputerUseAdapter:
                 return getattr(self._backend, name)
 
             def _scale_xy_from_args(self, args, kwargs):
-                """从参数中缩放x,y坐标"""
+                """从参数中缩放x,y坐标，支持多种坐标格式"""
+                # 处理 (x, y) 格式
                 if len(args) >= 2 and isinstance(args[0], (int, float)) and isinstance(args[1], (int, float)):
                     x = int(round(args[0] * self._scale_x))
                     y = int(round(args[1] * self._scale_y))
                     args = (x, y) + tuple(args[2:])
+                # 处理 ((x, y),) 格式
                 elif len(args) >= 1 and isinstance(args[0], (tuple, list)) and len(args[0]) == 2:
                     x_raw, y_raw = args[0]
                     if isinstance(x_raw, (int, float)) and isinstance(y_raw, (int, float)):
@@ -210,14 +215,14 @@ class ComputerUseAdapter:
                         y = int(round(y_raw * self._scale_y))
                         args = ((x, y),) + tuple(args[1:])
                 else:
-                    # 尝试kwargs变体
+                    # 处理kwargs格式
                     if 'x' in kwargs and 'y' in kwargs and isinstance(kwargs['x'], (int, float)) and isinstance(kwargs['y'], (int, float)):
                         kwargs = dict(kwargs)
                         kwargs['x'] = int(round(kwargs['x'] * self._scale_x))
                         kwargs['y'] = int(round(kwargs['y'] * self._scale_y))
                 return args, kwargs
 
-            # 包装的绝对坐标鼠标API
+            # 包装的绝对坐标鼠标API - 自动坐标缩放
             def moveTo(self, *args, **kwargs):
                 args, kwargs = self._scale_xy_from_args(args, kwargs)
                 return self._backend.moveTo(*args, **kwargs)
@@ -237,6 +242,11 @@ class ComputerUseAdapter:
             def dragTo(self, *args, **kwargs):
                 args, kwargs = self._scale_xy_from_args(args, kwargs)
                 return self._backend.dragTo(*args, **kwargs)
+            
+            def scroll(self, *args, **kwargs):
+                """滚动操作也支持坐标缩放"""
+                args, kwargs = self._scale_xy_from_args(args, kwargs)
+                return self._backend.scroll(*args, **kwargs)
         
         return _ScaledPyAutoGUI(pyautogui, self.scale_x, self.scale_y)
     
@@ -369,7 +379,7 @@ class ComputerUseAdapter:
             }
     
     async def run_instruction(self, instruction: str, max_iterations: int = 15) -> Dict[str, Any]:
-        """执行自然语言指令，基于博弈论的run_instruction实现"""
+        """执行自然语言指令"""
         if not self.init_ok:
             return {"success": False, "error": "电脑控制适配器未初始化"}
         
@@ -409,7 +419,7 @@ class ComputerUseAdapter:
                 if "下一步" in code or "next" in code.lower():
                     continue
                 
-                # 执行代码（这里需要注入缩放后的pyautogui）
+                # 执行代码（注入缩放后的pyautogui）
                 try:
                     exec_env = globals().copy()
                     if PYAUTOGUI_AVAILABLE and hasattr(self, 'scale_x') and hasattr(self, 'scale_y'):
@@ -437,6 +447,86 @@ class ComputerUseAdapter:
         except Exception as e:
             logger.error(f"任务执行失败: {e}")
             return {"success": False, "error": str(e)}
+    
+    def normalize_coordinates(self, x: float, y: float, screen_width: int = None, screen_height: int = None) -> Tuple[int, int]:
+        """
+        坐标标准化
+        将任意坐标转换为0-1000范围的标准化坐标
+        """
+        if screen_width is None:
+            screen_width = self.screen_width
+        if screen_height is None:
+            screen_height = self.screen_height
+        
+        # 标准化到0-1000范围
+        normalized_x = int(round(x / screen_width * 1000))
+        normalized_y = int(round(y / screen_height * 1000))
+        
+        # 确保在有效范围内
+        normalized_x = max(0, min(1000, normalized_x))
+        normalized_y = max(0, min(1000, normalized_y))
+        
+        return normalized_x, normalized_y
+    
+    def denormalize_coordinates(self, normalized_x: int, normalized_y: int, 
+                               screen_width: int = None, screen_height: int = None) -> Tuple[int, int]:
+        """
+        反标准化坐标，将0-1000范围的坐标转换为实际像素坐标
+        坐标反标准化
+        """
+        if screen_width is None:
+            screen_width = self.screen_width
+        if screen_height is None:
+            screen_height = self.screen_height
+        
+        # 从标准化坐标转换为实际像素坐标
+        pixel_x = int(round(normalized_x / 1000.0 * screen_width))
+        pixel_y = int(round(normalized_y / 1000.0 * screen_height))
+        
+        return pixel_x, pixel_y
+    
+    async def click_with_ai_location(self, target_description: str, button: str = 'left') -> bool:
+        """
+        使用AI定位进行点击
+        支持自然语言描述目标元素
+        """
+        try:
+            # 获取屏幕截图
+            screenshot = await self.take_screenshot()
+            if not screenshot:
+                logger.error("无法获取屏幕截图")
+                return False
+            
+            # 使用AI定位元素
+            from .visual_analyzer import VisualAnalyzer
+            analyzer = VisualAnalyzer()
+            location = await analyzer.locate_element_with_ai(
+                target_description, 
+                screenshot, 
+                self.screen_width, 
+                self.screen_height
+            )
+            
+            if location:
+                x, y = location
+                return await self.click(x, y, button)
+            else:
+                logger.error(f"AI定位失败: {target_description}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"AI定位点击失败: {e}")
+            return False
+    
+    def get_coordinate_info(self) -> Dict[str, Any]:
+        """获取坐标系统信息"""
+        return {
+            "screen_size": f"{self.screen_width}x{self.screen_height}",
+            "scaled_size": f"{self.scaled_width}x{self.scaled_height}",
+            "scale_factors": f"x={self.scale_x:.2f}, y={self.scale_y:.2f}",
+            "normalization_range": "0-1000",
+            "platform": platform.system()
+        }
     
     def _parse_instruction(self, instruction: str) -> Optional[Dict[str, Any]]:
         """解析指令"""

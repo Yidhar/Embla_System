@@ -4,9 +4,9 @@
 """
 
 import os
-from PyQt5.QtWidgets import QWidget, QLabel, QProgressBar, QVBoxLayout, QHBoxLayout  # 直接依赖 #
-from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal  # 直接依赖 #
-from PyQt5.QtGui import QFont, QPixmap, QMovie  # 直接依赖 #
+from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget, QLabel, QProgressBar, QVBoxLayout, QHBoxLayout  # 统一入口 #
+from nagaagent_core.vendors.PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, pyqtSignal  # 统一入口 #
+from nagaagent_core.vendors.PyQt5.QtGui import QFont, QPixmap, QMovie  # 统一入口 #
 
 class ProgressWidget(QWidget):
     """进度显示组件"""
@@ -180,7 +180,7 @@ class EnhancedProgressWidget(ProgressWidget):
         
     def add_cancel_button(self):
         """添加取消按钮"""
-        from PyQt5.QtWidgets import QPushButton  # 直接依赖 #
+        from nagaagent_core.vendors.PyQt5.QtWidgets import QPushButton  # 统一入口 #
         
         # 在顶部布局添加取消按钮
         top_layout = self.layout().itemAt(0).layout()

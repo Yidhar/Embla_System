@@ -98,7 +98,7 @@ class ActionExecutor:
             })
     
     async def _execute_click(self, target: str, parameters: Dict[str, Any]) -> ActionResult:
-        """执行点击动作"""
+        """执行点击动作，支持多种坐标格式和AI定位"""
         try:
             if not self.computer_adapter:
                 return ActionResult(
@@ -107,13 +107,18 @@ class ActionExecutor:
                     error="适配器未初始化"
                 )
             
-            # 获取坐标
+            # 获取坐标，支持多种格式
             x = parameters.get("x")
             y = parameters.get("y")
             button = parameters.get("button", "left")
             
-            if x is None or y is None:
-                # 需要先定位元素
+            # 处理坐标格式
+            if x is not None and y is not None:
+                # 直接坐标
+                x, y = self._parse_coordinates(x, y)
+            elif isinstance(target, str) and (target.startswith(('点击', 'click', 'Click')) or 
+                                           any(keyword in target.lower() for keyword in ['按钮', 'button', '图标', 'icon'])):
+                # 尝试AI定位
                 if self.visual_analyzer:
                     screenshot = await self.computer_adapter.take_screenshot()
                     location = await self.visual_analyzer.locate_element(target, screenshot)
@@ -122,8 +127,8 @@ class ActionExecutor:
                     else:
                         return ActionResult(
                             success=False,
-                            message=f"无法定位目标: {target}",
-                            error="元素定位失败"
+                            message=f"AI定位失败: {target}",
+                            error="AI定位失败"
                         )
                 else:
                     return ActionResult(
@@ -131,6 +136,12 @@ class ActionExecutor:
                         message="需要坐标或视觉分析器",
                         error="缺少必要参数"
                     )
+            else:
+                return ActionResult(
+                    success=False,
+                    message="缺少坐标参数",
+                    error="缺少坐标参数"
+                )
             
             # 执行点击
             success = await self.computer_adapter.click(x, y, button)
@@ -139,7 +150,7 @@ class ActionExecutor:
                 return ActionResult(
                     success=True,
                     message=f"成功点击: ({x}, {y})",
-                    data={"x": x, "y": y, "button": button}
+                    data={"x": x, "y": y, "button": button, "target": target}
                 )
             else:
                 return ActionResult(
@@ -154,6 +165,29 @@ class ActionExecutor:
                 message=f"点击执行失败: {str(e)}",
                 error=str(e)
             )
+    
+    def _parse_coordinates(self, x, y) -> Tuple[int, int]:
+        """解析坐标，支持多种格式"""
+        try:
+            # 处理字符串坐标
+            if isinstance(x, str):
+                x = float(x)
+            if isinstance(y, str):
+                y = float(y)
+            
+            # 处理元组/列表坐标
+            if isinstance(x, (tuple, list)) and len(x) == 2:
+                x, y = x[0], x[1]
+            
+            # 转换为整数
+            x = int(round(float(x)))
+            y = int(round(float(y)))
+            
+            return x, y
+            
+        except Exception as e:
+            logger.error(f"坐标解析失败: {e}")
+            return 0, 0
     
     async def _execute_type(self, target: str, parameters: Dict[str, Any]) -> ActionResult:
         """执行输入动作"""

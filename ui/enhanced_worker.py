@@ -5,7 +5,7 @@
 
 import asyncio
 import time
-from PyQt5.QtCore import QThread, pyqtSignal  # 直接依赖 #
+from nagaagent_core.vendors.PyQt5.QtCore import QThread, pyqtSignal  # 统一入口 #
 from ui.response_utils import extract_message
 from system.config import config, AI_NAME  # 导入配置模块
 

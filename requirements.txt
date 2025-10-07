@@ -1,65 +1,8 @@
-# 核心依赖 (已整合到nagaagent-core==1.0.1)
-nagaagent-core==1.0.5
+# Because of gbk encoding error, the comments are changed to English.
+# recommend to use python 3.11
 
-# GRAG知识图谱相关依赖
-py2neo>=2021.2.3
-pyvis>=0.3.2
-matplotlib>=3.10.0
-neo4j
+# Core dependency (integrated into nagaagent-core)
+nagaagent-core>=1.0.6
 
-# 网络通信相关依赖
-# uvicorn[standard]>=0.34.0  # 已通过 nagaagent_core.api 转发使用 #
-librosa
-accelerate
-torch
- 
-# AI机器学习相关依赖（已迁移到 nagaagent-core==1.0.1，避免本地编译问题）
-
-# 数据处理相关依赖
-# pydantic>=2.11.3  # 已通过 nagaagent_core.vendors.pydantic 提供 #
-# httpx>=0.28.1     # 已通过 nagaagent_core.vendors.httpx 提供 #
- 
-# GUI界面相关依赖（显式安装，避免首次运行缺失）
-PyQt5>=5.15.10  # Qt GUI #
-
-# 系统控制可选依赖（音量/亮度）
-pycaw>=20240210  # 音量控制（Windows） #
-comtypes>=1.2.0  # COM支持（Windows） #
-screen-brightness-control>=0.21.0  # 屏幕亮度控制（可选） #
-
-# 音频处理相关依赖
-sounddevice>=0.4.6
-pyaudio>=0.2.14
-edge-tts>=7.0.2
-emoji>=2.8.0
-pygame>=2.5.0  # 音频播放支持 #
-
-# 系统托盘相关依赖（部分迁移到 nagaagent-core==1.0.1）
-pystray>=0.19.4  # 仅安装脚本与托盘文档涉及 #
-
-# MCP工具相关依赖
-jmcomic>=2.6.5
-fastmcp>=2.11.2
-
-# MQTT通信相关依赖
-paho-mqtt>=2.0.0
-
-# 其他工具依赖
-tiktoken
-python-docx>=1.2.0
-onnxruntime
-
-# Live2D相关依赖
-live2d-py>=0.5.4
-pyopengl>=3.1.10
-toml>=0.10.2
-opensimplex>=0.4.5.1
-
-# 搜索工具依赖（crawl4ai 需要编译依赖 madoka，Windows/py3.13 下可能失败，先标记为可选）
-langchain-community>=0.3.29
-langchain-openai>=0.2.0  # OpenAI集成 #
-# crawl4ai  # 可选：需要安装 Microsoft C++ Build Tools 后再启用 #
- 
-# 可选Agent所需依赖（按需内置，避免运行时缺包）
-playwright>=1.52.0  # 浏览器自动化Agent #
-bilibili-api-python  # Bilibili 视频Agent #
+# All other runtime dependencies have been migrated into nagaagent-core.
+# If you need to pin extra versions locally, append them below.

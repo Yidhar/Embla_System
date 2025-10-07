@@ -1,13 +1,16 @@
 """
 视觉分析器 - 基于博弈论的视觉识别功能
-提供OCR、图像匹配、元素定位等功能
+提供OCR、图像匹配、元素定位、AI坐标定位等功能
+AI坐标定位算法升级
 """
 
 import logging
 from typing import Dict, Any, Optional, Tuple, List
-from PIL import Image
+from nagaagent_core.vendors.pil import Image
 import io
 import base64
+import re
+import json
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -19,10 +22,11 @@ class VisualAnalyzer:
         """初始化视觉分析器"""
         self.ocr_available = False
         self.image_matching_available = False
+        self.ai_coordinate_available = False
         
         # 尝试导入OCR库
         try:
-            import pytesseract
+            import nagaagent_core.vendors.pytesseract as pytesseract
             self.ocr_available = True
             logger.info("OCR功能已启用")
         except ImportError:
@@ -30,7 +34,7 @@ class VisualAnalyzer:
         
         # 尝试导入图像匹配库
         try:
-            import cv2
+            import nagaagent_core.vendors.cv2 as cv2
             import numpy as np
             self.cv2 = cv2
             self.np = np
@@ -38,6 +42,14 @@ class VisualAnalyzer:
             logger.info("图像匹配功能已启用")
         except ImportError:
             logger.warning("opencv-python未安装，图像匹配功能不可用")
+        
+        # 尝试导入AI坐标定位库
+        try:
+            from langchain_openai import ChatOpenAI
+            self.ai_coordinate_available = True
+            logger.info("AI坐标定位功能已启用")
+        except ImportError:
+            logger.warning("langchain-openai未安装，AI坐标定位功能不可用")
     
     async def analyze_screenshot(self, screenshot: bytes) -> Dict[str, Any]:
         """分析屏幕截图"""
@@ -80,7 +92,7 @@ class VisualAnalyzer:
             return []
         
         try:
-            import pytesseract
+            import nagaagent_core.vendors.pytesseract as pytesseract
             
             # 使用OCR提取文本和位置信息
             data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
@@ -214,10 +226,164 @@ class VisualAnalyzer:
                 "height": 0
             }
     
+    async def locate_element_with_ai(self, target_description: str, screenshot: bytes, 
+                                   screen_width: int = 1920, screen_height: int = 1080) -> Optional[Tuple[int, int]]:
+        """
+        使用AI定位屏幕元素
+        支持自然语言描述定位界面元素
+        """
+        if not self.ai_coordinate_available:
+            logger.warning("AI坐标定位功能不可用")
+            return None
+        
+        try:
+            from langchain_openai import ChatOpenAI
+            from config import OPENROUTER_API_KEY, OPENROUTER_URL, SUMMARY_MODEL
+            
+            # 初始化LLM
+            llm = ChatOpenAI(
+                model=SUMMARY_MODEL,
+                base_url=OPENROUTER_URL,
+                api_key=OPENROUTER_API_KEY,
+                temperature=0
+            )
+            
+            # 将截图转换为base64
+            screenshot_b64 = base64.b64encode(screenshot).decode('utf-8')
+            
+            # 构建AI定位提示词
+            prompt = f"""
+            请分析屏幕截图并定位目标元素: "{target_description}"
+            
+            请按以下格式输出坐标：
+            1. 如果可能，输出边界框 [x1, y1, x2, y2]，坐标范围0-1000
+            2. 如果边界框不合适，输出精确坐标 x,y
+            3. 不要包含任何解释文字，只输出坐标
+            
+            屏幕尺寸: {screen_width}x{screen_height}
+            """
+            
+            # 调用AI模型进行坐标定位
+            response = llm.invoke([
+                {
+                    "role": "user", 
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot_b64}"}}
+                    ]
+                }
+            ])
+            
+            # 解析AI返回的坐标
+            coordinates = self._parse_ai_coordinates(response.content, screen_width, screen_height)
+            
+            if coordinates:
+                logger.info(f"AI定位成功: {target_description} -> {coordinates}")
+                return coordinates
+            else:
+                logger.warning(f"AI定位失败: {target_description}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"AI坐标定位失败: {e}")
+            return None
+    
+    def _parse_ai_coordinates(self, response: str, screen_width: int, screen_height: int) -> Optional[Tuple[int, int]]:
+        """
+        解析AI返回的坐标
+        支持边界框和精确坐标两种格式
+        """
+        try:
+            # 清理响应文本
+            response = response.strip()
+            
+            # 尝试解析边界框格式 [x1, y1, x2, y2]
+            bbox_match = re.search(r'\[([0-9.,\s]+)\]', response)
+            if bbox_match:
+                coords_str = bbox_match.group(1)
+                numbers = re.findall(r'-?\d+\.?\d*', coords_str)
+                if len(numbers) >= 4:
+                    x1, y1, x2, y2 = [float(n) for n in numbers[:4]]
+                    # 检查是否在0-1000范围内（标准化坐标）
+                    if max(x1, y1, x2, y2) <= 1000:
+                        # 计算中心点并转换为实际像素坐标
+                        center_x = (x1 + x2) / 2.0
+                        center_y = (y1 + y2) / 2.0
+                        pixel_x = int(round(center_x / 1000.0 * screen_width))
+                        pixel_y = int(round(center_y / 1000.0 * screen_height))
+                        return (pixel_x, pixel_y)
+                    else:
+                        # 直接使用像素坐标
+                        center_x = (x1 + x2) / 2
+                        center_y = (y1 + y2) / 2
+                        return (int(center_x), int(center_y))
+            
+            # 尝试解析精确坐标格式 x,y
+            coord_match = re.search(r'(\d+\.?\d*)\s*,\s*(\d+\.?\d*)', response)
+            if coord_match:
+                x, y = float(coord_match.group(1)), float(coord_match.group(2))
+                # 检查是否在0-1000范围内（标准化坐标）
+                if x <= 1000 and y <= 1000:
+                    pixel_x = int(round(x / 1000.0 * screen_width))
+                    pixel_y = int(round(y / 1000.0 * screen_height))
+                    return (pixel_x, pixel_y)
+                else:
+                    # 直接使用像素坐标
+                    return (int(x), int(y))
+            
+            # 尝试解析数字列表
+            numbers = [int(float(x)) for x in re.findall(r'-?\d+\.?\d*', response)]
+            if len(numbers) >= 2:
+                x, y = numbers[0], numbers[1]
+                if x <= 1000 and y <= 1000:
+                    pixel_x = int(round(x / 1000.0 * screen_width))
+                    pixel_y = int(round(y / 1000.0 * screen_height))
+                    return (pixel_x, pixel_y)
+                else:
+                    return (x, y)
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"坐标解析失败: {e}")
+            return None
+    
+    async def locate_element(self, target: str, screenshot: bytes) -> Optional[Tuple[int, int]]:
+        """
+        智能元素定位，优先使用AI定位，回退到传统方法
+        多层次定位策略
+        """
+        try:
+            # 首先尝试AI定位
+            if self.ai_coordinate_available:
+                ai_result = await self.locate_element_with_ai(target, screenshot)
+                if ai_result:
+                    return ai_result
+            
+            # 回退到文本定位
+            if self.ocr_available:
+                text_result = await self.find_text_element(screenshot, target)
+                if text_result:
+                    return text_result
+            
+            # 回退到图像匹配（如果target是图像路径）
+            if self.image_matching_available and target.endswith(('.png', '.jpg', '.jpeg')):
+                image_result = await self.find_image_element(screenshot, target)
+                if image_result:
+                    return image_result
+            
+            logger.warning(f"无法定位元素: {target}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"元素定位失败: {e}")
+            return None
+    
     def is_available(self) -> Dict[str, Any]:
         """检查视觉分析器可用性"""
         return {
             "ocr_available": self.ocr_available,
             "image_matching_available": self.image_matching_available,
-            "ready": self.ocr_available or self.image_matching_available
+            "ai_coordinate_available": self.ai_coordinate_available,
+            "ready": self.ocr_available or self.image_matching_available or self.ai_coordinate_available
         }

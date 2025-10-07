@@ -264,7 +264,8 @@ async def chat(request: ChatRequest):
         pure_text_content = [""]  # 使用列表引用，便于在回调中修改
         
         # 调用LLM API - 流式模式
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=120, connect=30, sock_read=60)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             
             async with session.post(
                 f"{config.api.base_url}/chat/completions",
@@ -405,13 +406,31 @@ async def chat_stream(request: ChatRequest):
             async def call_llm_stream(messages: List[Dict]) -> AsyncGenerator[str, None]:
                 """调用LLM API - 流式模式"""
                 nonlocal complete_text  # V19: 声明使用外层函数的变量
-                async with aiohttp.ClientSession() as session:
-                    
+
+                # 增加超时配置
+                timeout = aiohttp.ClientTimeout(
+                    total=180,  # 总超时时间增加到3分钟
+                    connect=60,  # 连接超时60秒
+                    sock_read=120  # 读取超时120秒
+                )
+
+                # 配置连接器以处理长连接
+                connector = aiohttp.TCPConnector(
+                    force_close=False,
+                    keepalive_timeout=120,
+                    enable_cleanup_closed=True
+                )
+
+                async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                    logger.info(f"[API Server] 开始流式调用LLM: {config.api.base_url}")
+
                     async with session.post(
                         f"{config.api.base_url}/chat/completions",
                         headers={
                             "Authorization": f"Bearer {config.api.api_key}",
-                            "Content-Type": "application/json"
+                            "Content-Type": "application/json",
+                            "Accept": "text/event-stream",
+                            "Connection": "keep-alive"
                         },
                         json={
                             "model": config.api.model,
@@ -432,37 +451,66 @@ async def chat_stream(request: ChatRequest):
                             elif resp.status >= 500:
                                 error_detail = f"LLM API服务器错误 (状态码: {resp.status})"
                             raise HTTPException(status_code=resp.status, detail=error_detail)
-                        
-                        # 处理流式响应
-                        async for line in resp.content:
-                            line_str = line.decode('utf-8').strip()
-                            if line_str.startswith('data: '):
-                                data_str = line_str[6:]
-                                if data_str == '[DONE]':
+
+                        logger.info(f"[API Server] LLM流式响应开始，状态码: {resp.status}")
+
+                        # 处理流式响应，增加错误恢复机制
+                        buffer = ""
+                        try:
+                            async for chunk in resp.content.iter_chunked(1024):  # 使用固定大小的块
+                                if not chunk:
                                     break
+
                                 try:
-                                    data = json.loads(data_str)
-                                    if 'choices' in data and len(data['choices']) > 0:
-                                        delta = data['choices'][0].get('delta', {})
-                                        if 'content' in delta:
-                                            content = delta['content']
-                                            # 直接将增量内容推送给前端用于消息渲染
-                                            yield f"data: {content}\n\n"
+                                    # 解码并处理数据
+                                    data = chunk.decode('utf-8')
+                                    buffer += data
 
-                                            # V19: 如果需要返回音频，累积文本
-                                            if request.return_audio:
-                                                complete_text += content
+                                    # 按行分割处理
+                                    lines = buffer.split('\n')
+                                    buffer = lines[-1]  # 保留最后一个可能不完整的行
 
-                                            # 发送到流式文本切割器进行文本处理
-                                            # 修复：始终发送到tool_extractor以累积完整文本
-                                            if tool_extractor:
-                                                try:
-                                                    await tool_extractor.process_text_chunk(content)
-                                                except Exception as e:
-                                                    print(f"流式文本切割器处理错误: {e}")
-                                            
-                                except json.JSONDecodeError:
+                                    for line in lines[:-1]:
+                                        line_str = line.strip()
+                                        if line_str.startswith('data: '):
+                                            data_str = line_str[6:]
+                                            if data_str == '[DONE]':
+                                                break
+                                            try:
+                                                data = json.loads(data_str)
+                                                if 'choices' in data and len(data['choices']) > 0:
+                                                    delta = data['choices'][0].get('delta', {})
+                                                    if 'content' in delta:
+                                                        content = delta['content']
+                                                        # 直接将增量内容推送给前端用于消息渲染
+                                                        yield f"data: {content}\n\n"
+
+                                                        # V19: 如果需要返回音频，累积文本
+                                                        if request.return_audio:
+                                                            complete_text += content
+
+                                                        # 发送到流式文本切割器进行文本处理
+                                                        # 修复：始终发送到tool_extractor以累积完整文本
+                                                        if tool_extractor:
+                                                            try:
+                                                                await tool_extractor.process_text_chunk(content)
+                                                            except Exception as e:
+                                                                logger.error(f"[API Server] 流式文本切割器处理错误: {e}")
+
+                                            except json.JSONDecodeError as je:
+                                                logger.warning(f"[API Server] JSON解析错误: {je}, 数据: {data_str[:100]}")
+                                                continue
+
+                                except UnicodeDecodeError as ue:
+                                    logger.warning(f"[API Server] 解码错误: {ue}")
                                     continue
+
+                        except asyncio.CancelledError:
+                            logger.info("[API Server] 流式响应被取消")
+                            raise
+                        except Exception as e:
+                            logger.error(f"[API Server] 流式响应处理错误: {e}")
+                            # 不抛出异常，继续处理
             
             # 处理流式响应
             async for chunk in call_llm_stream(messages):
@@ -553,11 +601,14 @@ async def chat_stream(request: ChatRequest):
     
     return StreamingResponse(
         generate_response(),
-        media_type="text/plain",
+        media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "Content-Type": "text/event-stream"
+            "Content-Type": "text/event-stream",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "X-Accel-Buffering": "no"  # 禁用nginx缓冲
         }
     )
 

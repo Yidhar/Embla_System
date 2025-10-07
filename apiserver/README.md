@@ -161,7 +161,7 @@ python apiserver/start_server.py api
 ### 直接使用uvicorn
 ```bash
 # API服务器
-uvicorn apiserver.api_server:app --host 127.0.0.1 --port 8000 --reload
+uvicorn apiserver.api_server:app --host 127.0.0.1 --port ${API_SERVER_PORT:-8000} --reload
 
 # LLM服务
 uvicorn apiserver.llm_service:llm_app --host 127.0.0.1 --port 8001 --reload
@@ -174,16 +174,22 @@ uvicorn apiserver.llm_service:llm_app --host 127.0.0.1 --port 8001 --reload
 ```python
 import requests
 import json
+import os
+
+# 从环境变量获取端口，默认8000
+api_port = os.getenv("API_SERVER_PORT", "8000")
+api_host = os.getenv("API_SERVER_HOST", "127.0.0.1")
+api_base = f"http://{api_host}:{api_port}"
 
 # 普通对话
-response = requests.post("http://127.0.0.1:8000/chat", json={
+response = requests.post(f"{api_base}/chat", json={
     "message": "你好，请帮我查询今天的天气",
     "stream": False
 })
 print(response.json())
 
 # 流式对话
-response = requests.post("http://127.0.0.1:8000/chat/stream", json={
+response = requests.post(f"{api_base}/chat/stream", json={
     "message": "请帮我分析这张图片",
     "stream": True
 }, stream=True)
@@ -207,11 +213,11 @@ import requests
 # 上传文档
 with open("document.docx", "rb") as f:
     files = {"file": f}
-    response = requests.post("http://127.0.0.1:8000/upload/document", files=files)
+    response = requests.post(f"{api_base}/upload/document", files=files)
     print(response.json())
 
 # 处理文档
-response = requests.post("http://127.0.0.1:8000/document/process", json={
+response = requests.post(f"{api_base}/document/process", json={
     "file_path": "uploaded_documents/1234567890_document.docx",
     "action": "analyze"
 })
@@ -318,5 +324,5 @@ print(response.json())
 
 如果你使用了代理服务器，测试本地API时需要绕过代理：
 ```bash
-NO_PROXY="127.0.0.1,localhost" curl -X GET "http://127.0.0.1:8000/health"
+NO_PROXY="127.0.0.1,localhost" curl -X GET "http://127.0.0.1:${API_SERVER_PORT:-8000}/health"
 ``` 

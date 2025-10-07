@@ -131,7 +131,7 @@ mqtt_config = load_mqtt_config()
 # 只有在MQTT配置存在且启用时才导入MQTT相关模块
 if mqtt_config:
     try:
-        import paho.mqtt.client as mqtt
+        import nagaagent_core.vendors.paho_mqtt as mqtt
         MQTT_AVAILABLE = True
     except ImportError:
         logger.warning("paho-mqtt库未安装，物联网通讯功能不可用")

@@ -15,7 +15,11 @@ logger = logging.getLogger("LLMAdapter")
 class LLMAdapter:
     """LLM适配器 - 为game模块提供LLM调用接口"""
     
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = None):
+        # 如果没有提供base_url，从配置中读取
+        if base_url is None:
+            from system.config import config
+            base_url = f"http://{config.api_server.host}:{config.api_server.port}"
         self.base_url = base_url.rstrip('/')
         self.session: Optional[aiohttp.ClientSession] = None
     

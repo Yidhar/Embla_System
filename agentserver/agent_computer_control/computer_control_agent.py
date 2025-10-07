@@ -41,14 +41,20 @@ class ComputerControlAgent:
             # 根据动作类型处理
             if action == "click":
                 return await self._handle_click(target, parameters)
+            elif action == "click_ai":
+                return await self._handle_click_ai(target, parameters)
             elif action == "type":
                 return await self._handle_type(target, parameters)
             elif action == "screenshot":
                 return await self._handle_screenshot(target, parameters)
             elif action == "find_element":
                 return await self._handle_find_element(target, parameters)
+            elif action == "locate_ai":
+                return await self._handle_locate_ai(target, parameters)
             elif action == "automate_task":
                 return await self._handle_automate_task(target, parameters)
+            elif action == "coordinate_info":
+                return await self._handle_coordinate_info(target, parameters)
             else:
                 return await self._handle_generic_task(action, target, parameters)
                 
@@ -61,30 +67,51 @@ class ComputerControlAgent:
             }, ensure_ascii=False)
     
     async def _handle_click(self, target: str, parameters: Dict[str, Any]) -> str:
-        """处理点击任务"""
+        """处理点击任务，支持AI定位和多种坐标格式"""
         try:
-            # 构建点击动作
-            action = {
-                "action": "click",
-                "target": target,
-                "parameters": parameters
-            }
+            # 检查是否使用AI定位
+            use_ai_location = parameters.get("use_ai", False)
+            ai_description = parameters.get("ai_description", target)
             
-            # 执行点击
-            result = await self.executor.execute_action(action)
-            
-            if result.success:
-                return json.dumps({
-                    "success": True,
-                    "message": f"成功点击: {target}",
-                    "data": result.data
-                }, ensure_ascii=False)
+            if use_ai_location and ai_description:
+                # 使用AI定位进行点击
+                success = await self.adapter.click_with_ai_location(ai_description, parameters.get("button", "left"))
+                
+                if success:
+                    return json.dumps({
+                        "success": True,
+                        "message": f"AI定位点击成功: {ai_description}",
+                        "data": {"method": "ai_location", "target": ai_description}
+                    }, ensure_ascii=False)
+                else:
+                    return json.dumps({
+                        "success": False,
+                        "error": "AI定位失败",
+                        "message": f"AI定位点击失败: {ai_description}"
+                    }, ensure_ascii=False)
             else:
-                return json.dumps({
-                    "success": False,
-                    "error": result.error,
-                    "message": result.message
-                }, ensure_ascii=False)
+                # 使用传统方式执行点击
+                action = {
+                    "action": "click",
+                    "target": target,
+                    "parameters": parameters
+                }
+                
+                # 执行点击
+                result = await self.executor.execute_action(action)
+                
+                if result.success:
+                    return json.dumps({
+                        "success": True,
+                        "message": f"成功点击: {target}",
+                        "data": result.data
+                    }, ensure_ascii=False)
+                else:
+                    return json.dumps({
+                        "success": False,
+                        "error": result.error,
+                        "message": result.message
+                    }, ensure_ascii=False)
                 
         except Exception as e:
             return json.dumps({
@@ -263,11 +290,101 @@ class ComputerControlAgent:
             ]
         }
     
+    async def _handle_click_ai(self, target: str, parameters: Dict[str, Any]) -> str:
+        """处理AI定位点击任务"""
+        try:
+            # 使用AI定位进行点击
+            success = await self.adapter.click_with_ai_location(target, parameters.get("button", "left"))
+            
+            if success:
+                return json.dumps({
+                    "success": True,
+                    "message": f"AI定位点击成功: {target}",
+                    "data": {"method": "ai_location", "target": target}
+                }, ensure_ascii=False)
+            else:
+                return json.dumps({
+                    "success": False,
+                    "error": "AI定位失败",
+                    "message": f"AI定位点击失败: {target}"
+                }, ensure_ascii=False)
+                
+        except Exception as e:
+            return json.dumps({
+                "success": False,
+                "error": str(e),
+                "message": f"AI定位点击失败: {str(e)}"
+            }, ensure_ascii=False)
+    
+    async def _handle_locate_ai(self, target: str, parameters: Dict[str, Any]) -> str:
+        """处理AI定位任务"""
+        try:
+            # 获取屏幕截图
+            screenshot = await self.adapter.take_screenshot()
+            if not screenshot:
+                return json.dumps({
+                    "success": False,
+                    "error": "截图失败",
+                    "message": "无法获取屏幕截图"
+                }, ensure_ascii=False)
+            
+            # 使用AI定位元素
+            location = await self.analyzer.locate_element_with_ai(
+                target, 
+                screenshot, 
+                self.adapter.screen_width, 
+                self.adapter.screen_height
+            )
+            
+            if location:
+                x, y = location
+                return json.dumps({
+                    "success": True,
+                    "message": f"AI定位成功: {target}",
+                    "data": {
+                        "target": target,
+                        "coordinates": {"x": x, "y": y},
+                        "method": "ai_location"
+                    }
+                }, ensure_ascii=False)
+            else:
+                return json.dumps({
+                    "success": False,
+                    "error": "AI定位失败",
+                    "message": f"无法定位元素: {target}"
+                }, ensure_ascii=False)
+                
+        except Exception as e:
+            return json.dumps({
+                "success": False,
+                "error": str(e),
+                "message": f"AI定位失败: {str(e)}"
+            }, ensure_ascii=False)
+    
+    async def _handle_coordinate_info(self, target: str, parameters: Dict[str, Any]) -> str:
+        """处理坐标系统信息查询"""
+        try:
+            # 获取坐标系统信息
+            coordinate_info = self.adapter.get_coordinate_info()
+            
+            return json.dumps({
+                "success": True,
+                "message": "坐标系统信息获取成功",
+                "data": coordinate_info
+            }, ensure_ascii=False)
+            
+        except Exception as e:
+            return json.dumps({
+                "success": False,
+                "error": str(e),
+                "message": f"获取坐标系统信息失败: {str(e)}"
+            }, ensure_ascii=False)
+    
     def get_status(self) -> Dict[str, Any]:
         """获取电脑控制状态"""
         return {
             "agent_name": "ComputerControlAgent",
-            "version": "1.0.0",
+            "version": "2.0.0",  # 升级版本号
             "status": "running",
             "capabilities": self.get_capabilities(),
             "components": {
@@ -275,5 +392,11 @@ class ComputerControlAgent:
                 "analyzer": "VisualAnalyzer", 
                 "planner": "TaskPlanner",
                 "executor": "ActionExecutor"
-            }
+            },
+            "upgrades": [
+                "AI坐标定位",
+                "坐标标准化系统",
+                "多格式坐标支持",
+                "智能元素定位"
+            ]
         }

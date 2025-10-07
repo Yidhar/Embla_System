@@ -25,6 +25,28 @@
 - 负责任务执行调度
 - 管理任务生命周期
 - 支持并发任务执行
+  
+使用示例：
+
+```python
+from agentserver.task_scheduler import get_task_scheduler
+
+task_scheduler = get_task_scheduler()
+
+# 创建并行任务列表（示例）
+tasks = [
+    {"type": "processor", "params": {"query": "示例任务A"}},
+    {"type": "processor", "params": {"query": "示例任务B"}},
+]
+
+# 并行执行
+results = await task_scheduler.schedule_parallel_execution(tasks)
+
+# 查询统计
+total = len(task_scheduler.task_registry)
+running = len([t for t in task_scheduler.task_registry.values() if t.get("status") == "running"])
+queued = len([t for t in task_scheduler.task_registry.values() if t.get("status") == "queued"])
+```
 
 #### 4. Task Deduper (`task_deduper.py`)
 - 基于LLM的任务重复检测
@@ -125,3 +147,4 @@ async def _call_agent_server_analyze(self, messages, session_id):
 ## 更新记录
 
 - 2025-09-30: 修复导入路径，将 `apiserver.task_scheduler` 更正为 `agentserver.task_scheduler`（影响 `core/agent_manager.py` 与 `core/multi_agent_coordinator.py`），避免导入解析失败。
+- 2025-10-06: 新增 `agentserver/task_scheduler.py` 轻量实现与用法示例，并在 `agentserver/agent_manager.py` 统一更正注释为“通过agentserver处理”。

@@ -271,7 +271,8 @@
 
     <script>
         let currentFilePath = null;
-        const API_BASE = 'http://localhost:8000';
+        // API基础URL会自动匹配当前访问的地址和端口
+        const API_BASE = window.location.protocol + '//' + window.location.host;
 
         // 初始化
         document.addEventListener('DOMContentLoaded', function() {

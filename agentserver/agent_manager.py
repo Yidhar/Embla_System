@@ -60,7 +60,7 @@ class AgentManager:
         self.agents: Dict[str, AgentConfig] = {}
         self.agent_sessions: Dict[str, Dict[str, AgentSession]] = {}
         
-        # 任务规划相关 - 现在通过apiserver的task_scheduler处理
+        # 任务规划相关 - 现在通过agentserver的task_scheduler处理
         # self.task_planner = None  # 删除重复功能
         # self.task_executor = None  # 删除重复功能
         
@@ -91,7 +91,7 @@ class AgentManager:
             # 没有运行的事件循环，跳过定期清理任务
             pass
         
-        # 任务规划器现在通过apiserver的task_scheduler处理
+        # 任务规划器现在通过agentserver的task_scheduler处理
         # self._init_task_planner()  # 删除重复功能
         
         logger.info(f"AgentManager初始化完成，已加载 {len(self.agents)} 个Agent")
@@ -566,12 +566,12 @@ class AgentManager:
             return f"请执行动作 '{action}'"
     
     # 删除重复的任务规划器初始化方法
-    # 现在通过apiserver的task_scheduler处理任务规划
+    # 现在通过agentserver的task_scheduler处理任务规划
     
     async def process_intelligent_task(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        智能任务处理 - 核心方法，通过apiserver的task_scheduler处理
-        
+        智能任务处理 - 核心方法，通过agentserver的task_scheduler处理
+
         Args:
             query: 用户查询
             context: 上下文信息
@@ -651,15 +651,15 @@ def get_agent_info(agent_name: str) -> Optional[Dict[str, Any]]:
     manager = get_agent_manager()
     return manager.get_agent_info(agent_name)
 
-# 智能任务处理函数 - 通过apiserver处理
+# 智能任务处理函数 - 通过agentserver处理
 async def process_intelligent_task(query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """便捷的智能任务处理函数 - 通过apiserver的task_scheduler处理"""
+    """便捷的智能任务处理函数 - 通过agentserver的task_scheduler处理"""
     manager = get_agent_manager()
     return await manager.process_intelligent_task(query, context)
 
-# 任务管理函数 - 通过apiserver的task_scheduler处理
+# 任务管理函数 - 通过agentserver的task_scheduler处理
 async def get_task_status(task_id: str) -> Optional[Dict[str, Any]]:
-    """便捷的任务状态获取函数 - 通过apiserver处理"""
+    """便捷的任务状态获取函数 - 通过agentserver处理"""
     try:
         from agentserver.task_scheduler import get_task_scheduler
         task_scheduler = get_task_scheduler()
@@ -669,7 +669,7 @@ async def get_task_status(task_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 async def get_task_list(status_filter: Optional[str] = None) -> List[Dict[str, Any]]:
-    """便捷的任务列表获取函数 - 通过apiserver处理"""
+    """便捷的任务列表获取函数 - 通过agentserver处理"""
     try:
         from agentserver.task_scheduler import get_task_scheduler
         task_scheduler = get_task_scheduler()
@@ -679,7 +679,7 @@ async def get_task_list(status_filter: Optional[str] = None) -> List[Dict[str, A
         return []
 
 async def get_execution_stats() -> Dict[str, Any]:
-    """便捷的执行统计获取函数 - 通过apiserver处理"""
+    """便捷的执行统计获取函数 - 通过agentserver处理"""
     try:
         from agentserver.task_scheduler import get_task_scheduler
         task_scheduler = get_task_scheduler()
@@ -693,7 +693,7 @@ async def get_execution_stats() -> Dict[str, Any]:
         return {}
 
 async def cancel_task(task_id: str) -> bool:
-    """便捷的任务取消函数 - 通过apiserver处理"""
+    """便捷的任务取消函数 - 通过agentserver处理"""
     try:
         from agentserver.task_scheduler import get_task_scheduler
         task_scheduler = get_task_scheduler()

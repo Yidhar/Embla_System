@@ -3,7 +3,7 @@
 提供统一的按钮创建接口
 """
 
-from PyQt5.QtWidgets import QPushButton  # 直接依赖 #
+from nagaagent_core.vendors.PyQt5.QtWidgets import QPushButton  # 统一入口 #
 from .button_styles import BUTTON_CONFIGS, DOCUMENT_ACTION_BUTTON_STYLE, CANCEL_BUTTON_STYLE
 
 

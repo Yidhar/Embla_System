@@ -49,6 +49,36 @@
 
 ### 🔧 一键安装
 
+#### 📦 依赖管理工具
+
+NagaAgent 4.0 提供了强大的依赖管理工具，支持：
+
+- **🔍 自动扫描**: 扫描项目所有依赖文件，包括主依赖和各子模块依赖
+- **📊 依赖分析**: 按类别组织依赖（核心、GUI、语音、AI、网络、系统控制等）
+- **✅ 状态检测**: 自动检测已安装和缺失的依赖
+- **🛠️ 一键安装**: 生成PowerShell安装脚本和合并的requirements文件
+- **⚠️ 冲突检测**: 检测依赖版本冲突和兼容性问题
+
+**使用方法：**
+```bash
+# 运行依赖管理工具
+python dependency_manager.py
+
+# 查看依赖状态
+python dependency_manager.py --check
+
+# 生成安装脚本
+python dependency_manager.py --generate-script
+
+# 验证依赖安装
+python dependency_manager.py --validate
+```
+
+**生成的文件：**
+- `install_dependencies.ps1` - PowerShell一键安装脚本
+- `requirements_merged.txt` - 合并的依赖文件
+- `requirements_clean.txt` - 清理后的依赖文件
+
 <details>
 <summary><strong>Windows 用户</strong></summary>
 
@@ -57,7 +87,10 @@
 git clone https://github.com/Xxiii8322766509/NagaAgent.git
 cd NagaAgent
 
-# 一键配置
+# 使用依赖管理工具
+python dependency_manager.py
+
+# 或使用一键配置
 .\setup.ps1
 ```
 </details>
@@ -516,6 +549,23 @@ ui/live2d/
      - 电脑控制、能力刷新、任务列表与状态查询等（基于博弈论的调度器）
    - 关键接口（示例）：`/tasks`、`/tasks/{id}`、`/capabilities`、`/mcp/availability`、`/computer-use/*`
    - 相关实现：`agentserver/agent_server.py`、`agentserver/task_scheduler.py`
+   - 任务调度器用法示例：
+     ```python
+     from agentserver.task_scheduler import get_task_scheduler
+
+     scheduler = get_task_scheduler()
+     tasks = [
+         {"type": "processor", "params": {"query": "示例任务A"}},
+         {"type": "processor", "params": {"query": "示例任务B"}},
+     ]
+     results = await scheduler.schedule_parallel_execution(tasks)
+
+     # 统计（与 agentserver/agent_manager.py 的 get_execution_stats 对齐）
+     total = len(scheduler.task_registry)
+     running = len([t for t in scheduler.task_registry.values() if t.get("status") == "running"])
+     queued = len([t for t in scheduler.task_registry.values() if t.get("status") == "queued"])
+     ```
+   - 迁移提示：原 `apiserver.task_scheduler` 已统一为 `agentserver.task_scheduler`
 
 3) MCP Server（FastAPI，默认 8003）
    - 职责：
