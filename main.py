@@ -601,8 +601,9 @@ if __name__ == "__main__":
     if not run_system_check():
         print("\n❌ 系统环境检测失败，程序无法启动")
         print("请根据上述建议修复问题后重新启动")
-        input("按回车键退出...")
-        sys.exit(1)
+        i=input("是否无视检测结果继续启动？是则按y，否则按其他任意键退出...")
+        if i != "y" and i != "Y":
+            sys.exit(1)
 
     print("\n🎉 系统环境检测通过，正在启动应用...")
     print("=" * 50)
