@@ -203,6 +203,22 @@ class ScoringConfig(BaseModel):
     strict_filtering: bool = Field(default=True, description="严格过滤模式")
 
 
+# ========== 新增：电脑控制配置 ==========
+class ComputerControlConfig(BaseModel):
+    """电脑控制配置"""
+    enabled: bool = Field(default=True, description="是否启用电脑控制功能")
+    model: str = Field(default="glm-4.5v", description="视觉/坐标识别模型")
+    model_url: str = Field(default="https://open.bigmodel.cn/api/paas/v4", description="模型API地址")
+    api_key: str = Field(default="", description="模型API密钥")
+    grounding_model: str = Field(default="glm-4.5v", description="元素定位/grounding模型")
+    grounding_url: str = Field(default="https://open.bigmodel.cn/api/paas/v4", description="grounding模型API地址")
+    grounding_api_key: str = Field(default="", description="grounding模型API密钥")
+    screen_width: int = Field(default=1920, description="逻辑屏幕宽度（用于缩放体系）")
+    screen_height: int = Field(default=1080, description="逻辑屏幕高度（用于缩放体系）")
+    max_dim_size: int = Field(default=1920, description="逻辑空间最大边尺寸")
+    dpi_awareness: bool = Field(default=True, description="是否启用DPI感知（Windows）")
+    safe_mode: bool = Field(default=True, description="是否启用安全模式（限制高风险操作）")
+
 # 天气服务使用免费API，无需配置
 
 class MQTTConfig(BaseModel):
@@ -442,6 +458,7 @@ class NagaConfig(BaseModel):
     naga_portal: NagaPortalConfig = Field(default_factory=NagaPortalConfig)
     online_search: OnlineSearchConfig = Field(default_factory=OnlineSearchConfig)
     system_check: SystemCheckConfig = Field(default_factory=SystemCheckConfig)
+    computer_control: ComputerControlConfig = Field(default_factory=ComputerControlConfig)
 
     model_config = {"extra": "ignore"}
 

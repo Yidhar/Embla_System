@@ -3,12 +3,6 @@
 统一风格的设置界面，包含API配置、系统配置等多个选项
 """
 
-from nagaagent_core.vendors.PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                            QPushButton, QLineEdit, QCheckBox, QSpinBox, 
-                            QDoubleSpinBox, QComboBox, QFrame, QScrollArea,
-                            QSlider, QTextEdit, QGroupBox, QGridLayout, QFileDialog)  # 统一入口 #
-from nagaagent_core.vendors.PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve  # 统一入口 #
-from nagaagent_core.vendors.PyQt5.QtGui import QFont, QPainter, QColor  # 统一入口 #
 import sys
 import os
 import json
@@ -18,7 +12,30 @@ project_root = os.path.abspath(os.path.dirname(__file__) + '/..')
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+# 添加nagaagent-core目录到path，以便导入PyQt5
+nagaagent_core_dir = os.path.join(project_root, "nagaagent-core")
+if nagaagent_core_dir not in sys.path:
+    sys.path.insert(0, nagaagent_core_dir)
+
+from nagaagent_core.vendors.PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+                            QPushButton, QLineEdit, QCheckBox, QSpinBox, 
+                            QDoubleSpinBox, QComboBox, QFrame, QScrollArea,
+                            QSlider, QTextEdit, QGroupBox, QGridLayout, QFileDialog)  # 统一入口 #
+from nagaagent_core.vendors.PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve  # 统一入口 #
+from nagaagent_core.vendors.PyQt5.QtGui import QFont, QPainter, QColor  # 统一入口 #
+
 from system.config import config, AI_NAME
+from ui.styles.settings_styles import (
+    SYSTEM_PROMPT_CARD_STYLE, SYSTEM_PROMPT_EDITOR_STYLE, 
+    SYSTEM_PROMPT_TITLE_STYLE, SYSTEM_PROMPT_DESC_STYLE,
+    SETTING_CARD_BASE_STYLE, SETTING_CARD_TITLE_STYLE, SETTING_CARD_DESC_STYLE,
+    SETTING_GROUP_HEADER_CONTAINER_STYLE, SETTING_GROUP_HEADER_BUTTON_STYLE,
+    SETTING_GROUP_RIGHT_LABEL_STYLE, SCROLL_AREA_STYLE, SCROLL_CONTENT_STYLE,
+    STATUS_LABEL_STYLE, SAVE_BUTTON_STYLE, RESET_BUTTON_STYLE,
+    NAGA_PORTAL_BUTTON_STYLE, VOICE_MODE_DISABLED_STYLE, TEST_WINDOW_STYLE,
+    INPUT_STYLE, COMBO_STYLE, CHECKBOX_STYLE, SLIDER_STYLE, SPIN_STYLE,
+    LABEL_STYLE
+)
 
 class SettingCard(QWidget):
     """单个设置卡片"""
@@ -33,18 +50,7 @@ class SettingCard(QWidget):
     def setup_ui(self, title, description):
         """初始化卡片UI"""
         self.setFixedHeight(80)
-        self.setStyleSheet("""
-            SettingCard {
-                background: rgba(255, 255, 255, 8);
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 10px;
-                margin: 2px;
-            }
-            SettingCard:hover {
-                background: rgba(255, 255, 255, 15);
-                border: 1px solid rgba(255, 255, 255, 40);
-            }
-        """)
+        self.setStyleSheet(SETTING_CARD_BASE_STYLE)
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
@@ -56,27 +62,12 @@ class SettingCard(QWidget):
         
         # 标题
         title_label = QLabel(title)
-        title_label.setStyleSheet("""
-            QLabel {
-                color: #fff;
-                font: 12pt 'Lucida Console';
-                font-weight: bold;
-                background: transparent;
-                border: none;
-            }
-        """)
+        title_label.setStyleSheet(SETTING_CARD_TITLE_STYLE)
         text_layout.addWidget(title_label)
         
         # 描述
         desc_label = QLabel(description)
-        desc_label.setStyleSheet("""
-            QLabel {
-                color: rgba(255, 255, 255, 120);
-                font: 9pt 'Lucida Console';
-                background: transparent;
-                border: none;
-            }
-        """)
+        desc_label.setStyleSheet(SETTING_CARD_DESC_STYLE)
         desc_label.setWordWrap(True)
         text_layout.addWidget(desc_label)
         
@@ -131,16 +122,7 @@ class SettingGroup(QWidget):
         
         # 头部容器(按钮+右侧文本) #
         self.header_container = QWidget()  # 容器 #
-        self.header_container.setStyleSheet(
-            """
-            QWidget {
-                background: transparent;
-                border: none;
-                border-bottom: 1px solid rgba(255, 255, 255, 30);
-                margin-bottom: 2px;
-            }
-            """
-        )
+        self.header_container.setStyleSheet(SETTING_GROUP_HEADER_CONTAINER_STYLE)
         self.header_layout = QHBoxLayout(self.header_container)  # 水平布局 #
         self.header_layout.setContentsMargins(0, 0, 0, 0)
         self.header_layout.setSpacing(8)
@@ -149,29 +131,14 @@ class SettingGroup(QWidget):
         self.header_button.setCheckable(True)  # 可切换 #
         self.header_button.setChecked(False)  # 默认未选中为收起 #
         self.header_button.setCursor(Qt.PointingHandCursor)  # 指针手型 #
-        self.header_button.setStyleSheet(
-            """
-            QPushButton {
-                color: #fff;
-                font: 16pt 'Lucida Console';
-                font-weight: bold;
-                background: transparent;
-                border: none;
-                padding: 10px 0;
-                text-align: left;
-            }
-            QPushButton:hover {
-                color: #e8f6ff;
-            }
-            """
-        )
+        self.header_button.setStyleSheet(SETTING_GROUP_HEADER_BUTTON_STYLE)
         self.header_button.clicked.connect(self.on_header_clicked)  # 绑定点击事件 #
         self.header_layout.addWidget(self.header_button, 0, Qt.AlignLeft)
 
         self.header_layout.addStretch(1)  # 中间拉伸 #
 
         self.header_right_label = QLabel("")  # 右侧文本(如版本) #
-        self.header_right_label.setStyleSheet("color: rgba(255,255,255,180); font: 10pt 'Lucida Console'; background: transparent;")
+        self.header_right_label.setStyleSheet(SETTING_GROUP_RIGHT_LABEL_STYLE)
         self.header_right_label.setVisible(False)  # 默认不显示 #
         self.header_layout.addWidget(self.header_right_label, 0, Qt.AlignRight)
 
@@ -232,8 +199,9 @@ class SettingGroup(QWidget):
         self.animation.start()  # 开始动画 #
         
     def add_card(self, card):
-        """添加设置卡片"""
-        self.cards.append(card)  # 保存引用 #
+        """添加设置卡片或普通控件"""
+        if hasattr(card, 'value_changed'):  # 是SettingCard #
+            self.cards.append(card)  # 保存引用 #
         self.cards_layout.addWidget(card)  # 加入布局 #
         # 若在展开状态下新增卡片，更新容器高度以避免裁剪 #
         if self._expanded and self.cards_container.isVisible():  # 展开中 #
@@ -312,32 +280,11 @@ class ElegantSettingsWidget(QWidget):
         scroll_area.setWidgetResizable(True)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setStyleSheet("""
-            QScrollArea {
-                background: transparent;
-                border: none;
-            }
-            QScrollArea > QWidget > QWidget {
-                background: transparent;
-            }
-            QScrollBar:vertical {
-                background: rgba(255, 255, 255, 20);
-                width: 6px;
-                border-radius: 3px;
-            }
-            QScrollBar::handle:vertical {
-                background: rgba(255, 255, 255, 60);
-                border-radius: 3px;
-                min-height: 20px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: rgba(255, 255, 255, 80);
-            }
-        """)
+        scroll_area.setStyleSheet(SCROLL_AREA_STYLE)
         
         # 滚动内容
         scroll_content = QWidget()
-        scroll_content.setStyleSheet("background: transparent;")
+        scroll_content.setStyleSheet(SCROLL_CONTENT_STYLE)
         scroll_layout = QVBoxLayout(scroll_content)
         scroll_layout.setContentsMargins(12, 12, 12, 12)
         scroll_layout.setSpacing(20)
@@ -346,7 +293,6 @@ class ElegantSettingsWidget(QWidget):
         self.create_system_group(scroll_layout)
         self.create_naga_portal_group(scroll_layout)
         self.create_api_group(scroll_layout)
-        self.create_interface_group(scroll_layout)
         self.create_xiayuan_group(scroll_layout)
         self.create_voice_input_group(scroll_layout)  # 语音输入设置（ASR）
         self.create_voice_output_group(scroll_layout)  # 语音输出设置（TTS）
@@ -363,7 +309,7 @@ class ElegantSettingsWidget(QWidget):
         if hasattr(config.api, "api_key"):
             api_key_input = QLineEdit()
             api_key_input.setText(config.api.api_key)
-            api_key_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            api_key_input.setStyleSheet(INPUT_STYLE)
             api_key_card = SettingCard("API Key", "用于连接API的密钥", api_key_input, "api.api_key")
             api_key_card.value_changed.connect(self.on_setting_changed)
             group.add_card(api_key_card)
@@ -372,7 +318,7 @@ class ElegantSettingsWidget(QWidget):
         if hasattr(config.api, "base_url"):
             base_url_input = QLineEdit()
             base_url_input.setText(config.api.base_url)
-            base_url_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            base_url_input.setStyleSheet(INPUT_STYLE)
             base_url_card = SettingCard("API Base URL", "API基础URL", base_url_input, "api.base_url")
             base_url_card.value_changed.connect(self.on_setting_changed)
             group.add_card(base_url_card)
@@ -382,64 +328,70 @@ class ElegantSettingsWidget(QWidget):
             model_combo = QComboBox()
             model_combo.addItems([config.api.model])
             model_combo.setCurrentText(config.api.model)
-            model_combo.setStyleSheet(self.get_combo_style() + "color: #fff;")
+            model_combo.setStyleSheet(COMBO_STYLE)
             model_card = SettingCard("AI模型", "选择用于对话的AI模型", model_combo, "api.model")
             model_card.value_changed.connect(self.on_setting_changed)
             group.add_card(model_card)
             self.model_combo = model_combo
-        # Max Tokens
-        if hasattr(config.api, "max_tokens"):
-            max_tokens_spin = QSpinBox()
-            max_tokens_spin.setRange(100, 32768)
-            max_tokens_spin.setValue(config.api.max_tokens)
-            max_tokens_spin.setStyleSheet(self.get_spin_style() + "color: #fff;")
-            max_tokens_card = SettingCard("最大Token数", "单次对话的最大长度限制", max_tokens_spin, "api.max_tokens")
-            max_tokens_card.value_changed.connect(self.on_setting_changed)
-            group.add_card(max_tokens_card)
-            self.max_tokens_spin = max_tokens_spin
-        # Temperature
-        if hasattr(config.api, "temperature"):
-            temp_slider = QSlider(Qt.Horizontal)
-            temp_slider.setRange(0, 200)
-            temp_slider.setValue(int(config.api.temperature * 100))
-            temp_slider.setStyleSheet(self.get_slider_style())
-            temp_card = SettingCard("温度参数", "控制AI回复的随机性和创造性", temp_slider, "api.temperature")
-            temp_card.value_changed.connect(self.on_setting_changed)
-            group.add_card(temp_card)
-            self.temp_slider = temp_slider
+        
+        # 电脑控制配置
+        if hasattr(config, "computer_control"):
+            # 电脑控制模型
+            computer_control_model_input = QLineEdit()
+            computer_control_model_input.setText(config.computer_control.model)
+            computer_control_model_input.setStyleSheet(INPUT_STYLE)
+            computer_control_model_card = SettingCard("电脑控制模型", "用于电脑控制任务的主要模型", computer_control_model_input, "computer_control.model")
+            computer_control_model_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(computer_control_model_card)
+            self.computer_control_model_input = computer_control_model_input
             
-        # Max History Rounds
-        # 该项表示上下文对话轮数，即系统会保留最近多少轮对话内容作为上下文
-        if hasattr(config.api, "max_history_rounds"):
-            history_spin = QSpinBox()
-            history_spin.setRange(1, 200)
-            history_spin.setValue(config.api.max_history_rounds)
-            history_spin.setStyleSheet(self.get_spin_style() + "color: #fff;")
-            history_card = SettingCard("历史轮数", "上下文对话轮数（系统会保留最近多少轮对话内容作为上下文）", history_spin, "api.max_history_rounds")
-            history_card.value_changed.connect(self.on_setting_changed)
-            group.add_card(history_card)
-            self.history_spin = history_spin
+            # 电脑控制API地址
+            computer_control_url_input = QLineEdit()
+            computer_control_url_input.setText(config.computer_control.model_url)
+            computer_control_url_input.setStyleSheet(INPUT_STYLE)
+            computer_control_url_card = SettingCard("电脑控制API地址", "电脑控制模型的API地址", computer_control_url_input, "computer_control.model_url")
+            computer_control_url_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(computer_control_url_card)
+            self.computer_control_url_input = computer_control_url_input
+            
+            # 电脑控制API密钥
+            computer_control_api_key_input = QLineEdit()
+            computer_control_api_key_input.setText(config.computer_control.api_key)
+            computer_control_api_key_input.setEchoMode(QLineEdit.Password)
+            computer_control_api_key_input.setStyleSheet(INPUT_STYLE)
+            computer_control_api_key_card = SettingCard("电脑控制API密钥", "电脑控制模型的API密钥", computer_control_api_key_input, "computer_control.api_key")
+            computer_control_api_key_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(computer_control_api_key_card)
+            self.computer_control_api_key_input = computer_control_api_key_input
+            
+            # 定位模型
+            grounding_model_input = QLineEdit()
+            grounding_model_input.setText(config.computer_control.grounding_model)
+            grounding_model_input.setStyleSheet(INPUT_STYLE)
+            grounding_model_card = SettingCard("定位模型", "用于元素定位和坐标识别的模型", grounding_model_input, "computer_control.grounding_model")
+            grounding_model_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(grounding_model_card)
+            self.grounding_model_input = grounding_model_input
+            
+            # 定位模型API地址
+            grounding_url_input = QLineEdit()
+            grounding_url_input.setText(config.computer_control.grounding_url)
+            grounding_url_input.setStyleSheet(INPUT_STYLE)
+            grounding_url_card = SettingCard("定位模型API地址", "定位模型的API地址", grounding_url_input, "computer_control.grounding_url")
+            grounding_url_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(grounding_url_card)
+            self.grounding_url_input = grounding_url_input
+            
+            # 定位模型API密钥
+            grounding_api_key_input = QLineEdit()
+            grounding_api_key_input.setText(config.computer_control.grounding_api_key)
+            grounding_api_key_input.setEchoMode(QLineEdit.Password)
+            grounding_api_key_input.setStyleSheet(INPUT_STYLE)
+            grounding_api_key_card = SettingCard("定位模型API密钥", "定位模型的API密钥", grounding_api_key_input, "computer_control.grounding_api_key")
+            grounding_api_key_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(grounding_api_key_card)
+            self.grounding_api_key_input = grounding_api_key_input
         
-        # 持久化上下文设置
-        if hasattr(config.api, "persistent_context"):
-            persistent_context_checkbox = QCheckBox()
-            persistent_context_checkbox.setChecked(config.api.persistent_context)
-            persistent_context_checkbox.setStyleSheet(self.get_checkbox_style() + "color: #fff;")
-            persistent_context_card = SettingCard("持久化上下文", "重启后自动从日志文件加载历史对话上下文", persistent_context_checkbox, "api.persistent_context")
-            persistent_context_card.value_changed.connect(self.on_setting_changed)
-            group.add_card(persistent_context_card)
-            self.persistent_context_checkbox = persistent_context_checkbox
-        
-        # 加载天数设置
-        if hasattr(config.api, "context_load_days"):
-            context_days_spin = QSpinBox()
-            context_days_spin.setRange(1, 30)
-            context_days_spin.setValue(config.api.context_load_days)
-            context_days_spin.setStyleSheet(self.get_spin_style() + "color: #fff;")
-            context_days_card = SettingCard("加载天数", "从最近几天的日志文件中加载历史对话", context_days_spin, "api.context_load_days")
-            context_days_card.value_changed.connect(self.on_setting_changed)
-            group.add_card(context_days_card)
-            self.context_days_spin = context_days_spin
         parent_layout.addWidget(group)
 
     def create_system_group(self, parent_layout):
@@ -447,50 +399,135 @@ class ElegantSettingsWidget(QWidget):
         # 在标题栏最右侧显示版本号(若有) #
         if hasattr(config.system, "version"):
             group.set_right_text(f"v{config.system.version}")
-        
-        # 访问娜迦API
-        naga_api_btn = QPushButton("访问娜迦API")
-        naga_api_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(100, 200, 255, 150);
-                color: #fff;
-                border: 1px solid rgba(255, 255, 255, 50);
-                border-radius: 6px;
-                padding: 8px 16px;
-                font: 10pt 'Lucida Console';
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                border: 1px solid rgba(255, 255, 255, 80);
-                background: rgba(120, 220, 255, 180);
-            }
-            QPushButton:pressed {
-                background: rgba(80, 180, 255, 200);
-            }
-        """)
-        naga_api_btn.clicked.connect(self.open_naga_api)
-        naga_api_card = SettingCard("娜迦API", "访问娜迦API官方网站", naga_api_btn, None)
-        group.add_card(naga_api_card)
 
-        # debug
-        if hasattr(config.system, "debug"):
-            debug_checkbox = QCheckBox()
-            debug_checkbox.setChecked(config.system.debug)
-            debug_checkbox.setStyleSheet(self.get_checkbox_style() + "color: #fff;")
-            debug_card = SettingCard("调试模式", "启用详细的调试信息输出", debug_checkbox, "system.debug")
-            debug_card.value_changed.connect(self.on_setting_changed)
-            group.add_card(debug_card)
-            self.debug_checkbox = debug_checkbox
-        # log_level
-        if hasattr(config.system, "log_level"):
-            log_combo = QComboBox()
-            log_combo.addItems(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
-            log_combo.setCurrentText(config.system.log_level)
-            log_combo.setStyleSheet(self.get_combo_style() + "color: #fff;")  # 确保下拉栏字体为白色
-            log_card = SettingCard("日志级别", "系统日志输出级别", log_combo, "system.log_level")
-            log_card.value_changed.connect(self.on_setting_changed)
-            group.add_card(log_card)
-            self.log_combo = log_combo
+        # AI 名称输入框（写入 config.system.ai_name） #
+        ai_name_input = QLineEdit()
+        ai_name_input.setText(getattr(config.system, 'ai_name', ''))
+        ai_name_input.setStyleSheet(INPUT_STYLE)
+        ai_name_card = SettingCard("AI 名称", "修改后将写入config.json的system.ai_name", ai_name_input, "system.ai_name")
+        ai_name_card.value_changed.connect(self.on_setting_changed)
+        group.add_card(ai_name_card)
+        self.ai_name_input = ai_name_input  # 保存引用 #
+
+        # 最大Token数（从API配置移过来）
+        if hasattr(config.api, "max_tokens"):
+            max_tokens_spin = QSpinBox()
+            max_tokens_spin.setRange(100, 32768)
+            max_tokens_spin.setValue(config.api.max_tokens)
+            max_tokens_spin.setStyleSheet(SPIN_STYLE)
+            max_tokens_card = SettingCard("最大Token数", "单次对话的最大长度限制", max_tokens_spin, "api.max_tokens")
+            max_tokens_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(max_tokens_card)
+            self.max_tokens_spin = max_tokens_spin
+
+        # 历史轮数（从API配置移过来）
+        if hasattr(config.api, "max_history_rounds"):
+            history_spin = QSpinBox()
+            history_spin.setRange(1, 200)
+            history_spin.setValue(config.api.max_history_rounds)
+            history_spin.setStyleSheet(SPIN_STYLE)
+            history_card = SettingCard("历史轮数", "上下文对话轮数（系统会保留最近多少轮对话内容作为上下文）", history_spin, "api.max_history_rounds")
+            history_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(history_card)
+            self.history_spin = history_spin
+
+        # 加载天数设置（从API配置移过来）
+        if hasattr(config.api, "context_load_days"):
+            context_days_spin = QSpinBox()
+            context_days_spin.setRange(1, 30)
+            context_days_spin.setValue(config.api.context_load_days)
+            context_days_spin.setStyleSheet(SPIN_STYLE)
+            context_days_card = SettingCard("加载天数", "从最近几天的日志文件中加载历史对话", context_days_spin, "api.context_load_days")
+            context_days_card.value_changed.connect(self.on_setting_changed)
+            group.add_card(context_days_card)
+            self.context_days_spin = context_days_spin
+
+        # 系统提示词编辑（对接 system/prompts/naga_system_prompt.txt） #
+        prompt_editor = QTextEdit()
+        prompt_editor.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # 禁用垂直滚动条 #
+        prompt_editor.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # 禁用水平滚动条 #
+        prompt_editor.setStyleSheet(SYSTEM_PROMPT_EDITOR_STYLE)
+        
+        try:
+            from system.config import get_prompt  # 懒加载 #
+            # 直接读取对话风格提示词文件 #
+            preview_text = get_prompt('conversation_style_prompt')
+        except Exception:
+            preview_text = ""
+        prompt_editor.setPlainText(preview_text)
+        
+        # 自动调整高度 #
+        def adjust_height():
+            try:
+                doc = prompt_editor.document()
+                doc.setTextWidth(prompt_editor.viewport().width())
+                # 计算文本高度，增加更多边距 #
+                text_height = int(doc.size().height())
+                padding = 40  # 增加内边距 #
+                new_height = min(max(text_height + padding, 80), 200)  # 最小80px，最大200px #
+                if prompt_editor.height() != new_height:  # 避免重复设置相同高度 #
+                    prompt_editor.setFixedHeight(new_height)
+            except Exception as e:
+                print(f"调整高度失败: {e}")  # 调试信息 #
+        
+        # 为系统提示词创建特殊的全宽卡片 #
+        prompt_card = QWidget()
+        # 不设置固定高度，让内容决定高度 #
+        prompt_card.setStyleSheet(SYSTEM_PROMPT_CARD_STYLE)
+        
+        prompt_layout = QVBoxLayout(prompt_card)
+        prompt_layout.setContentsMargins(16, 12, 16, 12)
+        prompt_layout.setSpacing(8)
+        
+        # 标题和描述 #
+        title_label = QLabel("系统提示词")
+        title_label.setStyleSheet(SYSTEM_PROMPT_TITLE_STYLE)
+        prompt_layout.addWidget(title_label)
+        
+        desc_label = QLabel("编辑对话风格提示词，影响AI的回复风格和语言特点")
+        desc_label.setStyleSheet(SYSTEM_PROMPT_DESC_STYLE)
+        desc_label.setWordWrap(True)
+        prompt_layout.addWidget(desc_label)
+        
+        # 提示词编辑器占满剩余空间 #
+        prompt_layout.addWidget(prompt_editor)
+        
+        group.add_card(prompt_card)
+        self.system_prompt_editor = prompt_editor  # 保存引用 #
+
+        # 统一的文本变化处理函数 #
+        def _on_text_changed():
+            try:
+                # 调整高度 #
+                adjust_height()
+                # 记录提示词更改 #
+                preview_text = self.system_prompt_editor.toPlainText()
+                # 保存到对话风格提示词文件 #
+                if not hasattr(self, 'pending_prompts'):
+                    self.pending_prompts = {}
+                self.pending_prompts['conversation_style_prompt'] = preview_text
+                self.update_status_label("● 系统提示词 已修改")
+            except Exception as e:
+                print(f"文本变化处理失败: {e}")
+        
+        # 连接文本变化信号 #
+        prompt_editor.textChanged.connect(_on_text_changed)
+        
+        # 保存原始的resizeEvent方法 #
+        original_resize_event = prompt_editor.resizeEvent
+        
+        def custom_resize_event(event):
+            try:
+                original_resize_event(event)  # 调用原始方法 #
+                adjust_height()  # 调整高度 #
+            except Exception as e:
+                print(f"resize事件处理失败: {e}")
+        
+        prompt_editor.resizeEvent = custom_resize_event
+        
+        # 初始调整 #
+        adjust_height()
+
         group.set_collapsed(True)  # 默认收起系统配置 #
         parent_layout.addWidget(group)
 
@@ -499,33 +536,14 @@ class ElegantSettingsWidget(QWidget):
 
         # 标题栏右侧跳转按钮 #
         portal_btn = QPushButton("访问官网")
-        portal_btn.setStyleSheet(
-            """
-            QPushButton {
-                background: rgba(100, 200, 255, 150);
-                color: #fff;
-                border: 1px solid rgba(255, 255, 255, 50);
-                border-radius: 6px;
-                padding: 6px 12px;
-                font: 10pt 'Lucida Console';
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                border: 1px solid rgba(255, 255, 255, 80);
-                background: rgba(120, 220, 255, 180);
-            }
-            QPushButton:pressed {
-                background: rgba(80, 180, 255, 200);
-            }
-            """
-        )
+        portal_btn.setStyleSheet(NAGA_PORTAL_BUTTON_STYLE)
         portal_btn.clicked.connect(self.open_naga_api)  # 复用原跳转 #
         group.set_right_widget(portal_btn)  # 放置在右侧 #
 
         # 用户名 #
         naga_user_input = QLineEdit()
         naga_user_input.setText(getattr(config.naga_portal, 'username', ''))
-        naga_user_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+        naga_user_input.setStyleSheet(INPUT_STYLE)
         naga_user_card = SettingCard("用户名", "娜迦官网登录用户名", naga_user_input, "naga_portal.username")
         naga_user_card.value_changed.connect(self.on_setting_changed)
         group.add_card(naga_user_card)
@@ -534,7 +552,7 @@ class ElegantSettingsWidget(QWidget):
         naga_pwd_input = QLineEdit()
         naga_pwd_input.setText(getattr(config.naga_portal, 'password', ''))
         naga_pwd_input.setEchoMode(QLineEdit.Password)
-        naga_pwd_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+        naga_pwd_input.setStyleSheet(INPUT_STYLE)
         naga_pwd_card = SettingCard("密码", "娜迦官网登录密码", naga_pwd_input, "naga_portal.password")
         naga_pwd_card.value_changed.connect(self.on_setting_changed)
         group.add_card(naga_pwd_card)
@@ -542,38 +560,6 @@ class ElegantSettingsWidget(QWidget):
         group.set_collapsed(True)  # 默认收起 #
         parent_layout.addWidget(group)
 
-    def create_interface_group(self, parent_layout):
-        group = SettingGroup("界面配置")
-        # user_name
-        if hasattr(config.ui, "user_name"):
-            user_name_input = QLineEdit()
-            user_name_input.setText(config.ui.user_name)
-            user_name_input.setStyleSheet(self.get_input_style() + "color: #fff;")
-            user_name_card = SettingCard("用户名", "界面显示的用户名", user_name_input, "ui.user_name")
-            user_name_card.value_changed.connect(self.on_setting_changed)
-            group.add_card(user_name_card)
-            self.user_name_input = user_name_input
-        # bg_alpha
-        if hasattr(config.ui, "bg_alpha"):
-            alpha_slider = QSlider(Qt.Horizontal)
-            alpha_slider.setRange(30, 100)
-            alpha_slider.setValue(int(config.ui.bg_alpha * 100))
-            alpha_slider.setStyleSheet(self.get_slider_style())
-            alpha_card = SettingCard("背景透明度", "调整界面背景的透明程度", alpha_slider, "ui.bg_alpha")
-            alpha_card.value_changed.connect(self.on_setting_changed)
-            group.add_card(alpha_card)
-            self.alpha_slider = alpha_slider
-        # window_bg_alpha
-        if hasattr(config.ui, "window_bg_alpha"):
-            window_bg_spin = QSpinBox()
-            window_bg_spin.setRange(0, 255)
-            window_bg_spin.setValue(config.ui.window_bg_alpha)
-            window_bg_spin.setStyleSheet(self.get_spin_style() + "color: #fff;")
-            window_bg_card = SettingCard("窗口背景透明度", "主窗口背景透明度", window_bg_spin, "ui.window_bg_alpha")
-            window_bg_card.value_changed.connect(self.on_setting_changed)
-            group.add_card(window_bg_card)
-            self.window_bg_spin = window_bg_spin
-        parent_layout.addWidget(group)
         
     def create_xiayuan_group(self, parent_layout):
         group = SettingGroup("夏园记忆系统")
@@ -581,14 +567,14 @@ class ElegantSettingsWidget(QWidget):
         if hasattr(config.grag, "neo4j_uri"):
             neo4j_uri_input = QLineEdit()
             neo4j_uri_input.setText(config.grag.neo4j_uri)
-            neo4j_uri_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            neo4j_uri_input.setStyleSheet(INPUT_STYLE)
             neo4j_uri_card = SettingCard("Neo4j URI", "知识图谱数据库地址", neo4j_uri_input, "grag.neo4j_uri")
             neo4j_uri_card.value_changed.connect(self.on_setting_changed)
             group.add_card(neo4j_uri_card)
         if hasattr(config.grag, "neo4j_user"):
             neo4j_user_input = QLineEdit()
             neo4j_user_input.setText(config.grag.neo4j_user)
-            neo4j_user_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            neo4j_user_input.setStyleSheet(INPUT_STYLE)
             neo4j_user_card = SettingCard("Neo4j 用户名", "知识图谱数据库用户名", neo4j_user_input, "grag.neo4j_user")
             neo4j_user_card.value_changed.connect(self.on_setting_changed)
             group.add_card(neo4j_user_card)
@@ -596,7 +582,7 @@ class ElegantSettingsWidget(QWidget):
             neo4j_pwd_input = QLineEdit()
             neo4j_pwd_input.setText(config.grag.neo4j_password)
             neo4j_pwd_input.setEchoMode(QLineEdit.Password)
-            neo4j_pwd_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            neo4j_pwd_input.setStyleSheet(INPUT_STYLE)
             neo4j_pwd_card = SettingCard("Neo4j 密码", "知识图谱数据库密码", neo4j_pwd_input, "grag.neo4j_password")
             neo4j_pwd_card.value_changed.connect(self.on_setting_changed)
             group.add_card(neo4j_pwd_card)
@@ -607,7 +593,7 @@ class ElegantSettingsWidget(QWidget):
             sim_slider = QSlider(Qt.Horizontal)
             sim_slider.setRange(0, 100)
             sim_slider.setValue(int(config.grag.similarity_threshold * 100))
-            sim_slider.setStyleSheet(self.get_slider_style())
+            sim_slider.setStyleSheet(SLIDER_STYLE)
             sim_card = SettingCard("相似度阈值", "知识图谱检索的相似度阈值", sim_slider, "grag.similarity_threshold")
             sim_card.value_changed.connect(self.on_setting_changed)
             group.add_card(sim_card)
@@ -625,7 +611,7 @@ class ElegantSettingsWidget(QWidget):
             # 启用语音输入
             voice_input_enabled_checkbox = QCheckBox()
             voice_input_enabled_checkbox.setChecked(config.voice_realtime.enabled)
-            voice_input_enabled_checkbox.setStyleSheet(self.get_checkbox_style() + "color: #fff;")
+            voice_input_enabled_checkbox.setStyleSheet(CHECKBOX_STYLE)
             voice_input_enabled_card = SettingCard(
                 "启用语音输入", 
                 "启用语音识别（ASR）功能，支持实时语音转文本", 
@@ -640,7 +626,7 @@ class ElegantSettingsWidget(QWidget):
             mode_combo.addItems(["auto", "local", "end2end", "hybrid"])
             current_mode = getattr(config.voice_realtime, 'voice_mode', 'auto')
             mode_combo.setCurrentText(current_mode)
-            mode_combo.setStyleSheet(self.get_combo_style() + "color: #fff;")
+            mode_combo.setStyleSheet(COMBO_STYLE)
             mode_card = SettingCard(
                 "语音模式",
                 "auto:自动选择 | local:本地离线 | end2end:端到端 | hybrid:混合模式",
@@ -656,7 +642,7 @@ class ElegantSettingsWidget(QWidget):
             provider_combo = QComboBox()
             provider_combo.addItems(["local", "qwen", "openai"])
             provider_combo.setCurrentText(config.voice_realtime.provider)
-            provider_combo.setStyleSheet(self.get_combo_style() + "color: #fff;")
+            provider_combo.setStyleSheet(COMBO_STYLE)
             self.provider_card = SettingCard(
                 "ASR服务提供商",
                 "local:本地FunASR | qwen:通义千问 | openai:OpenAI",
@@ -672,7 +658,7 @@ class ElegantSettingsWidget(QWidget):
             # ASR服务地址（本地模式）
             asr_host_input = QLineEdit()
             asr_host_input.setText(getattr(config.voice_realtime, 'asr_host', 'localhost'))
-            asr_host_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            asr_host_input.setStyleSheet(INPUT_STYLE)
             self.asr_host_card = SettingCard(
                 "ASR服务地址",
                 "本地FunASR服务地址（仅本地模式）",
@@ -686,7 +672,7 @@ class ElegantSettingsWidget(QWidget):
             asr_port_spin = QSpinBox()
             asr_port_spin.setRange(1, 65535)
             asr_port_spin.setValue(getattr(config.voice_realtime, 'asr_port', 5000))
-            asr_port_spin.setStyleSheet(self.get_spin_style() + "color: #fff;")
+            asr_port_spin.setStyleSheet(SPIN_STYLE)
             self.asr_port_card = SettingCard(
                 "ASR服务端口",
                 "本地FunASR服务端口（仅本地模式）",
@@ -700,7 +686,7 @@ class ElegantSettingsWidget(QWidget):
             record_duration_spin = QSpinBox()
             record_duration_spin.setRange(5, 60)
             record_duration_spin.setValue(getattr(config.voice_realtime, 'record_duration', 10))
-            record_duration_spin.setStyleSheet(self.get_spin_style() + "color: #fff;")
+            record_duration_spin.setStyleSheet(SPIN_STYLE)
             self.record_duration_card = SettingCard(
                 "最大录音时长",
                 "本地模式最大录音时长（秒）",
@@ -715,7 +701,7 @@ class ElegantSettingsWidget(QWidget):
             api_key_input = QLineEdit()
             api_key_input.setText(config.voice_realtime.api_key)
             api_key_input.setEchoMode(QLineEdit.Password)
-            api_key_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            api_key_input.setStyleSheet(INPUT_STYLE)
             self.api_key_card = SettingCard(
                 "API密钥",
                 "语音服务API密钥（云端模式）",
@@ -728,7 +714,7 @@ class ElegantSettingsWidget(QWidget):
             # 模型选择（云端模式）
             model_input = QLineEdit()
             model_input.setText(config.voice_realtime.model)
-            model_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            model_input.setStyleSheet(INPUT_STYLE)
             self.model_card = SettingCard(
                 "ASR模型名称",
                 "语音识别模型名称（云端模式）",
@@ -743,9 +729,9 @@ class ElegantSettingsWidget(QWidget):
             vad_slider = QSlider(Qt.Horizontal)
             vad_slider.setRange(0, 100)
             vad_slider.setValue(int(config.voice_realtime.vad_threshold * 100))
-            vad_slider.setStyleSheet(self.get_slider_style())
+            vad_slider.setStyleSheet(SLIDER_STYLE)
             vad_label = QLabel(f"{config.voice_realtime.vad_threshold:.2f}")
-            vad_label.setStyleSheet("color: #fff; font: 10pt 'Lucida Console';")
+            vad_label.setStyleSheet(LABEL_STYLE)
             vad_slider.valueChanged.connect(lambda v: vad_label.setText(f"{v/100:.2f}"))
             vad_container = QWidget()
             vad_layout = QHBoxLayout(vad_container)
@@ -771,12 +757,7 @@ class ElegantSettingsWidget(QWidget):
                     self.voice_provider_combo.setCurrentText('local')
                     self.voice_provider_combo.setEnabled(False)
                     # 应用禁用样式
-                    self.voice_provider_combo.setStyleSheet(self.get_combo_style() + """
-                        QComboBox:disabled {
-                            background: rgba(50, 50, 50, 150);
-                            color: rgba(255, 255, 255, 100);
-                        }
-                    """)
+                    self.voice_provider_combo.setStyleSheet(COMBO_STYLE + VOICE_MODE_DISABLED_STYLE)
 
         parent_layout.addWidget(group)
 
@@ -799,7 +780,7 @@ class ElegantSettingsWidget(QWidget):
             tts_voice_combo.addItems(tts_voices)
             current_tts_voice = getattr(config.voice_realtime, 'tts_voice', 'zh-CN-XiaoyiNeural')
             tts_voice_combo.setCurrentText(current_tts_voice)
-            tts_voice_combo.setStyleSheet(self.get_combo_style() + "color: #fff;")
+            tts_voice_combo.setStyleSheet(COMBO_STYLE)
             self.tts_voice_card = SettingCard(
                 "TTS语音",
                 "文本转语音的声音选择",
@@ -814,7 +795,7 @@ class ElegantSettingsWidget(QWidget):
             # TTS服务地址
             tts_host_input = QLineEdit()
             tts_host_input.setText(getattr(config.voice_realtime, 'tts_host', 'localhost'))
-            tts_host_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            tts_host_input.setStyleSheet(INPUT_STYLE)
             self.tts_host_card = SettingCard(
                 "TTS服务地址",
                 "本地TTS服务地址",
@@ -828,7 +809,7 @@ class ElegantSettingsWidget(QWidget):
             tts_port_spin = QSpinBox()
             tts_port_spin.setRange(1, 65535)
             tts_port_spin.setValue(getattr(config.voice_realtime, 'tts_port', 5061))
-            tts_port_spin.setStyleSheet(self.get_spin_style() + "color: #fff;")
+            tts_port_spin.setStyleSheet(SPIN_STYLE)
             self.tts_port_card = SettingCard(
                 "TTS服务端口",
                 "本地TTS服务端口",
@@ -842,7 +823,7 @@ class ElegantSettingsWidget(QWidget):
             # 自动播放
             auto_play_checkbox = QCheckBox()
             auto_play_checkbox.setChecked(getattr(config.voice_realtime, 'auto_play', True))
-            auto_play_checkbox.setStyleSheet(self.get_checkbox_style() + "color: #fff;")
+            auto_play_checkbox.setStyleSheet(CHECKBOX_STYLE)
             auto_play_card = SettingCard(
                 "自动播放",
                 "AI回复后自动播放语音",
@@ -855,7 +836,7 @@ class ElegantSettingsWidget(QWidget):
             # 打断播放
             interrupt_playback_checkbox = QCheckBox()
             interrupt_playback_checkbox.setChecked(getattr(config.voice_realtime, 'interrupt_playback', True))
-            interrupt_playback_checkbox.setStyleSheet(self.get_checkbox_style() + "color: #fff;")
+            interrupt_playback_checkbox.setStyleSheet(CHECKBOX_STYLE)
             interrupt_playback_card = SettingCard(
                 "允许打断",
                 "用户说话时自动打断AI语音播放",
@@ -874,7 +855,7 @@ class ElegantSettingsWidget(QWidget):
         if hasattr(config.mqtt, "broker"):
             mqtt_broker_input = QLineEdit()
             mqtt_broker_input.setText(config.mqtt.broker)
-            mqtt_broker_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            mqtt_broker_input.setStyleSheet(INPUT_STYLE)
             mqtt_broker_card = SettingCard("MQTT Broker", "MQTT服务器地址", mqtt_broker_input, "mqtt.broker")
             mqtt_broker_card.value_changed.connect(self.on_setting_changed)
             group.add_card(mqtt_broker_card)
@@ -882,14 +863,14 @@ class ElegantSettingsWidget(QWidget):
             mqtt_port_spin = QSpinBox()
             mqtt_port_spin.setRange(1, 65535)
             mqtt_port_spin.setValue(config.mqtt.port)
-            mqtt_port_spin.setStyleSheet(self.get_spin_style() + "color: #fff;")
+            mqtt_port_spin.setStyleSheet(SPIN_STYLE)
             mqtt_port_card = SettingCard("MQTT端口", "MQTT服务器端口", mqtt_port_spin, "mqtt.port")
             mqtt_port_card.value_changed.connect(self.on_setting_changed)
             group.add_card(mqtt_port_card)
         if hasattr(config.mqtt, "username"):
             mqtt_user_input = QLineEdit()
             mqtt_user_input.setText(config.mqtt.username)
-            mqtt_user_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            mqtt_user_input.setStyleSheet(INPUT_STYLE)
             mqtt_user_card = SettingCard("MQTT用户名", "MQTT服务器用户名", mqtt_user_input, "mqtt.username")
             mqtt_user_card.value_changed.connect(self.on_setting_changed)
             group.add_card(mqtt_user_card)
@@ -897,7 +878,7 @@ class ElegantSettingsWidget(QWidget):
             mqtt_pwd_input = QLineEdit()
             mqtt_pwd_input.setText(config.mqtt.password)
             mqtt_pwd_input.setEchoMode(QLineEdit.Password)
-            mqtt_pwd_input.setStyleSheet(self.get_input_style() + "color: #fff;")
+            mqtt_pwd_input.setStyleSheet(INPUT_STYLE)
             mqtt_pwd_card = SettingCard("MQTT密码", "MQTT服务器密码", mqtt_pwd_input, "mqtt.password")
             mqtt_pwd_card.value_changed.connect(self.on_setting_changed)
             group.add_card(mqtt_pwd_card)
@@ -912,14 +893,7 @@ class ElegantSettingsWidget(QWidget):
         
         # 状态提示
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("""
-            QLabel {
-                color: rgba(255, 255, 255, 120);
-                font: 10pt 'Lucida Console';
-                background: transparent;
-                border: none;
-            }
-        """)
+        self.status_label.setStyleSheet(STATUS_LABEL_STYLE)
         save_layout.addWidget(self.status_label)
         
         save_layout.addStretch()
@@ -927,155 +901,25 @@ class ElegantSettingsWidget(QWidget):
         # 重置按钮
         reset_btn = QPushButton("重置")
         reset_btn.setFixedSize(80, 36)
-        reset_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(100, 100, 100, 150);
-                color: #fff;
-                border: 1px solid rgba(255, 255, 255, 50);
-                border-radius: 8px;
-                padding: 6px 12px;
-                font: 11pt 'Lucida Console';
-            }
-            QPushButton:hover {
-                border: 1px solid rgba(255, 255, 255, 80);
-                background: rgba(120, 120, 120, 180);
-            }
-            QPushButton:pressed {
-                background: rgba(80, 80, 80, 200);
-            }
-        """)
+        reset_btn.setStyleSheet(RESET_BUTTON_STYLE)
         reset_btn.clicked.connect(self.reset_settings)
         save_layout.addWidget(reset_btn)
         
         # 保存按钮
         self.save_btn = QPushButton("保存设置")
         self.save_btn.setFixedSize(100, 36)
-        self.save_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(100, 200, 100, 150);
-                color: #fff;
-                border: 1px solid rgba(255, 255, 255, 50);
-                border-radius: 8px;
-                padding: 6px 12px;
-                font: 11pt 'Lucida Console';
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                border: 1px solid rgba(255, 255, 255, 80);
-                background: rgba(120, 220, 120, 180);
-            }
-            QPushButton:pressed {
-                background: rgba(80, 180, 80, 200);
-            }
-        """)
+        self.save_btn.setStyleSheet(SAVE_BUTTON_STYLE)
         self.save_btn.clicked.connect(self.save_settings)
         save_layout.addWidget(self.save_btn)
         
         parent_layout.addWidget(save_container)
         
-    def get_input_style(self):
-        """获取输入框样式"""
-        return """
-            QLineEdit {
-                background: rgba(17,17,17,180);
-                color: #fff;
-                border: 1px solid rgba(255, 255, 255, 50);
-                border-radius: 6px;
-                padding: 6px 10px;
-                font: 10pt 'Lucida Console';
-            }
-            QLineEdit:focus {
-                border: 1px solid rgba(100, 200, 255, 100);
-            }
-        """
-        
-    def get_combo_style(self):
-        """获取下拉框样式"""
-        return """
-            QComboBox {
-                background: rgba(17,17,17,180);
-                color: #fff;
-                border: 1px solid rgba(255, 255, 255, 50);
-                border-radius: 6px;
-                padding: 6px 10px;
-                font: 10pt 'Lucida Console';
-            }
-            QComboBox:hover {
-                border: 1px solid rgba(255, 255, 255, 80);
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border: none;
-            }
-        """
-        
-    def get_checkbox_style(self):
-        """获取复选框样式"""
-        return """
-            QCheckBox {
-                color: #fff;
-                font: 10pt 'Lucida Console';
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border-radius: 4px;
-                border: 1px solid rgba(255, 255, 255, 50);
-                background: rgba(17,17,17,180);
-            }
-            QCheckBox::indicator:checked {
-                background: rgba(100, 200, 255, 150);
-                border: 1px solid rgba(100, 200, 255, 200);
-            }
-        """
-        
-    def get_slider_style(self):
-        """获取滑块样式"""
-        return """
-            QSlider::groove:horizontal {
-                border: 1px solid rgba(255, 255, 255, 30);
-                height: 6px;
-                background: rgba(17,17,17,180);
-                border-radius: 3px;
-            }
-            QSlider::handle:horizontal {
-                background: rgba(100, 200, 255, 150);
-                border: 1px solid rgba(100, 200, 255, 200);
-                width: 16px;
-                border-radius: 8px;
-                margin: -5px 0;
-            }
-            QSlider::handle:horizontal:hover {
-                background: rgba(120, 220, 255, 180);
-            }
-        """
-        
-    def get_spin_style(self):
-        """获取数字输入框样式"""
-        return """
-            QSpinBox {
-                background: rgba(17,17,17,180);
-                color: #fff;
-                border: 1px solid rgba(255, 255, 255, 50);
-                border-radius: 6px;
-                padding: 6px 10px;
-                font: 10pt 'Lucida Console';
-            }
-            QSpinBox:focus {
-                border: 1px solid rgba(100, 200, 255, 100);
-            }
-        """
         
     def on_setting_changed(self, setting_key, value):
         """处理设置变化"""
         # 统一转换为新式键名，兼容旧逻辑 #
         key_map = {
             "STREAM_MODE": "system.stream_mode",
-            "BG_ALPHA": "ui.bg_alpha",
             "DEBUG": "system.debug",
         }
         normalized_key = key_map.get(setting_key, setting_key)
@@ -1096,25 +940,20 @@ class ElegantSettingsWidget(QWidget):
             self.voice_provider_combo.setCurrentText('local')
             self.voice_provider_combo.setEnabled(False)
             # 更新样式显示禁用状态
-            self.voice_provider_combo.setStyleSheet(self.get_combo_style() + """
-                QComboBox:disabled {
-                    background: rgba(50, 50, 50, 150);
-                    color: rgba(255, 255, 255, 100);
-                }
-            """)
+            self.voice_provider_combo.setStyleSheet(COMBO_STYLE + VOICE_MODE_DISABLED_STYLE)
             # 同时更新配置
             self.on_setting_changed('voice_realtime.provider', 'local')
 
         elif value == 'auto' and hasattr(self, 'voice_provider_combo'):
             # auto模式：允许选择provider，根据provider自动决定实际模式
             self.voice_provider_combo.setEnabled(True)
-            self.voice_provider_combo.setStyleSheet(self.get_combo_style() + "color: #fff;")
+            self.voice_provider_combo.setStyleSheet(COMBO_STYLE)
             # auto模式不改变当前provider选择
 
         elif value in ['end2end', 'hybrid'] and hasattr(self, 'voice_provider_combo'):
             # end2end和hybrid模式：需要云端provider
             self.voice_provider_combo.setEnabled(True)
-            self.voice_provider_combo.setStyleSheet(self.get_combo_style() + "color: #fff;")
+            self.voice_provider_combo.setStyleSheet(COMBO_STYLE)
             # 如果当前是local，切换到qwen
             if self.voice_provider_combo.currentText() == 'local':
                 self.voice_provider_combo.setCurrentText('qwen')
@@ -1242,16 +1081,26 @@ class ElegantSettingsWidget(QWidget):
                     self.model_combo.setCurrentIndex(index)
                     
             # 系统设置
-            if hasattr(self, 'temp_slider'):
-                self.temp_slider.setValue(int(config.api.temperature * 100))
             if hasattr(self, 'max_tokens_spin'):
                 self.max_tokens_spin.setValue(config.api.max_tokens)
             if hasattr(self, 'history_spin'):
                 self.history_spin.setValue(config.api.max_history_rounds)
-            if hasattr(self, 'persistent_context_checkbox'):
-                self.persistent_context_checkbox.setChecked(config.api.persistent_context)
             if hasattr(self, 'context_days_spin'):
                 self.context_days_spin.setValue(config.api.context_load_days)
+            
+            # 电脑控制设置
+            if hasattr(self, 'computer_control_model_input'):
+                self.computer_control_model_input.setText(config.computer_control.model)
+            if hasattr(self, 'computer_control_url_input'):
+                self.computer_control_url_input.setText(config.computer_control.model_url)
+            if hasattr(self, 'computer_control_api_key_input'):
+                self.computer_control_api_key_input.setText(config.computer_control.api_key)
+            if hasattr(self, 'grounding_model_input'):
+                self.grounding_model_input.setText(config.computer_control.grounding_model)
+            if hasattr(self, 'grounding_url_input'):
+                self.grounding_url_input.setText(config.computer_control.grounding_url)
+            if hasattr(self, 'grounding_api_key_input'):
+                self.grounding_api_key_input.setText(config.computer_control.grounding_api_key)
             
             # 界面设置
             if hasattr(self, 'voice_checkbox'):
@@ -1266,12 +1115,21 @@ class ElegantSettingsWidget(QWidget):
             # 高级设置
             if hasattr(self, 'sim_slider'):
                 self.sim_slider.setValue(int(config.grag.similarity_threshold * 100))
-            if hasattr(self, 'alpha_slider'):
-                self.alpha_slider.setValue(int(config.ui.bg_alpha * 100))
-            if hasattr(self, 'window_bg_spin'):
-                self.window_bg_spin.setValue(config.ui.window_bg_alpha)
-            if hasattr(self, 'user_name_input'):
-                self.user_name_input.setText(config.ui.user_name)
+
+            # 系统提示词与AI名称回填 #
+            if hasattr(self, 'ai_name_input'):
+                self.ai_name_input.setText(getattr(config.system, 'ai_name', ''))
+            if hasattr(self, 'system_prompt_editor'):
+                try:
+                    from system.config import get_prompt  # 延迟导入 #
+                    # 直接读取对话风格提示词文件 #
+                    content = get_prompt('conversation_style_prompt')
+                except Exception:
+                    content = ""
+                # 避免触发textChanged循环 #
+                self.system_prompt_editor.blockSignals(True)
+                self.system_prompt_editor.setPlainText(content)
+                self.system_prompt_editor.blockSignals(False)
                 
         except Exception as e:
             print(f"加载设置失败: {e}")
@@ -1309,10 +1167,13 @@ class ElegantSettingsWidget(QWidget):
         """保存所有设置到config.json"""
         try:
             changes_count = len(self.pending_changes)
+            prompt_changes_count = len(getattr(self, 'pending_prompts', {}))
             
             if changes_count == 0:
-                self.update_status_label("● 没有需要保存的更改")
-                return
+                # 没有config更改，若有提示词更改也继续保存 #
+                if prompt_changes_count == 0:
+                    self.update_status_label("● 没有需要保存的更改")
+                    return
             
             # 使用配置管理器进行统一的配置更新
             try:
@@ -1333,13 +1194,27 @@ class ElegantSettingsWidget(QWidget):
                 self.write_api_key_to_env(self.pending_changes['api.api_key'])
             
             # 通过配置管理器更新配置（会自动写入config.json并触发热更新）
-            success = update_config(nested_updates)
-            if not success:
-                self.update_status_label("✗ 配置更新失败")
-                return
+            success = True
+            if changes_count > 0:
+                success = update_config(nested_updates)
+                if not success:
+                    self.update_status_label("✗ 配置更新失败")
+                    return
+
+            # 保存系统提示词到文件 #
+            if prompt_changes_count > 0:
+                try:
+                    from system.config import save_prompt  # 延迟导入 #
+                    for name, content in self.pending_prompts.items():
+                        save_prompt(name, content)
+                except Exception as e:
+                    self.update_status_label(f"✗ 提示词保存失败: {e}")
+                    return
                     
-            self.update_status_label(f"✓ 已保存 {changes_count}/{changes_count} 项设置")
+            self.update_status_label(f"✓ 已保存 配置{changes_count}项/提示词{prompt_changes_count}项")
             self.pending_changes.clear()
+            if hasattr(self, 'pending_prompts'):
+                self.pending_prompts.clear()
             
             # 等待配置重新加载完成
             import time
@@ -1382,8 +1257,8 @@ class ElegantSettingsWidget(QWidget):
             
             # 设置值，处理特殊转换
             final_key = keys[-1]
-            if setting_key in ['api.temperature', 'grag.similarity_threshold', 'ui.bg_alpha']:
-                # 温度、相似度、透明度值从0-100转换为0.0-1.0
+            if setting_key in ['api.temperature', 'grag.similarity_threshold']:
+                # 温度、相似度值从0-100转换为0.0-1.0
                 current[final_key] = value / 100.0
             else:
                 current[final_key] = value
@@ -1398,18 +1273,13 @@ class ElegantSettingsWidget(QWidget):
 
 
 if __name__ == "__main__":
-    from nagaagent_core.vendors.PyQt5.QtWidgets import QApplication  # 统一入口 #
+    from nagaagent_core.vendors.PyQt5.QtWidgets import QApplication  # 统一入口 # type: ignore
     
     app = QApplication([])
     
     # 创建测试窗口
     test_window = QWidget()
-    test_window.setStyleSheet("""
-        QWidget {
-            background: rgba(25, 25, 25, 220);
-            color: white;
-        }
-    """)
+    test_window.setStyleSheet(TEST_WINDOW_STYLE)
     test_window.resize(800, 600)
     
     layout = QVBoxLayout(test_window)

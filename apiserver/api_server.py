@@ -250,8 +250,10 @@ async def chat(request: ChatRequest):
         # 获取或创建会话ID
         session_id = message_manager.create_session(request.session_id)
         
-        # 构建系统提示词（不再注入服务信息）
-        system_prompt = get_prompt("naga_system_prompt", ai_name=AI_NAME)
+        # 构建系统提示词（拼接主提示词和对话风格）
+        main_prompt = get_prompt("naga_system_prompt", ai_name=AI_NAME)
+        style_prompt = get_prompt("conversation_style_prompt")
+        system_prompt = f"{main_prompt}\n\n{style_prompt}"
         
         # 使用消息管理器构建完整的对话消息（纯聊天，不触发工具）
         messages = message_manager.build_conversation_messages(
@@ -346,8 +348,10 @@ async def chat_stream(request: ChatRequest):
             # 发送会话ID信息
             yield f"data: session_id: {session_id}\n\n"
             
-            # 构建系统提示词（不再注入服务信息）
-            system_prompt = get_prompt("naga_system_prompt", ai_name=AI_NAME)
+            # 构建系统提示词（拼接主提示词和对话风格）
+            main_prompt = get_prompt("naga_system_prompt", ai_name=AI_NAME)
+            style_prompt = get_prompt("conversation_style_prompt")
+            system_prompt = f"{main_prompt}\n\n{style_prompt}"
             
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(

@@ -549,7 +549,11 @@ class QwenVoiceClientRefactored:
                 # 获取AI名称
                 ai_name = config.system.ai_name
                 # 获取语音端到端提示词
-                instructions = get_prompt("voice_end2end_prompt", ai_name=ai_name)
+                voice_prompt = get_prompt("voice_end2end_prompt", ai_name=ai_name)
+                # 获取对话风格提示词
+                style_prompt = get_prompt("conversation_style_prompt")
+                # 拼接完整的语音提示词
+                instructions = f"{voice_prompt}\n\n{style_prompt}"
                 logger.info(f"已加载语音提示词，AI名称: {ai_name}")
             except Exception as e:
                 logger.warning(f"加载语音提示词失败: {e}")

@@ -147,8 +147,14 @@ class MessageManager:
         """构建完整的对话消息列表"""
         messages = []
         
+        # 添加当前时间信息到系统提示词
+        from datetime import datetime
+        current_time = datetime.now()
+        time_info = f"\n\n【当前时间信息】\n当前日期：{current_time.strftime('%Y年%m月%d日')}\n当前时间：{current_time.strftime('%H:%M:%S')}\n当前星期：{current_time.strftime('%A')}\n"
+        enhanced_system_prompt = system_prompt + time_info
+        
         # 添加系统提示词
-        messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "system", "content": enhanced_system_prompt})
         
         # 添加历史对话
         if include_history:
@@ -176,8 +182,14 @@ class MessageManager:
         """
         messages = []
         
+        # 添加当前时间信息到系统提示词
+        from datetime import datetime
+        current_time = datetime.now()
+        time_info = f"\n\n【当前时间信息】\n当前日期：{current_time.strftime('%Y年%m月%d日')}\n当前时间：{current_time.strftime('%H:%M:%S')}\n当前星期：{current_time.strftime('%A')}\n"
+        enhanced_system_prompt = system_prompt + time_info
+        
         # 添加系统提示词
-        messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "system", "content": enhanced_system_prompt})
         
         # 计算最大消息数量
         if max_history_rounds is None:

@@ -238,13 +238,18 @@ class VisualAnalyzer:
         
         try:
             from langchain_openai import ChatOpenAI
-            from config import OPENROUTER_API_KEY, OPENROUTER_URL, SUMMARY_MODEL
+            # 统一从系统配置读取视觉LLM参数
+            from system.config import config
+            cc = getattr(config, 'computer_control', None)
+            model = getattr(cc, 'model', None) or config.api.model
+            base_url = getattr(cc, 'model_url', None) or config.api.base_url
+            api_key = getattr(cc, 'api_key', None) or config.api.api_key
             
             # 初始化LLM
             llm = ChatOpenAI(
-                model=SUMMARY_MODEL,
-                base_url=OPENROUTER_URL,
-                api_key=OPENROUTER_API_KEY,
+                model=model,
+                base_url=base_url,
+                api_key=api_key,
                 temperature=0
             )
             
