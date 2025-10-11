@@ -199,9 +199,6 @@ class DocumentTool():
             self.chat_tool.add_user_message("系统", f"❌ 文档处理失败: {str(e)}")
     
 from ..utils.lazy import lazy
-tool = None
 @lazy
 def document():
-    if tool is None:
-        tool = DocumentTool(config.window)
-    return tool
+    return DocumentTool(config.window)

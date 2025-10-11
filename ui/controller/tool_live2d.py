@@ -56,9 +56,6 @@ class Live2DTool():
         return self.side.is_live2d_available()
 
 from ..utils.lazy import lazy
-tool = None
 @lazy
 def live2d():
-    if tool is None:
-        tool = Live2DTool(config.window)
-    return tool
+    return Live2DTool(config.window)

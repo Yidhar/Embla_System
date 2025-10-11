@@ -121,9 +121,6 @@ class VoiceTool():
 
 
 from ..utils.lazy import lazy
-tool = None
 @lazy
 def voice():
-    if tool is None:
-        tool = VoiceTool(config.window)
-    return tool
+    return VoiceTool(config.window)

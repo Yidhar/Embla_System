@@ -112,9 +112,6 @@ class SideTool():
     
     
 from ..utils.lazy import lazy
-tool = None
 @lazy
 def side():
-    if tool is None:
-        tool = SideTool(config.window)
-    return tool
+    return SideTool(config.window)

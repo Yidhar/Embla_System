@@ -109,9 +109,6 @@ class SettingTool():
     
 
 from ..utils.lazy import lazy
-tool = None
 @lazy
 def setting():
-    if tool is None:
-        tool = SettingTool(config.window)
-    return tool
+    return SettingTool(config.window)

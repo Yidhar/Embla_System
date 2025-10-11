@@ -6,7 +6,7 @@
 import asyncio
 import time
 from nagaagent_core.vendors.PyQt5.QtCore import QThread, pyqtSignal  # 统一入口 #
-from ui.tools.tool_response import extract_message
+from ui.utils.response_util import extract_message
 from system.config import config, AI_NAME  # 导入配置模块
 
 class EnhancedWorker(QThread):

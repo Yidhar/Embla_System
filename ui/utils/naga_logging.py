@@ -1,6 +1,6 @@
 
 import logging
-from ..tools.tool_chat import getChatTool
+from ..controller.tool_chat import chat
 from system.config import config
 # 设置日志
 
@@ -9,9 +9,9 @@ class NagaLogging:
         self.logger = logging.getLogger(name)
         
     def append(self):
+        
         if config.window != None:
-            self.chat_tool = getChatTool()
-            self.chat_tool.append_log(self.logger.handlers[0].stream)
+            chat.append_log(self.logger.handlers[0].stream)
 
     def debug(self, message, show=True):
         self.logger.debug(message)

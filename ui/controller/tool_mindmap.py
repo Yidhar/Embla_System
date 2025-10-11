@@ -4,7 +4,7 @@ from system.config import config
 # 设置日志
 logger = logging.getLogger(__name__)
 
-class GameTool():
+class MindmapTool():
     def __init__(self, window):
         self.window = window
         
@@ -53,9 +53,6 @@ class GameTool():
             self.chat_tool.add_user_message("系统", f"❌ 打开心智云图失败: {str(e)}")
 
 from ..utils.lazy import lazy
-tool = None
 @lazy
-def game():
-    if tool is None:
-        tool = GameTool(config.window)
-    return tool
+def mindmap():
+    return MindmapTool(config.window)

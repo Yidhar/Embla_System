@@ -630,8 +630,7 @@ tool = None
 @lazy
 def stream():
     window=config.window
-    if tool is None:
-        tool = StreamingTool(
+    return StreamingTool(
             chat_layout=window.chatui.chat_layout,
             chat_scroll_area=window.chatui.chat_scroll_area,
             progress_widget=window.chatui.progress_widget,
@@ -641,4 +640,3 @@ def stream():
             logger=logger,
             window=window
         )
-    return tool
