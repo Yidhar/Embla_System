@@ -105,7 +105,7 @@ class UnifiedVoiceManager(QObject):
                         break
                 else:
                     logger.error("[统一语音] 没有可用的语音模式")
-                    self.parent.add_user_message("系统", "❌ 没有可用的语音模式")
+                    self.parent.chat_tool.add_user_message("系统", "❌ 没有可用的语音模式")
                     return False
 
             # 停止当前的语音服务
@@ -156,7 +156,7 @@ class UnifiedVoiceManager(QObject):
             logger.error(f"[统一语音] 启动失败: {e}")
             import traceback
             traceback.print_exc()
-            self.parent.add_user_message("系统", f"❌ 启动语音服务失败: {str(e)}")
+            self.parent.chat_tool.add_user_message("系统", f"❌ 启动语音服务失败: {str(e)}")
             return False
 
     def stop_voice(self):

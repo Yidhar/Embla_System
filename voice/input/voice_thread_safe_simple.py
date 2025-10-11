@@ -54,7 +54,7 @@ class ThreadSafeVoiceIntegration(QObject):
             self.voice_client = create_voice_client(**config_params)
 
             if not self.voice_client:
-                self.parent.add_user_message("系统", "❌ 语音服务创建失败")
+                self.parent.chat_tool.add_user_message("系统", "❌ 语音服务创建失败")
                 return False
 
             # 设置回调函数 - 使用线程安全的包装器
@@ -71,17 +71,17 @@ class ThreadSafeVoiceIntegration(QObject):
                 self.parent.voice_realtime_active = True
                 self.parent.voice_realtime_state = "listening"
                 self.parent.update_voice_button_state("listening")
-                self.parent.add_user_message("系统", "✅ 实时语音模式已启动，请开始说话...")
+                self.parent.chat_tool.add_user_message("系统", "✅ 实时语音模式已启动，请开始说话...")
                 return True
             else:
-                self.parent.add_user_message("系统", "❌ 语音服务连接失败，请检查API密钥和网络连接")
+                self.parent.chat_tool.add_user_message("系统", "❌ 语音服务连接失败，请检查API密钥和网络连接")
                 self.voice_client = None
                 return False
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.parent.add_user_message("系统", f"❌ 启动语音服务失败: {str(e)}")
+            self.parent.chat_tool.add_user_message("系统", f"❌ 启动语音服务失败: {str(e)}")
             return False
 
     def stop_voice(self):
@@ -109,7 +109,7 @@ class ThreadSafeVoiceIntegration(QObject):
 
             # 只有不是超时断开时才显示停止消息
             if not getattr(self.parent, '_is_timeout_disconnect', False):
-                self.parent.add_user_message("系统", "🔇 实时语音模式已停止")
+                self.parent.chat_tool.add_user_message("系统", "🔇 实时语音模式已停止")
 
             # 清理超时标记（在判断后清理）
             if hasattr(self.parent, '_is_timeout_disconnect'):
@@ -122,7 +122,7 @@ class ThreadSafeVoiceIntegration(QObject):
             return True
 
         except Exception as e:
-            self.parent.add_user_message("系统", f"❌ 停止语音服务失败: {str(e)}")
+            self.parent.chat_tool.add_user_message("系统", f"❌ 停止语音服务失败: {str(e)}")
             return False
 
     def is_active(self):

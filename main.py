@@ -613,7 +613,7 @@ if __name__ == "__main__":
     
     # 快速启动UI，后台服务延迟初始化
     app = QApplication(sys.argv)
-    icon_path = os.path.join(os.path.dirname(__file__), "ui", "window_icon.png")
+    icon_path = os.path.join(os.path.dirname(__file__), "ui", "img/window_icon.png")
     app.setWindowIcon(QIcon(icon_path))
     
     # 集成控制台托盘功能

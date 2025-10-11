@@ -7,7 +7,7 @@
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=for-the-badge)
 
 ![Star History](https://img.shields.io/github/stars/Xxiii8322766509/NagaAgent?style=social)![Forks](https://img.shields.io/github/forks/Xxiii8322766509/NagaAgent?style=social)![Issues](https://img.shields.io/github/issues/Xxiii8322766509/NagaAgent)![Pull Requests](https://img.shields.io/github/issues-pr/Xxiii8322766509/NagaAgent)
-![UI 预览](ui/README.jpg)
+![UI 预览](ui/img/README.jpg)
 ---
 
 快速入门视频：[https://www.pylindex.top/naga/intro.mp4](https://www.pylindex.top/naga/intro.mp4)
@@ -488,7 +488,7 @@ restore_config_snapshot(snapshot)
   "live2d": {
     "enabled": true,
     "model_path": "path/to/your/model.model3.json",
-    "fallback_image": "ui/standby.png"
+    "fallback_image": "ui/img/standby.png"
   }
 }
 ```
@@ -984,7 +984,7 @@ agents = list_agents()
 ### 注意事项
 1. **权限要求**: 自启动功能需要管理员权限
 2. **依赖安装**: 需要安装`PyQt5`库
-3. **图标文件**: 默认使用`ui/window_icon.png`作为托盘图标
+3. **图标文件**: 默认使用`ui/img/window_icon.png`作为托盘图标
 4. **启动方式**: 使用`start_with_tray.bat`启动以启用托盘功能
 
 ---

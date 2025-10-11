@@ -247,7 +247,7 @@ class Live2DConfig(BaseModel):
     """Live2D配置"""
     enabled: bool = Field(default=False, description="是否启用Live2D功能")
     model_path: str = Field(default="", description="Live2D模型文件路径")
-    fallback_image: str = Field(default="ui/standby.png", description="回退图片路径")
+    fallback_image: str = Field(default="ui/img/standby.png", description="回退图片路径")
     auto_switch: bool = Field(default=True, description="是否自动切换模式")
     animation_enabled: bool = Field(default=True, description="是否启用动画")
     touch_interaction: bool = Field(default=True, description="是否启用触摸交互")
@@ -459,7 +459,8 @@ class NagaConfig(BaseModel):
     online_search: OnlineSearchConfig = Field(default_factory=OnlineSearchConfig)
     system_check: SystemCheckConfig = Field(default_factory=SystemCheckConfig)
     computer_control: ComputerControlConfig = Field(default_factory=ComputerControlConfig)
-
+    
+    window = None
     model_config = {"extra": "ignore"}
 
     def __init__(self, **kwargs):
