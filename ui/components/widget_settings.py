@@ -1272,6 +1272,69 @@ class ElegantSettingsWidget(QWidget):
         self.update_status_label("● 设置已重置")
 
 
+from nagaagent_core.vendors.PyQt5.QtCore import Qt
+from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget, QTextEdit, QSizePolicy, QHBoxLayout, QLabel, QVBoxLayout, QStackedWidget, QScrollArea, QSplitter
+from ui.controller import setting
+
+class SettingWidget(QWidget):
+    def __init__(self, parent:QWidget=None):
+        super().__init__(parent)
+        self.setObjectName("SettingsPage")
+        self.setStyleSheet("""
+                    #SettingsPage {
+                        background: transparent;
+                        border-radius: 24px;
+                        padding: 12px;
+                    }
+                """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # 创建滚动区域
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setStyleSheet("""
+                    QScrollArea {
+                        background: transparent;
+                        border: none;
+                    }
+                    QScrollArea > QWidget > QWidget {
+                        background: transparent;
+                    }
+                    QScrollBar:vertical {
+                        background: rgba(255, 255, 255, 20);
+                        width: 6px;
+                        border-radius: 3px;
+                    }
+                    QScrollBar::handle:vertical {
+                        background: rgba(255, 255, 255, 60);
+                        border-radius: 3px;
+                        min-height: 20px;
+                    }
+                    QScrollBar::handle:vertical:hover {
+                        background: rgba(255, 255, 255, 80);
+                    }
+                """)
+        scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # 滚动内容
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet("background: transparent;")
+        scroll_content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(12, 12, 12, 12)
+        scroll_layout.setSpacing(20)
+        # 只保留系统设置界面
+        self.settings_widget = ElegantSettingsWidget(scroll_content)
+        self.settings_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.settings_widget.settings_changed.connect(setting.on_settings_changed)
+        scroll_layout.addWidget(self.settings_widget, 1)
+        scroll_layout.addStretch()
+        scroll_area.setWidget(scroll_content)
+        layout.addWidget(scroll_area, 1)
+
 if __name__ == "__main__":
     from nagaagent_core.vendors.PyQt5.QtWidgets import QApplication  # 统一入口 # type: ignore
     

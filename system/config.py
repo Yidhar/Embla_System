@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime
+
+from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget
 from pydantic import BaseModel, Field, field_validator
 
 # 配置变更监听器
@@ -459,14 +461,20 @@ class NagaConfig(BaseModel):
     online_search: OnlineSearchConfig = Field(default_factory=OnlineSearchConfig)
     system_check: SystemCheckConfig = Field(default_factory=SystemCheckConfig)
     computer_control: ComputerControlConfig = Field(default_factory=ComputerControlConfig)
-    
-    window = None
-    model_config = {"extra": "ignore"}
+    window: QWidget = Field(default=None)
 
+    model_config = {
+        "extra": "ignore",  # 保留原配置：忽略未定义的字段
+        "arbitrary_types_allowed": True,  # 允许非标准类型（如 QWidget）
+        "json_schema_extra": {
+            "exclude": ["window"]  # 序列化到 config.json 时排除 window 字段（避免报错）
+        }
+    }
     def __init__(self, **kwargs):
         setup_environment()
         super().__init__(**kwargs)
-        self.system.log_dir.mkdir(parents=True, exist_ok=True)  # 确保递归创建日志目录 #
+        self.system.log_dir.mkdir(parents=True, exist_ok=True)  # 确保递归创建日志目录
+
 
 # 全局配置实例
 ENCF = 0  # 编码修复计数器
@@ -552,4 +560,5 @@ except Exception:
 
 # 向后兼容的AI_NAME常量
 AI_NAME = config.system.ai_name
-
+import logging
+logger = logging.getLogger(__name__)

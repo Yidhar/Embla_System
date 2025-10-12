@@ -1,8 +1,6 @@
 import os
 import logging
-from system.config import config
-# 设置日志
-logger = logging.getLogger(__name__)
+from system.config import config, logger
 
 class MindmapTool():
     def __init__(self, window):

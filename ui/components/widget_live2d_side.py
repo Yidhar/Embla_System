@@ -1,13 +1,9 @@
 import os
-import sys
-import json
-import time
-import threading
-from pathlib import Path
 from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget, QStackedLayout, QLabel, QSizePolicy  # 统一入口 #
 from nagaagent_core.vendors.PyQt5.QtCore import Qt, QTimer, pyqtSignal  # 统一入口 #
 from nagaagent_core.vendors.PyQt5.QtGui import QPixmap, QPainter, QColor, QBrush, QPen  # 统一入口 #
 
+from system.config import config, logger
 # 导入独立的Live2D模块
 try:
     from ..live2d import Live2DWidget
@@ -70,13 +66,26 @@ class Live2DSideWidget(QWidget):
         self.stack_layout.addWidget(self.image_widget)  # index 0: 图片模式
         if self.live2d_widget:
             self.stack_layout.addWidget(self.live2d_widget)  # index 1: Live2D模式
-        
+
+        # Live2D相关配置
+        self.live2d_enabled = config.live2d.enabled  # 是否启用Live2D
+        self.live2d_model_path = config.live2d.model_path  # Live2D模型路径
         # 默认显示图片模式
         self.stack_layout.setCurrentIndex(0)
         
         # 设置鼠标指针
         self.setCursor(Qt.PointingHandCursor)
-    
+
+    def initialize_live2d(self):
+        """初始化Live2D"""
+        if self.live2d_enabled and self.live2d_model_path:
+            if os.path.exists(self.live2d_model_path):
+                self.set_live2d_model(self.live2d_model_path)  # 调用已有输出逻辑
+            else:
+                logger.warning(f"⚠️ Live2D模型文件不存在: {self.live2d_model_path}")
+        else:
+            logger.info("📝 Live2D功能未启用或未配置模型路径")
+
     def set_background_alpha(self, alpha):
         """设置背景透明度"""
         self.bg_alpha = alpha

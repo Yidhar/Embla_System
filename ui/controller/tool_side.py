@@ -1,16 +1,17 @@
 from system.config import config
 from nagaagent_core.vendors.PyQt5.QtCore import Qt, QParallelAnimationGroup, QPropertyAnimation, QEasingCurve
 import os
-from system.config import config
-import logging
-
-# 设置日志
-logger = logging.getLogger(__name__)
+from system.config import config, logger
 class SideTool():
     def __init__(self, window):
         self.window = window
         self.side=self.window.side
+        self.expanded_width=self.window.expanded_width
+        self.collapsed_width=self.window.collapsed_width
         self.side.mousePressEvent=self.toggle_full_img # 侧栏点击切换聊天/设置
+        self.full_img=0 # 立绘展开标志，0=收缩状态，1=展开状态
+        self.animating = False  # 动画标志位，动画期间为True
+        self._img_inited = False  # 标志变量，图片自适应只在初始化时触发一次
         
     
     def toggle_full_img(self,e):

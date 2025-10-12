@@ -1,25 +1,15 @@
 import sys, os; sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + '/..'))
 from .styles.button_factory import ButtonFactory
-from nagaagent_core.vendors.PyQt5.QtWidgets import QApplication, QWidget, QTextEdit, QSizePolicy, QHBoxLayout, QLabel, QVBoxLayout, QStackedLayout, QPushButton, QStackedWidget, QDesktopWidget, QScrollArea, QSplitter, QFileDialog, QMessageBox, QFrame  # 统一入口 #
-from nagaagent_core.vendors.PyQt5.QtCore import Qt, QRect, QParallelAnimationGroup, QPropertyAnimation, QEasingCurve, QTimer, QThread, pyqtSignal, QObject, QEvent  # 统一入口 #
-from nagaagent_core.vendors.PyQt5.QtGui import QColor, QPainter, QBrush, QFont, QPen  # 统一入口 #
-# conversation_core已删除，相关功能已迁移到apiserver
+from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget, QTextEdit, QSizePolicy, QHBoxLayout, QLabel, QVBoxLayout, QStackedWidget, QDesktopWidget, QScrollArea, QSplitter
+from nagaagent_core.vendors.PyQt5.QtCore import Qt, QEvent
+from nagaagent_core.vendors.PyQt5.QtGui import QColor, QPainter, QBrush
 import os
-from system.config import config, AI_NAME, Live2DConfig # 导入统一配置
-from ui.message_renderer import MessageRenderer  # 导入消息渲染器
-# 语音输入功能已迁移到统一语音管理器
-import json
-from nagaagent_core.core import requests
-from pathlib import Path
-import time
-import logging
-
-from .title_bar import TitleBar
-from .utils.response_util import extract_message
+from system.config import config, logger
+from ui.components.title_bar import TitleBar
+from .components.widget_progress import EnhancedProgressWidget
+from .components.widget_live2d_side import Live2DSideWidget
+from .components.widget_settings import SettingWidget
 from .controller import *
-
-# 设置日志
-logger = logging.getLogger(__name__)
 
 # 使用统一配置系统
 def get_ui_config():
@@ -47,18 +37,12 @@ ANIMATION_DURATION = ui_config['ANIMATION_DURATION']
 class ChatWindow(QWidget):
     def __init__(self):
         super().__init__()
-        
-        self._init_windows()
-        
         config.window=self
-        
-        
-        self.resizeEvent(None)  # 强制自适应一次，修复图片初始尺寸
-        # 加载历史记录（替换原_self_load_persistent_context_to_ui） 
-        chat.load_persistent_history(
-            max_messages=config.api.max_history_rounds * 2
-        )
-        
+        self._init_windows()
+        self._init_Layout()
+        self._init_buttons()
+        self._init_side()
+        self._init_end()
         
     def _init_windows(self):
         # 设置为屏幕大小的80%
@@ -87,7 +71,6 @@ class ChatWindow(QWidget):
                 border: 1px solid rgba(255, 255, 255, 30);
             }}
         """)
-        self.setLayout(self.chat_tool.main)
         self.titlebar = TitleBar('NAGA AGENT', self)
         self.titlebar.setGeometry(0,0,self.width(),100)
     
@@ -96,7 +79,7 @@ class ChatWindow(QWidget):
         fontfam,fontsize='Lucida Console',16
         
         # 创建主分割器，替换原来的HBoxLayout
-        self.main_splitter = QSplitter(Qt.Horizontal, self.window)
+        self.main_splitter = QSplitter(Qt.Horizontal, config.window)
         self.main_splitter.setStyleSheet("""
             QSplitter {
                 background: transparent;
@@ -114,20 +97,18 @@ class ChatWindow(QWidget):
         
         # 聊天区域容器
         self.chat_area=QWidget()
-        self.chat_area.setMinimumWidth(400)  # 设置最小宽度
-        self.vlay=QVBoxLayout(self.chat_area);
-        self.vlay.setContentsMargins(0,0,0,0);
+        self.chat_area.setMinimumWidth(400)
+        self.vlay=QVBoxLayout(self.chat_area)
+        self.vlay.setContentsMargins(0,0,0,0)
         self.vlay.setSpacing(10)
-        
-        # 用QStackedWidget管理聊天区和设置页
+
         self.chat_stack = QStackedWidget(self.chat_area)
         self.chat_stack.setStyleSheet("""
             QStackedWidget {
                 background: transparent;
                 border: none;
             }
-        """) # 保证背景穿透
-        # 创建聊天页面容器
+        """)
         self.chat_page = QWidget()
         self.chat_page.setStyleSheet("""
             QWidget {
@@ -174,16 +155,15 @@ class ChatWindow(QWidget):
         self.chat_layout.setContentsMargins(10, 10, 10, 10)
         self.chat_layout.setSpacing(10)
         self.chat_layout.addStretch()  # 添加弹性空间，让消息从顶部开始
-        
         self.chat_scroll_area.setWidget(self.chat_content)
         
         # 创建聊天页面布局
-        chat_page_layout = QVBoxLayout(self.chat_page)
-        chat_page_layout.setContentsMargins(0, 0, 0, 0)
-        chat_page_layout.addWidget(self.chat_scroll_area)
-        
+        self.chat_page_layout = QVBoxLayout(self.chat_page)
+        self.chat_page_layout.setContentsMargins(0, 0, 0, 0)
+        self.chat_page_layout.addWidget(self.chat_scroll_area)
+
         self.chat_stack.addWidget(self.chat_page) # index 0 聊天页
-        self.settings_page = self.create_settings_page() # index 1 设置页
+        self.settings_page = SettingWidget() # index 1 设置页
         self.chat_stack.addWidget(self.settings_page)
         self.vlay.addWidget(self.chat_stack, 1)
         
@@ -191,11 +171,13 @@ class ChatWindow(QWidget):
         self.progress_widget = EnhancedProgressWidget(self.chat_area)
         self.vlay.addWidget(self.progress_widget)
         # 连接进度组件信号
-        self.progress_widget.cancel_requested.connect(self.streaming_chat.cancel_current_task)
+        self.progress_widget.cancel_requested.connect(chat.cancel_current_task)
         
         self.input_wrap=QWidget(self.chat_area)
         self.input_wrap.setFixedHeight(60)  # 增加输入框包装器的高度，与字体大小匹配
-        self.hlay=QHBoxLayout(self.input_wrap);self.hlay.setContentsMargins(0,0,0,0);self.hlay.setSpacing(8)
+        self.hlay=QHBoxLayout(self.input_wrap)
+        self.hlay.setContentsMargins(0,0,0,0)
+        self.hlay.setSpacing(8)
         self.prompt=QLabel('>',self.input_wrap)
         self.prompt.setStyleSheet(f"color:#fff;font:{fontsize}pt '{fontfam}';background:transparent;")
         self.hlay.addWidget(self.prompt)
@@ -218,32 +200,28 @@ class ChatWindow(QWidget):
         # 初始化消息存储
         self._messages = {}
         self._message_counter = 0
-        
-        # 加载持久化历史对话到前端
-        self.streaming_tool._load_persistent_context_to_ui()
-        self.input.textChanged.connect(self.adjust_input_height)
-        self.input.installEventFilter(self.window)
+
+        self.input.textChanged.connect(chat.adjust_input_height)
+        self.input.installEventFilter(self)
         
         # 添加文档上传按钮
         self.upload_btn = ButtonFactory.create_action_button("upload", self.input_wrap)
         self.hlay.addWidget(self.upload_btn)
         # 连接文档上传按钮
-        self.document_tool = DocumentTool(self)
-        self.upload_btn.clicked.connect(self.document_tool.upload_document)
+        self.upload_btn.clicked.connect(document.upload_document)
         
         # 添加心智云图按钮
         self.mind_map_btn = ButtonFactory.create_action_button("mind_map", self.input_wrap)
         self.hlay.addWidget(self.mind_map_btn)
         # 连接心智云图按钮
-        self.mind_map_btn.clicked.connect(self.open_mind_map)
+        self.mind_map_btn.clicked.connect(mindmap.open_mind_map)
 
         # 添加博弈论启动/关闭按钮
-        self.self_game_enabled = False
         self.self_game_btn = ButtonFactory.create_action_button("self_game", self.input_wrap)
         self.self_game_btn.setToolTip("启动/关闭博弈论流程")
         self.hlay.addWidget(self.self_game_btn)
         # 连接博弈论按钮
-        self.self_game_btn.clicked.connect(self.toggle_self_game)
+        self.self_game_btn.clicked.connect(game.toggle_self_game)
         
         # 实时语音相关
         self.voice_realtime_client = None  # 语音客户端（废弃，使用线程安全版本）
@@ -254,8 +232,8 @@ class ChatWindow(QWidget):
         self.voice_realtime_btn.setToolTip("启动/关闭实时语音对话")
         self.hlay.addWidget(self.voice_realtime_btn)
         # 连接实时语音按钮
-        self.voice_realtime_btn.clicked.connect(self.toggle_voice_realtime)
-        
+        self.voice_realtime_btn.clicked.connect(voice.toggle_voice_realtime)
+
         
     def _init_side(self):
         self.vlay.addWidget(self.input_wrap,0)
@@ -282,6 +260,7 @@ class ChatWindow(QWidget):
         
         # 设置鼠标指针，提示可点击
         self.side.setCursor(Qt.PointingHandCursor)
+        self.side.mousePressEvent = side.toggle_full_img # 侧栏点击切换聊天/设置
         
         # 设置默认图片
         default_image = os.path.join(os.path.dirname(__file__), 'img/standby.png')
@@ -289,8 +268,8 @@ class ChatWindow(QWidget):
             self.side.set_fallback_image(default_image)
         
         # 连接Live2D侧栏的信号
-        self.side.model_loaded.connect(self.on_live2d_model_loaded)
-        self.side.error_occurred.connect(self.on_live2d_error)
+        self.side.model_loaded.connect(live2d.on_live2d_model_loaded)
+        self.side.error_occurred.connect(live2d.on_live2d_error)
         
         # 将侧栏添加到分割器
         self.main_splitter.addWidget(self.side)
@@ -302,23 +281,18 @@ class ChatWindow(QWidget):
         self.main=QVBoxLayout(self)
         self.main.setContentsMargins(10,110,10,10)
         self.main.addWidget(self.main_splitter)
-        
-        self.naga=None  # conversation_core已删除，相关功能已迁移到apiserver
-        self.worker=None
-        self.full_img=0 # 立绘展开标志，0=收缩状态，1=展开状态
-        self.streaming_mode = config.system.stream_mode  # 根据配置决定是否使用流式模式
-        self.current_response = ""  # 当前响应缓冲
-        self.animating = False  # 动画标志位，动画期间为True
-        self._img_inited = False  # 标志变量，图片自适应只在初始化时触发一次
+        self.setLayout(self.main)
 
-        # Live2D相关配置
-        self.live2d_enabled = config.live2d.enabled  # 是否启用Live2D
-        self.live2d_model_path = config.live2d.model_path  # Live2D模型路径
-        # 初始化Live2D（如果启用）
-        self.initialize_live2d()  
-        
-        self._init_voice()
-# PyQt不再处理语音输出，由apiserver直接交给voice/output处理
+        # 初始化Live2D
+        self.side.initialize_live2d()
+
+    def _init_end(self):
+        self.resizeEvent(None)  # 强制自适应一次，修复图片初始尺寸
+        # 加载历史记录（替换原_self_load_persistent_context_to_ui）
+        chat.load_persistent_history(
+            max_messages=config.api.max_history_rounds * 2
+        )
+
 
 
 #==========MouseEvents==========
@@ -379,7 +353,7 @@ class ChatWindow(QWidget):
             if is_enter_key:
                 if not is_shift_pressed:
                     # 纯回车：发送消息，阻止默认换行
-                    self.chat_tool.on_send()
+                    chat.on_send()
                     return True  # 返回True表示事件已处理，不传递给输入框
                 else:
                     # Shift+回车：放行事件，让输入框正常换行

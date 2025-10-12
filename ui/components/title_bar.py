@@ -3,12 +3,7 @@ from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget, QPushButton
 from nagaagent_core.vendors.PyQt5.QtCore import Qt, QRect
 from nagaagent_core.vendors.PyQt5.QtGui import QColor, QPainter, QFont
 import os
-from system.config import config
-import logging
-
-# 设置日志
-logger = logging.getLogger(__name__)
-
+from system.config import config, logger
 # 使用统一配置系统
 def get_ui_config():
     """获取UI配置，确保使用最新的配置值"""

@@ -1,15 +1,10 @@
 from system.config import config
 import os
-from system.config import config
-import logging
-
-# 设置日志
-logger = logging.getLogger(__name__)
+from system.config import config, logger
 class SettingTool():
     def __init__(self, window):
         self.window = window
-        
-    
+
     def on_settings_changed(self, setting_key, value):
         """处理设置变化"""
         logger.debug(f"设置变化: {setting_key} = {value}")
@@ -101,12 +96,9 @@ class SettingTool():
         """)
     
         # 触发重绘
-        self.update()
+        self.window.update()
 
         logger.info(f"✅ 窗口背景透明度已设置为: {WINDOW_BG_ALPHA}/255 ({WINDOW_BG_ALPHA/255*100:.1f}%不透明度)")
-
-
-    
 
 from ..utils.lazy import lazy
 @lazy

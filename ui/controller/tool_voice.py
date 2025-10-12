@@ -1,5 +1,4 @@
-from system.config import config
-
+from system.config import config, logger
 class VoiceTool():
     def __init__(self, window):
         self.window = window
