@@ -39,7 +39,7 @@ live2d_models/
   "live2d": {
     "enabled": true,
     "model_path": "live2d_models/characters/llny/mianfeimox/llny.model3.json",
-    "fallback_image": "ui/standby.png"
+    "fallback_image": "ui/img/standby.png"
   }
 }
 ```

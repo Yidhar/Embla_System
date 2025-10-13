@@ -51,7 +51,7 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from system.config import config, AI_NAME  # 使用新的配置系统
     from system.config import get_prompt  # 导入提示词仓库
-from ui.response_utils import extract_message  # 导入消息提取工具
+from ui.utils.response_util import extract_message  # 导入消息提取工具
 
 # conversation_core已删除，相关功能已迁移到apiserver
 
@@ -320,8 +320,8 @@ async def chat(request: ChatRequest):
         
         
         # 异步触发后台意图分析 - 基于博弈论的背景分析机制
-        _trigger_background_analysis(session_id)
-        
+        #_trigger_background_analysis(session_id)
+
         return ChatResponse(
             response=extract_message(pure_text_content[0]) if pure_text_content[0] else pure_text_content[0],
             session_id=session_id,
@@ -454,6 +454,7 @@ async def chat_stream(request: ChatRequest):
                                 error_detail = "LLM API请求过于频繁，请稍后重试"
                             elif resp.status >= 500:
                                 error_detail = f"LLM API服务器错误 (状态码: {resp.status})"
+                            logger.error(f"[API Server] 流式响应失败，状态码: {resp.status}")
                             raise HTTPException(status_code=resp.status, detail=error_detail)
 
                         logger.info(f"[API Server] LLM流式响应开始，状态码: {resp.status}")
@@ -464,6 +465,7 @@ async def chat_stream(request: ChatRequest):
                             async for chunk in resp.content.iter_chunked(1024):  # 使用固定大小的块
                                 if not chunk:
                                     break
+                                logger.info(f"[API Server] LLM流式处理中: {chunk}")
 
                                 try:
                                     # 解码并处理数据
@@ -593,8 +595,8 @@ async def chat_stream(request: ChatRequest):
             
             
             # 异步触发后台意图分析 - 基于博弈论的背景分析机制
-            _trigger_background_analysis(session_id)
-            
+            #_trigger_background_analysis(session_id)
+
             yield "data: [DONE]\n\n"
             
         except Exception as e:

@@ -653,7 +653,7 @@ def process_document(self, file_path, action, dialog=None):
             "summarize": "摘要"
         }
         
-        self.add_user_message("系统", f"🔄 正在{action_names[action]}文档...")
+        self.chat_tool.add_user_message("系统", f"🔄 正在{action_names[action]}文档...")
         self.progress_widget.set_thinking_mode()
         self.progress_widget.status_label.setText(f"{action_names[action]}文档中...")
         
@@ -674,29 +674,29 @@ def process_document(self, file_path, action, dialog=None):
             if action == "read":
                 content = result.get('content', '')
                 message = f"📖 文档内容:\n\n{content}"
-                self.add_user_message("娜迦", message)
+                self.chat_tool.add_user_message("娜迦", message)
                 # 将文档内容添加到对话历史中
                 self.naga.messages.append({"role": "assistant", "content": message})
             elif action == "analyze":
                 analysis = result.get('analysis', '')
                 message = f"🔍 文档分析:\n\n{analysis}"
-                self.add_user_message("娜迦", message)
+                self.chat_tool.add_user_message("娜迦", message)
                 self.naga.messages.append({"role": "assistant", "content": message})
             elif action == "summarize":
                 summary = result.get('summary', '')
                 message = f"📝 文档摘要:\n\n{summary}"
-                self.add_user_message("娜迦", message)
+                self.chat_tool.add_user_message("娜迦", message)
                 self.naga.messages.append({"role": "assistant", "content": message})
                 
         else:
             self.progress_widget.stop_loading()
             error_msg = f"❌ 文档处理失败: {response.text}"
-            self.add_user_message("系统", error_msg)
+            self.chat_tool.add_user_message("系统", error_msg)
             
     except Exception as e:
         self.progress_widget.stop_loading()
         error_msg = f"❌ 文档处理出错: {str(e)}"
-        self.add_user_message("系统", error_msg)
+        self.chat_tool.add_user_message("系统", error_msg)
 ```
 
 ## 🔄 处理流程
