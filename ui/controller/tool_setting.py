@@ -1,6 +1,9 @@
 from system.config import config
 import os
 from system.config import config, logger
+from . import chat
+from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget
+
 class SettingTool():
     def __init__(self, window):
         self.window = window
@@ -15,10 +18,10 @@ class SettingTool():
             self.apply_opacity_from_config()
             return
         if setting_key in ("system.stream_mode", "STREAM_MODE"):
-            self.streaming_mode = value if setting_key == "system.stream_mode" else value  # 兼容新旧键名 #
-            self.chat_tool.add_user_message("系统", f"● 流式模式已{'启用' if self.streaming_mode else '禁用'}")
+            chat.streaming_mode = value if setting_key == "system.stream_mode" else value  # 兼容新旧键名 #
+            chat.add_user_message("系统", f"● 流式模式已{'启用' if chat.streaming_mode else '禁用'}")
         elif setting_key in ("system.debug", "DEBUG"):
-            self.chat_tool.add_user_message("系统", f"● 调试模式已{'启用' if value else '禁用'}")
+            chat.add_user_message("系统", f"● 调试模式已{'启用' if value else '禁用'}")
         
         # 发送设置变化信号给其他组件
         # 这里可以根据需要添加更多处理逻辑
@@ -26,16 +29,16 @@ class SettingTool():
     def apply_opacity_from_config(self):
         """从配置中应用UI透明度(聊天区/输入框/侧栏/窗口)"""
         # 更新全局变量，保持其它逻辑一致 #
-        global BG_ALPHA, WINDOW_BG_ALPHA
+        from ui import pyqt_chat_window
         # 直接读取配置值，避免函数调用开销
-        BG_ALPHA = config.ui.bg_alpha
-        WINDOW_BG_ALPHA = config.ui.window_bg_alpha
+        pyqt_chat_window.BG_ALPHA = config.ui.bg_alpha
+        pyqt_chat_window.WINDOW_BG_ALPHA = config.ui.window_bg_alpha
 
         # 计算alpha #
-        alpha_px = int(BG_ALPHA * 255)
+        alpha_px = int(pyqt_chat_window.BG_ALPHA * 255)
 
         # 更新聊天区域背景 - 现在使用透明背景，对话框有自己的背景
-        self.chat_content.setStyleSheet(f"""
+        self.window.chat_content.setStyleSheet(f"""
             QWidget {{
                 background: transparent;
                 border: none;
@@ -44,7 +47,7 @@ class SettingTool():
 
         # 更新输入框背景 #
         fontfam, fontsize = 'Lucida Console', 16
-        self.input.setStyleSheet(f"""
+        self.window.input.setStyleSheet(f"""
             QTextEdit {{
                 background: rgba(17,17,17,{alpha_px});
                 color: #fff;
@@ -87,7 +90,7 @@ class SettingTool():
             return
         
         # 更新CSS样式表
-        self.setStyleSheet(f"""
+        self.window.setStyleSheet(f"""
             ChatWindow {{
                 background: rgba(25, 25, 25, {WINDOW_BG_ALPHA});
                 border-radius: 20px;

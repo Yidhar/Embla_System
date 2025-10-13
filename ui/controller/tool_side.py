@@ -1,7 +1,7 @@
-from system.config import config
 from nagaagent_core.vendors.PyQt5.QtCore import Qt, QParallelAnimationGroup, QPropertyAnimation, QEasingCurve
 import os
 from system.config import config, logger
+from . import chat
 class SideTool():
     def __init__(self, window):
         self.window = window
@@ -12,9 +12,11 @@ class SideTool():
         self.full_img=0 # 立绘展开标志，0=收缩状态，1=展开状态
         self.animating = False  # 动画标志位，动画期间为True
         self._img_inited = False  # 标志变量，图片自适应只在初始化时触发一次
-        
+        self._animating = False  # 设置动画标志位
+
     
     def toggle_full_img(self,e):
+        window=self.window
         if getattr(self, '_animating', False):  # 动画期间禁止重复点击
             return
         self._animating = True  # 设置动画标志位
@@ -23,11 +25,11 @@ class SideTool():
         
         # --- 立即切换界面状态 ---
         if self.full_img:  # 展开状态 - 进入设置页面
-            self.input_wrap.hide()  # 隐藏输入框
-            self.chat_stack.setCurrentIndex(1)  # 切换到设置页
+            window.input_wrap.hide()  # 隐藏输入框
+            window.chat_stack.setCurrentIndex(1)  # 切换到设置页
             self.side.setCursor(Qt.PointingHandCursor)  # 保持点击指针，可点击收缩
-            self.titlebar.text = "SETTING PAGE"
-            self.titlebar.update()
+            window.titlebar.text = "SETTING PAGE"
+            window.titlebar.update()
             self.side.setStyleSheet(f"""
                 QWidget {{
                     background: rgba(17,17,17,{int(config.ui.bg_alpha*255*0.9)});
@@ -36,12 +38,12 @@ class SideTool():
                 }}
             """)
         else:  # 收缩状态 - 主界面聊天模式
-            self.input_wrap.show()  # 显示输入框
-            self.chat_stack.setCurrentIndex(0)  # 切换到聊天页
-            self.input.setFocus()  # 恢复输入焦点
+            window.input_wrap.show()  # 显示输入框
+            window.chat_stack.setCurrentIndex(0)  # 切换到聊天页
+            window.input.setFocus()  # 恢复输入焦点
             self.side.setCursor(Qt.PointingHandCursor)  # 保持点击指针
-            self.titlebar.text = "NAGA AGENT"
-            self.titlebar.update()
+            window.titlebar.text = "NAGA AGENT"
+            window.titlebar.update()
             self.side.setStyleSheet(f"""
                 QWidget {{
                     background: rgba(17,17,17,{int(config.ui.bg_alpha*255*0.7)});
@@ -52,17 +54,17 @@ class SideTool():
         # --- 立即切换界面状态 END ---
         
         # 创建优化后的动画组
-        group = QParallelAnimationGroup(self)
+        group = QParallelAnimationGroup(window)
         
         # 侧栏宽度动画 - 合并为单个动画
-        side_anim = QPropertyAnimation(self.side, b"minimumWidth", self)
+        side_anim = QPropertyAnimation(self.side, b"minimumWidth", window)
         side_anim.setDuration(config.ui.animation_duration)
         side_anim.setStartValue(self.side.width())
         side_anim.setEndValue(target_width)
         side_anim.setEasingCurve(QEasingCurve.OutCubic)  # 使用更流畅的缓动
         group.addAnimation(side_anim)
         
-        side_anim2 = QPropertyAnimation(self.side, b"maximumWidth", self)
+        side_anim2 = QPropertyAnimation(self.side, b"maximumWidth", window)
         side_anim2.setDuration(config.ui.animation_duration)
         side_anim2.setStartValue(self.side.width())
         side_anim2.setEndValue(target_width)
@@ -71,14 +73,14 @@ class SideTool():
         
         # 输入框动画 - 进入设置时隐藏，退出时显示
         if self.full_img:
-            input_hide_anim = QPropertyAnimation(self.input_wrap, b"maximumHeight", self)
+            input_hide_anim = QPropertyAnimation(window.input_wrap, b"maximumHeight", window)
             input_hide_anim.setDuration(config.ui.animation_duration // 2)
-            input_hide_anim.setStartValue(self.input_wrap.height())
+            input_hide_anim.setStartValue(window.input_wrap.height())
             input_hide_anim.setEndValue(0)
             input_hide_anim.setEasingCurve(QEasingCurve.OutQuad)
             group.addAnimation(input_hide_anim)
         else:
-            input_show_anim = QPropertyAnimation(self.input_wrap, b"maximumHeight", self)
+            input_show_anim = QPropertyAnimation(window.input_wrap, b"maximumHeight", window)
             input_show_anim.setDuration(config.ui.animation_duration // 2)
             input_show_anim.setStartValue(0)
             input_show_anim.setEndValue(60)
@@ -103,11 +105,11 @@ class SideTool():
     def set_fallback_image(self, image_path):
         """设置回退图片"""
         if not os.path.exists(image_path):
-            self.chat_tool.add_user_message("系统", f"❌ 图片文件不存在: {image_path}")
+            chat.add_user_message("系统", f"❌ 图片文件不存在: {image_path}")
             return False
         
         self.side.set_fallback_image(image_path)
-        self.chat_tool.add_user_message("系统", f"✅ 回退图片已设置: {os.path.basename(image_path)}")
+        chat.add_user_message("系统", f"✅ 回退图片已设置: {os.path.basename(image_path)}")
         return True
     
     

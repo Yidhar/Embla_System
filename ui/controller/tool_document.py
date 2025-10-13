@@ -1,5 +1,6 @@
-from nagaagent_core.vendors.PyQt5.QtWidgets import QFileDialog, QMessageBox
+from nagaagent_core.vendors.PyQt5.QtWidgets import QFileDialog, QMessageBox, QDialog, QVBoxLayout, QLabel, QFrame, QPushButton  # 统一入口 #
 from nagaagent_core.vendors.PyQt5.QtCore import Qt
+from nagaagent_core.vendors.PyQt5.QtGui import QFont
 from ..styles.button_factory import ButtonFactory
 from pathlib import Path
 from system.config import config, AI_NAME, logger
@@ -86,10 +87,6 @@ class DocumentTool():
     
     def show_document_options(self, file_path, filename):
         """显示文档处理选项"""
-        from nagaagent_core.vendors.PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QFrame, QPushButton  # 统一入口 #
-        from nagaagent_core.vendors.PyQt5.QtCore import Qt  # 统一入口 #
-        from nagaagent_core.vendors.PyQt5.QtGui import QFont  # 统一入口 #
-        
         dialog = QDialog(self.window)
         dialog.setWindowTitle("文档处理选项")
         dialog.setFixedSize(650, 480)

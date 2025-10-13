@@ -1,9 +1,9 @@
 
-from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget, QLabel
+from nagaagent_core.vendors.PyQt5.QtWidgets import QLabel
 from ..utils.response_util import extract_message
 from ui.utils.message_renderer import MessageRenderer
 from system.config import config, AI_NAME, logger
-from nagaagent_core.vendors.PyQt5.QtCore import QTimer
+from nagaagent_core.vendors.PyQt5.QtCore import QThread, QCoreApplication, Qt, QTimer, QMetaObject
 import time
 from typing import Dict, Optional
 from ..utils.stream_util import _StreamHttpWorker, _NonStreamHttpWorker
@@ -12,6 +12,7 @@ class ChatTool():
     def __init__(self, window):
         self.window = window
         self.current_response = ""  # 当前响应缓冲
+        self.scroll_timer=QTimer(window)
         # 外部依赖
         self.chat_layout = window.chat_layout
         self.chat_scroll_area = window.chat_scroll_area
@@ -182,6 +183,7 @@ class ChatTool():
                     self.progress_widget.stop_loading()
                     self.start_non_stream_typewriter(text)
                 self.worker.finished_text.connect(_on_finish_text)
+                self.progress_widget.set_thinking_mode()
                 self.worker.start()
                 return
             else:
@@ -217,6 +219,7 @@ class ChatTool():
                         self.append_response_chunk(data_str)
                     self.worker.chunk.connect(_on_chunk)
                     self.worker.done.connect(self.finalize_streaming_response)
+                    self.progress_widget.set_thinking_mode()
                     self.worker.start()
                 else:
                     # 创建并启动非流式worker
@@ -227,8 +230,10 @@ class ChatTool():
                         self.progress_widget.stop_loading()
                         self.start_non_stream_typewriter(text)
                     self.worker.finished_text.connect(_on_finish_text)
+                    self.progress_widget.set_thinking_mode()
                     self.worker.start()
                 return
+
             
     
     def add_system_message(self, content: str) -> str:
@@ -401,7 +406,7 @@ class ChatTool():
             
             # 恢复stretch并滚动到底部
             self.chat_layout.addStretch()
-            self.scroll_to_bottom()
+            self.smart_scroll_to_bottom()
             logger.info(f"加载完成 {len(ui_messages)} 条历史对话")
         
         except Exception as e:
@@ -449,7 +454,7 @@ class ChatTool():
         self.chat_layout.addStretch()
 
         # 滚动到底部
-        self.scroll_to_bottom()
+        self.smart_scroll_to_bottom()
 
         # 在状态栏显示工具调用状态
         self.progress_widget.status_label.setText(f"🔧 {notification}")
@@ -489,22 +494,24 @@ class ChatTool():
     # 滚动控制
     # ------------------------------
 
-    def scroll_to_bottom(self):
-        """滚动到聊天区域底部"""
-        # 使用QTimer延迟滚动，确保布局完成
-        QTimer.singleShot(10, lambda: self.chat_scroll_area.verticalScrollBar().setValue(
-            self.chat_scroll_area.verticalScrollBar().maximum()
-        ))
 
     def smart_scroll_to_bottom(self):
         """智能滚动到底部（如果用户正在查看历史消息，则不滚动）"""
-        scrollbar = self.chat_scroll_area.verticalScrollBar()
-        # 检查是否已经在底部附近（允许50像素的误差）
-        is_at_bottom = scrollbar.value() >= scrollbar.maximum() - 50
+        # 如果不在 Qt 主线程，重新投递
+        if QThread.currentThread() != QCoreApplication.instance().thread():
+            logger.debug(f"不在qt线程。当前线程：{QThread.currentThread()} QT线程：{QCoreApplication.instance().thread()} ")
+            QMetaObject.invokeMethod(self, "smart_scroll_to_bottom", Qt.QueuedConnection)
+            return
 
-        # 如果本来就在底部附近，则自动滚动到最新消息
+        scrollbar = self.chat_scroll_area.verticalScrollBar()
+        is_at_bottom = (scrollbar.value() >= (scrollbar.maximum() - 1000))
+        logger.debug(f"移动到末尾的距离检测：{is_at_bottom} 数值：{scrollbar.maximum() - scrollbar.value()} ")
         if is_at_bottom:
-            self.scroll_to_bottom()
+            def to_bottom():
+                scrollbar.setValue(scrollbar.maximum())
+                logger.info("scroll to bottom")
+
+            self.scroll_timer.singleShot(10, to_bottom)
 
     def _remove_layout_stretch(self):
         """移除布局中最后一个stretch"""

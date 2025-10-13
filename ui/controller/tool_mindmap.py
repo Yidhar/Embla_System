@@ -1,6 +1,7 @@
 import os
 import logging
-from system.config import config, logger
+from system.config import config
+from . import chat
 
 class MindmapTool():
     def __init__(self, window):
@@ -24,7 +25,7 @@ class MindmapTool():
                         logger.error(f"删除graph.html文件失败: {e}")
                 
                 # 生成新的HTML
-                self.chat_tool.add_user_message("系统", "🔄 正在生成心智云图...")
+                chat.add_user_message("系统", "🔄 正在生成心智云图...")
                 try:
                     from summer_memory.quintuple_visualize_v2 import visualize_quintuples
                     visualize_quintuples()
@@ -39,16 +40,16 @@ class MindmapTool():
                             abs_graph_path = os.path.join(current_dir, graph_file)
                         
                         webbrowser.open("file:///" + abs_graph_path)
-                        self.chat_tool.add_user_message("系统", "🧠 心智云图已生成并打开")
+                        chat.add_user_message("系统", "🧠 心智云图已生成并打开")
                     else:
-                        self.chat_tool.add_user_message("系统", "❌ 心智云图生成失败")
+                        chat.add_user_message("系统", "❌ 心智云图生成失败")
                 except Exception as e:
-                    self.chat_tool.add_user_message("系统", f"❌ 生成心智云图失败: {str(e)}")
+                    chat.add_user_message("系统", f"❌ 生成心智云图失败: {str(e)}")
             else:
                 # 没有五元组数据，提示用户
-                self.chat_tool.add_user_message("系统", "❌ 未找到五元组数据，请先进行对话以生成知识图谱")
+                chat.add_user_message("系统", "❌ 未找到五元组数据，请先进行对话以生成知识图谱")
         except Exception as e:
-            self.chat_tool.add_user_message("系统", f"❌ 打开心智云图失败: {str(e)}")
+            chat.add_user_message("系统", f"❌ 打开心智云图失败: {str(e)}")
 
 from ..utils.lazy import lazy
 @lazy

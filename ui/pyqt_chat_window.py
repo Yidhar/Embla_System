@@ -222,11 +222,7 @@ class ChatWindow(QWidget):
         self.hlay.addWidget(self.self_game_btn)
         # 连接博弈论按钮
         self.self_game_btn.clicked.connect(game.toggle_self_game)
-        
-        # 实时语音相关
-        self.voice_realtime_client = None  # 语音客户端（废弃，使用线程安全版本）
-        self.voice_realtime_active = False  # 是否激活
-        self.voice_realtime_state = "idle"  # idle/listening/recording/ai_speaking
+
         # 添加实时语音按钮
         self.voice_realtime_btn = ButtonFactory.create_action_button("voice_realtime", self.input_wrap)
         self.voice_realtime_btn.setToolTip("启动/关闭实时语音对话")

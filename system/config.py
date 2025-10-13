@@ -84,6 +84,8 @@ class APIConfig(BaseModel):
     persistent_context: bool = Field(default=True, description="是否启用持久化上下文")
     context_load_days: int = Field(default=3, ge=1, le=30, description="加载历史上下文的天数")
     context_parse_logs: bool = Field(default=True, description="是否从日志文件解析上下文")
+    applied_proxy: bool = Field(default=True, description="是否应用代理")
+    applied_proxy: bool = Field(default=True, description="是否应用代理")
 
 class APIServerConfig(BaseModel):
     """API服务器配置"""
@@ -560,5 +562,6 @@ except Exception:
 
 # 向后兼容的AI_NAME常量
 AI_NAME = config.system.ai_name
+
 import logging
 logger = logging.getLogger(__name__)

@@ -48,7 +48,7 @@ class _StreamHttpWorker(QThread):
                 headers=headers,
                 timeout=timeout,
                 stream=True,
-                verify=False  # 如果有SSL问题可以临时禁用
+                verify=False,  # 如果有SSL问题可以临时禁用
             )
             if resp.status_code != 200:
                 self.error.emit(

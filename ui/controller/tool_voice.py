@@ -1,7 +1,13 @@
 from system.config import config, logger
+from . import chat
 class VoiceTool():
     def __init__(self, window):
         self.window = window
+
+        # 实时语音相关
+        self.voice_realtime_client = None  # 语音客户端（废弃，使用线程安全版本）
+        self.voice_realtime_active = False  # 是否激活
+        self.voice_realtime_state = "idle"  # idle/listening/recording/ai_speaking
         self._init_voice()
         
     def _init_voice(self):
@@ -46,7 +52,7 @@ class VoiceTool():
                 # 本地模式只需要ASR服务运行
                 pass
             elif not config.voice_realtime.api_key:
-                self.chat_tool.add_user_message("系统", "❌ 请先在设置中配置语音服务API密钥")
+                chat.add_user_message("系统", "❌ 请先在设置中配置语音服务API密钥")
                 return
 
             # 使用统一语音管理器启动
@@ -58,13 +64,13 @@ class VoiceTool():
             success = self.voice_integration.start_voice(mode=mode)
 
             if not success:
-                self.chat_tool.add_user_message("系统", "❌ 语音服务启动失败，请检查配置和服务状态")
+                chat.add_user_message("系统", "❌ 语音服务启动失败，请检查配置和服务状态")
             else:
                 # 设置激活标志
                 self.voice_realtime_active = True
 
         except Exception as e:
-            self.chat_tool.add_user_message("系统", f"❌ 启动语音服务失败: {str(e)}")
+            chat.add_user_message("系统", f"❌ 启动语音服务失败: {str(e)}")
 
     def stop_voice_realtime(self):
         """停止实时语音对话"""
@@ -83,11 +89,11 @@ class VoiceTool():
             self.voice_realtime_active = False
 
             if not success:
-                self.chat_tool.add_user_message("系统", "⚠️ 语音服务未在运行")
+                chat.add_user_message("系统", "⚠️ 语音服务未在运行")
 
         except Exception as e:
             self.voice_realtime_active = False  # 确保异常时也设置为False
-            self.chat_tool.add_user_message("系统", f"❌ 停止语音服务失败: {str(e)}")
+            chat.add_user_message("系统", f"❌ 停止语音服务失败: {str(e)}")
 
     def toggle_voice_realtime(self):
         """切换实时语音对话状态"""
