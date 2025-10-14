@@ -116,8 +116,8 @@ pip install pystray pillow PyQt5
 ## 配置说明
 
 ### 托盘图标
-- 默认使用 `ui/window_icon.png`
-- 备用图标 `ui/standby.png`
+- 默认使用 `ui/img/window_icon.png`
+- 备用图标 `ui/img/standby.png`
 - 支持自定义图标路径
 
 ### 自启动方式

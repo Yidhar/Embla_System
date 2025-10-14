@@ -1,21 +1,18 @@
-from nagaagent_core.vendors.PyQt5.QtWidgets import QApplication, QWidget, QTextEdit, QSizePolicy, QHBoxLayout, QLabel, QVBoxLayout, QStackedLayout, QPushButton, QStackedWidget, QDesktopWidget, QScrollArea, QSplitter, QFileDialog, QMessageBox, QFrame  # 统一入口 #
-from nagaagent_core.vendors.PyQt5.QtCore import Qt, QRect, QParallelAnimationGroup, QPropertyAnimation, QEasingCurve, QTimer, QThread, pyqtSignal, QObject  # 统一入口 #
-from nagaagent_core.vendors.PyQt5.QtGui import QColor, QPainter, QBrush, QFont, QPen  # 统一入口 #zv
-from .styles.button_factory import ButtonFactory
+from nagaagent_core.vendors.PyQt5.QtWidgets import QFileDialog, QMessageBox, QDialog, QVBoxLayout, QLabel, QFrame, QPushButton  # 统一入口 #
+from nagaagent_core.vendors.PyQt5.QtCore import Qt
+from nagaagent_core.vendors.PyQt5.QtGui import QFont
+from ..styles.button_factory import ButtonFactory
 from pathlib import Path
-from system.config import config, AI_NAME
+from system.config import config, AI_NAME, logger
 import os
 import requests
-import logging
-
-logger = logging.getLogger(__name__)
+from . import chat
 
 
 class DocumentTool():
     def __init__(self, window):
         self.window = window
         self.progress_widget = window.progress_widget
-        self.add_user_message = window.add_user_message
     def upload_document(self):
         """上传文档功能"""
         try:
@@ -55,7 +52,7 @@ class DocumentTool():
         """将文件上传到API服务器"""
         try:
             # 显示上传进度
-            self.add_user_message("系统", f"📤 正在上传文档: {Path(file_path).name}")
+            chat.add_user_message("系统", f"📤 正在上传文档: {Path(file_path).name}")
             self.progress_widget.set_thinking_mode()
             self.progress_widget.status_label.setText("上传文档中...")
             
@@ -73,27 +70,23 @@ class DocumentTool():
             if response.status_code == 200:
                 result = response.json()
                 self.progress_widget.stop_loading()
-                self.add_user_message("系统", f"✅ 文档上传成功: {result['filename']}")
+                chat.add_user_message("系统", f"✅ 文档上传成功: {result['filename']}")
                 
                 # 询问用户想要进行什么操作
                 self.show_document_options(result['file_path'], result['filename'])
             else:
                 self.progress_widget.stop_loading()
-                self.add_user_message("系统", f"❌ 上传失败: {response.text}")
+                chat.add_user_message("系统", f"❌ 上传失败: {response.text}")
                 
         except requests.exceptions.ConnectionError:
             self.progress_widget.stop_loading()
-            self.add_user_message("系统", "❌ 无法连接到API服务器，请确保服务器正在运行")
+            chat.add_user_message("系统", "❌ 无法连接到API服务器，请确保服务器正在运行")
         except Exception as e:
             self.progress_widget.stop_loading()
-            self.add_user_message("系统", f"❌ 上传失败: {str(e)}")
+            chat.add_user_message("系统", f"❌ 上传失败: {str(e)}")
     
     def show_document_options(self, file_path, filename):
         """显示文档处理选项"""
-        from nagaagent_core.vendors.PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QFrame, QPushButton  # 统一入口 #
-        from nagaagent_core.vendors.PyQt5.QtCore import Qt  # 统一入口 #
-        from nagaagent_core.vendors.PyQt5.QtGui import QFont  # 统一入口 #
-        
         dialog = QDialog(self.window)
         dialog.setWindowTitle("文档处理选项")
         dialog.setFixedSize(650, 480)
@@ -162,7 +155,7 @@ class DocumentTool():
             dialog.close()
         
         try:
-            self.add_user_message("系统", f"🔄 正在处理文档: {Path(file_path).name}")
+            chat.add_user_message("系统", f"🔄 正在处理文档: {Path(file_path).name}")
             self.progress_widget.set_thinking_mode()
             self.progress_widget.status_label.setText("处理文档中...")
             
@@ -182,19 +175,23 @@ class DocumentTool():
                 
                 
                 if action == "read":
-                    self.add_user_message(AI_NAME, f"📖 文档内容:\n\n{result['content']}")
+                    chat.add_user_message(AI_NAME, f"📖 文档内容:\n\n{result['content']}")
                 elif action == "analyze":
-                    self.add_user_message(AI_NAME, f"🔍 文档分析:\n\n{result['analysis']}")
+                    chat.add_user_message(AI_NAME, f"🔍 文档分析:\n\n{result['analysis']}")
                 elif action == "summarize":
-                    self.add_user_message(AI_NAME, f"📝 文档摘要:\n\n{result['summary']}")
+                    chat.add_user_message(AI_NAME, f"📝 文档摘要:\n\n{result['summary']}")
             else:
                 self.progress_widget.stop_loading()
-                self.add_user_message("系统", f"❌ 文档处理失败: {response.text}")
+                chat.add_user_message("系统", f"❌ 文档处理失败: {response.text}")
                 
         except requests.exceptions.ConnectionError:
             self.progress_widget.stop_loading()
-            self.add_user_message("系统", "❌ 无法连接到API服务器，请确保服务器正在运行")
+            chat.add_user_message("系统", "❌ 无法连接到API服务器，请确保服务器正在运行")
         except Exception as e:
             self.progress_widget.stop_loading()
-            self.add_user_message("系统", f"❌ 文档处理失败: {str(e)}")
+            chat.add_user_message("系统", f"❌ 文档处理失败: {str(e)}")
     
+from ..utils.lazy import lazy
+@lazy
+def document():
+    return DocumentTool(config.window)

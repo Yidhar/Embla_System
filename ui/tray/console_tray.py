@@ -62,9 +62,9 @@ class ConsoleTrayManager(QObject):
         """设置系统托盘"""
         try:
             # 创建托盘图标
-            icon_path = os.path.join(os.path.dirname(__file__), "..", "window_icon.png")
+            icon_path = os.path.join(os.path.dirname(__file__), "..", "img/window_icon.png")
             if not os.path.exists(icon_path):
-                icon_path = os.path.join(os.path.dirname(__file__), "..", "standby.png")
+                icon_path = os.path.join(os.path.dirname(__file__), "..", "img/standby.png")
             
             # 创建系统托盘图标
             self.tray_icon = QSystemTrayIcon()

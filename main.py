@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 import warnings
+import requests
 
 # 过滤弃用警告，提升启动体验
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="websockets")
@@ -126,6 +127,7 @@ class ServiceManager:
         service_status = {}  # 服务状态跟踪
         
         try:
+            self._init_proxy_settings()
             # 预检查所有端口，减少重复检查
             port_checks = {
                 'api': config.api_server.enabled and config.api_server.auto_start and 
@@ -193,12 +195,30 @@ class ServiceManager:
             
         except Exception as e:
             print(f"❌ 并行启动服务异常: {e}")
-    
+
+    def _init_proxy_settings(self):
+        """初始化代理设置：若不启用代理，则清空系统代理环境变量"""
+        # 检测 applied_proxy 状态
+        if not config.api.applied_proxy:  # 当 applied_proxy 为 False 时
+            print("检测到不启用代理，正在清空系统代理环境变量...")
+
+            # 清空 HTTP/HTTPS 代理环境变量（跨平台兼容）
+            proxy_vars = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]
+            for var in proxy_vars:
+                if var in os.environ:
+                    del os.environ[var]  # 删除环境变量
+                    print(f"已清除代理环境变量: {var}")
+
+            # 额外：确保 requests Session 没有全局代理配置
+            global_session = requests.Session()
+            if global_session.proxies:
+                global_session.proxies.clear()
+                print("已清空 requests Session 全局代理配置")
     def _start_api_server(self):
         """内部API服务器启动方法"""
         try:
             from nagaagent_core.api import uvicorn
-            
+
             uvicorn.run(
                 "apiserver.api_server:app",
                 host=config.api_server.host,
@@ -613,7 +633,7 @@ if __name__ == "__main__":
     
     # 快速启动UI，后台服务延迟初始化
     app = QApplication(sys.argv)
-    icon_path = os.path.join(os.path.dirname(__file__), "ui", "window_icon.png")
+    icon_path = os.path.join(os.path.dirname(__file__), "ui", "img/window_icon.png")
     app.setWindowIcon(QIcon(icon_path))
     
     # 集成控制台托盘功能

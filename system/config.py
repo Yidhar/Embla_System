@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime
+
+from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget
 from pydantic import BaseModel, Field, field_validator
 
 # 配置变更监听器
@@ -82,6 +84,8 @@ class APIConfig(BaseModel):
     persistent_context: bool = Field(default=True, description="是否启用持久化上下文")
     context_load_days: int = Field(default=3, ge=1, le=30, description="加载历史上下文的天数")
     context_parse_logs: bool = Field(default=True, description="是否从日志文件解析上下文")
+    applied_proxy: bool = Field(default=True, description="是否应用代理")
+    applied_proxy: bool = Field(default=True, description="是否应用代理")
 
 class APIServerConfig(BaseModel):
     """API服务器配置"""
@@ -247,7 +251,7 @@ class Live2DConfig(BaseModel):
     """Live2D配置"""
     enabled: bool = Field(default=False, description="是否启用Live2D功能")
     model_path: str = Field(default="", description="Live2D模型文件路径")
-    fallback_image: str = Field(default="ui/standby.png", description="回退图片路径")
+    fallback_image: str = Field(default="ui/img/standby.png", description="回退图片路径")
     auto_switch: bool = Field(default=True, description="是否自动切换模式")
     animation_enabled: bool = Field(default=True, description="是否启用动画")
     touch_interaction: bool = Field(default=True, description="是否启用触摸交互")
@@ -459,13 +463,20 @@ class NagaConfig(BaseModel):
     online_search: OnlineSearchConfig = Field(default_factory=OnlineSearchConfig)
     system_check: SystemCheckConfig = Field(default_factory=SystemCheckConfig)
     computer_control: ComputerControlConfig = Field(default_factory=ComputerControlConfig)
+    window: QWidget = Field(default=None)
 
-    model_config = {"extra": "ignore"}
-
+    model_config = {
+        "extra": "ignore",  # 保留原配置：忽略未定义的字段
+        "arbitrary_types_allowed": True,  # 允许非标准类型（如 QWidget）
+        "json_schema_extra": {
+            "exclude": ["window"]  # 序列化到 config.json 时排除 window 字段（避免报错）
+        }
+    }
     def __init__(self, **kwargs):
         setup_environment()
         super().__init__(**kwargs)
-        self.system.log_dir.mkdir(parents=True, exist_ok=True)  # 确保递归创建日志目录 #
+        self.system.log_dir.mkdir(parents=True, exist_ok=True)  # 确保递归创建日志目录
+
 
 # 全局配置实例
 ENCF = 0  # 编码修复计数器
@@ -552,3 +563,5 @@ except Exception:
 # 向后兼容的AI_NAME常量
 AI_NAME = config.system.ai_name
 
+import logging
+logger = logging.getLogger(__name__)
