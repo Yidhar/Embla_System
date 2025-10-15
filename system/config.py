@@ -249,12 +249,13 @@ class UIConfig(BaseModel):
 
 class Live2DConfig(BaseModel):
     """Live2D配置"""
-    enabled: bool = Field(default=False, description="是否启用Live2D功能")
-    model_path: str = Field(default="", description="Live2D模型文件路径")
+    enabled: bool = Field(default=True, description="是否启用Live2D功能")
+    model_path: str = Field(default="ui/live2d/live2d_models/kasane_teto/kasane_teto.model3.json", description="Live2D模型文件路径")
     fallback_image: str = Field(default="ui/img/standby.png", description="回退图片路径")
     auto_switch: bool = Field(default=True, description="是否自动切换模式")
     animation_enabled: bool = Field(default=True, description="是否启用动画")
     touch_interaction: bool = Field(default=True, description="是否启用触摸交互")
+    scale_factor: float = Field(default=1.0, ge=0.5, le=3.0, description="Live2D缩放比例")
 
 class VoiceRealtimeConfig(BaseModel):
     """实时语音配置"""

@@ -1,0 +1,66 @@
+{
+  "module_enabled": true,
+  "model": {
+    "default_model_path": "ui/live2d/live2d_models/",#放.model3.json
+    "fallback_image_path": "ui/img/standby.png",
+    "auto_load_on_start": true,
+    "scale_factor": 1.5,
+    "enable_mouse_wheel_zoom": true,
+    "min_scale": 0.5,
+    "max_scale": 3.0
+  },
+  "performance": {
+    "target_fps": 60,
+    "adaptive_fps": true,
+    "min_fps": 30,
+    "max_fps": 144,
+    "enable_canvas": false,
+    "canvas_opacity": 1.0
+  },
+  "interaction": {
+    "enable_eye_tracking": true,
+    "enable_click_interaction": true
+  },
+  "animators": {
+    "blink": {
+      "enabled": true,
+      "weight": 1.0,
+      "smooth_factor": 0.1,
+      "use_smoothing": true,
+      "min_interval": 2.0,
+      "max_interval": 4.0,
+      "duration": 0.1
+    },
+    "eye_tracking": {
+      "enabled": true,
+      "weight": 0.5,
+      "smooth_factor": 0.1,
+      "use_smoothing": true,
+      "max_range_x": 1.0,
+      "max_range_y": 1.0
+    },
+    "body_angle": {
+      "enabled": true,
+      "weight": 0.3,
+      "smooth_factor": 0.1,
+      "use_smoothing": true,
+      "angle_range": 0.1,
+      "speed": 0.3
+    },
+    "breath": {
+      "enabled": true,
+      "weight": 0.5,
+      "smooth_factor": 0.1,
+      "use_smoothing": true,
+      "speed": 1.0
+    },
+    "emotion": {
+      "enabled": true,
+      "weight": 1.0,
+      "smooth_factor": 0.1,
+      "use_smoothing": true,
+      "transition_duration": 0.3,
+      "default_emotion": "neutral"
+    }
+  }
+}

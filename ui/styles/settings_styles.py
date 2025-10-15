@@ -379,3 +379,92 @@ QLabel {
     font: 10pt 'Lucida Console';
 }
 """
+
+# 对话框标题样式
+DIALOG_HEADER_TITLE_STYLE = """
+QLabel {
+    color: #fff;
+    font: 14pt 'Lucida Console';
+    font-weight: bold;
+    background: transparent;
+    border: none;
+}
+"""
+
+# 对话框提示文本样式
+DIALOG_HINT_LABEL_STYLE = """
+QLabel {
+    color: rgba(255, 255, 255, 160);
+    font: 10pt 'Lucida Console';
+    background: transparent;
+    border: none;
+}
+"""
+
+# 对话框 Tab 样式
+DIALOG_TAB_BAR_STYLE = """
+QTabWidget::pane {
+    background: transparent;
+    border: none;
+}
+QTabBar::tab {
+    background: rgba(255, 255, 255, 8);
+    color: rgba(255, 255, 255, 180);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 18px;
+    padding: 8px 22px;
+    font: 11pt 'Lucida Console';
+    margin: 0px 6px;
+}
+QTabBar::tab:selected {
+    background: rgba(100, 200, 255, 120);
+    color: #fff;
+    border: 1px solid rgba(120, 220, 255, 200);
+}
+QTabBar::tab:hover {
+    background: rgba(255, 255, 255, 18);
+    color: #fff;
+}
+"""
+
+# 对话框搜索容器样式
+DIALOG_SEARCH_CONTAINER_STYLE = """
+QWidget#Live2DSearchContainer {
+    background: rgba(255, 255, 255, 6);
+    border: 1px solid rgba(255, 255, 255, 20);
+    border-radius: 24px;
+    padding: 4px 12px;
+}
+"""
+
+# 动作卡片样式
+ACTION_CARD_WIDGET_STYLE = """
+QWidget#Live2DActionCard {
+    background: rgba(255, 255, 255, 10);
+    border: 1px solid rgba(255, 255, 255, 30);
+    border-radius: 16px;
+    padding: 10px;
+}
+QWidget#Live2DActionCard:hover {
+    background: rgba(255, 255, 255, 18);
+    border: 1px solid rgba(120, 220, 255, 160);
+}
+QWidget#Live2DActionCard[selected="true"] {
+    background: rgba(120, 220, 255, 80);
+    border: 1px solid rgba(120, 220, 255, 220);
+}
+QWidget#Live2DActionCard QLabel {
+    color: #fff;
+}
+QLabel#Live2DActionIcon {
+    font: 26pt 'Segoe UI Emoji';
+}
+QLabel#Live2DActionName {
+    font: 10pt 'Lucida Console';
+    font-weight: bold;
+}
+QLabel#Live2DActionType {
+    color: rgba(200, 230, 255, 220);
+    font: 9pt 'Lucida Console';
+}
+"""

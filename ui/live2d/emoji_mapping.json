@@ -1,0 +1,60 @@
+{
+  "motion_emoji_map": {
+    "idle": "😊",
+    "sleep": "😴",
+    "tap": "👆",
+    "tap_head": "👆",
+    "tap_body": "👆",
+    "shake": "🎵",
+    "flick": "👋",
+    "pinch": "🤏",
+    "walk": "🚶",
+    "run": "🏃",
+    "jump": "🦘",
+    "dance": "💃",
+    "sing": "🎤",
+    "laugh": "😄",
+    "cry": "😢",
+    "angry": "😠",
+    "surprise": "😮",
+    "default": "🎭"
+  },
+  "expression_emoji_map": {
+    "blush": "😊",
+    "cry": "😢",
+    "love": "😍",
+    "star": "🤩",
+    "dizzy": "😵",
+    "dark": "😈",
+    "sweat": "😅",
+    "chibi": "🥺",
+    "exp": "👀",
+    "baguette": "🥖",
+    "mic": "🎤",
+    "sv": "🎵",
+    "utau": "🎶",
+    "water": "💧",
+    "happy": "😄",
+    "sad": "😢",
+    "angry": "😠",
+    "surprised": "😮",
+    "neutral": "😐",
+    "wink": "😉",
+    "sleepy": "😪",
+    "excited": "🤗",
+    "confused": "😕",
+    "default": "😀"
+  },
+  "custom_model_emoji": {
+    "kasane_teto": {
+      "motions": {
+        "utau_idle": "🎶",
+        "french_bread": "🥖"
+      },
+      "expressions": {
+        "teto_smile": "😊",
+        "teto_wink": "😉"
+      }
+    }
+  }
+}
