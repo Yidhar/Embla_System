@@ -66,7 +66,7 @@ class SettingTool():
                 pass
 
         # 更新主窗口背景 #
-        self.set_window_background_alpha(WINDOW_BG_ALPHA)
+        self.set_window_background_alpha(pyqt_chat_window.WINDOW_BG_ALPHA)
 
 
     def set_window_background_alpha(self, alpha):
@@ -76,15 +76,15 @@ class SettingTool():
                    - 0-255的整数 (PyQt原生格式)
                    - 0.0-1.0的浮点数 (百分比格式)
         """
-        global WINDOW_BG_ALPHA
-        
+
+        from ui import pyqt_chat_window
         # 处理不同格式的输入
         if isinstance(alpha, float) and 0.0 <= alpha <= 1.0:
             # 浮点数格式：0.0-1.0 转换为 0-255
-            WINDOW_BG_ALPHA = int(alpha * 255)
+            pyqt_chat_window.WINDOW_BG_ALPHA = int(alpha * 255)
         elif isinstance(alpha, int) and 0 <= alpha <= 255:
             # 整数格式：0-255
-            WINDOW_BG_ALPHA = alpha
+            pyqt_chat_window.WINDOW_BG_ALPHA = alpha
         else:
             logger.warning(f"警告：无效的透明度值 {alpha}，应为0-255的整数或0.0-1.0的浮点数")
             return
@@ -92,7 +92,7 @@ class SettingTool():
         # 更新CSS样式表
         self.window.setStyleSheet(f"""
             ChatWindow {{
-                background: rgba(25, 25, 25, {WINDOW_BG_ALPHA});
+                background: rgba(25, 25, 25, {pyqt_chat_window.WINDOW_BG_ALPHA});
                 border-radius: 20px;
                 border: 1px solid rgba(255, 255, 255, 30);
             }}
@@ -101,7 +101,7 @@ class SettingTool():
         # 触发重绘
         self.window.update()
 
-        logger.info(f"✅ 窗口背景透明度已设置为: {WINDOW_BG_ALPHA}/255 ({WINDOW_BG_ALPHA/255*100:.1f}%不透明度)")
+        logger.info(f"✅ 窗口背景透明度已设置为: {pyqt_chat_window.WINDOW_BG_ALPHA}/255 ({pyqt_chat_window.WINDOW_BG_ALPHA/255*100:.1f}%不透明度)")
 
 from ..utils.lazy import lazy
 @lazy

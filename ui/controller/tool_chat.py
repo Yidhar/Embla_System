@@ -690,8 +690,11 @@ class ChatTool():
             self.non_stream_timer = None
 
             # 清理临时变量
+            self._non_stream_text=""
             delattr(self, '_non_stream_text')
+            self._non_stream_index=0
             delattr(self, '_non_stream_index')
+            self._non_stream_message_id=0
             delattr(self, '_non_stream_message_id')
             self.current_message_id = None
             return
