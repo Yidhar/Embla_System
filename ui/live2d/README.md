@@ -106,7 +106,7 @@ Live2D功能可以通过配置文件启用：
   "live2d": {
     "enabled": true,
     "model_path": "ui/live2d/live2d_models/characters/llny/mianfeimox/llny.model3.json",
-    "fallback_image": "ui/img/standby.png"
+    "fallback_image": "ui/standby.png"
   }
 }
 ```

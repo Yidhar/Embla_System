@@ -6,7 +6,17 @@ Live2D集成模块
 """
 
 from .renderer import Live2DRenderer
-from .animator import Live2DAnimator
-from .widget import Live2DWidget
+from .animator import Live2DAnimator, create_animator_from_config
+from .widget import Live2DWidget, create_widget_from_config
+from .config_manager import Live2DConfigManager, get_config, reload_config
 
-__all__ = ['Live2DRenderer', 'Live2DAnimator', 'Live2DWidget']
+__all__ = [
+    'Live2DRenderer',
+    'Live2DAnimator',
+    'create_animator_from_config',
+    'Live2DWidget',
+    'create_widget_from_config',
+    'Live2DConfigManager',
+    'get_config',
+    'reload_config'
+]
