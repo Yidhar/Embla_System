@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
+from charset_normalizer import from_path
 
 class SystemChecker:
     """系统环境检测器"""
@@ -373,8 +374,20 @@ class SystemChecker:
         try:
             # 检查配置文件中是否有Neo4j配置
             if self.config_file.exists():
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
+                # 使用Charset Normalizer自动检测编码
+                charset_results = from_path(str(self.config_file))
+                if charset_results:
+                    best_match = charset_results.best()
+                    if best_match:
+                        # 使用检测到的编码读取文件
+                        config_content = str(best_match)
+                        config = json.loads(config_content)
+                    else:
+                        with open(self.config_file, 'r', encoding='utf-8') as f:
+                            config = json.load(f)
+                else:
+                    with open(self.config_file, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
 
                 neo4j_config = config.get('grag', {})
                 if neo4j_config.get('enabled', False):
@@ -712,12 +725,25 @@ class SystemChecker:
         """检查是否已经通过过系统检测"""
         if not self.config_file.exists():
             return False
-        
+
         try:
-            with open(self.config_file, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-                system_check = config_data.get('system_check', {})
-                return system_check.get('passed', False)
+            # 使用Charset Normalizer自动检测编码
+            charset_results = from_path(str(self.config_file))
+            if charset_results:
+                best_match = charset_results.best()
+                if best_match:
+                    # 使用检测到的编码读取文件
+                    config_content = str(best_match)
+                    config_data = json.loads(config_content)
+                else:
+                    with open(self.config_file, 'r', encoding='utf-8') as f:
+                        config_data = json.load(f)
+            else:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
+
+            system_check = config_data.get('system_check', {})
+            return system_check.get('passed', False)
         except Exception:
             return False
     
@@ -755,17 +781,29 @@ class SystemChecker:
         try:
             # 读取现有配置
             if self.config_file.exists():
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    config_data = json.load(f)
-                
+                # 使用Charset Normalizer自动检测编码
+                charset_results = from_path(str(self.config_file))
+                if charset_results:
+                    best_match = charset_results.best()
+                    if best_match:
+                        # 使用检测到的编码读取文件
+                        config_content = str(best_match)
+                        config_data = json.loads(config_content)
+                    else:
+                        with open(self.config_file, 'r', encoding='utf-8') as f:
+                            config_data = json.load(f)
+                else:
+                    with open(self.config_file, 'r', encoding='utf-8') as f:
+                        config_data = json.load(f)
+
                 # 删除system_check配置
                 if 'system_check' in config_data:
                     del config_data['system_check']
-                
+
                 # 保存配置
                 with open(self.config_file, 'w', encoding='utf-8') as f:
                     json.dump(config_data, f, ensure_ascii=False, indent=2)
-                
+
                 print("✅ 检测状态已重置，下次启动时将重新检测")
             else:
                 print("⚠️ 配置文件不存在")
