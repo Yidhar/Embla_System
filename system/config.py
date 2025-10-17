@@ -13,6 +13,7 @@ from datetime import datetime
 from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget
 from pydantic import BaseModel, Field, field_validator
 from charset_normalizer import from_path
+import json5  # 支持带注释的JSON解析
 
 # 配置变更监听器
 _config_listeners: List[Callable] = []
@@ -500,7 +501,8 @@ def load_config():
 
                     # 使用检测到的编码读取文件
                     config_content = str(best_match)
-                    config_data = json.loads(config_content)
+                    # 使用json5解析支持注释的JSON
+                    config_data = json5.loads(config_content)
                     return NagaConfig(**config_data)
                 else:
                     print(f"警告：无法检测 {config_path} 的编码")
@@ -510,7 +512,8 @@ def load_config():
             # 如果自动检测失败，回退到原来的方法
             print("使用回退方法加载配置")
             with open(config_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
+                # 使用json5解析支持注释的JSON
+                config_data = json5.load(f)
             return NagaConfig(**config_data)
 
         except Exception as e:
@@ -533,7 +536,8 @@ def load_config():
 
                 # 重新尝试加载配置
                 with open(config_path, 'r', encoding='utf-8') as f:
-                    config_data = json.load(f)
+                    # 使用json5解析支持注释的JSON
+                    config_data = json5.load(f)
                 return NagaConfig(**config_data)
             except Exception as e2:
                 print(f"警告：加载 {config_path} 失败: {e2}")
