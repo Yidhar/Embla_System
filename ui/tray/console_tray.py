@@ -56,7 +56,7 @@ class ConsoleTrayManager(QObject):
             print("自动隐藏控制台窗口...")
             self.hide_console_window()
             # 显示托盘消息提示
-            self.show_message("NagaAgent 3.0", "系统已启动，控制台已隐藏到托盘")
+            self.show_message("NagaAgent 4.0", "系统已启动，控制台已隐藏到托盘")
     
     def _setup_tray(self):
         """设置系统托盘"""
@@ -69,7 +69,7 @@ class ConsoleTrayManager(QObject):
             # 创建系统托盘图标
             self.tray_icon = QSystemTrayIcon()
             self.tray_icon.setIcon(QIcon(icon_path))
-            self.tray_icon.setToolTip("NagaAgent 3.0 - 控制台")
+            self.tray_icon.setToolTip("NagaAgent 4.0 - 控制台")
             
             # 创建托盘菜单
             self._create_tray_menu()
@@ -323,7 +323,7 @@ class ConsoleTrayManager(QObject):
             # 获取启动命令
             command = self._get_startup_command()
             
-            winreg.SetValueEx(key, "NagaAgent3.0", 0, winreg.REG_SZ, command)
+            winreg.SetValueEx(key, "NagaAgent4.0", 0, winreg.REG_SZ, command)
             winreg.CloseKey(key)
             self.is_auto_start = True
             print("自启动已启用")
@@ -343,13 +343,13 @@ class ConsoleTrayManager(QObject):
             launch_agents_dir = os.path.expanduser("~/Library/LaunchAgents")
             os.makedirs(launch_agents_dir, exist_ok=True)
             
-            plist_file = os.path.join(launch_agents_dir, "com.nagaagent.NagaAgent3.0.plist")
+            plist_file = os.path.join(launch_agents_dir, "com.nagaagent.NagaAgent4.0.plist")
             
             # 获取启动命令
             command = self._get_startup_command()
             
             plist_data = {
-                'Label': 'com.nagaagent.NagaAgent3.0',
+                'Label': 'com.nagaagent.NagaAgent4.0',
                 'ProgramArguments': [command],
                 'RunAtLoad': True,
                 'KeepAlive': False
@@ -371,14 +371,14 @@ class ConsoleTrayManager(QObject):
             autostart_dir = os.path.expanduser("~/.config/autostart")
             os.makedirs(autostart_dir, exist_ok=True)
             
-            desktop_file = os.path.join(autostart_dir, "nagaagent3.0.desktop")
+            desktop_file = os.path.join(autostart_dir, "nagaagent4.0.desktop")
             
             # 获取启动命令
             command = self._get_startup_command()
             
             desktop_content = f"""[Desktop Entry]
 Type=Application
-Name=NagaAgent 3.0
+Name=NagaAgent 4.0
 Exec={command}
 Terminal=false
 StartupNotify=false
@@ -411,7 +411,7 @@ StartupNotify=false
                 r"Software\Microsoft\Windows\CurrentVersion\Run",
                 0, winreg.KEY_SET_VALUE
             )
-            winreg.DeleteValue(key, "NagaAgent3.0")
+            winreg.DeleteValue(key, "NagaAgent4.0")
             winreg.CloseKey(key)
             self.is_auto_start = False
             print("自启动已禁用")
@@ -424,7 +424,7 @@ StartupNotify=false
         """macOS平台禁用自启动"""
         try:
             launch_agents_dir = os.path.expanduser("~/Library/LaunchAgents")
-            plist_file = os.path.join(launch_agents_dir, "com.nagaagent.NagaAgent3.0.plist")
+            plist_file = os.path.join(launch_agents_dir, "com.nagaagent.NagaAgent4.0.plist")
             
             if os.path.exists(plist_file):
                 os.remove(plist_file)
@@ -440,7 +440,7 @@ StartupNotify=false
         """Linux平台禁用自启动"""
         try:
             autostart_dir = os.path.expanduser("~/.config/autostart")
-            desktop_file = os.path.join(autostart_dir, "nagaagent3.0.desktop")
+            desktop_file = os.path.join(autostart_dir, "nagaagent4.0.desktop")
             
             if os.path.exists(desktop_file):
                 os.remove(desktop_file)
@@ -469,7 +469,7 @@ StartupNotify=false
                 r"Software\Microsoft\Windows\CurrentVersion\Run",
                 0, winreg.KEY_READ
             )
-            winreg.QueryValueEx(key, "NagaAgent3.0")
+            winreg.QueryValueEx(key, "NagaAgent4.0")
             winreg.CloseKey(key)
             return True
         except:
@@ -482,7 +482,7 @@ StartupNotify=false
                 return False
             
             launch_agents_dir = os.path.expanduser("~/Library/LaunchAgents")
-            plist_file = os.path.join(launch_agents_dir, "com.nagaagent.NagaAgent3.0.plist")
+            plist_file = os.path.join(launch_agents_dir, "com.nagaagent.NagaAgent4.0.plist")
             
             if os.path.exists(plist_file):
                 with open(plist_file, 'rb') as f:
@@ -498,7 +498,7 @@ StartupNotify=false
         try:
             # 检查 ~/.config/autostart 目录
             autostart_dir = os.path.expanduser("~/.config/autostart")
-            desktop_file = os.path.join(autostart_dir, "nagaagent3.0.desktop")
+            desktop_file = os.path.join(autostart_dir, "nagaagent4.0.desktop")
             return os.path.exists(desktop_file)
         except Exception as e:
             print(f"Linux自启动检查失败: {e}")

@@ -4,6 +4,7 @@ from py2neo.errors import ServiceUnavailable
 import logging
 import sys
 import os
+from charset_normalizer import from_path
 
 # 添加项目根目录到路径，以便导入config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
@@ -38,8 +39,27 @@ except Exception as e:
     # 兼容旧版本，从config.json读取
     try:
         CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.json')
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-            _cfg = _json.load(f)
+
+        # 使用Charset Normalizer自动检测编码
+        charset_results = from_path(CONFIG_PATH)
+        if charset_results:
+            best_match = charset_results.best()
+            if best_match:
+                detected_encoding = best_match.encoding
+                print(f"[GRAG] 检测到配置文件编码: {detected_encoding}")
+
+                # 使用检测到的编码读取文件
+                config_content = str(best_match)
+                _cfg = _json.loads(config_content)
+            else:
+                print("[GRAG] 无法检测配置文件编码，使用回退方法")
+                with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                    _cfg = _json.load(f)
+        else:
+            print("[GRAG] 无法检测配置文件编码，使用回退方法")
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                _cfg = _json.load(f)
+
         grag_cfg = _cfg.get('grag', {})
         NEO4J_URI = grag_cfg['neo4j_uri']
         NEO4J_USER = grag_cfg['neo4j_user']
