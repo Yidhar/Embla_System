@@ -243,7 +243,7 @@ class ConfigManager:
             print(f"获取配置快照失败: {e}")  # 去除Emoji #
             # 如果读取失败，返回一个基本的配置结构
             return {
-                "system": {"version": "3.0"},
+                "system": {"version": "4.0"},
                 "api": {"api_key": ""},
                 "api_server": {"enabled": True},
                 "grag": {"enabled": False},
