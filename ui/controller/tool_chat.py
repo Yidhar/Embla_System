@@ -37,6 +37,10 @@ class ChatTool():
         self.non_stream_timer: Optional[QTimer] = None
         self.non_stream_text = ""
         self.non_stream_index = 0
+        self.non_stream_message_id = None
+        
+        self.current_ai_voice_message_id=None
+        self.last_update_time = None
 
         # Worker管理
         self.worker: Optional[_StreamHttpWorker] = None
@@ -59,13 +63,13 @@ class ChatTool():
         content_html = str(msg).replace('\\n', '\n').replace('\n', '<br>')
 
         # 生成消息ID
-        if not hasattr(self, 'message_counter'):
+        if not self.message_counter:
             self.message_counter = 0
         self.message_counter += 1
         message_id = f"msg_{self.message_counter}"
 
         # 初始化消息存储
-        if not hasattr(self, '_messages'):
+        if self._messages:
             self._messages = {}
 
         # 存储消息信息
@@ -113,26 +117,26 @@ class ChatTool():
         u = window.input.toPlainText().strip()
         if u:
             # 停止任何正在进行的打字机效果
-            if hasattr(self, '_non_stream_timer') and self._non_stream_timer and self._non_stream_timer.isActive():
-                self._non_stream_timer.stop()
-                self._non_stream_timer.deleteLater()
-                self._non_stream_timer = None
+            if self.non_stream_timer and self.non_stream_timer and self.non_stream_timer.isActive():
+                self.non_stream_timer.stop()
+                self.non_stream_timer.deleteLater()
+                self.non_stream_timer = None
                 # 如果有未显示完的文本，立即显示完整内容
-                if hasattr(self, '_non_stream_text') and hasattr(self, '_non_stream_message_id'):
-                    self.update_last_message(self._non_stream_text)
+                if self.non_stream_text and self.non_stream_message_id:
+                    self.update_last_message(self.non_stream_text)
                 # 清理变量
-                if hasattr(self, '_non_stream_text'):
-                    delattr(self, '_non_stream_text')
-                if hasattr(self, '_non_stream_index'):
-                    delattr(self, '_non_stream_index')
-                if hasattr(self, '_non_stream_message_id'):
-                    delattr(self, '_non_stream_message_id')
+                if self.non_stream_text:
+                    self.non_stream_text=None
+                if self.non_stream_index:
+                    self.non_stream_index=None
+                if self.non_stream_message_id:
+                    self.non_stream_message_id=None
 
             # 检查是否有流式打字机在运行
-            if hasattr(self, '_stream_typewriter_timer') and self._stream_typewriter_timer and self._stream_typewriter_timer.isActive():
-                self._stream_typewriter_timer.stop()
-                self._stream_typewriter_timer.deleteLater()
-                self._stream_typewriter_timer = None
+            if self.stream_typewriter_timer and self.stream_typewriter_timer and self.stream_typewriter_timer.isActive():
+                self.stream_typewriter_timer.stop()
+                self.stream_typewriter_timer.deleteLater()
+                self.stream_typewriter_timer = None
 
             # 立即显示用户消息
             self.add_user_message(config.ui.user_name, u)
@@ -140,10 +144,10 @@ class ChatTool():
 
             # 在发送新消息之前，确保清理所有可能存在的message_id
             # 包括文本和语音相关的ID，避免冲突
-            if hasattr(self, '_current_message_id'):
-                delattr(self, '_current_message_id')
-            if hasattr(self, '_current_ai_voice_message_id'):
-                delattr(self, '_current_ai_voice_message_id')
+            if self.current_message_id:
+                self.current_message_id=None
+            if self.current_ai_voice_message_id:
+                self.current_ai_voice_message_id=None
 
             # 如果已有任务在运行，先取消
             if self.worker and self.worker.isRunning():
@@ -311,11 +315,11 @@ class ChatTool():
         # 优先使用当前消息ID（流式更新时设置的）
         message_id = None
         message_source = ""
-        if hasattr(self, '_current_message_id') and self._current_message_id:
-            message_id = self._current_message_id
+        if self.current_message_id and self.current_message_id:
+            message_id = self.current_message_id
             message_source = "text"
-        elif hasattr(self, '_current_ai_voice_message_id') and self._current_ai_voice_message_id:
-            message_id = self._current_ai_voice_message_id
+        elif self.current_ai_voice_message_id and self.current_ai_voice_message_id:
+            message_id = self.current_ai_voice_message_id
             message_source = "voice"
         elif self._messages:
             # 如果没有当前消息ID，查找最后一个消息
@@ -372,8 +376,8 @@ class ChatTool():
         # 重置状态
         self._messages.clear()
         self.message_counter = 0
-        self._current_message_id = None
-        self._current_response = ""
+        self.current_message_id = None
+        self.current_response = ""
         
         # 恢复stretch
         self.chat_layout.addStretch()
@@ -472,7 +476,7 @@ class ChatTool():
                         MessageRenderer.update_message_content(dialog_widget, f"✅ {result}")
 
                         # 更新嵌套对话框内容
-                        if hasattr(dialog_widget, 'set_nested_content'):
+                        if dialog_widget.set_nested_content:
                             nested_title = "工具调用结果"
                             nested_content = f"""
 工具名称: {message_info.get('content', '未知工具')}
@@ -615,10 +619,9 @@ class ChatTool():
                 self.update_last_message(final_message)
 
         # 重置状态
-        self.current_response = ""
+        self.current_response = None
         self.current_message_id = None
-        if hasattr(self, '_last_update_time'):
-            delattr(self, '_last_update_time')
+        self.last_update_time = None
 
         # 停止加载状态
         self.progress_widget.stop_loading()
@@ -667,7 +670,7 @@ class ChatTool():
         """为非流式响应启动打字机效果"""
         # 创建空消息
         message_id = self.add_ai_message("")
-        self._non_stream_message_id = message_id
+        self.non_stream_message_id = message_id
         self.current_message_id = message_id  # 让update_last_message能找到这个消息
 
         # 初始化打字机变量
@@ -690,12 +693,9 @@ class ChatTool():
             self.non_stream_timer = None
 
             # 清理临时变量
-            self._non_stream_text=""
-            delattr(self, '_non_stream_text')
-            self._non_stream_index=0
-            delattr(self, '_non_stream_index')
-            self._non_stream_message_id=0
-            delattr(self, '_non_stream_message_id')
+            self.non_stream_text=None
+            self.non_stream_index=None
+            self.non_stream_message_id = None
             self.current_message_id = None
             return
 
@@ -760,12 +760,9 @@ class ChatTool():
             self.non_stream_timer = None
 
             # 清理非流式打字机变量
-            if hasattr(self, '_non_stream_text'):
-                delattr(self, '_non_stream_text')
-            if hasattr(self, '_non_stream_index'):
-                delattr(self, '_non_stream_index')
-            if hasattr(self, '_non_stream_message_id'):
-                delattr(self, '_non_stream_message_id')
+            self.non_stream_text = None
+            self.non_stream_index = None
+            self.non_stream_message_id = None
 
         # 处理worker
         if self.worker and self.worker.isRunning():
