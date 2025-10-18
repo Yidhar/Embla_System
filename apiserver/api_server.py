@@ -487,9 +487,10 @@ async def chat_stream(request: ChatRequest):
                                                 if 'choices' in data and len(data['choices']) > 0:
                                                     delta = data['choices'][0].get('delta', {})
                                                     if 'content' in delta:
+                                                        import base64
                                                         content = delta['content']
-                                                        # 直接将增量内容推送给前端用于消息渲染
-                                                        yield f"data: {content}\n\n"
+                                                        b64 = base64.b64encode(content.encode('utf-8')).decode('ascii')
+                                                        yield f"data: {b64}\n\n"
 
                                                         # V19: 如果需要返回音频，累积文本
                                                         if request.return_audio:

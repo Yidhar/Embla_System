@@ -1,4 +1,3 @@
-
 from nagaagent_core.vendors.PyQt5.QtWidgets import QLabel
 from ..utils.response_util import extract_message
 from ui.utils.message_renderer import MessageRenderer
@@ -8,11 +7,12 @@ import time
 from typing import Dict, Optional
 from ..utils.stream_util import _StreamHttpWorker, _NonStreamHttpWorker
 
+
 class ChatTool():
     def __init__(self, window):
         self.window = window
         self.current_response = ""  # 当前响应缓冲
-        self.scroll_timer=QTimer(window)
+        self.scroll_timer = QTimer(window)
         # 外部依赖
         self.chat_layout = window.chat_layout
         self.chat_scroll_area = window.chat_scroll_area
@@ -38,10 +38,8 @@ class ChatTool():
         self.non_stream_text = ""
         self.non_stream_index = 0
         self.non_stream_message_id = None
-        
-        self.current_ai_voice_message_id=None
-        self.last_update_time = None
 
+        self.current_ai_voice_message_id = None
         # Worker管理
         self.worker: Optional[_StreamHttpWorker] = None
 
@@ -49,18 +47,17 @@ class ChatTool():
         self.in_tool_call_mode = False
 
     def adjust_input_height(self):
-        window=self.window
+        window = self.window
         doc = window.input.document()
-        h = int(doc.size().height())+10
+        h = int(doc.size().height()) + 10
         window.input.setFixedHeight(min(max(60, h), 150))  # 增加最小高度，与字体大小匹配
         window.input_wrap.setFixedHeight(window.input.height())
-    
-    
+
     def add_user_message(self, name, content, is_streaming=False):
-        window=self.window
+        window = self.window
         """添加用户消息"""
         msg = extract_message(content)
-        content_html = str(msg).replace('\\n', '\n').replace('\n', '<br>')
+        content_html = str(msg).replace('\n', '\n\n')#.replace('\n', '<br>')
 
         # 生成消息ID
         if not self.message_counter:
@@ -110,151 +107,147 @@ class ChatTool():
         self.smart_scroll_to_bottom()
 
         return message_id
-    
-    
+
     def on_send(self):
-        window = self.window
-        u = window.input.toPlainText().strip()
-        if u:
-            # 停止任何正在进行的打字机效果
-            if self.non_stream_timer and self.non_stream_timer and self.non_stream_timer.isActive():
-                self.non_stream_timer.stop()
-                self.non_stream_timer.deleteLater()
-                self.non_stream_timer = None
-                # 如果有未显示完的文本，立即显示完整内容
-                if self.non_stream_text and self.non_stream_message_id:
-                    self.update_last_message(self.non_stream_text)
-                # 清理变量
-                if self.non_stream_text:
-                    self.non_stream_text=None
-                if self.non_stream_index:
-                    self.non_stream_index=None
-                if self.non_stream_message_id:
-                    self.non_stream_message_id=None
+        # 1. 获取并验证用户输入
+        user_input = self.window.input.toPlainText().strip()
+        if not user_input:
+            return
 
-            # 检查是否有流式打字机在运行
-            if self.stream_typewriter_timer and self.stream_typewriter_timer and self.stream_typewriter_timer.isActive():
-                self.stream_typewriter_timer.stop()
-                self.stream_typewriter_timer.deleteLater()
-                self.stream_typewriter_timer = None
+        # 2. 清理所有历史状态（合并关联的清理逻辑）
+        self._cleanup_all_states()
 
-            # 立即显示用户消息
-            self.add_user_message(config.ui.user_name, u)
-            window.input.clear()
+        # 3. 显示用户消息并清空输入框
+        self.add_user_message(config.ui.user_name, user_input)
+        self.window.input.clear()
 
-            # 在发送新消息之前，确保清理所有可能存在的message_id
-            # 包括文本和语音相关的ID，避免冲突
-            if self.current_message_id:
-                self.current_message_id=None
-            if self.current_ai_voice_message_id:
-                self.current_ai_voice_message_id=None
-
-            # 如果已有任务在运行，先取消
-            if self.worker and self.worker.isRunning():
-                self.cancel_current_task()
-                return
-
-            # 清空当前响应缓冲
-            self.current_response = ""
-
-            # 确保worker被清理
-            if self.worker:
-                self.worker.deleteLater()
-                self.worker = None
-
-            # 架构设计：
-            # 1. 博弈论模式：必须使用非流式（需要完整响应进行多轮思考）
-            # 2. 普通模式：统一使用流式（更好的用户体验，统一的打字机效果）
-            # 这样简化了代码，避免了重复的打字机效果实现
-
-            # 博弈论模式必须使用非流式（需要完整响应进行多轮思考）
-            from .tool_game import game
-            if game.self_game_enabled:
-                # 博弈论模式：使用非流式接口（放入后台线程）
-                # 使用配置中的API服务器地址和端口
-                api_url = f"http://{config.api_server.host}:{config.api_server.port}/chat"
-                data = {"message": u, "stream": False, "use_self_game": True}
-
-                from system.config import config as _cfg
-                if _cfg.system.voice_enabled and _cfg.voice_realtime.voice_mode in ["hybrid", "end2end"]:
-                    data["return_audio"] = True
-
-                # 创建并启动非流式worker
-                self.worker = _NonStreamHttpWorker(api_url, data)
-                self.worker.status.connect(lambda st: self.progress_widget.status_label.setText(st))
-                self.worker.error.connect(lambda err: (self.progress_widget.stop_loading(), self.add_user_message("系统", f"❌ 博弈论调用错误: {err}")))
-                def _on_finish_text(text):
-                    self.progress_widget.stop_loading()
-                    self.start_non_stream_typewriter(text)
-                self.worker.finished_text.connect(_on_finish_text)
-                self.progress_widget.set_thinking_mode()
-                self.worker.start()
-                return
+        # 4. 根据模式分发请求（核心分支逻辑）
+        from .tool_game import game
+        if game.self_game_enabled:
+            self._send_self_game_request(user_input)
+        else:
+            if self.streaming_mode:
+                self._send_stream_request(user_input)
             else:
-                # 普通模式：根据配置决定使用流式还是非流式接口
-                if self.streaming_mode:
-                    # 流式模式
-                    # 使用配置中的API服务器地址和端口
-                    api_url = f"http://{config.api_server.host}:{config.api_server.port}/chat/stream"
-                    data = {"message": u, "stream": True, "use_self_game": False}
-                else:
-                    # 非流式模式
-                    # 使用配置中的API服务器地址和端口
-                    api_url = f"http://{config.api_server.host}:{config.api_server.port}/chat"
-                    data = {"message": u, "stream": False, "use_self_game": False}
+                self._send_non_stream_request(user_input)
 
-                from system.config import config as _cfg
-                if _cfg.system.voice_enabled and _cfg.voice_realtime.voice_mode in ["hybrid", "end2end"]:
-                    data["return_audio"] = True
+    def _cleanup_all_states(self):
+        """合并：清理打字机、消息ID、运行中任务等所有状态"""
+        # 清理非流式打字机
+        if self.non_stream_timer and self.non_stream_timer.isActive():
+            self.non_stream_timer.stop()
+            self.non_stream_timer.deleteLater()
+            if self.non_stream_text and self.non_stream_message_id:
+                self.update_last_message(self.non_stream_text)
+        # 重置非流式状态变量
+        self.non_stream_timer = self.non_stream_text = self.non_stream_index = self.non_stream_message_id = None
 
-                if self.streaming_mode:
-                    # 创建并启动流式worker
-                    self.worker = _StreamHttpWorker(api_url, data)
-                    # 复用现有的流式UI更新逻辑
-                    self.worker.status.connect(lambda st: self.progress_widget.status_label.setText(st))
-                    self.worker.error.connect(lambda err: (self.progress_widget.stop_loading(), self.add_user_message("系统", f"❌ 流式调用错误: {err}")))
-                    # 将返回的data_str包裹成伪SSE处理路径，直接复用append_response_chunk节流更新
-                    def _on_chunk(data_str):
-                        # 过滤session_id与audio_url行，保持与handle_streaming_response一致
-                        if data_str.startswith('session_id: '):
-                            return
-                        if data_str.startswith('audio_url: '):
-                            return
-                        self.append_response_chunk(data_str)
-                    self.worker.chunk.connect(_on_chunk)
-                    self.worker.done.connect(self.finalize_streaming_response)
-                    self.progress_widget.set_thinking_mode()
-                    self.worker.start()
-                else:
-                    # 创建并启动非流式worker
-                    self.worker = _NonStreamHttpWorker(api_url, data)
-                    self.worker.status.connect(lambda st: self.progress_widget.status_label.setText(st))
-                    self.worker.error.connect(lambda err: (self.progress_widget.stop_loading(), self.add_user_message("系统", f"❌ 非流式调用错误: {err}")))
-                    def _on_finish_text(text):
-                        self.progress_widget.stop_loading()
-                        self.start_non_stream_typewriter(text)
-                    self.worker.finished_text.connect(_on_finish_text)
-                    self.progress_widget.set_thinking_mode()
-                    self.worker.start()
-                return
+        # 清理流式打字机
+        if self.stream_typewriter_timer and self.stream_typewriter_timer.isActive():
+            self.stream_typewriter_timer.stop()
+            self.stream_typewriter_timer.deleteLater()
+        self.stream_typewriter_timer = None  # 重置流式状态
 
-            
-    
+        # 清理消息ID和响应缓冲
+        self.current_message_id = self.current_ai_voice_message_id = None
+        self.current_response = ""
+
+        # 终止运行中的worker
+        if self.worker and self.worker.isRunning():
+            self.cancel_current_task()
+            self.worker.deleteLater()
+            self.worker = None
+
+    def _send_self_game_request(self, user_input):
+        """博弈论模式（非流式）请求"""
+        api_url = f"http://{config.api_server.host}:{config.api_server.port}/chat"
+        data = self._build_request_data(user_input, stream=False, use_self_game=True)
+
+        self.worker = _NonStreamHttpWorker(api_url, data)
+        self._bind_non_stream_worker_signals(self.worker, "博弈论")
+        self.progress_widget.set_thinking_mode()
+        self.worker.start()
+
+    def _send_stream_request(self, user_input):
+        """普通流式请求"""
+        api_url = f"http://{config.api_server.host}:{config.api_server.port}/chat/stream"
+        data = self._build_request_data(user_input, stream=True, use_self_game=False)
+
+        self.worker = _StreamHttpWorker(api_url, data)
+        self.worker.status.connect(lambda st: self.progress_widget.status_label.setText(st))
+        self.worker.error.connect(lambda err: (
+            self.progress_widget.stop_loading(),
+            self.add_user_message("系统", f"❌ 流式调用错误: {err}")
+        ))
+        self.worker.chunk.connect(lambda data_str: self._handle_stream_chunk(data_str))
+        self.worker.done.connect(self.finalize_streaming_response)
+        self.progress_widget.set_thinking_mode()
+        self.worker.start()
+
+    def _send_non_stream_request(self, user_input):
+        """普通非流式请求"""
+        api_url = f"http://{config.api_server.host}:{config.api_server.port}/chat"
+        data = self._build_request_data(user_input, stream=False, use_self_game=False)
+
+        self.worker = _NonStreamHttpWorker(api_url, data)
+        self._bind_non_stream_worker_signals(self.worker, "非流式")
+        self.progress_widget.set_thinking_mode()
+        self.worker.start()
+
+    # 保留必要的工具方法（未过度拆分）
+    def _build_request_data(self, user_input, stream, use_self_game):
+        """构建请求数据（复用逻辑）"""
+        data = {"message": user_input, "stream": stream, "use_self_game": use_self_game}
+        from system.config import config as _cfg
+        if _cfg.system.voice_enabled and _cfg.voice_realtime.voice_mode in ["hybrid", "end2end"]:
+            data["return_audio"] = True
+        return data
+
+    def _bind_non_stream_worker_signals(self, worker, error_prefix):
+        """绑定非流式worker的信号（复用逻辑）"""
+        worker.status.connect(lambda st: self.progress_widget.status_label.setText(st))
+        worker.error.connect(lambda err: (
+            self.progress_widget.stop_loading(),
+            self.add_user_message("系统", f"❌ {error_prefix}调用错误: {err}")
+        ))
+        worker.finished_text.connect(lambda text: (
+            self.progress_widget.stop_loading(),
+            self.start_non_stream_typewriter(text)
+        ))
+
+    def _handle_stream_chunk(self, data_str):
+        """处理流式响应片段"""
+        try:
+            import base64
+            # 1. base64 → bytes
+            raw = base64.b64decode(data_str, validate=True)
+            # 2. bytes → str（默认 utf-8，出错就忽略）
+            text = raw.decode('utf-8', errors='ignore')
+        except Exception:
+            # 如果这一包不是完整 base64，直接原样丢给 UI，防止断帧
+            text = data_str
+
+        if text.startswith(('session_id: ', 'audio_url: ')):
+            return
+
+
+        self.append_response_chunk(text)
+
     def add_system_message(self, content: str) -> str:
         """添加系统消息到聊天界面"""
         msg = extract_message(content)
-        content_html = str(msg).replace('\\n', '\n').replace('\n', '<br>')
-        
+        content_html = str(msg)  # .replace('\\n', '\n').replace('\n', '<br>')
+
         # 生成消息ID
         self.message_counter += 1
         message_id = f"msg_{self.message_counter}"
-        
+
         # 创建系统消息对话框
         parent_widget = self.chat_layout.parentWidget()
         message_dialog = MessageRenderer.create_system_message(
             "系统", content_html, parent_widget
         )
-        
+
         # 存储消息信息
         self._messages[message_id] = {
             'name': "系统",
@@ -264,31 +257,31 @@ class ChatTool():
             'is_ai': False,
             'is_system': True
         }
-        
+
         # 添加到布局
         self._remove_layout_stretch()
         self.chat_layout.addWidget(message_dialog)
         self.chat_layout.addStretch()
-        
+
         # 滚动到底部
         self.smart_scroll_to_bottom()
         return message_id
-    
+
     def add_ai_message(self, content: str = "") -> str:
         """添加AI消息到聊天界面（流式处理时初始化为空消息）"""
         msg = extract_message(content)
-        content_html = str(msg).replace('\\n', '\n').replace('\n', '<br>')
-        
+        content_html = str(msg)  # .replace('\\n', '\n').replace('\n', '<br>')
+
         # 生成消息ID
         self.message_counter += 1
         message_id = f"msg_{self.message_counter}"
-        
+
         # 创建AI消息对话框
         parent_widget = self.chat_layout.parentWidget()
         message_dialog = MessageRenderer.create_assistant_message(
             self.ai_name, content_html, parent_widget
         )
-        
+
         # 存储消息信息
         self._messages[message_id] = {
             'name': self.ai_name,
@@ -297,20 +290,21 @@ class ChatTool():
             'dialog_widget': message_dialog,
             'is_ai': True
         }
-        
+
         # 添加到布局
         self._remove_layout_stretch()
         self.chat_layout.addWidget(message_dialog)
         self.chat_layout.addStretch()
-        
+
         return message_id
-    
-    
+
     def update_last_message(self, new_text):
         """更新最后一条消息的内容"""
+        line=new_text.count('\n')
+        logger.info(f"更新最后一条消息（换行数：{line}）：{new_text}")
         # 处理消息格式化
         msg = extract_message(new_text)
-        content_html = str(msg).replace('\\n', '\n').replace('\n', '<br>')
+        content_html = str(msg).replace('\n', '<br>')
 
         # 优先使用当前消息ID（流式更新时设置的）
         message_id = None
@@ -359,29 +353,28 @@ class ChatTool():
         # 自动滚动到底部，确保最新消息可见（使用智能滚动，不打扰正在查看历史的用户）
         self.smart_scroll_to_bottom()
 
-    
     def clear_chat_history(self):
         """清除所有聊天历史"""
         # 清除UI组件
         for msg_id, msg_info in self._messages.items():
             if msg_info['dialog_widget']:
                 msg_info['dialog_widget'].deleteLater()
-        
+
         # 清除布局
         while self.chat_layout.count() > 0:
             item = self.chat_layout.takeAt(0)
             if item and item.widget():
                 item.widget().deleteLater()
-        
+
         # 重置状态
         self._messages.clear()
         self.message_counter = 0
         self.current_message_id = None
         self.current_response = ""
-        
+
         # 恢复stretch
         self.chat_layout.addStretch()
-    
+
     def load_persistent_history(self, max_messages: int = 20):
         """从持久化存储加载历史对话"""
         try:
@@ -390,29 +383,29 @@ class ChatTool():
                 parent_widget=self.chat_layout.parentWidget(),
                 max_messages=max_messages
             )
-            
+
             if not ui_messages:
                 logger.info("未加载到历史对话")
                 return
-            
+
             # 清空现有布局
             self._remove_layout_stretch()
             while self.chat_layout.count() > 0:
                 item = self.chat_layout.takeAt(0)
                 if item and item.widget():
                     item.widget().deleteLater()
-            
+
             # 加载历史消息到UI和存储
             for message_id, message_info, dialog in ui_messages:
                 self.chat_layout.addWidget(dialog)
                 self._messages[message_id] = message_info
                 self.message_counter = max(self.message_counter, int(message_id.split('_')[-1]))
-            
+
             # 恢复stretch并滚动到底部
             self.chat_layout.addStretch()
             self.smart_scroll_to_bottom()
             logger.info(f"加载完成 {len(ui_messages)} 条历史对话")
-        
+
         except Exception as e:
             logger.error(f"加载历史对话失败: {str(e)}")
             self.add_system_message(f"❌ 加载历史对话失败: {str(e)}")
@@ -498,12 +491,12 @@ class ChatTool():
     # 滚动控制
     # ------------------------------
 
-
     def smart_scroll_to_bottom(self):
         """智能滚动到底部（如果用户正在查看历史消息，则不滚动）"""
         # 如果不在 Qt 主线程，重新投递
         if QThread.currentThread() != QCoreApplication.instance().thread():
-            logger.debug(f"不在qt线程。当前线程：{QThread.currentThread()} QT线程：{QCoreApplication.instance().thread()} ")
+            logger.debug(
+                f"不在qt线程。当前线程：{QThread.currentThread()} QT线程：{QCoreApplication.instance().thread()} ")
             QMetaObject.invokeMethod(self, "smart_scroll_to_bottom", Qt.QueuedConnection)
             return
 
@@ -586,6 +579,8 @@ class ChatTool():
         if any(marker in chunk for marker in ["[TOOL_CALL]", "[TOOL_START]", "[TOOL_RESULT]", "[TOOL_ERROR]"]):
             return
 
+        logger.debug(f"收到chunk：{chunk}")
+
         # 检查是否在工具调用过程中
         if self.in_tool_call_mode:
             # 工具调用模式结束，创建新的消息框
@@ -600,13 +595,13 @@ class ChatTool():
         else:
             # 后续chunk，追加到当前消息
             self.current_response += chunk
-
-            # 限制更新频率（节流）
-            current_time = time.time()
-            # 每50毫秒更新一次UI，减少闪动
-            if current_time - self.last_update_time >= 0.05:
-                self.update_last_message(self.current_response)
-                self.last_update_time = current_time
+            #
+            # # 限制更新频率（节流）
+            # current_time = time.time()
+            # # 每50毫秒更新一次UI，减少闪动
+            # if current_time - self.last_update_time >= 0.05:
+            self.update_last_message(self.current_response)
+            # self.last_update_time = current_time
 
     def finalize_streaming_response(self):
         """完成流式响应处理"""
@@ -621,7 +616,7 @@ class ChatTool():
         # 重置状态
         self.current_response = None
         self.current_message_id = None
-        self.last_update_time = None
+        self.last_update_time = 0
 
         # 停止加载状态
         self.progress_widget.stop_loading()
@@ -693,8 +688,8 @@ class ChatTool():
             self.non_stream_timer = None
 
             # 清理临时变量
-            self.non_stream_text=None
-            self.non_stream_index=None
+            self.non_stream_text = None
+            self.non_stream_index = None
             self.non_stream_message_id = None
             self.current_message_id = None
             return
@@ -801,7 +796,10 @@ class ChatTool():
         """获取所有消息"""
         return self._messages.copy()  # 返回副本，防止外部修改
 
+
 from ..utils.lazy import lazy
+
+
 @lazy
 def chat():
     return ChatTool(config.window)
