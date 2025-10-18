@@ -234,9 +234,9 @@ async def run_full_flow_test(user_question: str):
                     detected_encoding = best_match.encoding
                     test_logger.log_step(f"检测到配置文件编码: {detected_encoding}")
 
-                    # 使用检测到的编码读取文件
-                    config_content = str(best_match)
-                    config_data = json.loads(config_content)
+                    # 使用检测到的编码直接打开文件，然后使用JSON读取
+                    with open(config_path, 'r', encoding=detected_encoding) as f:
+                        config_data = json.load(f)
                 else:
                     test_logger.log_step("无法检测配置文件编码，使用回退方法")
                     with open(config_path, 'r', encoding='utf-8') as f:
