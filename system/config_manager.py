@@ -17,6 +17,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from .config import config, hot_reload_config, add_config_listener, remove_config_listener
+from charset_normalizer import from_path
+import json5  # 支持带注释的JSON解析
 
 class ConfigManager:
     """配置管理器 - 统一管理配置热更新
@@ -206,8 +208,28 @@ class ConfigManager:
     def _load_config_file(self, config_path: str) -> Optional[Dict[str, Any]]:
         """加载配置文件"""
         try:
+            # 使用Charset Normalizer自动检测编码
+            charset_results = from_path(config_path)
+            if charset_results:
+                best_match = charset_results.best()
+                if best_match:
+                    detected_encoding = best_match.encoding
+                    print(f"检测到配置文件编码: {detected_encoding}")
+
+                    # 使用检测到的编码读取文件
+                    config_content = str(best_match)
+                    # 使用json5解析支持注释的JSON
+                    return json5.loads(config_content)
+                else:
+                    print(f"警告：无法检测 {config_path} 的编码")
+            else:
+                print(f"警告：无法检测 {config_path} 的编码")
+
+            # 如果自动检测失败，回退到原来的方法
+            print("使用回退方法加载配置")
             with open(config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                # 使用json5解析支持注释的JSON
+                return json5.load(f)
         except Exception as e:
             print(f"加载配置文件失败: {e}")  # 去除Emoji #
             return None
@@ -237,13 +259,33 @@ class ConfigManager:
         # 直接读取config.json文件，避免序列化问题
         try:
             config_path = str(Path(__file__).parent.parent / "config.json")
+            # 使用Charset Normalizer自动检测编码
+            charset_results = from_path(config_path)
+            if charset_results:
+                best_match = charset_results.best()
+                if best_match:
+                    detected_encoding = best_match.encoding
+                    print(f"检测到配置文件编码: {detected_encoding}")
+
+                    # 使用检测到的编码读取文件
+                    config_content = str(best_match)
+                    # 使用json5解析支持注释的JSON
+                    return json5.loads(config_content)
+                else:
+                    print(f"警告：无法检测 {config_path} 的编码")
+            else:
+                print(f"警告：无法检测 {config_path} 的编码")
+
+            # 如果自动检测失败，回退到原来的方法
+            print("使用回退方法加载配置")
             with open(config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                # 使用json5解析支持注释的JSON
+                return json5.load(f)
         except Exception as e:
             print(f"获取配置快照失败: {e}")  # 去除Emoji #
             # 如果读取失败，返回一个基本的配置结构
             return {
-                "system": {"version": "3.0"},
+                "system": {"version": "4.0"},
                 "api": {"api_key": ""},
                 "api_server": {"enabled": True},
                 "grag": {"enabled": False},

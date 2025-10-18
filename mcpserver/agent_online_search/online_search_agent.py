@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 from langchain_community.utilities import SearxSearchWrapper
 from system.config import config
+from charset_normalizer import from_path
 
 class OnlineSearchAgent:
     
@@ -34,8 +35,26 @@ class OnlineSearchAgent:
             try:
                 config_path = Path(__file__).parent.parent.parent / "config.json"
                 if config_path.exists():
-                    with open(config_path, 'r', encoding='utf-8') as f:
-                        config_data = json.load(f)
+                    # 使用Charset Normalizer自动检测编码
+                    charset_results = from_path(str(config_path))
+                    if charset_results:
+                        best_match = charset_results.best()
+                        if best_match:
+                            detected_encoding = best_match.encoding
+                            print(f"[INFO] 检测到配置文件编码: {detected_encoding}")
+
+                            # 使用检测到的编码读取文件
+                            config_content = str(best_match)
+                            config_data = json.loads(config_content)
+                        else:
+                            print("[WARN] 无法检测配置文件编码，使用回退方法")
+                            with open(config_path, 'r', encoding='utf-8') as f:
+                                config_data = json.load(f)
+                    else:
+                        print("[WARN] 无法检测配置文件编码，使用回退方法")
+                        with open(config_path, 'r', encoding='utf-8') as f:
+                            config_data = json.load(f)
+
                     if 'online_search' in config_data:
                         if 'searxng_url' in config_data['online_search']:
                             self.searxng_url = config_data['online_search']['searxng_url']
@@ -188,8 +207,21 @@ def validate_agent_config():
             try:
                 config_path = Path(__file__).parent.parent.parent / "config.json"
                 if config_path.exists():
-                    with open(config_path, 'r', encoding='utf-8') as f:
-                        config_data = json.load(f)
+                    # 使用Charset Normalizer自动检测编码
+                    charset_results = from_path(str(config_path))
+                    if charset_results:
+                        best_match = charset_results.best()
+                        if best_match:
+                            # 使用检测到的编码读取文件
+                            config_content = str(best_match)
+                            config_data = json.loads(config_content)
+                        else:
+                            with open(config_path, 'r', encoding='utf-8') as f:
+                                config_data = json.load(f)
+                    else:
+                        with open(config_path, 'r', encoding='utf-8') as f:
+                            config_data = json.load(f)
+
                     if 'online_search' in config_data and 'searxng_url' in config_data['online_search']:
                         searxng_url = config_data['online_search']['searxng_url']
             except Exception:
