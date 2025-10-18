@@ -482,11 +482,9 @@ class NagaConfig(BaseModel):
 
 
 # 全局配置实例
-ENCF = 0  # 编码修复计数器
 
 def load_config():
     """加载配置"""
-    global ENCF
     config_path = str(Path(__file__).parent.parent / "config.json")
 
     if os.path.exists(config_path):
@@ -499,10 +497,28 @@ def load_config():
                     detected_encoding = best_match.encoding
                     print(f"检测到配置文件编码: {detected_encoding}")
 
-                    # 使用检测到的编码读取文件
-                    config_content = str(best_match)
-                    # 使用json5解析支持注释的JSON
-                    config_data = json5.loads(config_content)
+                    # 使用检测到的编码直接打开文件，然后使用json5读取
+                    with open(config_path, 'r', encoding=detected_encoding) as f:
+                        # 使用json5解析支持注释的JSON
+                        try:
+                            config_data = json5.load(f)
+                        except Exception as json5_error:
+                            print(f"json5解析失败: {json5_error}")
+                            print("尝试使用标准JSON库解析（将忽略注释）...")
+                            # 回退到标准JSON库，但需要先去除注释
+                            f.seek(0)  # 重置文件指针
+                            content = f.read()
+                            # 去除注释行
+                            lines = content.split('\n')
+                            cleaned_lines = []
+                            for line in lines:
+                                # 移除行内注释（#后面的内容）
+                                if '#' in line:
+                                    line = line.split('#')[0].rstrip()
+                                if line.strip():  # 只保留非空行
+                                    cleaned_lines.append(line)
+                            cleaned_content = '\n'.join(cleaned_lines)
+                            config_data = json.loads(cleaned_content)
                     return NagaConfig(**config_data)
                 else:
                     print(f"警告：无法检测 {config_path} 的编码")
@@ -519,30 +535,7 @@ def load_config():
         except Exception as e:
             print(f"警告：加载 {config_path} 失败: {e}")
             print("使用默认配置")
-
-            if ENCF > 1:
-                print(f"警告：加载 {config_path} 失败: {e}")
-                print("使用默认配置")
-                return NagaConfig()
-
-            ENCF += 1
-            try:
-                # 尝试修复编码问题
-                with open(config_path, 'r', encoding='ISO-8859-1') as f:
-                    con = f.read()
-                with open(config_path, 'w', encoding='utf-8') as f:
-                    f.write(con)
-                print("已经修复编码")
-
-                # 重新尝试加载配置
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    # 使用json5解析支持注释的JSON
-                    config_data = json5.load(f)
-                return NagaConfig(**config_data)
-            except Exception as e2:
-                print(f"警告：加载 {config_path} 失败: {e2}")
-                print("使用默认配置")
-                return NagaConfig()
+            return NagaConfig()
     else:
         print(f"警告：配置文件 {config_path} 不存在，使用默认配置")
 

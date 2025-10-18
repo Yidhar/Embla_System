@@ -110,9 +110,9 @@ def load_mqtt_config():
                     detected_encoding = best_match.encoding
                     logger.info(f"检测到配置文件编码: {detected_encoding}")
 
-                    # 使用检测到的编码读取文件
-                    config_content = str(best_match)
-                    config_data = json.loads(config_content)
+                    # 使用检测到的编码直接打开文件，然后使用JSON读取
+                    with open(config_path, 'r', encoding=detected_encoding) as f:
+                        config_data = json.load(f)
                 else:
                     logger.warning(f"无法检测 {config_path} 的编码，使用回退方法")
                     with open(config_path, 'r', encoding='utf-8') as f:

@@ -3,7 +3,7 @@
 ![NagaAgent Logo](https://img.shields.io/badge/NagaAgent-4.0-blue?style=for-the-badge&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-green?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python)
+![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=for-the-badge)
 
 ![Star History](https://img.shields.io/github/stars/Xxiii8322766509/NagaAgent?style=social)![Forks](https://img.shields.io/github/forks/Xxiii8322766509/NagaAgent?style=social)![Issues](https://img.shields.io/github/issues/Xxiii8322766509/NagaAgent)![Pull Requests](https://img.shields.io/github/issues-pr/Xxiii8322766509/NagaAgent)
@@ -15,7 +15,7 @@
 
 **🐍 智能对话助手 | 多平台支持 | 丰富生态 | 易于扩展**
 
-[功能特性](#-核心功能) • [快速开始](#-快速开始) • [安装指南](#-详细安装指南) • [API文档](#-restful-api服务) • [配置说明](#-配置说明) • [更新日志](#-更新日志) • [更新历史](CHANGELOG.md)
+[功能特性](#-核心功能) • [快速开始](#-快速开始) • [安装指南](#-详细安装指南) • [API文档](#-restful-api服务) • [配置说明](#-配置说明)
 
 ---
 
@@ -43,7 +43,7 @@
 ### 📋 系统要求
 
 - **操作系统**: Windows 10/11, macOS 10.15+, Linux
-- **Python**: 3.10+ (推荐 3.11)
+- **Python**: 3.11
 - **内存**: 建议 4GB 以上
 - **存储**: 建议 2GB 以上可用空间
 
@@ -194,7 +194,7 @@ docker run -d \
 
 ## 📁 项目结构
 
-NagaAgent 3.1 采用模块化架构设计，各功能模块独立且可扩展：
+NagaAgent 4.0采用模块化架构设计，各功能模块独立且可扩展：
 
 ```
 NagaAgent/
@@ -256,7 +256,7 @@ NagaAgent/
 
 ### 📦 依赖整合说明
 
-NagaAgent 3.1 已将核心依赖和API服务器相关依赖整合到 `nagaagent-core==1.0.1` 包中，以减少依赖下载负担：
+NagaAgent 4.0 已将核心依赖和API服务器相关依赖整合到 `nagaagent-core` 包中，以减少依赖下载负担：
 
 **已整合的依赖包：**
 - **核心依赖**: `mcp`, `openai`, `python-dotenv`, `requests`, `aiohttp`
@@ -276,7 +276,7 @@ pip install -r requirements.txt
 
 ### 🔍 系统环境检测
 
-NagaAgent 3.1 内置了完整的系统环境检测功能，自动检测Python版本、虚拟环境、依赖包等：
+NagaAgent 4.0 内置了完整的系统环境检测功能，自动检测Python版本、虚拟环境、依赖包等：
 
 ```bash
 # 运行系统环境检测
@@ -386,7 +386,7 @@ newgrp docker
 
 ### 🔄 配置热更新系统
 
-NagaAgent 3.1 引入了强大的配置热更新系统，支持实时配置变更而无需重启应用。
+NagaAgent 4.0 引入了强大的配置热更新系统，支持实时配置变更而无需重启应用。
 
 #### 核心特性
 - **实时更新**: 配置变更立即生效，无需重启
@@ -678,7 +678,7 @@ graph TB
 
 ## 🗂️ 目录结构
 ```
-NagaAgent3.1/
+NagaAgent4.0/
 ├── main.py                     # 主入口
 ├── config.py                   # 全局配置
 ├── config.json.example         # 配置文件模板
@@ -1042,7 +1042,7 @@ agents = list_agents()
 
 ## 🌳 深度思考引擎
 
-NagaAgent 3.1 引入了基于遗传算法的多分支思考引擎，提供更高质量的AI回答。
+NagaAgent 4.0 引入了基于遗传算法的多分支思考引擎，提供更高质量的AI回答。
 
 ### 核心特性
 
@@ -1096,86 +1096,6 @@ print(result["answer"])  # 输出综合后的最终答案
 
 ---
 
-## 📋 更新日志
-
-### v3.1.0 (2024-08-17)
-
-#### 🚀 新增功能
-- **深度思考引擎**: 基于遗传算法的多分支思考系统
-- **AgentManager**: 独立的Agent注册和调用系统
-- **模块化UI渲染**: 新的消息渲染系统，支持名字+消息框布局
-- **🎭 Live2D集成**: 独立的Live2D模块，支持模型和图片的混合侧栏显示，自动回退机制
-- **MQTT通信支持**: 新增MQTT工具模块
-- **Word文档处理**: 集成Office Word MCP服务
-- **漫画下载Agent**: 新增漫画下载功能Agent
-- **配置热更新系统**: 实时配置变更，无需重启应用
-
-#### 🔧 功能改进
-- **语音服务升级**: OpenAI兼容的TTS服务，支持多种音频格式
-- **系统托盘增强**: 完整的后台运行和自启动支持
-- **配置管理优化**: 统一的配置文件结构和环境变量支持
-- **配置热更新**: 支持实时配置变更和模块重新加载
-- **依赖管理**: 使用pyproject.toml进行现代化依赖管理
-- **Agent热插拔**: 支持运行时动态加载和卸载Agent
-
-#### 🐛 问题修复
-- **内存泄漏**: 修复会话管理中的内存泄漏问题
-- **并发处理**: 改进多线程并发处理的稳定性
-- **配置验证**: 增强配置文件的验证和错误处理
-- **配置热更新**: 修复配置快照序列化和更新延迟问题
-- **UI响应**: 优化UI界面的响应速度和用户体验
-
-#### 📚 文档更新
-- 完善所有模块的README文档
-- 更新安装和配置指南
-- 添加API接口文档
-- 增加故障排除指南
-- 新增配置热更新系统使用指南和测试报告
-
----
-
-## 🆙 历史对话兼容升级
-- **支持将旧版txt对话内容一键导入GRAG知识图谱记忆系统**: 兼容主题、分层、五元组等所有新特性
-- **激活指令**:
-  ```
-  #夏园系统兼容升级
-  ```
-- **系统会自动遍历logs目录下所有txt日志**: 列出所有历史对话内容并编号，输出到终端和`summer_memory/history_dialogs.json`
-- **用户可查看编号后，选择导入方式**:
-  - 全部导入：
-    ```
-    python summer_memory/main.py import all
-    ```
-  - 选择性导入（如第1、3、5-8条）：
-    ```
-    python summer_memory/main.py import 1,3,5-8
-    ```
-- **兼容过程自动判重**: 已入库内容不会重复导入，支持断点续跑
-- **兼容内容全部走AI自动主题归类与分层**: 完全与新系统一致
-- **详细进度、结果和异常均有反馈**: 安全高效
-
----
-
-## 🔧 最新更新 (v3.0.5)
-
-### 系统托盘功能增强
-- **控制台托盘功能**: 实现真正的"最小化到托盘"功能
-- **窗口钩子**: 监听控制台窗口的关闭事件，拦截关闭操作
-- **任务栏隐藏**: 使用`WS_EX_TOOLWINDOW`样式让窗口不在任务栏显示
-- **自动隐藏**: 启动后3秒自动隐藏控制台窗口
-- **托盘消息**: 支持托盘消息通知和状态提示
-
-### MCP工具依赖
-- **新增依赖**: 添加`jmcomic`和`fastmcp`依赖到`requirements.txt`
-- **虚拟环境安装**: 确保依赖安装到虚拟环境中
-- **依赖验证**: 提供依赖安装验证脚本
-
-### 技术改进
-- **窗口监控**: 添加窗口状态监控线程，实时检测窗口显示/隐藏状态
-- **样式管理**: 保存和恢复原始窗口样式，确保功能稳定性
-- **错误处理**: 增强窗口操作和托盘功能的错误处理机制
-
----
 
 ## ❓ 常见问题
 
