@@ -304,7 +304,9 @@ class ChatTool():
         logger.info(f"更新最后一条消息（换行数：{line}）：{new_text}")
         # 处理消息格式化
         msg = extract_message(new_text)
+        from markdown import markdown
         content_html = str(msg).replace('\n', '<br>')
+        content_html = markdown(content_html, extensions=['extra', 'codehilite'])
 
         # 优先使用当前消息ID（流式更新时设置的）
         message_id = None
