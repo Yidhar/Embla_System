@@ -216,10 +216,28 @@ class ConfigManager:
                     detected_encoding = best_match.encoding
                     print(f"检测到配置文件编码: {detected_encoding}")
 
-                    # 使用检测到的编码读取文件
-                    config_content = str(best_match)
-                    # 使用json5解析支持注释的JSON
-                    return json5.loads(config_content)
+                    # 使用检测到的编码直接打开文件，然后使用json5读取
+                    with open(config_path, 'r', encoding=detected_encoding) as f:
+                        # 使用json5解析支持注释的JSON
+                        try:
+                            return json5.load(f)
+                        except Exception as json5_error:
+                            print(f"json5解析失败: {json5_error}")
+                            print("尝试使用标准JSON库解析（将忽略注释）...")
+                            # 回退到标准JSON库，但需要先去除注释
+                            f.seek(0)  # 重置文件指针
+                            content = f.read()
+                            # 去除注释行
+                            lines = content.split('\n')
+                            cleaned_lines = []
+                            for line in lines:
+                                # 移除行内注释（#后面的内容）
+                                if '#' in line:
+                                    line = line.split('#')[0].rstrip()
+                                if line.strip():  # 只保留非空行
+                                    cleaned_lines.append(line)
+                            cleaned_content = '\n'.join(cleaned_lines)
+                            return json.loads(cleaned_content)
                 else:
                     print(f"警告：无法检测 {config_path} 的编码")
             else:
@@ -237,7 +255,17 @@ class ConfigManager:
     def _save_config_file(self, config_path: str, config_data: Dict[str, Any]) -> bool:
         """保存配置文件"""
         try:
-            with open(config_path, 'w', encoding='utf-8') as f:
+            # 自动检测文件编码
+            detected_encoding = 'utf-8'  # 默认编码
+            if os.path.exists(config_path):
+                charset_results = from_path(config_path)
+                if charset_results:
+                    best_match = charset_results.best()
+                    if best_match:
+                        detected_encoding = best_match.encoding
+                        print(f"检测到配置文件编码: {detected_encoding}")
+
+            with open(config_path, 'w', encoding=detected_encoding) as f:
                 json.dump(config_data, f, ensure_ascii=False, indent=2)
             return True
         except Exception as e:
@@ -267,10 +295,28 @@ class ConfigManager:
                     detected_encoding = best_match.encoding
                     print(f"检测到配置文件编码: {detected_encoding}")
 
-                    # 使用检测到的编码读取文件
-                    config_content = str(best_match)
-                    # 使用json5解析支持注释的JSON
-                    return json5.loads(config_content)
+                    # 使用检测到的编码直接打开文件，然后使用json5读取
+                    with open(config_path, 'r', encoding=detected_encoding) as f:
+                        # 使用json5解析支持注释的JSON
+                        try:
+                            return json5.load(f)
+                        except Exception as json5_error:
+                            print(f"json5解析失败: {json5_error}")
+                            print("尝试使用标准JSON库解析（将忽略注释）...")
+                            # 回退到标准JSON库，但需要先去除注释
+                            f.seek(0)  # 重置文件指针
+                            content = f.read()
+                            # 去除注释行
+                            lines = content.split('\n')
+                            cleaned_lines = []
+                            for line in lines:
+                                # 移除行内注释（#后面的内容）
+                                if '#' in line:
+                                    line = line.split('#')[0].rstrip()
+                                if line.strip():  # 只保留非空行
+                                    cleaned_lines.append(line)
+                            cleaned_content = '\n'.join(cleaned_lines)
+                            return json.loads(cleaned_content)
                 else:
                     print(f"警告：无法检测 {config_path} 的编码")
             else:
@@ -303,9 +349,20 @@ class ConfigManager:
         """恢复配置快照"""
         try:
             config_path = str(Path(__file__).parent.parent / "config.json")
-            with open(config_path, 'w', encoding='utf-8') as f:
+
+            # 自动检测文件编码
+            detected_encoding = 'utf-8'  # 默认编码
+            if os.path.exists(config_path):
+                charset_results = from_path(config_path)
+                if charset_results:
+                    best_match = charset_results.best()
+                    if best_match:
+                        detected_encoding = best_match.encoding
+                        print(f"检测到配置文件编码: {detected_encoding}")
+
+            with open(config_path, 'w', encoding=detected_encoding) as f:
                 json.dump(snapshot, f, ensure_ascii=False, indent=2)
-            
+
             hot_reload_config()
             print("配置快照恢复成功")  # 去除Emoji #
             return True

@@ -48,9 +48,9 @@ except Exception as e:
                 detected_encoding = best_match.encoding
                 print(f"[GRAG] 检测到配置文件编码: {detected_encoding}")
 
-                # 使用检测到的编码读取文件
-                config_content = str(best_match)
-                _cfg = _json.loads(config_content)
+                # 使用检测到的编码直接打开文件，然后使用JSON读取
+                with open(CONFIG_PATH, 'r', encoding=detected_encoding) as f:
+                    _cfg = _json.load(f)
             else:
                 print("[GRAG] 无法检测配置文件编码，使用回退方法")
                 with open(CONFIG_PATH, 'r', encoding='utf-8') as f:

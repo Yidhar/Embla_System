@@ -3,7 +3,7 @@
 ![NagaAgent Logo](https://img.shields.io/badge/NagaAgent-4.0-blue?style=for-the-badge&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-green?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python)
+![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)
 ![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=for-the-badge)
 
 ![Star History](https://img.shields.io/github/stars/Xxiii8322766509/NagaAgent?style=social)![Forks](https://img.shields.io/github/forks/Xxiii8322766509/NagaAgent?style=social)![Issues](https://img.shields.io/github/issues/Xxiii8322766509/NagaAgent)![Pull Requests](https://img.shields.io/github/issues-pr/Xxiii8322766509/NagaAgent)
@@ -15,7 +15,7 @@
 
 **🐍 智能对话助手 | 多平台支持 | 丰富生态 | 易于扩展**
 
-[功能特性](#-核心功能) • [快速开始](#-快速开始) • [安装指南](#-详细安装指南) • [API文档](#-restful-api服务) • [配置说明](#-配置说明) • [更新日志](#-更新日志) • [更新历史](CHANGELOG.md)
+[功能特性](#-核心功能) • [快速开始](#-快速开始) • [安装指南](#-详细安装指南) • [API文档](#-restful-api服务) • [配置说明](#-配置说明)
 
 ---
 
@@ -43,7 +43,7 @@
 ### 📋 系统要求
 
 - **操作系统**: Windows 10/11, macOS 10.15+, Linux
-- **Python**: 3.10+ (推荐 3.11)
+- **Python**: 3.11
 - **内存**: 建议 4GB 以上
 - **存储**: 建议 2GB 以上可用空间
 
@@ -159,10 +159,7 @@ docker run -d \
 <summary><strong>Windows 启动方式</strong></summary>
 
 ```powershell
-# 普通模式
-.\start.bat
-
-# 托盘模式 (推荐)
+# 托盘模式
 .\start_with_tray.bat
 ```
 </details>
@@ -194,7 +191,7 @@ docker run -d \
 
 ## 📁 项目结构
 
-NagaAgent 3.1 采用模块化架构设计，各功能模块独立且可扩展：
+NagaAgent 4.0采用模块化架构设计，各功能模块独立且可扩展：
 
 ```
 NagaAgent/
@@ -256,7 +253,7 @@ NagaAgent/
 
 ### 📦 依赖整合说明
 
-NagaAgent 3.1 已将核心依赖和API服务器相关依赖整合到 `nagaagent-core==1.0.1` 包中，以减少依赖下载负担：
+NagaAgent 4.0 已将核心依赖和API服务器相关依赖整合到 `nagaagent-core` 包中，以减少依赖下载负担：
 
 **已整合的依赖包：**
 - **核心依赖**: `mcp`, `openai`, `python-dotenv`, `requests`, `aiohttp`
@@ -276,7 +273,7 @@ pip install -r requirements.txt
 
 ### 🔍 系统环境检测
 
-NagaAgent 3.1 内置了完整的系统环境检测功能，自动检测Python版本、虚拟环境、依赖包等：
+NagaAgent 4.0 内置了完整的系统环境检测功能，自动检测Python版本、虚拟环境、依赖包等：
 
 ```bash
 # 运行系统环境检测
@@ -386,7 +383,7 @@ newgrp docker
 
 ### 🔄 配置热更新系统
 
-NagaAgent 3.1 引入了强大的配置热更新系统，支持实时配置变更而无需重启应用。
+NagaAgent 4.0 引入了强大的配置热更新系统，支持实时配置变更而无需重启应用。
 
 #### 核心特性
 - **实时更新**: 配置变更立即生效，无需重启
@@ -661,91 +658,6 @@ graph TB
 
 </div>
 
-### 📊 核心模块
-
-| 模块 | 功能 | 技术栈 |
-|------|------|--------|
-| **对话核心** | 处理用户输入和AI响应 | Python, OpenAI API |
-| **MCP 服务** | 工具调用和服务管理 | MCP Protocol |
-| **Agent 系统** | 专业任务处理 | 多模型支持 |
-| **记忆系统** | 知识图谱和上下文 | Neo4j, Py2neo |
-| **用户界面** | 图形交互界面 | PyQt5, Markdown |
-| **API 服务** | HTTP 接口服务 | FastAPI, Uvicorn |
-| **语音系统** | 语音合成和识别 | Edge-TTS, PyAudio |
-| **配置管理** | 配置热更新和模块重载 | ConfigManager, JSON |
-
----
-
-## 🗂️ 目录结构
-```
-NagaAgent3.1/
-├── main.py                     # 主入口
-├── config.py                   # 全局配置
-├── config.json.example         # 配置文件模板
-├── config_manager.py           # 配置热更新管理器
-├── (已迁移到apiserver)        # 对话核心（含工具调用循环主逻辑）
-├── apiserver/                  # API服务器模块
-│   ├── api_server.py           # FastAPI服务器
-│   ├── start_server.py         # 启动脚本
-│   ├── message_manager.py      # 消息管理器
-│   └── README.md               # API文档
-├── mcpserver/                  # MCP服务和Agent系统
-│   ├── mcp_manager.py          # MCP服务管理
-│   ├── mcp_registry.py         # Agent注册与schema元数据
-│   ├── agent_manager.py        # Agent管理器（独立系统）
-│   ├── agent_xxx/              # 各类自定义Agent
-│   │   └── agent-manifest.json # Agent配置文件
-│   ├── agent_comic_downloader/ # 漫画下载Agent
-│   ├── agent_device_switch/    # 设备控制Agent
-│   ├── agent_memory/           # 记忆管理Agent
-│   ├── agent_naga_portal/      # 娜迦门户Agent
-│   ├── agent_playwright_master/ # 浏览器自动化Agent
-│   ├── agent_weather_time/     # 天气时间Agent
-│   └── Office-Word-MCP-Server-main/ # Word文档处理Agent
-├── thinking/                   # 深度思考引擎
-│   ├── tree_thinking.py        # 核心思考引擎
-│   ├── difficulty_judge.py     # 问题难度评估
-│   ├── genetic_pruning.py     # 遗传算法剪枝
-│   ├── preference_filter.py   # 用户偏好过滤
-│   └── thinking_node.py       # 思考节点结构
-├── summer_memory/              # GRAG知识图谱记忆系统
-│   ├── memory_manager.py       # 记忆管理器
-│   ├── quintuple_extractor.py  # 五元组提取器
-│   ├── quintuple_graph.py      # Neo4j图谱操作
-│   ├── quintuple_rag_query.py  # 记忆查询
-│   └── quintuple_visualize_v2.py  # 图谱可视化
-├── voice/                      # 语音交互系统
-│   ├── tts_handler.py          # TTS处理器
-│   ├── voice_integration.py    # 语音集成
-│   ├── server.py               # 语音服务器
-│   └── start_voice_service.py  # 语音服务启动脚本
-├── ui/                         # 前端UI
-│   ├── pyqt_chat_window.py     # PyQt聊天窗口
-│   ├── response_utils.py       # 响应解析工具
-│   ├── message_renderer.py     # 消息渲染器
-│   ├── elegant_settings_widget.py # 设置组件
-│   └── tray/                   # 系统托盘模块
-│       ├── console_tray.py     # 控制台托盘功能
-│       ├── auto_start.py       # 自启动管理
-│       └── README.md           # 托盘使用说明
-├── mqtt_tool/                  # MQTT工具
-├── logs/                       # 日志（含历史txt对话）
-├── data/neo4j/                 # Neo4j数据库文件
-├── requirements.txt             # 项目依赖
-├── pyproject.toml             # 项目配置
-├── CONFIG_HOT_RELOAD_GUIDE.md  # 配置热更新使用指南
-├── CONFIG_HOT_RELOAD_TEST_REPORT.md # 配置热更新测试报告
-├── setup.ps1                   # Windows配置脚本
-├── start.bat                   # Windows启动脚本
-├── start_with_tray.bat         # Windows托盘启动脚本
-├── setup_mac.sh                # Mac配置脚本
-├── start_mac.sh                # Mac启动脚本
-├── check_env.py                # 跨平台环境检查
-└── README.md                   # 项目说明
-```
-
----
-
 ## 🔧 工具调用循环机制
 
 ### 系统概述
@@ -952,313 +864,6 @@ agents = list_agents()
 
 ---
 
-## 🖥️ 系统托盘功能
-
-### 功能特性
-- **控制台托盘**: 将终端窗口隐藏到系统托盘，支持自动隐藏
-- **任务栏隐藏**: 控制台窗口从任务栏完全隐藏
-- **托盘图标**: 系统托盘显示应用图标，支持右键菜单
-- **自启动管理**: 支持注册表方式的自启动功能
-- **托盘消息**: 支持状态通知和消息提示
-
-### 使用方法
-
-#### 托盘模式启动
-```bash
-# Windows
-.\start_with_tray.bat
-```
-
-#### 托盘菜单功能
-- **显示控制台**: 从托盘恢复控制台窗口显示
-- **隐藏控制台**: 隐藏控制台窗口到托盘
-- **开机自启动**: 切换自启动状态
-- **退出**: 完全退出应用
-
-### 技术实现
-- **窗口钩子**: 监听控制台窗口的关闭事件，拦截关闭操作
-- **窗口样式**: 使用`WS_EX_TOOLWINDOW`样式让窗口不在任务栏显示
-- **自动隐藏**: 启动后3秒自动隐藏控制台窗口
-- **托盘集成**: 使用PyQt5实现系统托盘功能
-
-### 注意事项
-1. **权限要求**: 自启动功能需要管理员权限
-2. **依赖安装**: 需要安装`PyQt5`库
-3. **图标文件**: 默认使用`ui/img/window_icon.png`作为托盘图标
-4. **启动方式**: 使用`start_with_tray.bat`启动以启用托盘功能
-
----
-
-## MCP服务Agent化升级说明
-
-- 所有MCP服务（如文件、代码、浏览器、应用启动、系统控制、天气等）已全部升级为标准Agent风格：
-  - 统一继承自`agents.Agent`，具备`name`、`instructions`属性和`handle_handoff`异步方法
-  - 变量全部走`config.py`统一管理，避免重复定义
-  - 注释全部中文，文件/类/函数注释一行，变量注释右侧#
-  - 支持多agent协作，ControllerAgent可智能分配任务给BrowserAgent、ContentAgent等
-  - 注册中心`mcp_registry.py`自动发现并注册所有实现了`handle_handoff`的Agent实例，支持热插拔
-  - 注册时自动输出所有已注册agent的名称和说明，便于调试
-  - 简化Agent类型：只支持`mcp`和`agent`两种类型
-
-- handoff机制全部通过`handle_handoff`异步方法调度，兼容JSON和handoff两种格式
-
-- 新增/删除agent只需增删py文件，无需重启主程序
-
-- 详细接口和参数请参考各Agent代码注释与`config.py`配置 
-
-## 更新日志
-
-- 工具调用格式已优化，改为纯JSON格式，更加简洁规范，具体示例如下：
-
-```
-{
-  "agentType": "mcp",
-  "service_name": "MCP服务名称",
-  "tool_name": "工具名称",
-  "参数名": "参数值"
-}
-```
-
----
-
-## 📝 前端UI与响应适配
-- **所有后端返回均为结构化JSON**: 前端通过`ui/response_utils.py`的`extract_message`方法自动适配多种返回格式
-- **优先显示逻辑**: 优先显示`data.content`，其次`message`，最后原样返回，兼容所有Agent
-- **换行符自动适配**: PyQt前端自动将所有`\n`和`\\n`换行符转为`<br>`，多行内容显示无障碍
-- **UI动画**: 侧栏点击切换时，侧栏宽度、主聊天区宽度、输入框高度均采用同步动画
-- **主题自定义**: UI动画、主题、昵称、透明度等全部可在`config.py`和`pyqt_chat_window.py`灵活配置
-
----
-
-## 🔊 流式语音交互
-- **支持语音输入**: 流式识别，自动转文字
-- **支持语音输出**: 流式合成，边播边出
-- **完全异步处理**: 重构语音集成系统，文本显示和音频播放完全分离
-- **消除重复播放**: 移除流式分句和最终文本的重复播放问题
-- **前端即时显示**: 前端立即显示文本，不再等待音频处理完成
-- **依赖与配置**: 详见`voice/voice_config.py`和README相关章节
-
----
-
-## 🌳 深度思考引擎
-
-NagaAgent 3.1 引入了基于遗传算法的多分支思考引擎，提供更高质量的AI回答。
-
-### 核心特性
-
-- **多分支并行思考**: 根据问题难度自动生成多条不同类型的思考路线
-- **问题难度评估**: 通过文本长度、关键词、句式结构等综合判断复杂度
-- **用户偏好系统**: 支持自定义偏好配置，对思考路线进行加权评分
-- **遗传算法剪枝**: 对思考路线进行适应度评估、交叉融合、精英保留
-- **并发线程池**: 思考与API调用分离，提升并发性能
-- **可扩展架构**: 支持自定义分支类型、评分权重、进化策略
-
-### 思考分支类型
-
-- **逻辑分支**: 注重逻辑推理和事实分析
-- **创新分支**: 强调创意思维和独特见解
-- **分析分支**: 深入分析和多角度思考
-- **实用分支**: 关注实际应用和可操作性
-- **哲学分支**: 探讨深层含义和价值思考
-
-### 使用方法
-
-```python
-from thinking import TreeThinkingEngine
-
-# 初始化引擎
-engine = TreeThinkingEngine(api_client=your_api_client, memory_manager=your_memory_manager)
-
-# 启用深度思考
-result = await engine.think_deeply("请分析人工智能未来的发展趋势")
-print(result["answer"])  # 输出综合后的最终答案
-```
-
----
-
-## 📝 其它亮点
-- **记忆权重动态调整**: 支持AI/人工标记important，权重/阈值/清理策略全部在`config.py`统一管理
-- **主题归类自动化**: 主题归类、召回、权重提升、清理等全部自动化
-- **检索日志自动记录**: 参数可调，GRAG配置示例见`config.py`
-- **历史对话兼容升级**: 支持将旧版txt对话内容一键导入GRAG知识图谱记忆系统
-- **工具调用循环自动执行机制**: 支持多轮递归调用，最大循环次数可配置
-- **所有Agent的注册元数据已集中在`mcpserver/mcp_registry.py`**: 主流程和管理器极简，扩展维护更方便
-- **自动注册/热插拔Agent机制**: 新增/删除Agent只需增删py文件，无需重启主程序
-- **Agent Manifest标准化**: 统一的`agent-manifest.json`格式，支持完整的字段验证和类型检查
-- **动态服务池查询**: 系统通过扫描`agent-manifest.json`文件自动发现和注册服务，无需手动配置静态服务列表
-- **AgentManager独立系统**: 支持Agent的配置加载、会话管理、消息组装和LLM调用，提供完整的Agent生命周期管理
-- **智能占位符替换**: 支持Agent配置、环境变量、时间信息等多种占位符，实现动态提示词生成
-- **完整消息序列构建**: 自动组装系统消息、历史消息和用户消息，确保对话上下文完整性
-- **多模型提供商支持**: 支持OpenAI、DeepSeek、Anthropic等多种LLM提供商，每个Agent可独立配置
-- **会话隔离与TTL管理**: 支持多用户多会话隔离，自动清理过期会话数据
-- **统一工具调用接口**: MCP和Agent类型服务通过统一的JSON格式调用，支持混合调用场景
-- **配置热更新系统**: 实时配置变更、配置快照、模块重载、自动监视等完整功能
-
----
-
-## 📋 更新日志
-
-### v3.1.0 (2024-08-17)
-
-#### 🚀 新增功能
-- **深度思考引擎**: 基于遗传算法的多分支思考系统
-- **AgentManager**: 独立的Agent注册和调用系统
-- **模块化UI渲染**: 新的消息渲染系统，支持名字+消息框布局
-- **🎭 Live2D集成**: 独立的Live2D模块，支持模型和图片的混合侧栏显示，自动回退机制
-- **MQTT通信支持**: 新增MQTT工具模块
-- **Word文档处理**: 集成Office Word MCP服务
-- **漫画下载Agent**: 新增漫画下载功能Agent
-- **配置热更新系统**: 实时配置变更，无需重启应用
-
-#### 🔧 功能改进
-- **语音服务升级**: OpenAI兼容的TTS服务，支持多种音频格式
-- **系统托盘增强**: 完整的后台运行和自启动支持
-- **配置管理优化**: 统一的配置文件结构和环境变量支持
-- **配置热更新**: 支持实时配置变更和模块重新加载
-- **依赖管理**: 使用pyproject.toml进行现代化依赖管理
-- **Agent热插拔**: 支持运行时动态加载和卸载Agent
-
-#### 🐛 问题修复
-- **内存泄漏**: 修复会话管理中的内存泄漏问题
-- **并发处理**: 改进多线程并发处理的稳定性
-- **配置验证**: 增强配置文件的验证和错误处理
-- **配置热更新**: 修复配置快照序列化和更新延迟问题
-- **UI响应**: 优化UI界面的响应速度和用户体验
-
-#### 📚 文档更新
-- 完善所有模块的README文档
-- 更新安装和配置指南
-- 添加API接口文档
-- 增加故障排除指南
-- 新增配置热更新系统使用指南和测试报告
-
----
-
-## 🆙 历史对话兼容升级
-- **支持将旧版txt对话内容一键导入GRAG知识图谱记忆系统**: 兼容主题、分层、五元组等所有新特性
-- **激活指令**:
-  ```
-  #夏园系统兼容升级
-  ```
-- **系统会自动遍历logs目录下所有txt日志**: 列出所有历史对话内容并编号，输出到终端和`summer_memory/history_dialogs.json`
-- **用户可查看编号后，选择导入方式**:
-  - 全部导入：
-    ```
-    python summer_memory/main.py import all
-    ```
-  - 选择性导入（如第1、3、5-8条）：
-    ```
-    python summer_memory/main.py import 1,3,5-8
-    ```
-- **兼容过程自动判重**: 已入库内容不会重复导入，支持断点续跑
-- **兼容内容全部走AI自动主题归类与分层**: 完全与新系统一致
-- **详细进度、结果和异常均有反馈**: 安全高效
-
----
-
-## 🔧 最新更新 (v3.0.5)
-
-### 系统托盘功能增强
-- **控制台托盘功能**: 实现真正的"最小化到托盘"功能
-- **窗口钩子**: 监听控制台窗口的关闭事件，拦截关闭操作
-- **任务栏隐藏**: 使用`WS_EX_TOOLWINDOW`样式让窗口不在任务栏显示
-- **自动隐藏**: 启动后3秒自动隐藏控制台窗口
-- **托盘消息**: 支持托盘消息通知和状态提示
-
-### MCP工具依赖
-- **新增依赖**: 添加`jmcomic`和`fastmcp`依赖到`requirements.txt`
-- **虚拟环境安装**: 确保依赖安装到虚拟环境中
-- **依赖验证**: 提供依赖安装验证脚本
-
-### 技术改进
-- **窗口监控**: 添加窗口状态监控线程，实时检测窗口显示/隐藏状态
-- **样式管理**: 保存和恢复原始窗口样式，确保功能稳定性
-- **错误处理**: 增强窗口操作和托盘功能的错误处理机制
-
----
-
-## ❓ 常见问题
-
-### 环境检查
-```bash
-python check_env.py
-```
-### Windows 环境
-- **Python版本/依赖/虚拟环境/浏览器驱动等问题**: 详见`setup.ps1`与本README
-- **IDE报import错误**: 重启并选择正确解释器
-- **语音依赖安装失败**: 先装C++ Build Tools
-- **MCP工具依赖缺失**: 运行`pip install jmcomic fastmcp`
-
-### Mac 环境
-- **Python版本过低**: `brew install python@3.11`
-- **PyAudio安装失败**: `brew install portaudio && pip install pyaudio`
-- **权限问题**: `chmod +x *.sh`
-
-### API服务器问题
-- **端口占用**: 修改`config.py`中的`API_SERVER_PORT`
-- **代理干扰**: 临时禁用代理 `unset ALL_PROXY http_proxy https_proxy`
-- **依赖缺失**: 确保安装了FastAPI和Uvicorn `pip install fastapi uvicorn[standard]`
-- **无法访问**: 检查防火墙设置，确保端口未被阻塞
-
-### 工具调用问题
-- **工具调用循环次数过多**: 调整`config.py`中的`MAX_handoff_LOOP_STREAM`和`MAX_handoff_LOOP_NON_STREAM`
-- **工具调用失败**: 检查MCP服务是否正常运行，查看日志输出
-- **格式错误**: 确保LLM输出严格遵循JSON格式
-
-### GRAG记忆系统问题
-- **Neo4j连接失败**: 检查Neo4j服务是否启动，确认连接参数正确
-- **记忆查询无结果**: 检查五元组是否正确提取和存储
-- **性能问题**: 调整`config.py`中的GRAG相关参数
-
-### 系统托盘问题
-- **托盘图标不显示**: 检查图标文件是否存在，确认PyQt5安装正确
-- **控制台托盘不工作**: 确认使用`start_with_tray.bat`启动
-- **自启动失败**: 确认管理员权限，检查注册表权限
-- **窗口最小化问题**: 检查托盘集成是否正确，确认事件处理函数
-
-### AgentManager问题
-- **Agent配置加载失败**: 检查`agent_configs/`目录下的JSON文件格式是否正确
-- **API调用失败**: 确认API密钥配置正确，检查网络连接
-- **会话历史丢失**: 检查会话TTL配置，确认会话未过期
-- **占位符替换失败**: 确认环境变量已正确设置
-- **内存占用过高**: 调整`max_history_rounds`参数，减少历史消息数量
-
-### 配置热更新问题
-- **配置更新失败**: 检查config.json文件格式是否正确，确认文件权限
-- **配置快照恢复失败**: 确认快照数据完整，检查JSON序列化问题
-- **模块重新加载失败**: 确认模块有`reload_config`方法，检查模块依赖
-- **配置监视器不工作**: 确认使用`start_config_watcher()`启动监视器
-- **配置文件被损坏**: 使用备份文件恢复，或重新生成配置文件
-
-### 通用问题
-- **浏览器无法启动**: 检查playwright安装与网络
-- **主题树/索引/参数/密钥全部在`config.py`统一管理**
-- **聊天输入`#devmode`进入开发者模式**: 后续对话不写入GRAG记忆，仅用于工具调用测试
-
-### 最佳实践
-
-#### Agent配置最佳实践
-1. **使用环境变量**: 敏感信息如API密钥应使用环境变量
-2. **合理设置参数**: 根据任务需求调整temperature和max_output_tokens
-3. **优化提示词**: 使用占位符实现动态内容，提高灵活性
-4. **会话管理**: 合理设置会话TTL，避免内存泄漏
-
-#### 性能优化建议
-1. **缓存配置**: 启用配置缓存，减少文件读取开销
-2. **并发控制**: 合理控制并发Agent调用数量
-3. **资源清理**: 定期清理过期会话和临时数据
-4. **监控日志**: 启用调试模式监控系统性能
-5. **配置热更新**: 使用批量更新减少重新加载次数，避免频繁配置变更
-
-#### 安全建议
-1. **API密钥管理**: 使用环境变量或密钥管理服务
-2. **输入验证**: 对用户输入进行验证和清理
-3. **错误处理**: 避免在错误信息中泄露敏感信息
-4. **访问控制**: 实现适当的访问控制机制
-5. **配置备份**: 定期备份配置文件，使用配置快照功能
-
----
-
 ## 🤝 贡献指南
 
 我们欢迎所有形式的贡献！请阅读以下指南：
@@ -1278,20 +883,6 @@ python check_env.py
 ### 📞 联系方式
 - **Issues**: [GitHub Issues](https://github.com/Xxiii8322766509/NagaAgent/issues)
 - **讨论**: [GitHub Discussions](https://github.com/Xxiii8322766509/NagaAgent/discussions)
-
----
-
-
-## 🙏 致谢
-
-感谢以下开源项目和贡献者：
-
-- **[OpenAI](https://openai.com/)** - 提供强大的 AI 模型
-- **[Neo4j](https://neo4j.com/)** - 图数据库支持
-- **[PyQt5](https://riverbankcomputing.com/software/pyqt/)** - GUI 框架
-- **[FastAPI](https://fastapi.tiangolo.com/)** - 现代 Web 框架
-- **[MCP](https://modelcontextprotocol.io/)** - 模型上下文协议
-- 所有贡献者和社区成员
 
 ---
 
