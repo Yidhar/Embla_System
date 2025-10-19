@@ -6,15 +6,14 @@ MCP调度器 - 负责MCP任务的调度和执行
 """
 
 import asyncio
-import logging
 import uuid
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
+from system.config import config, logger
 
 # 已移除独立的能力管理器，能力信息从注册中心获取或由上层管理
 
-logger = logging.getLogger(__name__)
 
 @dataclass
 class MCPTask:

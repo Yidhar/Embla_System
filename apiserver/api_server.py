@@ -314,7 +314,7 @@ async def chat(request: ChatRequest):
                             continue
         
         # 处理完成
-        
+        _trigger_background_analysis(session_id=session_id)
         # 统一保存对话历史与日志
         _save_conversation_and_logs(session_id, request.message, pure_text_content[0])
         
@@ -590,6 +590,7 @@ async def chat_stream(request: ChatRequest):
             elif request.return_audio:
                 # V19: 如果是return_audio模式，使用累积的文本
                 complete_response = complete_text
+            _trigger_background_analysis(session_id)
 
             # 统一保存对话历史与日志
             _save_conversation_and_logs(session_id, request.message, complete_response)

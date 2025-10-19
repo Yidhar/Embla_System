@@ -6,12 +6,11 @@
 """
 
 import asyncio
-import logging
 from typing import Dict, Any, List
+from system.config import config, logger
 from langchain_openai import ChatOpenAI
-from system.config import get_prompt
 
-logger = logging.getLogger(__name__)
+from system.config import get_prompt
 
 class ConversationAnalyzer:
     """
@@ -19,28 +18,16 @@ class ConversationAnalyzer:
     输入是跨服务器的文本转录片段；输出是零个或多个标准化的任务查询
     """
     def __init__(self):
-        # 使用Naga的配置系统
-        try:
-            from system.config import config
-            self.llm = ChatOpenAI(
-                model=config.api.model,
-                base_url=config.api.base_url,
-                api_key=config.api.api_key,
-                temperature=0
-            )
-        except ImportError:
-            # 降级配置
-            self.llm = ChatOpenAI(
-                model="gpt-3.5-turbo",
-                base_url="https://api.openai.com/v1",
-                api_key="sk-placeholder",
-                temperature=0
-            )
-            logger.warning("无法导入配置，使用默认LLM设置")
+        self.llm = ChatOpenAI(
+            model=config.api.model,
+            base_url=config.api.base_url,
+            api_key=config.api.api_key,
+            temperature=0
+        )
 
     def _build_prompt(self, messages: List[Dict[str, str]]) -> str:
         lines = []
-        for m in messages[-20:]:
+        for m in messages[-config.api.max_history_rounds:]:
             role = m.get('role', 'user')
             text = m.get('text', '')
             # 清理文本，移除可能导致格式化问题的字符

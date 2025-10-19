@@ -16,12 +16,10 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
 from .mcp_scheduler import MCPScheduler
+from system.config import config, logger
 # 能力发现逻辑已由注册中心承担，移除独立能力管理器
 # 精简：移除流式工具调用与独立工具解析执行，统一走调度器与管理器
 
-# 配置日志
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 if not logger.handlers:
     handler = logging.StreamHandler()
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')

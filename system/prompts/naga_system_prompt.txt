@@ -15,7 +15,7 @@
 [TOOL_CALL]
 service: office_word_mcp
 tool: get_document_text
-params: {"filename": "uploaded_documents/test.docx"}
+params: {{"filename": "uploaded_documents/test.docx"}}
 [/TOOL_CALL]
 
 
