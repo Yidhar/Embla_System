@@ -379,6 +379,7 @@ class SystemChecker:
                 if charset_results:
                     best_match = charset_results.best()
                     if best_match:
+                        detected_encoding = best_match.encoding
                         # 使用检测到的编码直接打开文件，然后使用JSON读取
                         with open(self.config_file, 'r', encoding=detected_encoding) as f:
                             config = json.load(f)
