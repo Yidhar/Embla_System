@@ -16,6 +16,7 @@ dependencies = [
     "nagaagent-core>=1.0.6",
     "charset-normalizer>=3.4.3",
     "json5>=0.12.1",
+    "markdown>=3.9",
 ]
 
 # 可选依赖组
