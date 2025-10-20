@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List
 import os
+from charset_normalizer import from_path
 
 # 允许从 game 子目录直接执行本脚本时，正确导入顶层包 `game`
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -225,8 +226,25 @@ async def run_full_flow_test(user_question: str):
         # 读取配置
         config_path = Path("../config.json")
         if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
+            # 使用Charset Normalizer自动检测编码
+            charset_results = from_path(str(config_path))
+            if charset_results:
+                best_match = charset_results.best()
+                if best_match:
+                    detected_encoding = best_match.encoding
+                    test_logger.log_step(f"检测到配置文件编码: {detected_encoding}")
+
+                    # 使用检测到的编码直接打开文件，然后使用JSON读取
+                    with open(config_path, 'r', encoding=detected_encoding) as f:
+                        config_data = json.load(f)
+                else:
+                    test_logger.log_step("无法检测配置文件编码，使用回退方法")
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        config_data = json.load(f)
+            else:
+                test_logger.log_step("无法检测配置文件编码，使用回退方法")
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
             test_logger.log_step("配置加载成功", {"api_model": config_data.get("api", {}).get("model")})
         else:
             config_data = {}

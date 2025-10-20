@@ -7,6 +7,7 @@ import time
 import threading
 from typing import Optional, Dict, Any
 from fastmcp import FastMCP
+from charset_normalizer import from_path
 
 logger = logging.getLogger('DeviceSwitch')
 
@@ -100,16 +101,34 @@ def load_mqtt_config():
         # 兼容旧版本，从config.json读取MQTT配置
         try:
             config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.json')
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-            
+
+            # 使用Charset Normalizer自动检测编码
+            charset_results = from_path(config_path)
+            if charset_results:
+                best_match = charset_results.best()
+                if best_match:
+                    detected_encoding = best_match.encoding
+                    logger.info(f"检测到配置文件编码: {detected_encoding}")
+
+                    # 使用检测到的编码直接打开文件，然后使用JSON读取
+                    with open(config_path, 'r', encoding=detected_encoding) as f:
+                        config_data = json.load(f)
+                else:
+                    logger.warning(f"无法检测 {config_path} 的编码，使用回退方法")
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        config_data = json.load(f)
+            else:
+                logger.warning(f"无法检测 {config_path} 的编码，使用回退方法")
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
+
             mqtt_config = config_data.get('mqtt', {})
-            
+
             # 检查是否启用物联网通讯
             if not mqtt_config.get('enabled', False):
                 logger.info("物联网通讯功能未启用，跳过初始化")
                 return None
-            
+
             return {
                 'broker': mqtt_config.get('broker', 'broker.emqx.io'),
                 'port': mqtt_config.get('port', 1883),

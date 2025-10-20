@@ -21,6 +21,8 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
+from charset_normalizer import from_path
+import json5  # 支持带注释的JSON解析
 
 class SystemChecker:
     """系统环境检测器"""
@@ -373,8 +375,21 @@ class SystemChecker:
         try:
             # 检查配置文件中是否有Neo4j配置
             if self.config_file.exists():
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
+                # 使用Charset Normalizer自动检测编码
+                charset_results = from_path(str(self.config_file))
+                if charset_results:
+                    best_match = charset_results.best()
+                    if best_match:
+                        detected_encoding = best_match.encoding
+                        # 使用检测到的编码直接打开文件，然后使用JSON读取
+                        with open(self.config_file, 'r', encoding=detected_encoding) as f:
+                            config = json.load(f)
+                    else:
+                        with open(self.config_file, 'r', encoding='utf-8') as f:
+                            config = json.load(f)
+                else:
+                    with open(self.config_file, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
 
                 neo4j_config = config.get('grag', {})
                 if neo4j_config.get('enabled', False):
@@ -712,25 +727,107 @@ class SystemChecker:
         """检查是否已经通过过系统检测"""
         if not self.config_file.exists():
             return False
-        
+
         try:
-            with open(self.config_file, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-                system_check = config_data.get('system_check', {})
-                return system_check.get('passed', False)
+            # 使用Charset Normalizer自动检测编码
+            charset_results = from_path(str(self.config_file))
+            if charset_results:
+                best_match = charset_results.best()
+                if best_match:
+                    # 使用检测到的编码直接打开文件
+                    detected_encoding = best_match.encoding
+                    with open(self.config_file, 'r', encoding=detected_encoding) as f:
+                        try:
+                            # 首先尝试使用json5解析（支持注释）
+                            config_data = json5.load(f)
+                        except Exception as json5_error:
+                            # 如果json5解析失败，回退到标准JSON（移除注释）
+                            f.seek(0)
+                            content = f.read()
+                            # 移除注释行
+                            lines = content.split('\n')
+                            cleaned_lines = []
+                            for line in lines:
+                                if '#' in line:
+                                    line = line.split('#')[0].rstrip()
+                                if line.strip():  # 只保留非空行
+                                    cleaned_lines.append(line)
+                            cleaned_content = '\n'.join(cleaned_lines)
+                            config_data = json.loads(cleaned_content)
+                else:
+                    with open(self.config_file, 'r', encoding='utf-8') as f:
+                        try:
+                            config_data = json5.load(f)
+                        except Exception as json5_error:
+                            f.seek(0)
+                            content = f.read()
+                            lines = content.split('\n')
+                            cleaned_lines = []
+                            for line in lines:
+                                if '#' in line:
+                                    line = line.split('#')[0].rstrip()
+                                if line.strip():
+                                    cleaned_lines.append(line)
+                            cleaned_content = '\n'.join(cleaned_lines)
+                            config_data = json.loads(cleaned_content)
+            else:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    try:
+                        config_data = json5.load(f)
+                    except Exception as json5_error:
+                        f.seek(0)
+                        content = f.read()
+                        lines = content.split('\n')
+                        cleaned_lines = []
+                        for line in lines:
+                            if '#' in line:
+                                line = line.split('#')[0].rstrip()
+                            if line.strip():
+                                cleaned_lines.append(line)
+                        cleaned_content = '\n'.join(cleaned_lines)
+                        config_data = json.loads(cleaned_content)
+
+            system_check = config_data.get('system_check', {})
+            return system_check.get('passed', False)
         except Exception:
             return False
     
     def save_check_status(self, passed: bool):
         """保存检测状态到config.json"""
         try:
-            # 读取现有配置
+            # 自动检测文件编码
+            detected_encoding = 'utf-8'  # 默认编码
             if self.config_file.exists():
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    config_data = json.load(f)
+                charset_results = from_path(str(self.config_file))
+                if charset_results:
+                    best_match = charset_results.best()
+                    if best_match:
+                        detected_encoding = best_match.encoding
+                        print(f"检测到配置文件编码: {detected_encoding}")
+
+            # 读取现有配置，使用检测到的编码直接打开文件
+            if self.config_file.exists():
+                with open(self.config_file, 'r', encoding=detected_encoding) as f:
+                    try:
+                        # 首先尝试使用json5解析（支持注释）
+                        config_data = json5.load(f)
+                    except Exception as json5_error:
+                        # 如果json5解析失败，回退到标准JSON（移除注释）
+                        f.seek(0)
+                        content = f.read()
+                        # 移除注释行
+                        lines = content.split('\n')
+                        cleaned_lines = []
+                        for line in lines:
+                            if '#' in line:
+                                line = line.split('#')[0].rstrip()
+                            if line.strip():  # 只保留非空行
+                                cleaned_lines.append(line)
+                        cleaned_content = '\n'.join(cleaned_lines)
+                        config_data = json.loads(cleaned_content)
             else:
                 config_data = {}
-            
+
             # 更新system_check配置
             config_data['system_check'] = {
                 'passed': passed,
@@ -739,9 +836,9 @@ class SystemChecker:
                 'project_path': str(self.project_root),
                 'system': platform.system()
             }
-            
-            # 保存配置
-            with open(self.config_file, 'w', encoding='utf-8') as f:
+
+            # 保存配置，使用检测到的编码
+            with open(self.config_file, 'w', encoding=detected_encoding) as f:
                 json.dump(config_data, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"⚠️ 保存检测状态失败: {e}")
@@ -755,17 +852,73 @@ class SystemChecker:
         try:
             # 读取现有配置
             if self.config_file.exists():
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    config_data = json.load(f)
-                
+                # 使用Charset Normalizer自动检测编码
+                charset_results = from_path(str(self.config_file))
+                detected_encoding = 'utf-8'  # 默认编码
+                if charset_results:
+                    best_match = charset_results.best()
+                    if best_match:
+                        # 使用检测到的编码直接打开文件
+                        detected_encoding = best_match.encoding
+                        with open(self.config_file, 'r', encoding=detected_encoding) as f:
+                            try:
+                                # 首先尝试使用json5解析（支持注释）
+                                config_data = json5.load(f)
+                            except Exception as json5_error:
+                                # 如果json5解析失败，回退到标准JSON（移除注释）
+                                f.seek(0)
+                                content = f.read()
+                                # 移除注释行
+                                lines = content.split('\n')
+                                cleaned_lines = []
+                                for line in lines:
+                                    if '#' in line:
+                                        line = line.split('#')[0].rstrip()
+                                    if line.strip():  # 只保留非空行
+                                        cleaned_lines.append(line)
+                                cleaned_content = '\n'.join(cleaned_lines)
+                                config_data = json.loads(cleaned_content)
+                    else:
+                        with open(self.config_file, 'r', encoding='utf-8') as f:
+                            try:
+                                config_data = json5.load(f)
+                            except Exception as json5_error:
+                                f.seek(0)
+                                content = f.read()
+                                lines = content.split('\n')
+                                cleaned_lines = []
+                                for line in lines:
+                                    if '#' in line:
+                                        line = line.split('#')[0].rstrip()
+                                    if line.strip():
+                                        cleaned_lines.append(line)
+                                cleaned_content = '\n'.join(cleaned_lines)
+                                config_data = json.loads(cleaned_content)
+                else:
+                    with open(self.config_file, 'r', encoding='utf-8') as f:
+                        try:
+                            config_data = json5.load(f)
+                        except Exception as json5_error:
+                            f.seek(0)
+                            content = f.read()
+                            lines = content.split('\n')
+                            cleaned_lines = []
+                            for line in lines:
+                                if '#' in line:
+                                    line = line.split('#')[0].rstrip()
+                                if line.strip():
+                                    cleaned_lines.append(line)
+                            cleaned_content = '\n'.join(cleaned_lines)
+                            config_data = json.loads(cleaned_content)
+
                 # 删除system_check配置
                 if 'system_check' in config_data:
                     del config_data['system_check']
-                
-                # 保存配置
-                with open(self.config_file, 'w', encoding='utf-8') as f:
+
+                # 保存配置，使用检测到的编码
+                with open(self.config_file, 'w', encoding=detected_encoding) as f:
                     json.dump(config_data, f, ensure_ascii=False, indent=2)
-                
+
                 print("✅ 检测状态已重置，下次启动时将重新检测")
             else:
                 print("⚠️ 配置文件不存在")

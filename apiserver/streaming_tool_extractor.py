@@ -61,7 +61,7 @@ class CallbackManager:
             return None
 
 class StreamingToolCallExtractor:
-    """流式文本切割器 - 实时按句切割并发送给TTS"""
+    """流式文本切割器 - 实时按句切割并发送给TTS，支持工具调用处理"""
     
     def __init__(self, mcp_manager=None):
         self.mcp_manager = mcp_manager
@@ -119,8 +119,8 @@ class StreamingToolCallExtractor:
                 if len(sentences) > 1:
                     complete_sentence = sentences[0] + char
                     if complete_sentence.strip():
-                        # 立即发送到语音集成进行TTS合成
-                        await self._send_to_voice_integration(complete_sentence)
+                        # 立即发送到语音集成进行TTS合成（不阻塞文本流）
+                        self._send_to_voice_integration(complete_sentence)
                     # 保留未完成的句子部分，继续累积
                     remaining_sentences = [s for s in sentences[1:] if s.strip()]
                     self.text_buffer = "".join(remaining_sentences)
@@ -129,17 +129,18 @@ class StreamingToolCallExtractor:
     async def _flush_text_buffer(self):
         """刷新文本缓冲区 - 处理流式结束时的剩余文本"""
         if self.text_buffer:
-            # 发送剩余的未完成句子到语音集成
-            await self._send_to_voice_integration(self.text_buffer)
+            # 立即发送剩余的未完成句子到语音集成（不阻塞）
+            self._send_to_voice_integration(self.text_buffer)
             
             self.text_buffer = ""
             return None
         return None
     
-    async def _send_to_voice_integration(self, text: str):
-        """发送文本到语音集成"""
+    def _send_to_voice_integration(self, text: str):
+        """发送文本到语音集成（不阻塞文本流）"""
         if self.voice_integration:
             try:
+                # 在独立线程中处理TTS，不阻塞文本流
                 import threading
                 threading.Thread(
                     target=self.voice_integration.receive_text_chunk,
@@ -147,7 +148,7 @@ class StreamingToolCallExtractor:
                     daemon=True
                 ).start()
             except Exception as e:
-                logger.error(f"语音集成错误: {e}")
+                logger.error(f"发送到语音集成失败: {e}")
     
     # 工具调用相关方法已移除
     

@@ -15,14 +15,13 @@ from nagaagent_core.core import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcpserver.mcp_registry import MCP_REGISTRY # MCP服务注册表
 
-from system.config import config, AI_NAME
+from system.config import config, AI_NAME, logger
 
 # 配置日志
 logging.basicConfig(
     level=logging.DEBUG if config.system.debug else getattr(logging, config.system.log_level.upper()),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger("MCPManager")
 
 # 屏蔽HTTP库的DEBUG日志
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 语音集成模块 - 重构版本：依赖apiserver的流式TTS实现
-支持接收处理好的普通文本、并发音频合成和pygame播放
+支持接收处理好的普通文本、并发音频合成和音频播放（使用simpleaudio替换pygame）
 """
 import asyncio
 import logging
@@ -55,10 +55,15 @@ class VoiceIntegration:
         
         # 播放状态控制
         self.is_playing = False
-        self.current_playback = None
+        self.current_playback = None  # 存储当前音频播放对象
         
-        # pygame音频初始化
-        self._init_pygame_audio()
+        # 音频系统状态
+        self.audio_available = False
+        self._sa = None  # simpleaudio引用
+        self._AudioSegment = None  # pydub的AudioSegment引用
+        
+        # 初始化音频系统（替换pygame）
+        self._init_audio_system()
         
         # 启动音频播放工作线程
         self.audio_thread = threading.Thread(target=self._audio_player_worker, daemon=True)
@@ -74,32 +79,42 @@ class VoiceIntegration:
         
         logger.info("语音集成模块初始化完成（重构版本 - 依赖apiserver）")
 
-    def _init_pygame_audio(self):
-        """初始化pygame音频系统"""
+    def _init_audio_system(self):
+        """初始化音频系统（替换pygame音频初始化）"""
         try:
-            import nagaagent_core.vendors.pygame as pygame
-            pygame.init()
+            import simpleaudio as sa
+            from pydub import AudioSegment
             
+            # 存储引用以便后续使用
+            self._sa = sa
+            self._AudioSegment = AudioSegment
+            
+            # 验证基本功能
             try:
-                pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
-                logger.info("pygame音频系统初始化成功")
+                # 创建一个空的音频段来测试初始化
+                test_segment = self._AudioSegment.silent(duration=10)
+                test_data = test_segment.raw_data
+                wave_obj = self._sa.WaveObject(
+                    test_data,
+                    num_channels=test_segment.channels,
+                    bytes_per_sample=test_segment.sample_width,
+                    sample_rate=test_segment.frame_rate
+                )
+                self.audio_available = True
+                logger.info("音频系统初始化成功 (simpleaudio + pydub)")
             except Exception as e:
-                logger.warning(f"使用指定参数初始化失败，尝试默认参数: {e}")
-                pygame.mixer.init()
-                logger.info("pygame音频系统初始化成功（使用默认参数）")
-            
-            self.pygame_available = True
-            logger.info(f"pygame版本: {pygame.version.ver}")
-            
-        except ImportError:
-            logger.error("pygame未安装，语音播放功能不可用")
-            self.pygame_available = False
+                logger.warning(f"音频系统功能验证失败: {e}")
+                self.audio_available = False
+                
+        except ImportError as e:
+            logger.error(f"音频库未安装: {e}，请安装: pip install simpleaudio pydub")
+            self.audio_available = False
         except Exception as e:
-            logger.error(f"pygame音频初始化失败: {e}")
-            self.pygame_available = False
+            logger.error(f"音频系统初始化失败: {e}")
+            self.audio_available = False
 
     def receive_final_text(self, final_text: str):
-        """接收最终完整文本 - 流式处理"""
+        """接收最终完整文本 - 流式处理（保持原始逻辑）"""
         if not config.system.voice_enabled:
             return
             
@@ -111,7 +126,7 @@ class VoiceIntegration:
             self._process_text_stream(final_text)
 
     def receive_text_chunk(self, text: str):
-        """接收文本片段 - 流式处理"""
+        """接收文本片段 - 流式处理（保持原始逻辑）"""
         if not config.system.voice_enabled:
             return
             
@@ -121,7 +136,7 @@ class VoiceIntegration:
             self._process_text_stream(text.strip())
 
     def receive_audio_url(self, audio_url: str):
-        """接收音频URL - 直接播放apiserver生成的音频"""
+        """接收音频URL - 直接播放apiserver生成的音频（保持原始逻辑）"""
         if not config.system.voice_enabled:
             return
             
@@ -131,7 +146,7 @@ class VoiceIntegration:
             self._play_audio_from_url(audio_url)
 
     def _process_text_stream(self, text: str):
-        """处理文本流 - 直接接收apiserver处理好的普通文本"""
+        """处理文本流 - 直接接收apiserver处理好的普通文本（保持原始逻辑）"""
         if not text:
             return
             
@@ -142,7 +157,7 @@ class VoiceIntegration:
         self._check_and_queue_sentences()
         
     def _check_and_queue_sentences(self):
-        """检查并加入句子队列 - 简化版本，依赖apiserver的预处理"""
+        """检查并加入句子队列 - 简化版本，依赖apiserver的预处理（保持原始逻辑）"""
         if not self.text_buffer:
             return
             
@@ -168,14 +183,14 @@ class VoiceIntegration:
                 break
         
     def _start_audio_processing(self):
-        """启动音频处理线程"""
+        """启动音频处理线程（保持原始逻辑）"""
         # 线程已经在初始化时启动，这里只需要设置状态
         if not self.is_processing:
             logger.debug("音频处理线程已启动，准备处理新的句子...")
         # 线程会自动从队列中获取句子进行处理
         
     def reset_processing_state(self):
-        """重置处理状态，为新的对话做准备"""
+        """重置处理状态，为新的对话做准备（保持原始逻辑）"""
         # 清空队列
         while not self.sentence_queue.empty():
             try:
@@ -195,7 +210,7 @@ class VoiceIntegration:
         logger.debug("语音处理状态已重置")
         
     def _audio_processing_worker(self):
-        """音频处理工作线程 - 持续运行"""
+        """音频处理工作线程 - 持续运行（保持原始逻辑）"""
         logger.info("音频处理工作线程启动")
         
         try:
@@ -234,7 +249,7 @@ class VoiceIntegration:
             logger.info("音频处理工作线程结束")
 
     def _generate_audio_sync(self, text: str) -> Optional[bytes]:
-        """同步生成音频数据"""
+        """同步生成音频数据（保持原始逻辑）"""
         # 使用信号量控制并发
         if not self.tts_semaphore.acquire(timeout=10):  # 10秒超时
             logger.warning("TTS请求超时，跳过音频生成")
@@ -285,25 +300,19 @@ class VoiceIntegration:
             self.tts_semaphore.release()
 
     def _audio_player_worker(self):
-        """音频播放工作线程"""
+        """音频播放工作线程（保持原始线程逻辑，仅替换播放实现）"""
         logger.info("音频播放工作线程启动")
         
-        # 在工作线程中检查pygame是否已初始化
-        try:
-            import nagaagent_core.vendors.pygame as pygame
-            if not pygame.mixer.get_init():
-                pygame.init()
-                pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
-                logger.info("音频播放工作线程中pygame初始化成功")
-        except Exception as e:
-            logger.error(f"音频播放工作线程中pygame初始化失败: {e}")
+        # 检查音频系统是否可用
+        if not self.audio_available:
+            logger.error("音频系统不可用，播放线程无法启动")
             return
         
         try:
             while True:
                 try:
-                    # 从队列获取音频数据，增加超时时间
-                    audio_data = self.audio_queue.get(timeout=30)  # 增加到30秒超时
+                    # 从队列获取音频数据，保持30秒超时
+                    audio_data = self.audio_queue.get(timeout=30)
                         
                     if audio_data:
                         # 播放音频数据
@@ -320,57 +329,63 @@ class VoiceIntegration:
         except Exception as e:
             logger.error(f"音频播放工作线程异常: {e}")
         finally:
-            try:
-                pygame.mixer.quit()
-                pygame.quit()
-            except:
-                pass
+            logger.info("音频播放工作线程结束")
 
     def _play_audio_data_sync(self, audio_data: bytes):
-        """同步播放音频数据"""
+        """同步播放音频数据（核心替换为simpleaudio实现，保持状态管理逻辑）"""
+        if not self.audio_available:
+            logger.warning("音频系统不可用，无法播放音频")
+            return
+            
         try:
-            import nagaagent_core.vendors.pygame as pygame
-            import io
-            import time
-            
-            # 检查pygame是否初始化
-            if not pygame.mixer.get_init():
-                logger.warning("pygame mixer未初始化，尝试重新初始化")
-                pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
-            
-            # 停止当前正在播放的音频
-            if pygame.mixer.music.get_busy():
-                pygame.mixer.music.stop()
+            # 停止当前正在播放的音频（对应原pygame停止逻辑）
+            if self.current_playback and self.current_playback.is_playing():
+                self.current_playback.stop()
                 time.sleep(0.1)  # 给一点时间让音频停止
             
-            # 从内存中播放音频数据
+            # 从内存中加载音频数据（替换pygame.mixer.music.load）
             audio_io = io.BytesIO(audio_data)
-            pygame.mixer.music.load(audio_io)
-            pygame.mixer.music.play()
             
-            # 等待播放完成
+            # 自动检测并解码音频（支持MP3/WAV等格式）
+            audio_format = config.tts.default_format or "mp3"
+            audio_segment = self._AudioSegment.from_file(audio_io, format=audio_format)
+            
+            # 转换为可播放的音频对象
+            wave_obj = self._sa.WaveObject(
+                audio_segment.raw_data,
+                num_channels=audio_segment.channels,
+                bytes_per_sample=audio_segment.sample_width,
+                sample_rate=audio_segment.frame_rate
+            )
+            
+            # 播放音频（替换pygame.mixer.music.play）
+            self.current_playback = wave_obj.play()
+            self.is_playing = True
+            
+            # 等待播放完成（保持原超时逻辑）
             start_time = time.time()
-            while pygame.mixer.music.get_busy():
+            while self.current_playback.is_playing():
                 time.sleep(0.1)
                 # 防止无限等待，设置最长播放时间（5分钟）
                 if time.time() - start_time > 300:
                     logger.warning("音频播放超时，强制停止")
-                    pygame.mixer.music.stop()
+                    self.current_playback.stop()
                     break
             
+            self.is_playing = False
             logger.debug("音频播放完成")
             
         except Exception as e:
             logger.error(f"播放音频数据失败: {e}")
-            # 尝试重新初始化pygame
+            self.is_playing = False
+            # 尝试重新初始化音频系统（对应原pygame重新初始化逻辑）
             try:
-                pygame.mixer.quit()
-                pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+                self._init_audio_system()
             except:
                 pass
 
     def _audio_cleanup_worker(self):
-        """音频文件清理工作线程"""
+        """音频文件清理工作线程（保持原始逻辑）"""
         logger.info("音频文件清理工作线程启动")
         
         while True:
@@ -405,7 +420,7 @@ class VoiceIntegration:
                 time.sleep(5)
 
     def finish_processing(self):
-        """完成处理，清理剩余内容"""
+        """完成处理，清理剩余内容（保持原始逻辑）"""
         # 处理剩余的文本
         if self.text_buffer.strip():
             # 将剩余文本作为最后一个句子处理
@@ -419,18 +434,23 @@ class VoiceIntegration:
         self.text_buffer = ""
 
     def get_debug_info(self) -> Dict[str, Any]:
-        """获取调试信息"""
+        """获取调试信息（保持原始逻辑，更新音频状态标识）"""
         return {
             "text_buffer_length": len(self.text_buffer),
             "sentence_queue_size": self.sentence_queue.qsize(),
             "audio_queue_size": self.audio_queue.qsize(),
             "is_processing": self.is_processing,
             "is_playing": self.is_playing,
+            "audio_available": self.audio_available,  # 替换原pygame_available
             "temp_files": len(list(self.audio_temp_dir.glob(f"*.{config.tts.default_format}")))
         }
 
     def _play_audio_from_url(self, audio_url: str):
-        """从URL播放音频"""
+        """从URL播放音频（保持原始逻辑，仅替换播放实现）"""
+        if not self.audio_available:
+            logger.warning("音频系统不可用，无法播放音频URL")
+            return
+            
         try:
             import requests
             import tempfile
@@ -441,7 +461,7 @@ class VoiceIntegration:
                 # 下载音频文件
                 logger.info(f"下载音频文件: {audio_url}")
                 resp = requests.get(audio_url)
-                temp_file = tempfile.mktemp(suffix=".mp3")
+                temp_file = tempfile.mktemp(suffix=f".{config.tts.default_format or 'mp3'}")
                 with open(temp_file, 'wb') as f:
                     f.write(resp.content)
                 audio_file = temp_file
@@ -470,7 +490,7 @@ class VoiceIntegration:
             logger.error(f"播放音频URL失败: {e}")
 
 def get_voice_integration() -> VoiceIntegration:
-    """获取语音集成实例"""
+    """获取语音集成实例（保持原始逻辑）"""
     if not hasattr(get_voice_integration, '_instance'):
         get_voice_integration._instance = VoiceIntegration()
     return get_voice_integration._instance

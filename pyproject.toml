@@ -8,8 +8,15 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.11,<3.12" 
 dependencies = [
+    # 先装个pyqt5避免奇葩依赖
+    "pyqt5==5.15.11",
+    "pyqt5-qt5==5.15.2",
+    "pyqt5-sip==12.17.0",
     # 核心依赖 (已整合到nagaagent-core)
     "nagaagent-core>=1.0.6",
+    "charset-normalizer>=3.4.3",
+    "json5>=0.12.1",
+    "markdown>=3.9",
 ]
 
 # 可选依赖组

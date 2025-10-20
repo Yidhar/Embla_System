@@ -12,6 +12,7 @@ import os
 import logging
 import uuid
 import time
+import threading
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, AsyncGenerator, Any
 
@@ -36,7 +37,7 @@ from pathlib import Path
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# 工具调用模块（仅用于流式接口）
+# 流式文本处理模块（仅用于TTS）
 from .message_manager import message_manager  # 导入统一的消息管理器
 
 from .llm_service import get_llm_service  # 导入LLM服务
@@ -51,7 +52,7 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from system.config import config, AI_NAME  # 使用新的配置系统
     from system.config import get_prompt  # 导入提示词仓库
-from ui.response_utils import extract_message  # 导入消息提取工具
+from ui.utils.response_util import extract_message  # 导入消息提取工具
 
 # conversation_core已删除，相关功能已迁移到apiserver
 
@@ -250,10 +251,11 @@ async def chat(request: ChatRequest):
         # 获取或创建会话ID
         session_id = message_manager.create_session(request.session_id)
         
-        # 构建系统提示词（拼接主提示词和对话风格）
-        main_prompt = get_prompt("naga_system_prompt", ai_name=AI_NAME)
-        style_prompt = get_prompt("conversation_style_prompt")
-        system_prompt = f"{main_prompt}\n\n{style_prompt}"
+        # 并行触发后台意图分析 - 在对话开始时就分析用户意图
+        _trigger_background_analysis(session_id=session_id)
+        
+        # 构建系统提示词（只使用对话风格提示词）
+        system_prompt = get_prompt("conversation_style_prompt")
         
         # 使用消息管理器构建完整的对话消息（纯聊天，不触发工具）
         messages = message_manager.build_conversation_messages(
@@ -314,14 +316,9 @@ async def chat(request: ChatRequest):
                             continue
         
         # 处理完成
-        
         # 统一保存对话历史与日志
         _save_conversation_and_logs(session_id, request.message, pure_text_content[0])
-        
-        
-        # 异步触发后台意图分析 - 基于博弈论的背景分析机制
-        _trigger_background_analysis(session_id)
-        
+
         return ChatResponse(
             response=extract_message(pure_text_content[0]) if pure_text_content[0] else pure_text_content[0],
             session_id=session_id,
@@ -334,7 +331,7 @@ async def chat(request: ChatRequest):
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
-    """流式对话接口 - 流式文本处理交给streaming_tool_extractor"""
+    """流式对话接口 - 流式文本处理交给streaming_tool_extractor用于TTS"""
     
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="消息内容不能为空")
@@ -348,10 +345,11 @@ async def chat_stream(request: ChatRequest):
             # 发送会话ID信息
             yield f"data: session_id: {session_id}\n\n"
             
-            # 构建系统提示词（拼接主提示词和对话风格）
-            main_prompt = get_prompt("naga_system_prompt", ai_name=AI_NAME)
-            style_prompt = get_prompt("conversation_style_prompt")
-            system_prompt = f"{main_prompt}\n\n{style_prompt}"
+            # 并行触发后台意图分析 - 在流式响应开始时就分析用户意图
+            _trigger_background_analysis(session_id)
+            
+            # 构建系统提示词（只使用对话风格提示词）
+            system_prompt = get_prompt("conversation_style_prompt")
             
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(
@@ -359,9 +357,6 @@ async def chat_stream(request: ChatRequest):
                 system_prompt=system_prompt,
                 current_message=request.message
             )
-
-            # 流式文本处理完全交给streaming_tool_extractor
-            # apiserver不再负责累积文本内容
 
             # 初始化语音集成（根据voice_mode和return_audio决定）
             # V19: 如果客户端请求返回音频，则在服务器端生成
@@ -391,8 +386,8 @@ async def chat_stream(request: ChatRequest):
                 elif request.disable_tts:
                     logger.info("[API Server] 客户端禁用了TTS (disable_tts=True)")
 
-            # 初始化流式文本切割器（负责文本处理和TTS）
-            # 修复：始终创建tool_extractor以累积文本内容，确保日志保存
+            # 初始化流式文本切割器（仅用于TTS处理）
+            # 始终创建tool_extractor以累积文本内容，确保日志保存
             tool_extractor = None
             try:
                 from .streaming_tool_extractor import StreamingToolCallExtractor
@@ -454,6 +449,7 @@ async def chat_stream(request: ChatRequest):
                                 error_detail = "LLM API请求过于频繁，请稍后重试"
                             elif resp.status >= 500:
                                 error_detail = f"LLM API服务器错误 (状态码: {resp.status})"
+                            logger.error(f"[API Server] 流式响应失败，状态码: {resp.status}")
                             raise HTTPException(status_code=resp.status, detail=error_detail)
 
                         logger.info(f"[API Server] LLM流式响应开始，状态码: {resp.status}")
@@ -464,6 +460,7 @@ async def chat_stream(request: ChatRequest):
                             async for chunk in resp.content.iter_chunked(1024):  # 使用固定大小的块
                                 if not chunk:
                                     break
+                                logger.info(f"[API Server] LLM流式处理中: {chunk}")
 
                                 try:
                                     # 解码并处理数据
@@ -485,19 +482,25 @@ async def chat_stream(request: ChatRequest):
                                                 if 'choices' in data and len(data['choices']) > 0:
                                                     delta = data['choices'][0].get('delta', {})
                                                     if 'content' in delta:
+                                                        import base64
                                                         content = delta['content']
-                                                        # 直接将增量内容推送给前端用于消息渲染
-                                                        yield f"data: {content}\n\n"
+                                                        b64 = base64.b64encode(content.encode('utf-8')).decode('ascii')
+                                                        yield f"data: {b64}\n\n"
 
                                                         # V19: 如果需要返回音频，累积文本
                                                         if request.return_audio:
                                                             complete_text += content
 
-                                                        # 发送到流式文本切割器进行文本处理
-                                                        # 修复：始终发送到tool_extractor以累积完整文本
+                                                        # 立即发送到流式文本切割器进行TTS处理（不阻塞文本流）
+                                                        # 始终发送到tool_extractor以累积完整文本
                                                         if tool_extractor:
                                                             try:
-                                                                await tool_extractor.process_text_chunk(content)
+                                                                # 异步处理TTS，不阻塞文本流
+                                                                threading.Thread(
+                                                                    target=tool_extractor.process_text_chunk,
+                                                                    args=(content,),
+                                                                    daemon=True
+                                                                ).start()
                                                             except Exception as e:
                                                                 logger.error(f"[API Server] 流式文本切割器处理错误: {e}")
 
@@ -558,17 +561,20 @@ async def chat_stream(request: ChatRequest):
                     print(f"[API Server V19] 详细错误信息:")
                     traceback.print_exc()
 
-            # 完成流式文本切割器处理（非return_audio模式）
+            # 异步完成流式文本切割器处理（非return_audio模式，不阻塞）
             if tool_extractor and not request.return_audio:
                 try:
-                    await tool_extractor.finish_processing()
+                    # 异步处理完成，不阻塞文本流返回
+                    threading.Thread(
+                        target=tool_extractor.finish_processing,
+                        daemon=True
+                    ).start()
                 except Exception as e:
                     print(f"流式文本切割器完成处理错误: {e}")
             
             # 完成语音处理
             if voice_integration and not request.return_audio:  # V19: return_audio模式不需要这里的处理
                 try:
-                    import threading
                     threading.Thread(
                         target=voice_integration.finish_processing,
                         daemon=True
@@ -587,14 +593,10 @@ async def chat_stream(request: ChatRequest):
             elif request.return_audio:
                 # V19: 如果是return_audio模式，使用累积的文本
                 complete_response = complete_text
-
+            
             # 统一保存对话历史与日志
             _save_conversation_and_logs(session_id, request.message, complete_response)
-            
-            
-            # 异步触发后台意图分析 - 基于博弈论的背景分析机制
-            _trigger_background_analysis(session_id)
-            
+
             yield "data: [DONE]\n\n"
             
         except Exception as e:

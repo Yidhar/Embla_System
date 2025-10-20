@@ -288,8 +288,8 @@ class QwenVoiceClientRefactored:
                 # 获取AI名称
                 ai_name = config.system.ai_name
 
-                # 获取语音端到端提示词
-                voice_prompt = get_prompt("voice_end2end_prompt", ai_name=ai_name)
+                # 获取对话风格提示词
+                voice_prompt = get_prompt("conversation_style_prompt")
 
                 # 发送系统提示词作为初始指令
                 # 注意：通义千问可能需要通过特定的方式设置系统消息
@@ -548,8 +548,8 @@ class QwenVoiceClientRefactored:
                 from system.config import get_prompt, config
                 # 获取AI名称
                 ai_name = config.system.ai_name
-                # 获取语音端到端提示词
-                voice_prompt = get_prompt("voice_end2end_prompt", ai_name=ai_name)
+                # 获取对话风格提示词
+                voice_prompt = get_prompt("conversation_style_prompt")
                 # 获取对话风格提示词
                 style_prompt = get_prompt("conversation_style_prompt")
                 # 拼接完整的语音提示词

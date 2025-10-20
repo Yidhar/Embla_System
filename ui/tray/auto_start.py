@@ -12,7 +12,7 @@ from pathlib import Path
 class AutoStartManager:
     """自启动管理器"""
     
-    def __init__(self, app_name="NagaAgent3.0"):
+    def __init__(self, app_name="NagaAgent4.0"):
         self.app_name = app_name
         self.registry_key = r"Software\Microsoft\Windows\CurrentVersion\Run"
     
@@ -103,7 +103,7 @@ class AutoStartManager:
 class TaskSchedulerManager:
     """任务计划程序管理器"""
     
-    def __init__(self, task_name="NagaAgent3.0"):
+    def __init__(self, task_name="NagaAgent4.0"):
         self.task_name = task_name
     
     def create_task(self, script_path):
@@ -150,7 +150,7 @@ class TaskSchedulerManager:
 class StartupFolderManager:
     """启动文件夹管理器"""
     
-    def __init__(self, app_name="NagaAgent3.0"):
+    def __init__(self, app_name="NagaAgent4.0"):
         self.app_name = app_name
         self.startup_folder = self._get_startup_folder()
         self.shortcut_path = os.path.join(self.startup_folder, f"{app_name}.lnk")

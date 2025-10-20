@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Dict, Any, Optional
 from system.config import config
+from charset_normalizer import from_path
 
 try:
     from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
@@ -58,8 +59,26 @@ class Crawl4aiAgent:
         try:
             config_path = Path(__file__).parent.parent.parent / "config.json"
             if config_path.exists():
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config_data = json.load(f)
+                # 使用Charset Normalizer自动检测编码
+                charset_results = from_path(str(config_path))
+                if charset_results:
+                    best_match = charset_results.best()
+                    if best_match:
+                        detected_encoding = best_match.encoding
+                        print(f"[INFO] 检测到配置文件编码: {detected_encoding}")
+
+                        # 使用检测到的编码直接打开文件，然后使用JSON读取
+                        with open(config_path, 'r', encoding=detected_encoding) as f:
+                            config_data = json.load(f)
+                    else:
+                        print("[WARN] 无法检测配置文件编码，使用回退方法")
+                        with open(config_path, 'r', encoding='utf-8') as f:
+                            config_data = json.load(f)
+                else:
+                    print("[WARN] 无法检测配置文件编码，使用回退方法")
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        config_data = json.load(f)
+
                 if 'crawl4ai' in config_data:
                     crawl4ai_config = config_data['crawl4ai']
                     if 'headless' in crawl4ai_config:

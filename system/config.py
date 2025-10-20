@@ -9,7 +9,11 @@ import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime
+
+from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget
 from pydantic import BaseModel, Field, field_validator
+from charset_normalizer import from_path
+import json5  # 支持带注释的JSON解析
 
 # 配置变更监听器
 _config_listeners: List[Callable] = []
@@ -82,6 +86,8 @@ class APIConfig(BaseModel):
     persistent_context: bool = Field(default=True, description="是否启用持久化上下文")
     context_load_days: int = Field(default=3, ge=1, le=30, description="加载历史上下文的天数")
     context_parse_logs: bool = Field(default=True, description="是否从日志文件解析上下文")
+    applied_proxy: bool = Field(default=True, description="是否应用代理")
+    applied_proxy: bool = Field(default=True, description="是否应用代理")
 
 class APIServerConfig(BaseModel):
     """API服务器配置"""
@@ -245,12 +251,13 @@ class UIConfig(BaseModel):
 
 class Live2DConfig(BaseModel):
     """Live2D配置"""
-    enabled: bool = Field(default=False, description="是否启用Live2D功能")
-    model_path: str = Field(default="", description="Live2D模型文件路径")
-    fallback_image: str = Field(default="ui/standby.png", description="回退图片路径")
+    enabled: bool = Field(default=True, description="是否启用Live2D功能")
+    model_path: str = Field(default="ui/live2d/live2d_models/kasane_teto/kasane_teto.model3.json", description="Live2D模型文件路径")
+    fallback_image: str = Field(default="ui/img/standby.png", description="回退图片路径")
     auto_switch: bool = Field(default=True, description="是否自动切换模式")
     animation_enabled: bool = Field(default=True, description="是否启用动画")
     touch_interaction: bool = Field(default=True, description="是否启用触摸交互")
+    scale_factor: float = Field(default=1.0, ge=0.5, le=3.0, description="Live2D缩放比例")
 
 class VoiceRealtimeConfig(BaseModel):
     """实时语音配置"""
@@ -459,56 +466,79 @@ class NagaConfig(BaseModel):
     online_search: OnlineSearchConfig = Field(default_factory=OnlineSearchConfig)
     system_check: SystemCheckConfig = Field(default_factory=SystemCheckConfig)
     computer_control: ComputerControlConfig = Field(default_factory=ComputerControlConfig)
+    window: QWidget = Field(default=None)
 
-    model_config = {"extra": "ignore"}
-
+    model_config = {
+        "extra": "ignore",  # 保留原配置：忽略未定义的字段
+        "arbitrary_types_allowed": True,  # 允许非标准类型（如 QWidget）
+        "json_schema_extra": {
+            "exclude": ["window"]  # 序列化到 config.json 时排除 window 字段（避免报错）
+        }
+    }
     def __init__(self, **kwargs):
         setup_environment()
         super().__init__(**kwargs)
-        self.system.log_dir.mkdir(parents=True, exist_ok=True)  # 确保递归创建日志目录 #
+        self.system.log_dir.mkdir(parents=True, exist_ok=True)  # 确保递归创建日志目录
+
 
 # 全局配置实例
-ENCF = 0  # 编码修复计数器
 
 def load_config():
     """加载配置"""
-    global ENCF
     config_path = str(Path(__file__).parent.parent / "config.json")
-    
+
     if os.path.exists(config_path):
         try:
+            # 使用Charset Normalizer自动检测编码
+            charset_results = from_path(config_path)
+            if charset_results:
+                best_match = charset_results.best()
+                if best_match:
+                    detected_encoding = best_match.encoding
+                    print(f"检测到配置文件编码: {detected_encoding}")
+
+                    # 使用检测到的编码直接打开文件，然后使用json5读取
+                    with open(config_path, 'r', encoding=detected_encoding) as f:
+                        # 使用json5解析支持注释的JSON
+                        try:
+                            config_data = json5.load(f)
+                        except Exception as json5_error:
+                            print(f"json5解析失败: {json5_error}")
+                            print("尝试使用标准JSON库解析（将忽略注释）...")
+                            # 回退到标准JSON库，但需要先去除注释
+                            f.seek(0)  # 重置文件指针
+                            content = f.read()
+                            # 去除注释行
+                            lines = content.split('\n')
+                            cleaned_lines = []
+                            for line in lines:
+                                # 移除行内注释（#后面的内容）
+                                if '#' in line:
+                                    line = line.split('#')[0].rstrip()
+                                if line.strip():  # 只保留非空行
+                                    cleaned_lines.append(line)
+                            cleaned_content = '\n'.join(cleaned_lines)
+                            config_data = json.loads(cleaned_content)
+                    return NagaConfig(**config_data)
+                else:
+                    print(f"警告：无法检测 {config_path} 的编码")
+            else:
+                print(f"警告：无法检测 {config_path} 的编码")
+
+            # 如果自动检测失败，回退到原来的方法
+            print("使用回退方法加载配置")
             with open(config_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
+                # 使用json5解析支持注释的JSON
+                config_data = json5.load(f)
             return NagaConfig(**config_data)
+
         except Exception as e:
             print(f"警告：加载 {config_path} 失败: {e}")
             print("使用默认配置")
-            
-            if ENCF > 1:
-                print(f"警告：加载 {config_path} 失败: {e}")
-                print("使用默认配置")
-                return NagaConfig()
-            
-            ENCF += 1
-            try:
-                # 尝试修复编码问题
-                with open(config_path, 'r', encoding='ISO-8859-1') as f:
-                    con = f.read()
-                with open(config_path, 'w', encoding='utf-8') as f:
-                    f.write(con)
-                print("已经修复编码")
-                
-                # 重新尝试加载配置
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config_data = json.load(f)
-                return NagaConfig(**config_data)
-            except Exception as e2:
-                print(f"警告：加载 {config_path} 失败: {e2}")
-                print("使用默认配置")
-                return NagaConfig()
+            return NagaConfig()
     else:
         print(f"警告：配置文件 {config_path} 不存在，使用默认配置")
-    
+
     return NagaConfig()
 
 config = load_config()
@@ -552,3 +582,5 @@ except Exception:
 # 向后兼容的AI_NAME常量
 AI_NAME = config.system.ai_name
 
+import logging
+logger = logging.getLogger(__name__)
