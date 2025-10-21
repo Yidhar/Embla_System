@@ -4,20 +4,20 @@
 根据任务类型选择执行方式：
 
 **MCP工具调用**：
-{
+｛
 "agentType": "mcp",
 "service_name": "MCP服务名称",
 "tool_name": "工具名称",
 "param_name": "参数值"
-}
+｝
 
 **Agent任务调用**（适用于：电脑自动化操作）：
-{
+｛
 "agentType": "agent",
 "task_type": "computer_control",
 "instruction": "具体任务描述",
-"parameters": {{"action": "操作类型", "target": "目标"}}
-}
+"parameters": ｛"action": "操作类型", "target": "目标"｝
+｝
 
 【输入对话】
 {conversation}

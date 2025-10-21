@@ -56,8 +56,6 @@ class MCPScheduler:
     
     async def _worker(self, worker_name: str):
         """工作线程"""
-        logger.info(f"MCP调度器工作线程 {worker_name} 启动")
-        
         while not self.shutdown_event.is_set():
             try:
                 # 等待任务或关闭信号

@@ -72,11 +72,18 @@ class MessageManager:
         return str(uuid.uuid4())
     
     def create_session(self, session_id: Optional[str] = None) -> str:
-        """创建新会话"""
+        """获取或创建会话"""
         if not session_id:
             session_id = self.generate_session_id()
         
-        # 初始化会话
+        # 检查会话是否已存在
+        if session_id in self.sessions:
+            logger.debug(f"使用现有会话: {session_id}")
+            # 更新最后活动时间
+            self.sessions[session_id]["last_activity"] = asyncio.get_event_loop().time()
+            return session_id
+        
+        # 初始化新会话
         self.sessions[session_id] = {
             "created_at": asyncio.get_event_loop().time(),
             "messages": [],
@@ -561,8 +568,15 @@ class MessageManager:
         try:
             import asyncio
             from system.background_analyzer import get_background_analyzer
+            from system.config import config
             background_analyzer = get_background_analyzer()
-            recent_messages = self.get_recent_messages(session_id, count=6)
+            
+            # 根据配置获取意图分析轮数，默认3轮
+            intent_rounds = getattr(config.api, 'intent_analysis_rounds', 3)
+            max_messages = intent_rounds * 2  # 每轮包含用户和助手各一条消息
+            
+            recent_messages = self.get_recent_messages(session_id, count=max_messages)
+            logger.info(f"[博弈论] 分析最近 {intent_rounds} 轮对话，共 {len(recent_messages)} 条消息")
             asyncio.create_task(background_analyzer.analyze_intent_async(recent_messages, session_id))
         except Exception as e:
             logger.error(f"后台意图分析触发失败: {e}")

@@ -497,12 +497,11 @@ class ChatTool():
             return
 
         scrollbar = self.chat_scroll_area.verticalScrollBar()
-        is_at_bottom = (scrollbar.value() >= (scrollbar.maximum() - 1000))
+        is_at_bottom = (scrollbar.value() >= (scrollbar.maximum() - 500))  # 修改距离阈值从1000改为500
         logger.debug(f"移动到末尾的距离检测：{is_at_bottom} 数值：{scrollbar.maximum() - scrollbar.value()} ")
         if is_at_bottom:
             def to_bottom():
                 scrollbar.setValue(scrollbar.maximum())
-                logger.info("scroll to bottom")
 
             self.scroll_timer.singleShot(10, to_bottom)
 

@@ -337,12 +337,8 @@ async def chat_stream(request: ChatRequest):
                         data_str = chunk[6:].strip()
                         if data_str != '[DONE]':
                             decoded = base64.b64decode(data_str).decode('utf-8')
-                            # 异步处理TTS，不阻塞文本流
-                            threading.Thread(
-                                target=tool_extractor.process_text_chunk,
-                                args=(decoded,),
-                                daemon=True
-                            ).start()
+                            # 同步处理文本累积，不阻塞文本流
+                            tool_extractor.complete_text += decoded
                     except Exception as e:
                         logger.error(f"[API Server] 流式文本切割器处理错误: {e}")
                 
@@ -386,14 +382,12 @@ async def chat_stream(request: ChatRequest):
                     print(f"[API Server V19] 详细错误信息:")
                     traceback.print_exc()
 
-            # 异步完成流式文本切割器处理（非return_audio模式，不阻塞）
+            # 完成流式文本切割器处理（非return_audio模式，不阻塞）
             if tool_extractor and not request.return_audio:
                 try:
-                    # 异步处理完成，不阻塞文本流返回
-                    threading.Thread(
-                        target=tool_extractor.finish_processing,
-                        daemon=True
-                    ).start()
+                    # 同步处理完成，不阻塞文本流返回
+                    # tool_extractor.finish_processing() 是异步方法，这里不需要调用
+                    pass
                 except Exception as e:
                     print(f"流式文本切割器完成处理错误: {e}")
             
