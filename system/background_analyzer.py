@@ -133,7 +133,17 @@ class ConversationAnalyzer:
 
                 for obj in parsed_objects:
                     if isinstance(obj, dict) and obj.get("agentType") in ["mcp", "agent"]:
-                        tool_calls.append(obj)
+                        # 标准化工具调用格式
+                        standardized_call = {
+                            "agentType": obj.get("agentType"),
+                            "service_name": obj.get("service_name"),
+                            "tool_name": obj.get("tool_name")
+                        }
+                        # 添加其他参数（除了标准字段外的所有参数）
+                        for key, value in obj.items():
+                            if key not in ["agentType", "service_name", "tool_name"]:
+                                standardized_call[key] = value
+                        tool_calls.append(standardized_call)
 
                 if not main_obj.get("tasks") and not tool_calls:
                     # 若未能可靠解析，退回整体尝试
@@ -192,6 +202,8 @@ class BackgroundAnalyzer:
             
             # 处理工具调用 - 根据agentType分发到不同服务器
             if tool_calls:
+                # 通知UI工具调用开始
+                await self._notify_ui_tool_calls(tool_calls, session_id)
                 await self._dispatch_tool_calls(tool_calls, session_id)
             
             # 返回分析结果
@@ -215,6 +227,38 @@ class BackgroundAnalyzer:
             logger.error(f"任务处理失败: {e}")
             return {"has_tasks": False, "reason": f"处理失败: {e}", "tasks": [], "priority": "low"}
 
+    async def _notify_ui_tool_calls(self, tool_calls: List[Dict[str, Any]], session_id: str):
+        """批量通知UI工具调用开始 - 优化网络请求"""
+        try:
+            import httpx
+            
+            # 批量构建工具调用通知
+            tool_names = [tool_call.get("tool_name", "未知工具") for tool_call in tool_calls]
+            service_names = [tool_call.get("service_name", "未知服务") for tool_call in tool_calls]
+            
+            # 批量发送通知（减少HTTP请求次数）
+            notification_payload = {
+                "session_id": session_id,
+                "tool_calls": [
+                    {
+                        "tool_name": tool_call.get("tool_name", "未知工具"),
+                        "service_name": tool_call.get("service_name", "未知服务"),
+                        "status": "starting"
+                    }
+                    for tool_call in tool_calls
+                ],
+                "message": f"🔧 正在执行 {len(tool_calls)} 个工具: {', '.join(tool_names)}"
+            }
+            
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(
+                    "http://localhost:8001/tool_notification",
+                    json=notification_payload
+                )
+                    
+        except Exception as e:
+            logger.error(f"批量通知UI工具调用失败: {e}")
+    
     async def _dispatch_tool_calls(self, tool_calls: List[Dict[str, Any]], session_id: str):
         """根据agentType将工具调用分发到相应的服务器"""
         try:
