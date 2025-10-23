@@ -31,7 +31,7 @@ class Live2DTool():
             if self.side.get_display_mode() == 'live2d':
                 config.live2d.enabled = True
                 chat.add_system_message("已切换到Live2D模式")
-                logger.info("切换到Live2D模式")
+                logger.debug("切换到Live2D模式")  # 改为DEBUG级别，减少启动时日志噪音
                 return True
             else:
                 chat.add_system_message("Live2D加载失败，请检查模型文件")
@@ -47,7 +47,7 @@ class Live2DTool():
         # 重新初始化
         self.side.initialize_live2d()
         chat.add_system_message("Live2D模型已重新加载")
-        logger.info("Live2D模型重新加载")
+        logger.debug("Live2D模型重新加载")  # 改为DEBUG级别，减少启动时日志噪音
 
     def set_live2d_scale(self, scale_factor):
         """设置Live2D缩放比例"""
@@ -59,24 +59,24 @@ class Live2DTool():
         self.side.live2d_widget.set_scale_factor(scale_factor)
         config.live2d.scale_factor = scale_factor
         chat.add_system_message(f"Live2D缩放设置为: {scale_factor:.1f}x")
-        logger.info(f"Live2D缩放: {scale_factor}")
+        logger.debug(f"Live2D缩放: {scale_factor}")  # 改为DEBUG级别，减少启动时日志噪音
 
     def trigger_live2d_emotion(self, emotion):
         """触发Live2D情绪动画"""
         if self.side.live2d_widget and self.side.live2d_widget.is_model_loaded():
             self.side.live2d_widget.set_emotion(emotion)
-            logger.info(f"触发Live2D情绪: {emotion}")
+            logger.debug(f"触发Live2D情绪: {emotion}")  # 改为DEBUG级别，减少启动时日志噪音
 
     def trigger_live2d_motion(self, motion_group='idle', index=0):
         """触发Live2D动作"""
         if self.side.live2d_widget and self.side.live2d_widget.is_model_loaded():
             self.side.live2d_widget.trigger_motion(motion_group, index)
-            logger.info(f"触发Live2D动作: {motion_group}[{index}]")
+            logger.debug(f"触发Live2D动作: {motion_group}[{index}]")  # 改为DEBUG级别，减少启动时日志噪音
 
     def on_live2d_model_loaded(self, success):
         """Live2D模型加载状态回调 - 增强版"""
         if success:
-            logger.info("Live2D模型已成功加载")
+            logger.debug("Live2D模型已成功加载")  # 改为DEBUG级别，减少启动时日志噪音
             # 可以在这里添加一些初始化动作
             if self.side.live2d_widget:
                 # 触发一个欢迎动作

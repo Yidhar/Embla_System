@@ -135,12 +135,12 @@ class Live2DConfigManager:
         if self.use_main_config:
             main_config_loaded = self._load_from_main_config()
             if main_config_loaded:
-                logger.info("Live2D配置已从主配置系统加载")
+                logger.debug("Live2D配置已从主配置系统加载")  # 改为DEBUG级别，减少启动时日志噪音
                 return True
 
         # 如果主配置不可用或未启用，使用本地配置
         if local_config_loaded:
-            logger.info("Live2D配置已从本地配置文件加载")
+            logger.debug("Live2D配置已从本地配置文件加载")  # 改为DEBUG级别，减少启动时日志噪音
             return True
 
         # 都失败了，使用默认配置
@@ -238,7 +238,7 @@ class Live2DConfigManager:
                     if self.breath:
                         self.breath.enabled = False
 
-            logger.info("成功从主配置系统加载Live2D配置")
+            logger.debug("成功从主配置系统加载Live2D配置")  # 改为DEBUG级别，减少启动时日志噪音
             return True
 
         except ImportError as e:

@@ -146,7 +146,7 @@ class Live2DAnimator:
         self._previous_params = {}
         self._param_threshold = 0.001  # 参数变化阈值
 
-        logger.info("Live2D动画管理器初始化完成")
+        logger.debug("Live2D动画管理器初始化完成")  # 改为DEBUG级别，减少启动时日志噪音
 
     def update(self):
         """更新所有动画 - 优化版，只更新变化的参数"""

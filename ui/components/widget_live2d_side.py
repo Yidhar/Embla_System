@@ -195,10 +195,10 @@ class Live2DSideWidget(QWidget):
         import os
         import glob
 
-        logger.info("开始初始化Live2D...")
+        logger.debug("开始初始化Live2D...")  # 改为DEBUG级别，减少启动时日志噪音
 
         if not self.live2d_enabled:
-            logger.info("Live2D功能未启用")
+            logger.debug("Live2D功能未启用")  # 改为DEBUG级别，减少启动时日志噪音
             return
 
         if not self.live2d_model_path:
@@ -216,7 +216,7 @@ class Live2DSideWidget(QWidget):
 
         # 检查文件是否存在
         if os.path.exists(model_path):
-            logger.info(f"准备加载Live2D模型: {model_path}")
+            logger.debug(f"准备加载Live2D模型: {model_path}")  # 改为DEBUG级别，减少启动时日志噪音
             success = self.set_live2d_model(model_path)
             if not success:
                 logger.warning("Live2D模型加载失败，回退到图片模式")
@@ -333,7 +333,7 @@ class Live2DSideWidget(QWidget):
                     # 确保按钮可以接收鼠标事件
                     self.expand_button.setEnabled(True)
                     self.expand_button.setAttribute(Qt.WA_TransparentForMouseEvents, False)
-                    logger.info(f"Live2D控制按钮状态检查 - config: {self.config_button.isVisible()}, expand: {self.expand_button.isVisible()}, expand_enabled: {self.expand_button.isEnabled()}")
+                    logger.debug(f"Live2D控制按钮状态检查 - config: {self.config_button.isVisible()}, expand: {self.expand_button.isVisible()}, expand_enabled: {self.expand_button.isEnabled()}")  # 改为DEBUG级别，减少启动时日志噪音
 
                 from nagaagent_core.vendors.PyQt5.QtCore import QTimer as QT
                 QT.singleShot(100, ensure_buttons_visible)

@@ -16,7 +16,7 @@ try:
         ActionCard,
         SearchBar
     )
-    logger.info("使用现代化的Live2D配置对话框")
+    logger.debug("使用现代化的Live2D配置对话框")  # 改为DEBUG级别，减少启动时日志噪音
 
 except ImportError as e:
     logger.warning(f"无法导入现代化配置对话框: {e}")

@@ -63,6 +63,16 @@ logger.setLevel(logging.INFO)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
+# 优化Live2D相关日志输出，减少启动时的信息噪音
+logging.getLogger("live2d").setLevel(logging.WARNING)  # Live2D库日志
+logging.getLogger("live2d.renderer").setLevel(logging.WARNING)  # 渲染器日志
+logging.getLogger("live2d.animator").setLevel(logging.WARNING)  # 动画器日志
+logging.getLogger("live2d.widget").setLevel(logging.WARNING)  # 组件日志
+logging.getLogger("live2d.config").setLevel(logging.WARNING)  # 配置日志
+logging.getLogger("live2d.config_dialog").setLevel(logging.WARNING)  # 配置对话框日志
+logging.getLogger("OpenGL").setLevel(logging.WARNING)  # OpenGL日志
+logging.getLogger("OpenGL.acceleratesupport").setLevel(logging.WARNING)  # OpenGL加速日志
+
 # 服务管理器类
 class ServiceManager:
     """服务管理器 - 统一管理所有后台服务"""

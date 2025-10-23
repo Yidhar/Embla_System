@@ -101,7 +101,11 @@ class Live2DRenderer:
 
         try:
             live2d.init()
-            live2d.glewInit()
+            # 使用新的glInit()函数替代已弃用的glewInit()
+            if hasattr(live2d, 'glInit'):
+                live2d.glInit()  # 新版本使用glInit()
+            else:
+                live2d.glewInit()  # 兼容旧版本
             self.state = RendererState.INITIALIZED
             logger.debug("Live2D渲染器初始化成功")
             return True
