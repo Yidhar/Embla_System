@@ -1,7 +1,6 @@
 {
-  "module_enabled": true,
   "model": {
-    "default_model_path": "ui/live2d/live2d_models/",#放.model3.json
+    "default_model_path": "ui/live2d/live2d_models/",
     "fallback_image_path": "ui/img/standby.png",
     "auto_load_on_start": true,
     "scale_factor": 1.5,

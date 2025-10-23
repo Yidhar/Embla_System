@@ -1,46 +1,22 @@
 {
   "selected_actions": [
     {
-      "type": "motion",
-      "name": "sleep",
-      "display": "Sleep",
-      "icon": "😴"
-    },
-    {
-      "type": "motion",
-      "name": "idle",
-      "display": "Idle",
-      "icon": "😊"
+      "type": "expression",
+      "name": "HighLight_Off",
+      "display": "HighLight Off",
+      "icon": "😀"
     },
     {
       "type": "expression",
-      "name": "Cry",
-      "display": "Cry",
-      "icon": "😢"
+      "name": "Seriously",
+      "display": "Seriously",
+      "icon": "😀"
     },
     {
       "type": "expression",
-      "name": "Exp eye",
-      "display": "Exp eye",
-      "icon": "👀"
-    },
-    {
-      "type": "expression",
-      "name": "Love",
-      "display": "Love",
-      "icon": "😍"
-    },
-    {
-      "type": "expression",
-      "name": "SV Utau ALT",
-      "display": "SV Utau ALT",
-      "icon": "🎵"
-    },
-    {
-      "type": "expression",
-      "name": "Dark Face",
-      "display": "Dark Face",
-      "icon": "😈"
+      "name": "Shy",
+      "display": "Shy",
+      "icon": "😀"
     }
   ]
 }

@@ -1,10 +1,11 @@
 import sys, os; sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + '/..'))
 from .styles.button_factory import ButtonFactory
-from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget, QTextEdit, QSizePolicy, QHBoxLayout, QLabel, QVBoxLayout, QStackedWidget, QDesktopWidget, QScrollArea, QSplitter
+from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget, QTextEdit, QSizePolicy, QHBoxLayout, QLabel, QVBoxLayout, QStackedWidget, QDesktopWidget, QScrollArea, QSplitter, QFrame
 from nagaagent_core.vendors.PyQt5.QtCore import Qt, QEvent
 from nagaagent_core.vendors.PyQt5.QtGui import QColor, QPainter, QBrush
 import os
 from system.config import config, logger
+from ui.utils.ui_style_hot_reload import register_window as register_ui_style_window
 from ui.components.title_bar import TitleBar
 from .components.widget_progress import EnhancedProgressWidget
 from .components.widget_live2d_side import Live2DSideWidget
@@ -25,15 +26,20 @@ def get_ui_config():
         'ANIMATION_DURATION': config.ui.animation_duration
     }
 
-# 初始化全局变量
-ui_config = get_ui_config()
-BG_ALPHA = ui_config['BG_ALPHA']
-WINDOW_BG_ALPHA = ui_config['WINDOW_BG_ALPHA']
-USER_NAME = ui_config['USER_NAME']
-MAC_BTN_SIZE = ui_config['MAC_BTN_SIZE']
-MAC_BTN_MARGIN = ui_config['MAC_BTN_MARGIN']
-MAC_BTN_GAP = ui_config['MAC_BTN_GAP']
-ANIMATION_DURATION = ui_config['ANIMATION_DURATION']
+
+def refresh_ui_constants():
+    global BG_ALPHA, WINDOW_BG_ALPHA, USER_NAME, MAC_BTN_SIZE, MAC_BTN_MARGIN, MAC_BTN_GAP, ANIMATION_DURATION
+    ui_config = get_ui_config()
+    BG_ALPHA = ui_config['BG_ALPHA']
+    WINDOW_BG_ALPHA = ui_config['WINDOW_BG_ALPHA']
+    USER_NAME = ui_config['USER_NAME']
+    MAC_BTN_SIZE = ui_config['MAC_BTN_SIZE']
+    MAC_BTN_MARGIN = ui_config['MAC_BTN_MARGIN']
+    MAC_BTN_GAP = ui_config['MAC_BTN_GAP']
+    ANIMATION_DURATION = ui_config['ANIMATION_DURATION']
+
+
+refresh_ui_constants()
 
 class ChatWindow(QWidget):
     def __init__(self):
@@ -44,6 +50,7 @@ class ChatWindow(QWidget):
         self._init_buttons()
         self._init_side()
         self._init_end()
+        register_ui_style_window(self)
         
     def _init_windows(self):
         # 设置为屏幕大小的80%
@@ -260,19 +267,23 @@ class ChatWindow(QWidget):
         
         # 侧栏（Live2D/图片显示区域）- 使用Live2D侧栏Widget
         self.side = Live2DSideWidget()
-        self.collapsed_width = 400  # 收缩状态宽度
+        self.collapsed_width = 480  # 收缩状态宽度
         self.expanded_width = 800  # 展开状态宽度
         self.side.setMinimumWidth(self.collapsed_width)  # 设置最小宽度为收缩状态
         self.side.setMaximumWidth(self.collapsed_width)  # 初始状态为收缩
         
         def _enter(e):
-            self.side.set_background_alpha(int(BG_ALPHA * 0.5 * 255))
+            # 使用Live2D的透明度参数，悬停时透明度减半
+            hover_alpha = int(config.ui.bg_alpha * 0.5 * 255)  # 悬停时透明度减半
+            self.side.set_background_alpha(hover_alpha)
             self.side.set_border_alpha(80)
         # 优化侧栏的悬停效果，使用QPainter绘制
         self.side.enterEvent = _enter
         
         def _leave(e):
-            self.side.set_background_alpha(int(BG_ALPHA * 255))
+            # 使用Live2D的透明度参数作为正常状态
+            normal_alpha = int(config.ui.bg_alpha * 255)  # 正常状态透明度
+            self.side.set_background_alpha(normal_alpha)
             self.side.set_border_alpha(50)
         self.side.leaveEvent = _leave
         
@@ -310,6 +321,52 @@ class ChatWindow(QWidget):
         chat.load_persistent_history(
             max_messages=config.api.max_history_rounds * 2
         )
+
+    def apply_ui_style(self):
+        """根据最新配置刷新窗口外观"""
+        refresh_ui_constants()
+        self.setStyleSheet(f"""
+            ChatWindow {{
+                background: rgba(25, 25, 25, {WINDOW_BG_ALPHA});
+                border-radius: 20px;
+                border: 1px solid rgba(255, 255, 255, 30);
+            }}
+        """)
+
+        alpha_px = int(BG_ALPHA * 255)
+        fontfam, fontsize = 'Lucida Console', 16
+        self.input.setStyleSheet(f"""
+            QTextEdit {{
+                background: rgba(17,17,17,{alpha_px});
+                color: #fff;
+                border-radius: 15px;
+                border: 1px solid rgba(255, 255, 255, 50);
+                font: {fontsize}pt '{fontfam}';
+                padding: 8px;
+            }}
+        """)
+
+        if hasattr(self.side, 'set_background_alpha'):
+            self.side.set_background_alpha(alpha_px)
+        if hasattr(self.side, 'set_border_alpha'):
+            self.side.set_border_alpha(50)
+
+        try:
+            from ui.utils import message_renderer as mr
+            mr.refresh_style_constants()
+        except Exception:
+            pass
+
+        if hasattr(self.titlebar, 'update_style'):
+            self.titlebar.update_style()
+
+        try:
+            from ui.controller.tool_chat import apply_config as apply_chat_tool_config
+            apply_chat_tool_config()
+        except Exception:
+            pass
+
+        self.update()
 
 
 
