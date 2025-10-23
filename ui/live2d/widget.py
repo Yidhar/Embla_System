@@ -121,13 +121,10 @@ class Live2DWidget(QOpenGLWidget):
 
     def paintGL(self):
         """绘制Live2D模型"""
-        # 使用统一的背景透明度配置
-        try:
-            from system.config import config
-            bg_alpha = int(config.ui.bg_alpha * 255)  # 使用配置中的透明度
-        except Exception:
-            # 如果配置加载失败，使用默认值
-            bg_alpha = 200
+        # 获取父容器的背景透明度
+        bg_alpha = 200
+        if self.parent():
+            bg_alpha = getattr(self.parent(), 'bg_alpha', 200)
 
         # 检查待加载的模型
         if self._pending_load_model:

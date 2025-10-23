@@ -273,17 +273,13 @@ class ChatWindow(QWidget):
         self.side.setMaximumWidth(self.collapsed_width)  # 初始状态为收缩
         
         def _enter(e):
-            # 使用Live2D的透明度参数，悬停时透明度减半
-            hover_alpha = int(config.ui.bg_alpha * 0.5 * 255)  # 悬停时透明度减半
-            self.side.set_background_alpha(hover_alpha)
+            self.side.set_background_alpha(int(BG_ALPHA * 0.5 * 255))
             self.side.set_border_alpha(80)
         # 优化侧栏的悬停效果，使用QPainter绘制
         self.side.enterEvent = _enter
         
         def _leave(e):
-            # 使用Live2D的透明度参数作为正常状态
-            normal_alpha = int(config.ui.bg_alpha * 255)  # 正常状态透明度
-            self.side.set_background_alpha(normal_alpha)
+            self.side.set_background_alpha(int(BG_ALPHA * 255))
             self.side.set_border_alpha(50)
         self.side.leaveEvent = _leave
         

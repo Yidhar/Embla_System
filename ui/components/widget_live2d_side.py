@@ -11,7 +11,7 @@ from system.config import config, logger
 # 导入独立的Live2D模块
 try:
     from ..live2d import Live2DWidget
-    from ..live2d.modern_config_dialog import Live2DConfigDialog
+    from ..live2d.config_dialog import Live2DConfigDialog
     LIVE2D_AVAILABLE = True
 except ImportError as e:
     LIVE2D_AVAILABLE = False
@@ -536,8 +536,8 @@ class Live2DSideWidget(QWidget):
             painter.setBrush(QBrush(Qt.NoBrush))
             painter.drawRoundedRect(glow_rect, 17, 17)
         
-        # 绘制主要背景 - 使用统一的背景颜色和透明度
-        bg_color = QColor(17, 17, 17, self.bg_alpha)  # 背景颜色保持17,17,17
+        # 绘制主要背景
+        bg_color = QColor(17, 17, 17, self.bg_alpha)
         painter.setBrush(QBrush(bg_color))
         
         # 绘制边框
