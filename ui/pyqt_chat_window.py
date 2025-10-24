@@ -285,7 +285,17 @@ class ChatWindow(QWidget):
         
         # 设置鼠标指针，提示可点击
         self.side.setCursor(Qt.PointingHandCursor)
-        self.side.mousePressEvent = side.toggle_full_img # 侧栏点击切换聊天/设置
+
+        # 创建包装函数，在编辑模式下不触发toggle_full_img
+        original_toggle = side.toggle_full_img
+        def wrapped_mouse_press(e):
+            # 如果在编辑模式下，调用侧边栏自己的mousePressEvent
+            if hasattr(self.side, 'edit_mode') and self.side.edit_mode:
+                Live2DSideWidget.mousePressEvent(self.side, e)
+            else:
+                original_toggle(e)
+
+        self.side.mousePressEvent = wrapped_mouse_press # 侧栏点击切换聊天/设置
         
         # 设置默认图片
         default_image = os.path.join(os.path.dirname(__file__), 'img/standby.png')

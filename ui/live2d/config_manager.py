@@ -207,6 +207,8 @@ class Live2DConfigManager:
                 self.model.fallback_image_path = live2d_config.fallback_image
             if hasattr(live2d_config, 'auto_switch'):
                 self.model.auto_load_on_start = live2d_config.auto_switch
+            if hasattr(live2d_config, 'scale_factor'):
+                self.model.scale_factor = float(live2d_config.scale_factor)
             if hasattr(live2d_config, 'enabled'):
                 self.module_enabled = bool(live2d_config.enabled)
                 if not self.module_enabled:

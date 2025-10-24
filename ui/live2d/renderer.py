@@ -170,19 +170,34 @@ class Live2DRenderer:
             self._load_expressions(model_dir)
 
             # 应用缩放
-            scaled_width = int(self.width * self.scale_factor)
-            scaled_height = int(self.height * self.scale_factor)
-            self.model.Resize(scaled_width, scaled_height)
+            # Resize只设置视口大小，不应用scale_factor
+            self.model.Resize(self.width, self.height)
+            # 通过SetScale应用缩放
+            self.model.SetScale(self.scale_factor)
 
             # 基本设置
             self.model.SetAutoBlinkEnable(False)
             self.model.SetAutoBreathEnable(True)
 
-            # 尝试关闭水印
+            # 尝试关闭水印 - 通过表情
             try:
-                self.model.SetParameterValue("ParamWatermarkOFF", 1.0)
+                self.model.SetExpression("Remove Water Mark")
             except:
                 pass
+
+            # 也尝试通过参数关闭
+            watermark_params = [
+                "ParamWatermarkOFF",
+                "ParamWatermark",
+                "Watermark",
+                "WatermarkOFF",
+                "ParamRemoveWaterMark"
+            ]
+            for param in watermark_params:
+                try:
+                    self.model.SetParameterValue(param, 1.0)
+                except:
+                    pass
 
             if progress_callback:
                 progress_callback(1.0)
@@ -273,7 +288,7 @@ class Live2DRenderer:
         except Exception as e:
             self._handle_operation_error('_update_errors', e, '更新')
 
-    def draw(self, bg_alpha=None):
+    def draw(self, bg_alpha=None, offset_x=0.0, offset_y=0.0):
         """绘制模型"""
         if not self.has_model():
             return
@@ -287,7 +302,11 @@ class Live2DRenderer:
             else:
                 live2d.clearBuffer()
 
+            # 应用模型偏移 - 使用Live2D的SetOffset方法
+            # 注意：只在有偏移时设置，否则使用默认值(0, 0)
+            self.model.SetOffset(offset_x, offset_y)
             self.model.Draw()
+
             self._draw_errors = 0
         except Exception as e:
             self._handle_operation_error('_draw_errors', e, '绘制')
@@ -322,9 +341,9 @@ class Live2DRenderer:
 
         if self.has_model():
             try:
-                scaled_width = int(width * self.scale_factor)
-                scaled_height = int(height * self.scale_factor)
-                self.model.Resize(scaled_width, scaled_height)
+                # Resize只设置视口大小，不应用scale_factor
+                # scale_factor通过SetScale单独应用
+                self.model.Resize(width, height)
             except Exception as e:
                 logger.error(f"调整大小失败: {e}")
 
@@ -334,7 +353,9 @@ class Live2DRenderer:
             return
 
         self.scale_factor = scale_factor
-        self.resize(self.width, self.height)
+        # 使用Live2D的SetScale方法来缩放模型
+        if self.has_model():
+            self.model.SetScale(scale_factor)
 
     def set_parameter(self, param_id: str, value: float, validate: bool = False):
         """设置模型参数 - 带错误保护"""
@@ -420,14 +441,15 @@ class Live2DRenderer:
         return ""
 
     def _load_emoji_mapping(self) -> Dict[str, Any]:
-        """加载emoji映射配置"""
+        """从统一配置文件加载emoji映射配置"""
         try:
-            emoji_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'emoji_mapping.json')
-            if os.path.exists(emoji_file):
-                with open(emoji_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'live2d_config.json')
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    live2d_config = json.load(f)
+                    return live2d_config.get('emoji_mapping', {})
             else:
-                logger.debug(f"Emoji映射文件不存在: {emoji_file}")
+                logger.debug(f"Live2D配置文件不存在: {config_file}")
         except Exception as e:
             logger.debug(f"加载emoji映射失败: {e}")
 

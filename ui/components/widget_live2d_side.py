@@ -5,7 +5,8 @@ from nagaagent_core.vendors.PyQt5.QtWidgets import (
     QVBoxLayout, QScrollArea, QHBoxLayout
 )  # 统一入口 #
 from nagaagent_core.vendors.PyQt5.QtCore import Qt, QTimer, pyqtSignal, QPropertyAnimation, QRect  # 统一入口 #
-from nagaagent_core.vendors.PyQt5.QtGui import QPixmap, QPainter, QColor, QBrush, QPen  # 统一入口 #
+from nagaagent_core.vendors.PyQt5.QtGui import QPixmap, QPainter, QColor, QBrush, QPen, QIcon  # 统一入口 #
+from nagaagent_core.vendors.PyQt5.QtCore import QSize  # 统一入口 #
 
 from system.config import config, logger
 # 导入独立的Live2D模块
@@ -54,8 +55,32 @@ class Live2DSideWidget(QWidget):
         
         # 创建Live2D Widget
         if LIVE2D_AVAILABLE:
-            self.live2d_widget = Live2DWidget(self)
+            # 从统一配置文件读取初始值
+            try:
+                live2d_config_path = os.path.join(os.path.dirname(__file__), '../live2d/live2d_config.json')
+                with open(live2d_config_path, 'r', encoding='utf-8') as f:
+                    live2d_config = json.load(f)
+                    transform = live2d_config.get('transform', {})
+                    initial_scale = transform.get('scale', live2d_config.get('model', {}).get('scale_factor', 1.0))
+                    initial_offset_x = transform.get('offset_x', 0.0)
+                    initial_offset_y = transform.get('offset_y', 0.0)
+            except:
+                initial_scale = getattr(config.live2d, 'scale_factor', 1.0)
+                initial_offset_x = 0.0
+                initial_offset_y = 0.0
+
+            self.live2d_widget = Live2DWidget(self, scale_factor=initial_scale)
             self.live2d_widget.setStyleSheet('background: transparent; border: none;')
+
+            # 固定的默认值（用于重置功能，不随配置改变）
+            self.default_scale = 1.8
+            self.default_offset_x = -0.013125000000000001
+            self.default_offset_y = -0.8022727272727274
+
+            # 运行时初始值（从配置加载，会随保存而改变）
+            self.initial_scale = initial_scale
+            self.initial_offset_x = initial_offset_x
+            self.initial_offset_y = initial_offset_y
         else:
             self.live2d_widget = None
         
@@ -81,34 +106,35 @@ class Live2DSideWidget(QWidget):
         # 设置鼠标指针
         self.setCursor(Qt.PointingHandCursor)
 
-        # 创建Live2D/图片模式切换按钮（放在右上角）
-        self.toggle_button = QPushButton("🎭", self)
-        self.toggle_button.setFixedSize(45, 30)  # 设置固定大小
+        # 创建Live2D/图片模式切换按钮
+        self.toggle_button = QPushButton(self)
+        self.toggle_button.setFixedSize(160, 120)  # 按图片比例4:3设置
+
+        # 加载按钮图片
+        self.toggle_icon_l2d = QPixmap(os.path.join(os.path.dirname(__file__), '../img/button/2l2d.png'))
+        self.toggle_icon_image = QPixmap(os.path.join(os.path.dirname(__file__), '../img/button/2img.png'))
+
+        # 设置初始图标（图片模式显示"转l2d模式"图标）
+        self.toggle_button.setIcon(QIcon(self.toggle_icon_l2d))
+        self.toggle_button.setIconSize(QSize(160, 120))
+
         self.toggle_button.setStyleSheet("""
             QPushButton {
-                background-color: rgba(100, 100, 100, 180);
-                color: white;
-                border: 1px solid rgba(255, 255, 255, 100);
-                border-radius: 5px;
-                font-size: 16px;
-                font-weight: bold;
-                padding: 2px;
+                background: transparent;
+                border: none;
+                padding: 0px;
             }
             QPushButton:hover {
-                background-color: rgba(150, 150, 150, 200);
-                border: 2px solid rgba(255, 255, 255, 150);
+                background: transparent;
             }
             QPushButton:pressed {
-                background-color: rgba(200, 200, 200, 220);
+                background: transparent;
             }
         """)
         self.toggle_button.setToolTip("切换 Live2D/图片 模式")
         self.toggle_button.clicked.connect(self.toggle_display_mode)
-        # 初始设置按钮位置（会在resizeEvent和showEvent中更新）
-        self.toggle_button.move(10, 10)  # 先放在左上角，后续会调整
-        # 确保按钮显示并在最上层
-        self.toggle_button.show()
-        self.toggle_button.raise_()
+        # 初始隐藏按钮，在resizeEvent和showEvent中根据宽度决定是否显示
+        self.toggle_button.hide()
 
         # 创建配置按钮（在切换按钮下面）
         self.config_button = QPushButton("⚙️", self)
@@ -186,6 +212,64 @@ class Live2DSideWidget(QWidget):
         # 动作列表展开状态
         self.actions_expanded = False
 
+        # 创建编辑模式按钮（在左上角）
+        self.edit_button = QPushButton("✏️", self)
+        self.edit_button.setFixedSize(45, 30)
+        self.edit_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(100, 100, 100, 180);
+                color: white;
+                border: 1px solid rgba(255, 255, 255, 100);
+                border-radius: 5px;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 2px;
+            }
+            QPushButton:hover {
+                background-color: rgba(150, 150, 150, 200);
+                border: 2px solid rgba(255, 255, 255, 150);
+            }
+            QPushButton:pressed {
+                background-color: rgba(200, 200, 200, 220);
+            }
+            QPushButton:checked {
+                background-color: rgba(100, 150, 255, 220);
+                border: 2px solid rgba(150, 200, 255, 200);
+            }
+        """)
+        self.edit_button.setToolTip("编辑模式：调整模型位置和大小")
+        self.edit_button.setCheckable(True)  # 设置为可切换按钮
+        self.edit_button.clicked.connect(self.toggle_edit_mode)
+        self.edit_button.hide()  # 默认隐藏，仅在Live2D模式且侧边栏展开时显示
+
+        # 编辑模式状态
+        self.edit_mode = False
+
+        # 创建重置按钮（在编辑按钮旁边）
+        self.reset_button = QPushButton("↺", self)
+        self.reset_button.setFixedSize(45, 30)
+        self.reset_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(100, 100, 100, 180);
+                color: white;
+                border: 1px solid rgba(255, 255, 255, 100);
+                border-radius: 5px;
+                font-size: 18px;
+                font-weight: bold;
+                padding: 2px;
+            }
+            QPushButton:hover {
+                background-color: rgba(150, 150, 150, 200);
+                border: 2px solid rgba(255, 255, 255, 150);
+            }
+            QPushButton:pressed {
+                background-color: rgba(200, 200, 200, 220);
+            }
+        """)
+        self.reset_button.setToolTip("重置模型位置和大小")
+        self.reset_button.clicked.connect(self.reset_model_transform)
+        self.reset_button.hide()  # 默认隐藏，仅在编辑模式下显示
+
         # 保存的动作配置
         self.saved_actions = []
         self.load_action_config()
@@ -254,23 +338,111 @@ class Live2DSideWidget(QWidget):
                 success = self.set_live2d_model(self.live2d_model_path)
                 if success:
                     print("已切换到Live2D模式")
-                    self.toggle_button.setText("📷")  # 显示相机图标
+                    self.toggle_button.setIcon(QIcon(self.toggle_icon_image))  # 显示"转立绘模式"图标
                 else:
                     print("切换到Live2D模式失败")
             else:
                 # 如果没有配置模型路径，尝试使用默认模型
                 self.initialize_live2d()
                 if self.display_mode == 'live2d':
-                    self.toggle_button.setText("📷")
+                    self.toggle_button.setIcon(QIcon(self.toggle_icon_image))
         else:
             # 切换到图片模式
             self.fallback_to_image_mode()
             print("已切换到图片模式")
-            self.toggle_button.setText("🎭")  # 显示面具图标
+            self.toggle_button.setIcon(QIcon(self.toggle_icon_l2d))  # 显示"转l2d模式"图标
 
         # 最后再确保按钮在最上层并可见
         self.toggle_button.raise_()
         self.toggle_button.setVisible(True)
+
+    def toggle_edit_mode(self):
+        """切换编辑模式"""
+        self.edit_mode = not self.edit_mode
+        self.edit_button.setChecked(self.edit_mode)
+
+        # 同步Live2D widget的编辑模式状态
+        if self.live2d_widget:
+            self.live2d_widget.set_edit_mode(self.edit_mode)
+
+        # 控制重置按钮显示
+        self.reset_button.setVisible(self.edit_mode)
+        if self.edit_mode:
+            self._update_reset_button_position()
+        else:
+            self.save_model_transform()
+
+    def reset_model_transform(self):
+        """重置模型位置和大小到固定默认值"""
+        if not self.live2d_widget:
+            return
+
+        # 重置到固定的默认值（不受配置文件影响）
+        self.live2d_widget.model_offset_x = self.default_offset_x
+        self.live2d_widget.model_offset_y = self.default_offset_y
+        self.live2d_widget.set_scale_factor(self.default_scale)
+        self.live2d_widget.update()
+
+    def set_current_as_default(self):
+        """将当前的位置和大小设置为默认值"""
+        if not self.live2d_widget:
+            return
+
+        # 更新初始值为当前值
+        self.initial_offset_x = getattr(self.live2d_widget, 'model_offset_x', 0.0)
+        self.initial_offset_y = getattr(self.live2d_widget, 'model_offset_y', 0.0)
+        self.initial_scale = getattr(self.live2d_widget, 'scale_factor', 1.0)
+
+        # 同时保存到配置文件
+        self.save_model_transform()
+        logger.info(f"已将当前状态设置为默认值: offset=({self.initial_offset_x:.2f}, {self.initial_offset_y:.2f}), scale={self.initial_scale:.2f}")
+
+    def _get_live2d_config_path(self):
+        """获取Live2D统一配置文件路径"""
+        return os.path.join(os.path.dirname(__file__), '../live2d/live2d_config.json')
+
+    def save_model_transform(self):
+        """保存模型的位置和缩放配置到统一配置文件"""
+        if not self.live2d_widget:
+            return
+
+        try:
+            config_path = self._get_live2d_config_path()
+            # 读取现有配置
+            with open(config_path, 'r', encoding='utf-8') as f:
+                live2d_config = json.load(f)
+
+            # 更新transform部分
+            live2d_config['transform'] = {
+                'offset_x': getattr(self.live2d_widget, 'model_offset_x', 0.0),
+                'offset_y': getattr(self.live2d_widget, 'model_offset_y', 0.0),
+                'scale': getattr(self.live2d_widget, 'scale_factor', 1.0)
+            }
+
+            # 保存回配置文件
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(live2d_config, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"保存模型变换配置失败: {e}")
+
+    def load_model_transform(self):
+        """从统一配置文件加载模型的位置和缩放配置"""
+        if not self.live2d_widget:
+            return
+
+        try:
+            config_path = self._get_live2d_config_path()
+            with open(config_path, 'r', encoding='utf-8') as f:
+                live2d_config = json.load(f)
+
+            transform = live2d_config.get('transform', {})
+            # 应用变换参数
+            self.live2d_widget.model_offset_x = transform.get('offset_x', 0.0)
+            self.live2d_widget.model_offset_y = transform.get('offset_y', 0.0)
+            if 'scale' in transform:
+                self.live2d_widget.set_scale_factor(transform['scale'])
+        except Exception as e:
+            logger.error(f"加载模型变换配置失败: {e}")
 
     def set_background_alpha(self, alpha):
         """设置背景透明度"""
@@ -313,8 +485,8 @@ class Live2DSideWidget(QWidget):
             if success:
                 self.display_mode = 'live2d'
                 self.stack_layout.setCurrentIndex(1)  # 切换到Live2D模式
-                # 更新按钮文字为相机图标
-                self.toggle_button.setText("📷")
+                # 更新按钮图标
+                self.toggle_button.setIcon(QIcon(self.toggle_icon_image))
                 # 确保按钮在最上层
                 self.toggle_button.raise_()
                 self.toggle_button.setVisible(True)
@@ -340,12 +512,26 @@ class Live2DSideWidget(QWidget):
 
                 # 确保按钮位置正确
                 if self.width() > 0:
-                    button_x = self.width() - self.toggle_button.width() - 10
-                    button_y = self.toggle_button.y() + self.toggle_button.height() + 5
+                    # 编辑按钮在左上角（只在展开状态显示）
+                    if self.width() > 790:
+                        edit_x = 10
+                        edit_y = 10
+                        self.edit_button.move(edit_x, edit_y)
+                        self.edit_button.setVisible(True)
+                        self.edit_button.raise_()
+
+                    # 配置按钮在右上角
+                    button_x = self.width() - self.config_button.width() - 10
+                    button_y = 10
                     self.config_button.move(button_x, button_y)
-                    button_y += self.config_button.height() + 5
+                    # 展开按钮在配置按钮下面
+                    button_x = self.width() - self.expand_button.width() - 10
+                    button_y = 10 + self.config_button.height() + 5
                     self.expand_button.move(button_x, button_y)
-                    logger.info(f"按钮位置已更新 - config: ({button_x}, {button_y-35}), expand: ({button_x}, {button_y})")
+
+                # 加载保存的模型变换配置
+                self.load_model_transform()
+
                 self.model_loaded.emit(True)
                 print(f"切换到Live2D模式: {model_path}")
                 return True
@@ -368,12 +554,14 @@ class Live2DSideWidget(QWidget):
         self.display_mode = 'image'
         self.stack_layout.setCurrentIndex(0)  # 切换到图片模式
 
-        # 更新按钮文字为面具图标
-        self.toggle_button.setText("🎭")
+        # 更新按钮图标
+        self.toggle_button.setIcon(QIcon(self.toggle_icon_l2d))
         # 确保按钮在最上层
         self.toggle_button.raise_()
         self.toggle_button.setVisible(True)
         # 隐藏Live2D控制按钮
+        self.edit_button.hide()
+        self.reset_button.hide()
         self.config_button.hide()
         self.expand_button.hide()
         self.actions_panel.hide()
@@ -440,27 +628,46 @@ class Live2DSideWidget(QWidget):
         """调整大小事件"""
         super().resizeEvent(event)
 
-        # 更新所有按钮位置，保持在右上角竖向排列
+        # 更新所有按钮位置
         if hasattr(self, 'toggle_button') and self.width() > 0:
-            button_x = self.width() - self.toggle_button.width() - 10
+            # 切换按钮：下方偏下位置的中央，只在宽度大于600时显示（扩展状态）
+            if self.width() > 790:
+                toggle_x = (self.width() - self.toggle_button.width()) // 2
+                toggle_y = int(self.height() * 0.85)
+                self.toggle_button.move(toggle_x, toggle_y)
+                self.toggle_button.setVisible(True)
+                self.toggle_button.raise_()
+            else:
+                self.toggle_button.setVisible(False)
 
-            # 切换按钮
-            button_y = 10
-            self.toggle_button.move(button_x, button_y)
-            self.toggle_button.setVisible(True)
-            self.toggle_button.raise_()
+            # 编辑按钮：左上角，只在Live2D模式且侧边栏展开时显示
+            if hasattr(self, 'edit_button'):
+                if self.width() > 790 and self.display_mode == 'live2d':
+                    edit_x = 10
+                    edit_y = 10
+                    self.edit_button.move(edit_x, edit_y)
+                    self.edit_button.setVisible(True)
+                    self.edit_button.raise_()
+                else:
+                    self.edit_button.setVisible(False)
 
-            # 配置按钮（在切换按钮下面）
+            # 重置按钮：编辑按钮下面，只在编辑模式下显示
+            self._update_reset_button_position()
+
+            # 配置和展开按钮保持原来的右上角位置
+            # 配置按钮
             if hasattr(self, 'config_button'):
-                button_y += self.toggle_button.height() + 5
+                button_x = self.width() - self.config_button.width() - 10
+                button_y = 10
                 self.config_button.move(button_x, button_y)
                 if self.display_mode == 'live2d':
                     self.config_button.setVisible(True)
                     self.config_button.raise_()
 
-            # 展开按钮（在配置按钮下面）
+            # 展开按钮
             if hasattr(self, 'expand_button'):
-                button_y += self.config_button.height() + 5
+                button_x = self.width() - self.expand_button.width() - 10
+                button_y = 10 + self.config_button.height() + 5
                 self.expand_button.move(button_x, button_y)
                 if self.display_mode == 'live2d':
                     self.expand_button.setVisible(True)
@@ -487,21 +694,42 @@ class Live2DSideWidget(QWidget):
 
         # 首次显示时设置按钮位置
         if hasattr(self, 'toggle_button') and self.width() > 0:
-            button_x = self.width() - self.toggle_button.width() - 10
-            button_y = 10
-            self.toggle_button.move(button_x, button_y)
-            self.toggle_button.setVisible(True)
-            self.toggle_button.raise_()
+            # 切换按钮：下方偏下位置的中央，只在宽度大于600时显示（扩展状态）
+            if self.width() > 790:
+                toggle_x = (self.width() - self.toggle_button.width()) // 2
+                toggle_y = int(self.height() * 0.85)
+                self.toggle_button.move(toggle_x, toggle_y)
+                self.toggle_button.setVisible(True)
+                self.toggle_button.raise_()
+            else:
+                self.toggle_button.setVisible(False)
 
-            # 配置按钮（在切换按钮下面）
+            # 编辑按钮：左上角，只在Live2D模式且侧边栏展开时显示
+            if hasattr(self, 'edit_button'):
+                if self.width() > 790 and self.display_mode == 'live2d':
+                    edit_x = 10
+                    edit_y = 10
+                    self.edit_button.move(edit_x, edit_y)
+                    self.edit_button.setVisible(True)
+                    self.edit_button.raise_()
+                else:
+                    self.edit_button.setVisible(False)
+
+            # 重置按钮：编辑按钮下面，只在编辑模式下显示
+            self._update_reset_button_position()
+
+            # 配置和展开按钮保持原来的右上角位置
+            # 配置按钮
             if hasattr(self, 'config_button') and self.display_mode == 'live2d':
-                button_y += self.toggle_button.height() + 5
+                button_x = self.width() - self.config_button.width() - 10
+                button_y = 10
                 self.config_button.move(button_x, button_y)
                 self.config_button.raise_()
 
-            # 展开按钮（在配置按钮下面）
+            # 展开按钮
             if hasattr(self, 'expand_button') and self.display_mode == 'live2d':
-                button_y += self.config_button.height() + 5 if hasattr(self, 'config_button') else self.toggle_button.height() + 5
+                button_x = self.width() - self.expand_button.width() - 10
+                button_y = 10 + self.config_button.height() + 5 if hasattr(self, 'config_button') else 10
                 self.expand_button.move(button_x, button_y)
                 self.expand_button.raise_()
 
@@ -561,70 +789,119 @@ class Live2DSideWidget(QWidget):
         """清理资源"""
         if self.live2d_widget:
             self.live2d_widget.cleanup()
-    
+
+    def _update_reset_button_position(self):
+        """更新重置按钮位置"""
+        if hasattr(self, 'reset_button') and self.edit_mode:
+            reset_x = 10
+            reset_y = 10 + self.edit_button.height() + 5
+            self.reset_button.move(reset_x, reset_y)
+            self.reset_button.raise_()
+
+    def _forward_mouse_event_to_live2d(self, event, event_type):
+        """将鼠标事件转发给Live2D widget的辅助方法"""
+        if self.display_mode != 'live2d' or not self.live2d_widget or not self.live2d_widget.is_model_loaded():
+            return False
+
+        # 映射坐标并创建新事件
+        mapped_pos = self.live2d_widget.mapFromParent(event.pos())
+        from nagaagent_core.vendors.PyQt5.QtGui import QMouseEvent
+        new_event = QMouseEvent(
+            event.type(),
+            mapped_pos,
+            event.globalPos(),
+            event.button(),
+            event.buttons(),
+            event.modifiers()
+        )
+
+        # 根据事件类型调用对应方法
+        if event_type == 'press':
+            self.live2d_widget.mousePressEvent(new_event)
+        elif event_type == 'release':
+            self.live2d_widget.mouseReleaseEvent(new_event)
+        elif event_type == 'move':
+            self.live2d_widget.mouseMoveEvent(new_event)
+
+        return True
+
     def mousePressEvent(self, event):
         """鼠标点击事件 - 传递给适当的组件处理"""
-        # 如果是Live2D模式，传递事件给Live2D Widget
-        if self.display_mode == 'live2d' and self.live2d_widget and self.live2d_widget.is_model_loaded():
-            # 将坐标映射到Live2D Widget
-            mapped_pos = self.live2d_widget.mapFromParent(event.pos())
-            # 创建新的事件传递给Live2D Widget
-            from nagaagent_core.vendors.PyQt5.QtGui import QMouseEvent
-            new_event = QMouseEvent(
-                event.type(),
-                mapped_pos,
-                event.globalPos(),
-                event.button(),
-                event.buttons(),
-                event.modifiers()
-            )
-            self.live2d_widget.mousePressEvent(new_event)
-        else:
-            super().mousePressEvent(event)
+        if self._forward_mouse_event_to_live2d(event, 'press'):
+            # 如果在编辑模式下，阻止事件继续传播（避免触发侧边栏收起）
+            if self.edit_mode:
+                event.accept()
+                return
+        super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
         """鼠标释放事件 - 传递给适当的组件处理"""
-        # 如果是Live2D模式，传递事件给Live2D Widget
-        if self.display_mode == 'live2d' and self.live2d_widget and self.live2d_widget.is_model_loaded():
+        if self._forward_mouse_event_to_live2d(event, 'release'):
+            # 如果在编辑模式下，阻止事件继续传播
+            if self.edit_mode:
+                event.accept()
+                return
+        super().mouseReleaseEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """鼠标移动事件 - 传递给适当的组件处理"""
+        if self._forward_mouse_event_to_live2d(event, 'move'):
+            # 如果在编辑模式下，阻止事件继续传播
+            if self.edit_mode:
+                event.accept()
+                return
+        super().mouseMoveEvent(event)
+
+    def wheelEvent(self, event):
+        """鼠标滚轮事件 - 传递给适当的组件处理"""
+        # 如果是Live2D模式且在编辑模式下，传递事件给Live2D Widget
+        if self.display_mode == 'live2d' and self.live2d_widget and self.live2d_widget.is_model_loaded() and self.edit_mode:
             # 将坐标映射到Live2D Widget
             mapped_pos = self.live2d_widget.mapFromParent(event.pos())
             # 创建新的事件传递给Live2D Widget
-            from nagaagent_core.vendors.PyQt5.QtGui import QMouseEvent
-            new_event = QMouseEvent(
-                event.type(),
+            from nagaagent_core.vendors.PyQt5.QtGui import QWheelEvent
+            new_event = QWheelEvent(
                 mapped_pos,
                 event.globalPos(),
-                event.button(),
+                event.pixelDelta(),
+                event.angleDelta(),
                 event.buttons(),
-                event.modifiers()
+                event.modifiers(),
+                event.phase(),
+                event.inverted()
             )
-            self.live2d_widget.mouseReleaseEvent(new_event)
+            self.live2d_widget.wheelEvent(new_event)
+            event.accept()
+            return
         else:
-            super().mouseReleaseEvent(event)
+            super().wheelEvent(event)
 
     def load_action_config(self):
-        """加载动作配置"""
+        """从统一配置文件加载动作配置"""
         try:
-            config_file = os.path.join(os.path.dirname(__file__), '..', 'live2d', 'action_config.json')
-            logger.info(f"正在加载动作配置文件: {config_file}")
-            if os.path.exists(config_file):
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    self.saved_actions = data.get('selected_actions', [])
-                    logger.info(f"成功加载 {len(self.saved_actions)} 个动作配置")
-            else:
-                logger.warning(f"动作配置文件不存在: {config_file}")
-                self.saved_actions = []
+            config_path = self._get_live2d_config_path()
+            with open(config_path, 'r', encoding='utf-8') as f:
+                live2d_config = json.load(f)
+                self.saved_actions = live2d_config.get('selected_actions', [])
+                logger.info(f"成功加载 {len(self.saved_actions)} 个动作配置")
         except Exception as e:
             logger.error(f"加载动作配置失败: {e}")
             self.saved_actions = []
 
     def save_action_config(self):
-        """保存动作配置"""
+        """保存动作配置到统一配置文件"""
         try:
-            config_file = os.path.join(os.path.dirname(__file__), '..', 'live2d', 'action_config.json')
-            with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump({'selected_actions': self.saved_actions}, f, ensure_ascii=False, indent=2)
+            config_path = self._get_live2d_config_path()
+            # 读取现有配置
+            with open(config_path, 'r', encoding='utf-8') as f:
+                live2d_config = json.load(f)
+
+            # 更新selected_actions部分
+            live2d_config['selected_actions'] = self.saved_actions
+
+            # 保存回配置文件
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(live2d_config, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"保存动作配置失败: {e}")
 

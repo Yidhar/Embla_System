@@ -60,6 +60,18 @@ class Live2DWidget(QOpenGLWidget):
         self._fallback_mode = False
         self._last_error_time = 0
 
+        # 编辑模式相关
+        self.edit_mode = False
+        self.model_offset_x = 0.0
+        self.model_offset_y = 0.0
+        self._drag_start_pos = None
+        self._drag_start_offset_x = 0.0
+        self._drag_start_offset_y = 0.0
+
+        # 编辑模式参数
+        self._drag_sensitivity = 0.5  # 拖拽灵敏度
+        self._zoom_sensitivity = 1200.0  # 缩放灵敏度
+
         # Widget属性
         self.setMinimumSize(100, 150)
         self.setStyleSheet('background: transparent; border: none;')
@@ -152,7 +164,8 @@ class Live2DWidget(QOpenGLWidget):
         if self.renderer and self.renderer.has_model():
             try:
                 self.renderer.update()
-                self.renderer.draw(bg_alpha)
+                # 传递偏移量给渲染器
+                self.renderer.draw(bg_alpha, self.model_offset_x, self.model_offset_y)
             except Exception as e:
                 logger.error(f"绘制失败: {e}")
 
@@ -263,6 +276,16 @@ class Live2DWidget(QOpenGLWidget):
             self.renderer.set_scale_factor(self.scale_factor)
             self.update()
 
+    def set_edit_mode(self, enabled: bool):
+        """设置编辑模式"""
+        self.edit_mode = enabled
+        if enabled:
+            self.setCursor(Qt.OpenHandCursor)
+            logger.info("编辑模式已启用")
+        else:
+            self.setCursor(Qt.PointingHandCursor)
+            logger.info("编辑模式已禁用")
+
     def is_model_loaded(self) -> bool:
         """检查是否已加载模型"""
         return self.renderer and self.renderer.has_model()
@@ -289,26 +312,60 @@ class Live2DWidget(QOpenGLWidget):
     def mousePressEvent(self, event: QMouseEvent):
         """鼠标点击事件"""
         if event.button() == Qt.LeftButton and self.is_model_loaded():
-            # 触发简单动作
-            import random
-            actions = ["tap_body", "tap_head"]
-            self.trigger_motion(random.choice(actions), 0)
+            if self.edit_mode:
+                # 编辑模式：开始拖拽
+                self._drag_start_pos = event.pos()
+                self._drag_start_offset_x = self.model_offset_x
+                self._drag_start_offset_y = self.model_offset_y
+                self.setCursor(Qt.ClosedHandCursor)
+            else:
+                # 正常模式：触发简单动作
+                import random
+                actions = ["tap_body", "tap_head"]
+                self.trigger_motion(random.choice(actions), 0)
 
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         """鼠标释放事件"""
+        if self.edit_mode and self._drag_start_pos is not None:
+            self._drag_start_pos = None
+            self.setCursor(Qt.OpenHandCursor)
+
         super().mouseReleaseEvent(event)
 
+    def _handle_drag(self, event: QMouseEvent):
+        """处理拖拽移动"""
+        delta_x = event.x() - self._drag_start_pos.x()
+        delta_y = event.y() - self._drag_start_pos.y()
+
+        # 将像素偏移转换为归一化坐标偏移
+        self.model_offset_x = self._drag_start_offset_x + (delta_x / self.width()) * self._drag_sensitivity
+        self.model_offset_y = self._drag_start_offset_y - (delta_y / self.height()) * self._drag_sensitivity
+        self.update()
+
     def mouseMoveEvent(self, event: QMouseEvent):
-        """鼠标移动事件（眼球跟踪）"""
-        if self.is_model_loaded():
-            # 转换坐标
+        """鼠标移动事件（眼球跟踪或拖拽）"""
+        if not self.is_model_loaded():
+            return super().mouseMoveEvent(event)
+
+        if self.edit_mode and self._drag_start_pos:
+            self._handle_drag(event)
+        else:
+            # 正常模式：眼球跟踪
             x = (event.x() / self.width()) * 2.0 - 1.0
             y = -((event.y() / self.height()) * 2.0 - 1.0)
             self.set_eye_target(x, y)
 
         super().mouseMoveEvent(event)
+
+    def wheelEvent(self, event):
+        """鼠标滚轮事件（缩放）"""
+        if self.edit_mode and self.is_model_loaded():
+            scale_delta = event.angleDelta().y() / self._zoom_sensitivity
+            self.set_scale_factor(self.scale_factor + scale_delta)
+
+        super().wheelEvent(event)
 
 
 def create_widget_from_config(parent=None, config=None):

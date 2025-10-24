@@ -303,11 +303,12 @@ class Live2DAutoConfigurator:
 
                     result['total_expressions'] = len(all_exp_files)
 
-                    configured_files = {os.path.join(model_dir, exp.get('File', ''))
+                    # 规范化路径进行比较，避免斜杠方向不一致导致的匹配失败
+                    configured_files = {os.path.normpath(os.path.join(model_dir, exp.get('File', '')))
                                       for exp in expressions if isinstance(exp, dict)}
 
                     for exp_file in all_exp_files:
-                        if exp_file not in configured_files:
+                        if os.path.normpath(exp_file) not in configured_files:
                             result['unconfigured_files'].append(exp_file)
                     break
 
@@ -335,14 +336,15 @@ class Live2DAutoConfigurator:
 
                     result['total_motions'] = len(all_motion_files)
 
+                    # 规范化路径进行比较，避免斜杠方向不一致导致的匹配失败
                     configured_files = set()
                     for files in motions.values():
                         for motion in files:
                             if isinstance(motion, dict):
-                                configured_files.add(os.path.join(model_dir, motion.get('File', '')))
+                                configured_files.add(os.path.normpath(os.path.join(model_dir, motion.get('File', ''))))
 
                     for motion_file in all_motion_files:
-                        if motion_file not in configured_files:
+                        if os.path.normpath(motion_file) not in configured_files:
                             result['unconfigured_files'].append(motion_file)
                     break
 
