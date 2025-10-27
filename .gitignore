@@ -16,7 +16,6 @@ sdist/
 var/
 wheels/
 *.manifest
-*.spec
 
 # Virtual Environment
 .venv/
@@ -94,7 +93,6 @@ desktop.ini
 *.backup
 *.old
 ~$*
-uv.lock
 
 # API Keys and Secrets (never commit these!)
 *api_key*

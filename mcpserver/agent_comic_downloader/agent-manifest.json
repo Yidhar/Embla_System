@@ -1,5 +1,4 @@
 {
-  "name": "漫画下载服务",
   "displayName": "漫画下载服务",
   "version": "1.0.0",
   "description": "支持漫画下载和搜索功能，默认保存到桌面，支持异步下载、状态查询和漫画搜索。",
@@ -8,15 +7,6 @@
   "entryPoint": {
     "module": "mcpserver.agent_comic_downloader.comic_service",
     "class": "ComicService"
-  },
-  "factory": {
-    "create_instance": "comic_service",
-    "validate_config": "validate_agent_config",
-    "get_dependencies": "get_agent_dependencies"
-  },
-  "communication": {
-    "protocol": "stdio",
-    "timeout": 15000
   },
   "capabilities": {
     "invocationCommands": [
@@ -41,47 +31,5 @@
         "example": "{\"tool_name\":\"获取漫画详情\",\"comic_id\":\"123456\"}"
       }
     ]
-  },
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "tool_name": {"type": "string", "description": "工具名称：下载漫画/搜索漫画/搜索作者/获取漫画详情"},
-      "album_id": {"type": "string", "description": "漫画ID（下载漫画时必需）"},
-      "comic_name": {"type": "string", "description": "漫画名称（搜索漫画时必需）"},
-      "author_name": {"type": "string", "description": "作者名称（搜索作者时必需）"},
-      "comic_id": {"type": "string", "description": "漫画ID（获取漫画详情时必需）"},
-      "page": {"type": "integer", "description": "页码（搜索时可选，默认1）"}
-    },
-    "required": ["tool_name"]
-  },
-  "outputSchema": {
-    "type": "object",
-    "properties": {
-      "success": {"type": "boolean", "description": "操作是否成功"},
-      "album_id": {"type": "string", "description": "漫画ID"},
-      "message": {"type": "string", "description": "操作结果描述"},
-      "album_title": {"type": "string", "description": "漫画标题"},
-      "album_author": {"type": "string", "description": "作者"},
-      "download_path": {"type": "string", "description": "下载路径"},
-      "error": {"type": "string", "description": "错误信息"},
-      "query_info": {"type": "string", "description": "搜索查询信息"},
-      "total": {"type": "integer", "description": "搜索结果总数"},
-      "page": {"type": "integer", "description": "总页数"},
-      "current_page": {"type": "integer", "description": "当前页码"},
-      "comics": {"type": "array", "description": "搜索结果列表"},
-      "comic": {"type": "object", "description": "漫画详情信息"}
-    }
-  },
-  "configSchema": {
-    "COMIC_DOWNLOADER_HOST": "string",
-    "COMIC_DOWNLOADER_PORT": "integer",
-    "COMIC_DOWNLOADER_PATH": "string",
-    "COMIC_DOWNLOADER_MAX_CONCURRENT": "integer"
-  },
-  "runtime": {
-    "instance": null,
-    "is_initialized": false,
-    "last_used": null,
-    "usage_count": 0
   }
 } 

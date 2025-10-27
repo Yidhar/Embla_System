@@ -7,7 +7,7 @@
 
 import asyncio
 import time
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from system.config import config, logger
 from langchain_openai import ChatOpenAI
 
@@ -30,95 +30,99 @@ class ConversationAnalyzer:
         lines = []
         for m in messages[-config.api.max_history_rounds:]:
             role = m.get('role', 'user')
-            text = m.get('text', '')
+            # 修复：使用content字段而不是text字段
+            content = m.get('content', '')
             # 清理文本，移除可能导致格式化问题的字符
-            text = text.replace('{', '{{').replace('}', '}}')
-            lines.append(f"{role}: {text}")
+            content = content.replace('{', '{{').replace('}', '}}')
+            lines.append(f"{role}: {content}")
         conversation = "\n".join(lines)
         
         # 获取可用的MCP工具信息，注入到意图识别中
         try:
-            from mcpserver.mcp_registry import get_all_services_info
-            services_info = get_all_services_info()
+            from nagaagent_core.stable.mcp import get_registered_services, get_service_info
+            registered_services = get_registered_services()
+            services_info = {name: get_service_info(name) for name in registered_services}
             
             # 构建工具信息摘要
             tools_summary = []
             for name, info in services_info.items():
-                display_name = info.get("display_name", name)
-                description = info.get("description", "")
-                tools = [t.get("name") for t in info.get("available_tools", [])]
-                
-                if tools:
-                    tools_summary.append(f"- {display_name}: {description} (工具: {', '.join(tools)})")
-                else:
-                    tools_summary.append(f"- {display_name}: {description}")
+                if info:
+                    display_name = info.get("displayName", name)
+                    description = info.get("description", "")
+                    capabilities = info.get("capabilities", {})
+                    
+                    # 提取工具名称
+                    tools = []
+                    for cap_name, cap_info in capabilities.items():
+                        if isinstance(cap_info, dict) and "tools" in cap_info:
+                            tools.extend(cap_info["tools"])
+                    
+                    if tools:
+                        tools_summary.append(f"- {display_name}: {description} (工具: {', '.join(tools)})")
+                    else:
+                        tools_summary.append(f"- {display_name}: {description}")
             
             if tools_summary:
                 available_tools = "\n".join(tools_summary)
                 # 将工具信息注入到对话分析提示词中
-                return get_prompt("conversation_analyzer_prompt", 
+                return get_prompt("conversation_analyzer_prompt",
                                 conversation=conversation,
-                                available_tools=f"\n\n【可用MCP工具】\n{available_tools}\n")
+                                available_tools=available_tools)
         except Exception as e:
             logger.debug(f"获取MCP工具信息失败: {e}")
         
         return get_prompt("conversation_analyzer_prompt", conversation=conversation)
 
     def analyze(self, messages: List[Dict[str, str]]):
+        logger.info(f"[ConversationAnalyzer] 开始分析对话，消息数量: {len(messages)}")
         prompt = self._build_prompt(messages)
-        resp = self.llm.invoke([
-            {"role": "system", "content": "你是精确的任务意图提取器与MCP调用规划器。"},
-            {"role": "user", "content": prompt},
-        ])
-        text = resp.content.strip()
-        import json, re
-        tool_calls: List[Dict[str, Any]] = []
+        logger.info(f"[ConversationAnalyzer] 构建提示词完成，长度: {len(prompt)}")
 
-        # 直接解析 ，提取变量值
+        # 使用简化的非标准JSON解析
+        result = self._analyze_with_non_standard_json(prompt)
+        if result and result.get("tool_calls"):
+            return result
+
+        # 解析失败
+        logger.info("[ConversationAnalyzer] 未发现可执行任务")
+        return {"tasks": [], "reason": "未发现可执行任务", "raw": "", "tool_calls": []}
+
+    def _analyze_with_non_standard_json(self, prompt: str) -> Optional[Dict]:
+        """非标准JSON格式解析 - 直接调用LLM，避免嵌套线程池"""
+        logger.info("[ConversationAnalyzer] 尝试非标准JSON格式解析")
         try:
-            # 查找 ：｛｝
-            chinese_blocks = re.findall(r"｛[\s\S]*?｝", text)
-            if chinese_blocks:
-                for chinese_block in chinese_blocks:
-                    # 直接提取变量值，不需要JSON解析
-                    tool_call = {}
-                    
-                    # 提取agentType
-                    agent_type_match = re.search(r'"agentType":\s*"([^"]*)"', chinese_block)
-                    if agent_type_match:
-                        tool_call["agentType"] = agent_type_match.group(1)
-                    
-                    # 提取service_name
-                    service_match = re.search(r'"service_name":\s*"([^"]*)"', chinese_block)
-                    if service_match:
-                        tool_call["service_name"] = service_match.group(1)
-                    
-                    # 提取tool_name
-                    tool_match = re.search(r'"tool_name":\s*"([^"]*)"', chinese_block)
-                    if tool_match:
-                        tool_call["tool_name"] = tool_match.group(1)
-                    
-                    # 提取其他所有参数
-                    for key in ["tool_name_param", "app", "args", "task_type", "instruction", "parameters"]:
-                        pattern = f'"{key}":\s*"([^"]*)"'
-                        match = re.search(pattern, chinese_block)
-                        if match:
-                            tool_call[key] = match.group(1)
-                    
-                    # 如果找到了基本的工具调用信息，添加到列表
-                    if tool_call.get("agentType") in ["mcp", "agent"] and tool_call.get("service_name") and tool_call.get("tool_name"):
-                        tool_calls.append(tool_call)
+            # 直接调用LLM，避免嵌套线程池
+            resp = self.llm.invoke([
+                {"role": "system", "content": "你是精确的任务意图提取器与MCP调用规划器。"},
+                {"role": "user", "content": prompt},
+            ])
+            
+            text = resp.content.strip()
+            logger.info(f"[ConversationAnalyzer] LLM响应完成，响应长度: {len(text)}")
+            logger.info(f"[ConversationAnalyzer] LLM原始响应内容: {text}")
+
+            # 解析非标准JSON格式
+            tool_calls = self._parse_non_standard_json(text)
+            
+            if tool_calls:
+                logger.info(f"[ConversationAnalyzer] 非标准JSON解析成功，发现 {len(tool_calls)} 个工具调用")
+                return {
+                    "tasks": [],
+                    "reason": f"非标准JSON解析成功，发现 {len(tool_calls)} 个工具调用",
+                    "tool_calls": tool_calls
+                }
+            else:
+                logger.info("[ConversationAnalyzer] 未发现工具调用")
+                return None
 
         except Exception as e:
-            logger.error(f"解析 失败: {e}")
-            return {"tasks": [], "reason": f"parse error: {e}", "raw": text, "tool_calls": []}
-        
-        # 返回结果
-        return {
-            "tasks": [],
-            "reason": f"发现 {len(tool_calls)} 个工具调用",
-            "tool_calls": tool_calls
-        }
+            logger.error(f"[ConversationAnalyzer] 非标准JSON解析失败: {e}")
+            return None
+
+    def _parse_non_standard_json(self, text: str) -> List[Dict[str, Any]]:
+        """解析非标准JSON格式 - 处理中文括号和标准JSON"""
+        from nagaagent_core.stable.parsing import parse_non_standard_json
+        return parse_non_standard_json(text)
 
 
 class BackgroundAnalyzer:
@@ -130,16 +134,39 @@ class BackgroundAnalyzer:
     
     async def analyze_intent_async(self, messages: List[Dict[str, str]], session_id: str):
         """异步意图分析 - 基于博弈论的背景分析机制"""
+        # 检查是否已经有分析在进行中
+        if session_id in self.running_analyses:
+            logger.info(f"[博弈论] 会话 {session_id} 已有意图分析在进行中，跳过重复执行")
+            return {"has_tasks": False, "reason": "已有分析在进行中", "tasks": [], "priority": "low"}
+        
         # 创建独立的意图分析会话
         analysis_session_id = f"analysis_{session_id}_{int(time.time())}"
         logger.info(f"[博弈论] 创建独立分析会话: {analysis_session_id}")
         
+        # 标记分析开始
+        self.running_analyses[session_id] = analysis_session_id
+        
         try:
+            logger.info(f"[博弈论] 开始异步意图分析，消息数量: {len(messages)}")
             loop = asyncio.get_running_loop()
             # Offload sync LLM call to threadpool to avoid blocking event loop
-            analysis = await loop.run_in_executor(None, self.analyzer.analyze, messages)
+            logger.info(f"[博弈论] 在线程池中执行LLM分析...")
+
+            # 添加异步超时机制
+            try:
+                analysis = await asyncio.wait_for(
+                    loop.run_in_executor(None, self.analyzer.analyze, messages),
+                    timeout=60.0  # 60秒超时
+                )
+                logger.info(f"[博弈论] LLM分析完成，结果类型: {type(analysis)}")
+            except asyncio.TimeoutError:
+                logger.error("[博弈论] 意图分析超时（60秒）")
+                return {"has_tasks": False, "reason": "意图分析超时", "tasks": [], "priority": "low"}
+
         except Exception as e:
             logger.error(f"[博弈论] 意图分析失败: {e}")
+            import traceback
+            logger.error(f"[博弈论] 详细错误信息: {traceback.format_exc()}")
             return {"has_tasks": False, "reason": f"分析失败: {e}", "tasks": [], "priority": "low"}
         
         try:
@@ -178,6 +205,11 @@ class BackgroundAnalyzer:
         except Exception as e:
             logger.error(f"任务处理失败: {e}")
             return {"has_tasks": False, "reason": f"处理失败: {e}", "tasks": [], "priority": "low"}
+        finally:
+            # 清除分析状态标记
+            if session_id in self.running_analyses:
+                del self.running_analyses[session_id]
+                logger.info(f"[博弈论] 会话 {session_id} 分析状态已清除")
 
     async def _notify_ui_tool_calls(self, tool_calls: List[Dict[str, Any]], session_id: str):
         """批量通知UI工具调用开始 - 优化网络请求"""
@@ -202,9 +234,10 @@ class BackgroundAnalyzer:
                 "message": f"🔧 正在执行 {len(tool_calls)} 个工具: {', '.join(tool_names)}"
             }
             
+            from system.config import get_server_port
             async with httpx.AsyncClient(timeout=5.0) as client:
                 await client.post(
-                    "http://localhost:8001/tool_notification",
+                    f"http://localhost:{get_server_port('api_server')}/tool_notification",
                     json=notification_payload
                 )
                     
@@ -245,18 +278,19 @@ class BackgroundAnalyzer:
             import httpx
             import uuid
             
+            from system.config import get_server_port
             # 构建MCP服务器请求
             mcp_payload = {
                 "query": f"批量MCP工具调用 ({len(mcp_calls)} 个)",
                 "tool_calls": mcp_calls,
                 "session_id": session_id,
                 "request_id": str(uuid.uuid4()),
-                "callback_url": "http://localhost:8001/tool_result_callback"
+                "callback_url": f"http://localhost:{get_server_port('api_server')}/tool_result_callback"
             }
             
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    "http://localhost:8003/schedule",
+                    f"http://localhost:{get_server_port('mcp_server')}/schedule",
                     json=mcp_payload
                 )
                 
@@ -270,29 +304,31 @@ class BackgroundAnalyzer:
             logger.error(f"[博弈论] 发送MCP任务失败: {e}")
     
     async def _send_to_agent_server(self, agent_calls: List[Dict[str, Any]], session_id: str, analysis_session_id: str = None):
-        """发送Agent任务到agentserver"""
+        """发送Agent任务到agentserver - 应用与MCP服务器相同的会话管理逻辑"""
         try:
             import httpx
             import uuid
             
-            # 构建agentserver请求
+            from system.config import get_server_port
+            # 构建agentserver请求 - 应用与MCP服务器相同的会话管理逻辑
             agent_payload = {
-                "messages": [
-                    {"role": "user", "content": f"执行Agent任务: {agent_call.get('instruction', '')}"}
-                    for agent_call in agent_calls
-                ],
-                "session_id": session_id
+                "query": f"批量Agent任务执行 ({len(agent_calls)} 个)",
+                "agent_calls": agent_calls,  # 传递完整的agent_calls信息
+                "session_id": session_id,
+                "analysis_session_id": analysis_session_id,  # 传递独立分析会话ID
+                "request_id": str(uuid.uuid4()),  # 生成独立请求ID
+                "callback_url": f"http://localhost:{get_server_port('api_server')}/agent_result_callback"  # 添加回调URL
             }
             
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    "http://localhost:8002/analyze_and_execute",
+                    f"http://localhost:{get_server_port('agent_server')}/schedule",  # 使用统一的schedule端点
                     json=agent_payload
                 )
                 
                 if response.status_code == 200:
                     result = response.json()
-                    logger.info(f"[博弈论] 分析会话 {analysis_session_id or 'unknown'} Agent任务调度成功: {result.get('status', 'unknown')}")
+                    logger.info(f"[博弈论] 分析会话 {analysis_session_id or 'unknown'} Agent任务调度成功: {result.get('task_id', 'unknown')}")
                 else:
                     logger.error(f"[博弈论] Agent任务调度失败: {response.status_code} - {response.text}")
                     

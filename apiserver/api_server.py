@@ -114,6 +114,7 @@ class ChatRequest(BaseModel):
     use_self_game: bool = False
     disable_tts: bool = False  # V17: 支持禁用服务器端TTS
     return_audio: bool = False  # V19: 支持返回音频URL供客户端播放
+    skip_intent_analysis: bool = False  # 新增：跳过意图分析
 
 class ChatResponse(BaseModel):
     response: str
@@ -213,9 +214,6 @@ async def chat(request: ChatRequest):
         # 获取或创建会话ID
         session_id = message_manager.create_session(request.session_id)
         
-        # 并行触发后台意图分析 - 在对话开始时就分析用户意图
-        _trigger_background_analysis(session_id=session_id)
-        
         # 构建系统提示词（只使用对话风格提示词）
         system_prompt = get_prompt("conversation_style_prompt")
         
@@ -233,6 +231,10 @@ async def chat(request: ChatRequest):
         # 处理完成
         # 统一保存对话历史与日志
         _save_conversation_and_logs(session_id, request.message, response_text)
+
+        # 在用户消息保存到历史后触发后台意图分析（除非明确跳过）
+        if not request.skip_intent_analysis:
+            _trigger_background_analysis(session_id=session_id)
 
         return ChatResponse(
             response=extract_message(response_text) if response_text else response_text,
@@ -260,8 +262,7 @@ async def chat_stream(request: ChatRequest):
             # 发送会话ID信息
             yield f"data: session_id: {session_id}\n\n"
             
-            # 并行触发后台意图分析 - 在流式响应开始时就分析用户意图
-            _trigger_background_analysis(session_id)
+            # 注意：这里不触发后台分析，将在对话保存后触发
             
             # 构建系统提示词（只使用对话风格提示词）
             system_prompt = get_prompt("conversation_style_prompt")
@@ -416,6 +417,10 @@ async def chat_stream(request: ChatRequest):
             # 统一保存对话历史与日志
             _save_conversation_and_logs(session_id, request.message, complete_response)
 
+            # 在用户消息保存到历史后触发后台意图分析（除非明确跳过）
+            if not request.skip_intent_analysis:
+                _trigger_background_analysis(session_id)
+
             yield "data: [DONE]\n\n"
             
         except Exception as e:
@@ -549,107 +554,244 @@ async def tool_notification(payload: Dict[str, Any]):
     """接收工具调用状态通知，只显示工具调用状态，不显示结果"""
     try:
         session_id = payload.get("session_id")
-        tool_name = payload.get("tool_name", "未知工具")
-        service_name = payload.get("service_name", "未知服务")
-        status = payload.get("status", "starting")
-        message = payload.get("message", f"🔧 正在执行工具: {tool_name}")
-        
+        tool_calls = payload.get("tool_calls", [])
+        message = payload.get("message", "")
+
         if not session_id:
             raise HTTPException(400, "缺少session_id")
-        
+
         # 记录工具调用状态（不处理结果，结果由tool_result_callback处理）
-        logger.info(f"工具调用状态: {tool_name} ({service_name}) - {status}")
-        
+        for tool_call in tool_calls:
+            tool_name = tool_call.get("tool_name", "未知工具")
+            service_name = tool_call.get("service_name", "未知服务")
+            status = tool_call.get("status", "starting")
+            logger.info(f"工具调用状态: {tool_name} ({service_name}) - {status}")
+
         # 这里可以添加WebSocket通知UI的逻辑，让UI显示工具调用状态
         # 目前先记录日志，UI可以通过其他方式获取工具调用状态
-        
+
         return {
             "success": True,
             "message": "工具调用状态通知已接收",
-            "tool_name": tool_name,
-            "service_name": service_name,
-            "status": status,
+            "tool_calls": tool_calls,
             "display_message": message
         }
-        
+
     except Exception as e:
         logger.error(f"工具调用通知处理失败: {e}")
         raise HTTPException(500, f"处理失败: {str(e)}")
 
 @app.post("/tool_result_callback")
 async def tool_result_callback(payload: Dict[str, Any]):
-    """接收MCP工具执行结果回调，通过普通对话流程返回给UI"""
+    """接收MCP工具执行结果回调，让主AI基于原始对话和工具结果重新生成回复"""
     try:
         session_id = payload.get("session_id")
         task_id = payload.get("task_id")
         result = payload.get("result", {})
         success = payload.get("success", False)
-        
+
         if not session_id:
             raise HTTPException(400, "缺少session_id")
-        
-        # 构建工具结果消息
-        if success and result:
-            tool_result_message = f"工具执行完成：{result.get('result', '执行成功')}"
-        else:
-            error_msg = result.get('error', '未知错误')
-            tool_result_message = f"工具执行失败：{error_msg}"
-        
+
+        logger.info(f"[工具回调] 开始处理工具回调，会话: {session_id}, 任务ID: {task_id}")
+        logger.info(f"[工具回调] 回调内容: {result}")
+
+        # 获取工具执行结果
+        tool_result = result.get('result', '执行成功') if success else result.get('error', '未知错误')
+        logger.info(f"[工具回调] 工具执行结果: {tool_result}")
+
+        # 获取原始对话的最后一条用户消息（触发工具调用的消息）
+        session_messages = message_manager.get_messages(session_id)
+        original_user_message = ""
+        for msg in reversed(session_messages):
+            if msg.get('role') == 'user':
+                original_user_message = msg.get('content', '')
+                break
+
+        # 构建包含工具结果的用户消息
+        enhanced_message = f"{original_user_message}\n\n[工具执行结果]: {tool_result}"
+        logger.info(f"[工具回调] 构建增强消息: {enhanced_message[:200]}...")
+
         # 构建对话风格提示词和消息
         system_prompt = get_prompt("conversation_style_prompt")
         messages = message_manager.build_conversation_messages(
             session_id=session_id,
             system_prompt=system_prompt,
-            current_message=tool_result_message
+            current_message=enhanced_message
         )
-        
-        # 使用LLM服务进行总结
+
+        logger.info(f"[工具回调] 开始生成工具后回复...")
+
+        # 使用LLM服务基于原始对话和工具结果重新生成回复
         try:
             llm_service = get_llm_service()
             response_text = await llm_service.chat_with_context(messages, temperature=0.7)
+            logger.info(f"[工具回调] 工具后回复生成成功，内容: {response_text[:200]}...")
         except Exception as e:
-            logger.error(f"调用LLM服务失败: {e}")
+            logger.error(f"[工具回调] 调用LLM服务失败: {e}")
             response_text = f"处理工具结果时出错: {str(e)}"
-        
-        # 保存到历史
-        message_manager.add_message(session_id, "user", tool_result_message)
+
+        # 只保存AI回复到历史记录（用户消息已在正常对话流程中保存）
         message_manager.add_message(session_id, "assistant", response_text)
-        
-        # 通过普通对话流程返回给UI（包括TTS）
-        # 直接调用现有的流式对话接口，复用完整的TTS和UI响应逻辑
-        await _trigger_chat_stream(session_id, response_text)
-        
+        logger.info(f"[工具回调] AI回复已保存到历史")
+
+        # 保存对话日志到文件
+        message_manager.save_conversation_log(original_user_message, response_text, dev_mode=False)
+        logger.info(f"[工具回调] 对话日志已保存")
+
+        # 通过UI通知接口将AI回复发送给UI
+        logger.info(f"[工具回调] 开始发送AI回复到UI...")
+        await _notify_ui_refresh(session_id, response_text)
+
+        logger.info(f"[工具回调] 工具结果处理完成，回复已发送到UI")
+
         return {
             "success": True,
-            "message": "工具结果已通过LLM总结并返回给UI",
+            "message": "工具结果已通过主AI处理并返回给UI",
             "response": response_text,
             "task_id": task_id,
             "session_id": session_id
         }
-        
+
     except Exception as e:
-        logger.error(f"工具结果回调处理失败: {e}")
+        logger.error(f"[工具回调] 工具结果回调处理失败: {e}")
         raise HTTPException(500, f"处理失败: {str(e)}")
 
-async def _trigger_chat_stream(session_id: str, response_text: str):
-    """触发聊天流式响应 - 直接调用现有的chat_stream接口"""
+@app.post("/tool_result")
+async def tool_result(payload: Dict[str, Any]):
+    """接收工具执行结果并显示在UI上"""
     try:
-        # 直接调用现有的流式对话接口，复用完整的TTS和UI响应逻辑
+        session_id = payload.get("session_id")
+        result = payload.get("result", "")
+        notification_type = payload.get("type", "")
+        ai_response = payload.get("ai_response", "")
+
+        if not session_id:
+            raise HTTPException(400, "缺少session_id")
+
+        logger.info(f"工具执行结果: {result}")
+
+        # 如果是工具完成后的AI回复，通过信号机制通知UI线程显示
+        if notification_type == "tool_completed_with_ai_response" and ai_response:
+            try:
+                # 使用Qt信号机制在主线程中安全地更新UI
+                from ui.controller.tool_chat import chat
+
+                # 直接发射信号，确保在主线程中执行
+                chat.tool_ai_response_received.emit(ai_response)
+                logger.info(f"[UI] 已通过信号机制通知UI显示AI回复，长度: {len(ai_response)}")
+            except Exception as e:
+                logger.error(f"[UI] 调用UI控制器显示AI回复失败: {e}")
+
+        return {
+            "success": True,
+            "message": "工具结果已接收",
+            "result": result,
+            "session_id": session_id
+        }
+
+    except Exception as e:
+        logger.error(f"处理工具结果失败: {e}")
+        raise HTTPException(500, f"处理失败: {str(e)}")
+
+
+@app.post("/save_tool_conversation")
+async def save_tool_conversation(payload: Dict[str, Any]):
+    """保存工具对话历史"""
+    try:
+        session_id = payload.get("session_id")
+        user_message = payload.get("user_message", "")
+        assistant_response = payload.get("assistant_response", "")
+
+        if not session_id:
+            raise HTTPException(400, "缺少session_id")
+
+        logger.info(f"[保存工具对话] 开始保存工具对话历史，会话: {session_id}")
+
+        # 保存用户消息（工具执行结果）
+        if user_message:
+            message_manager.add_message(session_id, "user", user_message)
+
+        # 保存AI回复
+        if assistant_response:
+            message_manager.add_message(session_id, "assistant", assistant_response)
+
+        logger.info(f"[保存工具对话] 工具对话历史已保存，会话: {session_id}")
+
+        return {
+            "success": True,
+            "message": "工具对话历史已保存",
+            "session_id": session_id
+        }
+
+    except Exception as e:
+        logger.error(f"[保存工具对话] 保存工具对话历史失败: {e}")
+        raise HTTPException(500, f"保存失败: {str(e)}")
+
+
+@app.post("/ui_notification")
+async def ui_notification(payload: Dict[str, Any]):
+    """UI通知接口 - 用于直接控制UI显示"""
+    try:
+        session_id = payload.get("session_id")
+        action = payload.get("action", "")
+        ai_response = payload.get("ai_response", "")
+
+        if not session_id:
+            raise HTTPException(400, "缺少session_id")
+
+        logger.info(f"UI通知: {action}, 会话: {session_id}")
+
+        # 处理显示工具AI回复的动作
+        if action == "show_tool_ai_response" and ai_response:
+            try:
+                from ui.controller.tool_chat import chat
+
+                # 直接发射信号，确保在主线程中执行
+                chat.tool_ai_response_received.emit(ai_response)
+                logger.info(f"[UI通知] 已通过信号机制显示工具AI回复，长度: {len(ai_response)}")
+                return {
+                    "success": True,
+                    "message": "AI回复已显示"
+                }
+            except Exception as e:
+                logger.error(f"[UI通知] 显示工具AI回复失败: {e}")
+                raise HTTPException(500, f"显示AI回复失败: {str(e)}")
+
+        return {
+            "success": True,
+            "message": "UI通知已处理"
+        }
+
+    except Exception as e:
+        logger.error(f"处理UI通知失败: {e}")
+        raise HTTPException(500, f"处理失败: {str(e)}")
+
+
+async def _trigger_chat_stream_no_intent(session_id: str, response_text: str):
+    """触发聊天流式响应但不触发意图分析 - 发送纯粹的AI回复到UI"""
+    try:
+        logger.info(f"[UI发送] 开始发送AI回复到UI，会话: {session_id}")
+        logger.info(f"[UI发送] 发送内容: {response_text[:200]}...")
+
+        # 直接调用现有的流式对话接口，但跳过意图分析
         import httpx
-        
-        # 构建请求数据
+
+        # 构建请求数据 - 使用纯粹的AI回复内容，并跳过意图分析
         chat_request = {
-            "message": f"工具执行结果：{response_text}",
+            "message": response_text,  # 直接使用AI回复内容，不加标记
             "stream": True,
             "session_id": session_id,
             "use_self_game": False,
             "disable_tts": False,
-            "return_audio": False
+            "return_audio": False,
+            "skip_intent_analysis": True  # 关键：跳过意图分析
         }
-        
+
         # 调用现有的流式对话接口
-        api_url = f"http://localhost:8001/chat/stream"
-        
+        from system.config import get_server_port
+        api_url = f"http://localhost:{get_server_port('api_server')}/chat/stream"
+
         async with httpx.AsyncClient() as client:
             async with client.stream("POST", api_url, json=chat_request) as response:
                 if response.status_code == 200:
@@ -659,13 +801,73 @@ async def _trigger_chat_stream(session_id: str, response_text: str):
                             # 这里可以进一步处理流式响应
                             # 或者直接让UI处理流式响应
                             pass
-                    
-                    logger.info(f"工具结果已通过流式对话接口发送给UI: {session_id}")
+
+                    logger.info(f"[UI发送] AI回复已成功发送到UI: {session_id}")
+                    logger.info(f"[UI发送] 成功显示到UI")
                 else:
-                    logger.error(f"调用流式对话接口失败: {response.status_code}")
-        
+                    logger.error(f"[UI发送] 调用流式对话接口失败: {response.status_code}")
+
     except Exception as e:
-        logger.error(f"触发聊天流式响应失败: {e}")
+        logger.error(f"[UI发送] 触发聊天流式响应失败: {e}")
+
+
+async def _notify_ui_refresh(session_id: str, response_text: str):
+    """通知UI刷新会话历史"""
+    try:
+        import httpx
+
+        # 通过UI通知接口直接显示AI回复
+        ui_notification_payload = {
+            "session_id": session_id,
+            "action": "show_tool_ai_response",
+            "ai_response": response_text
+        }
+
+        from system.config import get_server_port
+        api_url = f"http://localhost:{get_server_port('api_server')}/ui_notification"
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.post(api_url, json=ui_notification_payload)
+            if response.status_code == 200:
+                logger.info(f"[UI通知] AI回复显示通知发送成功: {session_id}")
+            else:
+                logger.error(f"[UI通知] AI回复显示通知失败: {response.status_code}")
+
+    except Exception as e:
+        logger.error(f"[UI通知] 通知UI刷新失败: {e}")
+
+
+
+
+async def _send_ai_response_directly(session_id: str, response_text: str):
+    """直接发送AI回复到UI"""
+    try:
+        import httpx
+
+        # 使用非流式接口发送AI回复
+        chat_request = {
+            "message": f"[工具结果] {response_text}",  # 添加标记让UI知道这是工具结果
+            "stream": False,
+            "session_id": session_id,
+            "use_self_game": False,
+            "disable_tts": False,
+            "return_audio": False,
+            "skip_intent_analysis": True
+        }
+
+        from system.config import get_server_port
+        api_url = f"http://localhost:{get_server_port('api_server')}/chat"
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(api_url, json=chat_request)
+            if response.status_code == 200:
+                logger.info(f"[直接发送] AI回复已通过非流式接口发送到UI: {session_id}")
+            else:
+                logger.error(f"[直接发送] 非流式接口发送失败: {response.status_code}")
+
+    except Exception as e:
+        logger.error(f"[直接发送] 直接发送AI回复失败: {e}")
+
 
 # 工具执行结果已通过LLM总结并保存到对话历史中
 # UI可以通过查询历史获取工具执行结果

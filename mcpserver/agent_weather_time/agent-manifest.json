@@ -1,5 +1,4 @@
 {
-  "name": "WeatherTimeAgent",
   "displayName": "天气时间Agent",
   "version": "1.0.0",
   "description": "支持今日天气查询、未来天气预报查询、时间查询，自动识别城市和IP，返回处理后的天气数据。",
@@ -8,15 +7,6 @@
   "entryPoint": {
     "module": "mcpserver.agent_weather_time.agent_weather_time",
     "class": "WeatherTimeAgent"
-  },
-  "factory": {
-    "create_instance": "create_weather_time_agent",
-    "validate_config": "validate_agent_config",
-    "get_dependencies": "get_agent_dependencies"
-  },
-  "communication": {
-    "protocol": "stdio",
-    "timeout": 15000
   },
   "capabilities": {
     "invocationCommands": [
@@ -36,33 +26,5 @@
         "example": "{\"tool_name\": \"time\", \"city\": \"<city格式为{省 市}, 如:湖北 武汉, 直辖市请重复两遍市名, 如:北京 北京>\"}"
       }
     ]
-  },
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "tool_name": {"type": "string", "description": "工具名称：today_weather/current_weather/today(今日天气) | forecast_weather/future_weather/forecast/weather_forecast(未来天气) | time/get_time/current_time(时间查询)"},
-      "city": {"type": "string", "description": "城市名（可选，LLM可传入具体城市，不传则使用本地城市，支持中文城市名, 格式固定为 {省 市}, 如:湖北 武汉, 直辖市请重复两遍市名, 如:北京 北京）"},
-      "ip": {"type": "string", "description": "用户IP（可选，自动获取）"},
-      "query": {"type": "string", "description": "查询内容（可选）"},
-      "format": {"type": "string", "description": "格式类型（可选）"}
-    },
-    "required": ["tool_name"]
-  },
-  "outputSchema": {
-    "type": "object",
-    "properties": {
-      "status": {"type": "string", "description": "状态：ok/error"},
-      "message": {"type": "string", "description": "消息描述"},
-      "data": {"type": "object", "description": "API原始JSON数据或时间信息"}
-    }
-  },
-  "configSchema": {
-    "WEATHER_AGENT_DEFAULT_CITY": "string"
-  },
-  "runtime": {
-    "instance": null,
-    "is_initialized": false,
-    "last_used": null,
-    "usage_count": 0
   }
 } 

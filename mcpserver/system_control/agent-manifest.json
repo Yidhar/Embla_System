@@ -1,5 +1,4 @@
 {
-  "name": "系统控制服务",
   "displayName": "系统控制服务",
   "version": "1.0.0",
   "description": "支持电脑控制：执行指令、屏幕亮度调节、音量调节。",
@@ -8,13 +7,6 @@
   "entryPoint": {
     "module": "mcpserver.system_control.agent_system_control",
     "class": "SystemControlAgent"
-  },
-  "factory": {
-    "create_instance": "create_system_control_agent"
-  },
-  "communication": {
-    "protocol": "stdio",
-    "timeout": 15000
   },
   "capabilities": {
     "invocationCommands": [
@@ -34,24 +26,5 @@
         "example": "{\"tool_name\":\"volume\",\"value\":50}"
       }
     ]
-  },
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "tool_name": {"type": "string", "description": "工具名称：command/brightness/volume"},
-      "command": {"type": "string", "description": "要执行的系统指令（command时必需）"},
-      "cwd": {"type": "string", "description": "工作目录（command时可选）"},
-      "value": {"type": "integer", "description": "亮度或音量值（0-100，brightness/volume时必需）"}
-    },
-    "required": ["tool_name"]
-  },
-  "configSchema": {
-    "SYSTEM_CONTROL_AGENT_TIMEOUT": "integer"
-  },
-  "runtime": {
-    "instance": null,
-    "is_initialized": false,
-    "last_used": null,
-    "usage_count": 0
   }
 } 

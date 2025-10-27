@@ -216,9 +216,10 @@ class DocumentTool():
             
             # 调用MCP服务
             import httpx
+            from system.config import get_server_port
             with httpx.Client() as client:
                 response = client.post(
-                    "http://localhost:8003/schedule",
+                    f"http://localhost:{get_server_port('mcp_server')}/schedule",
                     json=mcp_request,
                     timeout=30.0
                 )

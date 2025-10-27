@@ -1,5 +1,4 @@
 {
-  "name": "娜迦充值服务",
   "displayName": "娜迦充值服务",
   "version": "0.1.0",
   "description": "娜迦API官网交互功能",
@@ -8,15 +7,6 @@
   "entryPoint": {
     "module": "mcpserver.agent_naga_portal.naga_portal_agent",
     "class": "NagaPortalAgent"
-  },
-  "factory": {
-    "create_instance": "create_naga_portal_agent",
-    "validate_config": "validate_agent_config",
-    "get_dependencies": "get_agent_dependencies"
-  },
-  "communication": {
-    "protocol": "stdio",
-    "timeout": 15000
   },
   "capabilities": {
     "invocationCommands": [
@@ -46,35 +36,6 @@
         "example": "{\"tool_name\":\"查看令牌\"}"
       }
     ]
-  },
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "tool_name": {"type": "string"},
-      "amount": {"type": "string"},
-      "payment_type": {"type": "string"},
-      "key": {"type": "string"},
-      "name": {"type": "string"},
-      "group": {"type": "string"},
-      "unlimited_quota": {"type": "boolean"}
-    },
-    "required": ["tool_name"]
-  },
-  "outputSchema": {
-    "type": "object",
-    "properties": {
-      "success": {"type": "boolean"},
-      "status": {"type": "string"},
-      "message": {"type": "string"},
-      "data": {"type": "object"},
-      "error": {"type": "string"}
-    }
-  },
-  "runtime": {
-    "instance": null,
-    "is_initialized": false,
-    "last_used": null,
-    "usage_count": 0
   }
 }
 

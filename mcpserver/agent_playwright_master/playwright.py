@@ -4,7 +4,7 @@ import os # 导入操作系统模块，在本项目中用于读取环境变量�
 import re # 导入正则表达式库，在本项目中用于解析GITHub文档的markdown格式内容
 import webbrowser # 导入web浏览器模块，在本项目中用户打开一个web页面展示翻译后的文档内容
 import tempfile # 导入临时文件模块，在本项目中用于生成临时HTML文件以在浏览器中显示
-import markdown # 导入markdown库，在本项目中用于格式化文档内容并显示
+from nagaagent_core.vendors import markdown # 导入markdown库，在本项目中用于格式化文档内容并显示
 import traceback # 用于捕获和打印详细的异常信息
 from typing import Any # 导入类型提示工具，增加代码的类型安全，在本项目中用于标记函数参数和返回值的类型
 

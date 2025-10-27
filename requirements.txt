@@ -6,10 +6,7 @@ pyqt5-qt5>=5.15.2
 pyqt5-sip>=12.17.0
 
 # Core dependency (integrated into nagaagent-core)
-nagaagent-core>=1.0.6
+nagaagent-core>=1.0.9
 
-charset_normalizer
-json5
-# All other runtime dependencies have been migrated into nagaagent-core.
+# All runtime dependencies have been migrated into nagaagent-core.
 # If you need to pin extra versions locally, append them below.
-markdown

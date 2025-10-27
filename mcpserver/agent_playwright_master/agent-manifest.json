@@ -1,5 +1,4 @@
 {
-  "name": "PlaywrightAgent",
   "displayName": "浏览器Agent",
   "version": "1.0.0",
   "description": "使用Edge浏览器打开网页，支持基本的网页浏览功能。",
@@ -8,15 +7,6 @@
   "entryPoint": {
     "module": "mcpserver.agent_playwright_master.agent_playwright",
     "class": "PlaywrightAgent"
-  },
-  "factory": {
-    "create_instance": "create_playwright_agent",
-    "validate_config": "validate_agent_config",
-    "get_dependencies": "get_agent_dependencies"
-  },
-  "communication": {
-    "protocol": "stdio",
-    "timeout": 15000
   },
   "capabilities": {
     "invocationCommands": [
@@ -31,34 +21,5 @@
         "example": "{\"tool_name\": \"search\", \"query\": \"Python教程\"}"
       }
     ]
-  },
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "tool_name": {"type": "string", "description": "工具名称：open/search"},
-      "url": {"type": "string", "description": "要打开的网址（open时必需）"},
-      "query": {"type": "string", "description": "搜索关键词（search时必需）"},
-      "engine": {"type": "string", "description": "搜索引擎（search时可选，默认google）"},
-      "new_tab": {"type": "boolean", "description": "是否新建标签页（open时可选）"}
-    },
-    "required": ["tool_name"]
-  },
-  "outputSchema": {
-    "type": "object",
-    "properties": {
-      "status": {"type": "string", "description": "状态：ok/error"},
-      "message": {"type": "string", "description": "消息描述"},
-      "data": {"type": "object", "description": "返回数据"}
-    }
-  },
-  "configSchema": {
-    "PLAYWRIGHT_HEADLESS": "boolean",
-    "EDGE_PATH": "string"
-  },
-  "runtime": {
-    "instance": null,
-    "is_initialized": false,
-    "last_used": null,
-    "usage_count": 0
   }
 } 

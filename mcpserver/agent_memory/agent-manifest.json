@@ -1,5 +1,4 @@
 {
-  "name": "心智云图",
   "displayName": "心智云图",
   "version": "1.0.0",
   "description": "支持五元组知识图谱的回忆与查询。",
@@ -9,13 +8,6 @@
     "module": "mcpserver.agent_memory.agent_memory",
     "class": "MemoryAgent"
   },
-  "factory": {
-    "create_instance": "create_memory_agent"
-  },
-  "communication": {
-    "protocol": "stdio",
-    "timeout": 15000
-  },
   "capabilities": {
     "invocationCommands": [
       {
@@ -24,27 +16,5 @@
         "example": "{\"tool_name\":\"回忆\",\"query\":\"西藏的雪山\"}"
       }
     ]
-  },
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "tool_name": {"type": "string", "description": "工具名称：回忆"},
-      "query": {"type": "string", "description": "查询内容（必需）"}
-    },
-    "required": ["tool_name", "query"]
-  },
-  "outputSchema": {
-    "type": "object",
-    "properties": {
-      "status": {"type": "string", "description": "状态：ok/error"},
-      "message": {"type": "string", "description": "消息描述"},
-      "data": {"type": "string", "description": "查询结果内容"}
-    }
-  },
-  "runtime": {
-    "instance": null,
-    "is_initialized": false,
-    "last_used": null,
-    "usage_count": 0
   }
 } 

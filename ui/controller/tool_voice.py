@@ -3,6 +3,7 @@ from . import chat
 class VoiceTool():
     def __init__(self, window):
         self.window = window
+        self.chat_tool = chat  # 添加chat_tool引用
 
         # 实时语音相关
         self.voice_realtime_client = None  # 语音客户端（废弃，使用线程安全版本）

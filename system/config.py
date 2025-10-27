@@ -12,8 +12,43 @@ from datetime import datetime
 
 from nagaagent_core.vendors.PyQt5.QtWidgets import QWidget
 from pydantic import BaseModel, Field, field_validator
-from charset_normalizer import from_path
-import json5  # 支持带注释的JSON解析
+from nagaagent_core.vendors.charset_normalizer import from_path
+from nagaagent_core.vendors import json5  # 支持带注释的JSON解析
+
+# ========== 服务器端口配置 - 统一管理 ==========
+class ServerPortsConfig(BaseModel):
+    """服务器端口配置 - 统一管理所有服务器端口"""
+    # 主API服务器
+    api_server: int = Field(default=8000, ge=1, le=65535, description="API服务器端口")
+    
+    # 智能体服务器
+    agent_server: int = Field(default=8001, ge=1, le=65535, description="智能体服务器端口")
+    
+    # MCP工具服务器
+    mcp_server: int = Field(default=8003, ge=1, le=65535, description="MCP工具服务器端口")
+    
+    # TTS语音合成服务器
+    tts_server: int = Field(default=5048, ge=1, le=65535, description="TTS语音合成服务器端口")
+    
+    # ASR语音识别服务器
+    asr_server: int = Field(default=5060, ge=1, le=65535, description="ASR语音识别服务器端口")
+
+# 全局服务器端口配置实例
+server_ports = ServerPortsConfig()
+
+def get_server_port(server_name: str) -> int:
+    """获取指定服务器的端口号"""
+    return getattr(server_ports, server_name, None)
+
+def get_all_server_ports() -> Dict[str, int]:
+    """获取所有服务器端口配置"""
+    return {
+        "api_server": server_ports.api_server,
+        "agent_server": server_ports.agent_server,
+        "mcp_server": server_ports.mcp_server,
+        "tts_server": server_ports.tts_server,
+        "asr_server": server_ports.asr_server,
+    }
 
 # 配置变更监听器
 _config_listeners: List[Callable] = []
@@ -58,7 +93,7 @@ def setup_environment():
 class SystemConfig(BaseModel):
     """系统基础配置"""
     version: str = Field(default="4.0.0", description="系统版本号")
-    ai_name: str = Field(default="娜杰日达", description="AI助手名称")
+    ai_name: str = Field(default="娜迦日达", description="AI助手名称")
     base_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent, description="项目根目录")
     log_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "logs", description="日志目录")
     voice_enabled: bool = Field(default=True, description="是否启用语音功能")
@@ -93,7 +128,7 @@ class APIServerConfig(BaseModel):
     """API服务器配置"""
     enabled: bool = Field(default=True, description="是否启用API服务器")
     host: str = Field(default="127.0.0.1", description="API服务器主机")
-    port: int = Field(default=8000, ge=1, le=65535, description="API服务器端口")
+    port: int = Field(default_factory=lambda: server_ports.api_server, description="API服务器端口")
     auto_start: bool = Field(default=True, description="启动时自动启动API服务器")
     docs_enabled: bool = Field(default=True, description="是否启用API文档")
 
@@ -136,7 +171,7 @@ class BrowserConfig(BaseModel):
 class TTSConfig(BaseModel):
     """TTS服务配置"""
     api_key: str = Field(default="", description="TTS服务API密钥")
-    port: int = Field(default=5048, ge=1, le=65535, description="TTS服务端口")
+    port: int = Field(default_factory=lambda: server_ports.tts_server, description="TTS服务端口")
     default_voice: str = Field(default="zh-CN-XiaoxiaoNeural", description="默认语音")
     default_format: str = Field(default="mp3", description="默认音频格式")
     default_speed: float = Field(default=1.0, ge=0.1, le=3.0, description="默认语速")
@@ -147,7 +182,7 @@ class TTSConfig(BaseModel):
 
 class ASRConfig(BaseModel):
     """ASR输入服务配置"""
-    port: int = Field(default=5060, ge=1, le=65535, description="ASR服务端口")
+    port: int = Field(default_factory=lambda: server_ports.asr_server, description="ASR服务端口")
     device_index: int | None = Field(default=None, description="麦克风设备序号")
     sample_rate_in: int = Field(default=48000, description="输入采样率")
     frame_ms: int = Field(default=30, description="分帧时长ms")

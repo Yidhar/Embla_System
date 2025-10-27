@@ -1,5 +1,4 @@
 {
-  "name": "应用启动服务",
   "displayName": "应用启动服务",
   "version": "2.2.0",
   "description": "智能获取应用列表并启动指定应用",
@@ -8,15 +7,6 @@
   "entryPoint": {
     "module": "mcpserver.agent_open_launcher.agent_app_launcher",
     "class": "AppLauncherAgent"
-  },
-  "factory": {
-    "create_instance": "create_app_launcher_agent",
-    "validate_config": "validate_agent_config",
-    "get_dependencies": "get_agent_dependencies"
-  },
-  "communication": {
-    "protocol": "stdio",
-    "timeout": 15000
   },
   "capabilities": {
     "invocationCommands": [
@@ -31,32 +21,5 @@
         "example": "{\"tool_name\":\"启动应用\",\"app\":\"Chrome\"}"
       }
     ]
-  },
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "tool_name": {"type": "string", "description": "工具名称：获取应用列表 或 启动应用"},
-      "app": {"type": "string", "description": "应用名称（仅在启动应用时必填）"},
-      "args": {"type": "string", "description": "启动参数（可选）"}
-    },
-    "required": ["tool_name"]
-  },
-  "outputSchema": {
-    "type": "object",
-    "properties": {
-      "success": {"type": "boolean", "description": "操作是否成功"},
-      "status": {"type": "string", "description": "状态码"},
-      "message": {"type": "string", "description": "状态消息"},
-      "data": {"type": "object", "description": "返回数据"}
-    }
-  },
-  "configSchema": {
-    "APP_LAUNCHER_AGENT_CACHE_SIZE": "integer"
-  },
-  "runtime": {
-    "instance": null,
-    "is_initialized": false,
-    "last_used": null,
-    "usage_count": 0
   }
 } 

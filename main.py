@@ -137,11 +137,12 @@ class ServiceManager:
         try:
             self._init_proxy_settings()
             # 预检查所有端口，减少重复检查
+            from system.config import get_server_port
             port_checks = {
                 'api': config.api_server.enabled and config.api_server.auto_start and 
                       self.check_port_available(config.api_server.host, config.api_server.port),
-                'mcp': self.check_port_available("0.0.0.0", 8003),
-                'agent': self.check_port_available("0.0.0.0", 8001),
+                'mcp': self.check_port_available("0.0.0.0", get_server_port("mcp_server")),
+                'agent': self.check_port_available("0.0.0.0", get_server_port("agent_server")),
                 'tts': self.check_port_available("0.0.0.0", config.tts.port)
             }
             
@@ -160,7 +161,7 @@ class ServiceManager:
                 threads.append(("MCP", mcp_thread))
                 service_status['MCP'] = "准备启动"
             else:
-                print(f"⚠️  MCP服务器: 端口 8003 已被占用，跳过启动")
+                print(f"⚠️  MCP服务器: 端口 {get_server_port('mcp_server')} 已被占用，跳过启动")
                 service_status['MCP'] = "端口占用"
             
             # Agent服务器
@@ -169,7 +170,7 @@ class ServiceManager:
                 threads.append(("Agent", agent_thread))
                 service_status['Agent'] = "准备启动"
             else:
-                print(f"⚠️  Agent服务器: 端口 8001 已被占用，跳过启动")
+                print(f"⚠️  Agent服务器: 端口 {get_server_port('agent_server')} 已被占用，跳过启动")
                 service_status['Agent'] = "端口占用"
             
             # TTS服务器
@@ -247,11 +248,12 @@ class ServiceManager:
         try:
             import uvicorn
             from mcpserver.mcp_server import app
+            from system.config import get_server_port
             
             uvicorn.run(
                 app,
                 host="0.0.0.0",
-                port=8003,
+                port=get_server_port("mcp_server"),
                 log_level="error",
                 access_log=False,
                 reload=False,
@@ -266,11 +268,12 @@ class ServiceManager:
         try:
             import uvicorn
             from agentserver.agent_server import app
+            from system.config import get_server_port
             
             uvicorn.run(
                 app,
                 host="0.0.0.0",
-                port=8001,
+                port=get_server_port("agent_server"),
                 log_level="error",
                 access_log=False,
                 reload=False,
@@ -526,8 +529,9 @@ def _lazy_init_services():
         # service_manager._load_persistent_context()  # 删除重复加载，UI渲染时会自动加载
         
         # 初始化进度文件
-        with open('./ui/styles/progress.txt', 'w') as f:
-            f.write('0')
+        #with open('./ui/styles/progress.txt', 'w') as f:
+            #f.write('0')
+        #何意味？注释了 by Null
         
         # 显示系统状态
         print("=" * 30)

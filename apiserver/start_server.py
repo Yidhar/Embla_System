@@ -20,9 +20,14 @@ async def start_api_server():
     """启动API服务器"""
     from apiserver.api_server import app
     
-    # 从环境变量获取配置
+    # 从环境变量获取配置，回退到config
     host = os.getenv("API_SERVER_HOST", "127.0.0.1")
-    port = int(os.getenv("API_SERVER_PORT", "8000"))
+    try:
+        from system.config import get_server_port
+        default_port = get_server_port("api_server")
+    except ImportError:
+        default_port = 8000
+    port = int(os.getenv("API_SERVER_PORT", str(default_port)))
     reload = os.getenv("API_SERVER_RELOAD", "False").lower() == "true"
     
     print(f"启动NagaAgent API服务器...")
@@ -45,9 +50,14 @@ async def start_llm_service():
     """启动LLM服务"""
     from apiserver.llm_service import llm_app
     
-    # 从环境变量获取配置
+    # 从环境变量获取配置，回退到config
     host = os.getenv("LLM_SERVICE_HOST", "127.0.0.1")
-    port = int(os.getenv("LLM_SERVICE_PORT", "8001"))
+    try:
+        from system.config import get_server_port
+        default_port = get_server_port("agent_server")
+    except ImportError:
+        default_port = 8001
+    port = int(os.getenv("LLM_SERVICE_PORT", str(default_port)))
     reload = os.getenv("LLM_SERVICE_RELOAD", "False").lower() == "true"
     
     print(f"启动LLM服务...")
@@ -81,8 +91,15 @@ async def main():
     elif args.service == "both":
         print("启动所有服务...")
         print("注意: 同时启动多个服务需要不同的端口配置")
-        print("API服务器: http://127.0.0.1:8000")
-        print("LLM服务: http://127.0.0.1:8001")
+        try:
+            from system.config import get_server_port
+            api_port = get_server_port("api_server")
+            agent_port = get_server_port("agent_server")
+            print(f"API服务器: http://127.0.0.1:{api_port}")
+            print(f"LLM服务: http://127.0.0.1:{agent_port}")
+        except ImportError:
+            print("API服务器: http://127.0.0.1:8000")
+            print("LLM服务: http://127.0.0.1:8001")
         
         # 这里可以实现同时启动多个服务的逻辑
         # 目前先启动API服务器

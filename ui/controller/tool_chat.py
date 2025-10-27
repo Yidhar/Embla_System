@@ -3,13 +3,17 @@ from ..utils.response_util import extract_message
 from ui.utils.message_renderer import MessageRenderer
 from ui.utils.simple_http_client import SimpleHttpClient, SimpleBatchClient
 from system.config import config, AI_NAME, logger
-from nagaagent_core.vendors.PyQt5.QtCore import QThread, QCoreApplication, Qt, QTimer, QMetaObject
+from nagaagent_core.vendors.PyQt5.QtCore import QThread, QCoreApplication, Qt, QTimer, QMetaObject, QObject, pyqtSignal
 import time
 from typing import Dict, Optional
 
 
-class ChatTool():
+class ChatTool(QObject):
+    # 定义信号用于线程间通信
+    tool_ai_response_received = pyqtSignal(str)
+
     def __init__(self, window):
+        super().__init__()
         self.window = window
         self.current_response = ""  # 当前响应缓冲
         self.scroll_timer = QTimer(window)
@@ -45,6 +49,9 @@ class ChatTool():
 
         # 工具调用状态
         self.in_tool_call_mode = False
+
+        # 连接信号
+        self.tool_ai_response_received.connect(self._handle_tool_ai_response_safe)
 
     def adjust_input_height(self):
         window = self.window
@@ -191,7 +198,12 @@ class ChatTool():
     # 保留必要的工具方法（未过度拆分）
     def _build_request_data(self, user_input, stream, use_self_game):
         """构建请求数据（复用逻辑）"""
-        data = {"message": user_input, "stream": stream, "use_self_game": use_self_game}
+        data = {
+            "message": user_input,
+            "stream": stream,
+            "use_self_game": use_self_game,
+            "session_id": self._get_current_session_id()
+        }
         from system.config import config as _cfg
         if _cfg.system.voice_enabled and _cfg.voice_realtime.voice_mode in ["hybrid", "end2end"]:
             data["return_audio"] = True
@@ -261,8 +273,11 @@ class ChatTool():
 
     def add_ai_message(self, content: str = "") -> str:
         """添加AI消息到聊天界面（流式处理时初始化为空消息）"""
-        msg = extract_message(content)
-        content_html = str(msg)  # .replace('\\n', '\n').replace('\n', '<br>')
+        # 对于AI回复，直接使用原始内容，不经过extract_message处理
+        # 因为AI回复通常是纯文本或Markdown格式，不是JSON格式
+        content_html = content
+
+        logger.info(f"[UI] 添加AI消息，内容长度: {len(content_html)}")
 
         # 生成消息ID
         self.message_counter += 1
@@ -295,7 +310,7 @@ class ChatTool():
         line=new_text.count('\n')
         # 处理消息格式化
         msg = extract_message(new_text)
-        from markdown import markdown
+        from nagaagent_core.vendors.markdown import markdown
         content_html = str(msg).replace('\n', '<br>')
         content_html = markdown(content_html, extensions=['extra', 'codehilite'])
 
@@ -453,6 +468,7 @@ class ChatTool():
     def handle_tool_result(self, result: str):
         """处理工具执行结果"""
         # 查找最近的工具调用对话框并更新
+        tool_call_updated = False
         if self._messages:
             for message_id, message_info in reversed(list(self._messages.items())):
                 if message_id.startswith('tool_call_'):
@@ -471,6 +487,7 @@ class ChatTool():
 结果: {result[:200]}{'...' if len(result) > 200 else ''}
                             """.strip()
                             dialog_widget.set_nested_content(nested_title, nested_content)
+                    tool_call_updated = True
                     break
 
         # 工具调用完成，退出工具调用模式
@@ -479,6 +496,111 @@ class ChatTool():
         # 在状态栏显示工具执行结果
         self.progress_widget.status_label.setText(f"✅ {result[:50]}...")
         logger.debug(f"工具结果: {result}")
+
+        # 如果更新了工具调用对话框，强制刷新UI显示
+        if tool_call_updated:
+            # 确保UI刷新显示最新的工具结果
+            self.smart_scroll_to_bottom()
+            # 触发UI重绘
+            self.window.update()
+
+    def handle_tool_completed_with_ai_response(self, ai_response: str):
+        """处理工具执行完成后的AI回复（线程安全入口）"""
+        # 通过信号机制确保在主线程中执行
+        self.tool_ai_response_received.emit(ai_response)
+
+    def _handle_tool_ai_response_safe(self, ai_response: str):
+        """线程安全地处理工具执行完成后的AI回复"""
+        try:
+            logger.info(f"[UI] 收到工具完成后的AI回复，内容长度: {len(ai_response)}")
+            logger.info(f"[UI] 当前线程: {QThread.currentThread()}")
+
+            # 停止加载状态
+            self.progress_widget.stop_loading()
+
+            # 添加AI回复到聊天界面
+            if ai_response and ai_response.strip():
+                # 直接显示完整的AI回复，不使用打字机效果
+                logger.info(f"[UI] 直接显示完整AI回复")
+                self.add_ai_message(ai_response)
+                logger.info(f"[UI] AI回复已直接添加到聊天界面")
+
+                # 保存对话历史到API服务器
+                self._save_tool_conversation_to_history(ai_response)
+            else:
+                logger.warning(f"[UI] 收到空的AI回复")
+
+        except Exception as e:
+            logger.error(f"[UI] 处理工具完成后的AI回复失败: {e}")
+            self.add_system_message(f"❌ 显示工具结果失败: {str(e)}")
+
+    def _save_tool_conversation_to_history(self, ai_response: str):
+        """保存工具对话历史到API服务器"""
+        try:
+            import httpx
+            import asyncio
+
+            # 获取当前会话ID
+            session_id = self._get_current_session_id()
+            if not session_id:
+                logger.warning("[UI] 无法获取会话ID，跳过历史记录保存")
+                return
+
+            # 构建保存请求
+            save_data = {
+                "session_id": session_id,
+                "user_message": "[工具执行结果]",  # 占位用户消息
+                "assistant_response": ai_response
+            }
+
+            api_url = f"http://{config.api_server.host}:{config.api_server.port}/save_tool_conversation"
+
+            # 异步发送保存请求
+            async def _save_async():
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    response = await client.post(api_url, json=save_data)
+                    if response.status_code == 200:
+                        logger.info(f"[UI] 工具对话历史已保存到API服务器")
+                    else:
+                        logger.error(f"[UI] 保存工具对话历史失败: {response.status_code}")
+
+            # 在事件循环中运行异步任务
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(_save_async())
+            else:
+                loop.run_until_complete(_save_async())
+
+        except Exception as e:
+            logger.error(f"[UI] 保存工具对话历史失败: {e}")
+
+    def _get_current_session_id(self) -> str:
+        """获取当前会话ID"""
+        try:
+            # 从窗口对象获取会话ID
+            if hasattr(self.window, 'session_id') and self.window.session_id:
+                return self.window.session_id
+
+            # 如果窗口没有会话ID，尝试从HTTP客户端响应中获取
+            if hasattr(self, 'http_client') and self.http_client:
+                # 检查HTTP客户端是否有会话ID
+                if hasattr(self.http_client, 'last_session_id') and self.http_client.last_session_id:
+                    # 保存到窗口对象以便后续使用
+                    self.window.session_id = self.http_client.last_session_id
+                    return self.http_client.last_session_id
+
+            # 如果都没有，生成一个新的会话ID
+            import uuid
+            new_session_id = str(uuid.uuid4())
+            # 保存到窗口对象
+            self.window.session_id = new_session_id
+            return new_session_id
+
+        except Exception as e:
+            logger.warning(f"[UI] 获取会话ID失败: {e}")
+            # 生成一个默认会话ID
+            import uuid
+            return str(uuid.uuid4())
 
 # 工具执行结果已通过LLM总结并保存到对话历史中
 # UI可以通过查询历史获取工具执行结果

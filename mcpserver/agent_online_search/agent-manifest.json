@@ -1,5 +1,4 @@
 {
-  "name": "searxng搜索",
   "displayName": "searxng搜索",
   "version": "1.0.0",
   "author": "pyl(1708213363@qq.com)",
@@ -7,16 +6,7 @@
   "description": "searxng搜索，返回相关实时信息",
   "entryPoint": {
     "module": "mcpserver.agent_online_search.online_search_agent",
-    "class": "OnlineSearchAgent",
-    "function": "create_online_search_agent"
-  },
-  "factory": {
-    "validate_config": "validate_agent_config",
-    "get_dependencies": "get_agent_dependencies"
-  },
-  "communication": {
-    "protocol": "stdio",
-    "timeout": 15000
+    "class": "OnlineSearchAgent"
   },
   "capabilities": {
     "invocationCommands": [
@@ -26,34 +16,5 @@
         "example": "{\"tool_name\":\"网页搜索\",\"query\":\"天空为什么是蓝色的？\"}"
       }
     ]
-  },
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "tool_name": {"type": "string", "description": "工具名称：网页搜索"},
-      "query": {"type": "string", "description": "搜索内容"}
-    },
-    "required": ["tool_name", "query"]
-  },
-  "outputSchema": {
-    "type": "object",
-    "properties": {
-      "status": {"type": "string", "description": "操作状态"},
-      "message": {"type": "string", "description": "操作结果描述"},
-      "data": {"type": "string", "description": "格式化的搜索结果"},
-      "raw_data": {"type": "array", "description": "原始搜索结果"},
-      "error": {"type": "string", "description": "错误信息"}
-    }
-  },
-  "configSchema": {
-    "API_KEY": "string",
-    "Url": "string",
-    "count": "number"
-  },
-  "runtime": {
-    "instance": null,
-    "is_initialized": false,
-    "last_used": null,
-    "usage_count": 0
   }
 }

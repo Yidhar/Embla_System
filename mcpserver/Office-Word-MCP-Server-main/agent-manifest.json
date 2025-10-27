@@ -1,5 +1,4 @@
 {
-  "name": "office_word_mcp",
   "displayName": "Office Word文档处理器",
   "description": "专业的Microsoft Word文档创建、编辑和管理工具，支持文档创建、内容添加、格式化、表格处理、图片插入等全面功能",
   "version": "1.1.7",
@@ -7,9 +6,6 @@
   "entryPoint": {
     "module": "mcpserver.Office-Word-MCP-Server-main.word_mcp_adapter",
     "class": "WordDocumentMCPServer"
-  },
-  "factory": {
-    "create_instance": "create_word_document_mcp_server"
   },
   "capabilities": {
     "document_creation": {
