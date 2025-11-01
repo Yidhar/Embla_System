@@ -1,4 +1,4 @@
-# NagaAgent 4.0
+# NagaAgent
 
 ![NagaAgent Logo](https://img.shields.io/badge/NagaAgent-4.0-blue?style=for-the-badge&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-green?style=for-the-badge)
@@ -10,8 +10,8 @@
 ![UI 预览](ui/img/README.jpg)
 ---
 
-[教程视频及一键运行整合包获取链接](https://www.pylindex.top/naga)
----
+[![下载资源](https://img.shields.io/badge/下载资源-教程视频_|_整合包-blue)](https://www.pylindex.top/naga)
+
 
 ## 介绍
 
