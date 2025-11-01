@@ -1,3 +1,8 @@
+# pyinstaller适配
+import os
+if os.path.exists("_internal"):
+    os.chdir("_internal")
+
 # 标准库导入
 import asyncio
 import logging
