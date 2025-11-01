@@ -15,7 +15,14 @@ dependencies = [
     # 核心依赖 (已整合到nagaagent-core)
     "nagaagent-core>=1.0.9",
     "simpleaudio",
-    "pydub"
+    "pydub",
+    "onnxruntime>=1.23.2",
+    "sounddevice>=0.5.3",
+    "pyautogui>=0.9.54",
+    "librosa>=0.11.0",
+    "pystray>=0.19.5",
+    "paho-mqtt>=2.1.0",
+    "bilibili-api>=4.1.0",
 ]
 
 # 可选依赖组

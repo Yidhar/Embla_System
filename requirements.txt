@@ -12,3 +12,12 @@ nagaagent-core>=1.0.9
 # If you need to pin extra versions locally, append them below.
 simpleaudio
 pydub
+
+onnxruntime
+sounddevice
+pyautogui
+librosa
+pystray
+paho_mqtt
+bilibili_api
+
