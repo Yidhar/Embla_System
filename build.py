@@ -5,6 +5,7 @@ import sys
 import platform
 import glob
 import zipfile
+import tarfile
 
 def user_confirmation():
     """提示清空配置，让用户确认是否继续"""
@@ -175,18 +176,84 @@ def rename_and_zip_output():
         print(f"[错误] 重命名失败: {e}")
         sys.exit(1)
 
-    print(f"\n    -> 快速归档 {target_dir_path} 为 {os.path.basename(zip_file_path)}...")
+    print(f"\n    -> 开始打包 {target_dir_path} ...")
     try:
-        with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_STORED) as zipf:
-            for root, _, files in os.walk(target_dir_path):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    # 添加文件到 zip，arcname 是在 zip 文件中的路径
-                    arcname = os.path.relpath(file_path, os.path.join(target_dir_path, '..'))
-                    zipf.write(file_path, arcname)
-        print(f"    -> 归档完成。文件位置: {zip_file_path}")
+        # Windows: 尝试使用 7z（支持多线程），否则回退到使用多线程读取并写入 zip（压缩在写入时仍为单线程）
+        if platform.system() == "Windows":
+            zip_file_path = f'{target_dir_path}.zip'
+            sevenz = shutil.which('7z') or shutil.which('7za') or shutil.which('7zr')
+            if sevenz:
+                print("    -> 检测到 7z，使用 7z 多线程压缩为 zip ...")
+                try:
+                    subprocess.run([sevenz, 'a', '-tzip', zip_file_path, target_dir_path, '-mx=9', '-mmt'], check=True)
+                    print(f"    -> 多线程压缩完成。文件位置: {zip_file_path}")
+                except subprocess.CalledProcessError as e:
+                    print(f"[错误] 使用 7z 打包失败: {e}")
+                    sys.exit(1)
+            else:
+                print("    -> 未检测到 7z，使用 Python 多线程读取并写入 zip（兼容模式）...")
+                import concurrent.futures
+                files = []
+                for root, _, fnames in os.walk(target_dir_path):
+                    for fname in fnames:
+                        full = os.path.join(root, fname)
+                        arcname = os.path.relpath(full, os.path.join(target_dir_path, '..'))
+                        files.append((full, arcname))
+                try:
+                    max_workers = os.cpu_count() or 4
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+                        # 并行读取文件到内存
+                        future_map = {ex.submit(open, p, 'rb'): (p, a) for p, a in files}
+                        # 为了保证顺序无关紧要，我们按完成顺序写入 zip
+                        with zipfile.ZipFile(zip_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                            read_futures = []
+                            for p, a in files:
+                                read_futures.append(ex.submit(lambda p=p: open(p, 'rb').read()))
+                            # 按原 files 顺序写入以使 archive 稳定
+                            for (p, a), fut in zip(files, read_futures):
+                                data = fut.result()
+                                zipf.writestr(a, data)
+                    print(f"    -> 归档完成。文件位置: {zip_file_path}")
+                except Exception as e:
+                    print(f"[错误] 归档失败: {e}")
+                    sys.exit(1)
+
+        # Linux / Darwin: 优先使用 pigz + tar（pigz 支持并行 gzip），否则回退到 tarfile 单线程压缩
+        else:
+            tar_gz_path = f'{target_dir_path}.tar.gz'
+            tar_cmd = shutil.which('tar')
+            pigz_cmd = shutil.which('pigz')
+            if tar_cmd and pigz_cmd:
+                print("    -> 检测到 tar 和 pigz，使用 pigz 多线程压缩为 tar.gz ...")
+                try:
+                    nproc = str(os.cpu_count() or 4)
+                    # 在目标父目录下运行 tar，避免在归档中包含冗余路径
+                    cwd = os.path.dirname(target_dir_path) or '.'
+                    base = os.path.basename(target_dir_path)
+                    with open(tar_gz_path, 'wb') as out_f:
+                        p1 = subprocess.Popen([tar_cmd, '-C', cwd, '-cf', '-', base], stdout=subprocess.PIPE)
+                        p2 = subprocess.Popen([pigz_cmd, '-9', '-p', nproc], stdin=p1.stdout, stdout=out_f)
+                        p1.stdout.close()
+                        ret2 = p2.wait()
+                        ret1 = p1.wait()
+                        if ret1 != 0 or ret2 != 0:
+                            raise subprocess.CalledProcessError(ret2 or ret1, 'tar|pigz')
+                    print(f"    -> 多线程归档完成。文件位置: {tar_gz_path}")
+                except Exception as e:
+                    print(f"[错误] pigz/tar 打包失败: {e}")
+                    sys.exit(1)
+            else:
+                print("    -> 未检测到 pigz，使用 Python tarfile 单线程压缩为 tar.gz ...")
+                try:
+                    with tarfile.open(tar_gz_path, 'w:gz', compresslevel=9) as tar:
+                        tar.add(target_dir_path, arcname=os.path.basename(target_dir_path))
+                    print(f"    -> 归档完成。文件位置: {tar_gz_path}")
+                except Exception as e:
+                    print(f"[错误] tarfile 打包失败: {e}")
+                    sys.exit(1)
+
     except Exception as e:
-        print(f"[错误] 归档失败: {e}")
+        print(f"[错误] 打包过程出现异常: {e}")
         sys.exit(1)
 
 def main():
