@@ -2,8 +2,6 @@
 import os
 if os.path.exists("_internal"):
     os.chdir("_internal")
-# 为了可以识别需打包的库，牺牲启动时间
-import nagaagent_core, docx, jmcomic, crawl4ai, nagaagent_core.vendors.agents, langchain_community, playwright, langchain_community.utilities, fastmcp, live2d
 
 
 # 标准库导入
