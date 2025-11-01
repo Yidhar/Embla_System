@@ -23,10 +23,6 @@ dependencies = [
     "pystray>=0.19.5",
     "paho-mqtt>=2.1.0",
     "bilibili-api>=4.1.0",
-    "python_docx>=1.2.0",
-    "fastmcp>=2.12.5",
-    "tensorboard>=2.20.0",
-    "expecttest>=0.3.0",
 ]
 
 # 可选依赖组
@@ -39,7 +35,11 @@ dev = [
     "ruff>=0.1.0",
 ]
 build = [
-    "pyinstaller"
+    "pyinstaller",
+    "python_docx>=1.2.0",
+    "fastmcp>=2.12.5",
+    "tensorboard>=2.20.0",
+    "expecttest>=0.3.0",
 ]
 
 [build-system]

@@ -2012,8 +2012,6 @@ version = "4.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "bilibili-api" },
-    { name = "expecttest" },
-    { name = "fastmcp" },
     { name = "librosa" },
     { name = "nagaagent-core" },
     { name = "onnxruntime" },
@@ -2024,15 +2022,17 @@ dependencies = [
     { name = "pyqt5-qt5" },
     { name = "pyqt5-sip" },
     { name = "pystray" },
-    { name = "python-docx" },
     { name = "simpleaudio" },
     { name = "sounddevice" },
-    { name = "tensorboard" },
 ]
 
 [package.dev-dependencies]
 build = [
+    { name = "expecttest" },
+    { name = "fastmcp" },
     { name = "pyinstaller" },
+    { name = "python-docx" },
+    { name = "tensorboard" },
 ]
 dev = [
     { name = "black" },
@@ -2044,8 +2044,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bilibili-api", specifier = ">=4.1.0" },
-    { name = "expecttest", specifier = ">=0.3.0" },
-    { name = "fastmcp", specifier = ">=2.12.5" },
     { name = "librosa", specifier = ">=0.11.0" },
     { name = "nagaagent-core", specifier = ">=1.0.9" },
     { name = "onnxruntime", specifier = ">=1.23.2" },
@@ -2056,14 +2054,18 @@ requires-dist = [
     { name = "pyqt5-qt5", specifier = "==5.15.2" },
     { name = "pyqt5-sip", specifier = "==12.17.0" },
     { name = "pystray", specifier = ">=0.19.5" },
-    { name = "python-docx", specifier = ">=1.2.0" },
     { name = "simpleaudio" },
     { name = "sounddevice", specifier = ">=0.5.3" },
-    { name = "tensorboard", specifier = ">=2.20.0" },
 ]
 
 [package.metadata.requires-dev]
-build = [{ name = "pyinstaller" }]
+build = [
+    { name = "expecttest", specifier = ">=0.3.0" },
+    { name = "fastmcp", specifier = ">=2.12.5" },
+    { name = "pyinstaller" },
+    { name = "python-docx", specifier = ">=1.2.0" },
+    { name = "tensorboard", specifier = ">=2.20.0" },
+]
 dev = [
     { name = "black", specifier = ">=22.0.0" },
     { name = "pytest", specifier = ">=7.0.0" },
