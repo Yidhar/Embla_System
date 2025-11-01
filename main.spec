@@ -2,9 +2,22 @@
 
 # pyproject.toml requires python >=3.11,<3.12
 
+# 导入必要的模块
+from PyInstaller.utils.hooks import copy_metadata
+import os
+
+# 收集包的 metadata
+metadata_packages = ['fastmcp']
+datas = []
+for package in metadata_packages:
+    try:
+        datas += copy_metadata(package)
+    except Exception as e:
+        print(f"Warning: Could not copy metadata for {package}: {e}")
+
 # 收集所有需要的资源文件
 # (source_path, destination_in_bundle)
-datas = [
+datas += [
     ('config.json.example', '.'),
     ('config.json', '.'),
     ('LICENSE', '.'),
