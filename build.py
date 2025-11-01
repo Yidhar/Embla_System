@@ -9,7 +9,7 @@ import zipfile
 def user_confirmation():
     """提示清空配置，让用户确认是否继续"""
     print("=========================================")
-    print("  提示：此操作将清空并重建配置（删除 config.json）。")
+    print("  提示：请确保config.json内无隐私数据或已删除。")
     print("=========================================")
     response = input("请确认是否继续 (输入 'Y' 继续，或按 Enter/n 取消): ").strip().lower()
     
@@ -19,7 +19,7 @@ def user_confirmation():
 
 def check_uv():
     """检查 uv 是否存在，不存在就提示安装，然后退出"""
-    print("\n[1/8] 检查 uv 是否已安装...")
+    print("\n[1/7] 检查 uv 是否已安装...")
     try:
         # 运行 uv --version 来检查是否存在
         # capture_output=True 和 check=True 确保在失败时能捕获输出或抛出异常
@@ -38,35 +38,29 @@ def check_uv():
         sys.exit(1)
 
 def manage_config_files():
-    """删除 config.json 并复制 config.json.example"""
-    config_file = "config.json"
-    example_file = "config.json.example"
+    config_path = os.path.join('config.json')
+    example_path = os.path.join('config.json.example')
 
-    print(f"\n[2/8] 删除 {config_file}...")
-    try:
-        os.remove(config_file)
-        print(f"    -> {config_file} 已删除。")
-    except FileNotFoundError:
-        print(f"    -> {config_file} 不存在，跳过删除。")
-    except Exception as e:
-        print(f"[错误] 删除 {config_file} 失败: {e}")
-        sys.exit(1)
+    print("\n[2/7] 检查配置文件...")
+    if os.path.exists(config_path):
+        print(f"    -> 已检测到 {config_path}，跳过创建。")
+    else:
+        if os.path.exists(example_path):
+            try:
+                shutil.copy(example_path, config_path)
+                print(f"    -> 未检测到 {config_path}，已从 {example_path} 复制。")
+            except Exception as e:
+                print(f"[错误] 复制配置文件失败: {e}")
+                sys.exit(1)
+        else:
+            print(f"[错误] 未找到 {example_path}，无法创建 {config_path}。")
+            sys.exit(1)
 
-    print(f"\n[3/8] 复制 {example_file} 到 {config_file}...")
-    try:
-        shutil.copy2(example_file, config_file)
-        print("    -> 配置已重置。")
-    except FileNotFoundError:
-        print(f"[错误] 找不到 {example_file}，请确保文件存在。")
-        sys.exit(1)
-    except Exception as e:
-        print(f"[错误] 复制文件失败: {e}")
-        sys.exit(1)
 
 def run_build_commands():
     """执行 uv sync 和 pyinstaller 命令"""
     
-    print("\n[4/8] 安装所需依赖...")
+    print("\n[3/7] 安装所需依赖...")
     try:
         subprocess.run(['uv', 'sync', '--group', 'build'], check=True)
         print("    -> uv sync 完成。")
@@ -74,7 +68,7 @@ def run_build_commands():
         print("[错误] 'uv sync' 失败。请检查 'pyproject.toml' 和网络连接。")
         sys.exit(1)
     if platform.system() != "Windows":
-        print("\n[5/8] 授予执行权限...")
+        print("\n[4/7] 授予执行权限...")
         try:
             # 使用 glob 递归查找 .venv 下的 .so* 文件，并为每个文件添加可执行权限
             so_files = glob.glob('.venv/**/*.so*', recursive=True)
@@ -92,10 +86,9 @@ def run_build_commands():
             print("[错误] 执行权限授予失败。")
             sys.exit(1)
     else:
-        print("\n[5/8] Windows无需授予执行权限，已跳过...")
-        print("\n[5/8] Windows无需授予执行权限，已跳过...")
+        print("\n[4/7] Windows无需授予执行权限，已跳过...")
 
-    print("\n[6/8] 运行构建命令")
+    print("\n[5/7] 运行构建命令")
     try:
         # pyinstaller 命令
         subprocess.run(['uv', 'run', 'pyinstaller', 'main.spec', '--clean', '--noconfirm'], check=True)
@@ -123,7 +116,7 @@ config.json（配置文件）位置：_internal/config.json，也可以使用GUI
     # .venv/说明.txt 内容
     placeholder_content = "占位"
 
-    print(f"\n[7/8] 创建 {instructions_path} 和 {venv_path} 占位文件...")
+    print(f"\n[6/7] 创建 {instructions_path} 和 {venv_path} 占位文件...")
     
     # 确保目标目录存在
     os.makedirs(dist_main_dir, exist_ok=True)
@@ -168,7 +161,7 @@ def rename_and_zip_output():
         print(f"\n[错误] 找不到构建目录 {source_dir}。请检查 PyInstaller 是否成功运行。")
         sys.exit(1)
 
-    print(f"\n[8/8] 打包为压缩包...")
+    print(f"\n[7/7] 打包为压缩包...")
     try:
         # 如果目标目录已存在，先删除，确保重命名成功
         if os.path.exists(target_dir_path):
