@@ -203,7 +203,7 @@ graph TB
 >  如果您的部署有困难，可以参考视频教程或下载一键运行整合包。
 
 #### 1. 安装依赖
-<details><summary>使用setup脚本</summary>
+##### 使用setup脚本
 
 ```bash
 # 可选：先安装uv
@@ -229,7 +229,6 @@ setup.bat
 
 <details><summary>手动部署</summary>
 
-##### 手动进行
 ```bash
 # 无uv
 python -m venv .venv
