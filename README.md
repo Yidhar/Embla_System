@@ -10,7 +10,7 @@
 ![UI 预览](ui/img/README.jpg)
 ---
 
-[此处获取教程视频与一键运行整合包](https://www.pylindex.top/naga)
+## [此处获取教程视频与一键运行整合包](https://www.pylindex.top/naga)
 
 
 ## 介绍
