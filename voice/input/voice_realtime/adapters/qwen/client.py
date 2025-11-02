@@ -65,10 +65,14 @@ class QwenVoiceClientRefactored:
         self.audio_manager = AudioManager(
             input_sample_rate=16000,
             output_sample_rate=24000,
-            chunk_size_ms=200,  # 200ms块大小
+            chunk_size_ms=20,  # 🔧 关键修复：改为20ms（480样本，50FPS），接近EdgeTTS的400样本，RMS能量计算更准确
             vad_threshold=0.02,  # 提高阈值，减少误触发
             echo_suppression=True
         )
+
+        # 🔧 首次播放优化：暂时不启用延迟
+        # self.audio_manager.first_playback_delay_ms = 0
+        # self.audio_manager.enable_timing_debug = True  # 已默认开启
 
         self.state_manager = StateManager(debug=debug)
 
@@ -109,8 +113,26 @@ class QwenVoiceClientRefactored:
         self.ai_response_in_progress = False  # AI是否正在响应
         self.ai_response_done = False  # AI响应是否完成
 
+        # 口型同步现在由AudioManager直接处理（模仿EdgeTTS）
+        # 移除client中的引擎初始化和回调处理，避免重复
+
         # 设置组件回调
         self._setup_callbacks()
+
+    def _ensure_project_root_in_path(self) -> str:
+        """
+        确保项目根目录在sys.path中，以便导入system.config
+
+        Returns:
+            项目根目录路径
+        """
+        import sys
+        import os
+        # 计算项目根目录（向上5级）
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        return project_root
 
     def _fix_ai_name(self, text: str) -> str:
         """
@@ -162,6 +184,7 @@ class QwenVoiceClientRefactored:
         self.audio_manager.on_audio_input = self._on_audio_input
         self.audio_manager.on_playback_started = self._on_playback_started
         self.audio_manager.on_playback_ended = self._on_playback_ended
+        # 口型同步现在由AudioManager内部直接处理（模仿EdgeTTS）
 
         # 状态管理器回调
         self.state_manager.add_state_callback(
@@ -206,6 +229,9 @@ class QwenVoiceClientRefactored:
         播放开始回调
         """
         logger.info("[状态] 音频播放开始，麦克风已静音")
+
+        # Live2D嘴部同步现在由AudioManager内部处理（模仿EdgeTTS）
+
         # 确保在AI_SPEAKING状态
         if self.state_manager.current_state != ConversationState.AI_SPEAKING:
             self.state_manager.transition_to(ConversationState.AI_SPEAKING)
@@ -219,6 +245,8 @@ class QwenVoiceClientRefactored:
         播放结束回调
         """
         logger.info(f"[状态] 音频播放结束 - AI响应完成状态: {self.ai_response_done}")
+
+        # Live2D嘴巴关闭由AudioManager内部处理（模仿EdgeTTS）
 
         # 检查是否正在断开连接，如果是则不进行状态转换
         if self.is_disconnecting:
@@ -241,6 +269,7 @@ class QwenVoiceClientRefactored:
             if self.on_status_callback:
                 self.on_status_callback("ai_speaking")
                 logger.info("[状态] 保持ai_speaking状态")
+
 
     def _on_open(self):
         """
@@ -276,13 +305,7 @@ class QwenVoiceClientRefactored:
         if self.use_voice_prompt:
             try:
                 # 获取语音专用提示词
-                import sys
-                import os
-                # 确保能导入system.config
-                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
-                if project_root not in sys.path:
-                    sys.path.insert(0, project_root)
-
+                self._ensure_project_root_in_path()
                 from system.config import get_prompt, config
 
                 # 获取AI名称
@@ -533,18 +556,11 @@ class QwenVoiceClientRefactored:
         # 连接
         self.conversation.connect()
 
-        # 配置会话
         # 获取系统提示词（如果启用）
         instructions = None
         if self.use_voice_prompt:
             try:
-                import sys
-                import os
-                # 确保能导入system.config
-                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
-                if project_root not in sys.path:
-                    sys.path.insert(0, project_root)
-
+                self._ensure_project_root_in_path()
                 from system.config import get_prompt, config
                 # 获取AI名称
                 ai_name = config.system.ai_name
@@ -646,10 +662,15 @@ class QwenVoiceClientRefactored:
                 logger.debug("重置状态管理器...")
                 self.state_manager.reset()
 
-            # 4. 清理回调（防止内存泄漏）
+            # 4. 清除Live2D widget缓存（下次连接时重新获取）
+            self._cached_live2d_widget = None
+            self._live2d_widget_checked = False
+            logger.debug("已清除Live2D widget缓存")
+
+            # 5. 清理回调（防止内存泄漏）
             self.callback = None
 
-            # 5. 清理统计信息
+            # 6. 清理统计信息
             self.stats = {
                 'session_id': None,
                 'messages_sent': 0,

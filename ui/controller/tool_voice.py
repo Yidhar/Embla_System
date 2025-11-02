@@ -1,5 +1,8 @@
 from system.config import config, logger
 from . import chat
+from nagaagent_core.vendors.PyQt5.QtCore import QTimer
+import random
+
 class VoiceTool():
     def __init__(self, window):
         self.window = window
@@ -9,6 +12,11 @@ class VoiceTool():
         self.voice_realtime_client = None  # 语音客户端（废弃，使用线程安全版本）
         self.voice_realtime_active = False  # 是否激活
         self.voice_realtime_state = "idle"  # idle/listening/recording/ai_speaking
+        
+        # Live2D嘴部同步相关
+        self._lip_sync_timer = None  # 嘴部同步定时器
+        self._lip_sync_active = False  # 嘴部同步是否激活
+        
         self._init_voice()
         
     def _init_voice(self):
@@ -124,6 +132,100 @@ class VoiceTool():
 
             # 其他模式：停止服务
             self.stop_voice_realtime()
+
+    # ========== 语音回调方法 ==========
+    def on_voice_user_text(self, text: str):
+        """处理用户语音输入文本"""
+        try:
+            # 显示用户说的话
+            self.chat_tool.add_user_message("你", text)
+        except Exception as e:
+            logger.error(f"处理用户语音文本失败: {e}")
+
+    def on_voice_ai_text(self, text: str):
+        """处理AI响应文本（流式）"""
+        try:
+            # 流式显示AI响应 - 使用append_response_chunk方法
+            self.chat_tool.append_response_chunk(text)
+            # 注意：Live2D嘴部同步现在由音频播放循环驱动，不在这里处理
+        except Exception as e:
+            logger.error(f"处理AI语音文本失败: {e}")
+
+    def on_voice_response_complete(self):
+        """AI响应完成"""
+        try:
+            # 完成当前消息显示 - 使用finalize_streaming_response方法
+            self.chat_tool.finalize_streaming_response()
+            # 注意：Live2D嘴部同步现在由音频播放循环驱动，不在这里处理
+        except Exception as e:
+            logger.error(f"完成AI响应失败: {e}")
+
+    def on_voice_status(self, status: str):
+        """处理语音状态变化"""
+        try:
+            logger.info(f"语音状态: {status}")
+            
+            # 更新状态
+            self.voice_realtime_state = status
+            
+            # 根据状态更新UI
+            if status == "listening":
+                self.update_voice_button_state("listening")
+            elif status == "recording":
+                self.update_voice_button_state("recording")
+            elif status == "ai_speaking":
+                self.update_voice_button_state("ai_speaking")
+            elif status == "disconnected":
+                # 检查是否是超时断开
+                if not getattr(self, '_is_manual_stop', False):
+                    self._is_timeout_disconnect = True
+                    self.chat_tool.add_user_message("系统", "⚠️ 语音连接已断开（超时或网络问题）")
+                
+                self.voice_realtime_active = False
+                self.update_voice_button_state("idle")
+            elif status == "idle":
+                self.update_voice_button_state("idle")
+                
+        except Exception as e:
+            logger.error(f"处理语音状态失败: {e}")
+
+    def on_voice_error(self, error: str):
+        """处理语音错误"""
+        try:
+            logger.error(f"语音错误: {error}")
+            self.chat_tool.add_user_message("系统", f"❌ 语音错误: {error}")
+            
+            # 错误时停止语音服务
+            self.voice_realtime_active = False
+            self.update_voice_button_state("idle")
+        except Exception as e:
+            logger.error(f"处理语音错误回调失败: {e}")
+
+    def update_voice_button_state(self, state: str):
+        """更新语音按钮状态"""
+        try:
+            # 更新状态
+            self.voice_realtime_state = state
+            
+            # 如果window有对应的方法，调用它
+            if hasattr(self.window, 'update_voice_button_state'):
+                self.window.update_voice_button_state(state)
+            else:
+                # 简单的状态显示
+                status_text = {
+                    "idle": "空闲",
+                    "listening": "监听中...",
+                    "recording": "录音中...",
+                    "ai_speaking": "AI说话中..."
+                }.get(state, state)
+                logger.info(f"语音按钮状态: {status_text}")
+        except Exception as e:
+            logger.error(f"更新语音按钮状态失败: {e}")
+
+    # ========== Live2D嘴部同步辅助方法 ==========
+    # 注意：Live2D嘴部同步现在由音频播放循环直接驱动
+    # 相关实现在 voice/input/voice_realtime/adapters/qwen/client.py 中
+    # 这里保留的变量仅用于兼容性
 
 
 from ..utils.lazy import lazy
