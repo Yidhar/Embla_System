@@ -10,7 +10,7 @@
 ![UI 预览](ui/img/README.jpg)
 ---
 
-[![下载资源](https://img.shields.io/badge/下载资源-教程视频_|_整合包-blue)](https://www.pylindex.top/naga)
+[此处获取教程视频与一键运行整合包](https://www.pylindex.top/naga)
 
 
 ## 介绍
