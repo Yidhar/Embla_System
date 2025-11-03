@@ -8,7 +8,7 @@ Live2D Widget（精简版）
 import logging
 from typing import Optional, Callable
 from nagaagent_core.vendors.PyQt5.QtWidgets import QOpenGLWidget
-from nagaagent_core.vendors.PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from nagaagent_core.vendors.PyQt5.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot
 from nagaagent_core.vendors.PyQt5.QtGui import QMouseEvent
 
 from .renderer import Live2DRenderer, RendererState
@@ -258,6 +258,71 @@ class Live2DWidget(QOpenGLWidget):
         """设置眼球跟踪目标"""
         if self.animator:
             self.animator.set_eye_target(x, y)
+    
+    @pyqtSlot(float)
+    def set_audio_volume(self, volume: float):
+        """设置音频音量（用于驱动嘴部动画）
+
+        Args:
+            volume: 音量值 (0.0-1.0)
+        """
+        if self.animator:
+            self.animator.set_audio_volume(volume)
+
+    @pyqtSlot(float)
+    def set_mouth_form(self, form: float):
+        """设置嘴部形状参数（横向，用于音素识别）
+
+        Args:
+            form: 嘴形参数 (-1.0 到 1.0)
+                 -1.0 = 'i' 音（嘴角拉宽）
+                  0.0 = 'e' 音（中性）
+                  1.0 = 'u' 音（嘴唇撮起）
+        """
+        if self.animator:
+            self.animator.set_mouth_form(form)
+
+    @pyqtSlot()
+    def start_speaking(self):
+        """开始说话（启用嘴部动画）"""
+        if self.animator:
+            self.animator.start_speaking()
+
+    @pyqtSlot()
+    def stop_speaking(self):
+        """停止说话（关闭嘴部动画）"""
+        if self.animator:
+            self.animator.stop_speaking()
+
+    @pyqtSlot(float)
+    def set_mouth_smile(self, smile: float):
+        """设置嘴部微笑度（情感表情）
+
+        Args:
+            smile: 微笑度 (-1.0 到 1.0)
+        """
+        if self.animator:
+            self.animator.set_mouth_smile(smile)
+
+    @pyqtSlot(float)
+    def set_eye_brow(self, position: float):
+        """设置眉毛位置（情感表情）
+
+        Args:
+            position: 眉毛位置 (-1.0 到 1.0)，正值向上
+        """
+        if self.animator:
+            self.animator.set_eye_brow(position)
+
+    @pyqtSlot(float)
+    def set_eye_wide(self, wide: float):
+        """设置眼睛睁大度（情感表情）
+
+        Args:
+            wide: 睁大度 (0.0 到 1.0)
+        """
+        if self.animator:
+            self.animator.set_eye_wide(wide)
 
     def trigger_motion(self, group: str, index: int = 0, priority: int = 3):
         """触发动作"""

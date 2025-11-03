@@ -122,7 +122,6 @@ class APIConfig(BaseModel):
     context_load_days: int = Field(default=3, ge=1, le=30, description="加载历史上下文的天数")
     context_parse_logs: bool = Field(default=True, description="是否从日志文件解析上下文")
     applied_proxy: bool = Field(default=True, description="是否应用代理")
-    applied_proxy: bool = Field(default=True, description="是否应用代理")
 
 class APIServerConfig(BaseModel):
     """API服务器配置"""
@@ -293,6 +292,12 @@ class Live2DConfig(BaseModel):
     animation_enabled: bool = Field(default=True, description="是否启用动画")
     touch_interaction: bool = Field(default=True, description="是否启用触摸交互")
     scale_factor: float = Field(default=1.0, ge=0.5, le=3.0, description="Live2D缩放比例")
+    
+    # 嘴部同步配置
+    lip_sync_enabled: bool = Field(default=True, description="是否启用嘴部同步动画")
+    lip_sync_smooth_factor: float = Field(default=0.3, ge=0.1, le=1.0, description="嘴部动画平滑系数（越小越平滑）")
+    lip_sync_volume_scale: float = Field(default=1.5, ge=0.5, le=5.0, description="音量放大系数（调整嘴部张开幅度）")
+    lip_sync_volume_threshold: float = Field(default=0.01, ge=0.0, le=0.1, description="音量检测阈值（低于此值视为静音）")
 
 class VoiceRealtimeConfig(BaseModel):
     """实时语音配置"""
