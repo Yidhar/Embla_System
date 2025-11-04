@@ -13,7 +13,7 @@ def find_python_command(preferred_versions=None):
     返回 (命令, 版本输出字符串) 或 (None, None)
     """
     if preferred_versions is None:
-        preferred_versions = ["python3.11", "python3", "python"]
+        preferred_versions = ["python3.11", "python3", "python", "py"]
     for cmd in preferred_versions:
         try:
             # 通过 `--version` 获取版本信息（部分 Python 将输出到 stderr）
