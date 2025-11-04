@@ -61,7 +61,12 @@ class VoiceIntegration:
         self.audio_available = False
         self._sa = None  # simpleaudio引用
         self._AudioSegment = None  # pydub的AudioSegment引用
-        
+
+        # 🔧 首次播放优化：暂时不启用延迟
+        self.first_playback = True  # 是否是第一次播放
+        self.first_playback_delay_ms = 0  # 首次播放延迟（毫秒），暂时不启用
+        self.enable_timing_debug = False  # 是否启用计时debug日志（默认关闭）
+
         # 初始化音频系统（替换pygame）
         self._init_audio_system()
         
@@ -80,34 +85,19 @@ class VoiceIntegration:
         logger.info("语音集成模块初始化完成（重构版本 - 依赖apiserver）")
 
     def _init_audio_system(self):
-        """初始化音频系统（替换pygame音频初始化）"""
+        """初始化音频系统 - 使用pygame.mixer播放MP3（无需ffmpeg）"""
         try:
-            import simpleaudio as sa
-            from pydub import AudioSegment
-            
-            # 存储引用以便后续使用
-            self._sa = sa
-            self._AudioSegment = AudioSegment
-            
-            # 验证基本功能
-            try:
-                # 创建一个空的音频段来测试初始化
-                test_segment = self._AudioSegment.silent(duration=10)
-                test_data = test_segment.raw_data
-                wave_obj = self._sa.WaveObject(
-                    test_data,
-                    num_channels=test_segment.channels,
-                    bytes_per_sample=test_segment.sample_width,
-                    sample_rate=test_segment.frame_rate
-                )
-                self.audio_available = True
-                logger.info("音频系统初始化成功 (simpleaudio + pydub)")
-            except Exception as e:
-                logger.warning(f"音频系统功能验证失败: {e}")
-                self.audio_available = False
-                
+            import pygame
+
+            # 初始化pygame mixer（可以直接播放MP3，无需ffmpeg）
+            pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+
+            self._pygame = pygame
+            self.audio_available = True
+            logger.info("音频系统初始化成功 (pygame.mixer - 可直接播放MP3)")
+
         except ImportError as e:
-            logger.error(f"音频库未安装: {e}，请安装: pip install simpleaudio pydub")
+            logger.error(f"pygame未安装: {e}，请安装: pip install pygame")
             self.audio_available = False
         except Exception as e:
             logger.error(f"音频系统初始化失败: {e}")
@@ -332,57 +322,181 @@ class VoiceIntegration:
             logger.info("音频播放工作线程结束")
 
     def _play_audio_data_sync(self, audio_data: bytes):
-        """同步播放音频数据（核心替换为simpleaudio实现，保持状态管理逻辑）"""
+        """同步播放音频数据 - 使用pygame.mixer（无需ffmpeg）"""
         if not self.audio_available:
             logger.warning("音频系统不可用，无法播放音频")
             return
-            
+
         try:
-            # 停止当前正在播放的音频（对应原pygame停止逻辑）
-            if self.current_playback and self.current_playback.is_playing():
-                self.current_playback.stop()
-                time.sleep(0.1)  # 给一点时间让音频停止
-            
-            # 从内存中加载音频数据（替换pygame.mixer.music.load）
-            audio_io = io.BytesIO(audio_data)
-            
-            # 自动检测并解码音频（支持MP3/WAV等格式）
-            audio_format = config.tts.default_format or "mp3"
-            audio_segment = self._AudioSegment.from_file(audio_io, format=audio_format)
-            
-            # 转换为可播放的音频对象
-            wave_obj = self._sa.WaveObject(
-                audio_segment.raw_data,
-                num_channels=audio_segment.channels,
-                bytes_per_sample=audio_segment.sample_width,
-                sample_rate=audio_segment.frame_rate
-            )
-            
-            # 播放音频（替换pygame.mixer.music.play）
-            self.current_playback = wave_obj.play()
-            self.is_playing = True
-            
-            # 等待播放完成（保持原超时逻辑）
-            start_time = time.time()
-            while self.current_playback.is_playing():
+            # 🔧 首次播放计时开始
+            playback_start_time = time.time()
+            is_first_play = self.first_playback
+
+            # 停止当前正在播放的音频
+            if self._pygame.mixer.music.get_busy():
+                self._pygame.mixer.music.stop()
                 time.sleep(0.1)
-                # 防止无限等待，设置最长播放时间（5分钟）
-                if time.time() - start_time > 300:
-                    logger.warning("音频播放超时，强制停止")
-                    self.current_playback.stop()
-                    break
-            
+
+            # 创建临时文件用于播放（pygame.mixer需要文件路径）
+            import tempfile
+            audio_format = config.tts.default_format or "mp3"
+            temp_file = tempfile.mktemp(suffix=f".{audio_format}")
+
+            # 写入音频数据
+            with open(temp_file, 'wb') as f:
+                f.write(audio_data)
+
+            # ====== 商业级Live2D口型同步引擎 V2.0 ======
+            # 🔧 关键修改：先启动口型同步，让引擎立即开始初始化
+            self._start_live2d_lip_sync()
+
+            # 如果需要口型同步，先加载音频数据进行分析（让引擎准备就绪）
+            audio_array = None
+            sample_rate = 44100
+
+            # 尝试加载音频用于口型同步（可选功能）
+            if hasattr(self, '_advanced_lip_sync_v2') or True:  # 尝试初始化
+                try:
+                    # 使用soundfile或wave读取音频数据用于分析
+                    try:
+                        import soundfile as sf
+                        audio_array, sample_rate = sf.read(temp_file)
+                        # 转换为单声道
+                        if len(audio_array.shape) > 1:
+                            audio_array = audio_array.mean(axis=1)
+                        # 转换为int16格式
+                        import numpy as np
+                        audio_array = (audio_array * 32767).astype(np.int16)
+                        logger.debug(f"使用soundfile加载音频: {len(audio_array)} 样本, {sample_rate}Hz")
+                    except ImportError:
+                        # soundfile不可用，尝试使用wave（仅支持WAV格式）
+                        if audio_format == "wav":
+                            import wave
+                            import numpy as np
+                            with wave.open(temp_file, 'rb') as wf:
+                                sample_rate = wf.getframerate()
+                                frames = wf.readframes(wf.getnframes())
+                                audio_array = np.frombuffer(frames, dtype=np.int16)
+                            logger.debug(f"使用wave加载音频: {len(audio_array)} 样本, {sample_rate}Hz")
+
+                    # 初始化口型同步引擎
+                    if not hasattr(self, '_advanced_lip_sync_v2') and audio_array is not None:
+                        try:
+                            from voice.input.voice_realtime.core.advanced_lip_sync_v2 import AdvancedLipSyncEngineV2
+                            self._advanced_lip_sync_v2 = AdvancedLipSyncEngineV2(
+                                sample_rate=sample_rate,
+                                target_fps=60
+                            )
+                            logger.info("✅ TTS播放已启用商业级口型同步引擎V2.0")
+                        except Exception as e:
+                            logger.error(f"商业级引擎初始化失败: {e}")
+                            self._advanced_lip_sync_v2 = None
+
+                except Exception as e:
+                    logger.debug(f"加载音频数据用于口型同步失败: {e}")
+                    audio_array = None
+
+            # 🔧 首次播放延迟：在口型引擎准备好后，延迟音频播放
+            if self.first_playback and self.first_playback_delay_ms > 0:
+                delay_seconds = self.first_playback_delay_ms / 1000.0
+                if self.enable_timing_debug:
+                    logger.info(f"🎯 [EdgeTTS首次播放] 口型引擎已准备，延迟 {self.first_playback_delay_ms}ms 后再播放音频")
+                time.sleep(delay_seconds)
+                if self.enable_timing_debug:
+                    logger.info(f"🎯 [EdgeTTS首次播放] 延迟结束，开始播放音频")
+                self.first_playback = False
+
+            # 加载并播放音频
+            load_start_time = time.time()
+            self._pygame.mixer.music.load(temp_file)
+            self._pygame.mixer.music.play()
+            self.is_playing = True
+
+            # 🔧 计时debug：记录加载和播放启动时间
+            if is_first_play and self.enable_timing_debug:
+                load_duration = (time.time() - load_start_time) * 1000
+                total_startup = (time.time() - playback_start_time) * 1000
+                logger.info(f"⏱️ [EdgeTTS播放计时] 音频加载耗时={load_duration:.2f}ms, 总启动时间={total_startup:.2f}ms")
+
+            # 等待播放完成，同时更新口型
+            start_time = time.time()
+            lip_sync_count = 0  # 口型同步更新次数
+
+            if audio_array is not None and self._advanced_lip_sync_v2:
+                # 有音频数据，执行口型同步
+                chunk_size = int(sample_rate / 60)  # 60FPS
+                audio_pos = 0
+
+                while self._pygame.mixer.music.get_busy():
+                    current_time = time.time()
+                    elapsed_time = current_time - start_time
+
+                    # 根据播放时间计算当前音频位置
+                    target_pos = int(elapsed_time * sample_rate)
+
+                    # 获取当前音频块
+                    if target_pos < len(audio_array):
+                        chunk_start = max(0, target_pos - chunk_size // 2)
+                        chunk_end = min(len(audio_array), target_pos + chunk_size // 2)
+                        audio_chunk = audio_array[chunk_start:chunk_end].tobytes()
+
+                        # 使用商业级引擎处理音频
+                        if audio_chunk:
+                            try:
+                                # 🔧 首次播放计时：记录前5次口型同步耗时
+                                if is_first_play and self.enable_timing_debug and lip_sync_count < 5:
+                                    lip_sync_start = time.time()
+
+                                self._update_live2d_with_advanced_engine(audio_chunk)
+
+                                if is_first_play and self.enable_timing_debug and lip_sync_count < 5:
+                                    lip_sync_duration = (time.time() - lip_sync_start) * 1000
+                                    logger.info(f"⏱️ [EdgeTTS口型同步计时] 第{lip_sync_count+1}次更新: 耗时={lip_sync_duration:.2f}ms")
+                                    lip_sync_count += 1
+                            except Exception as e:
+                                logger.debug(f"商业级引擎处理错误: {e}")
+
+                    # 60FPS更新频率
+                    time.sleep(1.0 / 60)
+
+                    # 防止无限等待（5分钟超时）
+                    if current_time - start_time > 300:
+                        logger.warning("音频播放超时，强制停止")
+                        self._pygame.mixer.music.stop()
+                        break
+            else:
+                # 没有音频数据，仅等待播放完成
+                while self._pygame.mixer.music.get_busy():
+                    time.sleep(0.1)
+
+                    # 防止无限等待
+                    if time.time() - start_time > 300:
+                        logger.warning("音频播放超时，强制停止")
+                        self._pygame.mixer.music.stop()
+                        break
+
             self.is_playing = False
+            self._stop_live2d_lip_sync()
             logger.debug("音频播放完成")
-            
+
+            # 清理临时文件
+            try:
+                import os
+                if os.path.exists(temp_file):
+                    os.unlink(temp_file)
+            except Exception as e:
+                logger.debug(f"清理临时文件失败: {e}")
+
         except Exception as e:
             logger.error(f"播放音频数据失败: {e}")
+            import traceback
+            traceback.print_exc()
             self.is_playing = False
-            # 尝试重新初始化音频系统（对应原pygame重新初始化逻辑）
-            try:
-                self._init_audio_system()
-            except:
-                pass
+            self._stop_live2d_lip_sync()
+
+            # 🔧 即使出错也标记已尝试首次播放
+            if self.first_playback:
+                self.first_playback = False
 
     def _audio_cleanup_worker(self):
         """音频文件清理工作线程（保持原始逻辑）"""
@@ -446,16 +560,16 @@ class VoiceIntegration:
         }
 
     def _play_audio_from_url(self, audio_url: str):
-        """从URL播放音频（保持原始逻辑，仅替换播放实现）"""
+        """从URL播放音频 - 使用pygame.mixer"""
         if not self.audio_available:
             logger.warning("音频系统不可用，无法播放音频URL")
             return
-            
+
         try:
             import requests
             import tempfile
             import os
-            
+
             # 判断是URL还是本地文件
             if audio_url.startswith("http://") or audio_url.startswith("https://"):
                 # 下载音频文件
@@ -478,7 +592,7 @@ class VoiceIntegration:
             with open(audio_file, 'rb') as f:
                 audio_data = f.read()
             self._play_audio_data_sync(audio_data)
-            
+
             # 清理临时文件
             if audio_file != audio_url:
                 try:
@@ -488,6 +602,75 @@ class VoiceIntegration:
 
         except Exception as e:
             logger.error(f"播放音频URL失败: {e}")
+
+    # ====== Live2D嘴部同步辅助方法 ======
+    def _get_live2d_widget(self):
+        """获取Live2D widget引用"""
+        try:
+            # 通过config获取window，然后获取side widget和live2d_widget
+            if hasattr(config, 'window') and config.window:
+                window = config.window
+                if hasattr(window, 'side') and hasattr(window.side, 'live2d_widget'):
+                    live2d_widget = window.side.live2d_widget
+                    # 检查是否在Live2D模式且模型已加载
+                    if (hasattr(window.side, 'display_mode') and
+                        window.side.display_mode == 'live2d' and
+                        live2d_widget and
+                        hasattr(live2d_widget, 'is_model_loaded') and
+                        live2d_widget.is_model_loaded()):
+                        return live2d_widget
+        except Exception as e:
+            logger.debug(f"获取Live2D widget失败: {e}")
+        return None
+    
+    def _start_live2d_lip_sync(self):
+        """启动Live2D嘴部同步"""
+        try:
+            live2d_widget = self._get_live2d_widget()
+            if live2d_widget:
+                live2d_widget.start_speaking()
+                logger.debug("Live2D嘴部同步已启动（音频播放）")
+        except Exception as e:
+            logger.debug(f"启动Live2D嘴部同步失败: {e}")
+    
+    def _update_live2d_with_advanced_engine(self, audio_chunk: bytes):
+        """使用商业级引擎更新Live2D（完整5参数控制）"""
+        try:
+            live2d_widget = self._get_live2d_widget()
+            if not live2d_widget:
+                return
+            
+            # 使用商业级引擎处理音频
+            lip_sync_params = self._advanced_lip_sync_v2.process_audio_chunk(audio_chunk)
+            
+            # 应用全部5个参数
+            if 'mouth_open' in lip_sync_params:
+                live2d_widget.set_audio_volume(lip_sync_params['mouth_open'])
+            
+            if 'mouth_form' in lip_sync_params:
+                live2d_widget.set_mouth_form(lip_sync_params['mouth_form'])
+            
+            if hasattr(live2d_widget, 'set_mouth_smile') and 'mouth_smile' in lip_sync_params:
+                live2d_widget.set_mouth_smile(lip_sync_params['mouth_smile'])
+            
+            if hasattr(live2d_widget, 'set_eye_brow') and 'eye_brow_up' in lip_sync_params:
+                live2d_widget.set_eye_brow(lip_sync_params['eye_brow_up'])
+            
+            if hasattr(live2d_widget, 'set_eye_wide') and 'eye_wide' in lip_sync_params:
+                live2d_widget.set_eye_wide(lip_sync_params['eye_wide'])
+                
+        except Exception as e:
+            logger.debug(f"商业级引擎更新Live2D失败: {e}")
+    
+    def _stop_live2d_lip_sync(self):
+        """停止Live2D嘴部同步"""
+        try:
+            live2d_widget = self._get_live2d_widget()
+            if live2d_widget:
+                live2d_widget.stop_speaking()
+                logger.debug("Live2D嘴部同步已停止（音频播放完成）")
+        except Exception as e:
+            logger.debug(f"停止Live2D嘴部同步失败: {e}")
 
 def get_voice_integration() -> VoiceIntegration:
     """获取语音集成实例（保持原始逻辑）"""

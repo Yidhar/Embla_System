@@ -13,6 +13,7 @@ import base64
 import logging
 from typing import Optional, Callable
 from contextlib import suppress
+from collections import deque
 
 import numpy as np
 
@@ -37,7 +38,7 @@ class AudioManager:
         self,
         input_sample_rate: int = 16000,
         output_sample_rate: int = 24000,
-        chunk_size_ms: int = 200,
+        chunk_size_ms: int = 20,  # 优化：降低到20ms以提高口型同步更新率（50FPS，接近60FPS目标）
         vad_threshold: float = 0.02,
         echo_suppression: bool = True
     ):
@@ -47,7 +48,7 @@ class AudioManager:
         参数:
             input_sample_rate: 输入采样率（Hz）
             output_sample_rate: 输出采样率（Hz）
-            chunk_size_ms: 音频块大小（毫秒）
+            chunk_size_ms: 音频块大小（毫秒）- 20ms提供50FPS更新率，接近Live2D 60FPS口型同步目标
             vad_threshold: 静音检测阈值（0-1）
             echo_suppression: 是否启用回声抑制
         """
@@ -87,10 +88,52 @@ class AudioManager:
         self.ai_response_done = False
         self.empty_queue_count = 0
 
+        # 🔥 异步口型同步机制（模拟EdgeTTS）
+        self.lip_sync_buffer = deque(maxlen=50)  # 优化：扩大滑动窗口缓冲区到50个块（1000ms@20ms/块），提供更稳定的数据访问
+        self.playback_start_time = None  # 播放开始时间戳（用于流畅的位置计算）
+        self.chunk_counter = 0  # 已加入缓冲区的块总数（用于计算滑动窗口位置）
+        self.lip_sync_thread = None  # 独立的口型更新线程
+        self.lip_sync_running = False  # 口型线程运行标志
+        self.lip_sync_fps = 60  # 口型更新帧率
+        self.buffer_lock = threading.Lock()  # 缓冲区线程锁
+
+        # 🎯 实时语音固定延迟追踪参数
+        # 核心思想：target_pos跟随实际播放位置（elapsed_time），但固定落后一个延迟
+        # 关键：实际播放是连续的（用户反馈"语音流畅"），应该用elapsed_time而非chunk_counter
+        # 优化：将延迟从100ms降低到25ms，显著提升口型同步速度（接近EdgeTTS的实时性）
+        self.fixed_delay_seconds = 0.025  # 固定延迟25ms，平衡安全性和实时性
+        self.fixed_delay_samples = int(self.fixed_delay_seconds * output_sample_rate)  # 600样本
+
+        # 实时语音专用参数（与EdgeTTS的差异补偿）
+        self.realtime_mouth_open_scale = 1.0  # 优化：改为1.0，让口型变化更明显（与EdgeTTS一致）
+
         # 线程
         self.input_thread = None
         self.output_decoder_thread = None
         self.output_player_thread = None
+
+        # 初始化高级口型同步引擎（提前初始化，避免首次播放时阻塞）
+        self._advanced_lip_sync_v2 = None
+        self._lip_sync_error_count = 0
+
+        try:
+            from voice.input.voice_realtime.core.advanced_lip_sync_v2 import AdvancedLipSyncEngineV2
+            self._advanced_lip_sync_v2 = AdvancedLipSyncEngineV2(
+                sample_rate=output_sample_rate,
+                target_fps=60
+            )
+            logger.info("✅ AudioManager已启用商业级Live2D口型同步引擎V2.0（Kalman滤波+音素识别+情感联动+60FPS）")
+
+            # 引擎预热，避免第一次调用时的scipy/FFT初始化延迟
+            import numpy as np
+            dummy_audio = np.zeros(480, dtype=np.int16).tobytes()  # 20ms静音音频
+            self._advanced_lip_sync_v2.process_audio_chunk(dummy_audio)
+            logger.debug("口型同步引擎已预热，首次响应延迟已优化")
+
+        except ImportError as e:
+            logger.warning(f"无法加载高级口型同步引擎: {e}，口型同步功能将不可用")
+        except Exception as e:
+            logger.error(f"初始化口型同步引擎失败: {e}")
 
         # 回调函数
         self.on_audio_input: Optional[Callable[[bytes], None]] = None
@@ -187,6 +230,9 @@ class AudioManager:
         停止音频管理器
         """
         logger.info("Stopping AudioManager...")
+
+        # 停止异步口型同步线程
+        self._stop_lip_sync_thread()
 
         # 设置停止标志
         self.is_running = False
@@ -333,14 +379,42 @@ class AudioManager:
                         self.is_playing = True
                         self.force_mute = True
                         self.empty_queue_count = 0
+
+                        # 启动异步口型同步机制
+                        self.chunk_counter = 0
+                        self._start_lip_sync_thread()
+
                         if self.on_playback_started:
                             self.on_playback_started()
                         logger.debug("Started audio playback")
 
                     # 播放音频
                     if self.output_stream:
+                        # 🔧 关键修复：将大的audio_chunk切分成output_chunk_size的小块
+                        # 原因：从队列接收的audio_chunk可能很大（如320ms），需要切分成20ms小块
+
+                        # 切分音频块
+                        audio_array = np.frombuffer(audio_chunk, dtype=np.int16)
+                        num_small_chunks = (len(audio_array) + self.output_chunk_size - 1) // self.output_chunk_size
+
+                        for i in range(num_small_chunks):
+                            start_idx = i * self.output_chunk_size
+                            end_idx = min((i + 1) * self.output_chunk_size, len(audio_array))
+                            small_chunk = audio_array[start_idx:end_idx].tobytes()
+
+                            # 将小块加入滑动窗口缓冲区
+                            with self.buffer_lock:
+                                self.lip_sync_buffer.append(small_chunk)
+                                self.chunk_counter += 1
+
+                        # 在第一次播放时记录开始时间
+                        if self.playback_start_time is None:
+                            self.playback_start_time = time.time()
+
+                        # 播放音频块（阻塞，直到播放完成）
                         self.output_stream.write(audio_chunk)
                         self.stats['output_chunks'] += 1
+
                 else:
                     # 队列为空，检查是否结束播放
                     if was_playing:
@@ -385,6 +459,9 @@ class AudioManager:
                             logger.warning("Queue idle for 3 seconds, forcing end")
 
                         if should_end:
+                            # 停止异步口型同步线程
+                            self._stop_lip_sync_thread()
+
                             # 最后的清理，确保没有残留数据
                             final_chunks = 0
                             while not self.output_queue.empty():
@@ -423,6 +500,159 @@ class AudioManager:
             except Exception as e:
                 logger.error(f"Player loop error: {e}")
                 time.sleep(0.1)
+
+    def _lip_sync_update_loop(self):
+        """独立的60FPS口型同步更新线程"""
+        logger.info("口型同步更新线程启动（60FPS）")
+        frame_count = 0
+
+        while self.lip_sync_running:
+            try:
+                # 检查是否有播放开始时间
+                if self.playback_start_time is None:
+                    time.sleep(0.01)
+                    continue
+
+                # 获取当前播放状态
+                with self.buffer_lock:
+                    buffer_size = len(self.lip_sync_buffer)
+                    total_chunks = self.chunk_counter
+
+                # 🎯 最终修复：使用elapsed_time实时追踪播放位置
+                # 原因：played_chunks只在write()完成后更新，导致320ms才更新一次
+                # write()虽然阻塞，但音频已经开始播放，elapsed_time就是实际播放时间
+
+                current_time = time.time()
+                elapsed_time = current_time - self.playback_start_time
+
+                # 1. 实际播放位置 = 经过的时间 × 采样率
+                actual_playback_pos = int(elapsed_time * self.output_sample_rate)
+
+                # 2. 目标位置 = 实际播放位置 - 固定延迟（落后25ms）
+                target_sample_pos = max(0, actual_playback_pos - self.fixed_delay_samples)
+
+                # 3. 安全限制：不超过已接收的数据
+                max_sample_pos = total_chunks * self.output_chunk_size
+                target_sample_pos = min(target_sample_pos, max_sample_pos)
+
+                # 从缓冲区提取音频块
+                audio_chunk = self._extract_audio_from_buffer(target_sample_pos)
+
+                if audio_chunk:
+                    try:
+                        # 调用引擎更新Live2D
+                        self._update_live2d_with_advanced_engine(audio_chunk)
+                    except Exception as e:
+                        logger.error(f"口型同步处理错误: {e}")
+
+                frame_count += 1
+                # 60FPS更新频率
+                time.sleep(1.0 / self.lip_sync_fps)
+
+            except Exception as e:
+                if self.lip_sync_running:
+                    logger.error(f"口型同步更新循环错误: {e}")
+                    import traceback
+                    traceback.print_exc()
+                time.sleep(0.01)
+
+        logger.info("口型同步更新线程结束")
+
+    def _extract_audio_from_buffer(self, target_sample_pos: int) -> Optional[bytes]:
+        """从滑动窗口缓冲区提取音频块（基于时间戳）"""
+        try:
+            with self.buffer_lock:
+                if not self.lip_sync_buffer:
+                    return None
+
+                # 计算每个块的样本数（20ms @ 24000Hz = 480样本）
+                chunk_samples = self.output_chunk_size
+
+                # 计算当前应该在哪个块
+                target_chunk_index = target_sample_pos // chunk_samples
+
+                # 限制不超过已接收的块数（避免访问还未到达的块）
+                # chunk_counter是已加入的块总数，所以最大索引是 chunk_counter - 1
+                target_chunk_index = min(target_chunk_index, self.chunk_counter - 1)
+
+                # 计算缓冲区中第一个块的索引（滑动窗口）
+                # chunk_counter是已加入的块总数，buffer中最多保留50个块
+                buffer_start_chunk = max(0, self.chunk_counter - len(self.lip_sync_buffer))
+
+                # 计算相对位置
+                relative_index = target_chunk_index - buffer_start_chunk
+
+                # 优化：避免返回None导致跳帧，返回最接近的可用块
+                if relative_index < 0:
+                    # 目标块还未到达缓冲区，使用最早的块（缓冲区第一个）
+                    relative_index = 0
+                elif relative_index >= len(self.lip_sync_buffer):
+                    # 目标块已超出缓冲区，使用最新的块（缓冲区最后一个）
+                    relative_index = len(self.lip_sync_buffer) - 1
+
+                # 检查是否在缓冲区范围内（优化后应该总是True）
+                if 0 <= relative_index < len(self.lip_sync_buffer):
+                    # 🔧 修复：直接返回单个块，移除上下文拼接
+                    # 原因：上下文拼接导致返回的音频块太大（60ms而非20ms）
+                    # 现在每个块是20ms，足够精细，不需要额外上下文
+                    audio_chunk = self.lip_sync_buffer[relative_index]
+                    return audio_chunk
+                else:
+                    # 优化后理论上不应该到达这里，但保留作为安全网
+                    # 返回最新的块而非None
+                    if len(self.lip_sync_buffer) > 0:
+                        return self.lip_sync_buffer[-1]
+                    return None
+
+        except Exception as e:
+            logger.error(f"提取音频块错误: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def _start_lip_sync_thread(self):
+        """启动独立的口型同步线程"""
+        if self.lip_sync_thread and self.lip_sync_thread.is_alive():
+            logger.debug("口型同步线程已在运行")
+            return
+
+        self.lip_sync_running = True
+        self.lip_sync_thread = threading.Thread(
+            target=self._lip_sync_update_loop,
+            daemon=True,
+            name="LipSyncUpdate"
+        )
+        self.lip_sync_thread.start()
+        logger.info("口型同步线程已启动")
+
+    def _stop_lip_sync_thread(self):
+        """停止独立的口型同步线程"""
+        if not self.lip_sync_running:
+            return
+
+        self.lip_sync_running = False
+
+        # 等待线程结束
+        if self.lip_sync_thread and self.lip_sync_thread.is_alive():
+            self.lip_sync_thread.join(timeout=1.0)
+
+        # 清空缓冲区
+        with self.buffer_lock:
+            self.lip_sync_buffer.clear()
+            self.playback_start_time = None
+            self.chunk_counter = 0
+
+        # 关闭Live2D嘴巴（模仿EdgeTTS）
+        try:
+            live2d_widget = self._get_live2d_widget()
+            if live2d_widget:
+                if hasattr(live2d_widget, 'stop_speaking'):
+                    live2d_widget.stop_speaking()
+                    logger.debug("Live2D嘴部已关闭")
+        except Exception as e:
+            logger.debug(f"关闭Live2D嘴部失败: {e}")
+
+        logger.info("口型同步线程已停止")
 
     def _is_silence(self, audio_data: bytes) -> bool:
         """检测音频是否为静音"""
@@ -472,6 +702,12 @@ class AudioManager:
                 self.output_queue.get_nowait()
                 cleared_output += 1
 
+        # 清空口型同步缓冲区
+        with self.buffer_lock:
+            self.lip_sync_buffer.clear()
+            self.playback_start_time = None
+            self.chunk_counter = 0
+
         # 重置状态标志
         self.ai_response_done = False
         self.empty_queue_count = 0
@@ -484,6 +720,9 @@ class AudioManager:
     def interrupt_playback(self):
         """中断AI播放"""
         logger.info("Interrupting playback")
+
+        # 停止异步口型同步线程
+        self._stop_lip_sync_thread()
 
         self.is_playing = False
         self.ai_response_done = True
@@ -525,3 +764,91 @@ class AudioManager:
             'is_playing': self.is_playing,
             'stats': self.stats.copy()
         }
+
+    def _get_live2d_widget(self):
+        """获取Live2D widget引用（完全复制自EdgeTTS）"""
+        try:
+            # 确保可以导入system.config
+            import sys
+            import os
+            # 计算项目根目录（向上5级）
+            current_file = os.path.abspath(__file__)
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file)))))
+            if project_root not in sys.path:
+                sys.path.insert(0, project_root)
+
+            from system.config import config
+
+            if hasattr(config, 'window') and config.window:
+                window = config.window
+                if hasattr(window, 'side') and hasattr(window.side, 'live2d_widget'):
+                    live2d_widget = window.side.live2d_widget
+                    # 检查是否在Live2D模式且模型已加载
+                    if (hasattr(window.side, 'display_mode') and
+                        window.side.display_mode == 'live2d' and
+                        live2d_widget and
+                        hasattr(live2d_widget, 'is_model_loaded') and
+                        live2d_widget.is_model_loaded()):
+                        return live2d_widget
+        except Exception as e:
+            logger.debug(f"获取Live2D widget失败: {e}")
+        return None
+
+    def _update_live2d_with_advanced_engine(self, audio_chunk: bytes):
+        """使用商业级引擎更新Live2D（完全复制自EdgeTTS）"""
+        try:
+            # 检查引擎是否可用
+            if not self._advanced_lip_sync_v2:
+                if self._lip_sync_error_count == 0:
+                    logger.warning("口型同步引擎未初始化")
+                    self._lip_sync_error_count = 999
+                return
+
+            live2d_widget = self._get_live2d_widget()
+            if not live2d_widget:
+                if self._lip_sync_error_count == 0:
+                    logger.warning("Live2D widget未找到")
+                    self._lip_sync_error_count = 999
+                return
+
+            # 首次成功时记录
+            if self._lip_sync_error_count == 0:
+                logger.info("✅ Live2D口型同步已激活（EdgeTTS风格直接调用）")
+                self._lip_sync_error_count = -1
+
+            # 使用商业级引擎处理音频
+            lip_sync_params = self._advanced_lip_sync_v2.process_audio_chunk(audio_chunk)
+
+            # 🔧 实时语音专用修正：对mouth_open应用缩放系数（补偿24000Hz采样率差异）
+            if 'mouth_open' in lip_sync_params:
+                mouth_open = lip_sync_params['mouth_open'] * self.realtime_mouth_open_scale
+                live2d_widget.set_audio_volume(mouth_open)
+
+            if 'mouth_form' in lip_sync_params:
+                live2d_widget.set_mouth_form(lip_sync_params['mouth_form'])
+
+            if hasattr(live2d_widget, 'set_mouth_smile') and 'mouth_smile' in lip_sync_params:
+                live2d_widget.set_mouth_smile(lip_sync_params['mouth_smile'])
+
+            if hasattr(live2d_widget, 'set_eye_brow') and 'eye_brow_up' in lip_sync_params:
+                live2d_widget.set_eye_brow(lip_sync_params['eye_brow_up'])
+
+            if hasattr(live2d_widget, 'set_eye_wide') and 'eye_wide' in lip_sync_params:
+                live2d_widget.set_eye_wide(lip_sync_params['eye_wide'])
+
+        except Exception as e:
+            # 记录错误但不影响主流程
+            if self._lip_sync_error_count >= 0 and self._lip_sync_error_count <= 3:
+                self._lip_sync_error_count += 1
+                logger.error(f"口型同步引擎错误 ({self._lip_sync_error_count}/3): {e}")
+                import traceback
+                traceback.print_exc()
+
+                if self._lip_sync_error_count == 3:
+                    logger.warning("后续口型同步错误将静默处理")
+            elif self._lip_sync_error_count == -1:
+                # 已初始化但出错，重新计数
+                self._lip_sync_error_count = 1
+                logger.error(f"口型同步运行时错误: {e}")
+                import traceback
+                traceback.print_exc()

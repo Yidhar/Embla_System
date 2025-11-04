@@ -10,14 +10,11 @@ nagaagent-core>=1.0.9
 
 # All runtime dependencies have been migrated into nagaagent-core.
 # If you need to pin extra versions locally, append them below.
-simpleaudio
-pydub
 
-onnxruntime
-sounddevice
-pyautogui
-librosa
-pystray
-paho_mqtt
-bilibili_api
+# Audio playback (pygame can play MP3 directly, no ffmpeg needed)
+pygame>=2.5.0
 
+# Audio processing for lip sync
+soundfile>=0.12.1  # For reading MP3/WAV audio data (optional, for lip sync)
+scipy>=1.9.0       # Required for advanced lip sync (FFT, LPC, formant detection)
+numpy>=1.21.0      # Required for audio processing
