@@ -1,4 +1,4 @@
-# NagaAgent 4.0
+# NagaAgent
 
 ![NagaAgent Logo](https://img.shields.io/badge/NagaAgent-4.0-blue?style=for-the-badge&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-green?style=for-the-badge)
@@ -10,8 +10,8 @@
 ![UI 预览](ui/img/README.jpg)
 ---
 
-[教程视频及免配置一键运行整合包获取链接](https://www.pylindex.top/naga)
----
+## [此处获取教程视频与一键运行整合包](https://www.pylindex.top/naga)
+
 
 ## 介绍
 
@@ -189,7 +189,6 @@ graph TB
 - **MCP (Model Context Protocol)** 工具调用
 - **OpenAI兼容API** + 多种LLM服务商支持
 
-```
 
 ---
 
@@ -197,12 +196,19 @@ graph TB
 
 ### 环境要求
 - Python 3.11
-- 可选：uv工具（加速依赖安装）
+- 可选：uv工具（加速依赖安装，且无需特定python版本）
 
 ### 快速开始
 
-#### 1. 初始化项目
+>  如果您的部署有困难，可以参考视频教程或下载一键运行整合包。
+
+#### 1. 安装依赖
+##### 使用setup脚本
+
 ```bash
+# 可选：先安装uv
+pip install uv
+
 # 使用 setup.py 自动初始化
 python setup.py
 
@@ -219,22 +225,27 @@ setup.bat
 - 安装依赖包
 - 复制配置文件模板
 - 打开配置文件供编辑
+</details>
 
-##### 手动进行
+<details><summary>手动部署</summary>
+
 ```bash
 # 无uv
 python -m venv .venv
+
 # linux/Mac OS
 source .venv/bin/activate
 # Windows
 .\.venv\Scripts\activate
+
 pip install -r requirements.txt
 
 # 使用uv
 uv sync
 ```
+</details>
 
-#### 2. 配置API密钥
+#### 2. 配置LLM API
 编辑 `config.json` 文件，配置您的LLM API信息：
 ```json
 {
@@ -246,39 +257,23 @@ uv sync
 }
 ```
 
-#### 3. 启动应用
-```bash
-# 使用启动脚本
-./start.sh          # Linux/macOS
-start.bat           # Windows
-
-
-# 或直接运行
-# linux/Mac OS
-source .venv/bin/activate
-# Windows
-.\.venv\Scripts\activate
-python main.py
-# uv
-uv run main.py
-```
-
-### 可选配置
+<details><summary>可选配置</summary>
 
 #### 启用知识图谱记忆
-在 `config.json` 中配置Neo4j数据库：
+
+使用 `docker` 安装 `neo4j` 或安装 `neo4j desktop` 并在 `config.json` 中配置 Neo4j 连接参数：
 ```json
 {
   "grag": {
     "enabled": true,
     "neo4j_uri": "neo4j://127.0.0.1:7687",
     "neo4j_user": "neo4j",
-    "neo4j_password": "your-password"
+    "neo4j_password": "你安装neo4j时设置的密码"
   }
 }
 ```
 
-#### 启用语音功能
+#### 启用语音输出功能
 ```json
 {
   "system": {
@@ -290,42 +285,88 @@ uv run main.py
 }
 ```
 
-### 故障排除
+#### Live2D 相关配置
 
-#### 常见问题
-1. **Python版本不兼容**：确保使用Python 3.11
-2. **端口被占用**：检查8000、8001、8003、5048端口是否可用，或更改为其他端口
-3. **依赖安装失败**：尝试使用uv工具重新安装
-4. **Neo4j连接失败**：确保Neo4j服务正在运行
+```json5
+  "live2d": {
+    "enabled": false, # 是否启用Live2D
+    "model_path": "ui/live2d/live2d_models/characters/llny/mianfeimox/llny.model3.json", # Live2D模型路径
+    "fallback_image": "ui/img/standby.png", # 备用图片
+    "auto_switch": true, # 是否自动切换
+    "animation_enabled": true, # 是否启用动画
+    "touch_interaction": true # 是否启用触摸交互
+  },
+  ```
 
-#### 系统检测
+> 其他配置项可参考注释
+
+</details>
+
+#### 3. 启动应用
+```bash
+# 使用启动脚本
+./start.sh          # Linux/macOS
+start.bat           # Windows
+
+
+# 或直接运行py文件
+# linux/Mac OS
+source .venv/bin/activate
+# Windows
+.\.venv\Scripts\activate
+python main.py
+
+# uv
+uv run main.py
+```
+
+
+<details><summary>故障排除</summary>
+
+1. **Python 版本不兼容**：确保使用Python 3.11
+2. **端口被占用**：检查8000、8001、8003、5048端口是否可用
+3. **Neo4j 连接失败**：确保Neo4j服务正在运行
+4. **检测 Neo4j 连接时出现 json 解析错误**：退出并重新启动程序
+5. **未知错误**：请创建issue以反馈
+
+</details>
+
+<details><summary>环境检测</summary>
+
 ```bash
 # 运行系统环境检测
-python main.py --check-env
+python main.py --check-env --force-check
 
 # 快速检测
 python main.py --quick-check
 ```
 
----
+</details>
+
 
 ## 许可证
 
-[Nagaagent License](LICENSE)
+[NagaAgent License](LICENSE)
+
 
 ## 贡献
 
-欢迎提交Issue和Pull Request！
+欢迎创建Issue和Pull Request！
 
-### 构建
+<details><summary>构建一键运行整合包</summary>
+
 ```bash
 python build.py
 ```
+构建完成的文件位于`dist/`目录下
+
+</details>
+
 
 <div align="center">
 
----
+**感谢所有开发者对本项目做出的贡献**
 
-**⭐ 如果这个项目对您有帮助，请考虑给我们一个 Star！**
+**⭐ 如果这个项目对您有帮助，请考虑给我们一个 Star**
 
 </div>
