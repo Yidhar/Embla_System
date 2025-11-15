@@ -33,10 +33,19 @@
 输入对话："帮我打开浏览器"
 期望输出：
 ｛
-"agentType": "agent",
-"task_type": "computer_control",
-"instruction": "打开浏览器",
-"parameters": ｛"action": "open", "target": "browser"｝
+"agentType": "mcp",
+"service_name": "浏览器Agent",
+"tool_name": "open",
+"url": "https://www.baidu.com"
+｝
+
+输入对话："请用edge浏览器打开网站bilibili"
+期望输出：
+｛
+"agentType": "mcp",
+"service_name": "浏览器Agent",
+"tool_name": "open",
+"url": "https://www.bilibili.com"
 ｝
 
 【输入对话】
