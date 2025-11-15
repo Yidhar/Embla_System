@@ -1,15 +1,17 @@
 # pyinstaller适配
 import os
+import sys
 if os.path.exists("_internal"):
     os.chdir("_internal")
 
+# 检测是否在打包环境中
+# PyInstaller打包后的程序会设置sys.frozen属性
+IS_PACKAGED = getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
 
 # 标准库导入
 import asyncio
 import logging
-import os
 import socket
-import sys
 import threading
 import time
 import warnings
@@ -600,13 +602,17 @@ if __name__ == "__main__":
     print("🚀 正在启动NagaAgent...")
     print("=" * 50)
 
-    # 执行系统检测（只在第一次启动时检测）
-    if not run_system_check():
-        print("\n❌ 系统环境检测失败，程序无法启动")
-        print("请根据上述建议修复问题后重新启动")
-        i=input("是否无视检测结果继续启动？是则按y，否则按其他任意键退出...")
-        if i != "y" and i != "Y":
-            sys.exit(1)
+    # 如果是打包环境，跳过所有环境检测
+    if IS_PACKAGED:
+        print("📦 检测到打包环境，跳过系统环境检测...")
+    else:
+        # 执行系统检测（只在第一次启动时检测）
+        if not run_system_check():
+            print("\n❌ 系统环境检测失败，程序无法启动")
+            print("请根据上述建议修复问题后重新启动")
+            i=input("是否无视检测结果继续启动？是则按y，否则按其他任意键退出...")
+            if i != "y" and i != "Y":
+                sys.exit(1)
 
     print("\n🎉 系统环境检测通过，正在启动应用...")
     print("=" * 50)
