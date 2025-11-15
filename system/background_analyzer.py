@@ -51,12 +51,14 @@ class ConversationAnalyzer:
                     description = info.get("description", "")
                     capabilities = info.get("capabilities", {})
                     
-                    # 提取工具名称
+                    # 提取工具名称 - 从invocationCommands中提取
                     tools = []
-                    for cap_name, cap_info in capabilities.items():
-                        if isinstance(cap_info, dict) and "tools" in cap_info:
-                            tools.extend(cap_info["tools"])
-                    
+                    invocation_commands = capabilities.get('invocationCommands', [])
+                    for cmd in invocation_commands:
+                        tool_name = cmd.get('command', '')
+                        if tool_name:
+                            tools.append(tool_name)
+
                     if tools:
                         tools_summary.append(f"- {display_name}: {description} (工具: {', '.join(tools)})")
                     else:
