@@ -101,11 +101,11 @@ def run_build_commands():
 def create_instructions_and_venv_placeholder():
     """创建说明文件和 .venv 占位符"""
     
-    # 路径定义
+    ## 路径定义
     dist_main_dir = os.path.join('dist', 'main')
     instructions_path = os.path.join(dist_main_dir, '使用说明.txt')
-    venv_path = os.path.join(dist_main_dir, '.venv')
-    placeholder_path = os.path.join(venv_path, '说明.txt')
+    #venv_path = os.path.join(dist_main_dir, '.venv')
+    #placeholder_path = os.path.join(venv_path, '说明.txt')
 
     # 使用说明内容
     instructions_content = """\
@@ -117,11 +117,10 @@ config.json（配置文件）位置：_internal/config.json，也可以使用GUI
     # .venv/说明.txt 内容
     placeholder_content = "占位"
 
-    print(f"\n[6/7] 创建 {instructions_path} 和 {venv_path} 占位文件...")
+    print(f"\n[6/7] 创建 {instructions_path}...")
     
     # 确保目标目录存在
     os.makedirs(dist_main_dir, exist_ok=True)
-    os.makedirs(venv_path, exist_ok=True)
 
     # 写入使用说明
     try:
@@ -131,13 +130,13 @@ config.json（配置文件）位置：_internal/config.json，也可以使用GUI
     except Exception as e:
         print(f"[警告] 写入使用说明失败: {e}")
 
-    # 写入 .venv 占位文件
-    try:
-        with open(placeholder_path, 'w', encoding='utf-8') as f:
-            f.write(placeholder_content)
-        print("    -> .venv/说明.txt 写入完成。")
-    except Exception as e:
-        print(f"[警告] 写入 .venv 占位文件失败: {e}")
+    ## 写入 .venv 占位文件
+    #try:
+    #    with open(placeholder_path, 'w', encoding='utf-8') as f:
+    #        f.write(placeholder_content)
+    #    print("    -> .venv/说明.txt 写入完成。")
+    #except Exception as e:
+    #    print(f"[警告] 写入 .venv 占位文件失败: {e}")
 
 def rename_and_zip_output():
     """重命名 dist/main 目录并快速归档（不压缩）"""
