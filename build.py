@@ -217,16 +217,39 @@ def rename_and_zip_output():
                     print(f"[错误] 归档失败: {e}")
                     sys.exit(1)
 
-        # Linux / Darwin: 优先使用 pigz + tar（pigz 支持并行 gzip），否则回退到 tarfile 单线程压缩
+        # Linux / Darwin: 优先使用 xz（更高压缩率），回退使用 pigz + tar，最后回退到 tarfile
         else:
+            tar_xz_path = f'{target_dir_path}.tar.xz'
             tar_gz_path = f'{target_dir_path}.tar.gz'
             tar_cmd = shutil.which('tar')
+            xz_cmd = shutil.which('xz')
             pigz_cmd = shutil.which('pigz')
-            if tar_cmd and pigz_cmd:
+
+            # 首先尝试使用 xz（最高压缩率）
+            if tar_cmd and xz_cmd:
+                print("    -> 检测到 tar 和 xz，使用 xz 最高压缩率压缩为 tar.xz ...")
+                try:
+                    nproc = str(os.cpu_count() or 4)
+                    cwd = os.path.dirname(target_dir_path) or '.'
+                    base = os.path.basename(target_dir_path)
+                    with open(tar_xz_path, 'wb') as out_f:
+                        p1 = subprocess.Popen([tar_cmd, '-C', cwd, '-cf', '-', base], stdout=subprocess.PIPE)
+                        # xz -9: 最高压缩级别, -T: 多线程
+                        p2 = subprocess.Popen([xz_cmd, '-9', '-T', nproc], stdin=p1.stdout, stdout=out_f)
+                        p1.stdout.close()
+                        ret2 = p2.wait()
+                        ret1 = p1.wait()
+                        if ret1 != 0 or ret2 != 0:
+                            raise subprocess.CalledProcessError(ret2 or ret1, 'tar|xz')
+                    print(f"    -> 多线程 xz 压缩完成。文件位置: {tar_xz_path}")
+                except Exception as e:
+                    print(f"[错误] xz/tar 打包失败: {e}")
+                    sys.exit(1)
+            # 回退使用 pigz
+            elif tar_cmd and pigz_cmd:
                 print("    -> 检测到 tar 和 pigz，使用 pigz 多线程压缩为 tar.gz ...")
                 try:
                     nproc = str(os.cpu_count() or 4)
-                    # 在目标父目录下运行 tar，避免在归档中包含冗余路径
                     cwd = os.path.dirname(target_dir_path) or '.'
                     base = os.path.basename(target_dir_path)
                     with open(tar_gz_path, 'wb') as out_f:
@@ -242,14 +265,22 @@ def rename_and_zip_output():
                     print(f"[错误] pigz/tar 打包失败: {e}")
                     sys.exit(1)
             else:
-                print("    -> 未检测到 pigz，使用 Python tarfile 单线程压缩为 tar.gz ...")
+                # 最后回退到 Python tarfile，优先尝试 xz 格式
                 try:
-                    with tarfile.open(tar_gz_path, 'w:gz', compresslevel=9) as tar:
+                    print("    -> 未检测到外部压缩工具，使用 Python tarfile xz 格式压缩...")
+                    with tarfile.open(tar_xz_path, 'w:xz', preset=9) as tar:
                         tar.add(target_dir_path, arcname=os.path.basename(target_dir_path))
-                    print(f"    -> 归档完成。文件位置: {tar_gz_path}")
-                except Exception as e:
-                    print(f"[错误] tarfile 打包失败: {e}")
-                    sys.exit(1)
+                    print(f"    -> tar.xz 归档完成。文件位置: {tar_xz_path}")
+                except Exception:
+                    # tarfile 可能不支持 xz，回退到 gzip
+                    try:
+                        print("    -> Python tarfile 不支持 xz，回退到 gzip 压缩...")
+                        with tarfile.open(tar_gz_path, 'w:gz', compresslevel=9) as tar:
+                            tar.add(target_dir_path, arcname=os.path.basename(target_dir_path))
+                        print(f"    -> tar.gz 归档完成。文件位置: {tar_gz_path}")
+                    except Exception as e:
+                        print(f"[错误] tarfile 打包失败: {e}")
+                        sys.exit(1)
 
     except Exception as e:
         print(f"[错误] 打包过程出现异常: {e}")
