@@ -364,6 +364,9 @@ python build.py
 
 </details>
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Xxiii8322766509/NagaAgent&type=date&legend=top-left)](https://www.star-history.com/#Xxiii8322766509/NagaAgent&type=date&legend=top-left)
 
 <div align="center">
 
