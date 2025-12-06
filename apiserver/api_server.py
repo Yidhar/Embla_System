@@ -516,7 +516,39 @@ async def clear_all_sessions():
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-# 文档处理功能已整合到 ui/controller/tool_document.py
+@app.post("/upload/document", response_model=FileUploadResponse)
+async def upload_document(file: UploadFile = File(...), description: str = Form(None)):
+    """上传文档接口"""
+    try:
+        # 确保上传目录存在
+        upload_dir = Path("uploaded_documents")
+        upload_dir.mkdir(exist_ok=True)
+        
+        # 使用原始文件名
+        filename = file.filename
+        file_path = upload_dir / filename
+        
+        # 保存文件
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        # 获取文件信息
+        stat = file_path.stat()
+        
+        return FileUploadResponse(
+            filename=filename,
+            file_path=str(file_path.absolute()),
+            file_size=stat.st_size,
+            file_type=file_path.suffix,
+            upload_time=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime))
+        )
+    except Exception as e:
+        logger.error(f"文件上传失败: {e}")
+        raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
+
+# 挂载LLM服务路由以支持 /llm/chat
+from .llm_service import llm_app
+app.mount("/", llm_app)
 
 # 新增：日志解析相关API接口
 @app.get("/logs/context/statistics")
