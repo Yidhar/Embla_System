@@ -142,6 +142,7 @@ class MCPScheduler:
             return
         try:
             import aiohttp
+            import asyncio
             payload = {
                 "task_id": task.id,
                 "session_id": task.session_id,
@@ -150,19 +151,37 @@ class MCPScheduler:
                 "error": task.error,
                 "completed_at": task.completed_at,
             }
-            async with aiohttp.ClientSession() as session:
-                # 直接调用外部回调URL（通常是apiserver的tool_result_callback）
-                callback_url = task.callback_url
-                if not callback_url.startswith('http'):
-                    # 如果是相对路径，构建完整URL
-                    from system.config import get_server_port
-                    callback_url = f"http://localhost:{get_server_port('api_server')}/tool_result_callback"
-                
-                async with session.post(callback_url, json=payload) as response:
-                    if response.status == 200:
-                        logger.info(f"工具结果回调成功: {task.id}")
-                    else:
-                        logger.error(f"工具结果回调失败: {response.status}")
+
+            # 直接调用外部回调URL（通常是apiserver的tool_result_callback）
+            callback_url = task.callback_url
+            if not callback_url.startswith('http'):
+                # 如果是相对路径，构建完整URL
+                from system.config import get_server_port
+                callback_url = f"http://localhost:{get_server_port('api_server')}/tool_result_callback"
+
+            # 重试机制：尝试3次，每次间隔0.5秒
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(callback_url, json=payload, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                            if response.status == 200:
+                                logger.info(f"工具结果回调成功: {task.id}")
+                                return
+                            else:
+                                logger.warning(f"工具结果回调失败 (尝试 {attempt + 1}/{max_retries}): {response.status}")
+                                if attempt < max_retries - 1:
+                                    await asyncio.sleep(0.5)
+                except asyncio.TimeoutError:
+                    logger.warning(f"工具结果回调超时 (尝试 {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(0.5)
+                except Exception as e:
+                    logger.warning(f"工具结果回调异常 (尝试 {attempt + 1}/{max_retries}): {e}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(0.5)
+
+            logger.error(f"工具结果回调失败，已重试{max_retries}次: {task.id}")
         except Exception as e:
             logger.error(f"回调通知失败: {e}")
     
