@@ -45,8 +45,8 @@ class QuintupleResponse(BaseModel):
 
 async def extract_quintuples_async(text):
     """异步版本的五元组提取"""
-    # 首先尝试使用结构化输出
-    return await _extract_quintuples_async_structured(text)
+    # DeepSeek API不支持结构化输出，直接使用传统JSON解析方法
+    return await _extract_quintuples_async_fallback(text)
 
 
 async def _extract_quintuples_async_structured(text):
