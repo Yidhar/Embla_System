@@ -27,11 +27,12 @@ class MemoryAgent(Agent):
                 "message": f"未知操作: {tool_name}",
                 "data": ""
             }, ensure_ascii=False)
-        query = data.get("query", "").strip()
+        # 支持 query 和 param_name 两种参数名，保持向后兼容
+        query = data.get("query", "").strip() or data.get("param_name", "").strip()
         if not query:
             return json.dumps({
                 "status": "error",
-                "message": "缺少query参数",
+                "message": "缺少query或param_name参数",
                 "data": ""
             }, ensure_ascii=False)
         if not memory_manager or not getattr(memory_manager, "enabled", False):

@@ -548,7 +548,7 @@ async def upload_document(file: UploadFile = File(...), description: str = Form(
 
 # 挂载LLM服务路由以支持 /llm/chat
 from .llm_service import llm_app
-app.mount("/", llm_app)
+app.mount("/llm", llm_app)
 
 # 新增：日志解析相关API接口
 @app.get("/logs/context/statistics")
