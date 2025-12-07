@@ -562,6 +562,17 @@ class MessageManager:
                 assistant_response, 
                 dev_mode=False  # 开发者模式已禁用
             )
+            
+            # 触发五元组自动提取（如果记忆系统已启用）
+            try:
+                from summer_memory.memory_manager import memory_manager
+                if memory_manager and memory_manager.enabled and memory_manager.auto_extract:
+                    import asyncio
+                    # 异步调用记忆管理器添加对话记忆
+                    asyncio.create_task(memory_manager.add_conversation_memory(user_message, assistant_response))
+                    logger.info(f"已提交五元组提取任务: {user_message[:50]}...")
+            except ImportError as e:
+                logger.warning(f"记忆系统未启用或导入失败: {e}")
         except Exception as e:
             logger.error(f"保存对话与日志失败: {e}")
     
