@@ -154,36 +154,36 @@ class ServiceManager:
                 'tts': self.check_port_available("0.0.0.0", config.tts.port)
             }
             
-            # API服务器（可选）- 使用非守护线程，确保服务持续运行
+            # API服务器（可选）
             if port_checks['api']:
-                api_thread = threading.Thread(target=self._start_api_server, daemon=False)
+                api_thread = threading.Thread(target=self._start_api_server, daemon=True)
                 threads.append(("API", api_thread))
                 service_status['API'] = "准备启动"
             elif config.api_server.enabled and config.api_server.auto_start:
                 print(f"⚠️  API服务器: 端口 {config.api_server.port} 已被占用，跳过启动")
                 service_status['API'] = "端口占用"
 
-            # MCP服务器 - 使用非守护线程
+            # MCP服务器
             if port_checks['mcp']:
-                mcp_thread = threading.Thread(target=self._start_mcp_server, daemon=False)
+                mcp_thread = threading.Thread(target=self._start_mcp_server, daemon=True)
                 threads.append(("MCP", mcp_thread))
                 service_status['MCP'] = "准备启动"
             else:
                 print(f"⚠️  MCP服务器: 端口 {get_server_port('mcp_server')} 已被占用，跳过启动")
                 service_status['MCP'] = "端口占用"
 
-            # Agent服务器 - 使用非守护线程
+            # Agent服务器
             if port_checks['agent']:
-                agent_thread = threading.Thread(target=self._start_agent_server, daemon=False)
+                agent_thread = threading.Thread(target=self._start_agent_server, daemon=True)
                 threads.append(("Agent", agent_thread))
                 service_status['Agent'] = "准备启动"
             else:
                 print(f"⚠️  Agent服务器: 端口 {get_server_port('agent_server')} 已被占用，跳过启动")
                 service_status['Agent'] = "端口占用"
 
-            # TTS服务器 - 使用非守护线程
+            # TTS服务器
             if port_checks['tts']:
-                tts_thread = threading.Thread(target=self._start_tts_server, daemon=False)
+                tts_thread = threading.Thread(target=self._start_tts_server, daemon=True)
                 threads.append(("TTS", tts_thread))
                 service_status['TTS'] = "准备启动"
             else:
@@ -204,7 +204,7 @@ class ServiceManager:
             # 批量启动所有线程
             for name, thread in threads:
                 thread.start()
-                print(f"✅ {name}服务器: 启动线程已创建（非守护线程）")
+                print(f"✅ {name}服务器: 启动线程已创建")
 
             # 等待所有服务启动（给服务器启动时间）
             print("⏳ 等待服务初始化...")
