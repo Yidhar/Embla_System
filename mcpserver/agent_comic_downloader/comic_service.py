@@ -6,6 +6,7 @@
 import logging
 from typing import Dict, Any, List
 from pathlib import Path
+import json
 
 # 导入JMComic相关模块
 try:
@@ -95,6 +96,44 @@ class ComicService:
         }
         
         return JmOption.construct(option_dict)
+    
+    async def handle_handoff(self, data: dict):
+        try:
+            tool_name = data.get('tool_name', '').lower()
+
+            match tool_name:
+                case '下载漫画':
+                    func = self.download_comic
+                case '搜索漫画':
+                    func = self.search_comic_by_name
+                case '搜索作者':
+                    func = self.search_comic_by_author
+                case '获取漫画详情':
+                    func = self.get_comic_detail
+                case _:
+                    return json.dumps({
+                        "status": "error",
+                        "message": f"未知操作: {tool_name}",
+                        "data": ""
+                    }, ensure_ascii=False)
+            result = await func(data.get('param_name'))
+            if result:
+                return json.dumps({
+                    "status": "success",
+                    "message": f"操作成功: {tool_name}",
+                    "data": result
+                }, ensure_ascii=False)
+            return json.dumps({
+                "status": "error",
+                "message": f"操作失败: {tool_name}",
+                "data": ""
+            }, ensure_ascii=False)
+        except:
+            return json.dumps({
+                "status": "error",
+                "message": "未知错误",
+                "data": ""
+            }, ensure_ascii=False)
     
     # ==================== 下载功能 ====================
     
