@@ -139,9 +139,11 @@ class MCPScheduler:
     async def _maybe_callback(self, task: MCPTask) -> None:
         """如果提供了callback_url，则POST回传任务结果"""
         if not task.callback_url:
+            logger.debug(f"任务 {task.id} 没有设置callback_url，跳过回调")
             return
         try:
             import aiohttp
+            import asyncio
             payload = {
                 "task_id": task.id,
                 "session_id": task.session_id,
@@ -150,21 +152,54 @@ class MCPScheduler:
                 "error": task.error,
                 "completed_at": task.completed_at,
             }
-            async with aiohttp.ClientSession() as session:
-                # 直接调用外部回调URL（通常是apiserver的tool_result_callback）
-                callback_url = task.callback_url
-                if not callback_url.startswith('http'):
-                    # 如果是相对路径，构建完整URL
-                    from system.config import get_server_port
-                    callback_url = f"http://localhost:{get_server_port('api_server')}/tool_result_callback"
-                
-                async with session.post(callback_url, json=payload) as response:
-                    if response.status == 200:
-                        logger.info(f"工具结果回调成功: {task.id}")
-                    else:
-                        logger.error(f"工具结果回调失败: {response.status}")
+
+            # 直接调用外部回调URL（通常是apiserver的tool_result_callback）
+            callback_url = task.callback_url
+            logger.info(f"[回调调度] 原始callback_url: {callback_url}")
+
+            if not callback_url.startswith('http'):
+                # 如果是相对路径，构建完整URL
+                from system.config import get_server_port
+                callback_url = f"http://localhost:{get_server_port('api_server')}/tool_result_callback"
+                logger.info(f"[回调调度] 相对路径，构建完整URL: {callback_url}")
+
+            # 确保callback_url包含路径，如果没有则添加默认路径
+            # 检查URL格式: http://host:port (只有2个斜杠) 或 http://host:port/ (以斜杠结尾)
+            if callback_url.count('/') == 2 or callback_url.endswith('/'):
+                logger.info(f"[回调调度] URL缺少路径，添加/tool_result_callback")
+                callback_url = callback_url.rstrip('/') + '/tool_result_callback'
+
+            logger.info(f"[回调调度] 最终使用回调URL: {callback_url}, payload大小: {len(str(payload))}字节")
+
+            # 重试机制：尝试3次，每次间隔0.5秒
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"[回调调度] 发送POST请求 (尝试 {attempt + 1}/{max_retries})...")
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(callback_url, json=payload, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                            logger.info(f"[回调调度] 收到响应状态码: {response.status}")
+                            if response.status == 200:
+                                logger.info(f"[回调调度] 工具结果回调成功: {task.id}")
+                                return
+                            else:
+                                # 读取响应内容以帮助调试
+                                response_text = await response.text()
+                                logger.warning(f"[回调调度] 工具结果回调失败 (尝试 {attempt + 1}/{max_retries}): 状态码={response.status}, 响应={response_text[:200]}")
+                                if attempt < max_retries - 1:
+                                    await asyncio.sleep(0.5)
+                except asyncio.TimeoutError:
+                    logger.warning(f"[回调调度] 工具结果回调超时 (尝试 {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(0.5)
+                except Exception as e:
+                    logger.warning(f"[回调调度] 工具结果回调异常 (尝试 {attempt + 1}/{max_retries}): {e}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(0.5)
+
+            logger.error(f"[回调调度] 工具结果回调失败，已重试{max_retries}次: {task.id}")
         except Exception as e:
-            logger.error(f"回调通知失败: {e}")
+            logger.error(f"[回调调度] 回调通知失败: {e}")
     
     async def _execute_single_tool_call(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
         """执行单个工具调用（优先通过mcp_manager统一调用）"""

@@ -28,8 +28,11 @@ class GRAGMemoryManager:
             return
 
         try:
-            # 初始化Neo4j连接
-            from .quintuple_graph import graph
+            # 初始化Neo4j连接（延迟加载）
+            from .quintuple_graph import get_graph, GRAG_ENABLED
+            _graph = get_graph()  # 尝试连接Neo4j
+            if _graph is None and GRAG_ENABLED:
+                logger.warning("GRAG已启用但无法连接到Neo4j，将继续使用文件存储")
             logger.info("GRAG记忆系统初始化成功")
 
             # 启动自动清理任务

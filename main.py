@@ -162,7 +162,7 @@ class ServiceManager:
             elif config.api_server.enabled and config.api_server.auto_start:
                 print(f"⚠️  API服务器: 端口 {config.api_server.port} 已被占用，跳过启动")
                 service_status['API'] = "端口占用"
-            
+
             # MCP服务器
             if port_checks['mcp']:
                 mcp_thread = threading.Thread(target=self._start_mcp_server, daemon=True)
@@ -171,7 +171,7 @@ class ServiceManager:
             else:
                 print(f"⚠️  MCP服务器: 端口 {get_server_port('mcp_server')} 已被占用，跳过启动")
                 service_status['MCP'] = "端口占用"
-            
+
             # Agent服务器
             if port_checks['agent']:
                 agent_thread = threading.Thread(target=self._start_agent_server, daemon=True)
@@ -180,7 +180,7 @@ class ServiceManager:
             else:
                 print(f"⚠️  Agent服务器: 端口 {get_server_port('agent_server')} 已被占用，跳过启动")
                 service_status['Agent'] = "端口占用"
-            
+
             # TTS服务器
             if port_checks['tts']:
                 tts_thread = threading.Thread(target=self._start_tts_server, daemon=True)
@@ -200,14 +200,18 @@ class ServiceManager:
             
             print("\n🚀 开始启动服务...")
             print("-" * 30)
-            
+
             # 批量启动所有线程
             for name, thread in threads:
                 thread.start()
                 print(f"✅ {name}服务器: 启动线程已创建")
-            
+
+            # 等待所有服务启动（给服务器启动时间）
+            print("⏳ 等待服务初始化...")
+            time.sleep(2)
+
             print("-" * 30)
-            print(f"🎉 服务启动完成: {len(threads)} 个服务正在后台运行")
+            print(f"🎉 服务启动完成: {len(threads)} 个服务正在运行")
             print("=" * 50)
             
         except Exception as e:
@@ -234,18 +238,29 @@ class ServiceManager:
     def _start_api_server(self):
         """内部API服务器启动方法"""
         try:
+            import asyncio
+            import time
             from nagaagent_core.api import uvicorn
 
-            uvicorn.run(
+            print(f"   🚀 API服务器: 正在启动 on {config.api_server.host}:{config.api_server.port}...")
+
+            # 使用异步方式启动，不阻塞当前线程
+            uv_config = uvicorn.Config(
                 "apiserver.api_server:app",
                 host=config.api_server.host,
                 port=config.api_server.port,
-                log_level="error",
+                log_level="info",  # 临时改为info以便看到uvicorn日志
                 access_log=False,
                 reload=False,
                 ws_ping_interval=None,  # 禁用WebSocket ping
                 ws_ping_timeout=None    # 禁用WebSocket ping超时
             )
+            server = uvicorn.Server(uv_config)
+
+            # 在新的事件循环中运行服务器
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(server.serve())
         except ImportError as e:
             print(f"   ❌ API服务器依赖缺失: {e}")
         except Exception as e:
@@ -546,7 +561,8 @@ def _lazy_init_services():
         print(f"GRAG状态: {'启用' if memory_manager.enabled else '禁用'}")
         if memory_manager.enabled:
             stats = memory_manager.get_memory_stats()
-            from summer_memory.quintuple_graph import graph, GRAG_ENABLED
+            from summer_memory.quintuple_graph import get_graph, GRAG_ENABLED
+            graph = get_graph()
             print(f"Neo4j连接: {'成功' if graph and GRAG_ENABLED else '失败'}")
         print("=" * 30)
         print(f'{AI_NAME}系统已启动')
