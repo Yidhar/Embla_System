@@ -19,7 +19,7 @@ logger = logging.getLogger("live2d.config")
 @dataclass
 class ModelConfig:
     """模型配置"""
-    default_model_path: str = "ui/live2d/live2d_models/kasane_teto/kasane_teto.model3.json"
+    default_model_path: str = "ui/live2d_local/live2d_models/kasane_teto/kasane_teto.model3.json"
     fallback_image_path: str = "ui/img/standby.png"
     auto_load_on_start: bool = True
     scale_factor: float = 1.0  # 模型缩放因子
@@ -93,7 +93,7 @@ class EmotionConfigData(AnimatorConfigData):
 class Live2DConfigManager:
     """Live2D配置管理器"""
 
-    DEFAULT_CONFIG_PATH = "ui/live2d/live2d_config.json"
+    DEFAULT_CONFIG_PATH = "ui/live2d_local/live2d_config.json"
 
     def __init__(self, config_path: Optional[str] = None, use_main_config: bool = True):
         """

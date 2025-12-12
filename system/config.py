@@ -286,7 +286,7 @@ class UIConfig(BaseModel):
 class Live2DConfig(BaseModel):
     """Live2D配置"""
     enabled: bool = Field(default=True, description="是否启用Live2D功能")
-    model_path: str = Field(default="ui/live2d/live2d_models/kasane_teto/kasane_teto.model3.json", description="Live2D模型文件路径")
+    model_path: str = Field(default="ui/live2d_local/live2d_models/kasane_teto/kasane_teto.model3.json", description="Live2D模型文件路径")
     fallback_image: str = Field(default="ui/img/standby.png", description="回退图片路径")
     auto_switch: bool = Field(default=True, description="是否自动切换模式")
     animation_enabled: bool = Field(default=True, description="是否启用动画")
