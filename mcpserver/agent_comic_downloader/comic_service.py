@@ -6,6 +6,7 @@
 import logging
 from typing import Dict, Any, List
 from pathlib import Path
+import json
 
 # 导入JMComic相关模块
 try:
@@ -96,9 +97,44 @@ class ComicService:
         
         return JmOption.construct(option_dict)
     
+    async def handle_handoff(self, data: dict):
+        try:
+            tool_name = data.get('tool_name', '').lower()
+
+            match tool_name:
+                case '下载漫画':
+                    func = self.download_comic
+                case '搜索漫画':
+                    func = self.search_comic_by_name
+                case '搜索作者':
+                    func = self.search_comic_by_author
+                case '获取漫画详情':
+                    func = self.get_comic_detail
+                case _:
+                    return json.dumps({
+                        "status": "error",
+                        "message": f"未知操作: {tool_name}",
+                        "data": ""
+                    }, ensure_ascii=False)
+            result = await func(data.get('param_name'))
+            self.logger.debug(f"操作结果: {result}")
+            if result:
+                return json.dumps({
+                    "status": "success",
+                    "message": f"操作成功: {tool_name}",
+                    "data": result
+                }, ensure_ascii=False)
+            return json.dumps({
+                "status": "error",
+                "message": f"操作失败: {tool_name}",
+                "data": ""
+            }, ensure_ascii=False)
+        except Exception as e:
+            self.logger.error(f"操作失败: {e}")
+    
     # ==================== 下载功能 ====================
     
-    def download_comic(self, album_id: str) -> Dict[str, Any]:
+    async def download_comic(self, album_id: str) -> Dict[str, Any]:
         """
         下载漫画
         
@@ -156,7 +192,7 @@ class ComicService:
     
     # ==================== 搜索功能 ====================
     
-    def search_comic_by_name(self, comic_name: str, page: int = 1) -> Dict[str, Any]:
+    async def search_comic_by_name(self, comic_name: str, page: int = 1) -> Dict[str, Any]:
         """
         按漫画名搜索
         
@@ -192,7 +228,7 @@ class ComicService:
                 'type': 'comic_name'
             }
     
-    def search_comic_by_author(self, author_name: str, page: int = 1) -> Dict[str, Any]:
+    async def search_comic_by_author(self, author_name: str, page: int = 1) -> Dict[str, Any]:
         """
         按作者名搜索
         
@@ -228,7 +264,7 @@ class ComicService:
                 'type': 'author'
             }
     
-    def get_comic_detail(self, comic_id: str) -> Dict[str, Any]:
+    async def get_comic_detail(self, comic_id: str) -> Dict[str, Any]:
         """
         获取漫画详情
         
@@ -269,7 +305,7 @@ class ComicService:
                 'comic_id': comic_id
             }
     
-    def _format_search_result(self, search_page: JmSearchPage, query_info: str) -> Dict[str, Any]:
+    async def _format_search_result(self, search_page: JmSearchPage, query_info: str) -> Dict[str, Any]:
         """
         格式化搜索结果
         
