@@ -99,7 +99,6 @@ a = Analysis(
         'langchain_community.utilities',
         'fastmcp',
         'live2d',
-        'live2d-py',
         'dashscope',
     ],
     hookspath=[],
