@@ -18,3 +18,4 @@ pygame>=2.5.0
 soundfile>=0.12.1  # For reading MP3/WAV audio data (optional, for lip sync)
 scipy>=1.9.0       # Required for advanced lip sync (FFT, LPC, formant detection)
 numpy>=1.21.0      # Required for audio processing
+dashscope

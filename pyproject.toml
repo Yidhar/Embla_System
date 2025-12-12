@@ -8,6 +8,7 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.11,<3.12" 
 dependencies = [
+    "live2d-py<0.6",
     # 先装个pyqt5避免奇葩依赖
     "pyqt5==5.15.11",
     "pyqt5-qt5==5.15.2",
@@ -23,6 +24,7 @@ dependencies = [
     "pystray>=0.19.5",
     "paho-mqtt>=2.1.0",
     "bilibili-api>=4.1.0",
+    "dashscope>=1.25.3",
 ]
 
 # 可选依赖组
@@ -51,4 +53,3 @@ include = ["apiserver","mcpserver","mqtt_tool", "agent", "summer_memory", "think
 
 [tool.ruff]
 line-length = 120 
-
