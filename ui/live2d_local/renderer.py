@@ -28,7 +28,7 @@ try:
     original_path = sys.path.copy()
 
     # 临时移除当前目录和父目录，避免导入本地的live2d目录
-    current_dir = os.path.dirname(os.path.abspath(__file__))  # ui/live2d
+    current_dir = os.path.dirname(os.path.abspath(__file__))  # ui/live2d_local
     parent_dir = os.path.dirname(current_dir)  # ui
     grandparent_dir = os.path.dirname(parent_dir)  # NagaAgent
 
@@ -46,7 +46,7 @@ try:
     temp_sys_path = [p for p in sys.path if p not in paths_to_remove]
     sys.path = temp_sys_path
 
-    # 现在导入系统的live2d包（不会找到本地的ui/live2d）
+    # 现在导入系统的live2d包（不会找到本地的ui/live2d_local）
     import live2d.v3 as live2d_v3
     live2d = live2d_v3
     LIVE2D_AVAILABLE = True

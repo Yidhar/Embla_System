@@ -11,8 +11,8 @@ from nagaagent_core.vendors.PyQt5.QtCore import QSize  # 统一入口 #
 from system.config import config, logger
 # 导入独立的Live2D模块
 try:
-    from ..live2d import Live2DWidget
-    from ..live2d.config_dialog import Live2DConfigDialog
+    from ..live2d_local import Live2DWidget
+    from ..live2d_local.config_dialog import Live2DConfigDialog
     LIVE2D_AVAILABLE = True
 except ImportError as e:
     LIVE2D_AVAILABLE = False
@@ -309,7 +309,7 @@ class Live2DSideWidget(QWidget):
             logger.warning(f"Live2D模型文件不存在: {model_path}")
             # 尝试查找其他可用的模型
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            model_dirs = glob.glob(os.path.join(base_dir, 'ui/live2d/live2d_models/*/'))
+            model_dirs = glob.glob(os.path.join(base_dir, 'ui/live2d_local/live2d_models/*/'))
             for model_dir in model_dirs:
                 model_files = glob.glob(os.path.join(model_dir, '*.model3.json'))
                 if model_files:

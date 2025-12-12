@@ -5,7 +5,7 @@
 ## 模块结构
 
 ```
-ui/live2d/
+ui/live2d_local/
 ├── __init__.py          # 模块初始化文件
 ├── renderer.py          # Live2D渲染器
 ├── animator.py          # 动画系统
@@ -42,7 +42,7 @@ ui/live2d/
 
 ### 基本使用
 ```python
-from ui.live2d import Live2DWidget
+from ui.live2d_local import Live2DWidget
 
 # 创建Live2D Widget
 live2d_widget = Live2DWidget(parent)
@@ -59,13 +59,13 @@ live2d_widget.trigger_motion("tap", 0)
 
 ### 在Live2DSideWidget中使用
 ```python
-from ui.live2d_side_widget import Live2DSideWidget
+from ui.components.widget_live2d_side import Live2DSideWidget
 
 # 创建侧栏Widget
 side_widget = Live2DSideWidget()
 
 # 设置Live2D模型
-side_widget.set_live2d_model("ui/live2d/live2d_models/characters/llny/mianfeimox/llny.model3.json")
+side_widget.set_live2d_model("ui/live2d_local/live2d_models/characters/llny/mianfeimox/llny.model3.json")
 
 # 设置回退图片
 side_widget.set_fallback_image("path/to/image.png")
@@ -105,7 +105,7 @@ Live2D功能可以通过配置文件启用：
 {
   "live2d": {
     "enabled": true,
-    "model_path": "ui/live2d/live2d_models/characters/llny/mianfeimox/llny.model3.json",
+    "model_path": "ui/live2d_local/live2d_models/characters/llny/mianfeimox/llny.model3.json",
     "fallback_image": "ui/standby.png"
   }
 }

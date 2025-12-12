@@ -22,7 +22,7 @@ class Live2DModelManager:
         初始化模型管理器
 
         Args:
-            models_root_dir: 模型根目录，默认为 ui/live2d/live2d_models
+            models_root_dir: 模型根目录，默认为 ui/live2d_local/live2d_models
         """
         if models_root_dir is None:
             models_root_dir = os.path.join(
