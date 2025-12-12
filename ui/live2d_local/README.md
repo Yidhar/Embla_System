@@ -65,7 +65,7 @@ from ui.components.widget_live2d_side import Live2DSideWidget
 side_widget = Live2DSideWidget()
 
 # 设置Live2D模型
-side_widget.set_live2d_model("ui/live2d_local/live2d_models/characters/llny/mianfeimox/llny.model3.json")
+side_widget.set_live2d_model("ui/live2d_local/live2d_models/重音テト/重音テト.model3.json")
 
 # 设置回退图片
 side_widget.set_fallback_image("path/to/image.png")
@@ -105,7 +105,7 @@ Live2D功能可以通过配置文件启用：
 {
   "live2d": {
     "enabled": true,
-    "model_path": "ui/live2d_local/live2d_models/characters/llny/mianfeimox/llny.model3.json",
+    "model_path": "ui/live2d_local/live2d_models/重音テト/重音テト.model3.json",
     "fallback_image": "ui/standby.png"
   }
 }

@@ -292,7 +292,7 @@ uv sync
 ```json5
   "live2d": {
     "enabled": false, # 是否啟用Live2D
-    "model_path": "ui/live2d_local/live2d_models/characters/llny/mianfeimox/llny.model3.json", # Live2D模型路徑
+    "model_path": "ui/live2d_local/live2d_models/重音テト/重音テト.model3.json", # Live2D模型路徑
     "fallback_image": "ui/img/standby.png", # 備用圖片
     "auto_switch": true, # 是否自動切換
     "animation_enabled": true, # 是否啟用動畫

@@ -28,11 +28,8 @@ class Live2DSideWidget(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        # 从配置中读取透明度设置，避免硬编码
+        # 从配置中读取透明度设置
         try:
-            import sys, os
-            sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + '/..'))
-            from system.config import config
             # 使用配置中的透明度，转换为0-255范围
             self.bg_alpha = int(config.ui.bg_alpha * 255)  # 背景透明度
             self.border_alpha = 50  # 边框透明度（保持固定值）
@@ -57,7 +54,7 @@ class Live2DSideWidget(QWidget):
         if LIVE2D_AVAILABLE:
             # 从统一配置文件读取初始值
             try:
-                live2d_config_path = os.path.join(os.path.dirname(__file__), '../live2d/live2d_config.json')
+                live2d_config_path = os.path.join(os.path.dirname(__file__), '../live2d_local/live2d_config.json')
                 with open(live2d_config_path, 'r', encoding='utf-8') as f:
                     live2d_config = json.load(f)
                     transform = live2d_config.get('transform', {})
@@ -399,7 +396,7 @@ class Live2DSideWidget(QWidget):
 
     def _get_live2d_config_path(self):
         """获取Live2D统一配置文件路径"""
-        return os.path.join(os.path.dirname(__file__), '../live2d/live2d_config.json')
+        return os.path.join(os.path.dirname(__file__), '../live2d_local/live2d_config.json')
 
     def save_model_transform(self):
         """保存模型的位置和缩放配置到统一配置文件"""

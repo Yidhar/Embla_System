@@ -16,49 +16,14 @@ from .auto_configurator import Live2DAutoConfigurator
 
 logger = logging.getLogger("live2d.renderer")
 
-# 尝试导入Live2D模块 - 避免与本地目录冲突
-LIVE2D_AVAILABLE = False
-live2d = None
-
 try:
-    import sys
-    import os
-
-    # 保存当前路径
-    original_path = sys.path.copy()
-
-    # 临时移除当前目录和父目录，避免导入本地的live2d目录
-    current_dir = os.path.dirname(os.path.abspath(__file__))  # ui/live2d_local
-    parent_dir = os.path.dirname(current_dir)  # ui
-    grandparent_dir = os.path.dirname(parent_dir)  # NagaAgent
-
-    # 创建需要临时移除的路径列表
-    paths_to_remove = [
-        current_dir,
-        parent_dir,
-        grandparent_dir,
-        os.getcwd(),
-        '.',
-        ''
-    ]
-
-    # 临时移除这些路径
-    temp_sys_path = [p for p in sys.path if p not in paths_to_remove]
-    sys.path = temp_sys_path
-
-    # 现在导入系统的live2d包（不会找到本地的ui/live2d_local）
+    # 直接导入系统的live2d包
     import live2d.v3 as live2d_v3
     live2d = live2d_v3
     LIVE2D_AVAILABLE = True
     logger.debug("Live2D模块加载成功")
 
-    # 恢复原始路径
-    sys.path = original_path
-
 except ImportError as e:
-    # 恢复路径（如果导入失败）
-    if 'original_path' in locals():
-        sys.path = original_path
     LIVE2D_AVAILABLE = False
     logger.warning(f"Live2D模块未安装: {e}")
 
