@@ -68,6 +68,25 @@ from pathlib import Path
 for manifest_path in Path('mcpserver').rglob('agent-manifest.json'):
     datas.append((str(manifest_path), str(manifest_path.parent)))
 
+# 添加OpenGL相关的数据文件
+import OpenGL
+opengl_path = OpenGL.__file__
+opengl_dir = os.path.dirname(opengl_path)
+
+# 收集OpenGL平台文件
+platform_dirs = []
+for item in os.listdir(opengl_dir):
+    if item.startswith('platform') and os.path.isdir(os.path.join(opengl_dir, item)):
+        platform_dirs.append(os.path.join(opengl_dir, item))
+
+for platform_dir in platform_dirs:
+    for root, dirs, files in os.walk(platform_dir):
+        for file in files:
+            if file.endswith('.py') or file.endswith('.so') or file.endswith('.dll') or file.endswith('.dylib'):
+                src_path = os.path.join(root, file)
+                dst_path = os.path.relpath(src_path, opengl_dir)
+                datas.append((src_path, 'OpenGL'))
+
 a = Analysis(
     ['main.py'],
     pathex=['/data0/code/NagaAgent'],
@@ -100,10 +119,29 @@ a = Analysis(
         'fastmcp',
         'live2d',
         'dashscope',
+        # OpenGL相关导入
+        'OpenGL',
+        'OpenGL.GL',
+        'OpenGL.GLU',
+        'OpenGL.GLUT',
+        'OpenGL.EGL',
+        'OpenGL.platform',
+        'OpenGL.platform.egl',
+        'OpenGL.platform.base_platform',
+        'OpenGL.arrays',
+        'OpenGL.arrays.arraydatatype',
+        'OpenGL.arrays.numpymodule',
+        'OpenGL.arrays.vbo',
+        'OpenGL.raw',
+        'OpenGL.raw.GL',
+        'OpenGL.raw.GLU',
+        'OpenGL.raw.GLUT',
+        'OpenGL.raw.EGL',
+        'OpenGL_accelerate',
     ],
-    hookspath=[],
+    hookspath=['hooks'],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['hooks/rthook-opengl.py'],
     excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

@@ -27,6 +27,27 @@ except ImportError as e:
     LIVE2D_AVAILABLE = False
     logger.warning(f"Live2D模块未安装: {e}")
 
+# 尝试导入OpenGL并设置错误处理
+try:
+    import OpenGL
+    import OpenGL.GL as GL
+    import OpenGL.platform
+    OPENGL_AVAILABLE = True
+    # 减少OpenGL日志噪音
+    logging.getLogger("OpenGL").setLevel(logging.ERROR)
+    logging.getLogger("OpenGL.acceleratesupport").setLevel(logging.ERROR)
+    
+    # 尝试导入OpenGL加速模块
+    try:
+        import OpenGL_accelerate
+        logger.debug("OpenGL加速模块加载成功")
+    except ImportError:
+        logger.debug("OpenGL加速模块未安装，使用标准OpenGL")
+        
+except ImportError as e:
+    OPENGL_AVAILABLE = False
+    logger.warning(f"OpenGL模块未安装: {e}")
+
 
 class RendererState(Enum):
     """渲染器状态"""
@@ -64,7 +85,23 @@ class Live2DRenderer:
             self.state = RendererState.ERROR
             return False
 
+        if not OPENGL_AVAILABLE:
+            logger.error("OpenGL模块不可用")
+            self.state = RendererState.ERROR
+            return False
+
         try:
+            # 检查OpenGL平台是否可用
+            try:
+                OpenGL.platform.GetCurrentPlatform()
+            except Exception as e:
+                logger.warning(f"OpenGL平台检查失败: {e}")
+                # 尝试强制使用基础平台
+                try:
+                    OpenGL.platform.use(OpenGL.platform.base_platform.BasePlatform)
+                except:
+                    pass
+
             live2d.init()
             # 使用新的glInit()函数替代已弃用的glewInit()
             if hasattr(live2d, 'glInit'):
@@ -259,18 +296,44 @@ class Live2DRenderer:
             return
 
         try:
+            # 检查OpenGL函数是否可用
+            if not OPENGL_AVAILABLE:
+                raise Exception("OpenGL模块不可用")
+
             # 设置背景清除颜色并手动清除
             if bg_alpha is not None:
-                from OpenGL.GL import glClearColor, glClear, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT
-                glClearColor(17/255.0, 17/255.0, 17/255.0, bg_alpha / 255.0)
-                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+                # 延迟导入，避免打包时的导入问题
+                try:
+                    from OpenGL.GL import glClearColor, glClear, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT
+                    # 检查函数是否可调用
+                    if callable(glClearColor) and callable(glClear):
+                        glClearColor(17/255.0, 17/255.0, 17/255.0, bg_alpha / 255.0)
+                        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+                    else:
+                        raise Exception("OpenGL函数不可调用")
+                except ImportError:
+                    # 如果OpenGL.GL导入失败，使用live2d的清除方法
+                    if hasattr(live2d, 'clearBuffer') and callable(live2d.clearBuffer):
+                        live2d.clearBuffer()
+                    else:
+                        raise Exception("无法清除缓冲区")
             else:
-                live2d.clearBuffer()
+                # 检查live2d.clearBuffer是否可调用
+                if hasattr(live2d, 'clearBuffer') and callable(live2d.clearBuffer):
+                    live2d.clearBuffer()
+                else:
+                    raise Exception("live2d.clearBuffer不可调用")
 
-            # 应用模型偏移 - 使用Live2D的SetOffset方法
-            # 注意：只在有偏移时设置，否则使用默认值(0, 0)
-            self.model.SetOffset(offset_x, offset_y)
-            self.model.Draw()
+            # 检查模型方法是否可调用
+            if (hasattr(self.model, 'SetOffset') and callable(self.model.SetOffset) and
+                hasattr(self.model, 'Draw') and callable(self.model.Draw)):
+                
+                # 应用模型偏移 - 使用Live2D的SetOffset方法
+                # 注意：只在有偏移时设置，否则使用默认值(0, 0)
+                self.model.SetOffset(offset_x, offset_y)
+                self.model.Draw()
+            else:
+                raise Exception("模型方法不可调用")
 
             self._draw_errors = 0
         except Exception as e:
@@ -388,6 +451,16 @@ class Live2DRenderer:
     def is_available(self) -> bool:
         """检查是否可用"""
         return LIVE2D_AVAILABLE and self.state != RendererState.UNINITIALIZED
+
+    def get_fallback_status(self) -> dict:
+        """获取fallback状态信息"""
+        return {
+            'live2d_available': LIVE2D_AVAILABLE,
+            'opengl_available': OPENGL_AVAILABLE,
+            'state': self.state.value,
+            'model_loaded': self.has_model(),
+            'error_reason': self.get_error_reason() if self.state == RendererState.ERROR else None
+        }
 
     def has_model(self) -> bool:
         """检查是否已加载模型"""

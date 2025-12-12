@@ -25,6 +25,7 @@ dependencies = [
     "paho-mqtt>=2.1.0",
     "bilibili-api>=4.1.0",
     "dashscope>=1.25.3",
+    "pyopengl-accelerate>=3.1.10",
 ]
 
 # 可选依赖组
