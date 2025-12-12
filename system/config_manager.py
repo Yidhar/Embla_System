@@ -266,7 +266,7 @@ class ConfigManager:
                         print(f"检测到配置文件编码: {detected_encoding}")
 
             with open(config_path, 'w', encoding=detected_encoding) as f:
-                json.dump(config_data, f, ensure_ascii=False, indent=2)
+                json5.dump(config_data, f, ensure_ascii=False, indent=2)
             return True
         except Exception as e:
             print(f"保存配置文件失败: {e}")  # 去除Emoji #
