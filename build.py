@@ -6,6 +6,7 @@ import platform
 import glob
 import zipfile
 import tarfile
+import concurrent.futures
 
 def user_confirmation():
     """提示清空配置，让用户确认是否继续"""
@@ -90,15 +91,20 @@ def run_build_commands():
             if not so_files:
                 print("    -> 未发现 .so* 文件，跳过授予执行权限。")
             else:
-                for f in so_files:
+                def set_executable(f):
                     try:
                         st = os.stat(f).st_mode
                         os.chmod(f, st | 0o111)
                     except Exception as e:
                         print(f"    -> 无法修改权限 {f}: {e}")
-                print("    -> 执行权限授予完成。")
-        except Exception:
-            print("[错误] 执行权限授予失败。")
+
+                max_workers = os.cpu_count() or 4
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                     list(executor.map(set_executable, so_files))
+                     
+                print(f"    -> 已对 {len(so_files)} 个文件授予执行权限。")
+        except Exception as e:
+            print(f"[错误] 执行权限授予失败: {e}")
             sys.exit(1)
     else:
         print("\n[4.5/7] Windows无需授予执行权限，已跳过...")

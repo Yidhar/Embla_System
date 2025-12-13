@@ -93,7 +93,13 @@ class Live2DRenderer:
         try:
             # 检查OpenGL平台是否可用
             try:
-                OpenGL.platform.GetCurrentPlatform()
+                # 使用更安全的平台检查方式
+                platform_module = OpenGL.platform
+                if hasattr(platform_module, 'GetCurrentPlatform'):
+                    platform_module.GetCurrentPlatform()
+                else:
+                    # 尝试获取当前平台实例
+                    platform_module.PLATFORM
             except Exception as e:
                 logger.warning(f"OpenGL平台检查失败: {e}")
                 # 尝试强制使用基础平台
@@ -101,7 +107,7 @@ class Live2DRenderer:
                     OpenGL.platform.use(OpenGL.platform.base_platform.BasePlatform)
                 except:
                     pass
-
+            
             live2d.init()
             # 使用新的glInit()函数替代已弃用的glewInit()
             if hasattr(live2d, 'glInit'):
