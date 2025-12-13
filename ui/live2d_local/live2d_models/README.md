@@ -1,6 +1,6 @@
 # Live2D 模型文件夹
 
-Live2D 模型存放在 `ui/live2d/live2d_models/` 下。仓库内自带一个示例模型 `kasane_teto`，其结构与官方 Cubism 导出的目录一致，可作为导入新模型的参考。
+Live2D 模型存放在 `ui/live2d_local/live2d_models/` 下。仓库内自带一个示例模型 `kasane_teto`，其结构与官方 Cubism 导出的目录一致，可作为导入新模型的参考。
 
 ## 当前目录示例
 
@@ -21,14 +21,14 @@ live2d_models/
 
 ## 添加自定义模型
 
-1. 将完整的模型目录复制到 `ui/live2d/live2d_models/<你的模型名>/`。确保 `.model3.json` 内引用的文件（贴图、表情、动作等）都存在于该目录中。
+1. 将完整的模型目录复制到 `ui/live2d_local/live2d_models/<你的模型名>/`。确保 `.model3.json` 内引用的文件（贴图、表情、动作等）都存在于该目录中。
 2. 在主配置（`config.json` 或 `.local` 覆盖）中启用 Live2D，并指向新的模型路径：
 
 ```json
 {
   "live2d": {
     "enabled": true,
-    "model_path": "ui/live2d/live2d_models/<你的模型名>/<模型文件>.model3.json",
+    "model_path": "ui/live2d_local/live2d_models/<你的模型名>/<模型文件>.model3.json",
     "fallback_image": "ui/img/standby.png",
     "scale_factor": 1.0
   }

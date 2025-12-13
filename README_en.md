@@ -292,7 +292,7 @@ Install `neo4j` using `docker` or install `Neo4j Desktop`, then configure the Ne
 ```json5
   "live2d": {
     "enabled": false, // Whether to enable Live2D
-    "model_path": "ui/live2d/live2d_models/characters/llny/mianfeimox/llny.model3.json", // Live2D model path
+    "model_path": "ui/live2d_local/live2d_models/重音テト/重音テト.model3.json", // Live2D model path
     "fallback_image": "ui/img/standby.png", // Fallback image
     "auto_switch": true, // Whether to switch automatically
     "animation_enabled": true, // Whether to enable animation

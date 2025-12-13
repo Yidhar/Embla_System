@@ -83,6 +83,16 @@ class Live2DWidget(QOpenGLWidget):
     def initializeGL(self):
         """初始化OpenGL上下文"""
         try:
+            # 检查OpenGL上下文是否可用
+            try:
+                # 尝试获取OpenGL版本信息
+                from OpenGL.GL import glGetString, GL_VERSION
+                version = glGetString(GL_VERSION)
+                logger.debug(f"OpenGL版本: {version}")
+            except Exception as gl_error:
+                logger.warning(f"无法获取OpenGL版本: {gl_error}")
+                # 继续尝试初始化，可能是打包环境的问题
+
             if self.renderer.initialize():
                 # 创建动画器
                 self.animator = Live2DAnimator(self.renderer)
@@ -133,6 +143,18 @@ class Live2DWidget(QOpenGLWidget):
 
     def paintGL(self):
         """绘制Live2D模型"""
+        # 检查OpenGL上下文是否有效
+        try:
+            # 简单检查OpenGL是否可用
+            from OpenGL.GL import glGetError
+            error = glGetError()
+            if error != 0:
+                logger.debug(f"OpenGL错误状态: {error}")
+        except Exception as e:
+            logger.debug(f"OpenGL检查失败: {e}")
+            # 如果OpenGL不可用，直接返回避免崩溃
+            return
+
         # 获取父容器的背景透明度
         bg_alpha = 200
         if self.parent():
@@ -168,6 +190,12 @@ class Live2DWidget(QOpenGLWidget):
                 self.renderer.draw(bg_alpha, self.model_offset_x, self.model_offset_y)
             except Exception as e:
                 logger.error(f"绘制失败: {e}")
+                # 尝试重置渲染器状态
+                try:
+                    if hasattr(self.renderer, '_reset_model_state'):
+                        self.renderer._reset_model_state()
+                except:
+                    pass
 
     def resizeGL(self, width: int, height: int):
         """调整OpenGL视口大小"""

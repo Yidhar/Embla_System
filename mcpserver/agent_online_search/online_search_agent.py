@@ -5,6 +5,7 @@ from typing import Dict, Any, List
 from langchain_community.utilities import SearxSearchWrapper
 from system.config import config
 from charset_normalizer import from_path
+from nagaagent_core.vendors import json5
 
 class OnlineSearchAgent:
     
@@ -43,17 +44,17 @@ class OnlineSearchAgent:
                             detected_encoding = best_match.encoding
                             print(f"[INFO] 检测到配置文件编码: {detected_encoding}")
 
-                            # 使用检测到的编码直接打开文件，然后使用JSON读取
+                            # 使用检测到的编码直接打开文件，然后使用JSON5读取
                             with open(config_path, 'r', encoding=detected_encoding) as f:
-                                config_data = json.load(f)
+                                config_data = json5.load(f)
                         else:
                             print("[WARN] 无法检测配置文件编码，使用回退方法")
                             with open(config_path, 'r', encoding='utf-8') as f:
-                                config_data = json.load(f)
+                                config_data = json5.load(f)
                     else:
                         print("[WARN] 无法检测配置文件编码，使用回退方法")
                         with open(config_path, 'r', encoding='utf-8') as f:
-                            config_data = json.load(f)
+                            config_data = json5.load(f)
 
                     if 'online_search' in config_data:
                         if 'searxng_url' in config_data['online_search']:
@@ -212,15 +213,15 @@ def validate_agent_config():
                     if charset_results:
                         best_match = charset_results.best()
                         if best_match:
-                            # 使用检测到的编码直接打开文件，然后使用JSON读取
+                            # 使用检测到的编码直接打开文件，然后使用JSON5读取
                             with open(config_path, 'r', encoding=detected_encoding) as f:
-                                config_data = json.load(f)
+                                config_data = json5.load(f)
                         else:
                             with open(config_path, 'r', encoding='utf-8') as f:
-                                config_data = json.load(f)
+                                config_data = json5.load(f)
                     else:
                         with open(config_path, 'r', encoding='utf-8') as f:
-                            config_data = json.load(f)
+                            config_data = json5.load(f)
 
                     if 'online_search' in config_data and 'searxng_url' in config_data['online_search']:
                         searxng_url = config_data['online_search']['searxng_url']

@@ -6,6 +6,7 @@ import platform
 import glob
 import zipfile
 import tarfile
+import concurrent.futures
 
 def user_confirmation():
     """提示清空配置，让用户确认是否继续"""
@@ -68,28 +69,47 @@ def run_build_commands():
     except subprocess.CalledProcessError:
         print("[错误] 'uv sync' 失败。请检查 'pyproject.toml' 和网络连接。")
         sys.exit(1)
+    
+    # 确保PyOpenGL已安装
+    print("\n[3.5/7] 检查OpenGL依赖...")
+    try:
+        # 检查PyOpenGL是否可用
+        import OpenGL
+        print("    -> PyOpenGL 已安装。")
+    except ImportError:
+        print("    -> PyOpenGL 未安装，尝试安装...")
+        try:
+            subprocess.run(['uv', 'add', 'PyOpenGL'], check=True)
+            print("    -> PyOpenGL 安装成功。")
+        except subprocess.CalledProcessError:
+            print("[警告] PyOpenGL 安装失败，可能会影响Live2D功能。")
     if platform.system() != "Windows":
-        print("\n[4/7] 授予执行权限...")
+        print("\n[4.5/7] 授予执行权限...")
         try:
             # 使用 glob 递归查找 .venv 下的 .so* 文件，并为每个文件添加可执行权限
             so_files = glob.glob('.venv/**/*.so*', recursive=True)
             if not so_files:
                 print("    -> 未发现 .so* 文件，跳过授予执行权限。")
             else:
-                for f in so_files:
+                def set_executable(f):
                     try:
                         st = os.stat(f).st_mode
                         os.chmod(f, st | 0o111)
                     except Exception as e:
                         print(f"    -> 无法修改权限 {f}: {e}")
-                print("    -> 执行权限授予完成。")
-        except Exception:
-            print("[错误] 执行权限授予失败。")
+
+                max_workers = os.cpu_count() or 4
+                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                     list(executor.map(set_executable, so_files))
+                     
+                print(f"    -> 已对 {len(so_files)} 个文件授予执行权限。")
+        except Exception as e:
+            print(f"[错误] 执行权限授予失败: {e}")
             sys.exit(1)
     else:
-        print("\n[4/7] Windows无需授予执行权限，已跳过...")
+        print("\n[4.5/7] Windows无需授予执行权限，已跳过...")
 
-    print("\n[5/7] 运行构建命令")
+    print("\n[5.5/7] 运行构建命令")
     try:
         # pyinstaller 命令
         subprocess.run(['uv', 'run', 'pyinstaller', 'main.spec', '--clean', '--noconfirm'], check=True)
@@ -117,7 +137,7 @@ config.json（配置文件）位置：_internal/config.json，也可以使用GUI
     # .venv/说明.txt 内容
     placeholder_content = "占位"
 
-    print(f"\n[6/7] 创建 {instructions_path}...")
+    print(f"\n[6.5/7] 创建 {instructions_path}...")
     
     # 确保目标目录存在
     os.makedirs(dist_main_dir, exist_ok=True)
@@ -161,7 +181,7 @@ def rename_and_zip_output():
         print(f"\n[错误] 找不到构建目录 {source_dir}。请检查 PyInstaller 是否成功运行。")
         sys.exit(1)
 
-    print(f"\n[7/7] 打包为压缩包...")
+    print(f"\n[7.5/7] 打包为压缩包...")
     try:
         # 如果目标目录已存在，先删除，确保重命名成功
         if os.path.exists(target_dir_path):

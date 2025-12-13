@@ -4,6 +4,14 @@ import sys
 if os.path.exists("_internal"):
     os.chdir("_internal")
 
+# 打包库识别适配
+import webbrowser
+import sqlite3
+import redis
+import timeit
+import key_value
+import key_value.aio
+
 # 检测是否在打包环境中
 # PyInstaller打包后的程序会设置sys.frozen属性
 IS_PACKAGED = getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')

@@ -3,11 +3,12 @@ name = "nagaagent"
 version = "4.0.0"
 description = "NagaAgent 4.0 - 智能对话助手，支持多MCP服务、流式语音交互、GRAG知识图谱记忆系统、RESTful API接口、控制台托盘功能"
 authors = [
-    {name = "柏斯阔落", email = "1781393885@qq.com"},
+{name = "柏斯阔落", email = "1781393885@qq.com"},
 ]
 readme = "README.md"
-requires-python = ">=3.11,<3.12" 
+requires-python = ">=3.11,<3.12"
 dependencies = [
+    "live2d-py<0.6",
     # 先装个pyqt5避免奇葩依赖
     "pyqt5==5.15.11",
     "pyqt5-qt5==5.15.2",
@@ -23,16 +24,21 @@ dependencies = [
     "pystray>=0.19.5",
     "paho-mqtt>=2.1.0",
     "bilibili-api>=4.1.0",
+    "dashscope>=1.25.3",
+    "markdown>=3.10",
+    "pygame>=2.6.1",
+    "py-key-value-aio[disk,memory,redis]>=0.3.0",
+    "pyopengl>=3.1.10",
 ]
 
 # 可选依赖组
 [dependency-groups]
 #其余依赖组已经整合进入主依赖项
 dev = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.20.0",
-    "black>=22.0.0",
-    "ruff>=0.1.0",
+"pytest>=7.0.0",
+"pytest-asyncio>=0.20.0",
+"black>=22.0.0",
+"ruff>=0.1.0",
 ]
 build = [
     "pyinstaller",
@@ -40,6 +46,15 @@ build = [
     "fastmcp>=2.12.5",
     "tensorboard>=2.20.0",
     "expecttest>=0.3.0",
+    "onnx>=1.20.0",
+    "onnxscript>=0.5.6",
+    "twisted>=25.5.0",
+    "django>=5.2.9",
+    "tensorflow>=2.20.0",
+    "requests>=2.32.5",
+    "pyopengl-accelerate>=3.1.10",
+    "pyopengl>=3.1.10",
+    "urllib3>=2.6.2",
 ]
 
 [build-system]
@@ -47,8 +62,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-include = ["apiserver","mcpserver","mqtt_tool", "agent", "summer_memory", "thinking", "ui", "voice" ]
+include = ["apiserver","mcpserver","mqtt_tool", "agentserver", "summer_memory", "thinking", "ui", "voice" ]
 
 [tool.ruff]
-line-length = 120 
-
+line-length = 120

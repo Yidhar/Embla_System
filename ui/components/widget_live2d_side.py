@@ -11,8 +11,8 @@ from nagaagent_core.vendors.PyQt5.QtCore import QSize  # 统一入口 #
 from system.config import config, logger
 # 导入独立的Live2D模块
 try:
-    from ..live2d import Live2DWidget
-    from ..live2d.config_dialog import Live2DConfigDialog
+    from ..live2d_local import Live2DWidget
+    from ..live2d_local.config_dialog import Live2DConfigDialog
     LIVE2D_AVAILABLE = True
 except ImportError as e:
     LIVE2D_AVAILABLE = False
@@ -28,11 +28,8 @@ class Live2DSideWidget(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        # 从配置中读取透明度设置，避免硬编码
+        # 从配置中读取透明度设置
         try:
-            import sys, os
-            sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + '/..'))
-            from system.config import config
             # 使用配置中的透明度，转换为0-255范围
             self.bg_alpha = int(config.ui.bg_alpha * 255)  # 背景透明度
             self.border_alpha = 50  # 边框透明度（保持固定值）
@@ -57,7 +54,7 @@ class Live2DSideWidget(QWidget):
         if LIVE2D_AVAILABLE:
             # 从统一配置文件读取初始值
             try:
-                live2d_config_path = os.path.join(os.path.dirname(__file__), '../live2d/live2d_config.json')
+                live2d_config_path = os.path.join(os.path.dirname(__file__), '../live2d_local/live2d_config.json')
                 with open(live2d_config_path, 'r', encoding='utf-8') as f:
                     live2d_config = json.load(f)
                     transform = live2d_config.get('transform', {})
@@ -309,7 +306,7 @@ class Live2DSideWidget(QWidget):
             logger.warning(f"Live2D模型文件不存在: {model_path}")
             # 尝试查找其他可用的模型
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            model_dirs = glob.glob(os.path.join(base_dir, 'ui/live2d/live2d_models/*/'))
+            model_dirs = glob.glob(os.path.join(base_dir, 'ui/live2d_local/live2d_models/*/'))
             for model_dir in model_dirs:
                 model_files = glob.glob(os.path.join(model_dir, '*.model3.json'))
                 if model_files:
@@ -399,7 +396,7 @@ class Live2DSideWidget(QWidget):
 
     def _get_live2d_config_path(self):
         """获取Live2D统一配置文件路径"""
-        return os.path.join(os.path.dirname(__file__), '../live2d/live2d_config.json')
+        return os.path.join(os.path.dirname(__file__), '../live2d_local/live2d_config.json')
 
     def save_model_transform(self):
         """保存模型的位置和缩放配置到统一配置文件"""

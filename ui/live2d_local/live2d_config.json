@@ -1,6 +1,6 @@
 {
   "model": {
-    "default_model_path": "ui/live2d/live2d_models/",
+    "default_model_path": "ui/live2d_local/live2d_models/",
     "fallback_image_path": "ui/img/standby.png",
     "auto_load_on_start": true,
     "scale_factor": 1.0,
