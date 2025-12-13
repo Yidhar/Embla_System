@@ -180,7 +180,6 @@ exclude_packages = {
     'setuptools', 'wheel', 'uv'
 }
 
-"""
 print("正在自动查找项目中的所有库...")
 try:
     for dist in importlib.metadata.distributions():
@@ -200,13 +199,13 @@ try:
             if top_level:
                 for pkg in top_level.split():
                     if pkg and pkg != name:
-                        discovered_packages.add(pkg)
+                        discovered_packages.add(pkg.replace('/', '.'))
         except Exception:
             pass
             
 except Exception as e:
     print(f"警告: 自动发现包时出错: {e}")
-"""
+    
 print(f"共发现 {len(discovered_packages)} 个潜在包/库。")
 
 # =============================================================================
