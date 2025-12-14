@@ -19,3 +19,5 @@ scipy>=1.9.0       # Required for advanced lip sync (FFT, LPC, formant detection
 numpy>=1.21.0      # Required for audio processing
 dashscope
 #py-key-value-aio[disk,memory,redis] # This lib cannot be find sometimes. Kill it.
+live2d-py<0.6
+pyopengl>=3.1.10
