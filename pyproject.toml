@@ -27,7 +27,7 @@ dependencies = [
     "dashscope>=1.25.3",
     "markdown>=3.10",
     "pygame>=2.6.1",
-    "py-key-value-aio[disk,memory,redis]>=0.3.0",
+    #"py-key-value-aio[disk,memory,redis]>=0.3.0", # no not need you
     "pyopengl>=3.1.10",
 ]
 
