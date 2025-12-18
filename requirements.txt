@@ -2,8 +2,7 @@
 # recommend to use python 3.11
 
 pyqt5>=5.15.11
-pyqt5-qt5>=5.15.2
-pyqt5-sip>=12.17.0
+# do not be too strict for kids
 
 # Core dependency (integrated into nagaagent-core)
 nagaagent-core>=1.0.9
@@ -19,4 +18,6 @@ soundfile>=0.12.1  # For reading MP3/WAV audio data (optional, for lip sync)
 scipy>=1.9.0       # Required for advanced lip sync (FFT, LPC, formant detection)
 numpy>=1.21.0      # Required for audio processing
 dashscope
-py-key-value-aio[disk,memory,redis]
+#py-key-value-aio[disk,memory,redis] # This lib cannot be find sometimes. Kill it.
+live2d-py<0.6
+pyopengl>=3.1.10
