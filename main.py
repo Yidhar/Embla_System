@@ -541,6 +541,84 @@ def show_index():
 def clear():
     os.system('cls' if os.name == 'nt' else 'clear')
 
+
+def check_and_update_if_needed() -> bool:
+    """检查上次系统检测时间，如果超过7天则执行更新"""
+    from datetime import datetime, timedelta
+    from nagaagent_core.vendors.charset_normalizer import from_path
+    from nagaagent_core.vendors import json5
+
+    config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+    if not os.path.exists(config_file):
+        return False
+
+    try:
+        # 使用Charset Normalizer自动检测编码
+        charset_results = from_path(config_file)
+        if charset_results:
+            best_match = charset_results.best()
+            if best_match:
+                detected_encoding = best_match.encoding
+                with open(config_file, 'r', encoding=detected_encoding) as f:
+                    config_data = json5.load(f)
+            else:
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    config_data = json5.load(f)
+        else:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                config_data = json5.load(f)
+
+        system_check = config_data.get('system_check', {})
+        timestamp_str = system_check.get('timestamp')
+
+        if not timestamp_str:
+            return False
+
+        # 解析时间戳
+        last_check_time = datetime.fromisoformat(timestamp_str)
+        now = datetime.now()
+        days_since_last_check = (now - last_check_time).days
+
+        # 如果超过7天
+        if days_since_last_check >= 7:
+            print(f"⚠️ 上次系统检测已超过 {days_since_last_check} 天，开始执行更新...")
+            print("=" * 50)
+
+            # 执行 update.py
+            update_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "update.py")
+            if os.path.exists(update_script):
+                result = subprocess.run([sys.executable, update_script], cwd=os.path.dirname(os.path.abspath(__file__)))
+                if result.returncode == 0:
+                    print("✅ 更新成功")
+                else:
+                    print(f"⚠️ 更新失败，返回码: {result.returncode}")
+            else:
+                print("⚠️ update.py 不存在，跳过更新")
+
+            # 重置检测状态为 false
+            config_data['system_check']['passed'] = False
+            # 保存配置
+            detected_encoding = 'utf-8'
+            if charset_results:
+                best_match = charset_results.best()
+                if best_match:
+                    detected_encoding = best_match.encoding
+            with open(config_file, 'w', encoding=detected_encoding) as f:
+                json5.dump(config_data, f, ensure_ascii=False, indent=2)
+
+            print("✅ 检测状态已重置为 false")
+            print("=" * 50)
+            print("🔄 正在重启程序...")
+            # 重启程序
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        return False
+
+    except Exception as e:
+        print(f"⚠️ 检查上次检测时间失败: {e}")
+        return False
+
 # 延迟初始化 - 避免启动时阻塞
 def _lazy_init_services():
     """延迟初始化服务 - 在需要时才初始化"""
@@ -621,6 +699,9 @@ if __name__ == "__main__":
         else:
             success = run_system_check(force_check=args.force_check)
         sys.exit(0 if success else 1)
+
+    # 检查上次系统检测时间，如果超过7天则执行更新
+    check_and_update_if_needed()
 
     # 系统环境检测
     print("🚀 正在启动NagaAgent...")
