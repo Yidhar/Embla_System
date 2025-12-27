@@ -16,7 +16,13 @@ def clear_build_artifacts():
     startup_script = "启动.cmd"
     if os.path.exists(startup_script):
         os.remove(startup_script)
+
+    # 删除占位文件
+    placeholder_file = ".is_package"
+    if os.path.exists(placeholder_file):
+        os.remove(placeholder_file)
     
     print("清理完成，已删除打包产生的文件和文件夹。")
+    
 if __name__ == "__main__":
     clear_build_artifacts()

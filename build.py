@@ -43,6 +43,9 @@ set PATH=""
 .\\py3119\\python.exe main.py
 """)
     
+with open(".is_package", "w", encoding="utf-8") as f:
+    f.write("""更新占位文件""")
+    
 cd("..")
 
 archive_name = 'NagaAgent_Win64.zip'
