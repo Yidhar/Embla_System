@@ -322,6 +322,20 @@ python main.py
 uv run main.py
 ```
 
+> 程式會自動偵測上次系統偵測時間，如果偵測通過且超過7天，會自動執行更新並重啟。
+
+#### 手動更新
+```bash
+# 使用更新腳本
+./update.sh         # Linux/macOS
+update.bat          # Windows
+
+# 或直接執行py檔案
+python update.py
+```
+
+更新腳本會自動執行 git pull（自動偵測當前分支）和 uv sync 同步依賴。
+
 
 <details><summary>故障排除</summary>
 

@@ -322,6 +322,20 @@ python main.py
 uv run main.py
 ```
 
+> The program will automatically check the last system check time. If the check passed and it has been more than 7 days, it will automatically perform an update and restart.
+
+#### Manual Update
+```bash
+# Using the update script
+./update.sh         # Linux/macOS
+update.bat          # Windows
+
+# Or run the py file directly
+python update.py
+```
+
+The update script will automatically execute git pull (automatically detecting the current branch) and uv sync to sync dependencies.
+
 
 <details><summary>Troubleshooting</summary>
 
