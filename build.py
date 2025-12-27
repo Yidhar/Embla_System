@@ -2,8 +2,11 @@ from requests import get as iget
 from zipfile import ZipFile
 from os import remove, name, system, chdir as cd
 from shutil import rmtree as rm, make_archive
+from zipfile import ZipFile, ZIP_DEFLATED
+import os
 IS_WINDOWS = True if name == 'nt' else False
 
+print("开始下载运行时文件...")
 url = 'https://www.pylindex.top/naga/files/build_files/py3119.zip'
 response = iget(url)
 with open("py3119.zip", "wb") as code:
@@ -17,13 +20,15 @@ f.close()
 remove("py3119.zip")
 rm(".venv")
 
+print("运行时文件下载完成，开始安装依赖...")
 if IS_WINDOWS:
-    system(".\\py3119\\python.exe -m pip install --upgrade pip")
-    system(".\\py3119\\python.exe -m pip install -r requirements.txt")
+    system(".\\py3119\\python.exe -m pip install --upgrade pip --no-warn-script-location.")
+    system(".\\py3119\\python.exe -m pip install -r requirements.txt --no-warn-script-location.")
 else:
-    system("wine ./py3119/python.exe -m pip install --upgrade pip")
-    system("wine ./py3119/python.exe -m pip install -r requirements.txt")
+    system("wine ./py3119/python.exe -m pip install --upgrade pip --no-warn-script-location.")
+    system("wine ./py3119/python.exe -m pip install -r requirements.txt --no-warn-script-location.")
 
+print("依赖安装完成，开始打包...")
 with open("使用必看说明.txt", "w", encoding="utf-8") as f:
     f.write("""双击 启动.cmd 即可运行
 有问题请反馈至QQ：1708213363
@@ -40,10 +45,17 @@ set PATH=""
     
 cd("..")
 
-make_archive(
-    base_name='NagaAgent_Win64',
-    format='zip',
-    root_dir='./NagaAgent',
-    base_dir='.',  # 只压缩my_project文件夹内的内容
-    verbose=True            # 显示压缩过程
-)
+archive_name = 'NagaAgent_Win64.zip'
+root_dir = './NagaAgent'
+
+with ZipFile(archive_name, 'w', compression=ZIP_DEFLATED) as zf:
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        # don't descend into any .git directories
+        dirnames[:] = [d for d in dirnames if d != '.git']
+        for fname in filenames:
+            file_path = os.path.join(dirpath, fname)
+            arcname = os.path.relpath(file_path, root_dir)
+            print(f'Adding {arcname}')
+            zf.write(file_path, arcname)
+
+print("打包完成")
