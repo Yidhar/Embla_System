@@ -724,6 +724,37 @@ if __name__ == "__main__":
             i=input("是否无视检测结果继续启动？是则按y，否则按其他任意键退出...")
             if i != "y" and i != "Y":
                 sys.exit(1)
+            else:
+                # 用户选择强制启动，将检测状态设置为通过
+                from nagaagent_core.vendors.charset_normalizer import from_path
+                from nagaagent_core.vendors import json5
+                from datetime import datetime
+                
+                config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+                if os.path.exists(config_file):
+                    try:
+                        charset_results = from_path(config_file)
+                        if charset_results:
+                            best_match = charset_results.best()
+                            detected_encoding = best_match.encoding if best_match else 'utf-8'
+                        else:
+                            detected_encoding = 'utf-8'
+                        
+                        with open(config_file, 'r', encoding=detected_encoding) as f:
+                            config_data = json5.load(f)
+                        
+                        if 'system_check' not in config_data:
+                            config_data['system_check'] = {}
+                        
+                        config_data['system_check']['passed'] = True
+                        config_data['system_check']['timestamp'] = datetime.now().isoformat()
+                        
+                        with open(config_file, 'w', encoding=detected_encoding) as f:
+                            json5.dump(config_data, f, ensure_ascii=False, indent=2)
+                        
+                        print("✅ 已将检测状态设置为通过")
+                    except Exception as e:
+                        print(f"⚠️ 保存检测状态失败: {e}")
 
     print("\n🎉 系统环境检测通过，正在启动应用...")
     print("=" * 50)
