@@ -40,8 +40,18 @@ def main() -> int:
     # 检测 .git 目录
     git_dir = os.path.join(project_root, ".git")
     if os.path.exists(git_dir):
-        print("✅ 检测到 Git 仓库，执行 git pull...")
-        ret = run_command("git pull", "拉取最新代码")
+        # 获取当前分支名
+        result = subprocess.run(
+            "git rev-parse --abbrev-ref HEAD",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        current_branch = result.stdout.strip() if result.returncode == 0 else "main"
+
+        print(f"✅ 检测到 Git 仓库，当前分支: {current_branch}")
+        print(f"🔄 执行 git pull origin {current_branch}...")
+        ret = run_command(f"git pull origin {current_branch}", "拉取最新代码")
         if ret != 0:
             print(f"⚠️ git pull 返回非零状态码: {ret}")
     else:

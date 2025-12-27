@@ -1,6 +1,7 @@
 # pyinstaller适配
 import os
 import sys
+import subprocess
 if os.path.exists("_internal"):
     os.chdir("_internal")
 
@@ -543,7 +544,7 @@ def clear():
 
 
 def check_and_update_if_needed() -> bool:
-    """检查上次系统检测时间，如果超过7天则执行更新"""
+    """检查上次系统检测时间，如果检测通过且超过7天则执行更新"""
     from datetime import datetime, timedelta
     from nagaagent_core.vendors.charset_normalizer import from_path
     from nagaagent_core.vendors import json5
@@ -571,8 +572,13 @@ def check_and_update_if_needed() -> bool:
 
         system_check = config_data.get('system_check', {})
         timestamp_str = system_check.get('timestamp')
+        passed = system_check.get('passed', False)
 
         if not timestamp_str:
+            return False
+
+        # 只在检测通过的情况下才检查时间
+        if not passed:
             return False
 
         # 解析时间戳
