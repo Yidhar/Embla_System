@@ -322,6 +322,20 @@ python main.py
 uv run main.py
 ```
 
+> 程序会自动检测上次系统检测时间，如果检测通过且超过7天，会自动执行更新并重启。
+
+#### 手动更新
+```bash
+# 使用更新脚本
+./update.sh         # Linux/macOS
+update.bat          # Windows
+
+# 或直接运行py文件
+python update.py
+```
+
+更新脚本会自动执行 git pull（自动检测当前分支）和 uv sync 同步依赖。
+
 
 <details><summary>故障排除</summary>
 
