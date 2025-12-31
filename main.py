@@ -544,7 +544,7 @@ def clear():
 
 
 def check_and_update_if_needed() -> bool:
-    """检查上次系统检测时间，如果检测通过且超过7天则执行更新"""
+    """检查上次系统检测时间，如果检测通过且超过5天则执行更新"""
     from datetime import datetime, timedelta
     from nagaagent_core.vendors.charset_normalizer import from_path
     from nagaagent_core.vendors import json5
@@ -586,8 +586,8 @@ def check_and_update_if_needed() -> bool:
         now = datetime.now()
         days_since_last_check = (now - last_check_time).days
 
-        # 如果超过7天
-        if days_since_last_check >= 7:
+        # 如果超过5天
+        if days_since_last_check >= 5:
             print(f"⚠️ 上次系统检测已超过 {days_since_last_check} 天，开始执行更新...")
             print("=" * 50)
 
