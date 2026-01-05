@@ -338,8 +338,6 @@ async def chat_stream(request: ChatRequest):
                         data_str = chunk[6:].strip()
                         if data_str != '[DONE]':
                             decoded = base64.b64decode(data_str).decode('utf-8')
-                            # 同步处理文本累积，不阻塞文本流
-                            tool_extractor.complete_text += decoded
                             # 异步调用TTS处理，不阻塞文本流
                             asyncio.create_task(tool_extractor.process_text_chunk(decoded))
                     except Exception as e:
@@ -388,8 +386,8 @@ async def chat_stream(request: ChatRequest):
             # 完成流式文本切割器处理（非return_audio模式，不阻塞）
             if tool_extractor and not request.return_audio:
                 try:
-                    # 同步处理完成，不阻塞文本流返回
-                    # tool_extractor.finish_processing() 是异步方法，这里不需要调用
+                    # 1.将剩余文本发送到voice_integration中的缓冲区
+                    await tool_extractor.finish_processing()
                     pass
                 except Exception as e:
                     print(f"流式文本切割器完成处理错误: {e}")
@@ -398,6 +396,7 @@ async def chat_stream(request: ChatRequest):
             if voice_integration and not request.return_audio:  # V19: return_audio模式不需要这里的处理
                 try:
                     threading.Thread(
+                        # 2.处理缓冲区中的剩余文本
                         target=voice_integration.finish_processing,
                         daemon=True
                     ).start()
