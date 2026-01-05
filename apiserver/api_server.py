@@ -338,8 +338,6 @@ async def chat_stream(request: ChatRequest):
                         data_str = chunk[6:].strip()
                         if data_str != '[DONE]':
                             decoded = base64.b64decode(data_str).decode('utf-8')
-                            # 同步处理文本累积，不阻塞文本流
-                            tool_extractor.complete_text += decoded
                             # 异步调用TTS处理，不阻塞文本流
                             asyncio.create_task(tool_extractor.process_text_chunk(decoded))
                     except Exception as e:
