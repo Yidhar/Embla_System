@@ -386,8 +386,8 @@ async def chat_stream(request: ChatRequest):
             # 完成流式文本切割器处理（非return_audio模式，不阻塞）
             if tool_extractor and not request.return_audio:
                 try:
-                    # 同步处理完成，不阻塞文本流返回
-                    # tool_extractor.finish_processing() 是异步方法，这里不需要调用
+                    # 1.将剩余文本发送到voice_integration中的缓冲区
+                    await tool_extractor.finish_processing()
                     pass
                 except Exception as e:
                     print(f"流式文本切割器完成处理错误: {e}")
@@ -396,6 +396,7 @@ async def chat_stream(request: ChatRequest):
             if voice_integration and not request.return_audio:  # V19: return_audio模式不需要这里的处理
                 try:
                     threading.Thread(
+                        # 2.处理缓冲区中的剩余文本
                         target=voice_integration.finish_processing,
                         daemon=True
                     ).start()
