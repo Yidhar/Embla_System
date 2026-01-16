@@ -14,7 +14,7 @@
 
 ## [此处获取教程视频与一键运行整合包](https://www.pylindex.top/naga)
 
-### 框架联动：[Undefined QQbot](https://github.com/69gg/Undefined/)
+### 框架联动（QQ机器人）：[Undefined QQbot](https://github.com/69gg/Undefined/)
 ---
 ## 介绍
 
