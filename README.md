@@ -14,7 +14,8 @@
 
 ## [此处获取教程视频与一键运行整合包](https://www.pylindex.top/naga)
 
-
+### 框架联动：[Undefined QQbot](https://github.com/69gg/Undefined/)
+---
 ## 介绍
 
 NagaAgent 是一个功能丰富的智能对话助手系统，具有以下特色功能：
