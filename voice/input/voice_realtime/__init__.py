@@ -22,10 +22,12 @@ from .core.state_manager import StateManager, ConversationState
 # 导入适配器
 from .adapters.qwen_adapter import QwenVoiceClientAdapter
 from .adapters.openai_adapter import OpenAIVoiceClientAdapter
+from .adapters.local import LocalVoiceClientAdapter
 
 # 注册默认适配器
 VoiceClientFactory.register('qwen', QwenVoiceClientAdapter)
 VoiceClientFactory.register('openai', OpenAIVoiceClientAdapter)
+VoiceClientFactory.register('local', LocalVoiceClientAdapter)
 
 # 导出公共接口
 __all__ = [
