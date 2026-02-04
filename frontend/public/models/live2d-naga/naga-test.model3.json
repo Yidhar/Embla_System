@@ -1,0 +1,23 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "naga-test.moc3",
+		"Textures": [
+			"naga-test/texture_00.png"
+		],
+		"Physics": "naga-test.physics3.json",
+		"DisplayInfo": "naga-test.cdi3.json"
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": []
+		},
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": []
+		}
+	]
+}
