@@ -1,6 +1,6 @@
-:root {
-  font-family: system-ui, sans-serif;
+@import url('https://chinese-fonts-cdn.deno.dev/packages/syst/dist/SourceHanSerifCN/result.css');
 
+:root {
   color-scheme: light dark;
   color: rgba(255, 255, 255, 0.87);
   background-color: #110901;
@@ -13,7 +13,6 @@
 
 body,
 #app {
-  margin: 0;
   width: 100vw;
   height: 100vh;
   overflow: hidden;
@@ -23,6 +22,12 @@ body,
 ::after,
 ::before {
   box-sizing: border-box;
+  margin: 0;
+  outline: none;
+  border-width: 0;
+  border-style: solid;
+  padding: 0;
+  line-height: 1;
 }
 
 .box {

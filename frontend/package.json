@@ -1,14 +1,15 @@
 {
   "name": "frontend",
-  "private": true,
-  "version": "0.0.0",
   "type": "module",
+  "version": "0.0.0",
+  "private": true,
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@antfu/eslint-config": "^7.2.0",
     "@vueuse/core": "^14.2.0",
     "pixi-live2d-display": "0.4.0",
     "pixi.js": "6.5.10",

@@ -4,7 +4,9 @@ const input = defineModel<string>()
 
 <template>
   <div class="box">
-    <input class="text-white w-full bg-transparent border-none outline-none" v-model="input" type="text"
-      placeholder="Type a message..." />
+    <input
+      v-model="input" class="text-white w-full bg-transparent border-none outline-none" type="text"
+      placeholder="Type a message..."
+    >
   </div>
 </template>
