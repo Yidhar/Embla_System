@@ -13,36 +13,40 @@ from langchain_openai import ChatOpenAI
 
 from system.config import get_prompt
 
+
 class ConversationAnalyzer:
     """
     对话分析器模块：分析语音对话轮次以推断潜在任务意图
     输入是跨服务器的文本转录片段；输出是零个或多个标准化的任务查询
     """
+
     def __init__(self):
         self.llm = ChatOpenAI(
             model=config.api.model,
             base_url=config.api.base_url,
-            api_key=config.api.api_key,
-            temperature=0
+            api_key=config.api.api_key,  # type: ignore[arg-type]
+            temperature=0,
         )
 
     def _build_prompt(self, messages: List[Dict[str, str]]) -> str:
         lines = []
-        for m in messages[-config.api.max_history_rounds:]:
-            role = m.get('role', 'user')
+        for m in messages[-config.api.max_history_rounds :]:
+            role = m.get("role", "user")
             # 修复：使用content字段而不是text字段
-            content = m.get('content', '')
+            content = m.get("content", "")
             # 清理文本，移除可能导致格式化问题的字符
-            content = content.replace('{', '{{').replace('}', '}}')
+            content = content.replace("{", "{{").replace("}", "}}")
             lines.append(f"{role}: {content}")
         conversation = "\n".join(lines)
-        
+
         # 获取可用的MCP工具信息，注入到意图识别中
+        available_tools = ""
         try:
             from nagaagent_core.stable.mcp import get_registered_services, get_service_info
+
             registered_services = get_registered_services()
             services_info = {name: get_service_info(name) for name in registered_services}
-            
+
             # 构建工具信息摘要
             tools_summary = []
             for name, info in services_info.items():
@@ -50,12 +54,12 @@ class ConversationAnalyzer:
                     display_name = info.get("displayName", name)
                     description = info.get("description", "")
                     capabilities = info.get("capabilities", {})
-                    
+
                     # 提取工具名称 - 从invocationCommands中提取
                     tools = []
-                    invocation_commands = capabilities.get('invocationCommands', [])
+                    invocation_commands = capabilities.get("invocationCommands", [])
                     for cmd in invocation_commands:
-                        tool_name = cmd.get('command', '')
+                        tool_name = cmd.get("command", "")
                         if tool_name:
                             tools.append(tool_name)
 
@@ -63,17 +67,17 @@ class ConversationAnalyzer:
                         tools_summary.append(f"- {display_name}: {description} (工具: {', '.join(tools)})")
                     else:
                         tools_summary.append(f"- {display_name}: {description}")
-            
+
             if tools_summary:
                 available_tools = "\n".join(tools_summary)
-                # 将工具信息注入到对话分析提示词中
-                return get_prompt("conversation_analyzer_prompt",
-                                conversation=conversation,
-                                available_tools=available_tools)
         except Exception as e:
             logger.debug(f"获取MCP工具信息失败: {e}")
-        
-        return get_prompt("conversation_analyzer_prompt", conversation=conversation)
+
+        return get_prompt(
+            "conversation_analyzer_prompt",
+            conversation=conversation,
+            available_tools=available_tools,
+        )
 
     def analyze(self, messages: List[Dict[str, str]]):
         logger.info(f"[ConversationAnalyzer] 开始分析对话，消息数量: {len(messages)}")
@@ -94,24 +98,31 @@ class ConversationAnalyzer:
         logger.info("[ConversationAnalyzer] 尝试非标准JSON格式解析")
         try:
             # 直接调用LLM，避免嵌套线程池
-            resp = self.llm.invoke([
-                {"role": "system", "content": "你是精确的任务意图提取器与MCP调用规划器。"},
-                {"role": "user", "content": prompt},
-            ])
-            
-            text = resp.content.strip()
+            resp = self.llm.invoke(
+                [
+                    {"role": "system", "content": "你是精确的任务意图提取器与MCP调用规划器。"},
+                    {"role": "user", "content": prompt},
+                ]
+            )
+
+            raw_content: Any = getattr(resp, "content", "")
+            if isinstance(raw_content, str):
+                text = raw_content.strip()
+            else:
+                # 兼容LangChain对多模态/分段内容的返回类型
+                text = str(raw_content).strip()
             logger.info(f"[ConversationAnalyzer] LLM响应完成，响应长度: {len(text)}")
             logger.info(f"[ConversationAnalyzer] LLM原始响应内容: {text}")
 
             # 解析非标准JSON格式
             tool_calls = self._parse_non_standard_json(text)
-            
+
             if tool_calls:
                 logger.info(f"[ConversationAnalyzer] 非标准JSON解析成功，发现 {len(tool_calls)} 个工具调用")
                 return {
                     "tasks": [],
                     "reason": f"非标准JSON解析成功，发现 {len(tool_calls)} 个工具调用",
-                    "tool_calls": tool_calls
+                    "tool_calls": tool_calls,
                 }
             else:
                 logger.info("[ConversationAnalyzer] 未发现工具调用")
@@ -122,32 +133,130 @@ class ConversationAnalyzer:
             return None
 
     def _parse_non_standard_json(self, text: str) -> List[Dict[str, Any]]:
-        """解析非标准JSON格式 - 处理中文括号和标准JSON"""
-        from nagaagent_core.stable.parsing import parse_non_standard_json
-        return parse_non_standard_json(text)
+        """解析非标准JSON格式。
+
+        兼容场景：
+        - LLM输出全角括号/标点（如｛｝），导致下游解析器无法识别
+        - LLM输出在JSON前后夹杂少量说明文字
+        """
+
+        normalized_text = self._normalize_fullwidth_json_chars(text)
+
+        # 优先使用核心库解析器（如果可用）
+        try:
+            from nagaagent_core.stable.parsing import parse_non_standard_json  # type: ignore
+
+            tool_calls = parse_non_standard_json(normalized_text)
+            if tool_calls:
+                return tool_calls
+        except Exception as e:
+            logger.debug(f"parse_non_standard_json不可用或解析失败，尝试回退解析: {e}")
+
+        # 回退：从文本中提取一个或多个JSON对象并解析
+        return self._fallback_extract_json_objects(normalized_text)
+
+    @staticmethod
+    def _normalize_fullwidth_json_chars(text: str) -> str:
+        """将常见全角JSON相关字符归一化为ASCII。
+
+        仅做保守替换，避免影响普通文本内容。
+        """
+        if not text:
+            return text
+
+        translation_table = str.maketrans(
+            {
+                "｛": "{",
+                "｝": "}",
+                "：": ":",
+                "，": ",",
+                "“": '"',
+                "”": '"',
+                "‘": "'",
+                "’": "'",
+            }
+        )
+        return text.translate(translation_table)
+
+    def _fallback_extract_json_objects(self, text: str) -> List[Dict[str, Any]]:
+        """从文本中提取JSON对象（支持多个），并用json5/json解析。
+
+        返回值统一为List[Dict]；无法解析时返回空列表。
+        """
+
+        def _loads(s: str) -> Any:
+            try:
+                from nagaagent_core.vendors import json5 as _json5  # type: ignore
+
+                return _json5.loads(s)
+            except Exception:
+                import json as _json
+
+                return _json.loads(s)
+
+        objects: List[Dict[str, Any]] = []
+        start: Optional[int] = None
+        depth = 0
+
+        for i, ch in enumerate(text):
+            if ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}":
+                if depth > 0:
+                    depth -= 1
+                    if depth == 0 and start is not None:
+                        candidate = text[start : i + 1].strip()
+                        start = None
+
+                        # 跳过空对象（表示“无任务”）
+                        if candidate in ("{}", "{ }"):
+                            continue
+
+                        try:
+                            parsed = _loads(candidate)
+                        except Exception:
+                            continue
+
+                        if isinstance(parsed, dict):
+                            objects.append(parsed)
+                        elif isinstance(parsed, list):
+                            for item in parsed:
+                                if isinstance(item, dict):
+                                    objects.append(item)
+
+        # 只保留形如工具调用的对象（避免误解析到无关JSON）
+        filtered: List[Dict[str, Any]] = []
+        for obj in objects:
+            agent_type = obj.get("agentType")
+            if isinstance(agent_type, str) and agent_type:
+                filtered.append(obj)
+
+        return filtered
 
 
 class BackgroundAnalyzer:
     """后台分析器 - 管理异步意图分析"""
-    
+
     def __init__(self):
         self.analyzer = ConversationAnalyzer()
         self.running_analyses = {}
-    
+
     async def analyze_intent_async(self, messages: List[Dict[str, str]], session_id: str):
         """异步意图分析 - 基于博弈论的背景分析机制"""
         # 检查是否已经有分析在进行中
         if session_id in self.running_analyses:
             logger.info(f"[博弈论] 会话 {session_id} 已有意图分析在进行中，跳过重复执行")
             return {"has_tasks": False, "reason": "已有分析在进行中", "tasks": [], "priority": "low"}
-        
+
         # 创建独立的意图分析会话
         analysis_session_id = f"analysis_{session_id}_{int(time.time())}"
         logger.info(f"[博弈论] 创建独立分析会话: {analysis_session_id}")
-        
+
         # 标记分析开始
         self.running_analyses[session_id] = analysis_session_id
-        
+
         try:
             logger.info(f"[博弈论] 开始异步意图分析，消息数量: {len(messages)}")
             loop = asyncio.get_running_loop()
@@ -158,7 +267,7 @@ class BackgroundAnalyzer:
             try:
                 analysis = await asyncio.wait_for(
                     loop.run_in_executor(None, self.analyzer.analyze, messages),
-                    timeout=60.0  # 60秒超时
+                    timeout=60.0,  # 60秒超时
                 )
                 logger.info(f"[博弈论] LLM分析完成，结果类型: {type(analysis)}")
             except asyncio.TimeoutError:
@@ -168,42 +277,46 @@ class BackgroundAnalyzer:
         except Exception as e:
             logger.error(f"[博弈论] 意图分析失败: {e}")
             import traceback
+
             logger.error(f"[博弈论] 详细错误信息: {traceback.format_exc()}")
             return {"has_tasks": False, "reason": f"分析失败: {e}", "tasks": [], "priority": "low"}
-        
+
         try:
             import uuid as _uuid
+
             tasks = analysis.get("tasks", []) if isinstance(analysis, dict) else []
             tool_calls = analysis.get("tool_calls", []) if isinstance(analysis, dict) else []
-            
+
             if not tasks and not tool_calls:
                 return {"has_tasks": False, "reason": "未发现可执行任务", "tasks": [], "priority": "low"}
-            
-            logger.info(f"[博弈论] 分析会话 {analysis_session_id} 发现 {len(tasks)} 个任务和 {len(tool_calls)} 个工具调用")
-            
+
+            logger.info(
+                f"[博弈论] 分析会话 {analysis_session_id} 发现 {len(tasks)} 个任务和 {len(tool_calls)} 个工具调用"
+            )
+
             # 处理工具调用 - 根据agentType分发到不同服务器
             if tool_calls:
                 # 通知UI工具调用开始
                 await self._notify_ui_tool_calls(tool_calls, session_id)
                 await self._dispatch_tool_calls(tool_calls, session_id, analysis_session_id)
-            
+
             # 返回分析结果
             result = {
                 "has_tasks": True,
                 "reason": analysis.get("reason", "发现潜在任务"),
                 "tasks": tasks,
                 "tool_calls": tool_calls,
-                "priority": "medium"  # 可以根据任务数量或类型调整优先级
+                "priority": "medium",  # 可以根据任务数量或类型调整优先级
             }
-            
+
             # 记录任务详情
             for task in tasks:
                 logger.info(f"发现任务: {task}")
             for tool_call in tool_calls:
                 logger.info(f"发现工具调用: {tool_call}")
-            
+
             return result
-                
+
         except Exception as e:
             logger.error(f"任务处理失败: {e}")
             return {"has_tasks": False, "reason": f"处理失败: {e}", "tasks": [], "priority": "low"}
@@ -217,11 +330,11 @@ class BackgroundAnalyzer:
         """批量通知UI工具调用开始 - 优化网络请求"""
         try:
             import httpx
-            
+
             # 批量构建工具调用通知
             tool_names = [tool_call.get("tool_name", "未知工具") for tool_call in tool_calls]
             service_names = [tool_call.get("service_name", "未知服务") for tool_call in tool_calls]
-            
+
             # 批量发送通知（减少HTTP请求次数）
             notification_payload = {
                 "session_id": session_id,
@@ -229,89 +342,98 @@ class BackgroundAnalyzer:
                     {
                         "tool_name": tool_call.get("tool_name", "未知工具"),
                         "service_name": tool_call.get("service_name", "未知服务"),
-                        "status": "starting"
+                        "status": "starting",
                     }
                     for tool_call in tool_calls
                 ],
-                "message": f"🔧 正在执行 {len(tool_calls)} 个工具: {', '.join(tool_names)}"
+                "message": f"🔧 正在执行 {len(tool_calls)} 个工具: {', '.join(tool_names)}",
             }
-            
+
             from system.config import get_server_port
+
             async with httpx.AsyncClient(timeout=5.0) as client:
                 await client.post(
-                    f"http://localhost:{get_server_port('api_server')}/tool_notification",
-                    json=notification_payload
+                    f"http://localhost:{get_server_port('api_server')}/tool_notification", json=notification_payload
                 )
-                    
+
         except Exception as e:
             logger.error(f"批量通知UI工具调用失败: {e}")
-    
-    async def _dispatch_tool_calls(self, tool_calls: List[Dict[str, Any]], session_id: str, analysis_session_id: str = None):
+
+    async def _dispatch_tool_calls(
+        self, tool_calls: List[Dict[str, Any]], session_id: str, analysis_session_id: Optional[str] = None
+    ):
         """根据agentType将工具调用分发到相应的服务器"""
         try:
             import httpx
             import uuid
-            
+
             # 按agentType分组
             mcp_calls = []
             agent_calls = []
-            
+
             for tool_call in tool_calls:
                 agent_type = tool_call.get("agentType", "")
                 if agent_type == "mcp":
                     mcp_calls.append(tool_call)
                 elif agent_type == "agent":
                     agent_calls.append(tool_call)
-            
+
             # 分发MCP任务到MCP服务器
             if mcp_calls:
                 await self._send_to_mcp_server(mcp_calls, session_id, analysis_session_id)
-            
+
             # 分发Agent任务到agentserver
             if agent_calls:
                 await self._send_to_agent_server(agent_calls, session_id, analysis_session_id)
-                
+
         except Exception as e:
             logger.error(f"工具调用分发失败: {e}")
-    
-    async def _send_to_mcp_server(self, mcp_calls: List[Dict[str, Any]], session_id: str, analysis_session_id: str = None):
+
+    async def _send_to_mcp_server(
+        self, mcp_calls: List[Dict[str, Any]], session_id: str, analysis_session_id: Optional[str] = None
+    ):
         """发送MCP任务到MCP服务器"""
         try:
             import httpx
             import uuid
-            
+
             from system.config import get_server_port
+
             # 构建MCP服务器请求
             mcp_payload = {
                 "query": f"批量MCP工具调用 ({len(mcp_calls)} 个)",
                 "tool_calls": mcp_calls,
                 "session_id": session_id,
                 "request_id": str(uuid.uuid4()),
-                "callback_url": f"http://localhost:{get_server_port('api_server')}/tool_result_callback"
+                "callback_url": f"http://localhost:{get_server_port('api_server')}/tool_result_callback",
             }
-            
+
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"http://localhost:{get_server_port('mcp_server')}/schedule",
-                    json=mcp_payload
+                    f"http://localhost:{get_server_port('mcp_server')}/schedule", json=mcp_payload
                 )
-                
+
                 if response.status_code == 200:
                     result = response.json()
-                    logger.info(f"[博弈论] 分析会话 {analysis_session_id or 'unknown'} MCP任务调度成功: {result.get('task_id', 'unknown')}")
+                    logger.info(
+                        f"[博弈论] 分析会话 {analysis_session_id or 'unknown'} MCP任务调度成功: {result.get('task_id', 'unknown')}"
+                    )
                 else:
                     logger.error(f"[博弈论] MCP任务调度失败: {response.status_code} - {response.text}")
-                    
+
         except Exception as e:
             logger.error(f"[博弈论] 发送MCP任务失败: {e}")
-    
-    async def _send_to_agent_server(self, agent_calls: List[Dict[str, Any]], session_id: str, analysis_session_id: str = None):
+
+    async def _send_to_agent_server(
+        self, agent_calls: List[Dict[str, Any]], session_id: str, analysis_session_id: Optional[str] = None
+    ):
         """发送Agent任务到agentserver - 应用与MCP服务器相同的会话管理逻辑"""
         try:
             import httpx
             import uuid
-            
+
             from system.config import get_server_port
+
             # 构建agentserver请求 - 应用与MCP服务器相同的会话管理逻辑
             agent_payload = {
                 "query": f"批量Agent任务执行 ({len(agent_calls)} 个)",
@@ -319,27 +441,30 @@ class BackgroundAnalyzer:
                 "session_id": session_id,
                 "analysis_session_id": analysis_session_id,  # 传递独立分析会话ID
                 "request_id": str(uuid.uuid4()),  # 生成独立请求ID
-                "callback_url": f"http://localhost:{get_server_port('api_server')}/agent_result_callback"  # 添加回调URL
+                "callback_url": f"http://localhost:{get_server_port('api_server')}/agent_result_callback",  # 添加回调URL
             }
-            
+
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
                     f"http://localhost:{get_server_port('agent_server')}/schedule",  # 使用统一的schedule端点
-                    json=agent_payload
+                    json=agent_payload,
                 )
-                
+
                 if response.status_code == 200:
                     result = response.json()
-                    logger.info(f"[博弈论] 分析会话 {analysis_session_id or 'unknown'} Agent任务调度成功: {result.get('task_id', 'unknown')}")
+                    logger.info(
+                        f"[博弈论] 分析会话 {analysis_session_id or 'unknown'} Agent任务调度成功: {result.get('task_id', 'unknown')}"
+                    )
                 else:
                     logger.error(f"[博弈论] Agent任务调度失败: {response.status_code} - {response.text}")
-                    
+
         except Exception as e:
             logger.error(f"[博弈论] 发送Agent任务失败: {e}")
 
 
 # 全局分析器实例
 _background_analyzer = None
+
 
 def get_background_analyzer() -> BackgroundAnalyzer:
     """获取全局后台分析器实例"""
