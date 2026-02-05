@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Live2DModel } from 'pixi-live2d-display'
+import { Live2DModel } from 'pixi-live2d-display/cubism4'
 import * as PIXI from 'pixi.js'
 import { computed, onMounted, onUnmounted, useTemplateRef, watch } from 'vue'
 
@@ -18,7 +18,12 @@ const props = withDefaults(defineProps<{
   factor: 1,
 })
 
-Live2DModel.registerTicker(PIXI.Ticker)
+declare global {
+  interface Window {
+    PIXI: typeof PIXI
+  }
+}
+window.PIXI = PIXI
 
 let app: PIXI.Application
 let model: Live2DModel & { rawWidth: number, rawHeight: number }

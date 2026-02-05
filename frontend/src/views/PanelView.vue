@@ -3,13 +3,15 @@ import ArkButton from '@/components/ArkButton.vue'
 </script>
 
 <template>
-  <div class="flex flex-col items-center justify-center">
-    <div class="grid grid-rows-3 gap-3 [&>.grid]:gap-3">
-      <ArkButton icon="/assets/icons/naga.png">
-        <div class="absolute bottom-0 right-0 size-full justify-center flex items-center">
-          对话
-        </div>
-      </ArkButton>
+  <div class="flex flex-col items-start justify-center pl-10%">
+    <div class="grid grid-rows-3 gap-3 [&>.grid]:gap-3 panel">
+      <RouterLink to="/chat">
+        <ArkButton class="size-full" icon="/assets/icons/naga.png">
+          <div class="absolute bottom-0 right-0 size-full justify-center flex items-center">
+            对话
+          </div>
+        </ArkButton>
+      </RouterLink>
       <div class="grid grid-cols-2 translate-x-16">
         <ArkButton icon="/assets/icons/brain.png">
           记忆<br>云海
@@ -24,7 +26,7 @@ import ArkButton from '@/components/ArkButton.vue'
             参数设置
           </div>
           <div class="grow grid grid-cols-2 font-serif font-bold lh-none">
-            <ArkButton class="border-r">
+            <ArkButton class="mr-1">
               <span class="p-auto text-1.5vw">对话模型</span>
             </ArkButton>
             <ArkButton>
@@ -41,3 +43,10 @@ import ArkButton from '@/components/ArkButton.vue'
     </div>
   </div>
 </template>
+
+<style scoped>
+.panel {
+  transform: perspective(100px) rotateY(1deg);
+  zoom: 1.2;
+}
+</style>

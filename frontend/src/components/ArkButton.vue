@@ -6,13 +6,17 @@ defineProps<{
 </script>
 
 <template>
-  <button class="text-black bg-white bg-opacity-80 relative">
-    <div class="px-3 py-2 flex flex gap-12 justify-between">
-      <div class="w-full  flex flex-col gap-2 flex justify-center">
+  <button
+    class="text-black bg-white bg-opacity-80 relative
+      transition-all duration-150 ease-out
+      hover:scale-102 hover:bg-opacity-90 hover:brightness-110"
+  >
+    <div class="px-3 py-2 flex gap-12 justify-between">
+      <div class="w-full  flex flex-col gap-2 justify-center">
         <span class="text-2vw font-bold font-serif lh-none">
           <slot />
         </span>
-        <span v-if="subtitle" class="text-1.2vw c-gray-800 op-40 font-sans">
+        <span v-if="subtitle" class="text-1vw font-bold c-gray-800 op-40 font-sans">
           {{ subtitle }}
         </span>
       </div>
