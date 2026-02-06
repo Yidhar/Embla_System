@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700&family=Noto+Serif+SC:wght@400;700&display=swap');
+
 :root {
   font-family: 'Noto Sans SC', sans-serif;
   font-family: 'Noto Serif SC', serif;
@@ -11,32 +13,41 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
-  -webkit-user-select: none;
-  user-select: none;
+  /* -webkit-user-select: none;
+  user-select: none; */
 }
 
 body,
 #app {
+  margin: 0;
   width: 100vw;
   height: 100vh;
   overflow: hidden;
 }
 
-*,
-::after,
-::before {
+* {
   box-sizing: border-box;
-  margin: 0;
   outline: none;
   border-width: 0;
   border-style: solid;
-  padding: 0;
-  line-height: 1;
 }
 
 .box {
   border-image-source: url(/assets/box.9.png);
   border-image-slice: 49% fill;
   border-image-width: 2em;
+  padding: 0.5em;
+}
+
+blockquote {
+  margin: 0;
+  padding: 0.25em 1em;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-left: 0.25em solid rgba(255, 255, 255, 0.5);
+}
+
+pre:has(code) {
   padding: 1em;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 0.5em;
 }
