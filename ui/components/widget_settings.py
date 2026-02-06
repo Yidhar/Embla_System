@@ -26,7 +26,7 @@ from nagaagent_core.vendors.PyQt5.QtGui import QFont, QPainter, QColor  # 统一
 
 from system.config import config, AI_NAME, UIConfig, Live2DConfig
 from ui.styles.settings_styles import (
-    SYSTEM_PROMPT_CARD_STYLE, SYSTEM_PROMPT_EDITOR_STYLE, 
+    SYSTEM_PROMPT_CARD_STYLE, SYSTEM_PROMPT_EDITOR_STYLE,
     SYSTEM_PROMPT_TITLE_STYLE, SYSTEM_PROMPT_DESC_STYLE,
     SETTING_CARD_BASE_STYLE, SETTING_CARD_TITLE_STYLE, SETTING_CARD_DESC_STYLE,
     SETTING_GROUP_HEADER_CONTAINER_STYLE, SETTING_GROUP_HEADER_BUTTON_STYLE,
@@ -34,7 +34,10 @@ from ui.styles.settings_styles import (
     STATUS_LABEL_STYLE, SAVE_BUTTON_STYLE, RESET_BUTTON_STYLE,
     NAGA_PORTAL_BUTTON_STYLE, VOICE_MODE_DISABLED_STYLE, TEST_WINDOW_STYLE,
     INPUT_STYLE, COMBO_STYLE, CHECKBOX_STYLE, SLIDER_STYLE, SPIN_STYLE,
-    LABEL_STYLE
+    LABEL_STYLE,
+    OPENCLAW_STATUS_INSTALLED_STYLE, OPENCLAW_STATUS_NOT_INSTALLED_STYLE,
+    OPENCLAW_CONNECTED_STYLE, OPENCLAW_DISCONNECTED_STYLE,
+    OPENCLAW_REFRESH_BUTTON_STYLE, OPENCLAW_DOCS_BUTTON_STYLE
 )
 
 class SettingCard(QWidget):
@@ -298,6 +301,7 @@ class ElegantSettingsWidget(QWidget):
         self.create_voice_input_group(scroll_layout)  # 语音输入设置（ASR）
         self.create_voice_output_group(scroll_layout)  # 语音输出设置（TTS）
         self.create_mqtt_group(scroll_layout)
+        self.create_openclaw_group(scroll_layout)  # OpenClaw 集成设置
         self.create_save_section(scroll_layout)
         
         scroll_layout.addStretch()
@@ -326,10 +330,9 @@ class ElegantSettingsWidget(QWidget):
             self.base_url_input = base_url_input
         # Model
         if hasattr(config.api, "model"):
-            model_combo = QComboBox()
-            model_combo.addItems([config.api.model])
-            model_combo.setCurrentText(config.api.model)
-            model_combo.setStyleSheet(COMBO_STYLE)
+            model_combo = QLineEdit()
+            model_combo.setText(config.api.model)
+            model_combo.setStyleSheet(INPUT_STYLE)
             model_card = SettingCard("AI模型", "选择用于对话的AI模型", model_combo, "api.model")
             model_card.value_changed.connect(self.on_setting_changed)
             group.add_card(model_card)
@@ -1013,6 +1016,206 @@ class ElegantSettingsWidget(QWidget):
             mqtt_pwd_card.value_changed.connect(self.on_setting_changed)
             group.add_card(mqtt_pwd_card)
         parent_layout.addWidget(group)
+
+    def create_openclaw_group(self, parent_layout):
+        """创建 OpenClaw 集成设置组"""
+        group = SettingGroup("OpenClaw 集成")
+
+        # 右侧文档按钮
+        docs_btn = QPushButton("官方文档")
+        docs_btn.setStyleSheet(OPENCLAW_DOCS_BUTTON_STYLE)
+        docs_btn.clicked.connect(self.open_openclaw_docs)
+        group.set_right_widget(docs_btn)
+
+        # 检测 OpenClaw 安装状态
+        self.openclaw_status = None
+        self.detect_openclaw_status()
+
+        # 安装状态显示卡片
+        status_widget = QWidget()
+        status_layout = QHBoxLayout(status_widget)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setSpacing(12)
+
+        # 状态标签
+        self.openclaw_status_label = QLabel("检测中...")
+        self.openclaw_status_label.setStyleSheet(LABEL_STYLE)
+        status_layout.addWidget(self.openclaw_status_label)
+
+        status_layout.addStretch()
+
+        # 刷新按钮
+        refresh_btn = QPushButton("刷新状态")
+        refresh_btn.setStyleSheet(OPENCLAW_REFRESH_BUTTON_STYLE)
+        refresh_btn.clicked.connect(self.refresh_openclaw_status)
+        status_layout.addWidget(refresh_btn)
+
+        status_card = SettingCard(
+            "安装状态",
+            "检测本机 OpenClaw 安装情况 (~/.openclaw)",
+            status_widget
+        )
+        group.add_card(status_card)
+
+        # Gateway URL
+        self.openclaw_gateway_input = QLineEdit()
+        self.openclaw_gateway_input.setStyleSheet(INPUT_STYLE)
+        self.openclaw_gateway_input.setPlaceholderText("http://localhost:18789")
+        gateway_card = SettingCard(
+            "Gateway 地址",
+            "OpenClaw Gateway 服务地址（默认端口 18789）",
+            self.openclaw_gateway_input,
+            "openclaw.gateway_url"
+        )
+        gateway_card.value_changed.connect(self.on_setting_changed)
+        group.add_card(gateway_card)
+
+        # Token
+        self.openclaw_token_input = QLineEdit()
+        self.openclaw_token_input.setStyleSheet(INPUT_STYLE)
+        self.openclaw_token_input.setEchoMode(QLineEdit.Password)
+        self.openclaw_token_input.setPlaceholderText("自动从 ~/.openclaw/openclaw.json 读取")
+        token_card = SettingCard(
+            "认证 Token",
+            "Gateway 认证令牌（对应 gateway.auth.token）",
+            self.openclaw_token_input,
+            "openclaw.token"
+        )
+        token_card.value_changed.connect(self.on_setting_changed)
+        group.add_card(token_card)
+
+        # 连接状态
+        connection_widget = QWidget()
+        connection_layout = QHBoxLayout(connection_widget)
+        connection_layout.setContentsMargins(0, 0, 0, 0)
+        connection_layout.setSpacing(12)
+
+        self.openclaw_connection_label = QLabel("未检测")
+        self.openclaw_connection_label.setStyleSheet(LABEL_STYLE)
+        connection_layout.addWidget(self.openclaw_connection_label)
+
+        connection_layout.addStretch()
+
+        # 测试连接按钮
+        test_btn = QPushButton("测试连接")
+        test_btn.setStyleSheet(OPENCLAW_REFRESH_BUTTON_STYLE)
+        test_btn.clicked.connect(self.test_openclaw_connection)
+        connection_layout.addWidget(test_btn)
+
+        connection_card = SettingCard(
+            "连接状态",
+            "测试与 OpenClaw Gateway 的连接",
+            connection_widget
+        )
+        group.add_card(connection_card)
+
+        # 启用开关
+        self.openclaw_enabled_checkbox = QCheckBox()
+        self.openclaw_enabled_checkbox.setStyleSheet(CHECKBOX_STYLE)
+        enabled_card = SettingCard(
+            "启用 OpenClaw",
+            "启用后 Naga 可以调度 OpenClaw 执行任务",
+            self.openclaw_enabled_checkbox,
+            "openclaw.enabled"
+        )
+        enabled_card.value_changed.connect(self.on_setting_changed)
+        group.add_card(enabled_card)
+
+        # 更新UI显示
+        self.update_openclaw_ui()
+
+        parent_layout.addWidget(group)
+
+    def detect_openclaw_status(self):
+        """检测 OpenClaw 安装状态"""
+        try:
+            from agentserver.openclaw import detect_openclaw
+            self.openclaw_status = detect_openclaw(check_connection=False)
+        except Exception as e:
+            print(f"检测 OpenClaw 状态失败: {e}")
+            self.openclaw_status = None
+
+    def update_openclaw_ui(self):
+        """更新 OpenClaw UI 显示"""
+        if self.openclaw_status is None:
+            self.openclaw_status_label.setText("检测失败")
+            self.openclaw_status_label.setStyleSheet(OPENCLAW_STATUS_NOT_INSTALLED_STYLE)
+            return
+
+        if self.openclaw_status.installed:
+            version_text = f"v{self.openclaw_status.version}" if self.openclaw_status.version else ""
+            self.openclaw_status_label.setText(f"已安装 {version_text}")
+            self.openclaw_status_label.setStyleSheet(OPENCLAW_STATUS_INSTALLED_STYLE)
+
+            # 自动填充检测到的配置
+            if self.openclaw_status.gateway_url:
+                self.openclaw_gateway_input.setText(self.openclaw_status.gateway_url)
+
+            if self.openclaw_status.gateway_token:
+                self.openclaw_token_input.setText(self.openclaw_status.gateway_token)
+
+            # 设置启用状态
+            self.openclaw_enabled_checkbox.setChecked(self.openclaw_status.gateway_enabled)
+        else:
+            self.openclaw_status_label.setText("未安装")
+            self.openclaw_status_label.setStyleSheet(OPENCLAW_STATUS_NOT_INSTALLED_STYLE)
+            # 使用默认值
+            self.openclaw_gateway_input.setText("http://localhost:18789")
+            self.openclaw_enabled_checkbox.setChecked(False)
+
+    def refresh_openclaw_status(self):
+        """刷新 OpenClaw 状态"""
+        self.openclaw_status_label.setText("检测中...")
+        self.openclaw_status_label.setStyleSheet(LABEL_STYLE)
+
+        # 使用 QTimer 延迟执行，避免界面卡顿
+        QTimer.singleShot(100, self._do_refresh_openclaw)
+
+    def _do_refresh_openclaw(self):
+        """实际执行 OpenClaw 状态刷新"""
+        self.detect_openclaw_status()
+        self.update_openclaw_ui()
+        self.update_status_label("OpenClaw 状态已刷新")
+
+    def test_openclaw_connection(self):
+        """测试 OpenClaw 连接"""
+        self.openclaw_connection_label.setText("测试中...")
+        self.openclaw_connection_label.setStyleSheet(LABEL_STYLE)
+
+        # 使用 QTimer 延迟执行
+        QTimer.singleShot(100, self._do_test_openclaw_connection)
+
+    def _do_test_openclaw_connection(self):
+        """实际执行 OpenClaw 连接测试"""
+        try:
+            from agentserver.openclaw import OpenClawDetector
+
+            detector = OpenClawDetector()
+            gateway_url = self.openclaw_gateway_input.text() or "http://localhost:18789"
+
+            # 同步检查连接
+            reachable = detector._check_gateway_connection(gateway_url)
+
+            if reachable:
+                self.openclaw_connection_label.setText("已连接")
+                self.openclaw_connection_label.setStyleSheet(OPENCLAW_CONNECTED_STYLE)
+                self.update_status_label("OpenClaw Gateway 连接成功")
+            else:
+                self.openclaw_connection_label.setText("无法连接")
+                self.openclaw_connection_label.setStyleSheet(OPENCLAW_DISCONNECTED_STYLE)
+                self.update_status_label("OpenClaw Gateway 连接失败")
+        except Exception as e:
+            self.openclaw_connection_label.setText(f"错误: {str(e)[:20]}")
+            self.openclaw_connection_label.setStyleSheet(OPENCLAW_DISCONNECTED_STYLE)
+            self.update_status_label(f"连接测试失败: {e}")
+
+    def open_openclaw_docs(self):
+        """打开 OpenClaw 官方文档"""
+        import webbrowser
+        try:
+            webbrowser.open("https://docs.openclaw.ai/")
+        except Exception as e:
+            print(f"打开 OpenClaw 文档失败: {e}")
         
     def create_save_section(self, parent_layout):
         """创建保存区域"""
@@ -1205,10 +1408,10 @@ class ElegantSettingsWidget(QWidget):
             if hasattr(self, 'base_url_input'):
                 self.base_url_input.setText(config.api.base_url)
             
-            if hasattr(self, 'model_combo'):
-                index = self.model_combo.findText(config.api.model)
-                if index >= 0:
-                    self.model_combo.setCurrentIndex(index)
+            # if hasattr(self, 'model_combo'):
+            #     index = self.model_combo.findText(config.api.model)
+            #     if index >= 0:
+            #         self.model_combo.setCurrentIndex(index)
                     
             # 系统设置
             if hasattr(self, 'max_tokens_spin'):
@@ -1274,7 +1477,26 @@ class ElegantSettingsWidget(QWidget):
                 self.system_prompt_editor.blockSignals(True)
                 self.system_prompt_editor.setPlainText(content)
                 self.system_prompt_editor.blockSignals(False)
-                
+
+            # OpenClaw 设置 - 优先从检测器获取，其次从 config
+            if hasattr(self, 'openclaw_gateway_input') and hasattr(self, 'openclaw_token_input'):
+                # 先检测 OpenClaw 状态并更新 UI
+                self.detect_openclaw_status()
+                self.update_openclaw_ui()
+
+                # 如果检测未获取到配置，使用 config 中的值
+                if hasattr(config, 'openclaw'):
+                    if not self.openclaw_gateway_input.text():
+                        self.openclaw_gateway_input.setText(config.openclaw.gateway_url)
+                    if not self.openclaw_token_input.text() and config.openclaw.token:
+                        self.openclaw_token_input.setText(config.openclaw.token)
+                    if hasattr(self, 'openclaw_enabled_checkbox'):
+                        # 使用检测到的 enabled 状态或 config 中的值
+                        if self.openclaw_status and self.openclaw_status.installed:
+                            self.openclaw_enabled_checkbox.setChecked(self.openclaw_status.gateway_enabled)
+                        else:
+                            self.openclaw_enabled_checkbox.setChecked(config.openclaw.enabled)
+
         except Exception as e:
             print(f"加载设置失败: {e}")
     

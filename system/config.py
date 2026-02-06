@@ -355,6 +355,18 @@ class OnlineSearchConfig(BaseModel):
     engines: List[str] = Field(default=["google"], description="默认搜索引擎列表")
     num_results: int = Field(default=5, ge=1, le=20, description="搜索结果数量")
 
+class OpenClawConfig(BaseModel):
+    """OpenClaw 集成配置
+
+    官方文档: https://docs.openclaw.ai/
+    """
+    gateway_url: str = Field(default="http://localhost:18789", description="OpenClaw Gateway 地址")
+    token: Optional[str] = Field(default=None, description="认证 token")
+    timeout: int = Field(default=120, ge=5, le=600, description="请求超时时间（秒）")
+    default_model: Optional[str] = Field(default=None, description="默认模型")
+    default_channel: str = Field(default="last", description="默认消息通道")
+    enabled: bool = Field(default=False, description="是否启用 OpenClaw 集成")
+
 class SystemCheckConfig(BaseModel):
     """系统检测状态配置"""
     passed: bool = Field(default=False, description="系统检测是否通过")
@@ -504,6 +516,7 @@ class NagaConfig(BaseModel):
     voice_realtime: VoiceRealtimeConfig = Field(default_factory=VoiceRealtimeConfig)  # 实时语音配置
     naga_portal: NagaPortalConfig = Field(default_factory=NagaPortalConfig)
     online_search: OnlineSearchConfig = Field(default_factory=OnlineSearchConfig)
+    openclaw: OpenClawConfig = Field(default_factory=OpenClawConfig)
     system_check: SystemCheckConfig = Field(default_factory=SystemCheckConfig)
     computer_control: ComputerControlConfig = Field(default_factory=ComputerControlConfig)
     window: QWidget = Field(default=None)

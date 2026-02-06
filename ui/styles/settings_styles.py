@@ -468,3 +468,84 @@ QLabel#Live2DActionType {
     font: 9pt 'Lucida Console';
 }
 """
+
+# OpenClaw 状态标签样式 - 已安装
+OPENCLAW_STATUS_INSTALLED_STYLE = """
+QLabel {
+    color: rgba(100, 255, 100, 200);
+    font: 10pt 'Lucida Console';
+    font-weight: bold;
+    background: transparent;
+    border: none;
+}
+"""
+
+# OpenClaw 状态标签样式 - 未安装
+OPENCLAW_STATUS_NOT_INSTALLED_STYLE = """
+QLabel {
+    color: rgba(255, 150, 100, 200);
+    font: 10pt 'Lucida Console';
+    font-weight: bold;
+    background: transparent;
+    border: none;
+}
+"""
+
+# OpenClaw 连接状态标签样式 - 已连接
+OPENCLAW_CONNECTED_STYLE = """
+QLabel {
+    color: rgba(100, 255, 100, 180);
+    font: 9pt 'Lucida Console';
+    background: transparent;
+    border: none;
+}
+"""
+
+# OpenClaw 连接状态标签样式 - 未连接
+OPENCLAW_DISCONNECTED_STYLE = """
+QLabel {
+    color: rgba(255, 100, 100, 180);
+    font: 9pt 'Lucida Console';
+    background: transparent;
+    border: none;
+}
+"""
+
+# OpenClaw 刷新按钮样式
+OPENCLAW_REFRESH_BUTTON_STYLE = """
+QPushButton {
+    background: rgba(100, 200, 255, 100);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 50);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font: 9pt 'Lucida Console';
+}
+QPushButton:hover {
+    border: 1px solid rgba(255, 255, 255, 80);
+    background: rgba(120, 220, 255, 150);
+}
+QPushButton:pressed {
+    background: rgba(80, 180, 255, 180);
+}
+"""
+
+# OpenClaw 官网按钮样式
+OPENCLAW_DOCS_BUTTON_STYLE = """
+QPushButton {
+    background: rgba(150, 100, 255, 120);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 50);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font: 10pt 'Lucida Console';
+    font-weight: bold;
+}
+QPushButton:hover {
+    border: 1px solid rgba(255, 255, 255, 80);
+    background: rgba(170, 120, 255, 160);
+}
+QPushButton:pressed {
+    background: rgba(130, 80, 255, 180);
+}
+"""

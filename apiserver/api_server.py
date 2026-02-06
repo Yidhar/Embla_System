@@ -425,14 +425,14 @@ async def chat_stream(request: ChatRequest):
             if not request.skip_intent_analysis:
                 _trigger_background_analysis(session_id)
 
-            yield "data: [DONE]\n\n"
-
+            # [DONE] 信号已由 llm_service.stream_chat_with_context 发送，无需重复
+            
         except Exception as e:
             print(f"流式对话处理错误: {e}")
             # 使用顶部导入的traceback
             traceback.print_exc()
-            yield f"data: 错误: {str(e)}\n\n"
-
+            yield f"data: error:{str(e)}\n\n"
+    
     return StreamingResponse(
         generate_response(),
         media_type="text/event-stream",

@@ -1,44 +1,62 @@
 # Because of gbk encoding error, the comments are changed to English.
 # recommend to use python 3.11
 
-pyqt5>=5.15.11
-# do not be too strict for kids
 
-# Core dependency (integrated into nagaagent-core)
-nagaagent-core>=1.0.9
-
-# All runtime dependencies have been migrated into nagaagent-core.
-# If you need to pin extra versions locally, append them below.
-
-# Audio playback (pygame can play MP3 directly, no ffmpeg needed)
+setuptools>=80.0.0
+wheel>=0.46.0
+pyyaml>=6.0.0
+#desktop
 pygame>=2.5.0
-
-# Audio processing for lip sync
-soundfile>=0.12.1  # For reading MP3/WAV audio data (optional, for lip sync)
-scipy>=1.9.0       # Required for advanced lip sync (FFT, LPC, formant detection)
-numpy>=1.21.0      # Required for audio processing
-dashscope
-#py-key-value-aio[disk,memory,redis] # This lib cannot be find sometimes. Kill it.
-live2d-py<0.6
-pyopengl>=3.1.10
-onnxruntime
-librosa
-
-# Additional formatted dependencies
-live2d-py<0.6
 pyqt5>=5.15.11
-nagaagent-core>=1.0.9
-simpleaudio
-pydub
-onnxruntime>=1.23.2
-sounddevice>=0.5.3
+pyqt5-qt5
+pyqt5-sip
+pyaudio
 pyautogui>=0.9.54
-librosa>=0.11.0
-pystray>=0.19.5
-paho-mqtt>=2.1.0
-bilibili-api>=4.1.0
+live2d-py<0.6
+
+#backend
+aiohttp
+bilibili-api==4.1.0
+charset-normalizer
+comtypes
+crawl4ai
 dashscope>=1.25.3
+edge-tts
+emoji
+fastapi
+fastmcp
+flask
+gevent
+gui-agents
+jmcomic
+json5
+langchain-community
+langchain-openai
+librosa>=0.11.0
 markdown>=3.10
-pygame>=2.6.1
-# py-key-value-aio[disk,memory,redis]>=0.3.0  # optional, often unavailable
+matplotlib
+mcp
+neo4j
+numpy>=1.21.0
+openai
+opencv-python
+onnxruntime>=1.23.2
+paho-mqtt>=2.1.0
+pillow
+playwright
+psutil
+py2neo
+pycaw
+pydub
+py-key-value-aio[disk,memory,redis]>=0.3.0 # optional, often unavailable
+pyneo
 pyopengl>=3.1.10
+pytesseract
+python-docx
+python-dotenv
+pyvis
+requests
+scipy>=1.9.0
+screen-brightness-control
+#torch
+uvicorn
