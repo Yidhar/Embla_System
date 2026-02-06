@@ -611,7 +611,8 @@ def check_and_update_if_needed() -> bool:
                 if best_match:
                     detected_encoding = best_match.encoding
             with open(config_file, 'w', encoding=detected_encoding) as f:
-                json5.dump(config_data, f, ensure_ascii=False, indent=2)
+                import json
+                json.dump(config_data, f, ensure_ascii=False, indent=2)
 
             print("✅ 检测状态已重置为 false")
             print("=" * 50)
@@ -750,7 +751,8 @@ if __name__ == "__main__":
                         config_data['system_check']['timestamp'] = datetime.now().isoformat()
                         
                         with open(config_file, 'w', encoding=detected_encoding) as f:
-                            json5.dump(config_data, f, ensure_ascii=False, indent=2)
+                            import json
+                            json.dump(config_data, f, ensure_ascii=False, indent=2)
                         
                         print("✅ 已将检测状态设置为通过")
                     except Exception as e:

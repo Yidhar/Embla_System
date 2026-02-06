@@ -794,7 +794,8 @@ class SystemChecker:
 
             # 保存配置，使用检测到的编码
             with open(self.config_file, 'w', encoding=detected_encoding) as f:
-                json5.dump(config_data, f, ensure_ascii=False, indent=2)
+                import json
+                json.dump(config_data, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"⚠️ 保存检测状态失败: {e}")
     
@@ -830,7 +831,8 @@ class SystemChecker:
 
                 # 保存配置，使用检测到的编码
                 with open(self.config_file, 'w', encoding=detected_encoding) as f:
-                    json5.dump(config_data, f, ensure_ascii=False, indent=2)
+                    import json
+                    json.dump(config_data, f, ensure_ascii=False, indent=2)
 
                 print("✅ 检测状态已重置，下次启动时将重新检测")
             else:
