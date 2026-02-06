@@ -20,6 +20,9 @@ from system.background_analyzer import get_background_analyzer
 from agentserver.agent_computer_control import ComputerControlAgent
 from agentserver.task_scheduler import get_task_scheduler, TaskStep
 from agentserver.toolkit_manager import toolkit_manager
+from agentserver.openclaw import (
+    OpenClawClient, OpenClawConfig, get_openclaw_client, set_openclaw_config
+)
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -50,7 +53,37 @@ async def lifespan(app: FastAPI):
                 "api_base": config.api.base_url
             }
             Modules.task_scheduler.set_llm_config(llm_config)
-        
+
+        # 初始化 OpenClaw 客户端 - 优先从检测器读取配置
+        try:
+            from agentserver.openclaw import detect_openclaw, OpenClawConfig as ClientOpenClawConfig
+
+            # 检测 OpenClaw 安装状态
+            openclaw_status = detect_openclaw(check_connection=False)
+
+            if openclaw_status.installed:
+                # 使用检测到的配置
+                openclaw_config = ClientOpenClawConfig(
+                    gateway_url=openclaw_status.gateway_url or 'http://localhost:18789',
+                    token=openclaw_status.gateway_token,
+                    timeout=120
+                )
+                logger.info(f"从 ~/.openclaw 检测到 OpenClaw 配置: {openclaw_config.gateway_url}")
+            else:
+                # 回退到 config.json 中的配置
+                openclaw_config = ClientOpenClawConfig(
+                    gateway_url=getattr(config.openclaw, 'gateway_url', 'http://localhost:18789') if hasattr(config, 'openclaw') else 'http://localhost:18789',
+                    token=getattr(config.openclaw, 'token', None) if hasattr(config, 'openclaw') else None,
+                    timeout=120
+                )
+                logger.info(f"OpenClaw 未检测到安装，使用配置文件: {openclaw_config.gateway_url}")
+
+            Modules.openclaw_client = get_openclaw_client(openclaw_config)
+            logger.info(f"OpenClaw客户端初始化完成: {openclaw_config.gateway_url}")
+        except Exception as e:
+            logger.warning(f"OpenClaw客户端初始化失败（可选功能）: {e}")
+            Modules.openclaw_client = None
+
         logger.info("NagaAgent电脑控制服务初始化完成")
     except Exception as e:
         logger.error(f"服务初始化失败: {e}")
@@ -72,6 +105,7 @@ class Modules:
     analyzer = None
     computer_control = None
     task_scheduler = None
+    openclaw_client = None
 
 def _now_iso() -> str:
     """获取当前时间ISO格式"""
@@ -785,7 +819,7 @@ async def list_files(directory: str = "."):
         result = await toolkit_manager.call_tool("file_edit", "list_files", {
             "directory": directory
         })
-        
+
         return {
             "success": True,
             "result": result
@@ -793,6 +827,229 @@ async def list_files(directory: str = "."):
     except Exception as e:
         logger.error(f"列出文件失败: {e}")
         raise HTTPException(500, f"列出失败: {e}")
+
+# ============ OpenClaw 集成 API ============
+
+@app.get("/openclaw/health")
+async def openclaw_health_check():
+    """检查 OpenClaw Gateway 健康状态"""
+    if not Modules.openclaw_client:
+        return {
+            "success": False,
+            "status": "not_configured",
+            "message": "OpenClaw 客户端未配置"
+        }
+
+    try:
+        health = await Modules.openclaw_client.health_check()
+        return {
+            "success": True,
+            "health": health
+        }
+    except Exception as e:
+        logger.error(f"OpenClaw 健康检查失败: {e}")
+        return {
+            "success": False,
+            "status": "error",
+            "error": str(e)
+        }
+
+@app.post("/openclaw/config")
+async def configure_openclaw(payload: Dict[str, Any]):
+    """配置 OpenClaw 连接
+
+    请求体:
+    - gateway_url: Gateway 地址 (默认 http://localhost:18789)
+    - token: 认证 token
+    - timeout: 超时时间
+    - default_model: 默认模型
+    - default_channel: 默认通道
+    """
+    try:
+        from agentserver.openclaw import OpenClawConfig as ClientOpenClawConfig
+        openclaw_config = ClientOpenClawConfig(
+            gateway_url=payload.get("gateway_url", "http://localhost:18789"),
+            token=payload.get("token"),
+            timeout=payload.get("timeout", 120),
+            default_model=payload.get("default_model"),
+            default_channel=payload.get("default_channel", "last")
+        )
+        set_openclaw_config(openclaw_config)
+        Modules.openclaw_client = get_openclaw_client()
+
+        logger.info(f"OpenClaw 配置更新: {openclaw_config.gateway_url}")
+
+        return {
+            "success": True,
+            "message": "OpenClaw 配置已更新",
+            "gateway_url": openclaw_config.gateway_url
+        }
+    except Exception as e:
+        logger.error(f"OpenClaw 配置失败: {e}")
+        raise HTTPException(500, f"配置失败: {e}")
+
+@app.post("/openclaw/send")
+async def openclaw_send_message(payload: Dict[str, Any]):
+    """
+    发送消息给 OpenClaw Agent
+
+    使用 POST /hooks/agent 端点
+    文档: https://docs.openclaw.ai/automation/webhook
+
+    请求体:
+    - message: 消息内容 (必需)
+    - session_key: 会话标识 (可选)
+    - name: hook 名称 (可选)
+    - channel: 消息通道 (可选)
+    - to: 接收者 (可选)
+    - model: 模型名称 (可选)
+    - wake_mode: 唤醒模式 now/next-heartbeat (可选)
+    - deliver: 是否投递 (可选)
+    """
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw 客户端未就绪")
+
+    message = payload.get("message")
+    if not message:
+        raise HTTPException(400, "message 不能为空")
+
+    try:
+        task = await Modules.openclaw_client.send_message(
+            message=message,
+            session_key=payload.get("session_key"),
+            name=payload.get("name"),
+            channel=payload.get("channel"),
+            to=payload.get("to"),
+            model=payload.get("model"),
+            wake_mode=payload.get("wake_mode", "now"),
+            deliver=payload.get("deliver", False)
+        )
+
+        return {
+            "success": task.status.value != "failed",
+            "task": task.to_dict()
+        }
+    except Exception as e:
+        logger.error(f"OpenClaw 发送消息失败: {e}")
+        raise HTTPException(500, f"发送失败: {e}")
+
+@app.post("/openclaw/wake")
+async def openclaw_wake(payload: Dict[str, Any]):
+    """
+    触发 OpenClaw 系统事件
+
+    使用 POST /hooks/wake 端点
+    文档: https://docs.openclaw.ai/automation/webhook
+
+    请求体:
+    - text: 事件描述 (必需)
+    - mode: 触发模式 now/next-heartbeat (可选)
+    """
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw 客户端未就绪")
+
+    text = payload.get("text")
+    if not text:
+        raise HTTPException(400, "text 不能为空")
+
+    try:
+        result = await Modules.openclaw_client.wake(
+            text=text,
+            mode=payload.get("mode", "now")
+        )
+        return result
+    except Exception as e:
+        logger.error(f"OpenClaw 触发事件失败: {e}")
+        raise HTTPException(500, f"触发失败: {e}")
+
+@app.post("/openclaw/tools/invoke")
+async def openclaw_invoke_tool(payload: Dict[str, Any]):
+    """
+    直接调用 OpenClaw 工具
+
+    使用 POST /tools/invoke 端点
+    文档: https://docs.openclaw.ai/gateway/tools-invoke-http-api
+
+    请求体:
+    - tool: 工具名称 (必需)
+    - args: 工具参数 (可选)
+    - action: 动作 (可选)
+    - session_key: 会话标识 (可选)
+    """
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw 客户端未就绪")
+
+    tool = payload.get("tool")
+    if not tool:
+        raise HTTPException(400, "tool 不能为空")
+
+    try:
+        result = await Modules.openclaw_client.invoke_tool(
+            tool=tool,
+            args=payload.get("args"),
+            action=payload.get("action"),
+            session_key=payload.get("session_key")
+        )
+        return result
+    except Exception as e:
+        logger.error(f"OpenClaw 工具调用失败: {e}")
+        raise HTTPException(500, f"调用失败: {e}")
+
+# ============ OpenClaw 本地任务查询 API ============
+
+@app.get("/openclaw/tasks")
+async def openclaw_get_local_tasks():
+    """获取本地缓存的所有 OpenClaw 任务"""
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw 客户端未就绪")
+
+    try:
+        tasks = Modules.openclaw_client.get_all_tasks()
+        return {
+            "success": True,
+            "tasks": [task.to_dict() for task in tasks],
+            "count": len(tasks)
+        }
+    except Exception as e:
+        logger.error(f"获取 OpenClaw 任务失败: {e}")
+        raise HTTPException(500, f"获取失败: {e}")
+
+@app.get("/openclaw/tasks/{task_id}")
+async def openclaw_get_task(task_id: str):
+    """获取单个 OpenClaw 任务"""
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw 客户端未就绪")
+
+    try:
+        task = Modules.openclaw_client.get_task(task_id)
+        if task:
+            return {
+                "success": True,
+                "task": task.to_dict()
+            }
+        else:
+            raise HTTPException(404, f"任务不存在: {task_id}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取 OpenClaw 任务失败: {e}")
+        raise HTTPException(500, f"获取失败: {e}")
+
+@app.delete("/openclaw/tasks/completed")
+async def openclaw_clear_completed_tasks():
+    """清理已完成的 OpenClaw 任务"""
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw 客户端未就绪")
+
+    try:
+        Modules.openclaw_client.clear_completed_tasks()
+        return {
+            "success": True,
+            "message": "已清理完成的任务"
+        }
+    except Exception as e:
+        logger.error(f"清理 OpenClaw 任务失败: {e}")
+        raise HTTPException(500, f"清理失败: {e}")
 
 if __name__ == "__main__":
     import uvicorn
