@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onKeyStroke } from '@vueuse/core'
-import { nextTick, onMounted, ref, useTemplateRef } from 'vue'
+import { nextTick, ref, useTemplateRef } from 'vue'
 import API from '@/api/core'
 import MessageItem from '@/components/MessageItem.vue'
 
@@ -20,10 +20,10 @@ function sendMessage() {
 
   history.value.push({ role: 'user', content: input.value })
 
-  API.chatStream(input.value).then(async ({ sessionId, response }) => {
+  API.chatStream(input.value).then(async ({ response }) => {
     history.value.push({
       role: 'assistant' as const,
-      content: `---\nsessionId: ${sessionId}\n---\n`,
+      content: '',
       generating: true,
     })
     const message = history.value[history.value.length - 1]!
@@ -48,22 +48,17 @@ function scrollToBottom() {
 }
 
 onKeyStroke('Enter', sendMessage)
-
-onMounted(() => {
-  input.value = 'Hello, NagaAgent!'
-  sendMessage()
-})
 </script>
 
 <template>
-  <div class="px-10% py-5% flex flex-col items-center justify-center gap-8 box-border">
+  <div class="flex flex-col items-center justify-center gap-8">
     <div class="w-full grow overflow-hidden">
       <div class="w-60% h-full box">
         <div ref="container" class="h-full flex flex-col gap-4 overflow-auto p-4">
           <MessageItem
             v-for="item, index in history" :key="index"
             :role="item.role" :content="item.content"
-            :class="item.generating ? '' : 'border-b'"
+            :class="item.generating || 'border-b'"
           />
         </div>
       </div>

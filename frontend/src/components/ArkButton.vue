@@ -1,5 +1,6 @@
 <script setup lang="ts">
 defineProps<{
+  title?: string
   subtitle?: string
   icon?: string
 }>()
@@ -7,20 +8,18 @@ defineProps<{
 
 <template>
   <button
-    class="text-black bg-white bg-opacity-80 relative
-      transition-all duration-150 ease-out
-      hover:scale-102 hover:bg-opacity-90 hover:brightness-110"
+    class="text-black bg-#fffe backdrop-blur-md relative transition-all duration-150 ease-out shadow hover:scale-102"
   >
-    <div class="px-3 py-2 flex gap-12 justify-between">
-      <div class="w-full  flex flex-col gap-2 justify-center">
-        <span class="text-2vw font-bold font-serif lh-none">
-          <slot />
-        </span>
-        <span v-if="subtitle" class="text-1vw font-bold c-gray-800 op-40 font-sans">
-          {{ subtitle }}
-        </span>
-      </div>
-      <img v-if="icon" :src="icon" class="w-5vw">
+    <img v-if="icon" :src="icon" class="size-16 pl-2 absolute right-4 top-1/2 -translate-y-1/2">
+    <div class="flex text-3xl font-bold font-serif lh-none">
+      <slot>
+        <div class="px-2 py-4 pr-5em flex flex-col gap-2 justify-center">
+          <div v-html="title" />
+          <div v-if="subtitle" class="text-base c-gray-800 op-40 font-sans lh-none">
+            {{ subtitle }}
+          </div>
+        </div>
+      </slot>
     </div>
   </button>
 </template>
