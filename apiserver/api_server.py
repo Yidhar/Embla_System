@@ -49,6 +49,7 @@ try:
 except ImportError:
     import sys
     import os
+
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from system.config import config, AI_NAME  # 使用新的配置系统
     from system.config import get_prompt  # 导入提示词仓库
@@ -56,15 +57,18 @@ from ui.utils.response_util import extract_message  # 导入消息提取工具
 
 # 对话核心功能已集成到apiserver
 
+
 # 统一后台意图分析触发函数 - 已整合到message_manager
 def _trigger_background_analysis(session_id: str):
     """统一触发后台意图分析 - 委托给message_manager"""
     message_manager.trigger_background_analysis(session_id)
 
+
 # 统一保存对话与日志函数 - 已整合到message_manager
 def _save_conversation_and_logs(session_id: str, user_message: str, assistant_response: str):
     """统一保存对话历史与日志 - 委托给message_manager"""
     message_manager.save_conversation_and_logs(session_id, user_message, assistant_response)
+
 
 # 回调工厂类已移除 - 功能已整合到streaming_tool_extractor
 
@@ -85,13 +89,9 @@ async def lifespan(app: FastAPI):
         print("[INFO] 正在清理资源...")
         # MCP服务现在由mcpserver独立管理，无需清理
 
+
 # 创建FastAPI应用
-app = FastAPI(
-    title="NagaAgent API",
-    description="智能对话助手API服务",
-    version="4.0.0",
-    lifespan=lifespan
-)
+app = FastAPI(title="NagaAgent API", description="智能对话助手API服务", version="4.0.0", lifespan=lifespan)
 
 # 配置CORS
 app.add_middleware(
@@ -106,6 +106,7 @@ app.add_middleware(
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+
 # 请求模型
 class ChatRequest(BaseModel):
     message: str
@@ -116,11 +117,11 @@ class ChatRequest(BaseModel):
     return_audio: bool = False  # V19: 支持返回音频URL供客户端播放
     skip_intent_analysis: bool = False  # 新增：跳过意图分析
 
+
 class ChatResponse(BaseModel):
     response: str
     session_id: Optional[str] = None
     status: str = "success"
-
 
 
 class SystemInfoResponse(BaseModel):
@@ -128,6 +129,7 @@ class SystemInfoResponse(BaseModel):
     status: str
     available_services: List[str]
     api_key_configured: bool
+
 
 class FileUploadResponse(BaseModel):
     filename: str
@@ -137,6 +139,7 @@ class FileUploadResponse(BaseModel):
     upload_time: str
     status: str = "success"
     message: str = "文件上传成功"
+
 
 class DocumentProcessRequest(BaseModel):
     file_path: str
@@ -155,57 +158,56 @@ async def root():
         "docs": "/docs",
     }
 
+
 @app.get("/health")
 async def health_check():
     """健康检查"""
-    return {
-        "status": "healthy",
-        "agent_ready": True,
-        "timestamp": str(asyncio.get_event_loop().time())
-    }
+    return {"status": "healthy", "agent_ready": True, "timestamp": str(asyncio.get_event_loop().time())}
+
 
 @app.get("/system/info", response_model=SystemInfoResponse)
 async def get_system_info():
     """获取系统信息"""
-    
+
     return SystemInfoResponse(
         version="4.0.0",
         status="running",
         available_services=[],  # MCP服务现在由mcpserver独立管理
-        api_key_configured=bool(config.api.api_key and config.api.api_key != "sk-placeholder-key-not-set")
+        api_key_configured=bool(config.api.api_key and config.api.api_key != "sk-placeholder-key-not-set"),
     )
+
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """普通对话接口 - 仅处理纯文本对话"""
-    
+
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="消息内容不能为空")
-    
+
     try:
         # 分支: 启用博弈论流程（非流式，返回聚合文本）
         if request.use_self_game:
             # 配置项控制：失败时可跳过回退到普通对话 #
-            skip_on_error = getattr(getattr(config, 'game', None), 'skip_on_error', True)  # 兼容无配置情况 #
-            enabled = getattr(getattr(config, 'game', None), 'enabled', False)  # 控制总开关 #
+            skip_on_error = getattr(getattr(config, "game", None), "skip_on_error", True)  # 兼容无配置情况 #
+            enabled = getattr(getattr(config, "game", None), "enabled", False)  # 控制总开关 #
             if enabled:
                 try:
                     # 延迟导入以避免启动时循环依赖 #
                     from game.naga_game_system import NagaGameSystem  # 博弈系统入口 #
                     from game.core.models.config import GameConfig  # 博弈系统配置 #
+
                     # 创建系统并执行用户问题处理 #
                     system = NagaGameSystem(GameConfig())
                     system_response = await system.process_user_question(
-                        user_question=request.message,
-                        user_id=request.session_id or "api_user"
+                        user_question=request.message, user_id=request.session_id or "api_user"
                     )
                     return ChatResponse(
-                        response=system_response.content,
-                        session_id=request.session_id,
-                        status="success"
+                        response=system_response.content, session_id=request.session_id, status="success"
                     )
                 except Exception as e:
-                    print(f"[WARNING] 博弈论流程失败，将{ '回退到普通对话' if skip_on_error else '返回错误' }: {e}")  # 运行时警告 #
+                    print(
+                        f"[WARNING] 博弈论流程失败，将{'回退到普通对话' if skip_on_error else '返回错误'}: {e}"
+                    )  # 运行时警告 #
                     if not skip_on_error:
                         raise HTTPException(status_code=500, detail=f"博弈论流程失败: {str(e)}")
                     # 否则继续走普通对话流程 #
@@ -213,21 +215,19 @@ async def chat(request: ChatRequest):
 
         # 获取或创建会话ID
         session_id = message_manager.create_session(request.session_id)
-        
+
         # 构建系统提示词（只使用对话风格提示词）
         system_prompt = get_prompt("conversation_style_prompt")
-        
+
         # 使用消息管理器构建完整的对话消息（纯聊天，不触发工具）
         messages = message_manager.build_conversation_messages(
-            session_id=session_id,
-            system_prompt=system_prompt,
-            current_message=request.message
+            session_id=session_id, system_prompt=system_prompt, current_message=request.message
         )
-        
+
         # 使用整合后的LLM服务
         llm_service = get_llm_service()
         response_text = await llm_service.chat_with_context(messages, config.api.temperature)
-        
+
         # 处理完成
         # 统一保存对话历史与日志
         _save_conversation_and_logs(session_id, request.message, response_text)
@@ -239,39 +239,38 @@ async def chat(request: ChatRequest):
         return ChatResponse(
             response=extract_message(response_text) if response_text else response_text,
             session_id=session_id,
-            status="success"
+            status="success",
         )
     except Exception as e:
         print(f"对话处理错误: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
 
+
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
     """流式对话接口 - 流式文本处理交给streaming_tool_extractor用于TTS"""
-    
+
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="消息内容不能为空")
-    
+
     async def generate_response() -> AsyncGenerator[str, None]:
         complete_text = ""  # V19: 用于累积完整文本以生成音频
         try:
             # 获取或创建会话ID
             session_id = message_manager.create_session(request.session_id)
-            
+
             # 发送会话ID信息
             yield f"data: session_id: {session_id}\n\n"
-            
+
             # 注意：这里不触发后台分析，将在对话保存后触发
-            
+
             # 构建系统提示词（只使用对话风格提示词）
             system_prompt = get_prompt("conversation_style_prompt")
-            
+
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(
-                session_id=session_id,
-                system_prompt=system_prompt,
-                current_message=request.message
+                session_id=session_id, system_prompt=system_prompt, current_message=request.message
             )
 
             # 初始化语音集成（根据voice_mode和return_audio决定）
@@ -290,8 +289,11 @@ async def chat_stream(request: ChatRequest):
             if should_enable_tts:
                 try:
                     from voice.output.voice_integration import get_voice_integration
+
                     voice_integration = get_voice_integration()
-                    logger.info(f"[API Server] 实时语音集成已启用 (return_audio={request.return_audio}, voice_mode={config.voice_realtime.voice_mode})")
+                    logger.info(
+                        f"[API Server] 实时语音集成已启用 (return_audio={request.return_audio}, voice_mode={config.voice_realtime.voice_mode})"
+                    )
                 except Exception as e:
                     print(f"语音集成初始化失败: {e}")
             else:
@@ -307,16 +309,17 @@ async def chat_stream(request: ChatRequest):
             tool_extractor = None
             try:
                 from .streaming_tool_extractor import StreamingToolCallExtractor
+
                 tool_extractor = StreamingToolCallExtractor()
                 # 只有在需要实时TTS且不是return_audio模式时，才设置voice_integration
                 if voice_integration and not request.return_audio:
                     tool_extractor.set_callbacks(
                         on_text_chunk=None,  # 不需要回调，直接处理TTS
-                        voice_integration=voice_integration
+                        voice_integration=voice_integration,
                     )
             except Exception as e:
                 print(f"流式文本切割器初始化失败: {e}")
-            
+
             # 使用整合后的流式处理
             llm_service = get_llm_service()
             async for chunk in llm_service.stream_chat_with_context(messages, config.api.temperature):
@@ -324,27 +327,29 @@ async def chat_stream(request: ChatRequest):
                 if request.return_audio and chunk.startswith("data: "):
                     try:
                         import base64
+
                         data_str = chunk[6:].strip()
-                        if data_str != '[DONE]':
-                            decoded = base64.b64decode(data_str).decode('utf-8')
+                        if data_str != "[DONE]":
+                            decoded = base64.b64decode(data_str).decode("utf-8")
                             complete_text += decoded
                     except Exception:
                         pass
-                
+
                 # 立即发送到流式文本切割器进行TTS处理（不阻塞文本流）
                 if tool_extractor and chunk.startswith("data: "):
                     try:
                         import base64
+
                         data_str = chunk[6:].strip()
-                        if data_str != '[DONE]':
-                            decoded = base64.b64decode(data_str).decode('utf-8')
+                        if data_str != "[DONE]":
+                            decoded = base64.b64decode(data_str).decode("utf-8")
                             # 异步调用TTS处理，不阻塞文本流
                             asyncio.create_task(tool_extractor.process_text_chunk(decoded))
                     except Exception as e:
                         logger.error(f"[API Server] 流式文本切割器处理错误: {e}")
-                
+
                 yield chunk
-            
+
             # 处理完成
 
             # V19: 如果请求返回音频，在这里生成并返回音频URL
@@ -360,15 +365,13 @@ async def chat_stream(request: ChatRequest):
                     # 生成音频文件
                     tts_voice = config.voice_realtime.tts_voice or "zh-CN-XiaoyiNeural"
                     audio_file = generate_speech_safe(
-                        text=complete_text,
-                        voice=tts_voice,
-                        response_format="mp3",
-                        speed=1.0
+                        text=complete_text, voice=tts_voice, response_format="mp3", speed=1.0
                     )
 
                     # 直接使用voice/output播放音频，不再返回给客户端
                     try:
                         from voice.output.voice_integration import get_voice_integration
+
                         voice_integration = get_voice_integration()
                         voice_integration.receive_audio_url(audio_file)
                         logger.info(f"[API Server V19] 音频已直接播放: {audio_file}")
@@ -391,14 +394,14 @@ async def chat_stream(request: ChatRequest):
                     pass
                 except Exception as e:
                     print(f"流式文本切割器完成处理错误: {e}")
-            
+
             # 完成语音处理
             if voice_integration and not request.return_audio:  # V19: return_audio模式不需要这里的处理
                 try:
                     threading.Thread(
                         # 2.处理缓冲区中的剩余文本
                         target=voice_integration.finish_processing,
-                        daemon=True
+                        daemon=True,
                     ).start()
                 except Exception as e:
                     print(f"语音集成完成处理错误: {e}")
@@ -414,7 +417,7 @@ async def chat_stream(request: ChatRequest):
             elif request.return_audio:
                 # V19: 如果是return_audio模式，使用累积的文本
                 complete_response = complete_text
-            
+
             # 统一保存对话历史与日志
             _save_conversation_and_logs(session_id, request.message, complete_response)
 
@@ -423,13 +426,13 @@ async def chat_stream(request: ChatRequest):
                 _trigger_background_analysis(session_id)
 
             yield "data: [DONE]\n\n"
-            
+
         except Exception as e:
             print(f"流式对话处理错误: {e}")
             # 使用顶部导入的traceback
             traceback.print_exc()
             yield f"data: 错误: {str(e)}\n\n"
-    
+
     return StreamingResponse(
         generate_response(),
         media_type="text/event-stream",
@@ -439,39 +442,32 @@ async def chat_stream(request: ChatRequest):
             "Content-Type": "text/event-stream",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "*",
-            "X-Accel-Buffering": "no"  # 禁用nginx缓冲
-        }
+            "X-Accel-Buffering": "no",  # 禁用nginx缓冲
+        },
     )
 
 
 @app.get("/memory/stats")
 async def get_memory_stats():
     """获取记忆统计信息"""
-    
+
     try:
         # 记忆系统现在由main.py直接管理
         try:
             from summer_memory.memory_manager import memory_manager
+
             if memory_manager and memory_manager.enabled:
                 stats = memory_manager.get_memory_stats()
-                return {
-                    "status": "success",
-                    "memory_stats": stats
-                }
+                return {"status": "success", "memory_stats": stats}
             else:
-                return {
-                    "status": "success",
-                    "memory_stats": {"enabled": False, "message": "记忆系统未启用"}
-                }
+                return {"status": "success", "memory_stats": {"enabled": False, "message": "记忆系统未启用"}}
         except ImportError:
-            return {
-                "status": "success",
-                "memory_stats": {"enabled": False, "message": "记忆系统模块未找到"}
-            }
+            return {"status": "success", "memory_stats": {"enabled": False, "message": "记忆系统模块未找到"}}
     except Exception as e:
         print(f"获取记忆统计错误: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"获取记忆统计失败: {str(e)}")
+
 
 @app.get("/sessions")
 async def get_sessions():
@@ -482,6 +478,7 @@ async def get_sessions():
         print(f"获取会话信息错误: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/sessions/{session_id}")
 async def get_session_detail(session_id: str):
@@ -495,6 +492,7 @@ async def get_session_detail(session_id: str):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     """删除指定会话 - 委托给message_manager"""
@@ -507,6 +505,7 @@ async def delete_session(session_id: str):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.delete("/sessions")
 async def clear_all_sessions():
     """清空所有会话 - 委托给message_manager"""
@@ -517,6 +516,7 @@ async def clear_all_sessions():
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/upload/document", response_model=FileUploadResponse)
 async def upload_document(file: UploadFile = File(...), description: str = Form(None)):
     """上传文档接口"""
@@ -524,32 +524,35 @@ async def upload_document(file: UploadFile = File(...), description: str = Form(
         # 确保上传目录存在
         upload_dir = Path("uploaded_documents")
         upload_dir.mkdir(exist_ok=True)
-        
+
         # 使用原始文件名
         filename = file.filename
         file_path = upload_dir / filename
-        
+
         # 保存文件
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-            
+
         # 获取文件信息
         stat = file_path.stat()
-        
+
         return FileUploadResponse(
             filename=filename,
             file_path=str(file_path.absolute()),
             file_size=stat.st_size,
             file_type=file_path.suffix,
-            upload_time=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime))
+            upload_time=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
         )
     except Exception as e:
         logger.error(f"文件上传失败: {e}")
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
 
+
 # 挂载LLM服务路由以支持 /llm/chat
 from .llm_service import llm_app
+
 app.mount("/llm", llm_app)
+
 
 # 新增：日志解析相关API接口
 @app.get("/logs/context/statistics")
@@ -557,30 +560,24 @@ async def get_log_context_statistics(days: int = 7):
     """获取日志上下文统计信息"""
     try:
         statistics = message_manager.get_context_statistics(days)
-        return {
-            "status": "success",
-            "statistics": statistics
-        }
+        return {"status": "success", "statistics": statistics}
     except Exception as e:
         print(f"获取日志上下文统计错误: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"获取统计信息失败: {str(e)}")
+
 
 @app.get("/logs/context/load")
 async def load_log_context(days: int = 3, max_messages: int = None):
     """加载日志上下文"""
     try:
         messages = message_manager.load_recent_context(days=days, max_messages=max_messages)
-        return {
-            "status": "success",
-            "messages": messages,
-            "count": len(messages),
-            "days": days
-        }
+        return {"status": "success", "messages": messages, "count": len(messages), "days": days}
     except Exception as e:
         print(f"加载日志上下文错误: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"加载上下文失败: {str(e)}")
+
 
 @app.post("/tool_notification")
 async def tool_notification(payload: Dict[str, Any]):
@@ -589,6 +586,13 @@ async def tool_notification(payload: Dict[str, Any]):
         session_id = payload.get("session_id")
         tool_calls = payload.get("tool_calls", [])
         message = payload.get("message", "")
+        stage = payload.get("stage", "")
+        auto_hide_ms_raw = payload.get("auto_hide_ms", 0)
+
+        try:
+            auto_hide_ms = int(auto_hide_ms_raw)
+        except (TypeError, ValueError):
+            auto_hide_ms = 0
 
         if not session_id:
             raise HTTPException(400, "缺少session_id")
@@ -600,19 +604,33 @@ async def tool_notification(payload: Dict[str, Any]):
             status = tool_call.get("status", "starting")
             logger.info(f"工具调用状态: {tool_name} ({service_name}) - {status}")
 
-        # 这里可以添加WebSocket通知UI的逻辑，让UI显示工具调用状态
-        # 目前先记录日志，UI可以通过其他方式获取工具调用状态
+        display_message = message
+        if not display_message:
+            if stage == "detecting":
+                display_message = "正在检测工具调用"
+            elif stage == "executing":
+                display_message = f"检测到{len(tool_calls)}个工具调用，执行中"
+            elif stage == "none":
+                display_message = "未检测到工具调用"
+
+        if stage == "hide":
+            _hide_tool_status_in_ui()
+        elif display_message:
+            _emit_tool_status_to_ui(display_message, auto_hide_ms)
 
         return {
             "success": True,
             "message": "工具调用状态通知已接收",
             "tool_calls": tool_calls,
-            "display_message": message
+            "display_message": display_message,
+            "stage": stage,
+            "auto_hide_ms": auto_hide_ms,
         }
 
     except Exception as e:
         logger.error(f"工具调用通知处理失败: {e}")
         raise HTTPException(500, f"处理失败: {str(e)}")
+
 
 @app.post("/tool_result_callback")
 async def tool_result_callback(payload: Dict[str, Any]):
@@ -626,19 +644,21 @@ async def tool_result_callback(payload: Dict[str, Any]):
         if not session_id:
             raise HTTPException(400, "缺少session_id")
 
+        _emit_tool_status_to_ui("生成工具回调", 0)
+
         logger.info(f"[工具回调] 开始处理工具回调，会话: {session_id}, 任务ID: {task_id}")
         logger.info(f"[工具回调] 回调内容: {result}")
 
         # 获取工具执行结果
-        tool_result = result.get('result', '执行成功') if success else result.get('error', '未知错误')
+        tool_result = result.get("result", "执行成功") if success else result.get("error", "未知错误")
         logger.info(f"[工具回调] 工具执行结果: {tool_result}")
 
         # 获取原始对话的最后一条用户消息（触发工具调用的消息）
         session_messages = message_manager.get_messages(session_id)
         original_user_message = ""
         for msg in reversed(session_messages):
-            if msg.get('role') == 'user':
-                original_user_message = msg.get('content', '')
+            if msg.get("role") == "user":
+                original_user_message = msg.get("content", "")
                 break
 
         # 构建包含工具结果的用户消息
@@ -648,9 +668,7 @@ async def tool_result_callback(payload: Dict[str, Any]):
         # 构建对话风格提示词和消息
         system_prompt = get_prompt("conversation_style_prompt")
         messages = message_manager.build_conversation_messages(
-            session_id=session_id,
-            system_prompt=system_prompt,
-            current_message=enhanced_message
+            session_id=session_id, system_prompt=system_prompt, current_message=enhanced_message
         )
 
         logger.info(f"[工具回调] 开始生成工具后回复...")
@@ -675,6 +693,7 @@ async def tool_result_callback(payload: Dict[str, Any]):
         # 通过UI通知接口将AI回复发送给UI
         logger.info(f"[工具回调] 开始发送AI回复到UI...")
         await _notify_ui_refresh(session_id, response_text)
+        _hide_tool_status_in_ui()
 
         logger.info(f"[工具回调] 工具结果处理完成，回复已发送到UI")
 
@@ -683,12 +702,14 @@ async def tool_result_callback(payload: Dict[str, Any]):
             "message": "工具结果已通过主AI处理并返回给UI",
             "response": response_text,
             "task_id": task_id,
-            "session_id": session_id
+            "session_id": session_id,
         }
 
     except Exception as e:
+        _hide_tool_status_in_ui()
         logger.error(f"[工具回调] 工具结果回调处理失败: {e}")
         raise HTTPException(500, f"处理失败: {str(e)}")
+
 
 @app.post("/tool_result")
 async def tool_result(payload: Dict[str, Any]):
@@ -716,12 +737,7 @@ async def tool_result(payload: Dict[str, Any]):
             except Exception as e:
                 logger.error(f"[UI] 调用UI控制器显示AI回复失败: {e}")
 
-        return {
-            "success": True,
-            "message": "工具结果已接收",
-            "result": result,
-            "session_id": session_id
-        }
+        return {"success": True, "message": "工具结果已接收", "result": result, "session_id": session_id}
 
     except Exception as e:
         logger.error(f"处理工具结果失败: {e}")
@@ -751,11 +767,7 @@ async def save_tool_conversation(payload: Dict[str, Any]):
 
         logger.info(f"[保存工具对话] 工具对话历史已保存，会话: {session_id}")
 
-        return {
-            "success": True,
-            "message": "工具对话历史已保存",
-            "session_id": session_id
-        }
+        return {"success": True, "message": "工具对话历史已保存", "session_id": session_id}
 
     except Exception as e:
         logger.error(f"[保存工具对话] 保存工具对话历史失败: {e}")
@@ -769,6 +781,13 @@ async def ui_notification(payload: Dict[str, Any]):
         session_id = payload.get("session_id")
         action = payload.get("action", "")
         ai_response = payload.get("ai_response", "")
+        status_text = payload.get("status_text", "")
+        auto_hide_ms_raw = payload.get("auto_hide_ms", 0)
+
+        try:
+            auto_hide_ms = int(auto_hide_ms_raw)
+        except (TypeError, ValueError):
+            auto_hide_ms = 0
 
         if not session_id:
             raise HTTPException(400, "缺少session_id")
@@ -783,18 +802,20 @@ async def ui_notification(payload: Dict[str, Any]):
                 # 直接发射信号，确保在主线程中执行
                 chat.tool_ai_response_received.emit(ai_response)
                 logger.info(f"[UI通知] 已通过信号机制显示工具AI回复，长度: {len(ai_response)}")
-                return {
-                    "success": True,
-                    "message": "AI回复已显示"
-                }
+                return {"success": True, "message": "AI回复已显示"}
             except Exception as e:
                 logger.error(f"[UI通知] 显示工具AI回复失败: {e}")
                 raise HTTPException(500, f"显示AI回复失败: {str(e)}")
 
-        return {
-            "success": True,
-            "message": "UI通知已处理"
-        }
+        if action == "show_tool_status" and status_text:
+            _emit_tool_status_to_ui(status_text, auto_hide_ms)
+            return {"success": True, "message": "工具状态已显示"}
+
+        if action == "hide_tool_status":
+            _hide_tool_status_in_ui()
+            return {"success": True, "message": "工具状态已隐藏"}
+
+        return {"success": True, "message": "UI通知已处理"}
 
     except Exception as e:
         logger.error(f"处理UI通知失败: {e}")
@@ -818,11 +839,12 @@ async def _trigger_chat_stream_no_intent(session_id: str, response_text: str):
             "use_self_game": False,
             "disable_tts": False,
             "return_audio": False,
-            "skip_intent_analysis": True  # 关键：跳过意图分析
+            "skip_intent_analysis": True,  # 关键：跳过意图分析
         }
 
         # 调用现有的流式对话接口
         from system.config import get_server_port
+
         api_url = f"http://localhost:{get_server_port('api_server')}/chat/stream"
 
         async with httpx.AsyncClient() as client:
@@ -853,10 +875,11 @@ async def _notify_ui_refresh(session_id: str, response_text: str):
         ui_notification_payload = {
             "session_id": session_id,
             "action": "show_tool_ai_response",
-            "ai_response": response_text
+            "ai_response": response_text,
         }
 
         from system.config import get_server_port
+
         api_url = f"http://localhost:{get_server_port('api_server')}/ui_notification"
 
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -870,6 +893,24 @@ async def _notify_ui_refresh(session_id: str, response_text: str):
         logger.error(f"[UI通知] 通知UI刷新失败: {e}")
 
 
+def _emit_tool_status_to_ui(status_text: str, auto_hide_ms: int = 0) -> None:
+    """通过Qt信号向UI发送工具状态提示"""
+    try:
+        from ui.controller.tool_chat import chat
+
+        chat.tool_status_received.emit(status_text, max(0, auto_hide_ms))
+    except Exception as e:
+        logger.error(f"[UI通知] 发送工具状态提示失败: {e}")
+
+
+def _hide_tool_status_in_ui() -> None:
+    """通过Qt信号隐藏工具状态提示"""
+    try:
+        from ui.controller.tool_chat import chat
+
+        chat.tool_status_hide_requested.emit()
+    except Exception as e:
+        logger.error(f"[UI通知] 隐藏工具状态提示失败: {e}")
 
 
 async def _send_ai_response_directly(session_id: str, response_text: str):
@@ -885,10 +926,11 @@ async def _send_ai_response_directly(session_id: str, response_text: str):
             "use_self_game": False,
             "disable_tts": False,
             "return_audio": False,
-            "skip_intent_analysis": True
+            "skip_intent_analysis": True,
         }
 
         from system.config import get_server_port
+
         api_url = f"http://localhost:{get_server_port('api_server')}/chat"
 
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -904,4 +946,3 @@ async def _send_ai_response_directly(session_id: str, response_text: str):
 
 # 工具执行结果已通过LLM总结并保存到对话历史中
 # UI可以通过查询历史获取工具执行结果
-

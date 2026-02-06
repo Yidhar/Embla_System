@@ -257,6 +257,13 @@ class BackgroundAnalyzer:
         # 标记分析开始
         self.running_analyses[session_id] = analysis_session_id
 
+        await self._notify_ui_tool_status(
+            session_id=session_id,
+            message="正在检测工具调用",
+            stage="detecting",
+            auto_hide_ms=0,
+        )
+
         try:
             logger.info(f"[博弈论] 开始异步意图分析，消息数量: {len(messages)}")
             loop = asyncio.get_running_loop()
@@ -288,6 +295,12 @@ class BackgroundAnalyzer:
             tool_calls = analysis.get("tool_calls", []) if isinstance(analysis, dict) else []
 
             if not tasks and not tool_calls:
+                await self._notify_ui_tool_status(
+                    session_id=session_id,
+                    message="未检测到工具调用",
+                    stage="none",
+                    auto_hide_ms=1200,
+                )
                 return {"has_tasks": False, "reason": "未发现可执行任务", "tasks": [], "priority": "low"}
 
             logger.info(
@@ -332,9 +345,6 @@ class BackgroundAnalyzer:
             import httpx
 
             # 批量构建工具调用通知
-            tool_names = [tool_call.get("tool_name", "未知工具") for tool_call in tool_calls]
-            service_names = [tool_call.get("service_name", "未知服务") for tool_call in tool_calls]
-
             # 批量发送通知（减少HTTP请求次数）
             notification_payload = {
                 "session_id": session_id,
@@ -346,7 +356,9 @@ class BackgroundAnalyzer:
                     }
                     for tool_call in tool_calls
                 ],
-                "message": f"🔧 正在执行 {len(tool_calls)} 个工具: {', '.join(tool_names)}",
+                "stage": "executing",
+                "auto_hide_ms": 0,
+                "message": f"检测到{len(tool_calls)}个工具调用，执行中",
             }
 
             from system.config import get_server_port
@@ -358,6 +370,29 @@ class BackgroundAnalyzer:
 
         except Exception as e:
             logger.error(f"批量通知UI工具调用失败: {e}")
+
+    async def _notify_ui_tool_status(self, session_id: str, message: str, stage: str, auto_hide_ms: int) -> None:
+        """通知UI显示工具调用相关状态"""
+        try:
+            import httpx
+
+            from system.config import get_server_port
+
+            notification_payload = {
+                "session_id": session_id,
+                "tool_calls": [],
+                "stage": stage,
+                "auto_hide_ms": auto_hide_ms,
+                "message": message,
+            }
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(
+                    f"http://localhost:{get_server_port('api_server')}/tool_notification",
+                    json=notification_payload,
+                )
+        except Exception as e:
+            logger.error(f"通知UI工具状态失败: {e}")
 
     async def _dispatch_tool_calls(
         self, tool_calls: List[Dict[str, Any]], session_id: str, analysis_session_id: Optional[str] = None
