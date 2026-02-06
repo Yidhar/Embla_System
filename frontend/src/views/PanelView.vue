@@ -46,7 +46,7 @@ import ArkButton from '@/components/ArkButton.vue'
 
 <style scoped>
 .panel {
-  transform: perspective(100px) rotateY(1deg);
+  transform: perspective(400px) rotateY(3deg);
   zoom: 1.2;
 }
 </style>
