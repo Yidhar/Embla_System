@@ -7,7 +7,7 @@ defineProps<{
 </script>
 
 <template>
-  <button class="text-black bg-white bg-op-90 backdrop-blur-md relative transition-all duration-150 ease-out shadow hover:brightness-105 hover:bg-op-100">
+  <button class="border-none text-black bg-white bg-op-90 backdrop-blur-md relative transition duration-150 ease-out shadow hover:brightness-105 hover:bg-op-100">
     <img v-if="icon" :src="icon" class="w-16 pl-2 absolute right-4 top-1/2 -translate-y-1/2">
     <div class="flex text-3xl font-bold font-serif lh-none">
       <slot>

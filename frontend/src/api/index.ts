@@ -4,8 +4,8 @@ import axios from 'axios'
 import camelcaseKeys from 'camelcase-keys'
 import snakecaseKeys from 'snakecase-keys'
 
-export const ACCESS_TOKEN = useStorage('naga_access_token', '')
-export const REFRESH_TOKEN = useStorage('naga_refresh_token', '')
+export const ACCESS_TOKEN = useStorage('naga-access-token', '')
+export const REFRESH_TOKEN = useStorage('naga-refresh-token', '')
 
 let isRefreshing = false
 let refreshSubscribers: Array<(newToken: string) => void> = []

@@ -11,18 +11,18 @@ import ArkButton from '@/components/ArkButton.vue'
   <div class="flex flex-col items-start justify-center px-1/16">
     <div class="grid grid-rows-3 gap-3 *:gap-3 panel">
       <div class="relative size-full">
-        <ArkButton class="size-full" :icon="naga" @click="useLink({ to: '/chat' }).navigate">
-          <div class="size-full flex items-center justify-end mr-4em">
-            对话
-          </div>
-        </ArkButton>
         <div class="absolute -left-4 right-1/2 top-2 bottom-2">
-          <ArkButton class="size-full bg-blue!">
+          <ArkButton class="size-full bg-blue! z-1">
             <div class="size-full text-center">
               I'm Overlay!
             </div>
           </ArkButton>
         </div>
+        <ArkButton class="size-full" :icon="naga" @click="useLink({ to: '/chat' }).navigate">
+          <div class="size-full flex items-center justify-end mr-4em">
+            对话
+          </div>
+        </ArkButton>
       </div>
       <div class="grid grid-cols-2 -translate-x-1/5">
         <ArkButton :icon="brain" title="记忆<br>云海" @click="useLink({ to: '/mind' }).navigate" />

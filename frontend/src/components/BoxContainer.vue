@@ -1,14 +1,15 @@
 <script setup lang="ts">
+import { ScrollPanel } from 'primevue'
 import { useTemplateRef } from 'vue'
 import back from '@/assets/icons/back.png'
 
-const container = useTemplateRef('container')
+const scrollPanelRef = useTemplateRef<{
+  scrollTop: (scrollTop: number) => void
+}>('scrollPanelRef')
 
 defineExpose({
   scrollToBottom() {
-    if (container.value) {
-      container.value.scrollTop = container.value?.scrollHeight
-    }
+    scrollPanelRef.value?.scrollTop(Infinity)
   },
 })
 </script>
@@ -18,10 +19,20 @@ defineExpose({
     <div class="flex items-center">
       <img :src="back" class="w-[var(--nav-back-width)]" alt="" @click="$router.back">
     </div>
-    <div class="h-full box w-3/5">
-      <div ref="container" class="h-full flex flex-col gap-4 overflow-auto p-4" v-bind="$attrs">
-        <slot />
-      </div>
+    <div class="box w-3/5">
+      <ScrollPanel
+        ref="scrollPanelRef"
+        class="size-full"
+        :pt="{
+          barY: {
+            class: 'w-2! rounded! bg-#373737! transition! -translate-1',
+          },
+        }"
+      >
+        <div class="p-4">
+          <slot />
+        </div>
+      </ScrollPanel>
     </div>
   </div>
 </template>
