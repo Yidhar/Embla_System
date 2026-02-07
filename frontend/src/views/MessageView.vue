@@ -1,87 +1,47 @@
 <script setup lang="ts">
-import { onKeyStroke } from '@vueuse/core'
-import { nextTick, ref, useTemplateRef } from 'vue'
-import API from '@/api/core'
+import { onKeyStroke, useEventListener } from '@vueuse/core'
+import { nextTick, onMounted, useTemplateRef } from 'vue'
+import BoxContainer from '@/components/BoxContainer.vue'
 import MessageItem from '@/components/MessageItem.vue'
+import { chatStream, HISTORY } from '@/utils/chat'
 
-interface Message {
-  role: 'system' | 'user' | 'assistant'
-  content: string
-  generating?: boolean
-}
-
-const history = ref<Message[]>([])
 const input = defineModel<string>()
-const container = useTemplateRef<HTMLDivElement>('container')
+const container = useTemplateRef('container')
 
 function sendMessage() {
-  if (!input.value)
-    return
-
-  history.value.push({ role: 'user', content: input.value })
-
-  API.chatStream(input.value).then(async ({ response }) => {
-    history.value.push({
-      role: 'assistant' as const,
-      content: '',
-      generating: true,
-    })
-    const message = history.value[history.value.length - 1]!
-    for await (const chunk of response) {
-      message.content += chunk
-      scrollToBottom()
-    }
-    delete message.generating
-  }).catch((err) => {
-    history.value.push({ role: 'system', content: `Error: ${err.message}` })
-  })
-
-  input.value = ''
-
-  nextTick().then(scrollToBottom)
-}
-
-function scrollToBottom() {
-  if (container.value) {
-    container.value.scrollTop = container.value?.scrollHeight
+  if (input.value) {
+    chatStream(input.value)
   }
+  nextTick().then(() => container.value?.scrollToBottom())
 }
 
+useEventListener('token', () => {
+  container.value?.scrollToBottom()
+})
 onKeyStroke('Enter', sendMessage)
+onMounted(() => {
+  container.value?.scrollToBottom()
+})
 </script>
 
 <template>
-  <div class="flex flex-col items-center justify-center gap-8">
-    <div class="w-full grow overflow-hidden">
-      <div class="w-60% h-full box">
-        <div ref="container" class="h-full flex flex-col gap-4 overflow-auto p-4">
-          <MessageItem
-            v-for="item, index in history" :key="index"
-            :role="item.role" :content="item.content"
-            :class="item.generating || 'border-b'"
-          />
-        </div>
+  <div class="flex flex-col gap-8 overflow-hidden">
+    <BoxContainer ref="container" class="w-full grow [&_:not(img)]:select-text">
+      <MessageItem
+        v-for="item, index in HISTORY" :key="index"
+        :role="item.role" :content="item.content"
+        class="py-2"
+        :class="(item.generating && index === HISTORY.length - 1) || 'border-b'"
+      />
+    </BoxContainer>
+    <div class="mx-[var(--nav-back-width)]">
+      <div class="box">
+        <input
+          v-model="input"
+          class="p-2 lh-none text-white w-full bg-transparent border-none outline-none" type="text"
+          placeholder="Type a message..."
+        >
       </div>
-    </div>
-    <div class="w-full box">
-      <input
-        v-model="input"
-        class="p-2 pt-1.5 lh-none text-white w-full bg-transparent border-none outline-none" type="text"
-        placeholder="Type a message..."
-      >
     </div>
   </div>
 </template>
-
-<style scoped>
-::-webkit-scrollbar {
-  background-color: transparent;
-  width: 6px;
-}
-
-::-webkit-scrollbar-thumb {
-  background-color: #fff3;
-  border-radius: 3px;
-  height: 20%;
-}
-</style>

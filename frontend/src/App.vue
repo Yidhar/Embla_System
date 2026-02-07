@@ -19,7 +19,17 @@ const scale = computed(() => height.value / size)
       <img src="/assets/light.png" alt="" class="absolute right-0 bottom-0 w-80vw h-60vw op-40 -z-1">
       <Live2dModel :model="model" :width="width" :height="height" :x="x" :y="y" :scale="scale" :factor="2" />
     </div>
-    <router-view class="h-full px-10% py-5%" />
+    <div class="h-full px-1/8 py-1/12 grid-container">
+      <RouterView v-slot="{ Component, route }">
+        <Transition :name="route.path === '/' ? 'slide-out' : 'slide-in'">
+          <component
+            :is="Component"
+            :key="route.fullPath"
+            class="grid-item size-full"
+          />
+        </Transition>
+      </RouterView>
+    </div>
   </div>
 </template>
 
@@ -28,5 +38,40 @@ const scale = computed(() => height.value / size)
   border-image-source: url('/assets/sunflower.9.png');
   border-image-slice: 50%;
   border-image-width: 10em;
+}
+
+.grid-container {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.grid-item {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.slide-in-enter-from {
+  transform: translateX(-100%);
+}
+.slide-in-leave-to {
+  opacity: 0;
+  transform: translate(-3%, -5%);
+}
+
+.slide-in-leave-active,
+.slide-in-enter-active,
+.slide-out-leave-active,
+.slide-out-enter-active {
+  transition: all 1s ease;
+}
+
+.slide-out-enter-from {
+  opacity: 0;
+  transform: translate(-3%, -5%);
+}
+
+.slide-out-leave-to {
+  opacity: 0;
+  transform: translateX(-100%);
 }
 </style>

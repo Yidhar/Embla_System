@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { render } from '@/utils'
+import { render } from '@/utils/markdown'
 
 defineProps<{
   role: 'system' | 'user' | 'assistant'
@@ -20,7 +20,7 @@ const COLOR_MAP = {
       <div class="font-bold text-white">{{ role }}</div>
     </div>
     <div class="text-white mx-2 relative">
-      <div v-html="render(content)" />
+      <div v-html="render(content) || '<p>Generating...</p>'" />
     </div>
   </div>
 </template>

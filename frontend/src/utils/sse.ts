@@ -1,25 +1,6 @@
-import MarkdownIt from 'markdown-it'
+import { decoder } from './encoding'
 
-const md = new MarkdownIt()
-
-export function render(content: string) {
-  return md.render(content)
-}
-
-const decoder = new TextDecoder('utf-8')
-
-export function decodeBase64(base64: string) {
-  const binaryString = atob(base64)
-  const bytes = new Uint8Array(binaryString.length)
-
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i)
-  }
-
-  return decoder.decode(bytes)
-}
-
-export async function* readerToEventStream(reader: ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<string, undefined, void> {
+export async function* readerToEventStream(reader: ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<string, void, void> {
   let buffer = ''
 
   try {
@@ -53,7 +34,7 @@ export async function* readerToEventStream(reader: ReadableStreamDefaultReader<U
   }
 }
 
-export async function* eventStreamToMessages(events: AsyncGenerator<string>): AsyncGenerator<string, undefined, void> {
+export async function* eventStreamToMessages(events: AsyncGenerator<string>): AsyncGenerator<string, void, void> {
   for await (const event of events) {
     if (event.startsWith('data: ')) {
       const data = event.slice(6)

@@ -1,5 +1,6 @@
 import { aiter } from 'iterator-helper'
-import { decodeBase64, readerToMessages } from '@/utils'
+import { decodeBase64 } from '@/utils/encoding'
+import { readerToMessages } from '@/utils/sse'
 import { ACCESS_TOKEN, ApiClient } from './index'
 
 export class CoreApiClient extends ApiClient {
