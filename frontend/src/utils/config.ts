@@ -13,7 +13,7 @@ export function defineModel(model: Model) {
 
 export const MODELS = {
   NagaTest: defineModel({
-    source: '/models/live2d-naga/naga-test.model3.json',
+    source: '/models/naga-test/naga-test.model3.json',
     x: 0.5,
     y: 1.3,
     size: 6800,
