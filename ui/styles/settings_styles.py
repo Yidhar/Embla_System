@@ -549,3 +549,80 @@ QPushButton:pressed {
     background: rgba(130, 80, 255, 180);
 }
 """
+
+# ========== OpenClaw 调度终端样式 ==========
+
+# 终端状态 - 活跃（绿色）
+OPENCLAW_TERMINAL_ACTIVE_STYLE = """
+QLabel {
+    color: rgba(100, 255, 100, 220);
+    font: 10pt 'Lucida Console';
+    font-weight: bold;
+}
+"""
+
+# 终端状态 - 空闲/未交互（灰色）
+OPENCLAW_TERMINAL_IDLE_STYLE = """
+QLabel {
+    color: rgba(180, 180, 180, 180);
+    font: 10pt 'Lucida Console';
+    font-style: italic;
+}
+"""
+
+# 终端状态 - 错误（红色）
+OPENCLAW_TERMINAL_ERROR_STYLE = """
+QLabel {
+    color: rgba(255, 100, 100, 220);
+    font: 10pt 'Lucida Console';
+    font-weight: bold;
+}
+"""
+
+# 终端详情样式（等宽字体，显示 session/runId 等）
+OPENCLAW_TERMINAL_DETAILS_STYLE = """
+QLabel {
+    color: rgba(200, 200, 255, 180);
+    font: 9pt 'Consolas', 'Monaco', 'Lucida Console', monospace;
+    background: rgba(30, 30, 50, 100);
+    border: 1px solid rgba(100, 100, 150, 80);
+    border-radius: 4px;
+    padding: 8px;
+}
+"""
+
+# OpenClaw 监控文本框样式（用于显示 session_status 和交互历史）
+OPENCLAW_MONITOR_TEXT_STYLE = """
+QTextEdit {
+    background: rgba(20, 20, 30, 200);
+    color: rgba(180, 220, 255, 220);
+    font: 9pt 'Consolas', 'Monaco', 'Lucida Console', monospace;
+    border: 1px solid rgba(100, 100, 150, 80);
+    border-radius: 6px;
+    padding: 10px 12px;
+    line-height: 1.4;
+}
+QTextEdit:focus {
+    border: 1px solid rgba(100, 180, 255, 120);
+}
+QScrollBar:vertical {
+    background: rgba(40, 40, 60, 100);
+    width: 8px;
+    border-radius: 4px;
+    margin: 2px;
+}
+QScrollBar::handle:vertical {
+    background: rgba(100, 140, 200, 150);
+    border-radius: 4px;
+    min-height: 30px;
+}
+QScrollBar::handle:vertical:hover {
+    background: rgba(120, 160, 220, 180);
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: transparent;
+}
+"""

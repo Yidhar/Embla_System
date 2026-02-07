@@ -37,7 +37,10 @@ from ui.styles.settings_styles import (
     LABEL_STYLE,
     OPENCLAW_STATUS_INSTALLED_STYLE, OPENCLAW_STATUS_NOT_INSTALLED_STYLE,
     OPENCLAW_CONNECTED_STYLE, OPENCLAW_DISCONNECTED_STYLE,
-    OPENCLAW_REFRESH_BUTTON_STYLE, OPENCLAW_DOCS_BUTTON_STYLE
+    OPENCLAW_REFRESH_BUTTON_STYLE, OPENCLAW_DOCS_BUTTON_STYLE,
+    OPENCLAW_TERMINAL_ACTIVE_STYLE, OPENCLAW_TERMINAL_IDLE_STYLE,
+    OPENCLAW_TERMINAL_ERROR_STYLE, OPENCLAW_TERMINAL_DETAILS_STYLE,
+    OPENCLAW_MONITOR_TEXT_STYLE
 )
 
 class SettingCard(QWidget):
@@ -1121,6 +1124,80 @@ class ElegantSettingsWidget(QWidget):
         enabled_card.value_changed.connect(self.on_setting_changed)
         group.add_card(enabled_card)
 
+        # ========== OpenClaw 状态监控卡片（使用全宽卡片而非 SettingCard）==========
+        monitor_card = QWidget()
+        monitor_card.setStyleSheet(SYSTEM_PROMPT_CARD_STYLE)  # 复用系统提示词卡片样式
+
+        monitor_layout = QVBoxLayout(monitor_card)
+        monitor_layout.setContentsMargins(16, 16, 16, 16)
+        monitor_layout.setSpacing(12)
+
+        # 标题行（标题 + 刷新按钮）
+        monitor_header = QHBoxLayout()
+        monitor_header.setSpacing(12)
+
+        monitor_title = QLabel("状态监控")
+        monitor_title.setStyleSheet(SYSTEM_PROMPT_TITLE_STYLE)
+        monitor_header.addWidget(monitor_title)
+
+        self.openclaw_monitor_status_label = QLabel("请和 OpenClaw 交互以显示状态")
+        self.openclaw_monitor_status_label.setStyleSheet(OPENCLAW_TERMINAL_IDLE_STYLE)
+        monitor_header.addWidget(self.openclaw_monitor_status_label)
+
+        monitor_header.addStretch()
+
+        # 刷新按钮
+        refresh_monitor_btn = QPushButton("刷新")
+        refresh_monitor_btn.setFixedSize(60, 28)
+        refresh_monitor_btn.setStyleSheet(OPENCLAW_REFRESH_BUTTON_STYLE)
+        refresh_monitor_btn.clicked.connect(self.refresh_openclaw_monitor)
+        monitor_header.addWidget(refresh_monitor_btn)
+
+        monitor_layout.addLayout(monitor_header)
+
+        # 描述
+        monitor_desc = QLabel("显示 OpenClaw 实时状态和 Naga 调度的交互记录")
+        monitor_desc.setStyleSheet(SYSTEM_PROMPT_DESC_STYLE)
+        monitor_layout.addWidget(monitor_desc)
+
+        # OpenClaw 状态详情（显示 session_status 返回的信息）
+        status_label = QLabel("OpenClaw 状态:")
+        status_label.setStyleSheet(LABEL_STYLE)
+        monitor_layout.addWidget(status_label)
+
+        self.openclaw_status_text = QTextEdit()
+        self.openclaw_status_text.setReadOnly(True)
+        self.openclaw_status_text.setStyleSheet(OPENCLAW_MONITOR_TEXT_STYLE)
+        self.openclaw_status_text.setMinimumHeight(100)
+        self.openclaw_status_text.setMaximumHeight(150)
+        self.openclaw_status_text.setPlaceholderText("OpenClaw 状态信息将在此显示...")
+        self.openclaw_status_text.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        monitor_layout.addWidget(self.openclaw_status_text)
+
+        # API 交互历史（显示最近的消息）
+        self.openclaw_history_label = QLabel("最近交互:")
+        self.openclaw_history_label.setStyleSheet(LABEL_STYLE)
+        monitor_layout.addWidget(self.openclaw_history_label)
+
+        self.openclaw_history_text = QTextEdit()
+        self.openclaw_history_text.setReadOnly(True)
+        self.openclaw_history_text.setStyleSheet(OPENCLAW_MONITOR_TEXT_STYLE)
+        self.openclaw_history_text.setMinimumHeight(80)
+        self.openclaw_history_text.setMaximumHeight(120)
+        self.openclaw_history_text.setPlaceholderText("对话历史将在此显示...")
+        self.openclaw_history_text.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        monitor_layout.addWidget(self.openclaw_history_text)
+
+        group.add_card(monitor_card)
+
+        # 设置定时刷新（每 2 秒，更实时）
+        self.openclaw_monitor_timer = QTimer()
+        self.openclaw_monitor_timer.timeout.connect(self.refresh_openclaw_monitor)
+        self.openclaw_monitor_timer.start(2000)
+
+        # 初始化
+        QTimer.singleShot(500, self.refresh_openclaw_monitor)
+
         # 更新UI显示
         self.update_openclaw_ui()
 
@@ -1216,7 +1293,142 @@ class ElegantSettingsWidget(QWidget):
             webbrowser.open("https://docs.openclaw.ai/")
         except Exception as e:
             print(f"打开 OpenClaw 文档失败: {e}")
-        
+
+    def refresh_openclaw_monitor(self):
+        """刷新 OpenClaw 状态监控 - 显示真实的对话内容"""
+        try:
+            import httpx
+            from system.config import get_server_port
+
+            agent_server_port = get_server_port('agent_server')
+
+            with httpx.Client(timeout=8.0) as client:
+                # 1. 获取 Naga 的会话信息
+                session_key = None
+                try:
+                    session_resp = client.get(f"http://127.0.0.1:{agent_server_port}/openclaw/session")
+                    if session_resp.status_code == 200:
+                        session_data = session_resp.json()
+                        if session_data.get("has_session"):
+                            session = session_data.get("session", {})
+                            session_key = session.get("session_key")
+                            self.openclaw_monitor_status_label.setText(
+                                f"会话: {session_key or 'N/A'} · 消息: {session.get('message_count', 0)}"
+                            )
+                            self.openclaw_monitor_status_label.setStyleSheet(OPENCLAW_TERMINAL_ACTIVE_STYLE)
+                        else:
+                            self.openclaw_monitor_status_label.setText("请和 OpenClaw 交互以显示对话")
+                            self.openclaw_monitor_status_label.setStyleSheet(OPENCLAW_TERMINAL_IDLE_STYLE)
+                            self.openclaw_status_text.setPlaceholderText("等待与 OpenClaw 交互...")
+                            self.openclaw_history_text.setPlaceholderText("对话历史将在此显示...")
+                            return
+                    elif session_resp.status_code == 503:
+                        self.openclaw_monitor_status_label.setText("OpenClaw 客户端未就绪")
+                        self.openclaw_monitor_status_label.setStyleSheet(OPENCLAW_TERMINAL_ERROR_STYLE)
+                        return
+                except Exception as e:
+                    self.openclaw_monitor_status_label.setText(f"连接失败: {str(e)[:30]}")
+                    self.openclaw_monitor_status_label.setStyleSheet(OPENCLAW_TERMINAL_ERROR_STYLE)
+                    return
+
+                # 2. 获取 OpenClaw 当前状态
+                try:
+                    status_resp = client.get(f"http://127.0.0.1:{agent_server_port}/openclaw/status")
+                    if status_resp.status_code == 200:
+                        status_data = status_resp.json()
+                        if status_data.get("success"):
+                            status_text = status_data.get("status_text", "")
+                            if status_text:
+                                self.openclaw_status_text.setText(status_text)
+                            else:
+                                self.openclaw_status_text.setText("OpenClaw 空闲中...")
+                        else:
+                            self.openclaw_status_text.setText(f"状态获取失败: {status_data.get('error', 'unknown')}")
+                    else:
+                        self.openclaw_status_text.setText(f"HTTP {status_resp.status_code}")
+                except Exception as e:
+                    self.openclaw_status_text.setText(f"状态查询失败: {str(e)[:50]}")
+
+                # 3. 获取真实的会话历史消息
+                try:
+                    history_resp = client.get(
+                        f"http://127.0.0.1:{agent_server_port}/openclaw/history",
+                        params={"limit": 10}
+                    )
+                    if history_resp.status_code == 200:
+                        history_data = history_resp.json()
+                        if history_data.get("success"):
+                            messages = history_data.get("messages", [])
+                            if messages:
+                                # 格式化对话历史
+                                history_lines = []
+                                for msg in messages:
+                                    role = msg.get("role", "unknown")
+                                    content = msg.get("content", "")[:80]
+                                    if role == "user":
+                                        history_lines.append(f"[User] {content}")
+                                    elif role == "assistant":
+                                        history_lines.append(f"[Agent] {content}")
+                                    else:
+                                        # 处理 raw 类型
+                                        if content:
+                                            history_lines.append(content[:100])
+
+                                if history_lines:
+                                    self.openclaw_history_text.setText("\n".join(history_lines))
+                                else:
+                                    # 回退到本地任务记录
+                                    self._show_local_tasks(client, agent_server_port)
+                            else:
+                                # 没有远程消息，显示本地任务记录
+                                self._show_local_tasks(client, agent_server_port)
+                        else:
+                            error = history_data.get("error", "unknown")
+                            if error == "no_session":
+                                self.openclaw_history_text.setText("尚未建立会话，请先发送消息")
+                            else:
+                                self.openclaw_history_text.setText(f"获取历史失败: {error}")
+                    else:
+                        self.openclaw_history_text.setText(f"HTTP {history_resp.status_code}")
+                except Exception as e:
+                    self.openclaw_history_text.setText(f"历史查询失败: {str(e)[:50]}")
+
+                # 滚动到底部显示最新内容
+                self.openclaw_status_text.verticalScrollBar().setValue(
+                    self.openclaw_status_text.verticalScrollBar().maximum()
+                )
+                self.openclaw_history_text.verticalScrollBar().setValue(
+                    self.openclaw_history_text.verticalScrollBar().maximum()
+                )
+
+        except Exception as e:
+            self.openclaw_monitor_status_label.setText("Agent 服务器未运行")
+            self.openclaw_monitor_status_label.setStyleSheet(OPENCLAW_TERMINAL_IDLE_STYLE)
+            self.openclaw_status_text.setText(f"错误: {str(e)[:100]}")
+
+    def _show_local_tasks(self, client, agent_server_port):
+        """显示本地发送的任务记录作为历史"""
+        try:
+            tasks_resp = client.get(f"http://127.0.0.1:{agent_server_port}/openclaw/tasks")
+            if tasks_resp.status_code == 200:
+                tasks_data = tasks_resp.json()
+                tasks = tasks_data.get("tasks", [])
+                if tasks:
+                    # 显示最近的任务
+                    history_lines = []
+                    for task in tasks[-8:]:  # 最近8条
+                        msg = task.get("message", "")[:60]
+                        status = task.get("status", "unknown")
+                        status_icon = "✓" if status == "completed" else ("⏳" if status == "running" else "✗")
+                        history_lines.append(f"{status_icon} [Naga→OC] {msg}")
+                    self.openclaw_history_text.setText("\n".join(history_lines))
+                else:
+                    self.openclaw_history_text.setText("暂无发送记录\n请通过 Naga 向 OpenClaw 发送消息")
+            else:
+                self.openclaw_history_text.setText("暂无交互记录")
+        except Exception:
+            self.openclaw_history_text.setText("暂无交互记录")
+
     def create_save_section(self, parent_layout):
         """创建保存区域"""
         save_container = QWidget()

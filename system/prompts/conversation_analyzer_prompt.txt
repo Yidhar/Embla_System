@@ -30,6 +30,28 @@
 "schedule": "cron表达式（仅定时任务需要）",
 "at": "执行时间（仅一次性提醒需要，如'10m'表示10分钟后）"
 }}
+OpenClaw（曾用名clawdbot、moltbot） 是一个本地运行的 AI Agent网关，可以通过自然语言调度执行复杂任务。
+    - 发送任务让 OpenClaw 执行
+    - 代码分析、文档生成、问题解答
+    - 复杂多步骤任务
+    - 示例: "跟openclaw说帮我分析这个项目的架构"
+
+### 触发关键词
+当用户消息包含以下关键词时，使用 openclaw 调度:
+  - "让openclaw做"、"跟clawdbot说"、"告诉moltbot"、"跟我那个机器人说"
+
+### 可用工具 (通过 OpenClaw 间接调用)
+
+  | 工具 | 功能 |
+  |------|------|
+  | web_fetch | 获取网页内容 |
+  | web_search | 网络搜索 (需Brave API) |
+  | browser | 浏览器控制 |
+  | sessions_list | 查看会话列表 |
+  | agents_list | 查看可用 Agent |
+  | memory_search | 搜索记忆 |
+  | cron | 定时任务管理 |
+
 
 ## 示例
 
@@ -84,14 +106,6 @@
 "task_type": "reminder",
 "message": "提醒：10分钟后有会议",
 "at": "10m"
-}}
-
-输入对话："用openclaw帮我写一份报告"
-期望输出：
-{{
-"agentType": "openclaw",
-"task_type": "message",
-"message": "帮我写一份报告(附带待写报告的详细信息)"
 }}
 
 【输入对话】

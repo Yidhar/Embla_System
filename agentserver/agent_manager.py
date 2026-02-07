@@ -32,7 +32,7 @@ class AgentConfig:
     name: str  # Agent名称（中文名）
     base_name: str  # 基础名称（英文）
     system_prompt: str  # 系统提示词
-    max_output_tokens: int = 40000  # 最大输出token数
+    max_output_tokens: int = 8192  # 最大输出token数
     temperature: float = 0.7  # 温度参数
     description: str = ""  # 描述信息
     model_provider: str = "openai"  # 模型提供商
