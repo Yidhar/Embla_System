@@ -11,8 +11,8 @@ import ArkButton from '@/components/ArkButton.vue'
   <div class="flex flex-col items-start justify-center px-1/16">
     <div class="grid grid-rows-3 gap-3 *:gap-3 panel">
       <div class="relative size-full">
-        <div class="absolute -left-4 right-1/2 top-2 bottom-2">
-          <ArkButton class="size-full bg-blue! z-1">
+        <div class="absolute -left-12 right-1/2 top-2 bottom-2">
+          <ArkButton class="size-full bg-blue! z-1" disabled>
             <div class="size-full text-center">
               I'm Overlay!
             </div>
@@ -34,7 +34,7 @@ import ArkButton from '@/components/ArkButton.vue'
             参数设置
           </div>
           <div class="grow grid grid-cols-2 font-serif font-bold lh-none">
-            <ArkButton disabled @click="useLink({ to: '/model' }).navigate">
+            <ArkButton @click="useLink({ to: '/model' }).navigate">
               <div class="size-full text-lg">对话模型</div>
             </ArkButton>
             <ArkButton disabled @click="useLink({ to: '/memory' }).navigate">

@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import Markdown from './Markdown.vue'
-
 withDefaults(defineProps<{
   name: string
   description?: string
@@ -12,14 +10,11 @@ withDefaults(defineProps<{
 
 <template>
   <label :class="layout === 'row' ? 'grid grid-cols-2' : 'flex flex-col'">
-    <div class="flex flex-col justify-center">
+    <div class="flex flex-col justify-center gap-1">
       <div class="font-bold">{{ name }}</div>
-      <Markdown
-        v-if="description" :source="description"
-        class="text-sm text-gray-500 *:mt-0.5 *:mb-2"
-      />
+      <div v-if="description" class="text-sm text-gray-500">{{ description }}</div>
     </div>
-    <div class="flex flex-col *:w-full justify-center">
+    <div class="flex flex-col justify-center">
       <slot />
     </div>
   </label>
