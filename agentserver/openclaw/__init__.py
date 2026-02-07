@@ -21,6 +21,7 @@ from .detector import (
     get_openclaw_detector,
     detect_openclaw,
     get_openclaw_token,
+    get_openclaw_hooks_token,
     get_openclaw_gateway_url
 )
 
@@ -38,5 +39,6 @@ __all__ = [
     "get_openclaw_detector",
     "detect_openclaw",
     "get_openclaw_token",
+    "get_openclaw_hooks_token",
     "get_openclaw_gateway_url"
 ]

@@ -64,21 +64,44 @@ class OpenClawTask:
 class OpenClawConfig:
     """OpenClaw 配置"""
     # OpenClaw Gateway 默认端口是 18789
-    gateway_url: str = "http://localhost:18789"
-    # 认证 token (对应 gateway.auth.token 或 gateway.auth.password)
-    token: Optional[str] = None
+    gateway_url: str = "http://127.0.0.1:18789"
+    # Gateway 认证 token (对应 gateway.auth.token)
+    gateway_token: Optional[str] = None
+    # Hooks 认证 token (对应 hooks.token)
+    hooks_token: Optional[str] = None
     # 请求超时时间（秒）
     timeout: int = 120
     # 默认参数
     default_model: Optional[str] = None
     default_channel: str = "last"
 
-    def get_headers(self) -> Dict[str, str]:
-        """获取请求头"""
+    # 兼容旧配置
+    token: Optional[str] = None
+
+    def __post_init__(self):
+        # 如果只配置了 token，同时用于 gateway 和 hooks
+        if self.token and not self.gateway_token:
+            self.gateway_token = self.token
+        if self.token and not self.hooks_token:
+            self.hooks_token = self.token
+
+    def get_gateway_headers(self) -> Dict[str, str]:
+        """获取 Gateway 请求头"""
         headers = {"Content-Type": "application/json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+        if self.gateway_token:
+            headers["Authorization"] = f"Bearer {self.gateway_token}"
         return headers
+
+    def get_hooks_headers(self) -> Dict[str, str]:
+        """获取 Hooks 请求头"""
+        headers = {"Content-Type": "application/json"}
+        if self.hooks_token:
+            headers["Authorization"] = f"Bearer {self.hooks_token}"
+        return headers
+
+    def get_headers(self) -> Dict[str, str]:
+        """获取请求头（兼容旧代码）"""
+        return self.get_gateway_headers()
 
 
 class OpenClawClient:
@@ -104,8 +127,7 @@ class OpenClawClient:
         """获取 HTTP 客户端（懒加载）"""
         if self._http_client is None or self._http_client.is_closed:
             self._http_client = httpx.AsyncClient(
-                timeout=self.config.timeout,
-                headers=self.config.get_headers()
+                timeout=self.config.timeout
             )
         return self._http_client
 
@@ -189,7 +211,8 @@ class OpenClawClient:
 
             response = await client.post(
                 f"{self.config.gateway_url}/hooks/agent",
-                json=payload
+                json=payload,
+                headers=self.config.get_hooks_headers()
             )
 
             # /hooks/agent 返回 202 表示异步执行成功
@@ -244,7 +267,8 @@ class OpenClawClient:
 
             response = await client.post(
                 f"{self.config.gateway_url}/hooks/wake",
-                json=payload
+                json=payload,
+                headers=self.config.get_hooks_headers()
             )
 
             if response.status_code == 200:
@@ -305,7 +329,8 @@ class OpenClawClient:
 
             response = await client.post(
                 f"{self.config.gateway_url}/tools/invoke",
-                json=payload
+                json=payload,
+                headers=self.config.get_gateway_headers()
             )
 
             if response.status_code == 200:
@@ -367,7 +392,8 @@ class OpenClawClient:
             # 尝试访问根路径或健康检查端点
             response = await client.get(
                 f"{self.config.gateway_url}/",
-                timeout=10
+                timeout=10,
+                headers=self.config.get_gateway_headers()
             )
 
             if response.status_code == 200:

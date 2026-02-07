@@ -64,16 +64,20 @@ async def lifespan(app: FastAPI):
             if openclaw_status.installed:
                 # 使用检测到的配置
                 openclaw_config = ClientOpenClawConfig(
-                    gateway_url=openclaw_status.gateway_url or 'http://localhost:18789',
-                    token=openclaw_status.gateway_token,
+                    gateway_url=openclaw_status.gateway_url or 'http://127.0.0.1:18789',
+                    gateway_token=openclaw_status.gateway_token,
+                    hooks_token=openclaw_status.hooks_token,
                     timeout=120
                 )
                 logger.info(f"从 ~/.openclaw 检测到 OpenClaw 配置: {openclaw_config.gateway_url}")
+                logger.info(f"  - gateway_token: {'***' + openclaw_config.gateway_token[-8:] if openclaw_config.gateway_token else '未配置'}")
+                logger.info(f"  - hooks_token: {'***' + openclaw_config.hooks_token[-8:] if openclaw_config.hooks_token else '未配置'}")
             else:
                 # 回退到 config.json 中的配置
                 openclaw_config = ClientOpenClawConfig(
-                    gateway_url=getattr(config.openclaw, 'gateway_url', 'http://localhost:18789') if hasattr(config, 'openclaw') else 'http://localhost:18789',
-                    token=getattr(config.openclaw, 'token', None) if hasattr(config, 'openclaw') else None,
+                    gateway_url=getattr(config.openclaw, 'gateway_url', 'http://127.0.0.1:18789') if hasattr(config, 'openclaw') else 'http://127.0.0.1:18789',
+                    gateway_token=getattr(config.openclaw, 'gateway_token', None) if hasattr(config, 'openclaw') else None,
+                    hooks_token=getattr(config.openclaw, 'hooks_token', None) if hasattr(config, 'openclaw') else None,
                     timeout=120
                 )
                 logger.info(f"OpenClaw 未检测到安装，使用配置文件: {openclaw_config.gateway_url}")

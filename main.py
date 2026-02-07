@@ -56,8 +56,8 @@ LOCAL_PKG_DIR = os.path.join(REPO_ROOT, "nagaagent-core")  # 统一入口 #
 if LOCAL_PKG_DIR not in sys.path:
     sys.path.insert(0, LOCAL_PKG_DIR)  # 优先使用本地包 #
 
-from nagaagent_core.vendors.PyQt5.QtGui import QIcon  # 统一入口 #
-from nagaagent_core.vendors.PyQt5.QtWidgets import QApplication  # 统一入口 #
+from PyQt5.QtGui import QIcon  # 统一入口 #
+from PyQt5.QtWidgets import QApplication  # 统一入口 #
 
 # 本地模块导入
 from system.system_checker import run_system_check, run_quick_check
@@ -546,8 +546,8 @@ def clear():
 def check_and_update_if_needed() -> bool:
     """检查上次系统检测时间，如果检测通过且超过5天则执行更新"""
     from datetime import datetime, timedelta
-    from nagaagent_core.vendors.charset_normalizer import from_path
-    from nagaagent_core.vendors import json5
+    from charset_normalizer import from_path
+    import json5
 
     config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
@@ -727,8 +727,8 @@ if __name__ == "__main__":
                 sys.exit(1)
             else:
                 # 用户选择强制启动，将检测状态设置为通过
-                from nagaagent_core.vendors.charset_normalizer import from_path
-                from nagaagent_core.vendors import json5
+                from charset_normalizer import from_path
+                import json5
                 from datetime import datetime
                 
                 config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -786,7 +786,7 @@ if __name__ == "__main__":
             print(f"⚠️ 后台服务初始化异常: {e}")
     
     # 使用定时器延迟初始化，避免阻塞UI
-    from nagaagent_core.vendors.PyQt5.QtCore import QTimer
+    from PyQt5.QtCore import QTimer
     QTimer.singleShot(100, init_services_async)  # 100ms后初始化
     
     sys.exit(app.exec_())
