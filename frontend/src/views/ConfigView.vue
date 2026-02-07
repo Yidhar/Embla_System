@@ -28,7 +28,7 @@ const accordionValue = useStorage('accordion-config', [])
 <template>
   <BoxContainer class="text-sm">
     <Accordion :value="accordionValue" multiple>
-      <ConfigGroup name="system">
+      <ConfigGroup value="system">
         <template #header>
           <div class="flex w-full justify-between">
             <span>系统设置</span>
@@ -53,7 +53,7 @@ const accordionValue = useStorage('accordion-config', [])
           </ConfigItem>
         </div>
       </ConfigGroup>
-      <ConfigGroup name="ui">
+      <ConfigGroup value="ui">
         <template #header>
           <div class="w-full flex justify-between items-center -my-1.5">
             <span>UI 风格配置</span>
@@ -62,7 +62,7 @@ const accordionValue = useStorage('accordion-config', [])
         </template>
         <div class="grid *:h-full gap-4">
           <ConfigItem name="用户昵称" description="聊天窗口显示的用户呢称">
-            <InputText id="ai-name" v-model="CONFIG.ui.user_name" />
+            <InputText v-model="CONFIG.ui.user_name" />
           </ConfigItem>
           <ConfigItem name="Live2D 模型位置">
             <div class="flex flex-col items-center justify-evenly *:w-full">
@@ -85,6 +85,16 @@ const accordionValue = useStorage('accordion-config', [])
           </ConfigItem>
           <ConfigItem name="Live2D 模型超采样倍数">
             <InputNumber v-model="CONFIG.ui.live2d_ssaa" :min="1" :max="4" show-buttons />
+          </ConfigItem>
+        </div>
+      </ConfigGroup>
+      <ConfigGroup value="account" header="账号设置">
+        <div class="grid *:h-full gap-4">
+          <ConfigItem name="用户名">
+            <InputText v-model="CONFIG.naga_portal.username" />
+          </ConfigItem>
+          <ConfigItem name="用户密码">
+            <InputText v-model="CONFIG.naga_portal.password" />
           </ConfigItem>
         </div>
       </ConfigGroup>

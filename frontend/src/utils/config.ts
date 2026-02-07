@@ -47,5 +47,9 @@ export const DEFALUT_CONFIG = {
     model: MODELS.重音テト,
     live2d_ssaa: 2,
   },
+  naga_portal: {
+    username: '',
+    password: '',
+  },
 }
 export const CONFIG = useStorage('naga-config', DEFALUT_CONFIG)

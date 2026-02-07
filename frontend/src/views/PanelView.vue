@@ -25,8 +25,8 @@ import ArkButton from '@/components/ArkButton.vue'
         </ArkButton>
       </div>
       <div class="grid grid-cols-2 -translate-x-1/5">
-        <ArkButton :icon="brain" title="记忆<br>云海" @click="useLink({ to: '/mind' }).navigate" />
-        <ArkButton :icon="toolkit" title="功能" @click="useLink({ to: '/tool' }).navigate" />
+        <ArkButton :icon="brain" title="记忆<br>云海" disabled @click="useLink({ to: '/mind' }).navigate" />
+        <ArkButton :icon="toolkit" title="功能" disabled @click="useLink({ to: '/tool' }).navigate" />
       </div>
       <div class="grid grid-cols-2">
         <div class="flex flex-col">
@@ -34,10 +34,10 @@ import ArkButton from '@/components/ArkButton.vue'
             参数设置
           </div>
           <div class="grow grid grid-cols-2 font-serif font-bold lh-none">
-            <ArkButton @click="useLink({ to: '/model' }).navigate">
+            <ArkButton disabled @click="useLink({ to: '/model' }).navigate">
               <div class="size-full text-lg">对话模型</div>
             </ArkButton>
-            <ArkButton @click="useLink({ to: '/memory' }).navigate">
+            <ArkButton disabled @click="useLink({ to: '/memory' }).navigate">
               <div class="size-full text-lg">记忆链接</div>
             </ArkButton>
           </div>

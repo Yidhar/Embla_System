@@ -2,16 +2,17 @@
 import { AccordionContent, AccordionHeader, AccordionPanel } from 'primevue'
 
 defineProps<{
-  name?: string
+  value: string
+  header?: string
   recoverDefault?: () => void
 }>()
 </script>
 
 <template>
-  <AccordionPanel :value="name">
+  <AccordionPanel :value="value">
     <AccordionHeader>
       <div class="w-full flex justify-between items-center pr-4">
-        <slot name="header">{{ name }}</slot>
+        <slot name="header">{{ header }}</slot>
       </div>
     </AccordionHeader>
     <AccordionContent>

@@ -22,6 +22,11 @@ body,
   overflow: hidden;
 }
 
+* {
+  border-width: 0;
+  border-style: solid;
+}
+
 img {
   -webkit-user-select: none;
   user-select: none;
