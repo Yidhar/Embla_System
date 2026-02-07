@@ -5,6 +5,10 @@ import chip from '@/assets/icons/chip.png'
 import naga from '@/assets/icons/naga.png'
 import toolkit from '@/assets/icons/toolkit.png'
 import ArkButton from '@/components/ArkButton.vue'
+
+function navigateTo(url: string) {
+  window.location.href = url
+}
 </script>
 
 <template>
@@ -12,9 +16,12 @@ import ArkButton from '@/components/ArkButton.vue'
     <div class="grid grid-rows-3 gap-3 *:gap-3 panel">
       <div class="relative size-full">
         <div class="absolute -left-12 right-1/2 top-2 bottom-2">
-          <ArkButton class="size-full bg-blue! z-1" disabled>
-            <div class="size-full text-center">
-              I'm Overlay!
+          <ArkButton class="size-full bg-#f00! z-1" @click="navigateTo('https://www.pylindex.top/naga/')">
+            <div class="size-full text-center pt-1">
+              广告位招租
+              <div class="text-sm">
+                仅需<b>一千<span class="text-1">亿</span></b>龙门币！
+              </div>
             </div>
           </ArkButton>
         </div>
