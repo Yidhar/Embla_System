@@ -45,6 +45,7 @@ class OpenClawTask:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     session_key: Optional[str] = None
+    run_id: Optional[str] = None  # OpenClaw 返回的 runId
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -56,7 +57,29 @@ class OpenClawTask:
             "completed_at": self.completed_at,
             "result": self.result,
             "error": self.error,
-            "session_key": self.session_key
+            "session_key": self.session_key,
+            "run_id": self.run_id
+        }
+
+
+@dataclass
+class OpenClawSessionInfo:
+    """OpenClaw 调度终端会话信息"""
+    session_key: str
+    created_at: str
+    last_activity: str
+    message_count: int = 0
+    last_run_id: Optional[str] = None
+    status: str = "active"  # active, idle, error
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "session_key": self.session_key,
+            "created_at": self.created_at,
+            "last_activity": self.last_activity,
+            "message_count": self.message_count,
+            "last_run_id": self.last_run_id,
+            "status": self.status
         }
 
 
@@ -123,6 +146,10 @@ class OpenClawClient:
         self._tasks: Dict[str, OpenClawTask] = {}
         self._http_client: Optional[httpx.AsyncClient] = None
 
+        # 调度终端会话信息 - 首次调用时初始化，保持整个运行期间
+        self._session_info: Optional[OpenClawSessionInfo] = None
+        self._default_session_key: Optional[str] = None
+
     async def _get_client(self) -> httpx.AsyncClient:
         """获取 HTTP 客户端（懒加载）"""
         if self._http_client is None or self._http_client.is_closed:
@@ -169,11 +196,19 @@ class OpenClawClient:
         Returns:
             OpenClawTask: 任务对象
         """
+        # 首次调用时初始化默认 session_key
+        if self._default_session_key is None:
+            self._default_session_key = f"naga:{uuid.uuid4().hex[:12]}"
+            logger.info(f"[OpenClaw] 初始化调度终端会话: {self._default_session_key}")
+
+        # 使用传入的 session_key 或默认的
+        actual_session_key = session_key or self._default_session_key
+
         task_id = str(uuid.uuid4())
         task = OpenClawTask(
             task_id=task_id,
             message=message,
-            session_key=session_key or f"naga:{task_id}"
+            session_key=actual_session_key
         )
 
         try:
@@ -185,8 +220,7 @@ class OpenClawClient:
             }
 
             # 可选参数
-            if session_key:
-                payload["sessionKey"] = session_key
+            payload["sessionKey"] = actual_session_key
             if name:
                 payload["name"] = name
             if channel:
@@ -220,22 +254,57 @@ class OpenClawClient:
                 task.status = TaskStatus.COMPLETED
                 task.completed_at = datetime.now().isoformat()
                 try:
-                    task.result = response.json()
+                    result = response.json()
+                    task.result = result
+                    # 提取 runId
+                    task.run_id = result.get("runId")
                 except Exception:
                     task.result = {"raw": response.text}
-                logger.info(f"[OpenClaw] 消息发送成功: {task_id}")
+                logger.info(f"[OpenClaw] 消息发送成功: {task_id}, runId: {task.run_id}")
+
+                # 更新会话信息
+                self._update_session_info(actual_session_key, task.run_id, "active")
             else:
                 task.status = TaskStatus.FAILED
                 task.error = f"HTTP {response.status_code}: {response.text}"
                 logger.error(f"[OpenClaw] 消息发送失败: {task.error}")
+
+                # 更新会话状态为 error
+                self._update_session_info(actual_session_key, None, "error")
 
         except Exception as e:
             task.status = TaskStatus.FAILED
             task.error = str(e)
             logger.error(f"[OpenClaw] 消息发送异常: {e}")
 
+            # 更新会话状态为 error
+            if self._session_info:
+                self._session_info.status = "error"
+
         self._tasks[task_id] = task
         return task
+
+    def _update_session_info(self, session_key: str, run_id: Optional[str], status: str):
+        """更新调度终端会话信息"""
+        now = datetime.now().isoformat()
+
+        if self._session_info is None:
+            # 首次创建会话信息
+            self._session_info = OpenClawSessionInfo(
+                session_key=session_key,
+                created_at=now,
+                last_activity=now,
+                message_count=1,
+                last_run_id=run_id,
+                status=status
+            )
+        else:
+            # 更新现有会话信息
+            self._session_info.last_activity = now
+            self._session_info.message_count += 1
+            if run_id:
+                self._session_info.last_run_id = run_id
+            self._session_info.status = status
 
     async def wake(
         self,
@@ -376,6 +445,213 @@ class OpenClawClient:
             k: v for k, v in self._tasks.items()
             if v.status not in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]
         }
+
+    # ============ 会话历史查询 ============
+
+    async def get_sessions_history(
+        self,
+        session_key: Optional[str] = None,
+        limit: int = 20
+    ) -> Dict[str, Any]:
+        """
+        获取会话历史消息
+
+        使用 POST /tools/invoke 调用 sessions_history 工具
+
+        Args:
+            session_key: 会话标识，不传则使用默认会话
+            limit: 返回消息条数限制
+
+        Returns:
+            包含历史消息的结果
+        """
+        actual_session_key = session_key or self._default_session_key
+
+        if not actual_session_key:
+            return {"success": False, "error": "no_session", "messages": []}
+
+        try:
+            result = await self.invoke_tool(
+                tool="sessions_history",
+                args={
+                    "sessionKey": actual_session_key,
+                    "limit": limit
+                }
+            )
+
+            if result.get("success"):
+                # 解析返回的消息
+                raw_result = result.get("result", {})
+                messages = self._parse_history_messages(raw_result)
+                return {
+                    "success": True,
+                    "session_key": actual_session_key,
+                    "messages": messages,
+                    "raw": raw_result
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": result.get("error", "unknown"),
+                    "messages": []
+                }
+
+        except Exception as e:
+            logger.error(f"[OpenClaw] 获取会话历史失败: {e}")
+            return {"success": False, "error": str(e), "messages": []}
+
+    def _parse_history_messages(self, raw_result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        解析 sessions_history 返回的消息格式
+
+        OpenClaw 返回格式:
+        {
+          "ok": true,
+          "result": {
+            "content": [{"type": "text", "text": "{...json...}"}],
+            "details": {"sessionKey": "...", "messages": [...]}
+          }
+        }
+        """
+        messages = []
+
+        try:
+            # 尝试从 result 中提取
+            if isinstance(raw_result, dict):
+                inner_result = raw_result.get("result", raw_result)
+
+                # 优先从 details.messages 获取
+                details = inner_result.get("details", {})
+                msg_list = details.get("messages", [])
+                if msg_list and isinstance(msg_list, list):
+                    for msg in msg_list:
+                        if isinstance(msg, dict):
+                            messages.append({
+                                "role": msg.get("role", "unknown"),
+                                "content": msg.get("content", ""),
+                                "type": "message"
+                            })
+                    return messages
+
+                # 备选：从 content[].text 解析 JSON
+                content = inner_result.get("content", [])
+                if content and isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and "text" in item:
+                            text = item.get("text", "")
+                            # 尝试解析 JSON
+                            try:
+                                import json
+                                parsed = json.loads(text)
+                                if isinstance(parsed, dict):
+                                    msg_list = parsed.get("messages", [])
+                                    for msg in msg_list:
+                                        if isinstance(msg, dict):
+                                            messages.append({
+                                                "role": msg.get("role", "unknown"),
+                                                "content": msg.get("content", ""),
+                                                "type": "message"
+                                            })
+                            except json.JSONDecodeError:
+                                # 不是 JSON，作为原始文本返回
+                                if text.strip():
+                                    messages.append({
+                                        "role": "system",
+                                        "content": text,
+                                        "type": "raw"
+                                    })
+
+        except Exception as e:
+            logger.warning(f"[OpenClaw] 解析历史消息失败: {e}")
+
+        return messages
+
+    async def get_session_status(self) -> Dict[str, Any]:
+        """
+        获取当前会话状态
+
+        使用 POST /tools/invoke 调用 session_status 工具
+
+        Returns:
+            会话状态信息
+        """
+        try:
+            result = await self.invoke_tool(tool="session_status")
+
+            if result.get("success"):
+                raw_result = result.get("result", {})
+                # 提取状态文本
+                inner_result = raw_result.get("result", {})
+                content = inner_result.get("content", [])
+
+                status_text = ""
+                if content and isinstance(content, list) and len(content) > 0:
+                    status_text = content[0].get("text", "")
+
+                return {
+                    "success": True,
+                    "status_text": status_text,
+                    "raw": raw_result
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": result.get("error", "unknown"),
+                    "status_text": ""
+                }
+
+        except Exception as e:
+            logger.error(f"[OpenClaw] 获取会话状态失败: {e}")
+            return {"success": False, "error": str(e), "status_text": ""}
+
+    async def get_sessions_list(self) -> Dict[str, Any]:
+        """
+        获取所有会话列表
+
+        使用 POST /tools/invoke 调用 sessions_list 工具
+
+        Returns:
+            会话列表
+        """
+        try:
+            result = await self.invoke_tool(tool="sessions_list")
+
+            if result.get("success"):
+                return {
+                    "success": True,
+                    "sessions": result.get("result", {}),
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": result.get("error", "unknown"),
+                    "sessions": []
+                }
+
+        except Exception as e:
+            logger.error(f"[OpenClaw] 获取会话列表失败: {e}")
+            return {"success": False, "error": str(e), "sessions": []}
+
+    # ============ 会话信息 ============
+
+    def get_session_info(self) -> Optional[Dict[str, Any]]:
+        """
+        获取当前调度终端会话信息
+
+        Returns:
+            会话信息字典，未交互时返回 None
+        """
+        if self._session_info is None:
+            return None
+        return self._session_info.to_dict()
+
+    def has_session(self) -> bool:
+        """检查是否已有活跃会话"""
+        return self._session_info is not None
+
+    def get_default_session_key(self) -> Optional[str]:
+        """获取默认会话标识"""
+        return self._default_session_key
 
     # ============ 健康检查 ============
 

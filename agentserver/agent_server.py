@@ -1055,6 +1055,88 @@ async def openclaw_clear_completed_tasks():
         logger.error(f"清理 OpenClaw 任务失败: {e}")
         raise HTTPException(500, f"清理失败: {e}")
 
+
+@app.get("/openclaw/session")
+async def openclaw_get_session():
+    """
+    获取当前 OpenClaw 调度终端会话信息
+
+    用于在设置界面显示 Naga 调度 OpenClaw 的终端连接状态
+
+    返回:
+    - 有活跃会话: session_key, created_at, last_activity, message_count, last_run_id, status
+    - 无会话: has_session=False, message="请和 OpenClaw 交互以显示交互终端"
+    """
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw 客户端未就绪")
+
+    try:
+        session_info = Modules.openclaw_client.get_session_info()
+
+        if session_info is None:
+            return {
+                "has_session": False,
+                "message": "请和 OpenClaw 交互以显示交互终端"
+            }
+
+        return {
+            "has_session": True,
+            "session": session_info
+        }
+    except Exception as e:
+        logger.error(f"获取 OpenClaw 会话信息失败: {e}")
+        raise HTTPException(500, f"获取失败: {e}")
+
+
+@app.get("/openclaw/history")
+async def openclaw_get_history(session_key: Optional[str] = None, limit: int = 20):
+    """
+    获取 OpenClaw 会话历史消息
+
+    用于在设置界面显示 OpenClaw Agent 的对话内容
+
+    Args:
+        session_key: 会话标识，不传则使用默认会话
+        limit: 返回消息条数限制
+
+    Returns:
+        会话历史消息列表
+    """
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw 客户端未就绪")
+
+    try:
+        result = await Modules.openclaw_client.get_sessions_history(
+            session_key=session_key,
+            limit=limit
+        )
+        return result
+    except Exception as e:
+        logger.error(f"获取 OpenClaw 会话历史失败: {e}")
+        raise HTTPException(500, f"获取失败: {e}")
+
+
+@app.get("/openclaw/status")
+async def openclaw_get_status():
+    """
+    获取 OpenClaw 当前状态
+
+    调用 session_status 工具获取实时状态
+
+    Returns:
+        OpenClaw 当前状态文本
+    """
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw 客户端未就绪")
+
+    try:
+        result = await Modules.openclaw_client.get_session_status()
+        return result
+    except Exception as e:
+        logger.error(f"获取 OpenClaw 状态失败: {e}")
+        raise HTTPException(500, f"获取失败: {e}")
+
+
 if __name__ == "__main__":
     import uvicorn
     from agentserver.config import AGENT_SERVER_PORT

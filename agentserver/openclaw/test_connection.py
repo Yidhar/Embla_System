@@ -88,48 +88,14 @@ async def test_tools_invoke():
     """测试工具调用 POST /tools/invoke"""
     print("\n[4] 测试 POST /tools/invoke")
 
-    # 测试所有可能的工具
+    # 测试会话相关工具的详细返回
     tools_to_try = [
-        # 会话相关
         ("sessions_list", {}),
-        ("sessions_history", {"sessionKey": "agent:main:naga:test"}),
-        ("agents_list", {}),
-
-        # 网络相关
-        ("web_fetch", {"url": "https://example.com"}),
-        ("web_search", {"query": "hello"}),
-
-        # 记忆相关
-        ("memory_search", {"query": "test"}),
-        ("memory_get", {"key": "test"}),
-
-        # 文件相关
-        ("read", {"path": "/tmp/test.txt"}),
-        ("write", {"path": "/tmp/test.txt", "content": "hello"}),
-        ("apply_patch", {"patch": "test"}),
-
-        # 执行相关
-        ("exec", {"command": "echo hello"}),
-        ("process", {}),
-
-        # UI 相关
-        ("browser", {"action": "status"}),
-        ("canvas", {}),
-
-        # 其他
-        ("message", {"text": "test"}),
-        ("image", {}),
-        ("cron", {"action": "list"}),
-        ("gateway", {"action": "status"}),
-        ("nodes", {}),
-        ("llm_task", {"prompt": "say hi"}),
-        ("agent_send", {"message": "test"}),
+        ("sessions_history", {"sessionKey": "agent:main:naga:test", "limit": 5}),
+        ("session_status", {}),
     ]
 
     async with httpx.AsyncClient(timeout=30) as client:
-        success_count = 0
-        fail_count = 0
-
         for tool_name, args in tools_to_try:
             payload = {"tool": tool_name}
             if args:
@@ -140,21 +106,15 @@ async def test_tools_invoke():
                     headers=GATEWAY_HEADERS,
                     json=payload
                 )
+                print(f"\n    [{tool_name}] 状态码: {r.status_code}")
                 if r.status_code == 200:
-                    success_count += 1
-                    print(f"    ✅ [{tool_name}]")
-                elif r.status_code == 404:
-                    fail_count += 1
-                    print(f"    ❌ [{tool_name}] 不可用")
+                    import json
+                    result = r.json()
+                    print(f"    响应: {json.dumps(result, indent=2, ensure_ascii=False)[:800]}")
                 else:
-                    fail_count += 1
-                    error_msg = r.text[:80] if r.text else ""
-                    print(f"    ⚠️  [{tool_name}] {r.status_code}: {error_msg}")
+                    print(f"    错误: {r.text[:200]}")
             except Exception as e:
-                fail_count += 1
-                print(f"    ❌ [{tool_name}] 错误: {e}")
-
-        print(f"\n    总计: {success_count} 可用, {fail_count} 不可用")
+                print(f"    [{tool_name}] 错误: {e}")
 
 
 async def main():

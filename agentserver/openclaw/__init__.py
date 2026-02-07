@@ -10,6 +10,7 @@ from .openclaw_client import (
     OpenClawClient,
     OpenClawConfig,
     OpenClawTask,
+    OpenClawSessionInfo,
     TaskStatus,
     get_openclaw_client,
     set_openclaw_config
@@ -30,6 +31,7 @@ __all__ = [
     "OpenClawClient",
     "OpenClawConfig",
     "OpenClawTask",
+    "OpenClawSessionInfo",
     "TaskStatus",
     "get_openclaw_client",
     "set_openclaw_config",
