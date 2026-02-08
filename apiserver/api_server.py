@@ -848,6 +848,18 @@ async def ui_notification(payload: Dict[str, Any]):
                 logger.error(f"[UI通知] 显示工具AI回复失败: {e}")
                 raise HTTPException(500, f"显示AI回复失败: {str(e)}")
 
+        # 处理显示 ClawdBot 回复的动作
+        if action == "show_clawdbot_response" and ai_response:
+            try:
+                from ui.controller.tool_chat import chat
+
+                chat.clawdbot_response_received.emit(ai_response)
+                logger.info(f"[UI通知] 已通过信号机制显示 ClawdBot 回复，长度: {len(ai_response)}")
+                return {"success": True, "message": "ClawdBot 回复已显示"}
+            except Exception as e:
+                logger.error(f"[UI通知] 显示 ClawdBot 回复失败: {e}")
+                raise HTTPException(500, f"显示 ClawdBot 回复失败: {str(e)}")
+
         if action == "show_tool_status" and status_text:
             _emit_tool_status_to_ui(status_text, auto_hide_ms)
             return {"success": True, "message": "工具状态已显示"}
