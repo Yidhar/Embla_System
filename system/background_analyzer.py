@@ -257,6 +257,13 @@ class BackgroundAnalyzer:
         # 标记分析开始
         self.running_analyses[session_id] = analysis_session_id
 
+        await self._notify_ui_tool_status(
+            session_id=session_id,
+            message="正在检测工具调用",
+            stage="detecting",
+            auto_hide_ms=0,
+        )
+
         try:
             logger.info(f"[博弈论] 开始异步意图分析，消息数量: {len(messages)}")
             loop = asyncio.get_running_loop()
@@ -288,6 +295,12 @@ class BackgroundAnalyzer:
             tool_calls = analysis.get("tool_calls", []) if isinstance(analysis, dict) else []
 
             if not tasks and not tool_calls:
+                await self._notify_ui_tool_status(
+                    session_id=session_id,
+                    message="未检测到工具调用",
+                    stage="none",
+                    auto_hide_ms=1200,
+                )
                 return {"has_tasks": False, "reason": "未发现可执行任务", "tasks": [], "priority": "low"}
 
             logger.info(
@@ -332,9 +345,6 @@ class BackgroundAnalyzer:
             import httpx
 
             # 批量构建工具调用通知
-            tool_names = [tool_call.get("tool_name", "未知工具") for tool_call in tool_calls]
-            service_names = [tool_call.get("service_name", "未知服务") for tool_call in tool_calls]
-
             # 批量发送通知（减少HTTP请求次数）
             notification_payload = {
                 "session_id": session_id,
@@ -346,7 +356,9 @@ class BackgroundAnalyzer:
                     }
                     for tool_call in tool_calls
                 ],
-                "message": f"🔧 正在执行 {len(tool_calls)} 个工具: {', '.join(tool_names)}",
+                "stage": "executing",
+                "auto_hide_ms": 0,
+                "message": f"检测到{len(tool_calls)}个工具调用，执行中",
             }
 
             from system.config import get_server_port
@@ -359,6 +371,29 @@ class BackgroundAnalyzer:
         except Exception as e:
             logger.error(f"批量通知UI工具调用失败: {e}")
 
+    async def _notify_ui_tool_status(self, session_id: str, message: str, stage: str, auto_hide_ms: int) -> None:
+        """通知UI显示工具调用相关状态"""
+        try:
+            import httpx
+
+            from system.config import get_server_port
+
+            notification_payload = {
+                "session_id": session_id,
+                "tool_calls": [],
+                "stage": stage,
+                "auto_hide_ms": auto_hide_ms,
+                "message": message,
+            }
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                await client.post(
+                    f"http://localhost:{get_server_port('api_server')}/tool_notification",
+                    json=notification_payload,
+                )
+        except Exception as e:
+            logger.error(f"通知UI工具状态失败: {e}")
+
     async def _dispatch_tool_calls(
         self, tool_calls: List[Dict[str, Any]], session_id: str, analysis_session_id: Optional[str] = None
     ):
@@ -370,6 +405,7 @@ class BackgroundAnalyzer:
             # 按agentType分组
             mcp_calls = []
             agent_calls = []
+            openclaw_calls = []
 
             for tool_call in tool_calls:
                 agent_type = tool_call.get("agentType", "")
@@ -377,6 +413,8 @@ class BackgroundAnalyzer:
                     mcp_calls.append(tool_call)
                 elif agent_type == "agent":
                     agent_calls.append(tool_call)
+                elif agent_type == "openclaw":
+                    openclaw_calls.append(tool_call)
 
             # 分发MCP任务到MCP服务器
             if mcp_calls:
@@ -385,6 +423,10 @@ class BackgroundAnalyzer:
             # 分发Agent任务到agentserver
             if agent_calls:
                 await self._send_to_agent_server(agent_calls, session_id, analysis_session_id)
+
+            # 分发OpenClaw任务到agentserver（通过OpenClaw客户端）
+            if openclaw_calls:
+                await self._send_to_openclaw(openclaw_calls, session_id, analysis_session_id)
 
         except Exception as e:
             logger.error(f"工具调用分发失败: {e}")
@@ -460,6 +502,59 @@ class BackgroundAnalyzer:
 
         except Exception as e:
             logger.error(f"[博弈论] 发送Agent任务失败: {e}")
+
+    async def _send_to_openclaw(
+        self, openclaw_calls: List[Dict[str, Any]], session_id: str, analysis_session_id: Optional[str] = None
+    ):
+        """发送OpenClaw任务到agentserver的OpenClaw端点
+
+        使用 POST /hooks/agent 端点
+        文档: https://docs.openclaw.ai/automation/webhook
+        """
+        try:
+            import httpx
+
+            from system.config import get_server_port
+
+            for call in openclaw_calls:
+                task_type = call.get("task_type", "message")
+                message = call.get("message", "")
+
+                if not message:
+                    logger.warning(f"[博弈论] OpenClaw任务缺少message字段，跳过: {call}")
+                    continue
+
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    # 所有任务类型都通过 /openclaw/send 发送
+                    # OpenClaw Agent 会自行处理消息内容
+                    payload = {
+                        "message": message,
+                        "session_key": call.get("session_key", f"naga_{session_id}"),
+                        "name": "Naga",  # hook 名称标识
+                        "wake_mode": "now"
+                    }
+
+                    # 如果是定时任务或提醒，在消息中包含调度信息
+                    if task_type == "cron" and call.get("schedule"):
+                        payload["message"] = f"[定时任务 cron: {call.get('schedule')}] {message}"
+                    elif task_type == "reminder" and call.get("at"):
+                        payload["message"] = f"[提醒 在 {call.get('at')} 后] {message}"
+
+                    response = await client.post(
+                        f"http://localhost:{get_server_port('agent_server')}/openclaw/send",
+                        json=payload
+                    )
+
+                    if response.status_code == 200:
+                        result = response.json()
+                        logger.info(
+                            f"[博弈论] OpenClaw {task_type} 任务发送成功: {result.get('success', False)}"
+                        )
+                    else:
+                        logger.error(f"[博弈论] OpenClaw任务发送失败: {response.status_code} - {response.text}")
+
+        except Exception as e:
+            logger.error(f"[博弈论] 发送OpenClaw任务失败: {e}")
 
 
 # 全局分析器实例

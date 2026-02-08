@@ -91,6 +91,31 @@ class ComputerControlConfig:
 # 默认电脑控制配置实例
 DEFAULT_COMPUTER_CONTROL_CONFIG = ComputerControlConfig()
 
+# ============ OpenClaw 配置 ============
+
+@dataclass
+class OpenClawConfig:
+    """OpenClaw 集成配置
+
+    官方文档: https://docs.openclaw.ai/
+    """
+    # Gateway 连接 - 默认端口是 18789
+    gateway_url: str = "http://localhost:18789"
+    # 认证 token (对应 gateway.auth.token 或 gateway.auth.password)
+    token: Optional[str] = None
+    # 请求超时时间（秒）
+    timeout: int = 120
+
+    # 默认参数
+    default_model: Optional[str] = None         # 默认模型
+    default_channel: str = "last"               # 默认消息通道
+
+    # 功能开关
+    enabled: bool = True                        # 是否启用 OpenClaw 集成
+
+# 默认 OpenClaw 配置实例
+DEFAULT_OPENCLAW_CONFIG = OpenClawConfig()
+
 # ============ 全局配置管理 ============
 
 @dataclass
@@ -99,21 +124,22 @@ class AgentServerConfig:
     # 服务器配置
     host: str = "0.0.0.0"
     port: int = None
-    
+
     # 子模块配置
     task_scheduler: TaskSchedulerConfig = None
     agent_manager: AgentManagerConfig = None
     computer_control: ComputerControlConfig = None
-    
+    openclaw: OpenClawConfig = None
+
     # 日志配置
     log_level: str = "INFO"
     enable_debug_logs: bool = False
-    
+
     def __post_init__(self):
         # 设置默认端口
         if self.port is None:
             self.port = AGENT_SERVER_PORT
-        
+
         # 设置默认子配置
         if self.task_scheduler is None:
             self.task_scheduler = DEFAULT_TASK_SCHEDULER_CONFIG
@@ -121,6 +147,8 @@ class AgentServerConfig:
             self.agent_manager = DEFAULT_AGENT_MANAGER_CONFIG
         if self.computer_control is None:
             self.computer_control = DEFAULT_COMPUTER_CONTROL_CONFIG
+        if self.openclaw is None:
+            self.openclaw = DEFAULT_OPENCLAW_CONFIG
 
 # 全局配置实例
 config = AgentServerConfig()
@@ -138,6 +166,10 @@ def get_agent_manager_config() -> AgentManagerConfig:
 def get_computer_control_config() -> ComputerControlConfig:
     """获取电脑控制配置"""
     return config.computer_control
+
+def get_openclaw_config() -> OpenClawConfig:
+    """获取 OpenClaw 配置"""
+    return config.openclaw
 
 def update_config(**kwargs):
     """更新配置"""
