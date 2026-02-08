@@ -37,12 +37,12 @@ function navigateTo(url: string) {
       </div>
       <div class="grid grid-cols-2">
         <div class="flex flex-col">
-          <div class="bg-#363837 text-white p-2 text-sm font-sans">
+          <div class="bg-#363837 text-white p-2 text-sm">
             参数设置
           </div>
           <div class="grow grid grid-cols-2 font-serif font-bold lh-none">
             <ArkButton @click="useLink({ to: '/model' }).navigate">
-              <div class="size-full text-lg">对话模型</div>
+              <div class="size-full text-lg">人格投影</div>
             </ArkButton>
             <ArkButton disabled @click="useLink({ to: '/memory' }).navigate">
               <div class="size-full text-lg">记忆链接</div>
