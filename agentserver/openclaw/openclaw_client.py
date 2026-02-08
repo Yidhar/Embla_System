@@ -175,7 +175,10 @@ class OpenClawClient:
         to: Optional[str] = None,
         model: Optional[str] = None,
         wake_mode: str = "now",
-        deliver: bool = False
+        deliver: bool = False,
+        timeout_seconds: int = 120,
+        max_retries: int = 5,
+        retry_interval: float = 2.0
     ) -> OpenClawTask:
         """
         发送消息给 OpenClaw Agent
@@ -192,10 +195,15 @@ class OpenClawClient:
             model: 模型覆盖 (如 "anthropic/claude-3-5-sonnet")
             wake_mode: 唤醒模式 ("now" 或 "next-heartbeat")
             deliver: 是否投递到通道
+            timeout_seconds: 等待结果的超时时间（秒），0表示异步不等待
+            max_retries: 最大重试次数，默认5次
+            retry_interval: 重试间隔（秒），默认2秒
 
         Returns:
             OpenClawTask: 任务对象
         """
+        import asyncio
+
         # 首次调用时初始化默认 session_key
         if self._default_session_key is None:
             self._default_session_key = f"naga:{uuid.uuid4().hex[:12]}"
@@ -211,75 +219,113 @@ class OpenClawClient:
             session_key=actual_session_key
         )
 
-        try:
-            client = await self._get_client()
+        # 构建请求体
+        payload: Dict[str, Any] = {
+            "message": message
+        }
 
-            # 构建请求体
-            payload: Dict[str, Any] = {
-                "message": message
-            }
+        # 可选参数
+        payload["sessionKey"] = actual_session_key
+        if name:
+            payload["name"] = name
+        if channel:
+            payload["channel"] = channel
+        elif self.config.default_channel:
+            payload["channel"] = self.config.default_channel
+        if to:
+            payload["to"] = to
+        if model:
+            payload["model"] = model
+        elif self.config.default_model:
+            payload["model"] = self.config.default_model
+        if wake_mode:
+            payload["wakeMode"] = wake_mode
+        if deliver:
+            payload["deliver"] = deliver
+        # 设置超时时间，>0 表示同步等待结果
+        if timeout_seconds > 0:
+            payload["timeoutSeconds"] = timeout_seconds
 
-            # 可选参数
-            payload["sessionKey"] = actual_session_key
-            if name:
-                payload["name"] = name
-            if channel:
-                payload["channel"] = channel
-            elif self.config.default_channel:
-                payload["channel"] = self.config.default_channel
-            if to:
-                payload["to"] = to
-            if model:
-                payload["model"] = model
-            elif self.config.default_model:
-                payload["model"] = self.config.default_model
-            if wake_mode:
-                payload["wakeMode"] = wake_mode
-            if deliver:
-                payload["deliver"] = deliver
+        task.started_at = datetime.now().isoformat()
+        task.status = TaskStatus.RUNNING
 
-            logger.info(f"[OpenClaw] 发送消息到 /hooks/agent: {message[:50]}...")
+        # HTTP 超时需要比 OpenClaw 的 timeoutSeconds 更长
+        http_timeout = max(timeout_seconds + 30, self.config.timeout)
 
-            task.started_at = datetime.now().isoformat()
-            task.status = TaskStatus.RUNNING
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                client = await self._get_client()
 
-            response = await client.post(
-                f"{self.config.gateway_url}/hooks/agent",
-                json=payload,
-                headers=self.config.get_hooks_headers()
-            )
+                logger.info(f"[OpenClaw] 发送消息到 /hooks/agent (尝试 {attempt}/{max_retries}): {message[:50]}... (timeout={timeout_seconds}s)")
 
-            # /hooks/agent 返回 202 表示异步执行成功
-            if response.status_code in (200, 202):
-                task.status = TaskStatus.COMPLETED
-                task.completed_at = datetime.now().isoformat()
-                try:
-                    result = response.json()
-                    task.result = result
-                    # 提取 runId
-                    task.run_id = result.get("runId")
-                except Exception:
-                    task.result = {"raw": response.text}
-                logger.info(f"[OpenClaw] 消息发送成功: {task_id}, runId: {task.run_id}")
+                response = await client.post(
+                    f"{self.config.gateway_url}/hooks/agent",
+                    json=payload,
+                    headers=self.config.get_hooks_headers(),
+                    timeout=http_timeout
+                )
 
-                # 更新会话信息
-                self._update_session_info(actual_session_key, task.run_id, "active")
-            else:
-                task.status = TaskStatus.FAILED
-                task.error = f"HTTP {response.status_code}: {response.text}"
-                logger.error(f"[OpenClaw] 消息发送失败: {task.error}")
+                # /hooks/agent 返回 200/202
+                # 如果设置了 timeoutSeconds，返回 { runId, status: 'ok', reply } 或 { runId, status: 'timeout' }
+                if response.status_code in (200, 202):
+                    try:
+                        result = response.json()
+                        task.result = result
+                        task.run_id = result.get("runId")
 
-                # 更新会话状态为 error
-                self._update_session_info(actual_session_key, None, "error")
+                        # 检查返回状态
+                        status = result.get("status", "accepted")
+                        if status == "ok":
+                            # 同步完成，包含 reply
+                            task.status = TaskStatus.COMPLETED
+                            task.completed_at = datetime.now().isoformat()
+                            reply = result.get("reply", "")
+                            logger.info(f"[OpenClaw] 任务完成: {task_id}, reply: {reply[:100] if reply else 'empty'}...")
+                        elif status == "timeout":
+                            # 超时但任务仍在运行
+                            task.status = TaskStatus.RUNNING
+                            logger.warning(f"[OpenClaw] 任务超时但仍在运行: {task_id}")
+                        else:
+                            # accepted 表示异步接受，任务还在运行
+                            task.status = TaskStatus.RUNNING
+                            logger.info(f"[OpenClaw] 任务已接受: {task_id}, runId: {task.run_id}")
+                    except Exception:
+                        task.result = {"raw": response.text}
+                        task.status = TaskStatus.RUNNING
 
-        except Exception as e:
-            task.status = TaskStatus.FAILED
-            task.error = str(e)
-            logger.error(f"[OpenClaw] 消息发送异常: {e}")
+                    # 更新会话信息
+                    self._update_session_info(actual_session_key, task.run_id, "active")
+                    # 成功，跳出重试循环
+                    break
+                else:
+                    last_error = f"HTTP {response.status_code}: {response.text}"
+                    logger.warning(f"[OpenClaw] 消息发送失败 (尝试 {attempt}/{max_retries}): {last_error}")
 
-            # 更新会话状态为 error
-            if self._session_info:
-                self._session_info.status = "error"
+                    if attempt < max_retries:
+                        logger.info(f"[OpenClaw] {retry_interval}秒后重试...")
+                        await asyncio.sleep(retry_interval)
+                    else:
+                        # 最后一次尝试也失败了
+                        task.status = TaskStatus.FAILED
+                        task.error = last_error
+                        logger.error(f"[OpenClaw] 消息发送失败，已达最大重试次数: {last_error}")
+                        self._update_session_info(actual_session_key, None, "error")
+
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"[OpenClaw] 消息发送异常 (尝试 {attempt}/{max_retries}): {e}")
+
+                if attempt < max_retries:
+                    logger.info(f"[OpenClaw] {retry_interval}秒后重试...")
+                    await asyncio.sleep(retry_interval)
+                else:
+                    # 最后一次尝试也失败了
+                    task.status = TaskStatus.FAILED
+                    task.error = last_error
+                    logger.error(f"[OpenClaw] 消息发送异常，已达最大重试次数: {e}")
+                    if self._session_info:
+                        self._session_info.status = "error"
 
         self._tasks[task_id] = task
         return task
@@ -459,22 +505,21 @@ class OpenClawClient:
         使用 POST /tools/invoke 调用 sessions_history 工具
 
         Args:
-            session_key: 会话标识，不传则使用默认会话
+            session_key: 会话标识，必须指定
             limit: 返回消息条数限制
 
         Returns:
             包含历史消息的结果
         """
-        actual_session_key = session_key or self._default_session_key
-
-        if not actual_session_key:
-            return {"success": False, "error": "no_session", "messages": []}
+        # 如果没有指定 session_key，返回空结果（sessions_history 需要有效的 sessionKey）
+        if not session_key:
+            return {"success": True, "messages": [], "note": "no_session_key_specified"}
 
         try:
             result = await self.invoke_tool(
                 tool="sessions_history",
                 args={
-                    "sessionKey": actual_session_key,
+                    "sessionKey": session_key,
                     "limit": limit
                 }
             )
@@ -566,17 +611,21 @@ class OpenClawClient:
 
         return messages
 
-    async def get_session_status(self) -> Dict[str, Any]:
+    async def get_session_status(self, session_key: Optional[str] = None) -> Dict[str, Any]:
         """
         获取当前会话状态
 
-        使用 POST /tools/invoke 调用 session_status 工具
+        使用 POST /tools/invoke 调用 sessions_list 工具获取会话信息
+
+        Args:
+            session_key: 会话标识（暂未使用，sessions_list 不需要此参数）
 
         Returns:
             会话状态信息
         """
         try:
-            result = await self.invoke_tool(tool="session_status")
+            # sessions_list 不需要 sessionKey 参数，它列出所有会话
+            result = await self.invoke_tool(tool="sessions_list")
 
             if result.get("success"):
                 raw_result = result.get("result", {})

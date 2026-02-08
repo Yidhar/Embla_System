@@ -45,14 +45,16 @@ from .llm_service import get_llm_service  # 导入LLM服务
 # 导入配置系统
 try:
     from system.config import config, AI_NAME  # 使用新的配置系统
-    from system.config import get_prompt  # 导入提示词仓库
+    from system.config import get_prompt, build_system_prompt  # 导入提示词仓库
+    from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 except ImportError:
     import sys
     import os
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from system.config import config, AI_NAME  # 使用新的配置系统
-    from system.config import get_prompt  # 导入提示词仓库
+    from system.config import get_prompt, build_system_prompt  # 导入提示词仓库
+    from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 from ui.utils.response_util import extract_message  # 导入消息提取工具
 
 # 对话核心功能已集成到apiserver
@@ -120,6 +122,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
+    reasoning_content: Optional[str] = None  # COT 思考过程内容
     session_id: Optional[str] = None
     status: str = "success"
 
@@ -177,6 +180,35 @@ async def get_system_info():
     )
 
 
+@app.get("/system/config")
+async def get_system_config():
+    """获取完整系统配置"""
+    try:
+        config_data = get_config_snapshot()
+        return {"status": "success", "config": config_data}
+    except Exception as e:
+        logger.error(f"获取系统配置失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取配置失败: {str(e)}")
+
+
+@app.post("/system/config")
+async def update_system_config(payload: Dict[str, Any]):
+    """更新系统配置"""
+    try:
+        success = update_config(payload)
+        if success:
+            return {"status": "success", "message": "配置更新成功"}
+        else:
+            raise HTTPException(status_code=500, detail="配置更新失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新系统配置失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """普通对话接口 - 仅处理纯文本对话"""
@@ -216,28 +248,29 @@ async def chat(request: ChatRequest):
         # 获取或创建会话ID
         session_id = message_manager.create_session(request.session_id)
 
-        # 构建系统提示词（只使用对话风格提示词）
-        system_prompt = get_prompt("conversation_style_prompt")
+        # 构建系统提示词（包含技能元数据）
+        system_prompt = build_system_prompt(include_skills=True)
 
         # 使用消息管理器构建完整的对话消息（纯聊天，不触发工具）
         messages = message_manager.build_conversation_messages(
             session_id=session_id, system_prompt=system_prompt, current_message=request.message
         )
 
-        # 使用整合后的LLM服务
+        # 使用整合后的LLM服务（支持 reasoning_content）
         llm_service = get_llm_service()
-        response_text = await llm_service.chat_with_context(messages, config.api.temperature)
+        llm_response = await llm_service.chat_with_context_and_reasoning(messages, config.api.temperature)
 
         # 处理完成
         # 统一保存对话历史与日志
-        _save_conversation_and_logs(session_id, request.message, response_text)
+        _save_conversation_and_logs(session_id, request.message, llm_response.content)
 
         # 在用户消息保存到历史后触发后台意图分析（除非明确跳过）
         if not request.skip_intent_analysis:
             _trigger_background_analysis(session_id=session_id)
 
         return ChatResponse(
-            response=extract_message(response_text) if response_text else response_text,
+            response=extract_message(llm_response.content) if llm_response.content else llm_response.content,
+            reasoning_content=llm_response.reasoning_content,
             session_id=session_id,
             status="success",
         )
@@ -266,7 +299,7 @@ async def chat_stream(request: ChatRequest):
             # 注意：这里不触发后台分析，将在对话保存后触发
 
             # 构建系统提示词（只使用对话风格提示词）
-            system_prompt = get_prompt("conversation_style_prompt")
+            system_prompt = build_system_prompt(include_skills=True)
 
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(
@@ -320,33 +353,41 @@ async def chat_stream(request: ChatRequest):
             except Exception as e:
                 print(f"流式文本切割器初始化失败: {e}")
 
-            # 使用整合后的流式处理
+            # 使用整合后的流式处理（支持 reasoning_content）
             llm_service = get_llm_service()
+            complete_reasoning = ""  # 累积推理内容
             async for chunk in llm_service.stream_chat_with_context(messages, config.api.temperature):
-                # V19: 如果需要返回音频，累积文本
-                if request.return_audio and chunk.startswith("data: "):
+                # 新格式: chunk 是 "data: <base64_json>\n\n"，JSON 结构为 {"type": "content"|"reasoning", "text": "..."}
+                # V19: 如果需要返回音频，累积文本（只累积 content，不累积 reasoning）
+                if chunk.startswith("data: "):
                     try:
                         import base64
+                        import json as json_module
 
                         data_str = chunk[6:].strip()
-                        if data_str != "[DONE]":
+                        if data_str and data_str != "[DONE]":
                             decoded = base64.b64decode(data_str).decode("utf-8")
-                            complete_text += decoded
-                    except Exception:
-                        pass
+                            chunk_data = json_module.loads(decoded)
+                            chunk_type = chunk_data.get("type", "content")
+                            chunk_text = chunk_data.get("text", "")
 
-                # 立即发送到流式文本切割器进行TTS处理（不阻塞文本流）
-                if tool_extractor and chunk.startswith("data: "):
-                    try:
-                        import base64
+                            if chunk_type == "content":
+                                # 累积正式回答内容
+                                if request.return_audio:
+                                    complete_text += chunk_text
+                                # TTS 只处理 content，不处理 reasoning
+                                if tool_extractor:
+                                    asyncio.create_task(tool_extractor.process_text_chunk(chunk_text))
+                            elif chunk_type == "reasoning":
+                                # 累积推理内容（可选：用于日志或 UI 显示）
+                                complete_reasoning += chunk_text
 
-                        data_str = chunk[6:].strip()
-                        if data_str != "[DONE]":
-                            decoded = base64.b64decode(data_str).decode("utf-8")
-                            # 异步调用TTS处理，不阻塞文本流
-                            asyncio.create_task(tool_extractor.process_text_chunk(decoded))
+                            # 将纯文本重新 base64 编码后 yield
+                            text_b64 = base64.b64encode(chunk_text.encode('utf-8')).decode('ascii')
+                            yield f"data: {text_b64}\n\n"
+                            continue
                     except Exception as e:
-                        logger.error(f"[API Server] 流式文本切割器处理错误: {e}")
+                        logger.error(f"[API Server] 流式数据解析错误: {e}")
 
                 yield chunk
 
@@ -666,7 +707,7 @@ async def tool_result_callback(payload: Dict[str, Any]):
         logger.info(f"[工具回调] 构建增强消息: {enhanced_message[:200]}...")
 
         # 构建对话风格提示词和消息
-        system_prompt = get_prompt("conversation_style_prompt")
+        system_prompt = build_system_prompt(include_skills=True)
         messages = message_manager.build_conversation_messages(
             session_id=session_id, system_prompt=system_prompt, current_message=enhanced_message
         )

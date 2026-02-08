@@ -206,6 +206,7 @@ ipython_config.py
 
 # Claude Code
 .claude/
+CLAUDE.md
 
 # Cursor
 .cursorrules

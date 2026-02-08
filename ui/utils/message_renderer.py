@@ -481,6 +481,208 @@ class ToolCallContentDialog(QFrame):
         return max(60, base_height)  # 最小高度60px（因为没有用户名）
 
 
+class ReasoningDialog(QFrame):
+    """COT/思考过程对话框 - 可折叠显示 AI 的推理过程"""
+
+    def __init__(self, content, parent=None):
+        super().__init__(parent)
+        self.content = content
+        self.is_expanded = False  # 初始收缩状态
+        self.setup_ui()
+
+    def setup_ui(self):
+        """设置UI布局"""
+        # 设置对话框样式 - 使用紫色/蓝色调表示思考过程
+        self.setStyleSheet(f"""
+            ReasoningDialog {{
+                background: rgba(30, 20, 40, {int(BG_ALPHA * 255)});
+                border-radius: 0px;
+                border: 1px solid rgba(138, 43, 226, 80);
+                padding: 10px;
+                margin: 5px 0px;
+            }}
+        """)
+
+        # 创建垂直布局
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(5)
+
+        # 创建水平布局用于标题和展开按钮
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(10)
+
+        # 思考过程标题
+        self.title_label = QLabel("💭 思考过程")
+        self.title_label.setStyleSheet("""
+            QLabel {
+                color: #9370DB;
+                font-size: 12pt;
+                font-family: 'Lucida Console';
+                background: transparent;
+                border: none;
+                padding: 0px;
+                margin: 0px;
+            }
+        """)
+        header_layout.addWidget(self.title_label)
+
+        # 弹性空间
+        header_layout.addStretch()
+
+        # 展开/收缩按钮
+        self.expand_button = QPushButton("▶")
+        self.expand_button.setFixedSize(24, 24)
+        self.expand_button.setStyleSheet("""
+            QPushButton {
+                background: rgba(138, 43, 226, 50);
+                border: 1px solid rgba(138, 43, 226, 80);
+                border-radius: 12px;
+                color: #9370DB;
+                font-size: 10pt;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: rgba(138, 43, 226, 100);
+                border: 1px solid rgba(138, 43, 226, 120);
+            }
+            QPushButton:pressed {
+                background: rgba(138, 43, 226, 150);
+            }
+        """)
+        self.expand_button.clicked.connect(self.toggle_expand)
+        header_layout.addWidget(self.expand_button)
+
+        layout.addLayout(header_layout)
+
+        # 内容容器（初始隐藏）
+        self.content_container = QWidget()
+        self.content_container.setStyleSheet("""
+            QWidget {
+                background: transparent;
+                border: none;
+                padding: 0px;
+                margin: 0px;
+            }
+        """)
+        self.content_container.setMaximumHeight(0)
+        self.content_container.hide()
+
+        content_layout = QVBoxLayout(self.content_container)
+        content_layout.setContentsMargins(0, 5, 0, 0)
+        content_layout.setSpacing(0)
+
+        # 将Markdown转换为HTML
+        html_content = simple_markdown_to_html(self.content)
+
+        # 内容标签
+        self.content_label = QLabel(html_content)
+        self.content_label.setWordWrap(True)
+        self.content_label.setTextFormat(Qt.RichText)
+        self.content_label.setStyleSheet("""
+            QLabel {
+                color: #B8A9C9;
+                font-size: 14pt;
+                font-family: 'Lucida Console';
+                background: transparent;
+                border: none;
+                padding: 0px;
+                margin: 0px;
+                line-height: 1.3;
+            }
+        """)
+        content_layout.addWidget(self.content_label)
+
+        layout.addWidget(self.content_container)
+
+        # 设置大小策略
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+    def toggle_expand(self):
+        """切换展开/收缩状态"""
+        if self.is_expanded:
+            self.collapse()
+        else:
+            self.expand()
+
+    def expand(self):
+        """展开内容"""
+        if self.is_expanded:
+            return
+
+        self.is_expanded = True
+        self.expand_button.setText("▼")
+        self.content_container.show()
+
+        # 计算内容高度
+        self.content_label.adjustSize()
+        target_height = self.content_label.sizeHint().height() + 10
+
+        # 创建高度动画
+        self.height_animation = QPropertyAnimation(self.content_container, b"maximumHeight")
+        self.height_animation.setDuration(ANIMATION_DURATION)
+        self.height_animation.setStartValue(0)
+        self.height_animation.setEndValue(target_height)
+        self.height_animation.setEasingCurve(QEasingCurve.OutCubic)
+        self.height_animation.finished.connect(self.adjust_size)
+        self.height_animation.start()
+
+    def collapse(self):
+        """收缩内容"""
+        if not self.is_expanded:
+            return
+
+        self.is_expanded = False
+        self.expand_button.setText("▶")
+
+        # 创建高度动画
+        current_height = self.content_container.height()
+        self.height_animation = QPropertyAnimation(self.content_container, b"maximumHeight")
+        self.height_animation.setDuration(ANIMATION_DURATION)
+        self.height_animation.setStartValue(current_height)
+        self.height_animation.setEndValue(0)
+        self.height_animation.setEasingCurve(QEasingCurve.OutCubic)
+        self.height_animation.finished.connect(self.hide_content)
+        self.height_animation.start()
+
+    def hide_content(self):
+        """隐藏内容容器"""
+        self.content_container.hide()
+        self.adjust_size()
+
+    def adjust_size(self):
+        """调整大小"""
+        self.adjustSize()
+        if self.parent():
+            self.parent().updateGeometry()
+
+    def update_content(self, new_content):
+        """更新内容"""
+        self.content = new_content
+        html_content = simple_markdown_to_html(new_content)
+        self.content_label.setText(html_content)
+        self.content_label.adjustSize()
+        if self.is_expanded:
+            # 更新展开高度
+            target_height = self.content_label.sizeHint().height() + 10
+            self.content_container.setMaximumHeight(target_height)
+        self.adjustSize()
+
+    def get_preferred_height(self):
+        """获取对话框的推荐高度"""
+        # 标题高度
+        header_height = 30
+
+        if self.is_expanded:
+            # 计算内容高度
+            self.content_label.adjustSize()
+            content_height = self.content_label.sizeHint().height()
+            return header_height + content_height + 30  # padding
+        else:
+            return header_height + 20  # 只有标题
+
+
 class MessageRenderer:
     """消息渲染器管理器"""
 
@@ -503,6 +705,11 @@ class MessageRenderer:
     def create_tool_call_content_message(content, parent):
         """创建工具调用内容对话框 - 没有用户名"""
         return ToolCallContentDialog(content, parent)
+
+    @staticmethod
+    def create_reasoning_message(content, parent):
+        """创建思考过程/COT对话框 - 可折叠显示"""
+        return ReasoningDialog(content, parent)
 
     @staticmethod
     def create_system_message(name, content, parent):
