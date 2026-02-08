@@ -157,6 +157,8 @@ OPENCLAW_STATE_DIR = Path.home() / ".openclaw"
 OPENCLAW_SKILLS_DIR = OPENCLAW_STATE_DIR / "skills"
 OPENCLAW_CONFIG_PATH = OPENCLAW_STATE_DIR / "openclaw.json"
 SKILLS_TEMPLATE_DIR = Path(__file__).resolve().parent / "skills_templates"
+MCPORTER_DIR = Path.home() / ".mcporter"
+MCPORTER_CONFIG_PATH = MCPORTER_DIR / "config.json"
 
 MARKET_ITEMS: List[Dict[str, Any]] = [
     {
@@ -205,12 +207,13 @@ MARKET_ITEMS: List[Dict[str, Any]] = [
     },
     {
         "id": "search",
-        "title": "Search (Coming Soon)",
-        "description": "Search MCP integration placeholder (disabled in demo).",
+        "title": "Search (Firecrawl MCP)",
+        "description": "Search MCP integration via mcporter + firecrawl-mcp.",
         "skill_name": "search",
-        "enabled": False,
+        "enabled": True,
         "install": {
-            "type": "none",
+            "type": "template_dir",
+            "template": "search",
         },
     },
 ]
@@ -277,6 +280,46 @@ def _copy_template_dir(template_name: str, skill_name: str) -> None:
         target_path = skill_dir / relative
         target_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target_path)
+
+
+def _update_mcporter_firecrawl_config(api_key: Optional[str]) -> Path:
+    MCPORTER_DIR.mkdir(parents=True, exist_ok=True)
+    config: Dict[str, Any] = {}
+    if MCPORTER_CONFIG_PATH.exists():
+        try:
+            config = json.loads(MCPORTER_CONFIG_PATH.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            config = {}
+
+    servers = config.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+
+    server_entry = servers.get("firecrawl-mcp")
+    if not isinstance(server_entry, dict):
+        server_entry = {}
+
+    env = server_entry.get("env")
+    if not isinstance(env, dict):
+        env = {}
+
+    if api_key:
+        env["FIRECRAWL_API_KEY"] = api_key
+    elif "FIRECRAWL_API_KEY" not in env:
+        env["FIRECRAWL_API_KEY"] = "YOUR_FIRECRAWL_API_KEY"
+
+    server_entry.update(
+        {
+            "command": "npx",
+            "args": ["-y", "firecrawl-mcp"],
+            "env": env,
+        }
+    )
+    servers["firecrawl-mcp"] = server_entry
+    config["mcpServers"] = servers
+
+    MCPORTER_CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=True, indent=2), encoding="utf-8")
+    return MCPORTER_CONFIG_PATH
 
 
 def _install_agent_browser() -> None:
@@ -435,6 +478,11 @@ async def install_openclaw_market_item(item_id: str, payload: Optional[Dict[str,
     try:
         if item_id == "agent-browser":
             _install_agent_browser()
+        if item_id == "search":
+            api_key = None
+            if payload and isinstance(payload, dict):
+                api_key = payload.get("api_key") or payload.get("FIRECRAWL_API_KEY")
+            _update_mcporter_firecrawl_config(api_key)
         if install_type == "remote_skill":
             url = install_spec.get("url")
             if not url:
