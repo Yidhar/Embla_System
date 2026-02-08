@@ -45,14 +45,16 @@ from .llm_service import get_llm_service  # 导入LLM服务
 # 导入配置系统
 try:
     from system.config import config, AI_NAME  # 使用新的配置系统
-    from system.config import get_prompt  # 导入提示词仓库
+    from system.config import get_prompt, build_system_prompt  # 导入提示词仓库
+    from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 except ImportError:
     import sys
     import os
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from system.config import config, AI_NAME  # 使用新的配置系统
-    from system.config import get_prompt  # 导入提示词仓库
+    from system.config import get_prompt, build_system_prompt  # 导入提示词仓库
+    from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 from ui.utils.response_util import extract_message  # 导入消息提取工具
 
 # 对话核心功能已集成到apiserver
@@ -177,6 +179,35 @@ async def get_system_info():
     )
 
 
+@app.get("/system/config")
+async def get_system_config():
+    """获取完整系统配置"""
+    try:
+        config_data = get_config_snapshot()
+        return {"status": "success", "config": config_data}
+    except Exception as e:
+        logger.error(f"获取系统配置失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取配置失败: {str(e)}")
+
+
+@app.post("/system/config")
+async def update_system_config(payload: Dict[str, Any]):
+    """更新系统配置"""
+    try:
+        success = update_config(payload)
+        if success:
+            return {"status": "success", "message": "配置更新成功"}
+        else:
+            raise HTTPException(status_code=500, detail="配置更新失败")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新系统配置失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """普通对话接口 - 仅处理纯文本对话"""
@@ -216,8 +247,8 @@ async def chat(request: ChatRequest):
         # 获取或创建会话ID
         session_id = message_manager.create_session(request.session_id)
 
-        # 构建系统提示词（只使用对话风格提示词）
-        system_prompt = get_prompt("conversation_style_prompt")
+        # 构建系统提示词（包含技能元数据）
+        system_prompt = build_system_prompt(include_skills=True)
 
         # 使用消息管理器构建完整的对话消息（纯聊天，不触发工具）
         messages = message_manager.build_conversation_messages(
@@ -266,7 +297,7 @@ async def chat_stream(request: ChatRequest):
             # 注意：这里不触发后台分析，将在对话保存后触发
 
             # 构建系统提示词（只使用对话风格提示词）
-            system_prompt = get_prompt("conversation_style_prompt")
+            system_prompt = build_system_prompt(include_skills=True)
 
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(
@@ -666,7 +697,7 @@ async def tool_result_callback(payload: Dict[str, Any]):
         logger.info(f"[工具回调] 构建增强消息: {enhanced_message[:200]}...")
 
         # 构建对话风格提示词和消息
-        system_prompt = get_prompt("conversation_style_prompt")
+        system_prompt = build_system_prompt(include_skills=True)
         messages = message_manager.build_conversation_messages(
             session_id=session_id, system_prompt=system_prompt, current_message=enhanced_message
         )

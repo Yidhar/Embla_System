@@ -489,6 +489,49 @@ def save_prompt(name: str, content: str):
     """便捷函数：保存提示词"""
     get_prompt_manager().save_prompt(name, content)
 
+
+def build_system_prompt(include_skills: bool = True, include_time: bool = False) -> str:
+    """
+    构建完整的系统提示词
+
+    将基础对话风格提示词与技能元数据组合
+
+    Args:
+        include_skills: 是否包含技能列表
+        include_time: 是否包含当前时间信息
+
+    Returns:
+        完整的系统提示词
+    """
+    # 基础提示词
+    base_prompt = get_prompt("conversation_style_prompt")
+
+    parts = [base_prompt]
+
+    # 添加技能元数据
+    if include_skills:
+        try:
+            from system.skill_manager import get_skills_prompt
+            skills_prompt = get_skills_prompt()
+            if skills_prompt:
+                parts.append("\n\n" + skills_prompt)
+        except ImportError:
+            pass  # 技能管理器不可用时忽略
+
+    # 添加时间信息
+    if include_time:
+        from datetime import datetime
+        current_time = datetime.now()
+        time_info = (
+            f"\n\n【当前时间信息】\n"
+            f"当前日期：{current_time.strftime('%Y年%m月%d日')}\n"
+            f"当前时间：{current_time.strftime('%H:%M:%S')}\n"
+            f"当前星期：{current_time.strftime('%A')}"
+        )
+        parts.append(time_info)
+
+    return "".join(parts)
+
 class GameModuleConfig(BaseModel):
     """博弈论模块配置"""
     enabled: bool = Field(default=False, description="是否启用博弈论流程")

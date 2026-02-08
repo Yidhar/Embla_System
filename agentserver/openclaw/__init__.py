@@ -26,6 +26,20 @@ from .detector import (
     get_openclaw_gateway_url
 )
 
+from .installer import (
+    OpenClawInstaller,
+    InstallMethod,
+    InstallStatus,
+    InstallResult,
+    get_openclaw_installer
+)
+
+from .config_manager import (
+    OpenClawConfigManager,
+    ConfigUpdateResult,
+    get_openclaw_config_manager
+)
+
 __all__ = [
     # Client
     "OpenClawClient",
@@ -42,5 +56,15 @@ __all__ = [
     "detect_openclaw",
     "get_openclaw_token",
     "get_openclaw_hooks_token",
-    "get_openclaw_gateway_url"
+    "get_openclaw_gateway_url",
+    # Installer
+    "OpenClawInstaller",
+    "InstallMethod",
+    "InstallStatus",
+    "InstallResult",
+    "get_openclaw_installer",
+    # Config Manager
+    "OpenClawConfigManager",
+    "ConfigUpdateResult",
+    "get_openclaw_config_manager",
 ]
