@@ -29,7 +29,7 @@ defineExpose({
           },
         }"
       >
-        <div class="p-4">
+        <div class="p-4 size-full">
           <slot />
         </div>
       </ScrollPanel>

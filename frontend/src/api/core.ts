@@ -1,6 +1,6 @@
 import type { Config } from '@/utils/config'
 import { aiter } from 'iterator-helper'
-import { decodeBase64, readerToMessages } from '@/utils'
+import { decodeBase64, readerToMessageStream } from '@/utils'
 import { ACCESS_TOKEN, ApiClient } from './index'
 
 export class CoreApiClient extends ApiClient {
@@ -12,33 +12,39 @@ export class CoreApiClient extends ApiClient {
     return this.instance.get('/health')
   }
 
-  systemInfo(): Promise<{
-    version: '4.0.0' | string
-    status: 'running'
-    availableServices: []
-    apiKeyConfigured: boolean
-  }> {
-    return this.instance.get('/system/info')
-  }
+  // systemInfo() {
+  //   return this.instance.get<{
+  //     version: '4.0.0' | string
+  //     status: 'running'
+  //     availableServices: []
+  //     apiKeyConfigured: boolean
+  //   }>('/system/info').then(res => res.data)
+  // }
 
   systemConfig(): Promise<Config> {
-    return this.instance.get('/system/config')
+    return this.instance.get<{
+      status: 'success'
+      config: Config
+    }>('/system/config').then(res => res.data.config)
   }
 
-  setSystemConfig(config: Config): Promise<void> {
-    return this.instance.post('/system/config', config)
+  setSystemConfig(config: Config) {
+    return this.instance.post<{
+      status: 'success'
+      message: string
+    }>('/system/config', config).then(res => res.data.message)
   }
 
   chat(message: string, options?: {
     sessionId?: string
     useSelfGame?: boolean
     skipIntentAnalysis?: boolean
-  }): Promise<{
-    status: 'success'
-    response: string
-    sessionId?: string
-  }> {
-    return this.instance.post('/chat', { message, ...options })
+  }) {
+    return this.instance.post<{
+      status: 'success'
+      response: string
+      sessionId?: string
+    }>('/chat', { message, ...options }).then(res => res.data)
   }
 
   async chatStream(message: string, options?: {
@@ -65,15 +71,15 @@ export class CoreApiClient extends ApiClient {
     if (!reader) {
       throw new Error('Failed to get reader')
     }
-    const messages = readerToMessages(reader)
-    const { value } = await messages.next()
-    if (value?.startsWith('session_id: ')) {
-      return {
-        sessionId: value.slice(12),
-        response: aiter(messages).map(decodeBase64),
-      }
+    const messageStream = readerToMessageStream(reader)
+    const { value } = await messageStream.next()
+    if (!value?.startsWith('session_id: ')) {
+      throw new Error('Failed to get sessionId')
     }
-    throw new Error('Failed to get sessionId')
+    return {
+      sessionId: value.slice(12),
+      response: aiter(messageStream).map(decodeBase64),
+    }
   }
 }
 

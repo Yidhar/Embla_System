@@ -220,11 +220,18 @@ export const SYSTEM_PROMPT = useStorage('naga-system-prompt', `\
 
 export type Config = typeof DEFAULT_CONFIG
 
-export const CONFIG = ref(JSON.parse(JSON.stringify(DEFAULT_CONFIG)))
+export const CONFIG = ref<Config>(JSON.parse(JSON.stringify(DEFAULT_CONFIG)))
 
 API.systemConfig().then((config) => {
   CONFIG.value = config
   watch(CONFIG, (newConfig) => {
     API.setSystemConfig(newConfig)
+  })
+}).catch((error) => {
+  console.warn('Failed to load system config:', error, 'Using localStorage instead.')
+  const config = useStorage('naga-config', DEFAULT_CONFIG)
+  CONFIG.value = config.value
+  watch(CONFIG, (newConfig) => {
+    config.value = newConfig
   })
 })

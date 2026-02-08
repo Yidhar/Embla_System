@@ -13,9 +13,9 @@ const router = createRouter({
     { path: '/', component: () => import('@/views/PanelView.vue') },
     { path: '/chat', component: () => import('@/views/MessageView.vue') },
     { path: '/model', component: () => import('@/views/ModelView.vue') },
-    // { path: '/memory', component: () => import('@/views/MemoryView.vue') },
-    // { path: '/mind', component: () => import('@/views/MindView.vue') },
-    // { path: '/tool', component: () => import('@/views/ToolView.vue') },
+    { path: '/memory', component: () => import('@/views/MemoryView.vue') },
+    { path: '/mind', component: () => import('@/views/MindView.vue') },
+    { path: '/skill', component: () => import('@/views/SkillView.vue') },
     { path: '/config', component: () => import('@/views/ConfigView.vue') },
   ],
 })

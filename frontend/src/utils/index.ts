@@ -45,7 +45,7 @@ export async function* readerToEventStream(reader: ReadableStreamDefaultReader<U
   }
 }
 
-export async function* eventStreamToMessages(events: AsyncGenerator<string>): AsyncGenerator<string, void, void> {
+export async function* eventStreamToMessageStream(events: AsyncGenerator<string>): AsyncGenerator<string, void, void> {
   for await (const event of events) {
     if (event.startsWith('data: ')) {
       const data = event.slice(6)
@@ -57,6 +57,6 @@ export async function* eventStreamToMessages(events: AsyncGenerator<string>): As
   }
 }
 
-export function readerToMessages(reader: ReadableStreamDefaultReader<Uint8Array>) {
-  return eventStreamToMessages(readerToEventStream(reader))
+export function readerToMessageStream(reader: ReadableStreamDefaultReader<Uint8Array>) {
+  return eventStreamToMessageStream(readerToEventStream(reader))
 }

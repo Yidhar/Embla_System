@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useWindowSize } from '@vueuse/core'
+import { computed } from 'vue'
 import { useLink } from 'vue-router'
 import brain from '@/assets/icons/brain.png'
 import chip from '@/assets/icons/chip.png'
@@ -9,11 +11,19 @@ import ArkButton from '@/components/ArkButton.vue'
 function navigateTo(url: string) {
   window.location.href = url
 }
+
+const { height } = useWindowSize()
+const scale = computed(() => height.value / 720)
 </script>
 
 <template>
   <div class="flex flex-col items-start justify-center px-1/16">
-    <div class="grid grid-rows-3 gap-3 *:gap-3 panel">
+    <div
+      class="grid grid-rows-3 gap-3 *:gap-3" :style="{
+        transformOrigin: 'left',
+        transform: `perspective(1000px) rotateY(8deg) scale(${scale})`,
+      }"
+    >
       <div class="relative size-full">
         <div class="absolute -left-12 right-1/2 top-2 bottom-2">
           <ArkButton class="size-full bg-#f00! z-1" @click="navigateTo('https://www.pylindex.top/naga/')">
@@ -33,7 +43,7 @@ function navigateTo(url: string) {
       </div>
       <div class="grid grid-cols-2 -translate-x-1/5">
         <ArkButton :icon="brain" title="记忆<br>云海" disabled @click="useLink({ to: '/mind' }).navigate" />
-        <ArkButton :icon="toolkit" title="功能" disabled @click="useLink({ to: '/tool' }).navigate" />
+        <ArkButton :icon="toolkit" title="技能<br>工坊" disabled @click="useLink({ to: '/skill' }).navigate" />
       </div>
       <div class="grid grid-cols-2">
         <div class="flex flex-col">
@@ -54,10 +64,3 @@ function navigateTo(url: string) {
     </div>
   </div>
 </template>
-
-<style scoped>
-.panel {
-  transform-origin: left;
-  transform: perspective(1000px) rotateY(8deg) scale(1.4);
-}
-</style>

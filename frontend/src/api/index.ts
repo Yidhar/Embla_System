@@ -52,10 +52,7 @@ export class ApiClient {
       return config
     })
 
-    this.instance.interceptors.response.use(
-      response => response.data,
-      this.handleResponseError.bind(this),
-    )
+    this.instance.interceptors.response.use(null, this.handleResponseError.bind(this))
   }
 
   private async handleResponseError(error: AxiosError & { config: { _retry?: boolean } }): Promise<any> {
