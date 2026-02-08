@@ -16,7 +16,7 @@ defineProps<{
     <div class="flex text-3xl font-bold font-serif lh-none">
       <slot>
         <div class="px-2 py-4 pr-5em flex flex-col gap-2 justify-center">
-          <div v-html="title" />
+          <div class="whitespace-nowrap" v-html="title" />
           <div v-if="subtitle" class="text-base c-gray-800 op-40 font-sans lh-none">
             {{ subtitle }}
           </div>

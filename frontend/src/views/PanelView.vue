@@ -27,9 +27,9 @@ const scale = computed(() => height.value / 720)
       <div class="relative size-full">
         <div class="absolute -left-12 right-1/2 top-2 bottom-2">
           <ArkButton class="size-full bg-#f00! z-1" @click="navigateTo('https://www.pylindex.top/naga/')">
-            <div class="size-full text-center pt-1">
+            <div class="size-full">
               广告位招租
-              <div class="text-sm">
+              <div class="text-sm lh-none">
                 仅需<b>一千<span class="text-1">亿</span></b>龙门币！
               </div>
             </div>
