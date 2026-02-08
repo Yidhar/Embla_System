@@ -13,6 +13,7 @@ API 端点:
 """
 
 import logging
+import json
 import uuid
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 class TaskStatus(Enum):
     """任务状态枚举"""
+
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -34,8 +36,27 @@ class TaskStatus(Enum):
 
 
 @dataclass
+class OpenClawTaskEvent:
+    """OpenClaw 任务事件（用于追踪中间过程）"""
+
+    ts: str = field(default_factory=lambda: datetime.now().isoformat())
+    kind: str = "info"  # info, request, response, error, state
+    message: str = ""
+    data: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "ts": self.ts,
+            "kind": self.kind,
+            "message": self.message,
+            "data": self.data,
+        }
+
+
+@dataclass
 class OpenClawTask:
     """OpenClaw 任务数据结构"""
+
     task_id: str
     message: str
     status: TaskStatus = TaskStatus.PENDING
@@ -46,6 +67,10 @@ class OpenClawTask:
     error: Optional[str] = None
     session_key: Optional[str] = None
     run_id: Optional[str] = None  # OpenClaw 返回的 runId
+    events: List[OpenClawTaskEvent] = field(default_factory=list)
+
+    def add_event(self, kind: str, message: str, data: Optional[Dict[str, Any]] = None) -> None:
+        self.events.append(OpenClawTaskEvent(kind=kind, message=message, data=data))
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -58,13 +83,15 @@ class OpenClawTask:
             "result": self.result,
             "error": self.error,
             "session_key": self.session_key,
-            "run_id": self.run_id
+            "run_id": self.run_id,
+            "events": [e.to_dict() for e in self.events],
         }
 
 
 @dataclass
 class OpenClawSessionInfo:
     """OpenClaw 调度终端会话信息"""
+
     session_key: str
     created_at: str
     last_activity: str
@@ -79,13 +106,14 @@ class OpenClawSessionInfo:
             "last_activity": self.last_activity,
             "message_count": self.message_count,
             "last_run_id": self.last_run_id,
-            "status": self.status
+            "status": self.status,
         }
 
 
 @dataclass
 class OpenClawConfig:
     """OpenClaw 配置"""
+
     # OpenClaw Gateway 默认端口是 18789
     gateway_url: str = "http://127.0.0.1:18789"
     # Gateway 认证 token (对应 gateway.auth.token)
@@ -153,9 +181,7 @@ class OpenClawClient:
     async def _get_client(self) -> httpx.AsyncClient:
         """获取 HTTP 客户端（懒加载）"""
         if self._http_client is None or self._http_client.is_closed:
-            self._http_client = httpx.AsyncClient(
-                timeout=self.config.timeout
-            )
+            self._http_client = httpx.AsyncClient(timeout=self.config.timeout)
         return self._http_client
 
     async def close(self):
@@ -163,6 +189,15 @@ class OpenClawClient:
         if self._http_client and not self._http_client.is_closed:
             await self._http_client.aclose()
             self._http_client = None
+
+    def _emit_task_event(
+        self, task: OpenClawTask, kind: str, message: str, data: Optional[Dict[str, Any]] = None
+    ) -> None:
+        try:
+            task.add_event(kind=kind, message=message, data=data)
+        except Exception:
+            # 事件记录失败不影响主流程
+            return
 
     # ============ 核心 API ============
 
@@ -178,7 +213,8 @@ class OpenClawClient:
         deliver: bool = False,
         timeout_seconds: int = 120,
         max_retries: int = 5,
-        retry_interval: float = 2.0
+        retry_interval: float = 2.0,
+        task_id: Optional[str] = None,
     ) -> OpenClawTask:
         """
         发送消息给 OpenClaw Agent
@@ -212,17 +248,22 @@ class OpenClawClient:
         # 使用传入的 session_key 或默认的
         actual_session_key = session_key or self._default_session_key
 
-        task_id = str(uuid.uuid4())
-        task = OpenClawTask(
-            task_id=task_id,
-            message=message,
-            session_key=actual_session_key
+        use_task_id = task_id or str(uuid.uuid4())
+        task = OpenClawTask(task_id=use_task_id, message=message, session_key=actual_session_key)
+
+        self._emit_task_event(
+            task,
+            kind="state",
+            message="task_created",
+            data={
+                "gateway_url": self.config.gateway_url,
+                "session_key": actual_session_key,
+                "timeout_seconds": timeout_seconds,
+            },
         )
 
         # 构建请求体
-        payload: Dict[str, Any] = {
-            "message": message
-        }
+        payload: Dict[str, Any] = {"message": message}
 
         # 可选参数
         payload["sessionKey"] = actual_session_key
@@ -257,13 +298,39 @@ class OpenClawClient:
             try:
                 client = await self._get_client()
 
-                logger.info(f"[OpenClaw] 发送消息到 /hooks/agent (尝试 {attempt}/{max_retries}): {message[:50]}... (timeout={timeout_seconds}s)")
+                logger.info(
+                    f"[OpenClaw] 发送消息到 /hooks/agent (尝试 {attempt}/{max_retries}): {message[:50]}... (timeout={timeout_seconds}s)"
+                )
+
+                self._emit_task_event(
+                    task,
+                    kind="request",
+                    message="hooks_agent_request",
+                    data={
+                        "attempt": attempt,
+                        "max_retries": max_retries,
+                        "url": f"{self.config.gateway_url}/hooks/agent",
+                        "session_key": actual_session_key,
+                        "deliver": deliver,
+                        "wake_mode": wake_mode,
+                        "timeout_seconds": timeout_seconds,
+                    },
+                )
 
                 response = await client.post(
                     f"{self.config.gateway_url}/hooks/agent",
                     json=payload,
                     headers=self.config.get_hooks_headers(),
-                    timeout=http_timeout
+                    timeout=http_timeout,
+                )
+
+                self._emit_task_event(
+                    task,
+                    kind="response",
+                    message="hooks_agent_response",
+                    data={
+                        "status_code": response.status_code,
+                    },
                 )
 
                 # /hooks/agent 返回 200/202
@@ -274,6 +341,16 @@ class OpenClawClient:
                         task.result = result
                         task.run_id = result.get("runId")
 
+                        self._emit_task_event(
+                            task,
+                            kind="state",
+                            message="hooks_agent_accepted",
+                            data={
+                                "run_id": task.run_id,
+                                "status": result.get("status", "accepted"),
+                            },
+                        )
+
                         # 检查返回状态
                         status = result.get("status", "accepted")
                         if status == "ok":
@@ -281,18 +358,49 @@ class OpenClawClient:
                             task.status = TaskStatus.COMPLETED
                             task.completed_at = datetime.now().isoformat()
                             reply = result.get("reply", "")
-                            logger.info(f"[OpenClaw] 任务完成: {task_id}, reply: {reply[:100] if reply else 'empty'}...")
+                            logger.info(
+                                f"[OpenClaw] 任务完成: {task.task_id}, reply: {reply[:100] if reply else 'empty'}..."
+                            )
+
+                            self._emit_task_event(
+                                task,
+                                kind="state",
+                                message="task_completed",
+                                data={
+                                    "run_id": task.run_id,
+                                    "reply_preview": (reply[:200] if reply else ""),
+                                },
+                            )
                         elif status == "timeout":
                             # 超时但任务仍在运行
                             task.status = TaskStatus.RUNNING
-                            logger.warning(f"[OpenClaw] 任务超时但仍在运行: {task_id}")
+                            logger.warning(f"[OpenClaw] 任务超时但仍在运行: {task.task_id}")
+
+                            self._emit_task_event(
+                                task,
+                                kind="state",
+                                message="task_timeout_running",
+                                data={
+                                    "run_id": task.run_id,
+                                },
+                            )
                         else:
                             # accepted 表示异步接受，任务还在运行
                             task.status = TaskStatus.RUNNING
-                            logger.info(f"[OpenClaw] 任务已接受: {task_id}, runId: {task.run_id}")
+                            logger.info(f"[OpenClaw] 任务已接受: {task.task_id}, runId: {task.run_id}")
                     except Exception:
                         task.result = {"raw": response.text}
                         task.status = TaskStatus.RUNNING
+
+                        self._emit_task_event(
+                            task,
+                            kind="error",
+                            message="hooks_agent_parse_failed",
+                            data={
+                                "status_code": response.status_code,
+                                "raw_preview": response.text[:500] if response.text else "",
+                            },
+                        )
 
                     # 更新会话信息
                     self._update_session_info(actual_session_key, task.run_id, "active")
@@ -301,6 +409,17 @@ class OpenClawClient:
                 else:
                     last_error = f"HTTP {response.status_code}: {response.text}"
                     logger.warning(f"[OpenClaw] 消息发送失败 (尝试 {attempt}/{max_retries}): {last_error}")
+
+                    self._emit_task_event(
+                        task,
+                        kind="error",
+                        message="hooks_agent_http_error",
+                        data={
+                            "attempt": attempt,
+                            "status_code": response.status_code,
+                            "error_preview": response.text[:500] if response.text else "",
+                        },
+                    )
 
                     if attempt < max_retries:
                         logger.info(f"[OpenClaw] {retry_interval}秒后重试...")
@@ -312,9 +431,28 @@ class OpenClawClient:
                         logger.error(f"[OpenClaw] 消息发送失败，已达最大重试次数: {last_error}")
                         self._update_session_info(actual_session_key, None, "error")
 
+                        self._emit_task_event(
+                            task,
+                            kind="state",
+                            message="task_failed",
+                            data={
+                                "error": last_error,
+                            },
+                        )
+
             except Exception as e:
                 last_error = str(e)
                 logger.warning(f"[OpenClaw] 消息发送异常 (尝试 {attempt}/{max_retries}): {e}")
+
+                self._emit_task_event(
+                    task,
+                    kind="error",
+                    message="hooks_agent_exception",
+                    data={
+                        "attempt": attempt,
+                        "error": last_error,
+                    },
+                )
 
                 if attempt < max_retries:
                     logger.info(f"[OpenClaw] {retry_interval}秒后重试...")
@@ -327,7 +465,16 @@ class OpenClawClient:
                     if self._session_info:
                         self._session_info.status = "error"
 
-        self._tasks[task_id] = task
+                    self._emit_task_event(
+                        task,
+                        kind="state",
+                        message="task_failed",
+                        data={
+                            "error": last_error,
+                        },
+                    )
+
+        self._tasks[task.task_id] = task
         return task
 
     def _update_session_info(self, session_key: str, run_id: Optional[str], status: str):
@@ -342,7 +489,7 @@ class OpenClawClient:
                 last_activity=now,
                 message_count=1,
                 last_run_id=run_id,
-                status=status
+                status=status,
             )
         else:
             # 更新现有会话信息
@@ -352,11 +499,7 @@ class OpenClawClient:
                 self._session_info.last_run_id = run_id
             self._session_info.status = status
 
-    async def wake(
-        self,
-        text: str,
-        mode: str = "now"
-    ) -> Dict[str, Any]:
+    async def wake(self, text: str, mode: str = "now") -> Dict[str, Any]:
         """
         触发系统事件
 
@@ -373,17 +516,12 @@ class OpenClawClient:
         try:
             client = await self._get_client()
 
-            payload = {
-                "text": text,
-                "mode": mode
-            }
+            payload = {"text": text, "mode": mode}
 
             logger.info(f"[OpenClaw] 触发系统事件: {text[:50]}...")
 
             response = await client.post(
-                f"{self.config.gateway_url}/hooks/wake",
-                json=payload,
-                headers=self.config.get_hooks_headers()
+                f"{self.config.gateway_url}/hooks/wake", json=payload, headers=self.config.get_hooks_headers()
             )
 
             if response.status_code == 200:
@@ -406,7 +544,7 @@ class OpenClawClient:
         args: Optional[Dict[str, Any]] = None,
         action: Optional[str] = None,
         session_key: Optional[str] = None,
-        dry_run: bool = False
+        dry_run: bool = False,
     ) -> Dict[str, Any]:
         """
         直接调用工具
@@ -427,9 +565,7 @@ class OpenClawClient:
         try:
             client = await self._get_client()
 
-            payload: Dict[str, Any] = {
-                "tool": tool
-            }
+            payload: Dict[str, Any] = {"tool": tool}
 
             if args:
                 payload["args"] = args
@@ -443,9 +579,7 @@ class OpenClawClient:
             logger.info(f"[OpenClaw] 调用工具: {tool}")
 
             response = await client.post(
-                f"{self.config.gateway_url}/tools/invoke",
-                json=payload,
-                headers=self.config.get_gateway_headers()
+                f"{self.config.gateway_url}/tools/invoke", json=payload, headers=self.config.get_gateway_headers()
             )
 
             if response.status_code == 200:
@@ -488,7 +622,8 @@ class OpenClawClient:
     def clear_completed_tasks(self):
         """清理已完成的任务"""
         self._tasks = {
-            k: v for k, v in self._tasks.items()
+            k: v
+            for k, v in self._tasks.items()
             if v.status not in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]
         }
 
@@ -497,7 +632,8 @@ class OpenClawClient:
     async def get_sessions_history(
         self,
         session_key: Optional[str] = None,
-        limit: int = 20
+        limit: int = 20,
+        include_tools: bool = False,
     ) -> Dict[str, Any]:
         """
         获取会话历史消息
@@ -511,35 +647,28 @@ class OpenClawClient:
         Returns:
             包含历史消息的结果
         """
-        # 如果没有指定 session_key，返回空结果（sessions_history 需要有效的 sessionKey）
-        if not session_key:
-            return {"success": True, "messages": [], "note": "no_session_key_specified"}
+        # 如果没有指定 session_key，尝试回退到默认会话
+        actual_session_key = session_key or self._default_session_key
+        if not actual_session_key:
+            return {"success": True, "messages": [], "note": "no_session_key_available"}
 
         try:
             result = await self.invoke_tool(
                 tool="sessions_history",
                 args={
-                    "sessionKey": session_key,
-                    "limit": limit
-                }
+                    "sessionKey": actual_session_key,
+                    "limit": limit,
+                    "includeTools": include_tools,
+                },
             )
 
             if result.get("success"):
                 # 解析返回的消息
                 raw_result = result.get("result", {})
                 messages = self._parse_history_messages(raw_result)
-                return {
-                    "success": True,
-                    "session_key": actual_session_key,
-                    "messages": messages,
-                    "raw": raw_result
-                }
+                return {"success": True, "session_key": actual_session_key, "messages": messages, "raw": raw_result}
             else:
-                return {
-                    "success": False,
-                    "error": result.get("error", "unknown"),
-                    "messages": []
-                }
+                return {"success": False, "error": result.get("error", "unknown"), "messages": []}
 
         except Exception as e:
             logger.error(f"[OpenClaw] 获取会话历史失败: {e}")
@@ -571,11 +700,13 @@ class OpenClawClient:
                 if msg_list and isinstance(msg_list, list):
                     for msg in msg_list:
                         if isinstance(msg, dict):
-                            messages.append({
-                                "role": msg.get("role", "unknown"),
-                                "content": msg.get("content", ""),
-                                "type": "message"
-                            })
+                            messages.append(
+                                {
+                                    "role": msg.get("role", "unknown"),
+                                    "content": msg.get("content", ""),
+                                    "type": "message",
+                                }
+                            )
                     return messages
 
                 # 备选：从 content[].text 解析 JSON
@@ -586,25 +717,22 @@ class OpenClawClient:
                             text = item.get("text", "")
                             # 尝试解析 JSON
                             try:
-                                import json
                                 parsed = json.loads(text)
                                 if isinstance(parsed, dict):
                                     msg_list = parsed.get("messages", [])
                                     for msg in msg_list:
                                         if isinstance(msg, dict):
-                                            messages.append({
-                                                "role": msg.get("role", "unknown"),
-                                                "content": msg.get("content", ""),
-                                                "type": "message"
-                                            })
+                                            messages.append(
+                                                {
+                                                    "role": msg.get("role", "unknown"),
+                                                    "content": msg.get("content", ""),
+                                                    "type": "message",
+                                                }
+                                            )
                             except json.JSONDecodeError:
                                 # 不是 JSON，作为原始文本返回
                                 if text.strip():
-                                    messages.append({
-                                        "role": "system",
-                                        "content": text,
-                                        "type": "raw"
-                                    })
+                                    messages.append({"role": "system", "content": text, "type": "raw"})
 
         except Exception as e:
             logger.warning(f"[OpenClaw] 解析历史消息失败: {e}")
@@ -637,17 +765,9 @@ class OpenClawClient:
                 if content and isinstance(content, list) and len(content) > 0:
                     status_text = content[0].get("text", "")
 
-                return {
-                    "success": True,
-                    "status_text": status_text,
-                    "raw": raw_result
-                }
+                return {"success": True, "status_text": status_text, "raw": raw_result}
             else:
-                return {
-                    "success": False,
-                    "error": result.get("error", "unknown"),
-                    "status_text": ""
-                }
+                return {"success": False, "error": result.get("error", "unknown"), "status_text": ""}
 
         except Exception as e:
             logger.error(f"[OpenClaw] 获取会话状态失败: {e}")
@@ -671,11 +791,7 @@ class OpenClawClient:
                     "sessions": result.get("result", {}),
                 }
             else:
-                return {
-                    "success": False,
-                    "error": result.get("error", "unknown"),
-                    "sessions": []
-                }
+                return {"success": False, "error": result.get("error", "unknown"), "sessions": []}
 
         except Exception as e:
             logger.error(f"[OpenClaw] 获取会话列表失败: {e}")
@@ -716,29 +832,20 @@ class OpenClawClient:
         try:
             # 尝试访问根路径或健康检查端点
             response = await client.get(
-                f"{self.config.gateway_url}/",
-                timeout=10,
-                headers=self.config.get_gateway_headers()
+                f"{self.config.gateway_url}/", timeout=10, headers=self.config.get_gateway_headers()
             )
 
             if response.status_code == 200:
-                return {
-                    "status": "healthy",
-                    "gateway_url": self.config.gateway_url
-                }
+                return {"status": "healthy", "gateway_url": self.config.gateway_url}
             else:
                 return {
                     "status": "unhealthy",
                     "gateway_url": self.config.gateway_url,
-                    "error": f"HTTP {response.status_code}"
+                    "error": f"HTTP {response.status_code}",
                 }
 
         except Exception as e:
-            return {
-                "status": "unreachable",
-                "gateway_url": self.config.gateway_url,
-                "error": str(e)
-            }
+            return {"status": "unreachable", "gateway_url": self.config.gateway_url, "error": str(e)}
 
 
 # 全局客户端实例（懒加载）

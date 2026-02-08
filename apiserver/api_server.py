@@ -112,6 +112,39 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 
+async def _call_agentserver(
+    method: str,
+    path: str,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
+    timeout_seconds: float = 15.0,
+) -> Any:
+    """调用 agentserver 内部接口（用于透传 OpenClaw 状态查询等能力）"""
+    import httpx
+
+    port = get_server_port("agent_server")
+    url = f"http://127.0.0.1:{port}{path}"
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            resp = await client.request(method, url, params=params, json=json_body)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"agentserver 不可达: {e}")
+
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json()
+        except Exception:
+            pass
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+
+    try:
+        return resp.json()
+    except Exception:
+        return resp.text
+
+
 # 请求模型
 class ChatRequest(BaseModel):
     message: str
@@ -404,6 +437,39 @@ async def root():
 async def health_check():
     """健康检查"""
     return {"status": "healthy", "agent_ready": True, "timestamp": str(asyncio.get_event_loop().time())}
+
+
+# ============ OpenClaw 任务状态查询（对外暴露在 API Server） ============
+
+
+@app.get("/openclaw/tasks")
+async def api_openclaw_list_tasks():
+    """列出本地缓存的 OpenClaw 任务（来自 agentserver）"""
+    return await _call_agentserver("GET", "/openclaw/tasks")
+
+
+@app.get("/openclaw/tasks/{task_id}")
+async def api_openclaw_get_task(
+    task_id: str,
+    include_history: bool = False,
+    history_limit: int = 50,
+    include_tools: bool = False,
+):
+    """获取 OpenClaw 任务状态（支持查看中间过程）
+
+    - `task_id`: 建议直接使用调度器的 task_id/request_id（agentserver /openclaw/send 支持透传）
+    - `include_history=true`: 附带 OpenClaw sessions_history（可用于查看更细粒度过程）
+    - `include_tools=true`: history 中尽量包含 tool 相关内容（取决于 OpenClaw 返回）
+    """
+    return await _call_agentserver(
+        "GET",
+        f"/openclaw/tasks/{task_id}/detail",
+        params={
+            "include_history": str(include_history).lower(),
+            "history_limit": history_limit,
+            "include_tools": str(include_tools).lower(),
+        },
+    )
 
 
 @app.get("/system/info", response_model=SystemInfoResponse)
