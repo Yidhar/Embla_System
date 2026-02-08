@@ -27,6 +27,8 @@ dependencies = [
     "pygame>=2.6.1",
     #"py-key-value-aio[disk,memory,redis]>=0.3.0", # no not need you
     "pyopengl>=3.1.10",
+    # LiteLLM 统一处理多模型 COT/reasoning_content
+    "litellm>=1.63.0",
 ]
 
 # 可选依赖组

@@ -122,6 +122,7 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
+    reasoning_content: Optional[str] = None  # COT 思考过程内容
     session_id: Optional[str] = None
     status: str = "success"
 
@@ -255,20 +256,21 @@ async def chat(request: ChatRequest):
             session_id=session_id, system_prompt=system_prompt, current_message=request.message
         )
 
-        # 使用整合后的LLM服务
+        # 使用整合后的LLM服务（支持 reasoning_content）
         llm_service = get_llm_service()
-        response_text = await llm_service.chat_with_context(messages, config.api.temperature)
+        llm_response = await llm_service.chat_with_context_and_reasoning(messages, config.api.temperature)
 
         # 处理完成
         # 统一保存对话历史与日志
-        _save_conversation_and_logs(session_id, request.message, response_text)
+        _save_conversation_and_logs(session_id, request.message, llm_response.content)
 
         # 在用户消息保存到历史后触发后台意图分析（除非明确跳过）
         if not request.skip_intent_analysis:
             _trigger_background_analysis(session_id=session_id)
 
         return ChatResponse(
-            response=extract_message(response_text) if response_text else response_text,
+            response=extract_message(llm_response.content) if llm_response.content else llm_response.content,
+            reasoning_content=llm_response.reasoning_content,
             session_id=session_id,
             status="success",
         )
@@ -351,33 +353,36 @@ async def chat_stream(request: ChatRequest):
             except Exception as e:
                 print(f"流式文本切割器初始化失败: {e}")
 
-            # 使用整合后的流式处理
+            # 使用整合后的流式处理（支持 reasoning_content）
             llm_service = get_llm_service()
+            complete_reasoning = ""  # 累积推理内容
             async for chunk in llm_service.stream_chat_with_context(messages, config.api.temperature):
-                # V19: 如果需要返回音频，累积文本
-                if request.return_audio and chunk.startswith("data: "):
+                # 新格式: chunk 是 "data: <base64_json>\n\n"，JSON 结构为 {"type": "content"|"reasoning", "text": "..."}
+                # V19: 如果需要返回音频，累积文本（只累积 content，不累积 reasoning）
+                if chunk.startswith("data: "):
                     try:
                         import base64
+                        import json as json_module
 
                         data_str = chunk[6:].strip()
-                        if data_str != "[DONE]":
+                        if data_str and data_str != "[DONE]":
                             decoded = base64.b64decode(data_str).decode("utf-8")
-                            complete_text += decoded
-                    except Exception:
-                        pass
+                            chunk_data = json_module.loads(decoded)
+                            chunk_type = chunk_data.get("type", "content")
+                            chunk_text = chunk_data.get("text", "")
 
-                # 立即发送到流式文本切割器进行TTS处理（不阻塞文本流）
-                if tool_extractor and chunk.startswith("data: "):
-                    try:
-                        import base64
-
-                        data_str = chunk[6:].strip()
-                        if data_str != "[DONE]":
-                            decoded = base64.b64decode(data_str).decode("utf-8")
-                            # 异步调用TTS处理，不阻塞文本流
-                            asyncio.create_task(tool_extractor.process_text_chunk(decoded))
+                            if chunk_type == "content":
+                                # 累积正式回答内容
+                                if request.return_audio:
+                                    complete_text += chunk_text
+                                # TTS 只处理 content，不处理 reasoning
+                                if tool_extractor:
+                                    asyncio.create_task(tool_extractor.process_text_chunk(chunk_text))
+                            elif chunk_type == "reasoning":
+                                # 累积推理内容（可选：用于日志或 UI 显示）
+                                complete_reasoning += chunk_text
                     except Exception as e:
-                        logger.error(f"[API Server] 流式文本切割器处理错误: {e}")
+                        logger.error(f"[API Server] 流式数据解析错误: {e}")
 
                 yield chunk
 
