@@ -36,7 +36,7 @@ const accordionValue = useStorage('accordion-config', [])
 <template>
   <BoxContainer class="text-sm">
     <Accordion :value="accordionValue" multiple>
-      <ConfigGroup value="display">
+      <ConfigGroup value="ui">
         <template #header>
           <div class="w-full flex justify-between items-center -my-1.5">
             <span>显示设置</span>
@@ -62,7 +62,7 @@ const accordionValue = useStorage('accordion-config', [])
           <ConfigItem name="Live2D 模型位置">
             <div class="flex flex-col items-center justify-evenly">
               <label v-for="direction in ['x', 'y'] as const" :key="direction" class="w-full flex items-center">
-                <div class="capitalize w-0 trunce -translate-x-4">{{ direction }}</div>
+                <div class="capitalize w-0 -translate-x-4">{{ direction }}</div>
                 <Slider
                   v-model="CONFIG.web_live2d.model[direction]"
                   class="w-full" :min="-2" :max="2" :step="1e-3"
@@ -82,7 +82,7 @@ const accordionValue = useStorage('accordion-config', [])
           </ConfigItem>
         </div>
       </ConfigGroup>
-      <ConfigGroup value="account" header="账号设置">
+      <ConfigGroup value="portal" header="账号设置">
         <div class="grid gap-4">
           <ConfigItem name="用户名">
             <InputText v-model="CONFIG.naga_portal.username" />
@@ -96,7 +96,7 @@ const accordionValue = useStorage('accordion-config', [])
         <template #header>
           <div class="flex w-full justify-between">
             <span>系统设置</span>
-            <span>{{ CONFIG.system.version }}</span>
+            <span>v{{ CONFIG.system.version }}</span>
           </div>
         </template>
         <div class="grid gap-4">
