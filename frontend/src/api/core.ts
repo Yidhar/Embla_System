@@ -117,6 +117,10 @@ export class CoreApiClient extends ApiClient {
     return this.instance.get('/tool_status').then(res => res.data)
   }
 
+  getClawdbotReplies(): Promise<{ replies: string[] }> {
+    return this.instance.get('/clawdbot/replies').then(res => res.data)
+  }
+
   uploadDocument(file: File, description?: string) {
     const formData = new FormData()
     formData.append('file', file)

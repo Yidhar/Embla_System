@@ -624,11 +624,22 @@ async def load_log_context(days: int = 3, max_messages: int = None):
 # Web前端工具状态轮询存储
 _tool_status_store: Dict[str, Dict] = {"current": {"message": "", "visible": False}}
 
+# Web前端 ClawdBot 回复存储（轮询获取）
+_clawdbot_replies: list = []
+
 
 @app.get("/tool_status")
 async def get_tool_status():
     """获取当前工具调用状态（供Web前端轮询）"""
     return _tool_status_store.get("current", {"message": "", "visible": False})
+
+
+@app.get("/clawdbot/replies")
+async def get_clawdbot_replies():
+    """获取并清空 ClawdBot 待显示回复（供Web前端轮询）"""
+    replies = list(_clawdbot_replies)
+    _clawdbot_replies.clear()
+    return {"replies": replies}
 
 
 @app.post("/tool_notification")
@@ -861,15 +872,15 @@ async def ui_notification(payload: Dict[str, Any]):
 
         # 处理显示 ClawdBot 回复的动作
         if action == "show_clawdbot_response" and ai_response:
+            _clawdbot_replies.append(ai_response)
             try:
                 from ui.controller.tool_chat import chat
 
                 chat.clawdbot_response_received.emit(ai_response)
                 logger.info(f"[UI通知] 已通过信号机制显示 ClawdBot 回复，长度: {len(ai_response)}")
-                return {"success": True, "message": "ClawdBot 回复已显示"}
             except Exception as e:
-                logger.error(f"[UI通知] 显示 ClawdBot 回复失败: {e}")
-                raise HTTPException(500, f"显示 ClawdBot 回复失败: {str(e)}")
+                logger.warning(f"[UI通知] Qt信号发送失败（Web模式下正常）: {e}")
+            return {"success": True, "message": "ClawdBot 回复已存储"}
 
         if action == "show_tool_status" and status_text:
             _emit_tool_status_to_ui(status_text, auto_hide_ms)
