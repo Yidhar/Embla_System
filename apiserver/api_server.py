@@ -14,7 +14,7 @@ import uuid
 import time
 import threading
 import subprocess
-from urllib.request import Request, urlopen
+from urllib.request import Request as UrlRequest, urlopen
 from urllib.error import URLError
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, AsyncGenerator, Any, Tuple
@@ -250,7 +250,7 @@ def _get_openclaw_skills_data() -> Tuple[Optional[Dict[str, Any]], Optional[str]
 
 def _download_text(url: str, timeout: int = 20) -> str:
     try:
-        request = Request(url, headers={"User-Agent": "NagaAgent/market-installer"})
+        request = UrlRequest(url, headers={"User-Agent": "NagaAgent/market-installer"})
         with urlopen(request, timeout=timeout) as response:
             return response.read().decode("utf-8")
     except URLError as exc:
@@ -279,12 +279,26 @@ def _copy_template_dir(template_name: str, skill_name: str) -> None:
         shutil.copy2(path, target_path)
 
 
+def _install_agent_browser() -> None:
+    if shutil.which("npm") is None:
+        raise RuntimeError("未找到 npm，无法安装 agent-browser")
+    code, stdout, stderr = _run_command(["npm", "install", "-g", "agent-browser"], timeout=300)
+    if code != 0:
+        raise RuntimeError(stderr or stdout or "npm install -g agent-browser 失败")
+    if shutil.which("agent-browser") is None:
+        raise RuntimeError("agent-browser 未安装成功或未在 PATH 中")
+    code, stdout, stderr = _run_command(["agent-browser", "install"], timeout=300)
+    if code != 0:
+        raise RuntimeError(stderr or stdout or "agent-browser install 失败")
+
+
 def _build_market_item(
     item: Dict[str, Any],
     skills_data: Optional[Dict[str, Any]],
     openclaw_found: bool,
 ) -> Dict[str, Any]:
-    skill_name = item.get("skill_name", item.get("id"))
+    skill_name_value = item.get("skill_name") or item.get("id") or "unknown"
+    skill_name = str(skill_name_value)
     skill_entry = None
     if skills_data and isinstance(skills_data.get("skills"), list):
         for entry in skills_data.get("skills", []):
@@ -413,9 +427,14 @@ async def install_openclaw_market_item(item_id: str, payload: Optional[Dict[str,
 
     install_spec = item.get("install", {})
     install_type = install_spec.get("type")
-    skill_name = item.get("skill_name", item.get("id"))
+    skill_name_value = item.get("skill_name") or item.get("id")
+    if not skill_name_value:
+        raise HTTPException(status_code=500, detail="技能名称缺失")
+    skill_name = str(skill_name_value)
 
     try:
+        if item_id == "agent-browser":
+            _install_agent_browser()
         if install_type == "remote_skill":
             url = install_spec.get("url")
             if not url:
