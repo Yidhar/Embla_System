@@ -1,3 +1,4 @@
+import type { Config } from '@/utils/config'
 import { aiter } from 'iterator-helper'
 import { decodeBase64, readerToMessages } from '@/utils'
 import { ACCESS_TOKEN, ApiClient } from './index'
@@ -18,6 +19,14 @@ export class CoreApiClient extends ApiClient {
     apiKeyConfigured: boolean
   }> {
     return this.instance.get('/system/info')
+  }
+
+  systemConfig(): Promise<Config> {
+    return this.instance.get('/system/config')
+  }
+
+  setSystemConfig(config: Config): Promise<void> {
+    return this.instance.post('/system/config', config)
   }
 
   chat(message: string, options?: {
@@ -58,14 +67,13 @@ export class CoreApiClient extends ApiClient {
     }
     const messages = readerToMessages(reader)
     const { value } = await messages.next()
-    if (!value?.startsWith('session_id: ')) {
-      throw new Error('Failed to get sessionId')
+    if (value?.startsWith('session_id: ')) {
+      return {
+        sessionId: value.slice(12),
+        response: aiter(messages).map(decodeBase64),
+      }
     }
-    const sessionId = value.slice(12)
-    return {
-      sessionId,
-      response: aiter(messages).map(decodeBase64),
-    }
+    throw new Error('Failed to get sessionId')
   }
 }
 

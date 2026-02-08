@@ -1,4 +1,6 @@
 import { useStorage } from '@vueuse/core'
+import { ref, watch } from 'vue'
+import API from '@/api/core'
 
 export interface Model {
   source: string
@@ -26,9 +28,9 @@ export const MODELS = {
   }),
 } as const
 
-export const DEFALUT_MODEL: keyof typeof MODELS = '重音テト'
+export const DEFAULT_MODEL: keyof typeof MODELS = '重音テト'
 
-export const DEFALUT_CONFIG = {
+export const DEFAULT_CONFIG = {
   system: {
     version: '4.0', // 系统版本号
     ai_name: '娜迦日达', // AI助手名称
@@ -193,7 +195,7 @@ export const DEFALUT_CONFIG = {
   },
   web_live2d: {
     ssaa: 2,
-    model: MODELS[DEFALUT_MODEL],
+    model: MODELS[DEFAULT_MODEL],
   },
   system_check: {
     passed: false, // 系统检查是否通过
@@ -216,5 +218,13 @@ export const SYSTEM_PROMPT = useStorage('naga-system-prompt', `\
 【重要】关于系统能力说明：
 - 你有专门的调度器负责处理工具调用，当检测到工具调用需求时，系统会自动执行工具并返回结果。你只需要提示用户稍等即可。`)
 
-localStorage.clear()
-export const CONFIG = useStorage('naga-config', DEFALUT_CONFIG)
+export type Config = typeof DEFAULT_CONFIG
+
+export const CONFIG = ref(JSON.parse(JSON.stringify(DEFAULT_CONFIG)))
+
+API.systemConfig().then((config) => {
+  CONFIG.value = config
+  watch(CONFIG, (newConfig) => {
+    API.setSystemConfig(newConfig)
+  })
+})

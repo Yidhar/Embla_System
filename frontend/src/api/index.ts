@@ -1,8 +1,10 @@
 import type { AxiosError, AxiosInstance } from 'axios'
+import type { MaybeRef } from 'vue'
 import { useStorage } from '@vueuse/core'
 import axios from 'axios'
 import camelcaseKeys from 'camelcase-keys'
 import snakecaseKeys from 'snakecase-keys'
+import { unref, watch } from 'vue'
 
 export const ACCESS_TOKEN = useStorage('naga-access-token', '')
 export const REFRESH_TOKEN = useStorage('naga-refresh-token', '')
@@ -14,10 +16,10 @@ export class ApiClient {
   instance: AxiosInstance
 
   get endpoint() {
-    return `http://127.0.0.1:${this.port}`
+    return `http://localhost:${unref(this.port)}`
   }
 
-  constructor(readonly port: number) {
+  constructor(readonly port: MaybeRef<number>) {
     this.instance = axios.create({
       baseURL: this.endpoint,
       timeout: 30 * 1000,
@@ -37,6 +39,10 @@ export class ApiClient {
       transformResponse(data) {
         return camelcaseKeys(JSON.parse(data), { deep: true })
       },
+    })
+
+    watch(() => this.endpoint, (endpoint) => {
+      this.instance.defaults.baseURL = endpoint
     })
 
     this.instance.interceptors.request.use((config) => {
@@ -120,8 +126,3 @@ export class ApiClient {
     window.location.href = '/login'
   }
 }
-
-// export const agentApi = new AgentApiClient(8001)
-// export const mcpApi = new McpApiClient(8003)
-// export const ttsApi = new TtsApiClient(5048)
-// export const mqttApi = new MqttApiClient(1883)

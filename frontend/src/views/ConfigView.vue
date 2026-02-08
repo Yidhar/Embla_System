@@ -5,11 +5,11 @@ import { ref, useTemplateRef } from 'vue'
 import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
-import { CONFIG, DEFALUT_CONFIG, DEFALUT_MODEL, MODELS, SYSTEM_PROMPT } from '@/utils/config'
+import { CONFIG, DEFAULT_CONFIG, DEFAULT_MODEL, MODELS, SYSTEM_PROMPT } from '@/utils/config'
 
 const selectedModel = ref(Object.entries(MODELS).find(([_, model]) => {
   return model.source === CONFIG.value.web_live2d.model.source
-})?.[0] ?? DEFALUT_MODEL)
+})?.[0] ?? DEFAULT_MODEL)
 
 const modelSelectRef = useTemplateRef<{
   updateModel: (event: null, value: string) => void
@@ -24,10 +24,10 @@ const ssaaInputRef = useTemplateRef<{
 }>('ssaaInputRef')
 
 function recoverUiConfig() {
-  CONFIG.value.system.ai_name = DEFALUT_CONFIG.system.ai_name
-  CONFIG.value.ui.user_name = DEFALUT_CONFIG.ui.user_name
-  modelSelectRef.value?.updateModel(null, DEFALUT_MODEL)
-  ssaaInputRef.value?.updateModel(null, DEFALUT_CONFIG.web_live2d.ssaa)
+  CONFIG.value.system.ai_name = DEFAULT_CONFIG.system.ai_name
+  CONFIG.value.ui.user_name = DEFAULT_CONFIG.ui.user_name
+  modelSelectRef.value?.updateModel(null, DEFAULT_MODEL)
+  ssaaInputRef.value?.updateModel(null, DEFAULT_CONFIG.web_live2d.ssaa)
 }
 
 const accordionValue = useStorage('accordion-config', [])
