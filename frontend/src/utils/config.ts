@@ -222,10 +222,10 @@ export type Config = typeof DEFAULT_CONFIG
 
 export const CONFIG = ref<Config>(JSON.parse(JSON.stringify(DEFAULT_CONFIG)))
 
-API.systemConfig().then((config) => {
-  CONFIG.value = config
-  watch(CONFIG, (newConfig) => {
-    API.setSystemConfig(newConfig)
+API.systemConfig().then((res) => {
+  CONFIG.value = res.config
+  watch(CONFIG, (config) => {
+    API.setSystemConfig(config)
   })
 }).catch((error) => {
   console.warn('Failed to load system config:', error, 'Using localStorage instead.')

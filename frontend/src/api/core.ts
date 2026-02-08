@@ -1,7 +1,30 @@
 import type { Config } from '@/utils/config'
 import { aiter } from 'iterator-helper'
-import { decodeBase64, readerToMessageStream } from '@/utils'
+import { decodeBase64, readerToMessageStream } from '@/utils/encoding'
 import { ACCESS_TOKEN, ApiClient } from './index'
+
+export interface OpenClawStatus {
+  found: boolean
+  version?: string
+  skills_dir: string
+  config_path: string
+  skills_error?: string
+}
+
+export interface MarketItem {
+  id: string
+  title: string
+  description: string
+  skill_name: string
+  enabled: boolean
+  installed: boolean
+  eligible?: boolean
+  disabled?: boolean
+  missing?: boolean
+  skill_path: string
+  openclaw_visible: boolean
+  install_type: string
+}
 
 export class CoreApiClient extends ApiClient {
   health(): Promise<{
@@ -12,39 +35,39 @@ export class CoreApiClient extends ApiClient {
     return this.instance.get('/health')
   }
 
-  // systemInfo() {
-  //   return this.instance.get<{
-  //     version: '4.0.0' | string
-  //     status: 'running'
-  //     availableServices: []
-  //     apiKeyConfigured: boolean
-  //   }>('/system/info').then(res => res.data)
-  // }
-
-  systemConfig(): Promise<Config> {
-    return this.instance.get<{
-      status: 'success'
-      config: Config
-    }>('/system/config').then(res => res.data.config)
+  systemInfo(): Promise<{
+    version: '4.0.0' | string
+    status: 'running'
+    availableServices: []
+    apiKeyConfigured: boolean
+  }> {
+    return this.instance.get('/system/info')
   }
 
-  setSystemConfig(config: Config) {
-    return this.instance.post<{
-      status: 'success'
-      message: string
-    }>('/system/config', config).then(res => res.data.message)
+  systemConfig(): Promise<{
+    status: 'success'
+    config: Config
+  }> {
+    return this.instance('/system/config')
+  }
+
+  setSystemConfig(config: Config): Promise<{
+    status: 'success'
+    message: string
+  }> {
+    return this.instance.post('/system/config', config)
   }
 
   chat(message: string, options?: {
     sessionId?: string
     useSelfGame?: boolean
     skipIntentAnalysis?: boolean
-  }) {
-    return this.instance.post<{
-      status: 'success'
-      response: string
-      sessionId?: string
-    }>('/chat', { message, ...options }).then(res => res.data)
+  }): Promise<{
+    status: 'success'
+    response: string
+    sessionId?: string
+  }> {
+    return this.instance.post('/chat', { message, ...options })
   }
 
   async chatStream(message: string, options?: {
@@ -80,6 +103,23 @@ export class CoreApiClient extends ApiClient {
       sessionId: value.slice(12),
       response: aiter(messageStream).map(decodeBase64),
     }
+  }
+
+  getMarketItems(): Promise<{
+    status: 'success'
+    openclaw: OpenClawStatus
+    items: MarketItem[]
+  }> {
+    return this.instance.get('/market/items')
+  }
+
+  installMarketItem(itemId: string): Promise<{
+    status: 'success'
+    message: string
+    item: MarketItem
+    openclaw: OpenClawStatus
+  }> {
+    return this.instance.post(`/market/items/${itemId}/install`)
   }
 }
 
