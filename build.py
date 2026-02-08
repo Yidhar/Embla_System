@@ -22,11 +22,12 @@ rm(".venv")
 
 print("运行时文件下载完成，开始安装依赖...")
 if IS_WINDOWS:
-    system(".\\py3119\\python.exe -m pip install --upgrade pip --no-warn-script-location.")
-    system(".\\py3119\\python.exe -m pip install -r requirements.txt --no-warn-script-location.")
+    system(".\\py3119\\python.exe -m pip install --upgrade pip --no-warn-script-location. -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple")
+    system(".\\py3119\\python.exe -m pip install --upgrade setuptools wheel -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple")
+    system(".\\py3119\\python.exe -m pip install -r requirements.txt --no-warn-script-location -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple")
 else:
-    system("wine ./py3119/python.exe -m pip install --upgrade pip --no-warn-script-location.")
-    system("wine ./py3119/python.exe -m pip install -r requirements.txt --no-warn-script-location.")
+    system("wine ./py3119/python.exe -m pip install --upgrade pip setuptools wheel --no-warn-script-location. -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple")
+    system("wine ./py3119/python.exe -m pip install -r requirements.txt --no-warn-script-location -i https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple")
 
 print("依赖安装完成，开始打包...")
 with open("使用必看说明.txt", "w", encoding="utf-8") as f:
