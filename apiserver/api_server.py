@@ -382,8 +382,9 @@ async def chat_stream(request: ChatRequest):
                                 # 累积推理内容（可选：用于日志或 UI 显示）
                                 complete_reasoning += chunk_text
 
-                            # 将纯文本重新 base64 编码后 yield
-                            text_b64 = base64.b64encode(chunk_text.encode('utf-8')).decode('ascii')
+                            # 保留 type 字段，将完整 JSON 结构重新 base64 编码后 yield
+                            chunk_json = json_module.dumps({"type": chunk_type, "text": chunk_text})
+                            text_b64 = base64.b64encode(chunk_json.encode('utf-8')).decode('ascii')
                             yield f"data: {text_b64}\n\n"
                             continue
                     except Exception as e:
@@ -620,6 +621,27 @@ async def load_log_context(days: int = 3, max_messages: int = None):
         raise HTTPException(status_code=500, detail=f"加载上下文失败: {str(e)}")
 
 
+# Web前端工具状态轮询存储
+_tool_status_store: Dict[str, Dict] = {"current": {"message": "", "visible": False}}
+
+# Web前端 ClawdBot 回复存储（轮询获取）
+_clawdbot_replies: list = []
+
+
+@app.get("/tool_status")
+async def get_tool_status():
+    """获取当前工具调用状态（供Web前端轮询）"""
+    return _tool_status_store.get("current", {"message": "", "visible": False})
+
+
+@app.get("/clawdbot/replies")
+async def get_clawdbot_replies():
+    """获取并清空 ClawdBot 待显示回复（供Web前端轮询）"""
+    replies = list(_clawdbot_replies)
+    _clawdbot_replies.clear()
+    return {"replies": replies}
+
+
 @app.post("/tool_notification")
 async def tool_notification(payload: Dict[str, Any]):
     """接收工具调用状态通知，只显示工具调用状态，不显示结果"""
@@ -850,15 +872,15 @@ async def ui_notification(payload: Dict[str, Any]):
 
         # 处理显示 ClawdBot 回复的动作
         if action == "show_clawdbot_response" and ai_response:
+            _clawdbot_replies.append(ai_response)
             try:
                 from ui.controller.tool_chat import chat
 
                 chat.clawdbot_response_received.emit(ai_response)
                 logger.info(f"[UI通知] 已通过信号机制显示 ClawdBot 回复，长度: {len(ai_response)}")
-                return {"success": True, "message": "ClawdBot 回复已显示"}
             except Exception as e:
-                logger.error(f"[UI通知] 显示 ClawdBot 回复失败: {e}")
-                raise HTTPException(500, f"显示 ClawdBot 回复失败: {str(e)}")
+                logger.warning(f"[UI通知] Qt信号发送失败（Web模式下正常）: {e}")
+            return {"success": True, "message": "ClawdBot 回复已存储"}
 
         if action == "show_tool_status" and status_text:
             _emit_tool_status_to_ui(status_text, auto_hide_ms)
@@ -947,7 +969,8 @@ async def _notify_ui_refresh(session_id: str, response_text: str):
 
 
 def _emit_tool_status_to_ui(status_text: str, auto_hide_ms: int = 0) -> None:
-    """通过Qt信号向UI发送工具状态提示"""
+    """通过Qt信号向UI发送工具状态提示，同时更新Web可轮询的状态存储"""
+    _tool_status_store["current"] = {"message": status_text, "visible": True}
     try:
         from ui.controller.tool_chat import chat
 
@@ -957,7 +980,8 @@ def _emit_tool_status_to_ui(status_text: str, auto_hide_ms: int = 0) -> None:
 
 
 def _hide_tool_status_in_ui() -> None:
-    """通过Qt信号隐藏工具状态提示"""
+    """通过Qt信号隐藏工具状态提示，同时更新Web可轮询的状态存储"""
+    _tool_status_store["current"] = {"message": "", "visible": False}
     try:
         from ui.controller.tool_chat import chat
 
