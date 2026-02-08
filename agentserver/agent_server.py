@@ -909,6 +909,7 @@ async def openclaw_send_message(payload: Dict[str, Any]):
     - model: 模型名称 (可选)
     - wake_mode: 唤醒模式 now/next-heartbeat (可选)
     - deliver: 是否投递 (可选)
+    - timeout_seconds: 等待结果超时时间，默认120秒 (可选)
     """
     if not Modules.openclaw_client:
         raise HTTPException(503, "OpenClaw 客户端未就绪")
@@ -926,12 +927,14 @@ async def openclaw_send_message(payload: Dict[str, Any]):
             to=payload.get("to"),
             model=payload.get("model"),
             wake_mode=payload.get("wake_mode", "now"),
-            deliver=payload.get("deliver", False)
+            deliver=payload.get("deliver", False),
+            timeout_seconds=payload.get("timeout_seconds", 120)
         )
 
         return {
             "success": task.status.value != "failed",
-            "task": task.to_dict()
+            "task": task.to_dict(),
+            "reply": task.result.get("reply") if task.result else None
         }
     except Exception as e:
         logger.error(f"OpenClaw 发送消息失败: {e}")

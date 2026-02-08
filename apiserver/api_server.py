@@ -381,6 +381,11 @@ async def chat_stream(request: ChatRequest):
                             elif chunk_type == "reasoning":
                                 # 累积推理内容（可选：用于日志或 UI 显示）
                                 complete_reasoning += chunk_text
+
+                            # 将纯文本重新 base64 编码后 yield
+                            text_b64 = base64.b64encode(chunk_text.encode('utf-8')).decode('ascii')
+                            yield f"data: {text_b64}\n\n"
+                            continue
                     except Exception as e:
                         logger.error(f"[API Server] 流式数据解析错误: {e}")
 
