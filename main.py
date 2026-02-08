@@ -696,6 +696,7 @@ if __name__ == "__main__":
     parser.add_argument("--check-env", action="store_true", help="运行系统环境检测")
     parser.add_argument("--quick-check", action="store_true", help="运行快速环境检测")
     parser.add_argument("--force-check", action="store_true", help="强制运行环境检测（忽略缓存）")
+    parser.add_argument("--headless", action="store_true", help="无界面模式，仅启动后端服务（供Web/Electron前端使用）")
 
     args = parser.parse_args()
 
@@ -760,10 +761,22 @@ if __name__ == "__main__":
 
     print("\n🎉 系统环境检测通过，正在启动应用...")
     print("=" * 50)
-    
+
     if not asyncio.get_event_loop().is_running():
         asyncio.set_event_loop(asyncio.new_event_loop())
-    
+
+    # Headless 模式：仅启动后端服务，不启动 PyQt UI
+    if args.headless:
+        print("🖥️  Headless 模式：仅启动后端服务...")
+        _lazy_init_services()
+        print("\n✅ 所有后端服务已启动，等待前端连接...")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n👋 正在关闭后端服务...")
+            sys.exit(0)
+
     # 快速启动UI，后台服务延迟初始化
     app = QApplication(sys.argv)
     icon_path = os.path.join(os.path.dirname(__file__), "ui", "img/window_icon.png")

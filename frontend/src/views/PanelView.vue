@@ -42,8 +42,8 @@ const scale = computed(() => height.value / 720)
         </ArkButton>
       </div>
       <div class="grid grid-cols-2 -translate-x-1/5">
-        <ArkButton :icon="brain" title="记忆<br>云海" disabled @click="useLink({ to: '/mind' }).navigate" />
-        <ArkButton :icon="toolkit" title="技能<br>工坊" disabled @click="useLink({ to: '/skill' }).navigate" />
+        <ArkButton :icon="brain" title="记忆<br>云海" @click="useLink({ to: '/mind' }).navigate" />
+        <ArkButton :icon="toolkit" title="技能<br>工坊" @click="useLink({ to: '/skill' }).navigate" />
       </div>
       <div class="grid grid-cols-2">
         <div class="flex flex-col">
@@ -54,7 +54,7 @@ const scale = computed(() => height.value / 720)
             <ArkButton @click="useLink({ to: '/model' }).navigate">
               <div class="size-full text-lg">人格投影</div>
             </ArkButton>
-            <ArkButton disabled @click="useLink({ to: '/memory' }).navigate">
+            <ArkButton @click="useLink({ to: '/memory' }).navigate">
               <div class="size-full text-lg">记忆链接</div>
             </ArkButton>
           </div>

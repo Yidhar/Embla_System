@@ -1,5 +1,10 @@
 export const decoder = new TextDecoder('utf-8')
 
+export interface StreamChunk {
+  type: 'content' | 'reasoning'
+  text: string
+}
+
 export function decodeBase64(base64: string) {
   const binaryString = atob(base64)
   const bytes = new Uint8Array(binaryString.length)
@@ -9,6 +14,19 @@ export function decodeBase64(base64: string) {
   }
 
   return decoder.decode(bytes)
+}
+
+export function decodeStreamChunk(base64: string): StreamChunk {
+  const decoded = decodeBase64(base64)
+  try {
+    const parsed = JSON.parse(decoded)
+    if (parsed && typeof parsed === 'object' && 'type' in parsed && 'text' in parsed) {
+      return parsed as StreamChunk
+    }
+  } catch {
+    // Fallback for old format (plain text)
+  }
+  return { type: 'content', text: decoded }
 }
 
 export async function* readerToEventStream(reader: ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<string, void, void> {

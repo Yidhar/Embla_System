@@ -382,8 +382,9 @@ async def chat_stream(request: ChatRequest):
                                 # 累积推理内容（可选：用于日志或 UI 显示）
                                 complete_reasoning += chunk_text
 
-                            # 将纯文本重新 base64 编码后 yield
-                            text_b64 = base64.b64encode(chunk_text.encode('utf-8')).decode('ascii')
+                            # 保留 type 字段，将完整 JSON 结构重新 base64 编码后 yield
+                            chunk_json = json_module.dumps({"type": chunk_type, "text": chunk_text})
+                            text_b64 = base64.b64encode(chunk_json.encode('utf-8')).decode('ascii')
                             yield f"data: {text_b64}\n\n"
                             continue
                     except Exception as e:
@@ -618,6 +619,16 @@ async def load_log_context(days: int = 3, max_messages: int = None):
         print(f"加载日志上下文错误: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"加载上下文失败: {str(e)}")
+
+
+# Web前端工具状态轮询存储
+_tool_status_store: Dict[str, Dict] = {"current": {"message": "", "visible": False}}
+
+
+@app.get("/tool_status")
+async def get_tool_status():
+    """获取当前工具调用状态（供Web前端轮询）"""
+    return _tool_status_store.get("current", {"message": "", "visible": False})
 
 
 @app.post("/tool_notification")
@@ -935,7 +946,8 @@ async def _notify_ui_refresh(session_id: str, response_text: str):
 
 
 def _emit_tool_status_to_ui(status_text: str, auto_hide_ms: int = 0) -> None:
-    """通过Qt信号向UI发送工具状态提示"""
+    """通过Qt信号向UI发送工具状态提示，同时更新Web可轮询的状态存储"""
+    _tool_status_store["current"] = {"message": status_text, "visible": True}
     try:
         from ui.controller.tool_chat import chat
 
@@ -945,7 +957,8 @@ def _emit_tool_status_to_ui(status_text: str, auto_hide_ms: int = 0) -> None:
 
 
 def _hide_tool_status_in_ui() -> None:
-    """通过Qt信号隐藏工具状态提示"""
+    """通过Qt信号隐藏工具状态提示，同时更新Web可轮询的状态存储"""
+    _tool_status_store["current"] = {"message": "", "visible": False}
     try:
         from ui.controller.tool_chat import chat
 

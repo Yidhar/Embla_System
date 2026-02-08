@@ -2,14 +2,19 @@
 import { useWindowSize } from '@vueuse/core'
 import { computed } from 'vue'
 import Live2dModel from '@/components/Live2dModel.vue'
+import TitleBar from '@/components/TitleBar.vue'
 import { CONFIG } from '@/utils/config'
 
 const { width, height } = useWindowSize()
 const scale = computed(() => height.value / (10000 - CONFIG.value.web_live2d.model.size))
+
+const isElectron = !!window.electronAPI
+const titleBarPadding = isElectron ? '32px' : '0px'
 </script>
 
 <template>
-  <div class="h-full sunflower">
+  <TitleBar />
+  <div class="h-full sunflower" :style="{ paddingTop: titleBarPadding }">
     <div class="absolute top-0 left-0 size-full -z-1">
       <img src="/assets/light.png" alt="" class="absolute right-0 bottom-0 w-80vw h-60vw op-40 -z-1">
       <Live2dModel
