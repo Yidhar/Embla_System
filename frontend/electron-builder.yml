@@ -9,6 +9,7 @@ directories:
 files:
   - dist/**/*
   - dist-electron/**/*
+  - node_modules/lodash.isequal/**/*
 
 extraResources:
   - from: backend-dist/naga-backend
