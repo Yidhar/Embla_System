@@ -5,8 +5,9 @@ import Live2dModel from '@/components/Live2dModel.vue'
 import TitleBar from '@/components/TitleBar.vue'
 import { CONFIG } from '@/utils/config'
 
-const { width, height } = useWindowSize()
 const isElectron = !!window.electronAPI
+
+const { width, height } = useWindowSize()
 const scale = computed(() => height.value / (10000 - CONFIG.value.web_live2d.model.size))
 </script>
 
