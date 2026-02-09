@@ -455,6 +455,39 @@ async def health_check():
     return {"status": "healthy", "agent_ready": True, "timestamp": str(asyncio.get_event_loop().time())}
 
 
+# ============ OpenClaw 任务状态查询（对外暴露在 API Server） ============
+
+
+@app.get("/openclaw/tasks")
+async def api_openclaw_list_tasks():
+    """列出本地缓存的 OpenClaw 任务（来自 agentserver）"""
+    return await _call_agentserver("GET", "/openclaw/tasks")
+
+
+@app.get("/openclaw/tasks/{task_id}")
+async def api_openclaw_get_task(
+    task_id: str,
+    include_history: bool = False,
+    history_limit: int = 50,
+    include_tools: bool = False,
+):
+    """获取 OpenClaw 任务状态（支持查看中间过程）
+
+    - `task_id`: 建议直接使用调度器的 task_id/request_id（agentserver /openclaw/send 支持透传）
+    - `include_history=true`: 附带 OpenClaw sessions_history（可用于查看更细粒度过程）
+    - `include_tools=true`: history 中尽量包含 tool 相关内容（取决于 OpenClaw 返回）
+    """
+    return await _call_agentserver(
+        "GET",
+        f"/openclaw/tasks/{task_id}/detail",
+        params={
+            "include_history": str(include_history).lower(),
+            "history_limit": history_limit,
+            "include_tools": str(include_tools).lower(),
+        },
+    )
+
+
 @app.get("/system/info", response_model=SystemInfoResponse)
 async def get_system_info():
     """获取系统信息"""
@@ -494,6 +527,74 @@ async def update_system_config(payload: Dict[str, Any]):
         logger.error(f"更新系统配置失败: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
+
+
+@app.get("/openclaw/market/items")
+async def list_openclaw_market_items():
+    """获取OpenClaw技能市场条目"""
+    try:
+        status = _get_market_items_status()
+        return {"status": "success", **status}
+    except Exception as e:
+        logger.error(f"获取技能市场失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取技能市场失败: {str(e)}")
+
+
+@app.post("/openclaw/market/items/{item_id}/install")
+async def install_openclaw_market_item(item_id: str, payload: Optional[Dict[str, Any]] = None):
+    """安装指定OpenClaw技能市场条目"""
+    item = next((entry for entry in MARKET_ITEMS if entry.get("id") == item_id), None)
+    if not item:
+        raise HTTPException(status_code=404, detail="条目不存在")
+    if not item.get("enabled", True):
+        raise HTTPException(status_code=400, detail="条目暂不可安装")
+
+    install_spec = item.get("install", {})
+    install_type = install_spec.get("type")
+    skill_name_value = item.get("skill_name") or item.get("id")
+    if not skill_name_value:
+        raise HTTPException(status_code=500, detail="技能名称缺失")
+    skill_name = str(skill_name_value)
+
+    try:
+        if item_id == "agent-browser":
+            _install_agent_browser()
+        if item_id == "search":
+            api_key = None
+            if payload and isinstance(payload, dict):
+                api_key = payload.get("api_key") or payload.get("FIRECRAWL_API_KEY")
+            _update_mcporter_firecrawl_config(api_key)
+        if install_type == "remote_skill":
+            url = install_spec.get("url")
+            if not url:
+                raise HTTPException(status_code=500, detail="缺少安装URL")
+            content = _download_text(url)
+            _write_skill_file(skill_name, content)
+        elif install_type == "template_dir":
+            template_name = install_spec.get("template")
+            if not template_name:
+                raise HTTPException(status_code=500, detail="缺少模板名称")
+            _copy_template_dir(template_name, skill_name)
+        elif install_type == "none":
+            raise HTTPException(status_code=400, detail="该条目不支持安装")
+        else:
+            raise HTTPException(status_code=400, detail="未知安装方式")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"安装技能失败({item_id}): {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"安装失败: {str(e)}")
+
+    status = _get_market_items_status()
+    installed_item = next((entry for entry in status.get("items", []) if entry.get("id") == item_id), None)
+    return {
+        "status": "success",
+        "message": "安装完成",
+        "item": installed_item,
+        "openclaw": status.get("openclaw"),
+    }
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -755,13 +856,13 @@ async def chat_stream(request: ChatRequest):
                 _trigger_background_analysis(session_id)
 
             # [DONE] 信号已由 llm_service.stream_chat_with_context 发送，无需重复
-            
+
         except Exception as e:
             print(f"流式对话处理错误: {e}")
             # 使用顶部导入的traceback
             traceback.print_exc()
             yield f"data: error:{str(e)}\n\n"
-    
+
     return StreamingResponse(
         generate_response(),
         media_type="text/event-stream",
@@ -796,90 +897,6 @@ async def get_memory_stats():
         print(f"获取记忆统计错误: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"获取记忆统计失败: {str(e)}")
-
-
-# ============ OpenClaw Market 路由 ============
-
-@app.get("/openclaw/market/items")
-async def list_openclaw_market_items():
-    """获取OpenClaw技能市场条目"""
-    try:
-        status = _get_market_items_status()
-        return {"status": "success", **status}
-    except Exception as e:
-        logger.error(f"获取技能市场失败: {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"获取技能市场失败: {str(e)}")
-
-
-@app.post("/openclaw/market/items/{item_id}/install")
-async def install_openclaw_market_item(item_id: str, payload: Optional[Dict[str, Any]] = None):
-    """安装指定OpenClaw技能市场条目"""
-    item = next((entry for entry in MARKET_ITEMS if entry.get("id") == item_id), None)
-    if not item:
-        raise HTTPException(status_code=404, detail="条目不存在")
-    if not item.get("enabled", True):
-        raise HTTPException(status_code=400, detail="条目暂不可安装")
-
-    install_spec = item.get("install", {})
-    install_type = install_spec.get("type")
-    skill_name_value = item.get("skill_name") or item.get("id")
-    if not skill_name_value:
-        raise HTTPException(status_code=500, detail="技能名称缺失")
-    skill_name = str(skill_name_value)
-
-    try:
-        if item_id == "agent-browser":
-            _install_agent_browser()
-        if item_id == "search":
-            api_key = None
-            if payload and isinstance(payload, dict):
-                api_key = payload.get("api_key") or payload.get("FIRECRAWL_API_KEY")
-            _update_mcporter_firecrawl_config(api_key)
-        if install_type == "remote_skill":
-            url = install_spec.get("url")
-            if not url:
-                raise HTTPException(status_code=500, detail="缺少安装URL")
-            content = _download_text(url)
-            _write_skill_file(skill_name, content)
-        elif install_type == "template_dir":
-            template_name = install_spec.get("template")
-            if not template_name:
-                raise HTTPException(status_code=500, detail="缺少模板名称")
-            _copy_template_dir(template_name, skill_name)
-        elif install_type == "none":
-            raise HTTPException(status_code=400, detail="该条目不支持安装")
-        else:
-            raise HTTPException(status_code=400, detail="未知安装方式")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"安装技能失败({item_id}): {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"安装失败: {str(e)}")
-
-    status = _get_market_items_status()
-    installed_item = next((entry for entry in status.get("items", []) if entry.get("id") == item_id), None)
-    return {
-        "status": "success",
-        "message": "安装完成",
-        "item": installed_item,
-        "openclaw": status.get("openclaw"),
-    }
-
-
-# ============ OpenClaw 任务查询（代理 agentserver） ============
-
-@app.get("/openclaw/tasks")
-async def api_openclaw_list_tasks():
-    """列出本地缓存的 OpenClaw 任务（来自 agentserver）"""
-    return await _call_agentserver("GET", "/openclaw/tasks")
-
-
-@app.get("/openclaw/tasks/{task_id}")
-async def api_openclaw_get_task(task_id: str):
-    """获取 OpenClaw 任务状态"""
-    return await _call_agentserver("GET", f"/openclaw/tasks/{task_id}/detail")
 
 
 # ============ MCP Server 代理 ============
