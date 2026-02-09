@@ -1,4 +1,4 @@
-<script lang="ts">
+<script setup lang="ts">
 import { Listbox } from 'primevue'
 import { ref } from 'vue'
 import API from '@/api/core'
@@ -34,9 +34,6 @@ async function installItem(item: MarketItem) {
     installing.value = null
   }
 }
-</script>
-
-<script setup lang="ts">
 </script>
 
 <template>
