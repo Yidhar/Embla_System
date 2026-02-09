@@ -10,6 +10,7 @@ files:
   - dist/**/*
   - dist-electron/**/*
   - node_modules/lodash.isequal/**/*
+  - "!dist/models/重音テト/**"
 
 extraResources:
   - from: backend-dist/naga-backend
