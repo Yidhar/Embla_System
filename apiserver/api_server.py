@@ -58,7 +58,7 @@ except ImportError:
     from system.config import config, AI_NAME  # 使用新的配置系统
     from system.config import get_prompt, build_system_prompt  # 导入提示词仓库
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
-from ui.utils.response_util import extract_message  # 导入消息提取工具
+from apiserver.response_util import extract_message  # 导入消息提取工具
 
 # 对话核心功能已集成到apiserver
 
@@ -1242,17 +1242,9 @@ async def tool_result(payload: Dict[str, Any]):
 
         logger.info(f"工具执行结果: {result}")
 
-        # 如果是工具完成后的AI回复，通过信号机制通知UI线程显示
+        # 工具完成后的AI回复记录（Web前端通过轮询获取）
         if notification_type == "tool_completed_with_ai_response" and ai_response:
-            try:
-                # 使用Qt信号机制在主线程中安全地更新UI
-                from ui.controller.tool_chat import chat
-
-                # 直接发射信号，确保在主线程中执行
-                chat.tool_ai_response_received.emit(ai_response)
-                logger.info(f"[UI] 已通过信号机制通知UI显示AI回复，长度: {len(ai_response)}")
-            except Exception as e:
-                logger.error(f"[UI] 调用UI控制器显示AI回复失败: {e}")
+            logger.info(f"[工具结果] AI回复已记录，长度: {len(ai_response)}")
 
         return {"success": True, "message": "工具结果已接收", "result": result, "session_id": session_id}
 
@@ -1313,27 +1305,13 @@ async def ui_notification(payload: Dict[str, Any]):
 
         # 处理显示工具AI回复的动作
         if action == "show_tool_ai_response" and ai_response:
-            try:
-                from ui.controller.tool_chat import chat
-
-                # 直接发射信号，确保在主线程中执行
-                chat.tool_ai_response_received.emit(ai_response)
-                logger.info(f"[UI通知] 已通过信号机制显示工具AI回复，长度: {len(ai_response)}")
-                return {"success": True, "message": "AI回复已显示"}
-            except Exception as e:
-                logger.error(f"[UI通知] 显示工具AI回复失败: {e}")
-                raise HTTPException(500, f"显示AI回复失败: {str(e)}")
+            logger.info(f"[UI通知] 工具AI回复已记录，长度: {len(ai_response)}")
+            return {"success": True, "message": "AI回复已记录"}
 
         # 处理显示 ClawdBot 回复的动作
         if action == "show_clawdbot_response" and ai_response:
             _clawdbot_replies.append(ai_response)
-            try:
-                from ui.controller.tool_chat import chat
-
-                chat.clawdbot_response_received.emit(ai_response)
-                logger.info(f"[UI通知] 已通过信号机制显示 ClawdBot 回复，长度: {len(ai_response)}")
-            except Exception as e:
-                logger.warning(f"[UI通知] Qt信号发送失败（Web模式下正常）: {e}")
+            logger.info(f"[UI通知] ClawdBot 回复已存储，长度: {len(ai_response)}")
             return {"success": True, "message": "ClawdBot 回复已存储"}
 
         if action == "show_tool_status" and status_text:
@@ -1423,25 +1401,13 @@ async def _notify_ui_refresh(session_id: str, response_text: str):
 
 
 def _emit_tool_status_to_ui(status_text: str, auto_hide_ms: int = 0) -> None:
-    """通过Qt信号向UI发送工具状态提示，同时更新Web可轮询的状态存储"""
+    """更新Web可轮询的工具状态存储"""
     _tool_status_store["current"] = {"message": status_text, "visible": True}
-    try:
-        from ui.controller.tool_chat import chat
-
-        chat.tool_status_received.emit(status_text, max(0, auto_hide_ms))
-    except Exception as e:
-        logger.error(f"[UI通知] 发送工具状态提示失败: {e}")
 
 
 def _hide_tool_status_in_ui() -> None:
-    """通过Qt信号隐藏工具状态提示，同时更新Web可轮询的状态存储"""
+    """更新Web可轮询的工具状态存储（隐藏）"""
     _tool_status_store["current"] = {"message": "", "visible": False}
-    try:
-        from ui.controller.tool_chat import chat
-
-        chat.tool_status_hide_requested.emit()
-    except Exception as e:
-        logger.error(f"[UI通知] 隐藏工具状态提示失败: {e}")
 
 
 async def _send_ai_response_directly(session_id: str, response_text: str):

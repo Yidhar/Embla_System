@@ -30,7 +30,6 @@ datas = [
 ]
 
 # 第三方包的数据文件
-datas += collect_data_files('py2neo')
 datas += collect_data_files('tiktoken')
 datas += collect_data_files('tiktoken_ext')
 datas += collect_data_files('litellm')
@@ -76,30 +75,73 @@ hiddenimports = [
     'tiktoken_ext.openai_public',
 ]
 
-# 排除 PyQt5、UI 及不需要的大型科学计算库
+# 排除不需要的大型库（环境有 910 个包，只需约 27 个核心包）
 excludes = [
-    # PyQt / UI
+    # PyQt / Qt / UI
     'PyQt5', 'PyQt5.QtWidgets', 'PyQt5.QtGui', 'PyQt5.QtCore', 'PyQt5.QtOpenGL',
+    'PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtGui', 'PyQt6.QtCore',
     'ui', 'tkinter',
-    # 图像 / 可视化
-    'matplotlib',
-    # 科学计算（后端不需要）
+    # 深度学习框架（后端调 API，不跑本地模型）
     'torch', 'torchaudio', 'torchvision', 'torchgen', 'torchdata',
-    'scipy', 'sympy',
-    'vtk', 'vtkmodules',
-    # 地理 / 数据分析
-    'geopandas', 'folium', 'branca', 'xyzservices', 'fiona', 'shapely', 'pyproj',
-    'pandas', 'dask',
-    # NLP（后端直接调 API，不需要本地模型）
-    'nltk', 'spacy', 'transformers',
-    # Jupyter / 测试
-    'IPython', 'jupyter', 'notebook', 'nbconvert', 'nbformat',
-    'pytest', 'unittest',
-    # 其他大型库
+    'paddle', 'paddlenlp', 'paddleocr',
+    'tensorflow', 'keras',
+    'onnxruntime', 'onnx',
+    'transformers', 'accelerate', 'diffusers', 'safetensors',
+    'modelscope',
+    # 科学计算
+    'scipy', 'sympy', 'numba', 'llvmlite',
+    'statsmodels', 'patsy',
+    # 数据处理 / 分析
+    'pandas', 'polars', '_polars_runtime_32', 'pyarrow', 'dask',
+    'geopandas', 'folium', 'branca', 'xyzservices', 'fiona', 'shapely', 'pyproj', 'pyogrio',
+    'h5py', 'tables',
+    # 可视化
+    'matplotlib', 'bokeh', 'plotly', 'seaborn', 'panel', 'holoviews', 'datashader',
+    # 图像 / CV（MCP可选，不打包）
     'cv2', 'opencv', 'skimage', 'sklearn',
-    'bokeh', 'plotly', 'seaborn',
-    'sqlalchemy',
-    'lxml',
+    # NLP 本地库
+    'nltk', 'spacy', 'gensim',
+    # 分布式 / 大数据
+    'pyspark', 'ray', 'distributed',
+    # Google / Cloud（不需要）
+    'googleapiclient', 'google.cloud', 'google.auth', 'google_auth_httplib2',
+    # 音视频处理（MCP可选）
+    'av', 'librosa', 'soundfile', 'pyaudio',
+    # Web 工具（不需要）
+    'gradio', 'streamlit', 'dash',
+    # Jupyter / 开发工具
+    'IPython', 'jupyter', 'notebook', 'nbconvert', 'nbformat', 'nbclassic',
+    'sphinx', 'docutils',
+    'pytest', 'unittest',
+    'spyder', 'pylint', 'autopep8', 'flake8', 'mypy',
+    # 浏览器自动化（MCP可选）
+    'playwright', 'patchright', 'selenium',
+    # 数据库 ORM
+    'sqlalchemy', 'alembic',
+    # 国际化
+    'babel',
+    # 漫画（MCP可选）
+    'jmcomic',
+    # 其他大型库
+    'lxml', 'wandb', 'mlflow',
+    'faiss', 'milvus_lite',
+    'pymupdf', 'fitz',
+    'astropy',
+    # GUI 自动化（MCP可选）
+    'pyautogui', 'pytesseract', 'pycaw', 'screen_brightness_control',
+    # 图数据库（连接失败也不影响）
+    'neo4j', 'py2neo', 'pyneo', 'pyvis',
+    # 游戏 / 音频播放
+    'pygame',
+    # 爬虫（MCP可选）
+    'crawl4ai',
+    # 压缩（MCP可选）
+    'py7zr', 'pyzipper',
+    # 其他可选
+    'gevent', 'flask', 'docx2pdf', 'img2pdf', 'msoffcrypto', 'pikepdf',
+    'dashscope', 'Crypto', 'pycryptodome',
+    'agents',
+    'jieba',
 ]
 
 a = Analysis(
