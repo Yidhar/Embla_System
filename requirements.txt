@@ -24,6 +24,8 @@ tiktoken==0.11.0
 uvicorn==0.34.0
 watchfiles==1.0.4
 websockets==15.0
+Flask==3.1.2
+gevent==25.5.1
 
 # MCP 技能 / 可选功能
 datasets==3.6.0
