@@ -64,9 +64,6 @@ onMounted(() => {
           </div>
         </template>
         <div class="grid gap-4">
-          <Message v-if="testResult" :severity="testResult.startsWith('连接成功') ? 'success' : 'error'">
-            {{ testResult }}
-          </Message>
           <ConfigItem name="自动提取" description="自动从对话中提取五元组知识">
             <ToggleSwitch v-model="CONFIG.grag.auto_extract" />
           </ConfigItem>
@@ -90,13 +87,19 @@ onMounted(() => {
             <InputText v-model="CONFIG.grag.neo4j_password" placeholder="••••••••" />
           </ConfigItem>
           <Divider class="m-1!" />
-          <div class="flex justify-end">
+          <div class="flex flex-row-reverse justify-between">
             <Button
               :label="testing ? '测试中...' : '测试连接'"
               size="small"
               :disabled="testing"
               @click="testConnection"
             />
+            <Message
+              v-if="testResult" :pt="{ content: { class: 'p-2!' } }"
+              :severity="testResult.startsWith('连接成功') ? 'success' : 'error'"
+            >
+              {{ testResult }}
+            </Message>
           </div>
         </div>
       </ConfigGroup>

@@ -144,7 +144,15 @@ export class CoreApiClient extends ApiClient {
     return this.instance.get('/clawdbot/replies')
   }
 
-  uploadDocument(file: File, description?: string) {
+  uploadDocument(file: File, description?: string): Promise<{
+    status: 'success'
+    message: string
+    filename: string
+    filePath: string
+    fileSize: number
+    fileType: string
+    uploadTime: string
+  }> {
     const formData = new FormData()
     formData.append('file', file)
     if (description) {

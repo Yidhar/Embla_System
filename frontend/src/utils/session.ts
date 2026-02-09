@@ -59,27 +59,3 @@ declare global {
     token: CustomEvent<StreamChunk>
   }
 }
-
-export function chatStream(content: string) {
-  MESSAGES.value.push({ role: 'user', content })
-
-  API.chatStream(content).then(async ({ response }) => {
-    MESSAGES.value.push({ role: 'assistant', content: '', generating: true })
-    const message = MESSAGES.value[MESSAGES.value.length - 1]!
-
-    for await (const chunk of response) {
-      window.dispatchEvent(new CustomEvent('token', { detail: chunk }))
-
-      if (chunk.type === 'content') {
-        message.content += chunk.text
-      }
-      else if (chunk.type === 'reasoning') {
-        message.content += `$》${chunk.text}《$`
-      }
-    }
-
-    delete message.generating
-  }).catch((err) => {
-    MESSAGES.value.push({ role: 'system', content: `Error: ${err.message}` })
-  })
-}
