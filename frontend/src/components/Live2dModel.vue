@@ -62,6 +62,7 @@ onMounted(async () => {
         watch(computedY, y => model.y = y / 2, { immediate: true }),
       ]
 
+      model.autoInteract = false
       app.stage.addChild(model)
 
       onCleanUp(() => {

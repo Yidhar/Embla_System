@@ -1106,7 +1106,7 @@ async def load_log_context(days: int = 3, max_messages: int = None):
 # Web前端工具状态轮询存储
 _tool_status_store: Dict[str, Dict] = {"current": {"message": "", "visible": False}}
 
-# Web前端 ClawdBot 回复存储（轮询获取）
+# Web前端 AgentServer 回复存储（轮询获取）
 _clawdbot_replies: list = []
 
 
@@ -1118,7 +1118,7 @@ async def get_tool_status():
 
 @app.get("/clawdbot/replies")
 async def get_clawdbot_replies():
-    """获取并清空 ClawdBot 待显示回复（供Web前端轮询）"""
+    """获取并清空 AgentServer 待显示回复（供Web前端轮询）"""
     replies = list(_clawdbot_replies)
     _clawdbot_replies.clear()
     return {"replies": replies}
@@ -1338,11 +1338,11 @@ async def ui_notification(payload: Dict[str, Any]):
             logger.info(f"[UI通知] 工具AI回复已存储到队列，长度: {len(ai_response)}")
             return {"success": True, "message": "AI回复已存储"}
 
-        # 处理显示 ClawdBot 回复的动作
+        # 处理显示 AgentServer 回复的动作
         if action == "show_clawdbot_response" and ai_response:
             _clawdbot_replies.append(ai_response)
-            logger.info(f"[UI通知] ClawdBot 回复已存储到队列，长度: {len(ai_response)}")
-            return {"success": True, "message": "ClawdBot 回复已存储"}
+            logger.info(f"[UI通知] AgentServer 回复已存储到队列，长度: {len(ai_response)}")
+            return {"success": True, "message": "AgentServer 回复已存储"}
 
         if action == "show_tool_status" and status_text:
             _emit_tool_status_to_ui(status_text, auto_hide_ms)

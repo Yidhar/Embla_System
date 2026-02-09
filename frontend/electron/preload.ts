@@ -1,4 +1,3 @@
-import process from 'node:process'
 import { contextBridge, ipcRenderer } from 'electron'
 
 const electronAPI = {

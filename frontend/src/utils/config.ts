@@ -1,4 +1,5 @@
 import { ref, watch, computed } from 'vue'
+import { useStorage } from '@vueuse/core'
 import API from '@/api/core'
 import { deepMerge } from '@/utils/object'
 
@@ -28,12 +29,12 @@ export const MODELS = {
   }),
 } as const
 
-export const DEFAULT_MODEL: keyof typeof MODELS = '重音テト'
+export const DEFAULT_MODEL: keyof typeof MODELS = 'NagaTest'
 
 export const DEFAULT_CONFIG = {
   system: {
     version: '4.0', // 系统版本号
-    ai_name: '娜迦日达', // AI助手名称
+    ai_name: '娜杰日达', // AI助手名称
     voice_enabled: true, // 是否启用语音功能
     stream_mode: true, // 是否启用流式响应
     debug: false, // 是否启用调试模式

@@ -23,7 +23,7 @@ async function poll() {
         MESSAGES.value.push({
           role: 'assistant',
           content: reply,
-          sender: 'OpenClaw',
+          sender: 'AgentServer',
         })
       }
     }
@@ -32,7 +32,7 @@ async function poll() {
       openclawTasks.value = tasks.value.tasks
       const active = tasks.value.tasks.filter((t: any) => t.status === 'running' || t.status === 'pending')
       if (active.length > 0 && !toolMessage.value) {
-        toolMessage.value = `OpenClaw: ${active.length} 个任务执行中...`
+        toolMessage.value = `AgentServer: ${active.length} 个任务执行中...`
       }
     }
   }
