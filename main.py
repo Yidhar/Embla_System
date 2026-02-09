@@ -720,6 +720,8 @@ if __name__ == "__main__":
     # 如果是打包环境，跳过所有环境检测
     if IS_PACKAGED:
         print("📦 检测到打包环境，跳过系统环境检测...")
+    elif args.headless:
+        print("🖥️  Headless 模式，跳过系统环境检测...")
     else:
         # 执行系统检测（只在第一次启动时检测）
         if not run_system_check():
