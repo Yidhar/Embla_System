@@ -20,12 +20,6 @@ export const MODELS = {
     y: 1.3,
     size: 6800,
   }),
-  重音テト: defineModel({
-    source: './models/重音テト/重音テト.model3.json',
-    x: 0.5,
-    y: 0.8,
-    size: 5500,
-  }),
 } as const
 
 export const DEFAULT_MODEL: keyof typeof MODELS = 'NagaTest'
@@ -187,7 +181,7 @@ export const DEFAULT_CONFIG = {
   },
   live2d: {
     enabled: false, // 是否启用Live2D
-    model_path: 'ui/live2d_local/live2d_models/重音テト/重音テト.model3.json', // Live2D模型路径
+    model_path: '', // Live2D模型路径
     fallback_image: 'ui/img/standby.png', // 备用图片
     auto_switch: true, // 是否自动切换
     animation_enabled: true, // 是否启用动画
