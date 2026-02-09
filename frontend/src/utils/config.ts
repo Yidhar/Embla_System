@@ -28,7 +28,7 @@ export const MODELS = {
   }),
 } as const
 
-export const DEFAULT_MODEL: keyof typeof MODELS = '重音テト'
+export const DEFAULT_MODEL: keyof typeof MODELS = 'NagaTest'
 
 export const DEFAULT_CONFIG = {
   system: {

@@ -8,6 +8,7 @@ __pycache__/
 dist/
 build/
 !frontend/build/
+frontend/backend-dist/
 eggs/
 .eggs/
 lib/

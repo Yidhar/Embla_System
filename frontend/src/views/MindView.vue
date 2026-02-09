@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue'
-import * as d3 from 'd3'
+import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from 'd3-force'
+import { select as d3Select } from 'd3-selection'
+import { drag } from 'd3-drag'
+import { zoom } from 'd3-zoom'
+import type { Simulation, SimulationNodeDatum, SimulationLinkDatum } from 'd3-force'
 import API from '@/api/core'
 import BoxContainer from '@/components/BoxContainer.vue'
 
@@ -12,13 +16,13 @@ interface Quintuple {
   objectType: string
 }
 
-interface GraphNode extends d3.SimulationNodeDatum {
+interface GraphNode extends SimulationNodeDatum {
   id: string
   label: string
   type: string
 }
 
-interface GraphEdge extends d3.SimulationLinkDatum<GraphNode> {
+interface GraphEdge extends SimulationLinkDatum<GraphNode> {
   label: string
 }
 
@@ -44,7 +48,7 @@ const error = ref('')
 const searchQuery = ref('')
 const nodeCount = ref(0)
 
-let simulation: d3.Simulation<GraphNode, GraphEdge> | null = null
+let simulation: Simulation<GraphNode, GraphEdge> | null = null
 
 function buildGraphData(quints: Quintuple[]) {
   const nodeMap = new Map<string, GraphNode>()
@@ -71,21 +75,21 @@ function renderGraph(quints: Quintuple[]) {
     simulation.stop()
     simulation = null
   }
-  d3.select(svgRef.value).selectAll('*').remove()
+  d3Select(svgRef.value).selectAll('*').remove()
 
   const container = svgRef.value.parentElement
   if (!container) return
   const width = container.clientWidth
   const height = container.clientHeight
 
-  const svg = d3.select(svgRef.value)
+  const svg = d3Select(svgRef.value)
     .attr('width', width)
     .attr('height', height)
 
   // Zoom support
   const g = svg.append('g')
   svg.call(
-    d3.zoom<SVGSVGElement, unknown>()
+    zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.2, 4])
       .on('zoom', (event) => {
         g.attr('transform', event.transform)
@@ -94,11 +98,11 @@ function renderGraph(quints: Quintuple[]) {
 
   const { nodes, edges } = buildGraphData(quints)
 
-  simulation = d3.forceSimulation<GraphNode>(nodes)
-    .force('link', d3.forceLink<GraphNode, GraphEdge>(edges).id(d => d.id).distance(100))
-    .force('charge', d3.forceManyBody().strength(-300))
-    .force('center', d3.forceCenter(width / 2, height / 2))
-    .force('collide', d3.forceCollide().radius(35))
+  simulation = forceSimulation<GraphNode>(nodes)
+    .force('link', forceLink<GraphNode, GraphEdge>(edges).id(d => d.id).distance(100))
+    .force('charge', forceManyBody().strength(-300))
+    .force('center', forceCenter(width / 2, height / 2))
+    .force('collide', forceCollide().radius(35))
 
   // Edges
   const link = g.append('g')
@@ -130,7 +134,7 @@ function renderGraph(quints: Quintuple[]) {
     .attr('stroke-width', 2)
     .attr('cursor', 'pointer')
     .call(
-      d3.drag<SVGCircleElement, GraphNode>()
+      drag<SVGCircleElement, GraphNode>()
         .on('start', (event, d) => {
           if (!event.active) simulation?.alphaTarget(0.3).restart()
           d.fx = d.x

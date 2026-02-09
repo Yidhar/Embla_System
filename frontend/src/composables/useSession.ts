@@ -7,6 +7,7 @@ export interface Message {
   content: string
   reasoning?: string
   generating?: boolean
+  sender?: string
 }
 
 export const CURRENT_SESSION_ID = useStorage<string | null>('naga-session', null)

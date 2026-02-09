@@ -10,18 +10,29 @@ const __dirname = dirname(__filename)
 let backendProcess: ChildProcess | null = null
 
 export function startBackend(): void {
-  // Project root is parent of frontend/
-  const projectRoot = app.isPackaged
-    ? join(process.resourcesPath)
-    : join(__dirname, '..', '..')
+  let cmd: string
+  let args: string[]
+  let cwd: string
 
-  // Try 'uv run main.py' first, fallback to 'python main.py'
-  const cmd = process.platform === 'win32' ? 'python' : 'python3'
+  if (app.isPackaged) {
+    // 打包模式：spawn PyInstaller 编译的二进制
+    const backendDir = join(process.resourcesPath, 'backend')
+    const ext = process.platform === 'win32' ? '.exe' : ''
+    cmd = join(backendDir, `naga-backend${ext}`)
+    args = ['--headless']
+    cwd = backendDir
+  } else {
+    // 开发模式：直接用 python
+    cwd = join(__dirname, '..', '..')
+    cmd = process.platform === 'win32' ? 'python' : 'python3'
+    args = ['main.py', '--headless']
+  }
 
-  console.log(`[Backend] Starting from ${projectRoot}`)
+  console.log(`[Backend] Starting from ${cwd}`)
+  console.log(`[Backend] Command: ${cmd} ${args.join(' ')}`)
 
-  backendProcess = spawn(cmd, ['main.py', '--headless'], {
-    cwd: projectRoot,
+  backendProcess = spawn(cmd, args, {
+    cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PYTHONUNBUFFERED: '1' },
     detached: true,
