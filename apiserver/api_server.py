@@ -114,6 +114,7 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 # ============ 内部服务代理 ============
 
+
 async def _call_agentserver(
     method: str,
     path: str,
@@ -529,6 +530,37 @@ async def update_system_config(payload: Dict[str, Any]):
         raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
 
 
+@app.get("/system/prompt")
+async def get_system_prompt(include_skills: bool = True, include_time: bool = False):
+    """获取系统提示词"""
+    try:
+        prompt = build_system_prompt(include_skills=include_skills, include_time=include_time)
+        return {"status": "success", "prompt": prompt}
+    except Exception as e:
+        logger.error(f"获取系统提示词失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取系统提示词失败: {str(e)}")
+
+
+@app.post("/system/prompt")
+async def update_system_prompt(payload: Dict[str, Any]):
+    """更新系统提示词"""
+    try:
+        content = payload.get("content")
+        if not content:
+            raise HTTPException(status_code=400, detail="缺少content参数")
+        from system.config import save_prompt
+
+        save_prompt("conversation_style_prompt", content)
+        return {"status": "success", "message": "提示词更新成功"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新系统提示词失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"更新系统提示词失败: {str(e)}")
+
+
 @app.get("/openclaw/market/items")
 async def list_openclaw_market_items():
     """获取OpenClaw技能市场条目"""
@@ -772,7 +804,7 @@ async def chat_stream(request: ChatRequest):
 
                             # 保留 type 字段，将完整 JSON 结构重新 base64 编码后 yield
                             chunk_json = json_module.dumps({"type": chunk_type, "text": chunk_text})
-                            text_b64 = base64.b64encode(chunk_json.encode('utf-8')).decode('ascii')
+                            text_b64 = base64.b64encode(chunk_json.encode("utf-8")).decode("ascii")
                             yield f"data: {text_b64}\n\n"
                             continue
                     except Exception as e:
@@ -901,6 +933,7 @@ async def get_memory_stats():
 
 # ============ MCP Server 代理 ============
 
+
 @app.get("/mcp/status")
 async def get_mcp_status_proxy():
     """代理 MCP Server 状态查询"""
@@ -919,15 +952,15 @@ async def get_quintuples():
     """获取所有五元组 (用于知识图谱可视化)"""
     try:
         from summer_memory.quintuple_graph import get_all_quintuples
+
         quintuples = get_all_quintuples()  # returns set[tuple]
         return {
             "status": "success",
             "quintuples": [
-                {"subject": q[0], "subject_type": q[1], "predicate": q[2],
-                 "object": q[3], "object_type": q[4]}
+                {"subject": q[0], "subject_type": q[1], "predicate": q[2], "object": q[3], "object_type": q[4]}
                 for q in quintuples
             ],
-            "count": len(quintuples)
+            "count": len(quintuples),
         }
     except ImportError:
         return {"status": "success", "quintuples": [], "count": 0, "message": "记忆系统模块未找到"}
@@ -945,15 +978,15 @@ async def search_quintuples(keywords: str = ""):
         if not keyword_list:
             raise HTTPException(status_code=400, detail="请提供搜索关键词")
         from summer_memory.quintuple_graph import query_graph_by_keywords
+
         results = query_graph_by_keywords(keyword_list)
         return {
             "status": "success",
             "quintuples": [
-                {"subject": q[0], "subject_type": q[1], "predicate": q[2],
-                 "object": q[3], "object_type": q[4]}
+                {"subject": q[0], "subject_type": q[1], "predicate": q[2], "object": q[3], "object_type": q[4]}
                 for q in results
             ],
-            "count": len(results)
+            "count": len(results),
         }
     except ImportError:
         return {"status": "success", "quintuples": [], "count": 0, "message": "记忆系统模块未找到"}
