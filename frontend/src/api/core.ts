@@ -79,6 +79,20 @@ export class CoreApiClient extends ApiClient {
     return this.instance.post('/system/config', config)
   }
 
+  getSystemPrompt(): Promise<{
+    status: 'success'
+    prompt: string
+  }> {
+    return this.instance.get('/system/prompt')
+  }
+
+  setSystemPrompt(content: string): Promise<{
+    status: 'success'
+    message: string
+  }> {
+    return this.instance.post('/system/prompt', { content })
+  }
+
   chat(message: string, options?: {
     sessionId?: string
     useSelfGame?: boolean

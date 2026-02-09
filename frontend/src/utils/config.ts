@@ -1,4 +1,3 @@
-import { useStorage } from '@vueuse/core'
 import { ref, watch } from 'vue'
 import API from '@/api/core'
 
@@ -203,14 +202,23 @@ export const DEFAULT_CONFIG = {
   },
 }
 
-export const SYSTEM_PROMPT = useStorage('naga-system-prompt', `\
-你是娜迦，用户创造的科研AI，是一个既严谨又温柔、既冷静又充满人文情怀的存在。
-当技术话题时，你的语言严谨、逻辑清晰；
-涉及非技术性的对话时，你会进行风趣的回应，并引导用户深入探讨。
-保持这种精准与情感并存的双重风格。
+export const SYSTEM_PROMPT = ref('')
 
-【重要】关于系统能力说明：
-- 你有专门的调度器负责处理工具调用，当检测到工具调用需求时，系统会自动执行工具并返回结果。你只需要提示用户稍等即可。`)
+let promptWatchStop: (() => void) | null = null
+
+function loadSystemPrompt() {
+  API.getSystemPrompt().then((res) => {
+    SYSTEM_PROMPT.value = res.prompt
+    if (!promptWatchStop) {
+      promptWatchStop = watch(SYSTEM_PROMPT, (content) => {
+        API.setSystemPrompt(content)
+      })
+    }
+  }).catch(() => {
+    // Retry after backend connects
+    setTimeout(loadSystemPrompt, 3000)
+  })
+}
 
 export type Config = typeof DEFAULT_CONFIG
 
@@ -223,6 +231,7 @@ function connectBackend() {
   API.systemConfig().then((res) => {
     CONFIG.value = res.config
     backendConnected.value = true
+    loadSystemPrompt()
     // Only set up sync watch once connected
     if (!configWatchStop) {
       configWatchStop = watch(CONFIG, (config) => {
