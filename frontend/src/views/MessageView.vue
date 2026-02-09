@@ -18,8 +18,6 @@ declare global {
 export function chatStream(content: string) {
   MESSAGES.value.push({ role: 'user', content })
 
-  startToolPolling()
-
   API.chatStream(content, {
     sessionId: CURRENT_SESSION_ID.value ?? undefined,
     disableTTS: true,
@@ -43,14 +41,12 @@ export function chatStream(content: string) {
     if (!message.reasoning) {
       delete message.reasoning
     }
-    stopToolPolling()
 
     if (CONFIG.value.system.voice_enabled && message.content) {
       speak(message.content)
     }
   }).catch((err) => {
     MESSAGES.value.push({ role: 'system', content: `Error: ${err.message}` })
-    stopToolPolling()
   })
 }
 </script>
@@ -162,6 +158,7 @@ async function handleFileUpload(event: Event) {
 onMounted(() => {
   loadCurrentSession()
   scrollToBottom()
+  startToolPolling()
 })
 onUnmounted(() => {
   stopToolPolling()

@@ -35,7 +35,6 @@ export function startBackend(): void {
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PYTHONUNBUFFERED: '1' },
-    detached: true,
   })
 
   backendProcess.stdout?.on('data', (data: Buffer) => {
@@ -62,24 +61,29 @@ export function stopBackend(): void {
   console.log('[Backend] Stopping...')
 
   if (process.platform === 'win32') {
-    // On Windows, use taskkill to kill the process tree
     spawn('taskkill', ['/pid', String(pid), '/f', '/t'])
   } else {
-    // Kill the entire process group (negative PID)
+    // Send SIGTERM first, then SIGKILL immediately after
     try {
-      if (pid) process.kill(-pid, 'SIGTERM')
+      if (pid) process.kill(pid, 'SIGTERM')
     } catch {
       // already dead
     }
-    // Force kill after 5s if still alive
-    setTimeout(() => {
-      try {
-        if (pid) process.kill(-pid, 0) // check if alive
-        process.kill(-pid!, 'SIGKILL')
-      } catch {
-        // already dead
+    // Force kill after 1s — must be short since Electron is exiting
+    try {
+      if (pid) {
+        const timer = setTimeout(() => {
+          try {
+            process.kill(pid, 'SIGKILL')
+          } catch {
+            // already dead
+          }
+        }, 1000)
+        timer.unref() // Don't block Electron exit
       }
-    }, 5000)
+    } catch {
+      // already dead
+    }
   }
 
   backendProcess = null
