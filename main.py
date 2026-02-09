@@ -250,32 +250,25 @@ class ServiceManager:
         """内部API服务器启动方法"""
         try:
             import asyncio
-            import time
-            from nagaagent_core.api import uvicorn
+            import uvicorn
+            from apiserver.api_server import app
 
             print(f"   🚀 API服务器: 正在启动 on {config.api_server.host}:{config.api_server.port}...")
 
-            # 使用异步方式启动，不阻塞当前线程
-            uv_config = uvicorn.Config(
-                "apiserver.api_server:app",
+            uvicorn.run(
+                app,
                 host=config.api_server.host,
                 port=config.api_server.port,
-                log_level="info",  # 临时改为info以便看到uvicorn日志
+                log_level="info",
                 access_log=False,
                 reload=False,
-                ws_ping_interval=None,  # 禁用WebSocket ping
-                ws_ping_timeout=None    # 禁用WebSocket ping超时
+                ws_ping_interval=None,
+                ws_ping_timeout=None
             )
-            server = uvicorn.Server(uv_config)
-
-            # 在新的事件循环中运行服务器
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(server.serve())
         except ImportError as e:
-            print(f"   ❌ API服务器依赖缺失: {e}")
+            print(f"   ❌ API服务器依赖缺失: {e}", flush=True)
         except Exception as e:
-            print(f"   ❌ API服务器启动失败: {e}")
+            print(f"   ❌ API服务器启动失败: {e}", flush=True)
     
     def _start_mcp_server(self):
         """内部MCP服务器启动方法"""
@@ -303,7 +296,7 @@ class ServiceManager:
             import uvicorn
             from agentserver.agent_server import app
             from system.config import get_server_port
-            
+
             uvicorn.run(
                 app,
                 host="0.0.0.0",
@@ -315,7 +308,9 @@ class ServiceManager:
                 ws_ping_timeout=None    # 禁用WebSocket ping超时
             )
         except Exception as e:
-            print(f"   ❌ Agent服务器启动失败: {e}")
+            import traceback
+            print(f"   ❌ Agent服务器启动失败: {e}", flush=True)
+            traceback.print_exc()
     
     def _start_tts_server(self):
         """内部TTS服务器启动方法"""
@@ -323,7 +318,9 @@ class ServiceManager:
             from voice.output.start_voice_service import start_http_server
             start_http_server()
         except Exception as e:
-            print(f"   ❌ TTS服务器启动失败: {e}")
+            import traceback
+            print(f"   ❌ TTS服务器启动失败: {e}", flush=True)
+            traceback.print_exc()
     
     def _start_naga_portal_auto_login(self):
         """启动NagaPortal自动登录（异步）"""
