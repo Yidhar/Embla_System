@@ -1,6 +1,7 @@
+import { dirname, join } from 'node:path'
+import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 import { BrowserWindow, shell } from 'electron'
-import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -40,7 +41,8 @@ export function createWindow(): BrowserWindow {
   // Load the app
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
-  } else {
+  }
+  else {
     mainWindow.loadFile(join(__dirname, '../dist/index.html'))
   }
 

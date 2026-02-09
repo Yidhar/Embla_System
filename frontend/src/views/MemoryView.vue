@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { useStorage } from '@vueuse/core'
-import { Accordion, Button, Divider, InputNumber, InputText, Message, Slider, ToggleSwitch } from 'primevue'
+import { Accordion, Button, Divider, InputNumber, InputText, Message, ToggleSwitch } from 'primevue'
 import { computed, onMounted, ref } from 'vue'
+import API from '@/api/core'
 import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
 import { CONFIG } from '@/utils/config'
-import API from '@/api/core'
 
 const accordionValue = useStorage('accordion-memory', ['grag'])
 
@@ -31,13 +31,16 @@ async function testConnection() {
     const stats = res.memoryStats ?? res
     if (stats.enabled === false) {
       testResult.value = `未启用: ${stats.message || '请先启用知识图谱'}`
-    } else {
+    }
+    else {
       memoryStats.value = stats
       testResult.value = `连接成功 (五元组: ${stats.totalQuintuples ?? 0})`
     }
-  } catch (e: any) {
+  }
+  catch (e: any) {
     testResult.value = `连接失败: ${e.message}`
-  } finally {
+  }
+  finally {
     testing.value = false
   }
 }
@@ -49,7 +52,7 @@ onMounted(() => {
 
 <template>
   <BoxContainer class="text-sm">
-    <Accordion :value="accordionValue" multiple>
+    <Accordion :value="accordionValue" class="pb-8" multiple>
       <ConfigGroup value="grag">
         <template #header>
           <div class="w-full flex justify-between items-center -my-1.5">

@@ -20,7 +20,8 @@ export function speak(text: string) {
       response_format: tts.default_format,
     }),
   }).then(async (res) => {
-    if (!res.ok) return
+    if (!res.ok)
+      return
     const blob = await res.blob()
     const objectUrl = URL.createObjectURL(blob)
     const el = new Audio(objectUrl)

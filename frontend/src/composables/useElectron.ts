@@ -1,4 +1,4 @@
-import { ref, onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 
 export function useElectron() {
   const isElectron = ref(!!window.electronAPI)
@@ -8,7 +8,8 @@ export function useElectron() {
   let cleanupMaximized: (() => void) | undefined
 
   onMounted(async () => {
-    if (!window.electronAPI) return
+    if (!window.electronAPI)
+      return
 
     isMaximized.value = await window.electronAPI.isMaximized()
 

@@ -42,7 +42,7 @@ const scale = computed(() => height.value / 720)
         </ArkButton>
       </div>
       <div class="grid grid-cols-2 -translate-x-1/5">
-        <ArkButton :icon="brain" title="记忆<br>云海" @click="useLink({ to: '/mind' }).navigate" />
+        <ArkButton :icon="brain" title="记忆<br>云海" disabled @click="useLink({ to: '/mind' }).navigate" />
         <ArkButton :icon="toolkit" title="技能<br>工坊" @click="useLink({ to: '/skill' }).navigate" />
       </div>
       <div class="grid grid-cols-2">

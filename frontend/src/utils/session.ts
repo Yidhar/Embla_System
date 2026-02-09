@@ -1,3 +1,4 @@
+import type { StreamChunk } from '@/utils/encoding'
 import { useStorage } from '@vueuse/core'
 import { ref } from 'vue'
 import API from '@/api/core'
@@ -22,7 +23,8 @@ export async function loadCurrentSession() {
         content: m.content,
       }))
       return
-    } catch {
+    }
+    catch {
       CURRENT_SESSION_ID.value = null
     }
   }
@@ -35,7 +37,8 @@ export async function loadCurrentSession() {
         content: m.content,
       }))
     }
-  } catch {
+  }
+  catch {
     // Backend unavailable, start empty
     MESSAGES.value = []
   }
@@ -49,4 +52,34 @@ export function newSession() {
 export async function switchSession(id: string) {
   CURRENT_SESSION_ID.value = id
   await loadCurrentSession()
+}
+
+declare global {
+  interface WindowEventMap {
+    token: CustomEvent<StreamChunk>
+  }
+}
+
+export function chatStream(content: string) {
+  MESSAGES.value.push({ role: 'user', content })
+
+  API.chatStream(content).then(async ({ response }) => {
+    MESSAGES.value.push({ role: 'assistant', content: '', generating: true })
+    const message = MESSAGES.value[MESSAGES.value.length - 1]!
+
+    for await (const chunk of response) {
+      window.dispatchEvent(new CustomEvent('token', { detail: chunk }))
+
+      if (chunk.type === 'content') {
+        message.content += chunk.text
+      }
+      else if (chunk.type === 'reasoning') {
+        message.content += `$》${chunk.text}《$`
+      }
+    }
+
+    delete message.generating
+  }).catch((err) => {
+    MESSAGES.value.push({ role: 'system', content: `Error: ${err.message}` })
+  })
 }

@@ -1,10 +1,11 @@
+import process from 'node:process'
 import { app, BrowserWindow, ipcMain } from 'electron'
-import { createWindow, getMainWindow } from './modules/window'
-import { createTray, destroyTray } from './modules/tray'
-import { createMenu } from './modules/menu'
-import { registerHotkeys, unregisterHotkeys } from './modules/hotkeys'
-import { setupAutoUpdater, downloadUpdate, installUpdate } from './modules/updater'
 import { startBackend, stopBackend } from './modules/backend'
+import { registerHotkeys, unregisterHotkeys } from './modules/hotkeys'
+import { createMenu } from './modules/menu'
+import { createTray, destroyTray } from './modules/tray'
+import { downloadUpdate, installUpdate, setupAutoUpdater } from './modules/updater'
+import { createWindow, getMainWindow } from './modules/window'
 
 let isQuitting = false
 
@@ -17,7 +18,8 @@ if (!gotTheLock) {
 app.on('second-instance', () => {
   const win = getMainWindow()
   if (win) {
-    if (win.isMinimized()) win.restore()
+    if (win.isMinimized())
+      win.restore()
     win.show()
     win.focus()
   }
@@ -74,7 +76,8 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow()
-    } else {
+    }
+    else {
       getMainWindow()?.show()
     }
   })

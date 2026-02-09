@@ -6,7 +6,7 @@ export interface ElectronAPI {
   onMaximized: (callback: (maximized: boolean) => void) => () => void
   downloadUpdate: () => void
   installUpdate: () => void
-  onUpdateAvailable: (callback: (info: { version: string; releaseNotes: string }) => void) => () => void
+  onUpdateAvailable: (callback: (info: { version: string, releaseNotes: string }) => void) => () => void
   onUpdateDownloaded: (callback: () => void) => () => void
   platform: string
 }

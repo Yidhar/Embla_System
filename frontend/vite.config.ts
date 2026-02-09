@@ -1,3 +1,4 @@
+import process from 'node:process'
 import vue from '@vitejs/plugin-vue'
 import unocss from 'unocss/vite'
 import { defineConfig } from 'vite'
@@ -11,25 +12,21 @@ export default defineConfig({
   plugins: [
     vue(),
     unocss(),
-    ...(!isWebOnly
-      ? [
-          electron({
-            main: {
-              entry: 'electron/main.ts',
-              vite: {
-                build: {
-                  rollupOptions: {
-                    external: ['electron', 'electron-updater'],
-                  },
-                },
-              },
+    !isWebOnly && electron({
+      main: {
+        entry: 'electron/main.ts',
+        vite: {
+          build: {
+            rollupOptions: {
+              external: ['electron', 'electron-updater'],
             },
-            preload: {
-              input: 'electron/preload.ts',
-            },
-          }),
-        ]
-      : []),
+          },
+        },
+      },
+      preload: {
+        input: 'electron/preload.ts',
+      },
+    }),
   ],
   resolve: { alias: { '@': '/src' } },
 })

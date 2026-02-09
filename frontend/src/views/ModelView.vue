@@ -35,7 +35,7 @@ const TTS_VOICES = {
 
 <template>
   <BoxContainer class="text-sm">
-    <Accordion :value="accordionValue" multiple>
+    <Accordion :value="accordionValue" class="pb-8" multiple>
       <ConfigGroup value="llm" header="大语言模型">
         <div class="grid gap-4">
           <ConfigItem name="大语言模型" description="用于对话的大语言模型">

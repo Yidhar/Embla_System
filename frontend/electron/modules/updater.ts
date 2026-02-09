@@ -1,5 +1,5 @@
+import type { BrowserWindow } from 'electron'
 import pkg from 'electron-updater'
-import { BrowserWindow } from 'electron'
 
 const { autoUpdater } = pkg
 

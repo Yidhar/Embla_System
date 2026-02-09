@@ -46,6 +46,16 @@ export class AgentApiClient extends ApiClient {
   }> {
     return this.instance.get(`/sessions/${sessionId}/key_facts`)
   }
+
+  setSkillEnabled(itemId: string, enabled: boolean): Promise<{
+    success: 'success'
+    message: string
+    field: string
+    old_value: unknown
+    new_value: unknown
+  }> {
+    return this.instance.post(`/openclaw/skills/enable`, { itemId, enabled })
+  }
 }
 
 export default new AgentApiClient(8001)

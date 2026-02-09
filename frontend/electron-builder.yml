@@ -14,7 +14,7 @@ extraResources:
   - from: backend-dist/naga-backend
     to: backend
     filter:
-      - "**/*"
+      - '**/*'
 
 win:
   target:
@@ -57,4 +57,4 @@ linux:
 
 publish:
   provider: generic
-  url: ""
+  url: ''

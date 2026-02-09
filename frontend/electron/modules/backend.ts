@@ -1,7 +1,9 @@
-import { spawn } from 'child_process'
-import type { ChildProcess } from 'child_process'
-import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
+import type { Buffer } from 'node:buffer'
+import type { ChildProcess } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import { dirname, join } from 'node:path'
+import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 import { app } from 'electron'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -21,7 +23,8 @@ export function startBackend(): void {
     cmd = join(backendDir, `naga-backend${ext}`)
     args = ['--headless']
     cwd = backendDir
-  } else {
+  }
+  else {
     // 开发模式：直接用 python
     cwd = join(__dirname, '..', '..')
     cmd = process.platform === 'win32' ? 'python' : 'python3'
@@ -57,26 +60,32 @@ export function startBackend(): void {
 }
 
 export function stopBackend(): void {
-  if (!backendProcess) return
+  if (!backendProcess)
+    return
   const pid = backendProcess.pid
   console.log('[Backend] Stopping...')
 
   if (process.platform === 'win32') {
     // On Windows, use taskkill to kill the process tree
     spawn('taskkill', ['/pid', String(pid), '/f', '/t'])
-  } else {
+  }
+  else {
     // Kill the entire process group (negative PID)
     try {
-      if (pid) process.kill(-pid, 'SIGTERM')
-    } catch {
+      if (pid)
+        process.kill(-pid, 'SIGTERM')
+    }
+    catch {
       // already dead
     }
     // Force kill after 5s if still alive
     setTimeout(() => {
       try {
-        if (pid) process.kill(-pid, 0) // check if alive
+        if (pid)
+          process.kill(-pid, 0) // check if alive
         process.kill(-pid!, 'SIGKILL')
-      } catch {
+      }
+      catch {
         // already dead
       }
     }, 5000)
