@@ -211,6 +211,22 @@ export class CoreApiClient extends ApiClient {
   loadContext(days: number = 3) {
     return this.instance.get(`/logs/context/load?days=${days}`)
   }
+
+  getOpenclawTasks(): Promise<{
+    status: string
+    tasks: Array<Record<string, any>>
+  }> {
+    return this.instance.get('/openclaw/tasks')
+  }
+
+  getOpenclawTaskDetail(taskId: string): Promise<Record<string, any>> {
+    return this.instance.get(`/openclaw/tasks/${taskId}`)
+  }
+
+  getMcpTasks(status?: string): Promise<Record<string, any>> {
+    const params = status ? `?status=${status}` : ''
+    return this.instance.get(`/mcp/tasks${params}`)
+  }
 }
 
 export default new CoreApiClient(8000)

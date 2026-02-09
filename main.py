@@ -56,8 +56,9 @@ LOCAL_PKG_DIR = os.path.join(REPO_ROOT, "nagaagent-core")  # 统一入口 #
 if LOCAL_PKG_DIR not in sys.path:
     sys.path.insert(0, LOCAL_PKG_DIR)  # 优先使用本地包 #
 
-from PyQt5.QtGui import QIcon  # 统一入口 #
-from PyQt5.QtWidgets import QApplication  # 统一入口 #
+# PyQt5 延迟导入 - headless 模式不需要
+# from PyQt5.QtGui import QIcon
+# from PyQt5.QtWidgets import QApplication
 
 # 本地模块导入
 from system.system_checker import run_system_check, run_quick_check
@@ -68,8 +69,9 @@ from system.config import config, AI_NAME
 # conversation_core已删除，相关功能已迁移到apiserver
 from summer_memory.memory_manager import memory_manager
 from summer_memory.task_manager import start_task_manager, task_manager
-from ui.pyqt_chat_window import ChatWindow
-from ui.tray.console_tray import integrate_console_tray
+# UI 模块延迟导入 - headless 模式不需要
+# from ui.pyqt_chat_window import ChatWindow
+# from ui.tray.console_tray import integrate_console_tray
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -778,6 +780,11 @@ if __name__ == "__main__":
             sys.exit(0)
 
     # 快速启动UI，后台服务延迟初始化
+    from PyQt5.QtGui import QIcon
+    from PyQt5.QtWidgets import QApplication
+    from ui.pyqt_chat_window import ChatWindow
+    from ui.tray.console_tray import integrate_console_tray
+
     app = QApplication(sys.argv)
     icon_path = os.path.join(os.path.dirname(__file__), "ui", "img/window_icon.png")
     app.setWindowIcon(QIcon(icon_path))
