@@ -14,13 +14,13 @@ export function defineModel(model: Model) {
 
 export const MODELS = {
   NagaTest: defineModel({
-    source: '/models/naga-test/naga-test.model3.json',
+    source: './models/naga-test/naga-test.model3.json',
     x: 0.5,
     y: 1.3,
     size: 6800,
   }),
   重音テト: defineModel({
-    source: '/models/重音テト/重音テト.model3.json',
+    source: './models/重音テト/重音テト.model3.json',
     x: 0.5,
     y: 0.8,
     size: 5500,
