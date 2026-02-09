@@ -35,10 +35,12 @@ export function startToolPolling() {
   timer = setInterval(poll, 1000)
 }
 
-export function stopToolPolling() {
+export async function stopToolPolling() {
   if (timer) {
     clearInterval(timer)
     timer = null
   }
+  // Final poll to catch any last replies
+  await poll()
   toolMessage.value = ''
 }
