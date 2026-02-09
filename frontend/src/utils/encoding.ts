@@ -23,7 +23,8 @@ export function decodeStreamChunk(base64: string): StreamChunk {
     if (parsed && typeof parsed === 'object' && 'type' in parsed && 'text' in parsed) {
       return parsed as StreamChunk
     }
-  } catch {
+  }
+  catch {
     // Fallback for old format (plain text)
   }
   return { type: 'content', text: decoded }

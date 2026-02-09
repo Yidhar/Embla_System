@@ -4,19 +4,8 @@ import { ref } from 'vue'
 import API from '@/api/core'
 import BoxContainer from '@/components/BoxContainer.vue'
 
-interface MarketItem {
-  id: string
-  title: string
-  description: string
-  skillName: string
-  installed: boolean
-  enabled: boolean
-  installType: string
-}
-
-interface McpStatus {
-  server: string
-  tasks: { total: number; active: number; completed: number; failed: number }
+interface Skill extends MarketItem {
+  installFailed?: boolean
 }
 
 const skills = ref<MarketItem[]>([])

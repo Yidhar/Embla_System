@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ScrollPanel } from 'primevue'
+import ScrollPanel from 'primevue/scrollpanel'
 import { useTemplateRef } from 'vue'
 import back from '@/assets/icons/back.png'
 
@@ -19,13 +19,13 @@ defineExpose({
     <div class="flex items-center">
       <img :src="back" class="w-[var(--nav-back-width)]" alt="" @click="$router.back">
     </div>
-    <div class="box w-3/5">
+    <div class="box w-3/5 flex">
       <ScrollPanel
         ref="scrollPanelRef"
         class="size-full"
         :pt="{
           barY: {
-            class: 'w-2! rounded! bg-#373737! transition! -translate-1',
+            class: 'w-2! rounded! bg-#373737! transition!',
           },
         }"
       >

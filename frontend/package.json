@@ -5,6 +5,8 @@
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {
+    "lint": "eslint",
+    "lint:fix": "eslint --fix",
     "dev": "vite",
     "dev:web": "WEB_ONLY=1 vite",
     "build": "vue-tsc -b && vite build",

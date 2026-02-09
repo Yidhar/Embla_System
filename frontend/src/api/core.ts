@@ -4,6 +4,49 @@ import { aiter } from 'iterator-helper'
 import { decodeStreamChunk, readerToMessageStream } from '@/utils/encoding'
 import { ACCESS_TOKEN, ApiClient } from './index'
 
+export interface OpenClawStatus {
+  found: boolean
+  version?: string
+  skills_dir: string
+  config_path: string
+  skills_error?: string
+}
+
+export interface MarketItem {
+  id: string
+  title: string
+  description: string
+  skill_name?: string
+  enabled: boolean
+  installed: boolean
+  eligible?: boolean
+  disabled?: boolean
+  missing?: boolean
+  skill_path: string
+  openclaw_visible: boolean
+  install_type: string
+}
+
+export interface MemoryStats {
+  totalQuintuples: number
+  contextLength: number
+  cacheSize: number
+  activeTasks: number
+  taskManager: {
+    enabled: boolean
+    totalTasks: number
+    pendingTasks: number
+    runningTasks: number
+    completedTasks: number
+    failedTasks: number
+    cancelledTasks: number
+    maxWorkers: number
+    maxQueueSize: number
+    queueSize: number
+    queueUsage: string
+    taskTimeout: number
+  }
+}
 export class CoreApiClient extends ApiClient {
   health(): Promise<{
     status: 'healthy'
@@ -14,7 +57,7 @@ export class CoreApiClient extends ApiClient {
   }
 
   systemInfo(): Promise<{
-    version: '4.0.0' | string
+    version: string
     status: 'running'
     availableServices: []
     apiKeyConfigured: boolean
@@ -99,7 +142,7 @@ export class CoreApiClient extends ApiClient {
   getSessionDetail(id: string): Promise<{
     status: string
     sessionId: string
-    messages: Array<{ role: string; content: string }>
+    messages: Array<{ role: string, content: string }>
     conversationRounds: number
   }> {
     return this.instance.get(`/sessions/${id}`)
@@ -113,7 +156,7 @@ export class CoreApiClient extends ApiClient {
     return this.instance.delete('/sessions')
   }
 
-  getToolStatus(): Promise<{ message: string; visible: boolean }> {
+  getToolStatus(): Promise<{ message: string, visible: boolean }> {
     return this.instance.get('/tool_status')
   }
 
@@ -121,7 +164,15 @@ export class CoreApiClient extends ApiClient {
     return this.instance.get('/clawdbot/replies')
   }
 
-  uploadDocument(file: File, description?: string) {
+  uploadDocument(file: File, description?: string): Promise<{
+    status: 'success'
+    message: string
+    filename: string
+    filePath: string
+    fileSize: number
+    fileType: string
+    uploadTime: string
+  }> {
     const formData = new FormData()
     formData.append('file', file)
     if (description) {
@@ -133,7 +184,11 @@ export class CoreApiClient extends ApiClient {
     })
   }
 
-  getMemoryStats() {
+  getMemoryStats(): Promise<{
+    status: string
+    memoryStats: { enabled: true } & MemoryStats
+      | { enabled: false, message: string }
+  }> {
     return this.instance.get('/memory/stats')
   }
 
@@ -166,31 +221,18 @@ export class CoreApiClient extends ApiClient {
   }
 
   getMarketItems(): Promise<{
-    status: string
-    openclaw: {
-      found: boolean
-      version: string | null
-      skillsDir: string
-      configPath: string
-      skillsError: string | null
-    }
-    items: Array<{
-      id: string
-      title: string
-      description: string
-      skillName: string
-      installed: boolean
-      enabled: boolean
-      installType: string
-    }>
+    status: 'success'
+    openclaw: OpenClawStatus
+    items: MarketItem[]
   }> {
     return this.instance.get('/openclaw/market/items')
   }
 
-  installMarketItem(itemId: string, payload?: Record<string, any>): Promise<{
-    status: string
+  installMarketItem(itemId: string): Promise<{
+    status: 'success'
     message: string
-    item: Record<string, any>
+    item: MarketItem
+    openclaw: OpenClawStatus
   }> {
     return this.instance.post(`/openclaw/market/items/${itemId}/install`, payload ?? {}, {
       timeout: 5 * 60 * 1000,
@@ -200,17 +242,22 @@ export class CoreApiClient extends ApiClient {
   getMcpStatus(): Promise<{
     server: string
     timestamp: string
-    tasks: { total: number; active: number; completed: number; failed: number }
+    tasks: { total: number, active: number, completed: number, failed: number }
     scheduler?: Record<string, any>
   }> {
     return this.instance.get('/mcp/status')
   }
 
-  getContextStats(days: number = 7) {
+  getContextStats(days?: number) {
     return this.instance.get(`/logs/context/statistics?days=${days}`)
   }
 
-  loadContext(days: number = 3) {
+  loadContext(days?: number): Promise<{
+    status: 'success'
+    messages: { role: 'user' | 'assistant', content: string }[]
+    count: number
+    days: number
+  }> {
     return this.instance.get(`/logs/context/load?days=${days}`)
   }
 

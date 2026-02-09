@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import API from '@/api/core'
-import { MESSAGES } from '@/composables/useSession'
+import { MESSAGES } from '@/utils/session'
 
 export const toolMessage = ref('')
 export const openclawTasks = ref<Array<Record<string, any>>>([])
@@ -35,13 +35,15 @@ async function poll() {
         toolMessage.value = `OpenClaw: ${active.length} 个任务执行中...`
       }
     }
-  } catch {
+  }
+  catch {
     // ignore polling errors
   }
 }
 
 export function startToolPolling() {
-  if (timer) return
+  if (timer)
+    return
   poll()
   timer = setInterval(poll, 2000)
 }

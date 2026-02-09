@@ -1,5 +1,6 @@
-import { Tray, Menu, nativeImage, app } from 'electron'
-import { join } from 'path'
+import { join } from 'node:path'
+import process from 'node:process'
+import { app, Menu, nativeImage, Tray } from 'electron'
 import { getMainWindow } from './window'
 
 let tray: Tray | null = null
@@ -13,7 +14,8 @@ export function createTray(): Tray {
   let icon: Electron.NativeImage
   try {
     icon = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 })
-  } catch {
+  }
+  catch {
     icon = nativeImage.createEmpty()
   }
 
@@ -48,7 +50,8 @@ export function createTray(): Tray {
     if (win) {
       if (win.isVisible()) {
         win.focus()
-      } else {
+      }
+      else {
         win.show()
       }
     }

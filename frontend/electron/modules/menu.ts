@@ -1,4 +1,6 @@
-import { Menu, type MenuItemConstructorOptions } from 'electron'
+import type { MenuItemConstructorOptions } from 'electron'
+import process from 'node:process'
+import { Menu } from 'electron'
 
 export function createMenu(): void {
   const isMac = process.platform === 'darwin'

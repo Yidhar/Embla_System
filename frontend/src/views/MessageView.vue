@@ -4,16 +4,10 @@ import { nextTick, onMounted, onUnmounted, ref, useTemplateRef } from 'vue'
 import API from '@/api/core'
 import BoxContainer from '@/components/BoxContainer.vue'
 import MessageItem from '@/components/MessageItem.vue'
-import { CURRENT_SESSION_ID, MESSAGES, loadCurrentSession, newSession, switchSession } from '@/composables/useSession'
 import { startToolPolling, stopToolPolling, toolMessage } from '@/composables/useToolStatus'
-import { speak } from '@/composables/useTTS'
 import { CONFIG } from '@/utils/config'
-
-declare global {
-  interface WindowEventMap {
-    token: CustomEvent<string>
-  }
-}
+import { CURRENT_SESSION_ID, loadCurrentSession, MESSAGES, newSession, switchSession } from '@/utils/session'
+import { speak } from '@/utils/tts'
 
 export function chatStream(content: string) {
   MESSAGES.value.push({ role: 'user', content })
@@ -31,7 +25,8 @@ export function chatStream(content: string) {
     for await (const chunk of response) {
       if (chunk.type === 'reasoning') {
         message.reasoning = (message.reasoning || '') + chunk.text
-      } else {
+      }
+      else {
         message.content += chunk.text
       }
       window.dispatchEvent(new CustomEvent('token', { detail: chunk.text }))
@@ -56,6 +51,29 @@ const input = defineModel<string>()
 const containerRef = useTemplateRef('containerRef')
 const fileInput = ref<HTMLInputElement | null>(null)
 
+function scrollToBottom() {
+  containerRef.value?.scrollToBottom()
+}
+
+function sendMessage() {
+  if (input.value) {
+    chatStream(input.value)
+    nextTick().then(scrollToBottom)
+    input.value = ''
+  }
+}
+
+onMounted(() => {
+  loadCurrentSession()
+  startToolPolling()
+  scrollToBottom()
+})
+onUnmounted(() => {
+  stopToolPolling()
+})
+useEventListener('token', scrollToBottom)
+onKeyStroke('Enter', sendMessage)
+
 // Session history
 const showHistory = ref(false)
 const sessions = ref<Array<{
@@ -71,7 +89,8 @@ async function fetchSessions() {
   try {
     const res = await API.getSessions()
     sessions.value = res.sessions ?? []
-  } catch {
+  }
+  catch {
     sessions.value = []
   }
   loadingSessions.value = false
@@ -97,7 +116,8 @@ async function handleDeleteSession(id: string) {
     if (CURRENT_SESSION_ID.value === id) {
       newSession()
     }
-  } catch { /* ignore */ }
+  }
+  catch { /* ignore */ }
 }
 
 function formatTime(iso: string) {
@@ -105,25 +125,17 @@ function formatTime(iso: string) {
   const now = new Date()
   const diffMs = now.getTime() - d.getTime()
   const diffMin = Math.floor(diffMs / 60000)
-  if (diffMin < 1) return '刚刚'
-  if (diffMin < 60) return `${diffMin} 分钟前`
+  if (diffMin < 1)
+    return '刚刚'
+  if (diffMin < 60)
+    return `${diffMin} 分钟前`
   const diffHour = Math.floor(diffMin / 60)
-  if (diffHour < 24) return `${diffHour} 小时前`
+  if (diffHour < 24)
+    return `${diffHour} 小时前`
   const diffDay = Math.floor(diffHour / 24)
-  if (diffDay < 7) return `${diffDay} 天前`
+  if (diffDay < 7)
+    return `${diffDay} 天前`
   return d.toLocaleDateString()
-}
-
-function scrollToBottom() {
-  containerRef.value?.scrollToBottom()
-}
-
-function sendMessage() {
-  if (input.value) {
-    chatStream(input.value)
-    nextTick().then(scrollToBottom)
-    input.value = ''
-  }
 }
 
 function handleNewSession() {
@@ -138,7 +150,8 @@ function triggerUpload() {
 async function handleFileUpload(event: Event) {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
-  if (!file) return
+  if (!file)
+    return
 
   MESSAGES.value.push({ role: 'system', content: `正在上传文件: ${file.name}...` })
   try {
@@ -148,7 +161,8 @@ async function handleFileUpload(event: Event) {
     if (result.filePath) {
       chatStream(`请分析我刚上传的文件: ${file.name}`)
     }
-  } catch (err: any) {
+  }
+  catch (err: any) {
     const msg = MESSAGES.value[MESSAGES.value.length - 1]!
     msg.content = `文件上传失败: ${err.message}`
   }
@@ -171,7 +185,7 @@ onKeyStroke('Enter', sendMessage)
 <template>
   <div class="flex flex-col gap-8 overflow-hidden relative">
     <BoxContainer ref="containerRef" class="w-full grow">
-      <div class="grid gap-4">
+      <div class="grid gap-4 pb-8">
         <MessageItem
           v-for="item, index in MESSAGES" :key="index"
           :role="item.role" :content="item.content"

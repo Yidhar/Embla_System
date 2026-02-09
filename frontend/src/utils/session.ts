@@ -1,3 +1,4 @@
+import type { StreamChunk } from '@/utils/encoding'
 import { useStorage } from '@vueuse/core'
 import { ref } from 'vue'
 import API from '@/api/core'
@@ -22,7 +23,8 @@ export async function loadCurrentSession() {
         content: m.content,
       }))
       return
-    } catch {
+    }
+    catch {
       CURRENT_SESSION_ID.value = null
     }
   }
@@ -35,7 +37,8 @@ export async function loadCurrentSession() {
         content: m.content,
       }))
     }
-  } catch {
+  }
+  catch {
     // Backend unavailable, start empty
     MESSAGES.value = []
   }
@@ -49,4 +52,10 @@ export function newSession() {
 export async function switchSession(id: string) {
   CURRENT_SESSION_ID.value = id
   await loadCurrentSession()
+}
+
+declare global {
+  interface WindowEventMap {
+    token: CustomEvent<StreamChunk>
+  }
 }

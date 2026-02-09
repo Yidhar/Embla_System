@@ -1,3 +1,4 @@
+import process from 'node:process'
 import { contextBridge, ipcRenderer } from 'electron'
 
 const electronAPI = {
@@ -18,8 +19,8 @@ const electronAPI = {
   downloadUpdate: () => ipcRenderer.send('updater:download'),
   installUpdate: () => ipcRenderer.send('updater:install'),
 
-  onUpdateAvailable: (callback: (info: { version: string; releaseNotes: string }) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, info: { version: string; releaseNotes: string }) => callback(info)
+  onUpdateAvailable: (callback: (info: { version: string, releaseNotes: string }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, info: { version: string, releaseNotes: string }) => callback(info)
     ipcRenderer.on('updater:update-available', handler)
     return () => ipcRenderer.removeListener('updater:update-available', handler)
   },
