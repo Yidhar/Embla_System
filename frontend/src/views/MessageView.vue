@@ -43,14 +43,12 @@ export function chatStream(content: string) {
     if (!message.reasoning) {
       delete message.reasoning
     }
-    stopToolPolling()
 
     if (CONFIG.value.system.voice_enabled && message.content) {
       speak(message.content)
     }
   }).catch((err) => {
     MESSAGES.value.push({ role: 'system', content: `Error: ${err.message}` })
-    stopToolPolling()
   })
 }
 </script>
@@ -161,6 +159,7 @@ async function handleFileUpload(event: Event) {
 
 onMounted(() => {
   loadCurrentSession()
+  startToolPolling()
   scrollToBottom()
 })
 onUnmounted(() => {
