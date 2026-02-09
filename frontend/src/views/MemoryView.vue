@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { MemoryStats } from '@/api/core'
 import { useStorage } from '@vueuse/core'
 import { Accordion, Button, Divider, InputNumber, InputText, Message, ToggleSwitch } from 'primevue'
 import { computed, onMounted, ref } from 'vue'
@@ -10,9 +11,11 @@ import { CONFIG } from '@/utils/config'
 
 const accordionValue = useStorage('accordion-memory', ['grag'])
 
-const memoryStats = ref<Record<string, any> | null>(null)
-const testResult = ref<string | null>(null)
-const testing = ref(false)
+const memoryStats = ref<MemoryStats>()
+const testResult = ref<{
+  severity: 'success' | 'error'
+  message: string
+}>()
 
 const similarityPercent = computed({
   get() {
@@ -24,24 +27,29 @@ const similarityPercent = computed({
 })
 
 async function testConnection() {
-  testing.value = true
-  testResult.value = null
+  testResult.value = undefined
   try {
     const res = await API.getMemoryStats()
     const stats = res.memoryStats ?? res
     if (stats.enabled === false) {
-      testResult.value = `未启用: ${stats.message || '请先启用知识图谱'}`
+      testResult.value = {
+        severity: 'error',
+        message: `未启用: ${stats.message || '请先启用知识图谱'}`,
+      }
     }
     else {
       memoryStats.value = stats
-      testResult.value = `连接成功 (五元组: ${stats.totalQuintuples ?? 0})`
+      testResult.value = {
+        severity: 'success',
+        message: `连接成功：已加载 ${stats.totalQuintuples ?? 0} 个五元组`,
+      }
     }
   }
-  catch (e: any) {
-    testResult.value = `连接失败: ${e.message}`
-  }
-  finally {
-    testing.value = false
+  catch (error: any) {
+    testResult.value = {
+      severity: 'error',
+      message: `连接失败: ${error.message}`,
+    }
   }
 }
 
@@ -87,18 +95,18 @@ onMounted(() => {
             <InputText v-model="CONFIG.grag.neo4j_password" placeholder="••••••••" />
           </ConfigItem>
           <Divider class="m-1!" />
-          <div class="flex flex-row-reverse justify-between">
+          <div class="flex flex-row-reverse justify-between gap-4">
             <Button
-              :label="testing ? '测试中...' : '测试连接'"
+              :label="testResult ? '测试连接' : '测试中...' "
               size="small"
-              :disabled="testing"
+              :disabled="!testResult"
               @click="testConnection"
             />
             <Message
-              v-if="testResult" :pt="{ content: { class: 'p-2!' } }"
-              :severity="testResult.startsWith('连接成功') ? 'success' : 'error'"
+              v-if="testResult" :pt="{ content: { class: 'p-2.5!' } }"
+              :severity="testResult.severity"
             >
-              {{ testResult }}
+              {{ testResult.message }}
             </Message>
           </div>
         </div>

@@ -27,6 +27,26 @@ export interface MarketItem {
   install_type: string
 }
 
+export interface MemoryStats {
+  totalQuintuples: number
+  contextLength: number
+  cacheSize: number
+  activeTasks: number
+  taskManager: {
+    enabled: boolean
+    totalTasks: number
+    pendingTasks: number
+    runningTasks: number
+    completedTasks: number
+    failedTasks: number
+    cancelledTasks: number
+    maxWorkers: number
+    maxQueueSize: number
+    queueSize: number
+    queueUsage: string
+    taskTimeout: number
+  }
+}
 export class CoreApiClient extends ApiClient {
   health(): Promise<{
     status: 'healthy'
@@ -166,27 +186,8 @@ export class CoreApiClient extends ApiClient {
 
   getMemoryStats(): Promise<{
     status: string
-    memoryStats: {
-      enabled: true
-      totalQuintuples: number
-      contextLength: number
-      cacheSize: number
-      activeTasks: number
-      taskManager: {
-        enabled: boolean
-        totalTasks: number
-        pendingTasks: number
-        runningTasks: number
-        completedTasks: number
-        failedTasks: number
-        cancelledTasks: number
-        maxWorkers: number
-        maxQueueSize: number
-        queueSize: number
-        queueUsage: string
-        taskTimeout: number
-      }
-    } | { enabled: false, message: string }
+    memoryStats: { enabled: true } & MemoryStats
+      | { enabled: false, message: string }
   }> {
     return this.instance.get('/memory/stats')
   }
