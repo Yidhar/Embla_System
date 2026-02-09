@@ -11,7 +11,7 @@ export class AgentApiClient extends ApiClient {
     }>
     count: number
   }> {
-    return this.instance.get('/tools').then(res => res.data)
+    return this.instance.get('/tools')
   }
 
   getToolkits(): Promise<{
@@ -19,11 +19,11 @@ export class AgentApiClient extends ApiClient {
     toolkits: string[]
     count: number
   }> {
-    return this.instance.get('/toolkits').then(res => res.data)
+    return this.instance.get('/toolkits')
   }
 
   getToolkitDetail(name: string) {
-    return this.instance.get(`/toolkits/${name}`).then(res => res.data)
+    return this.instance.get(`/toolkits/${name}`)
   }
 
   getSessions(): Promise<{
@@ -31,11 +31,11 @@ export class AgentApiClient extends ApiClient {
     sessions: Array<Record<string, any>>
     totalSessions: number
   }> {
-    return this.instance.get('/sessions').then(res => res.data)
+    return this.instance.get('/sessions')
   }
 
   getSessionMemory(sessionId: string) {
-    return this.instance.get(`/sessions/${sessionId}/memory`).then(res => res.data)
+    return this.instance.get(`/sessions/${sessionId}/memory`)
   }
 
   getSessionKeyFacts(sessionId: string): Promise<{
@@ -44,7 +44,7 @@ export class AgentApiClient extends ApiClient {
     keyFacts: Record<string, string>
     count: number
   }> {
-    return this.instance.get(`/sessions/${sessionId}/key_facts`).then(res => res.data)
+    return this.instance.get(`/sessions/${sessionId}/key_facts`)
   }
 }
 

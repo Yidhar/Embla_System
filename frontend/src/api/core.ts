@@ -1,7 +1,7 @@
 import type { Config } from '@/utils/config'
-import type { StreamChunk } from '@/utils'
+import type { StreamChunk } from '@/utils/encoding'
 import { aiter } from 'iterator-helper'
-import { decodeStreamChunk, readerToMessageStream } from '@/utils'
+import { decodeStreamChunk, readerToMessageStream } from '@/utils/encoding'
 import { ACCESS_TOKEN, ApiClient } from './index'
 
 export class CoreApiClient extends ApiClient {
@@ -13,39 +13,39 @@ export class CoreApiClient extends ApiClient {
     return this.instance.get('/health')
   }
 
-  // systemInfo() {
-  //   return this.instance.get<{
-  //     version: '4.0.0' | string
-  //     status: 'running'
-  //     availableServices: []
-  //     apiKeyConfigured: boolean
-  //   }>('/system/info').then(res => res.data)
-  // }
-
-  systemConfig(): Promise<Config> {
-    return this.instance.get<{
-      status: 'success'
-      config: Config
-    }>('/system/config').then(res => res.data.config)
+  systemInfo(): Promise<{
+    version: '4.0.0' | string
+    status: 'running'
+    availableServices: []
+    apiKeyConfigured: boolean
+  }> {
+    return this.instance.get('/system/info')
   }
 
-  setSystemConfig(config: Config) {
-    return this.instance.post<{
-      status: 'success'
-      message: string
-    }>('/system/config', config).then(res => res.data.message)
+  systemConfig(): Promise<{
+    status: 'success'
+    config: Config
+  }> {
+    return this.instance('/system/config')
+  }
+
+  setSystemConfig(config: Config): Promise<{
+    status: 'success'
+    message: string
+  }> {
+    return this.instance.post('/system/config', config)
   }
 
   chat(message: string, options?: {
     sessionId?: string
     useSelfGame?: boolean
     skipIntentAnalysis?: boolean
-  }) {
-    return this.instance.post<{
-      status: 'success'
-      response: string
-      sessionId?: string
-    }>('/chat', { message, ...options }).then(res => res.data)
+  }): Promise<{
+    status: 'success'
+    response: string
+    sessionId?: string
+  }> {
+    return this.instance.post('/chat', { message, ...options })
   }
 
   async chatStream(message: string, options?: {
@@ -93,7 +93,7 @@ export class CoreApiClient extends ApiClient {
     }>
     totalSessions: number
   }> {
-    return this.instance.get('/sessions').then(res => res.data)
+    return this.instance.get('/sessions')
   }
 
   getSessionDetail(id: string): Promise<{
@@ -102,23 +102,23 @@ export class CoreApiClient extends ApiClient {
     messages: Array<{ role: string; content: string }>
     conversationRounds: number
   }> {
-    return this.instance.get(`/sessions/${id}`).then(res => res.data)
+    return this.instance.get(`/sessions/${id}`)
   }
 
   deleteSession(id: string) {
-    return this.instance.delete(`/sessions/${id}`).then(res => res.data)
+    return this.instance.delete(`/sessions/${id}`)
   }
 
   clearAllSessions() {
-    return this.instance.delete('/sessions').then(res => res.data)
+    return this.instance.delete('/sessions')
   }
 
   getToolStatus(): Promise<{ message: string; visible: boolean }> {
-    return this.instance.get('/tool_status').then(res => res.data)
+    return this.instance.get('/tool_status')
   }
 
   getClawdbotReplies(): Promise<{ replies: string[] }> {
-    return this.instance.get('/clawdbot/replies').then(res => res.data)
+    return this.instance.get('/clawdbot/replies')
   }
 
   uploadDocument(file: File, description?: string) {
@@ -130,11 +130,11 @@ export class CoreApiClient extends ApiClient {
     return this.instance.post('/upload/document', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 60000,
-    }).then(res => res.data)
+    })
   }
 
   getMemoryStats() {
-    return this.instance.get('/memory/stats').then(res => res.data)
+    return this.instance.get('/memory/stats')
   }
 
   getQuintuples(): Promise<{
@@ -148,7 +148,7 @@ export class CoreApiClient extends ApiClient {
     }>
     count: number
   }> {
-    return this.instance.get('/memory/quintuples').then(res => res.data)
+    return this.instance.get('/memory/quintuples')
   }
 
   searchQuintuples(keywords: string): Promise<{
@@ -162,7 +162,7 @@ export class CoreApiClient extends ApiClient {
     }>
     count: number
   }> {
-    return this.instance.get(`/memory/quintuples/search?keywords=${encodeURIComponent(keywords)}`).then(res => res.data)
+    return this.instance.get(`/memory/quintuples/search?keywords=${encodeURIComponent(keywords)}`)
   }
 
   getMarketItems(): Promise<{
@@ -184,7 +184,7 @@ export class CoreApiClient extends ApiClient {
       installType: string
     }>
   }> {
-    return this.instance.get('/openclaw/market/items').then(res => res.data)
+    return this.instance.get('/openclaw/market/items')
   }
 
   installMarketItem(itemId: string, payload?: Record<string, any>): Promise<{
@@ -192,7 +192,7 @@ export class CoreApiClient extends ApiClient {
     message: string
     item: Record<string, any>
   }> {
-    return this.instance.post(`/openclaw/market/items/${itemId}/install`, payload ?? {}).then(res => res.data)
+    return this.instance.post(`/openclaw/market/items/${itemId}/install`, payload ?? {})
   }
 
   getMcpStatus(): Promise<{
@@ -201,15 +201,15 @@ export class CoreApiClient extends ApiClient {
     tasks: { total: number; active: number; completed: number; failed: number }
     scheduler?: Record<string, any>
   }> {
-    return this.instance.get('/mcp/status').then(res => res.data)
+    return this.instance.get('/mcp/status')
   }
 
   getContextStats(days: number = 7) {
-    return this.instance.get(`/logs/context/statistics?days=${days}`).then(res => res.data)
+    return this.instance.get(`/logs/context/statistics?days=${days}`)
   }
 
   loadContext(days: number = 3) {
-    return this.instance.get(`/logs/context/load?days=${days}`).then(res => res.data)
+    return this.instance.get(`/logs/context/load?days=${days}`)
   }
 }
 
