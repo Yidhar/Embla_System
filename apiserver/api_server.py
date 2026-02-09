@@ -13,8 +13,11 @@ import logging
 import uuid
 import time
 import threading
+import subprocess
 from contextlib import asynccontextmanager
-from typing import Dict, List, Optional, AsyncGenerator, Any
+from typing import Dict, List, Optional, AsyncGenerator, Any, Tuple
+from urllib.request import Request as UrlRequest, urlopen
+from urllib.error import URLError
 
 # 在导入其他模块前先设置HTTP库日志级别
 logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
@@ -107,6 +110,290 @@ app.add_middleware(
 # 挂载静态文件
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+
+# ============ 内部服务代理 ============
+
+async def _call_agentserver(
+    method: str,
+    path: str,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
+    timeout_seconds: float = 15.0,
+) -> Any:
+    """调用 agentserver 内部接口（用于透传 OpenClaw 状态查询等能力）"""
+    import httpx
+    from system.config import get_server_port
+
+    port = get_server_port("agent_server")
+    url = f"http://127.0.0.1:{port}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            resp = await client.request(method, url, params=params, json=json_body)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"agentserver 不可达: {e}")
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json()
+        except Exception:
+            pass
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+    try:
+        return resp.json()
+    except Exception:
+        return resp.text
+
+
+async def _call_mcpserver(
+    method: str,
+    path: str,
+    params: Optional[Dict[str, Any]] = None,
+    timeout_seconds: float = 10.0,
+) -> Any:
+    """调用 MCP Server 内部接口"""
+    import httpx
+    from system.config import get_server_port
+
+    port = get_server_port("mcp_server")
+    url = f"http://127.0.0.1:{port}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+            resp = await client.request(method, url, params=params)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"MCP Server 不可达: {e}")
+    if resp.status_code >= 400:
+        detail = resp.text
+        try:
+            detail = resp.json()
+        except Exception:
+            pass
+        raise HTTPException(status_code=resp.status_code, detail=detail)
+    try:
+        return resp.json()
+    except Exception:
+        return resp.text
+
+
+# ============ OpenClaw Skill Market ============
+
+OPENCLAW_STATE_DIR = Path.home() / ".openclaw"
+OPENCLAW_SKILLS_DIR = OPENCLAW_STATE_DIR / "skills"
+OPENCLAW_CONFIG_PATH = OPENCLAW_STATE_DIR / "openclaw.json"
+SKILLS_TEMPLATE_DIR = Path(__file__).resolve().parent / "skills_templates"
+MCPORTER_DIR = Path.home() / ".mcporter"
+MCPORTER_CONFIG_PATH = MCPORTER_DIR / "config.json"
+
+MARKET_ITEMS: List[Dict[str, Any]] = [
+    {
+        "id": "agent-browser",
+        "title": "Agent Browser",
+        "description": "Browser automation skill (install SKILL.md only, demo mode).",
+        "skill_name": "agent-browser",
+        "enabled": True,
+        "install": {
+            "type": "remote_skill",
+            "url": "https://raw.githubusercontent.com/vercel-labs/agent-browser/refs/heads/main/skills/agent-browser/SKILL.md",
+        },
+    },
+    {
+        "id": "office-docs",
+        "title": "Office Docs (docx + xlsx)",
+        "description": "Extract docx/xlsx content with local scripts (no extra deps).",
+        "skill_name": "office-docs",
+        "enabled": True,
+        "install": {
+            "type": "template_dir",
+            "template": "office-docs",
+        },
+    },
+    {
+        "id": "brainstorming",
+        "title": "Brainstorming",
+        "description": "Guided ideation and design exploration skill.",
+        "skill_name": "brainstorming",
+        "enabled": True,
+        "install": {
+            "type": "remote_skill",
+            "url": "https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/skills/brainstorming/SKILL.md",
+        },
+    },
+    {
+        "id": "context7",
+        "title": "Context7 Docs",
+        "description": "Query library/API docs via mcporter + context7 MCP (stdio).",
+        "skill_name": "context7",
+        "enabled": True,
+        "install": {
+            "type": "template_dir",
+            "template": "context7",
+        },
+    },
+    {
+        "id": "search",
+        "title": "Search (Firecrawl MCP)",
+        "description": "Search MCP integration via mcporter + firecrawl-mcp.",
+        "skill_name": "search",
+        "enabled": True,
+        "install": {
+            "type": "template_dir",
+            "template": "search",
+        },
+    },
+]
+
+
+def _run_command(command: List[str], timeout: int = 30) -> Tuple[int, str, str]:
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
+
+
+def _get_openclaw_version() -> Optional[str]:
+    if shutil.which("openclaw") is None:
+        return None
+    try:
+        code, stdout, stderr = _run_command(["openclaw", "--version"], timeout=15)
+    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired):
+        return None
+    if code == 0:
+        return stdout or stderr
+    return None
+
+
+def _get_openclaw_skills_data() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    if shutil.which("openclaw") is None:
+        return None, "openclaw_not_found"
+    try:
+        code, stdout, stderr = _run_command(["openclaw", "skills", "list", "--json"], timeout=30)
+    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as exc:
+        return None, f"openclaw_skills_list_failed: {exc}"
+    if code != 0:
+        return None, stderr or stdout or "openclaw_skills_list_failed"
+    try:
+        return json.loads(stdout), None
+    except json.JSONDecodeError as exc:
+        return None, f"openclaw_skills_list_invalid_json: {exc}"
+
+
+def _download_text(url: str, timeout: int = 20) -> str:
+    try:
+        request = UrlRequest(url, headers={"User-Agent": "NagaAgent/market-installer"})
+        with urlopen(request, timeout=timeout) as response:
+            return response.read().decode("utf-8")
+    except URLError as exc:
+        raise RuntimeError(f"下载失败: {exc}")
+
+
+def _write_skill_file(skill_name: str, content: str) -> Path:
+    skill_dir = OPENCLAW_SKILLS_DIR / skill_name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_path = skill_dir / "SKILL.md"
+    skill_path.write_text(content, encoding="utf-8")
+    return skill_path
+
+
+def _copy_template_dir(template_name: str, skill_name: str) -> None:
+    template_dir = SKILLS_TEMPLATE_DIR / template_name
+    if not template_dir.exists():
+        raise FileNotFoundError(f"模板不存在: {template_dir}")
+    skill_dir = OPENCLAW_SKILLS_DIR / skill_name
+    for path in template_dir.rglob("*"):
+        if path.is_dir():
+            continue
+        relative = path.relative_to(template_dir)
+        target_path = skill_dir / relative
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target_path)
+
+
+def _update_mcporter_firecrawl_config(api_key: Optional[str]) -> Path:
+    MCPORTER_DIR.mkdir(parents=True, exist_ok=True)
+    mcporter_config: Dict[str, Any] = {}
+    if MCPORTER_CONFIG_PATH.exists():
+        try:
+            mcporter_config = json.loads(MCPORTER_CONFIG_PATH.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            mcporter_config = {}
+    servers = mcporter_config.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+    server_entry = servers.get("firecrawl-mcp")
+    if not isinstance(server_entry, dict):
+        server_entry = {}
+    env = server_entry.get("env")
+    if not isinstance(env, dict):
+        env = {}
+    if api_key:
+        env["FIRECRAWL_API_KEY"] = api_key
+    elif "FIRECRAWL_API_KEY" not in env:
+        env["FIRECRAWL_API_KEY"] = "YOUR_FIRECRAWL_API_KEY"
+    server_entry.update({"command": "npx", "args": ["-y", "firecrawl-mcp"], "env": env})
+    servers["firecrawl-mcp"] = server_entry
+    mcporter_config["mcpServers"] = servers
+    MCPORTER_CONFIG_PATH.write_text(json.dumps(mcporter_config, ensure_ascii=True, indent=2), encoding="utf-8")
+    return MCPORTER_CONFIG_PATH
+
+
+def _install_agent_browser() -> None:
+    if shutil.which("npm") is None:
+        raise RuntimeError("未找到 npm，无法安装 agent-browser")
+    code, stdout, stderr = _run_command(["npm", "install", "-g", "agent-browser"], timeout=300)
+    if code != 0:
+        raise RuntimeError(stderr or stdout or "npm install -g agent-browser 失败")
+    if shutil.which("agent-browser") is None:
+        raise RuntimeError("agent-browser 未安装成功或未在 PATH 中")
+    code, stdout, stderr = _run_command(["agent-browser", "install"], timeout=300)
+    if code != 0:
+        raise RuntimeError(stderr or stdout or "agent-browser install 失败")
+
+
+def _build_market_item(
+    item: Dict[str, Any],
+    skills_data: Optional[Dict[str, Any]],
+    openclaw_found: bool,
+) -> Dict[str, Any]:
+    skill_name_value = item.get("skill_name") or item.get("id") or "unknown"
+    skill_name = str(skill_name_value)
+    skill_entry = None
+    if skills_data and isinstance(skills_data.get("skills"), list):
+        for entry in skills_data.get("skills", []):
+            if entry.get("name") == skill_name:
+                skill_entry = entry
+                break
+    skill_path = OPENCLAW_SKILLS_DIR / skill_name / "SKILL.md"
+    installed_by_file = skill_path.exists()
+    installed = installed_by_file or bool(skill_entry)
+    return {
+        "id": item.get("id"),
+        "title": item.get("title"),
+        "description": item.get("description"),
+        "skill_name": skill_name,
+        "enabled": item.get("enabled", True),
+        "installed": installed,
+        "eligible": skill_entry.get("eligible") if skill_entry else None,
+        "disabled": skill_entry.get("disabled") if skill_entry else None,
+        "missing": skill_entry.get("missing") if skill_entry else None,
+        "skill_path": str(skill_path),
+        "openclaw_visible": bool(skill_entry) if openclaw_found else False,
+        "install_type": item.get("install", {}).get("type"),
+    }
+
+
+def _get_market_items_status() -> Dict[str, Any]:
+    openclaw_found = shutil.which("openclaw") is not None
+    openclaw_version = _get_openclaw_version()
+    skills_data, skills_error = _get_openclaw_skills_data()
+    items = [_build_market_item(item, skills_data, openclaw_found) for item in MARKET_ITEMS]
+    return {
+        "openclaw": {
+            "found": openclaw_found,
+            "version": openclaw_version,
+            "skills_dir": str(OPENCLAW_SKILLS_DIR),
+            "config_path": str(OPENCLAW_CONFIG_PATH),
+            "skills_error": skills_error,
+        },
+        "items": items,
+    }
 
 
 # 请求模型
@@ -509,6 +796,156 @@ async def get_memory_stats():
         print(f"获取记忆统计错误: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"获取记忆统计失败: {str(e)}")
+
+
+# ============ OpenClaw Market 路由 ============
+
+@app.get("/openclaw/market/items")
+async def list_openclaw_market_items():
+    """获取OpenClaw技能市场条目"""
+    try:
+        status = _get_market_items_status()
+        return {"status": "success", **status}
+    except Exception as e:
+        logger.error(f"获取技能市场失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取技能市场失败: {str(e)}")
+
+
+@app.post("/openclaw/market/items/{item_id}/install")
+async def install_openclaw_market_item(item_id: str, payload: Optional[Dict[str, Any]] = None):
+    """安装指定OpenClaw技能市场条目"""
+    item = next((entry for entry in MARKET_ITEMS if entry.get("id") == item_id), None)
+    if not item:
+        raise HTTPException(status_code=404, detail="条目不存在")
+    if not item.get("enabled", True):
+        raise HTTPException(status_code=400, detail="条目暂不可安装")
+
+    install_spec = item.get("install", {})
+    install_type = install_spec.get("type")
+    skill_name_value = item.get("skill_name") or item.get("id")
+    if not skill_name_value:
+        raise HTTPException(status_code=500, detail="技能名称缺失")
+    skill_name = str(skill_name_value)
+
+    try:
+        if item_id == "agent-browser":
+            _install_agent_browser()
+        if item_id == "search":
+            api_key = None
+            if payload and isinstance(payload, dict):
+                api_key = payload.get("api_key") or payload.get("FIRECRAWL_API_KEY")
+            _update_mcporter_firecrawl_config(api_key)
+        if install_type == "remote_skill":
+            url = install_spec.get("url")
+            if not url:
+                raise HTTPException(status_code=500, detail="缺少安装URL")
+            content = _download_text(url)
+            _write_skill_file(skill_name, content)
+        elif install_type == "template_dir":
+            template_name = install_spec.get("template")
+            if not template_name:
+                raise HTTPException(status_code=500, detail="缺少模板名称")
+            _copy_template_dir(template_name, skill_name)
+        elif install_type == "none":
+            raise HTTPException(status_code=400, detail="该条目不支持安装")
+        else:
+            raise HTTPException(status_code=400, detail="未知安装方式")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"安装技能失败({item_id}): {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"安装失败: {str(e)}")
+
+    status = _get_market_items_status()
+    installed_item = next((entry for entry in status.get("items", []) if entry.get("id") == item_id), None)
+    return {
+        "status": "success",
+        "message": "安装完成",
+        "item": installed_item,
+        "openclaw": status.get("openclaw"),
+    }
+
+
+# ============ OpenClaw 任务查询（代理 agentserver） ============
+
+@app.get("/openclaw/tasks")
+async def api_openclaw_list_tasks():
+    """列出本地缓存的 OpenClaw 任务（来自 agentserver）"""
+    return await _call_agentserver("GET", "/openclaw/tasks")
+
+
+@app.get("/openclaw/tasks/{task_id}")
+async def api_openclaw_get_task(task_id: str):
+    """获取 OpenClaw 任务状态"""
+    return await _call_agentserver("GET", f"/openclaw/tasks/{task_id}/detail")
+
+
+# ============ MCP Server 代理 ============
+
+@app.get("/mcp/status")
+async def get_mcp_status_proxy():
+    """代理 MCP Server 状态查询"""
+    return await _call_mcpserver("GET", "/status")
+
+
+@app.get("/mcp/tasks")
+async def get_mcp_tasks_proxy(status: Optional[str] = None):
+    """代理 MCP 任务列表"""
+    params = {"status": status} if status else None
+    return await _call_mcpserver("GET", "/tasks", params=params)
+
+
+@app.get("/memory/quintuples")
+async def get_quintuples():
+    """获取所有五元组 (用于知识图谱可视化)"""
+    try:
+        from summer_memory.quintuple_graph import get_all_quintuples
+        quintuples = get_all_quintuples()  # returns set[tuple]
+        return {
+            "status": "success",
+            "quintuples": [
+                {"subject": q[0], "subject_type": q[1], "predicate": q[2],
+                 "object": q[3], "object_type": q[4]}
+                for q in quintuples
+            ],
+            "count": len(quintuples)
+        }
+    except ImportError:
+        return {"status": "success", "quintuples": [], "count": 0, "message": "记忆系统模块未找到"}
+    except Exception as e:
+        logger.error(f"获取五元组错误: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取五元组失败: {str(e)}")
+
+
+@app.get("/memory/quintuples/search")
+async def search_quintuples(keywords: str = ""):
+    """按关键词搜索五元组"""
+    try:
+        keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
+        if not keyword_list:
+            raise HTTPException(status_code=400, detail="请提供搜索关键词")
+        from summer_memory.quintuple_graph import query_graph_by_keywords
+        results = query_graph_by_keywords(keyword_list)
+        return {
+            "status": "success",
+            "quintuples": [
+                {"subject": q[0], "subject_type": q[1], "predicate": q[2],
+                 "object": q[3], "object_type": q[4]}
+                for q in results
+            ],
+            "count": len(results)
+        }
+    except ImportError:
+        return {"status": "success", "quintuples": [], "count": 0, "message": "记忆系统模块未找到"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"搜索五元组错误: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"搜索五元组失败: {str(e)}")
 
 
 @app.get("/sessions")

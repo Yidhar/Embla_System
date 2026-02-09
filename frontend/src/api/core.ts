@@ -137,6 +137,73 @@ export class CoreApiClient extends ApiClient {
     return this.instance.get('/memory/stats').then(res => res.data)
   }
 
+  getQuintuples(): Promise<{
+    status: string
+    quintuples: Array<{
+      subject: string
+      subjectType: string
+      predicate: string
+      object: string
+      objectType: string
+    }>
+    count: number
+  }> {
+    return this.instance.get('/memory/quintuples').then(res => res.data)
+  }
+
+  searchQuintuples(keywords: string): Promise<{
+    status: string
+    quintuples: Array<{
+      subject: string
+      subjectType: string
+      predicate: string
+      object: string
+      objectType: string
+    }>
+    count: number
+  }> {
+    return this.instance.get(`/memory/quintuples/search?keywords=${encodeURIComponent(keywords)}`).then(res => res.data)
+  }
+
+  getMarketItems(): Promise<{
+    status: string
+    openclaw: {
+      found: boolean
+      version: string | null
+      skillsDir: string
+      configPath: string
+      skillsError: string | null
+    }
+    items: Array<{
+      id: string
+      title: string
+      description: string
+      skillName: string
+      installed: boolean
+      enabled: boolean
+      installType: string
+    }>
+  }> {
+    return this.instance.get('/openclaw/market/items').then(res => res.data)
+  }
+
+  installMarketItem(itemId: string, payload?: Record<string, any>): Promise<{
+    status: string
+    message: string
+    item: Record<string, any>
+  }> {
+    return this.instance.post(`/openclaw/market/items/${itemId}/install`, payload ?? {}).then(res => res.data)
+  }
+
+  getMcpStatus(): Promise<{
+    server: string
+    timestamp: string
+    tasks: { total: number; active: number; completed: number; failed: number }
+    scheduler?: Record<string, any>
+  }> {
+    return this.instance.get('/mcp/status').then(res => res.data)
+  }
+
   getContextStats(days: number = 7) {
     return this.instance.get(`/logs/context/statistics?days=${days}`).then(res => res.data)
   }

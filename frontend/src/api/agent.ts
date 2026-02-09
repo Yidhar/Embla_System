@@ -16,11 +16,7 @@ export class AgentApiClient extends ApiClient {
 
   getToolkits(): Promise<{
     success: boolean
-    toolkits: Array<{
-      name: string
-      description: string
-      tools: string[]
-    }>
+    toolkits: string[]
     count: number
   }> {
     return this.instance.get('/toolkits').then(res => res.data)
@@ -45,7 +41,7 @@ export class AgentApiClient extends ApiClient {
   getSessionKeyFacts(sessionId: string): Promise<{
     success: boolean
     sessionId: string
-    keyFacts: string[]
+    keyFacts: Record<string, string>
     count: number
   }> {
     return this.instance.get(`/sessions/${sessionId}/key_facts`).then(res => res.data)
