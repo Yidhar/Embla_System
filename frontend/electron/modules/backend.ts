@@ -19,13 +19,13 @@ export function startBackend(): void {
     const backendDir = join(process.resourcesPath, 'backend')
     const ext = process.platform === 'win32' ? '.exe' : ''
     cmd = join(backendDir, `naga-backend${ext}`)
-    args = ['--headless']
+    args = []
     cwd = backendDir
   } else {
     // 开发模式：直接用 python
     cwd = join(__dirname, '..', '..')
     cmd = process.platform === 'win32' ? 'python' : 'python3'
-    args = ['main.py', '--headless']
+    args = ['main.py']
   }
 
   console.log(`[Backend] Starting from ${cwd}`)
