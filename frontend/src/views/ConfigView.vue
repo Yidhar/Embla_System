@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { useStorage } from '@vueuse/core'
-import { Accordion, Button, Divider, InputNumber, InputText, Select, Slider, Textarea } from 'primevue'
+import { Accordion, Button, Divider, InputNumber, InputText, Select, Slider } from 'primevue'
 import { ref, useTemplateRef } from 'vue'
 import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
-import { CONFIG, DEFAULT_CONFIG, DEFAULT_MODEL, MODELS, SYSTEM_PROMPT } from '@/utils/config'
+import { CONFIG, DEFAULT_CONFIG, DEFAULT_MODEL, MODELS } from '@/utils/config'
 
 const selectedModel = ref(Object.entries(MODELS).find(([_, model]) => {
   return model.source === CONFIG.value.web_live2d.model.source
@@ -108,9 +108,6 @@ const accordionValue = useStorage('accordion-config', [])
           </ConfigItem>
           <ConfigItem name="加载天数" description="从最近几天的日志文件中加载历史对话">
             <InputNumber v-model="CONFIG.api.context_load_days" show-buttons />
-          </ConfigItem>
-          <ConfigItem layout="column" name="系统提示词" description="编辑对话风格提示词，影响AI的回复风格和语言特点">
-            <Textarea v-model="SYSTEM_PROMPT" rows="10" class="mt-3 resize-none" />
           </ConfigItem>
         </div>
       </ConfigGroup>

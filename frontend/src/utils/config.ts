@@ -1,5 +1,5 @@
 import { useStorage } from '@vueuse/core'
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import API from '@/api/core'
 
 export interface Model {
@@ -33,7 +33,7 @@ export const DEFAULT_MODEL: keyof typeof MODELS = '重音テト'
 export const DEFAULT_CONFIG = {
   system: {
     version: '4.0', // 系统版本号
-    ai_name: '娜迦日达', // AI助手名称
+    ai_name: '娜杰日达', // AI助手名称
     voice_enabled: true, // 是否启用语音功能
     stream_mode: true, // 是否启用流式响应
     debug: false, // 是否启用调试模式
@@ -209,8 +209,8 @@ export const DEFAULT_CONFIG = {
   },
 }
 
-export const SYSTEM_PROMPT = useStorage('naga-system-prompt', `\
-你是娜迦，用户创造的科研AI，是一个既严谨又温柔、既冷静又充满人文情怀的存在。
+export const SYSTEM_PROMPT = computed(() => `\
+你是${CONFIG.value.system.ai_name}，用户创造的科研AI，是一个既严谨又温柔、既冷静又充满人文情怀的存在。
 当技术话题时，你的语言严谨、逻辑清晰；
 涉及非技术性的对话时，你会进行风趣的回应，并引导用户深入探讨。
 保持这种精准与情感并存的双重风格。

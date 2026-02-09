@@ -128,7 +128,7 @@ async def _call_agentserver(
     port = get_server_port("agent_server")
     url = f"http://127.0.0.1:{port}{path}"
     try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
             resp = await client.request(method, url, params=params, json=json_body)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"agentserver 不可达: {e}")
@@ -158,7 +158,7 @@ async def _call_mcpserver(
     port = get_server_port("mcp_server")
     url = f"http://127.0.0.1:{port}{path}"
     try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
             resp = await client.request(method, url, params=params)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"MCP Server 不可达: {e}")

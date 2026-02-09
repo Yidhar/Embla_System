@@ -24,6 +24,7 @@ export function startBackend(): void {
     cwd: projectRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, PYTHONUNBUFFERED: '1' },
+    detached: true,
   })
 
   backendProcess.stdout?.on('data', (data: Buffer) => {
@@ -46,19 +47,24 @@ export function startBackend(): void {
 
 export function stopBackend(): void {
   if (!backendProcess) return
+  const pid = backendProcess.pid
   console.log('[Backend] Stopping...')
 
   if (process.platform === 'win32') {
     // On Windows, use taskkill to kill the process tree
-    spawn('taskkill', ['/pid', String(backendProcess.pid), '/f', '/t'])
+    spawn('taskkill', ['/pid', String(pid), '/f', '/t'])
   } else {
-    backendProcess.kill('SIGTERM')
+    // Kill the entire process group (negative PID)
+    try {
+      if (pid) process.kill(-pid, 'SIGTERM')
+    } catch {
+      // already dead
+    }
     // Force kill after 5s if still alive
-    const pid = backendProcess.pid
     setTimeout(() => {
       try {
-        if (pid) process.kill(pid, 0) // check if alive
-        process.kill(pid!, 'SIGKILL')
+        if (pid) process.kill(-pid, 0) // check if alive
+        process.kill(-pid!, 'SIGKILL')
       } catch {
         // already dead
       }
