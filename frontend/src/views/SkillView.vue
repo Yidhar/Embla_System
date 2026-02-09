@@ -1,12 +1,11 @@
 <script setup lang="ts">
+import type { MarketItem } from '@/api/core'
 import { Listbox } from 'primevue'
 import { ref } from 'vue'
 import API from '@/api/core'
 import BoxContainer from '@/components/BoxContainer.vue'
 
-interface Skill extends MarketItem {
-  installFailed?: boolean
-}
+type McpStatus = Awaited<ReturnType<typeof API.getMcpStatus>>
 
 const skills = ref<MarketItem[]>([])
 const mcpStatus = ref<McpStatus | null>(null)
@@ -28,9 +27,12 @@ async function installItem(item: MarketItem) {
   try {
     await API.installMarketItem(item.id)
     item.installed = true
-  } catch (e: any) {
+  }
+  catch (e: any) {
+    // eslint-disable-next-line no-alert -- simple user feedback
     alert(`安装失败: ${e.message}`)
-  } finally {
+  }
+  finally {
     installing.value = null
   }
 }
@@ -97,12 +99,16 @@ async function installItem(item: MarketItem) {
                     v-else-if="installing === option.id"
                     class="px-2 py-1 bg-white/10 rounded text-xs op-50 cursor-wait"
                     disabled
-                  >安装中...</button>
+                  >
+                    安装中...
+                  </button>
                   <button
                     v-else
                     class="px-2 py-1 bg-white/10 hover:bg-white/20 rounded text-xs transition"
                     @click.stop="installItem(option)"
-                  >安装</button>
+                  >
+                    安装
+                  </button>
                 </div>
               </div>
             </template>

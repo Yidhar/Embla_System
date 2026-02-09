@@ -1,7 +1,6 @@
-import { ref, watch, computed } from 'vue'
 import { useStorage } from '@vueuse/core'
+import { ref, watch } from 'vue'
 import API from '@/api/core'
-import { deepMerge } from '@/utils/object'
 
 export interface Model {
   source: string
