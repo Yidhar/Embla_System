@@ -902,6 +902,7 @@ async def openclaw_send_message(payload: Dict[str, Any]):
 
     请求体:
     - message: 消息内容 (必需)
+    - task_id: 外部任务ID（可选；用于与调度器task_id对齐）
     - session_key: 会话标识 (可选)
     - name: hook 名称 (可选)
     - channel: 消息通道 (可选)
@@ -918,17 +919,24 @@ async def openclaw_send_message(payload: Dict[str, Any]):
     if not message:
         raise HTTPException(400, "message 不能为空")
 
+    # 如果提供了 task_id 但未提供 session_key，则默认使用 task_id 派生稳定会话键，便于按任务查看中间过程
+    task_id = payload.get("task_id")
+    session_key = payload.get("session_key")
+    if task_id and not session_key:
+        session_key = f"naga:task:{task_id}"
+
     try:
         task = await Modules.openclaw_client.send_message(
             message=message,
-            session_key=payload.get("session_key"),
+            session_key=session_key,
             name=payload.get("name"),
             channel=payload.get("channel"),
             to=payload.get("to"),
             model=payload.get("model"),
             wake_mode=payload.get("wake_mode", "now"),
             deliver=payload.get("deliver", False),
-            timeout_seconds=payload.get("timeout_seconds", 120)
+            timeout_seconds=payload.get("timeout_seconds", 120),
+            task_id=task_id,
         )
 
         return {
@@ -1041,6 +1049,46 @@ async def openclaw_get_task(task_id: str):
     except Exception as e:
         logger.error(f"获取 OpenClaw 任务失败: {e}")
         raise HTTPException(500, f"获取失败: {e}")
+
+@app.get("/openclaw/tasks/{task_id}/detail")
+async def openclaw_get_task_detail(
+    task_id: str,
+    include_history: bool = True,
+    history_limit: int = 50,
+    include_tools: bool = False,
+):
+    """获取单个 OpenClaw 任务详情（包含本地 events 与可选 sessions_history）"""
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw 客户端未就绪")
+
+    try:
+        task = Modules.openclaw_client.get_task(task_id)
+        if not task:
+            raise HTTPException(404, f"任务不存在: {task_id}")
+
+        resp: Dict[str, Any] = {
+            "success": True,
+            "task": task.to_dict(),
+        }
+
+        if include_history:
+            if task.session_key:
+                history = await Modules.openclaw_client.get_sessions_history(
+                    session_key=task.session_key,
+                    limit=history_limit,
+                    include_tools=include_tools,
+                )
+                resp["history"] = history
+            else:
+                resp["history"] = {"success": True, "messages": [], "note": "task_has_no_session_key"}
+
+        return resp
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取 OpenClaw 任务详情失败: {e}")
+        raise HTTPException(500, f"获取失败: {e}")
+
 
 @app.delete("/openclaw/tasks/completed")
 async def openclaw_clear_completed_tasks():
