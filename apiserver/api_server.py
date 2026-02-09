@@ -10,7 +10,6 @@ import sys
 import traceback
 import os
 import logging
-import uuid
 import time
 import threading
 import subprocess
@@ -27,13 +26,11 @@ logging.getLogger("httpcore.connection").setLevel(logging.WARNING)
 # 创建logger实例
 logger = logging.getLogger(__name__)
 
-from nagaagent_core.api import uvicorn
-from nagaagent_core.api import FastAPI, HTTPException, Request, UploadFile, File, Form
+from nagaagent_core.api import FastAPI, HTTPException, UploadFile, File, Form
 from nagaagent_core.api import CORSMiddleware
 from nagaagent_core.api import StreamingResponse
 from nagaagent_core.api import StaticFiles
 from pydantic import BaseModel
-from nagaagent_core.core import aiohttp
 import shutil
 from pathlib import Path
 
@@ -55,10 +52,10 @@ except ImportError:
     import os
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from system.config import config, AI_NAME  # 使用新的配置系统
-    from system.config import get_prompt, build_system_prompt  # 导入提示词仓库
+    from system.config import config  # 使用新的配置系统
+    from system.config import build_system_prompt  # 导入提示词仓库
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
-from ui.utils.response_util import extract_message  # 导入消息提取工具
+from apiserver.response_util import extract_message  # 导入消息提取工具
 
 # 对话核心功能已集成到apiserver
 
@@ -821,8 +818,6 @@ async def chat_stream(request: ChatRequest):
 
                     # 使用服务器端的TTS生成音频
                     from voice.tts_wrapper import generate_speech_safe
-                    import tempfile
-                    import uuid
 
                     # 生成音频文件
                     tts_voice = config.voice_realtime.tts_voice or "zh-CN-XiaoyiNeural"
@@ -845,7 +840,7 @@ async def chat_stream(request: ChatRequest):
                 except Exception as e:
                     logger.error(f"[API Server V19] 音频生成失败: {e}")
                     # traceback已经在文件顶部导入，直接使用
-                    print(f"[API Server V19] 详细错误信息:")
+                    print("[API Server V19] 详细错误信息:")
                     traceback.print_exc()
 
             # 完成流式文本切割器处理（非return_audio模式，不阻塞）
@@ -1221,7 +1216,7 @@ async def tool_result_callback(payload: Dict[str, Any]):
             session_id=session_id, system_prompt=system_prompt, current_message=enhanced_message
         )
 
-        logger.info(f"[工具回调] 开始生成工具后回复...")
+        logger.info("[工具回调] 开始生成工具后回复...")
 
         # 使用LLM服务基于原始对话和工具结果重新生成回复
         try:
@@ -1234,18 +1229,18 @@ async def tool_result_callback(payload: Dict[str, Any]):
 
         # 只保存AI回复到历史记录（用户消息已在正常对话流程中保存）
         message_manager.add_message(session_id, "assistant", response_text)
-        logger.info(f"[工具回调] AI回复已保存到历史")
+        logger.info("[工具回调] AI回复已保存到历史")
 
         # 保存对话日志到文件
         message_manager.save_conversation_log(original_user_message, response_text, dev_mode=False)
-        logger.info(f"[工具回调] 对话日志已保存")
+        logger.info("[工具回调] 对话日志已保存")
 
         # 通过UI通知接口将AI回复发送给UI
-        logger.info(f"[工具回调] 开始发送AI回复到UI...")
+        logger.info("[工具回调] 开始发送AI回复到UI...")
         await _notify_ui_refresh(session_id, response_text)
         _hide_tool_status_in_ui()
 
-        logger.info(f"[工具回调] 工具结果处理完成，回复已发送到UI")
+        logger.info("[工具回调] 工具结果处理完成，回复已发送到UI")
 
         return {
             "success": True,
@@ -1275,17 +1270,10 @@ async def tool_result(payload: Dict[str, Any]):
 
         logger.info(f"工具执行结果: {result}")
 
-        # 如果是工具完成后的AI回复，通过信号机制通知UI线程显示
+        # 如果是工具完成后的AI回复，存储到ClawdBot回复队列供前端轮询
         if notification_type == "tool_completed_with_ai_response" and ai_response:
-            try:
-                # 使用Qt信号机制在主线程中安全地更新UI
-                from ui.controller.tool_chat import chat
-
-                # 直接发射信号，确保在主线程中执行
-                chat.tool_ai_response_received.emit(ai_response)
-                logger.info(f"[UI] 已通过信号机制通知UI显示AI回复，长度: {len(ai_response)}")
-            except Exception as e:
-                logger.error(f"[UI] 调用UI控制器显示AI回复失败: {e}")
+            _clawdbot_replies.append(ai_response)
+            logger.info(f"[UI] AI回复已存储到队列，长度: {len(ai_response)}")
 
         return {"success": True, "message": "工具结果已接收", "result": result, "session_id": session_id}
 
@@ -1346,27 +1334,14 @@ async def ui_notification(payload: Dict[str, Any]):
 
         # 处理显示工具AI回复的动作
         if action == "show_tool_ai_response" and ai_response:
-            try:
-                from ui.controller.tool_chat import chat
-
-                # 直接发射信号，确保在主线程中执行
-                chat.tool_ai_response_received.emit(ai_response)
-                logger.info(f"[UI通知] 已通过信号机制显示工具AI回复，长度: {len(ai_response)}")
-                return {"success": True, "message": "AI回复已显示"}
-            except Exception as e:
-                logger.error(f"[UI通知] 显示工具AI回复失败: {e}")
-                raise HTTPException(500, f"显示AI回复失败: {str(e)}")
+            _clawdbot_replies.append(ai_response)
+            logger.info(f"[UI通知] 工具AI回复已存储到队列，长度: {len(ai_response)}")
+            return {"success": True, "message": "AI回复已存储"}
 
         # 处理显示 ClawdBot 回复的动作
         if action == "show_clawdbot_response" and ai_response:
             _clawdbot_replies.append(ai_response)
-            try:
-                from ui.controller.tool_chat import chat
-
-                chat.clawdbot_response_received.emit(ai_response)
-                logger.info(f"[UI通知] 已通过信号机制显示 ClawdBot 回复，长度: {len(ai_response)}")
-            except Exception as e:
-                logger.warning(f"[UI通知] Qt信号发送失败（Web模式下正常）: {e}")
+            logger.info(f"[UI通知] ClawdBot 回复已存储到队列，长度: {len(ai_response)}")
             return {"success": True, "message": "ClawdBot 回复已存储"}
 
         if action == "show_tool_status" and status_text:
@@ -1420,7 +1395,7 @@ async def _trigger_chat_stream_no_intent(session_id: str, response_text: str):
                             pass
 
                     logger.info(f"[UI发送] AI回复已成功发送到UI: {session_id}")
-                    logger.info(f"[UI发送] 成功显示到UI")
+                    logger.info("[UI发送] 成功显示到UI")
                 else:
                     logger.error(f"[UI发送] 调用流式对话接口失败: {response.status_code}")
 
@@ -1456,25 +1431,13 @@ async def _notify_ui_refresh(session_id: str, response_text: str):
 
 
 def _emit_tool_status_to_ui(status_text: str, auto_hide_ms: int = 0) -> None:
-    """通过Qt信号向UI发送工具状态提示，同时更新Web可轮询的状态存储"""
+    """更新工具状态存储，前端通过轮询获取"""
     _tool_status_store["current"] = {"message": status_text, "visible": True}
-    try:
-        from ui.controller.tool_chat import chat
-
-        chat.tool_status_received.emit(status_text, max(0, auto_hide_ms))
-    except Exception as e:
-        logger.error(f"[UI通知] 发送工具状态提示失败: {e}")
 
 
 def _hide_tool_status_in_ui() -> None:
-    """通过Qt信号隐藏工具状态提示，同时更新Web可轮询的状态存储"""
+    """隐藏工具状态，前端通过轮询获取"""
     _tool_status_store["current"] = {"message": "", "visible": False}
-    try:
-        from ui.controller.tool_chat import chat
-
-        chat.tool_status_hide_requested.emit()
-    except Exception as e:
-        logger.error(f"[UI通知] 隐藏工具状态提示失败: {e}")
 
 
 async def _send_ai_response_directly(session_id: str, response_text: str):

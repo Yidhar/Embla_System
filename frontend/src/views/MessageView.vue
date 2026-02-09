@@ -12,8 +12,6 @@ import { speak } from '@/utils/tts'
 export function chatStream(content: string) {
   MESSAGES.value.push({ role: 'user', content })
 
-  startToolPolling()
-
   API.chatStream(content, {
     sessionId: CURRENT_SESSION_ID.value ?? undefined,
     disableTTS: true,
@@ -170,6 +168,18 @@ async function handleFileUpload(event: Event) {
   }
   target.value = ''
 }
+
+onMounted(() => {
+  loadCurrentSession()
+  startToolPolling()
+  scrollToBottom()
+  startToolPolling()
+})
+onUnmounted(() => {
+  stopToolPolling()
+})
+useEventListener('token', scrollToBottom)
+onKeyStroke('Enter', sendMessage)
 </script>
 
 <template>
