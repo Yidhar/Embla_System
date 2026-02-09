@@ -10,7 +10,6 @@ import sys
 import traceback
 import os
 import logging
-import uuid
 import time
 import threading
 import subprocess
@@ -27,13 +26,11 @@ logging.getLogger("httpcore.connection").setLevel(logging.WARNING)
 # 创建logger实例
 logger = logging.getLogger(__name__)
 
-from nagaagent_core.api import uvicorn
-from nagaagent_core.api import FastAPI, HTTPException, Request, UploadFile, File, Form
+from nagaagent_core.api import FastAPI, HTTPException, UploadFile, File, Form
 from nagaagent_core.api import CORSMiddleware
 from nagaagent_core.api import StreamingResponse
 from nagaagent_core.api import StaticFiles
 from pydantic import BaseModel
-from nagaagent_core.core import aiohttp
 import shutil
 from pathlib import Path
 
@@ -55,8 +52,8 @@ except ImportError:
     import os
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from system.config import config, AI_NAME  # 使用新的配置系统
-    from system.config import get_prompt, build_system_prompt  # 导入提示词仓库
+    from system.config import config  # 使用新的配置系统
+    from system.config import build_system_prompt  # 导入提示词仓库
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 from apiserver.response_util import extract_message  # 导入消息提取工具
 
@@ -113,6 +110,7 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 
 # ============ 内部服务代理 ============
+
 
 async def _call_agentserver(
     method: str,
@@ -529,6 +527,37 @@ async def update_system_config(payload: Dict[str, Any]):
         raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
 
 
+@app.get("/system/prompt")
+async def get_system_prompt(include_skills: bool = True, include_time: bool = False):
+    """获取系统提示词"""
+    try:
+        prompt = build_system_prompt(include_skills=include_skills, include_time=include_time)
+        return {"status": "success", "prompt": prompt}
+    except Exception as e:
+        logger.error(f"获取系统提示词失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取系统提示词失败: {str(e)}")
+
+
+@app.post("/system/prompt")
+async def update_system_prompt(payload: Dict[str, Any]):
+    """更新系统提示词"""
+    try:
+        content = payload.get("content")
+        if not content:
+            raise HTTPException(status_code=400, detail="缺少content参数")
+        from system.config import save_prompt
+
+        save_prompt("conversation_style_prompt", content)
+        return {"status": "success", "message": "提示词更新成功"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新系统提示词失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"更新系统提示词失败: {str(e)}")
+
+
 @app.get("/openclaw/market/items")
 async def list_openclaw_market_items():
     """获取OpenClaw技能市场条目"""
@@ -772,7 +801,7 @@ async def chat_stream(request: ChatRequest):
 
                             # 保留 type 字段，将完整 JSON 结构重新 base64 编码后 yield
                             chunk_json = json_module.dumps({"type": chunk_type, "text": chunk_text})
-                            text_b64 = base64.b64encode(chunk_json.encode('utf-8')).decode('ascii')
+                            text_b64 = base64.b64encode(chunk_json.encode("utf-8")).decode("ascii")
                             yield f"data: {text_b64}\n\n"
                             continue
                     except Exception as e:
@@ -789,8 +818,6 @@ async def chat_stream(request: ChatRequest):
 
                     # 使用服务器端的TTS生成音频
                     from voice.tts_wrapper import generate_speech_safe
-                    import tempfile
-                    import uuid
 
                     # 生成音频文件
                     tts_voice = config.voice_realtime.tts_voice or "zh-CN-XiaoyiNeural"
@@ -813,7 +840,7 @@ async def chat_stream(request: ChatRequest):
                 except Exception as e:
                     logger.error(f"[API Server V19] 音频生成失败: {e}")
                     # traceback已经在文件顶部导入，直接使用
-                    print(f"[API Server V19] 详细错误信息:")
+                    print("[API Server V19] 详细错误信息:")
                     traceback.print_exc()
 
             # 完成流式文本切割器处理（非return_audio模式，不阻塞）
@@ -901,6 +928,7 @@ async def get_memory_stats():
 
 # ============ MCP Server 代理 ============
 
+
 @app.get("/mcp/status")
 async def get_mcp_status_proxy():
     """代理 MCP Server 状态查询"""
@@ -919,15 +947,15 @@ async def get_quintuples():
     """获取所有五元组 (用于知识图谱可视化)"""
     try:
         from summer_memory.quintuple_graph import get_all_quintuples
+
         quintuples = get_all_quintuples()  # returns set[tuple]
         return {
             "status": "success",
             "quintuples": [
-                {"subject": q[0], "subject_type": q[1], "predicate": q[2],
-                 "object": q[3], "object_type": q[4]}
+                {"subject": q[0], "subject_type": q[1], "predicate": q[2], "object": q[3], "object_type": q[4]}
                 for q in quintuples
             ],
-            "count": len(quintuples)
+            "count": len(quintuples),
         }
     except ImportError:
         return {"status": "success", "quintuples": [], "count": 0, "message": "记忆系统模块未找到"}
@@ -945,15 +973,15 @@ async def search_quintuples(keywords: str = ""):
         if not keyword_list:
             raise HTTPException(status_code=400, detail="请提供搜索关键词")
         from summer_memory.quintuple_graph import query_graph_by_keywords
+
         results = query_graph_by_keywords(keyword_list)
         return {
             "status": "success",
             "quintuples": [
-                {"subject": q[0], "subject_type": q[1], "predicate": q[2],
-                 "object": q[3], "object_type": q[4]}
+                {"subject": q[0], "subject_type": q[1], "predicate": q[2], "object": q[3], "object_type": q[4]}
                 for q in results
             ],
-            "count": len(results)
+            "count": len(results),
         }
     except ImportError:
         return {"status": "success", "quintuples": [], "count": 0, "message": "记忆系统模块未找到"}
@@ -1188,7 +1216,7 @@ async def tool_result_callback(payload: Dict[str, Any]):
             session_id=session_id, system_prompt=system_prompt, current_message=enhanced_message
         )
 
-        logger.info(f"[工具回调] 开始生成工具后回复...")
+        logger.info("[工具回调] 开始生成工具后回复...")
 
         # 使用LLM服务基于原始对话和工具结果重新生成回复
         try:
@@ -1201,18 +1229,18 @@ async def tool_result_callback(payload: Dict[str, Any]):
 
         # 只保存AI回复到历史记录（用户消息已在正常对话流程中保存）
         message_manager.add_message(session_id, "assistant", response_text)
-        logger.info(f"[工具回调] AI回复已保存到历史")
+        logger.info("[工具回调] AI回复已保存到历史")
 
         # 保存对话日志到文件
         message_manager.save_conversation_log(original_user_message, response_text, dev_mode=False)
-        logger.info(f"[工具回调] 对话日志已保存")
+        logger.info("[工具回调] 对话日志已保存")
 
         # 通过UI通知接口将AI回复发送给UI
-        logger.info(f"[工具回调] 开始发送AI回复到UI...")
+        logger.info("[工具回调] 开始发送AI回复到UI...")
         await _notify_ui_refresh(session_id, response_text)
         _hide_tool_status_in_ui()
 
-        logger.info(f"[工具回调] 工具结果处理完成，回复已发送到UI")
+        logger.info("[工具回调] 工具结果处理完成，回复已发送到UI")
 
         return {
             "success": True,
@@ -1242,9 +1270,10 @@ async def tool_result(payload: Dict[str, Any]):
 
         logger.info(f"工具执行结果: {result}")
 
-        # 工具完成后的AI回复记录（Web前端通过轮询获取）
+        # 如果是工具完成后的AI回复，存储到ClawdBot回复队列供前端轮询
         if notification_type == "tool_completed_with_ai_response" and ai_response:
-            logger.info(f"[工具结果] AI回复已记录，长度: {len(ai_response)}")
+            _clawdbot_replies.append(ai_response)
+            logger.info(f"[UI] AI回复已存储到队列，长度: {len(ai_response)}")
 
         return {"success": True, "message": "工具结果已接收", "result": result, "session_id": session_id}
 
@@ -1305,13 +1334,14 @@ async def ui_notification(payload: Dict[str, Any]):
 
         # 处理显示工具AI回复的动作
         if action == "show_tool_ai_response" and ai_response:
-            logger.info(f"[UI通知] 工具AI回复已记录，长度: {len(ai_response)}")
-            return {"success": True, "message": "AI回复已记录"}
+            _clawdbot_replies.append(ai_response)
+            logger.info(f"[UI通知] 工具AI回复已存储到队列，长度: {len(ai_response)}")
+            return {"success": True, "message": "AI回复已存储"}
 
         # 处理显示 ClawdBot 回复的动作
         if action == "show_clawdbot_response" and ai_response:
             _clawdbot_replies.append(ai_response)
-            logger.info(f"[UI通知] ClawdBot 回复已存储，长度: {len(ai_response)}")
+            logger.info(f"[UI通知] ClawdBot 回复已存储到队列，长度: {len(ai_response)}")
             return {"success": True, "message": "ClawdBot 回复已存储"}
 
         if action == "show_tool_status" and status_text:
@@ -1365,7 +1395,7 @@ async def _trigger_chat_stream_no_intent(session_id: str, response_text: str):
                             pass
 
                     logger.info(f"[UI发送] AI回复已成功发送到UI: {session_id}")
-                    logger.info(f"[UI发送] 成功显示到UI")
+                    logger.info("[UI发送] 成功显示到UI")
                 else:
                     logger.error(f"[UI发送] 调用流式对话接口失败: {response.status_code}")
 
@@ -1401,12 +1431,12 @@ async def _notify_ui_refresh(session_id: str, response_text: str):
 
 
 def _emit_tool_status_to_ui(status_text: str, auto_hide_ms: int = 0) -> None:
-    """更新Web可轮询的工具状态存储"""
+    """更新工具状态存储，前端通过轮询获取"""
     _tool_status_store["current"] = {"message": status_text, "visible": True}
 
 
 def _hide_tool_status_in_ui() -> None:
-    """更新Web可轮询的工具状态存储（隐藏）"""
+    """隐藏工具状态，前端通过轮询获取"""
     _tool_status_store["current"] = {"message": "", "visible": False}
 
 

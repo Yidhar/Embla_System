@@ -157,6 +157,7 @@ async function handleFileUpload(event: Event) {
 
 onMounted(() => {
   loadCurrentSession()
+  startToolPolling()
   scrollToBottom()
   startToolPolling()
 })
