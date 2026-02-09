@@ -2349,6 +2349,7 @@ dependencies = [
     { name = "bilibili-api" },
     { name = "dashscope" },
     { name = "librosa" },
+    { name = "litellm" },
     { name = "live2d-py" },
     { name = "markdown" },
     { name = "nagaagent-core" },
@@ -2393,6 +2394,7 @@ requires-dist = [
     { name = "bilibili-api", specifier = ">=4.1.0" },
     { name = "dashscope", specifier = ">=1.25.3" },
     { name = "librosa", specifier = ">=0.11.0" },
+    { name = "litellm", specifier = ">=1.63.0" },
     { name = "live2d-py", specifier = "<0.6" },
     { name = "markdown", specifier = ">=3.10" },
     { name = "nagaagent-core", specifier = ">=1.0.9" },
@@ -6962,9 +6964,9 @@ wheels = [
 name = "sseclient-py"
 version = "1.7.2"
 source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple/" }
-sdist = { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/7d/1f/29688479e7e57a4cd847ded630be27b3a96f64b379e7f0136f64020f6308/sseclient-py-1.7.2.tar.gz", hash = "sha256:ba3197d314766eccb72a1dda80b5fa14a0fbba07d796a287654c07edde88fe0f" }
+sdist = { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/7d/1f/29688479e7e57a4cd847ded630be27b3a96f64b379e7f0136f64020f6308/sseclient-py-1.7.2.tar.gz", hash = "sha256:ba3197d314766eccb72a1dda80b5fa14a0fbba07d796a287654c07edde88fe0f", size = 7709, upload-time = "2021-09-20T19:56:25.668Z" }
 wheels = [
-    { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/74/67/482889996a8a12767ca402e50e6abe1ecde497e7b2d3425b3ac452050a7c/sseclient_py-1.7.2-py2.py3-none-any.whl", hash = "sha256:a758653b13b78df42cdb696740635a26cb72ad433b75efb68dbbb163d099b6a9" },
+    { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/74/67/482889996a8a12767ca402e50e6abe1ecde497e7b2d3425b3ac452050a7c/sseclient_py-1.7.2-py2.py3-none-any.whl", hash = "sha256:a758653b13b78df42cdb696740635a26cb72ad433b75efb68dbbb163d099b6a9", size = 8377, upload-time = "2021-09-20T19:56:24.257Z" },
 ]
 
 [[package]]

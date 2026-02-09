@@ -64,16 +64,20 @@ async def lifespan(app: FastAPI):
             if openclaw_status.installed:
                 # 使用检测到的配置
                 openclaw_config = ClientOpenClawConfig(
-                    gateway_url=openclaw_status.gateway_url or 'http://localhost:18789',
-                    token=openclaw_status.gateway_token,
+                    gateway_url=openclaw_status.gateway_url or 'http://127.0.0.1:18789',
+                    gateway_token=openclaw_status.gateway_token,
+                    hooks_token=openclaw_status.hooks_token,
                     timeout=120
                 )
                 logger.info(f"从 ~/.openclaw 检测到 OpenClaw 配置: {openclaw_config.gateway_url}")
+                logger.info(f"  - gateway_token: {'***' + openclaw_config.gateway_token[-8:] if openclaw_config.gateway_token else '未配置'}")
+                logger.info(f"  - hooks_token: {'***' + openclaw_config.hooks_token[-8:] if openclaw_config.hooks_token else '未配置'}")
             else:
                 # 回退到 config.json 中的配置
                 openclaw_config = ClientOpenClawConfig(
-                    gateway_url=getattr(config.openclaw, 'gateway_url', 'http://localhost:18789') if hasattr(config, 'openclaw') else 'http://localhost:18789',
-                    token=getattr(config.openclaw, 'token', None) if hasattr(config, 'openclaw') else None,
+                    gateway_url=getattr(config.openclaw, 'gateway_url', 'http://127.0.0.1:18789') if hasattr(config, 'openclaw') else 'http://127.0.0.1:18789',
+                    gateway_token=getattr(config.openclaw, 'gateway_token', None) if hasattr(config, 'openclaw') else None,
+                    hooks_token=getattr(config.openclaw, 'hooks_token', None) if hasattr(config, 'openclaw') else None,
                     timeout=120
                 )
                 logger.info(f"OpenClaw 未检测到安装，使用配置文件: {openclaw_config.gateway_url}")
@@ -898,6 +902,7 @@ async def openclaw_send_message(payload: Dict[str, Any]):
 
     请求体:
     - message: 消息内容 (必需)
+    - task_id: 外部任务ID（可选；用于与调度器task_id对齐）
     - session_key: 会话标识 (可选)
     - name: hook 名称 (可选)
     - channel: 消息通道 (可选)
@@ -905,6 +910,7 @@ async def openclaw_send_message(payload: Dict[str, Any]):
     - model: 模型名称 (可选)
     - wake_mode: 唤醒模式 now/next-heartbeat (可选)
     - deliver: 是否投递 (可选)
+    - timeout_seconds: 等待结果超时时间，默认120秒 (可选)
     """
     if not Modules.openclaw_client:
         raise HTTPException(503, "OpenClaw 客户端未就绪")
@@ -913,21 +919,30 @@ async def openclaw_send_message(payload: Dict[str, Any]):
     if not message:
         raise HTTPException(400, "message 不能为空")
 
+    # 如果提供了 task_id 但未提供 session_key，则默认使用 task_id 派生稳定会话键，便于按任务查看中间过程
+    task_id = payload.get("task_id")
+    session_key = payload.get("session_key")
+    if task_id and not session_key:
+        session_key = f"naga:task:{task_id}"
+
     try:
         task = await Modules.openclaw_client.send_message(
             message=message,
-            session_key=payload.get("session_key"),
+            session_key=session_key,
             name=payload.get("name"),
             channel=payload.get("channel"),
             to=payload.get("to"),
             model=payload.get("model"),
             wake_mode=payload.get("wake_mode", "now"),
-            deliver=payload.get("deliver", False)
+            deliver=payload.get("deliver", False),
+            timeout_seconds=payload.get("timeout_seconds", 120),
+            task_id=task_id,
         )
 
         return {
             "success": task.status.value != "failed",
-            "task": task.to_dict()
+            "task": task.to_dict(),
+            "reply": task.result.get("reply") if task.result else None
         }
     except Exception as e:
         logger.error(f"OpenClaw 发送消息失败: {e}")
@@ -1035,6 +1050,46 @@ async def openclaw_get_task(task_id: str):
         logger.error(f"获取 OpenClaw 任务失败: {e}")
         raise HTTPException(500, f"获取失败: {e}")
 
+@app.get("/openclaw/tasks/{task_id}/detail")
+async def openclaw_get_task_detail(
+    task_id: str,
+    include_history: bool = True,
+    history_limit: int = 50,
+    include_tools: bool = False,
+):
+    """获取单个 OpenClaw 任务详情（包含本地 events 与可选 sessions_history）"""
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw 客户端未就绪")
+
+    try:
+        task = Modules.openclaw_client.get_task(task_id)
+        if not task:
+            raise HTTPException(404, f"任务不存在: {task_id}")
+
+        resp: Dict[str, Any] = {
+            "success": True,
+            "task": task.to_dict(),
+        }
+
+        if include_history:
+            if task.session_key:
+                history = await Modules.openclaw_client.get_sessions_history(
+                    session_key=task.session_key,
+                    limit=history_limit,
+                    include_tools=include_tools,
+                )
+                resp["history"] = history
+            else:
+                resp["history"] = {"success": True, "messages": [], "note": "task_has_no_session_key"}
+
+        return resp
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取 OpenClaw 任务详情失败: {e}")
+        raise HTTPException(500, f"获取失败: {e}")
+
+
 @app.delete("/openclaw/tasks/completed")
 async def openclaw_clear_completed_tasks():
     """清理已完成的 OpenClaw 任务"""
@@ -1050,6 +1105,491 @@ async def openclaw_clear_completed_tasks():
     except Exception as e:
         logger.error(f"清理 OpenClaw 任务失败: {e}")
         raise HTTPException(500, f"清理失败: {e}")
+
+
+@app.get("/openclaw/session")
+async def openclaw_get_session():
+    """
+    获取当前 OpenClaw 调度终端会话信息
+
+    用于在设置界面显示 Naga 调度 OpenClaw 的终端连接状态
+
+    返回:
+    - 有活跃会话: session_key, created_at, last_activity, message_count, last_run_id, status
+    - 无会话: has_session=False, message="请和 OpenClaw 交互以显示交互终端"
+    """
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw 客户端未就绪")
+
+    try:
+        session_info = Modules.openclaw_client.get_session_info()
+
+        if session_info is None:
+            return {
+                "has_session": False,
+                "message": "请和 OpenClaw 交互以显示交互终端"
+            }
+
+        return {
+            "has_session": True,
+            "session": session_info
+        }
+    except Exception as e:
+        logger.error(f"获取 OpenClaw 会话信息失败: {e}")
+        raise HTTPException(500, f"获取失败: {e}")
+
+
+@app.get("/openclaw/history")
+async def openclaw_get_history(session_key: Optional[str] = None, limit: int = 20):
+    """
+    获取 OpenClaw 会话历史消息
+
+    用于在设置界面显示 OpenClaw Agent 的对话内容
+
+    Args:
+        session_key: 会话标识，不传则使用默认会话
+        limit: 返回消息条数限制
+
+    Returns:
+        会话历史消息列表
+    """
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw 客户端未就绪")
+
+    try:
+        result = await Modules.openclaw_client.get_sessions_history(
+            session_key=session_key,
+            limit=limit
+        )
+        return result
+    except Exception as e:
+        logger.error(f"获取 OpenClaw 会话历史失败: {e}")
+        raise HTTPException(500, f"获取失败: {e}")
+
+
+@app.get("/openclaw/status")
+async def openclaw_get_status():
+    """
+    获取 OpenClaw 当前状态
+
+    调用 session_status 工具获取实时状态
+
+    Returns:
+        OpenClaw 当前状态文本
+    """
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw 客户端未就绪")
+
+    try:
+        result = await Modules.openclaw_client.get_session_status()
+        return result
+    except Exception as e:
+        logger.error(f"获取 OpenClaw 状态失败: {e}")
+        raise HTTPException(500, f"获取失败: {e}")
+
+
+# ============ OpenClaw 安装和配置管理 API ============
+
+@app.get("/openclaw/install/check")
+async def openclaw_check_installation():
+    """
+    检查 OpenClaw 安装状态
+
+    Returns:
+        安装状态信息
+    """
+    try:
+        from agentserver.openclaw import get_openclaw_installer
+
+        installer = get_openclaw_installer()
+        status, version = installer.check_installation()
+
+        # 检查 Node.js
+        node_ok, node_version = installer.check_node_version()
+
+        return {
+            "success": True,
+            "status": status.value,
+            "version": version,
+            "node_ok": node_ok,
+            "node_version": node_version,
+            "npm_available": installer.check_npm_available()
+        }
+    except Exception as e:
+        logger.error(f"检查 OpenClaw 安装状态失败: {e}")
+        raise HTTPException(500, f"检查失败: {e}")
+
+
+@app.post("/openclaw/install")
+async def openclaw_install(payload: Dict[str, Any] = None):
+    """
+    安装 OpenClaw
+
+    请求体:
+    - method: 安装方式 ("npm" 或 "script"，默认 "npm")
+
+    Returns:
+        安装结果
+    """
+    try:
+        from agentserver.openclaw import get_openclaw_installer, InstallMethod
+
+        installer = get_openclaw_installer()
+
+        method_str = (payload or {}).get("method", "npm")
+        method = InstallMethod.NPM if method_str == "npm" else InstallMethod.SCRIPT
+
+        result = await installer.install(method)
+
+        return result.to_dict()
+    except Exception as e:
+        logger.error(f"安装 OpenClaw 失败: {e}")
+        raise HTTPException(500, f"安装失败: {e}")
+
+
+@app.post("/openclaw/setup")
+async def openclaw_setup(payload: Dict[str, Any] = None):
+    """
+    初始化 OpenClaw 配置
+
+    请求体:
+    - hooks_token: Hooks 认证 token（可选，不传则自动生成）
+
+    Returns:
+        初始化结果
+    """
+    try:
+        from agentserver.openclaw import get_openclaw_installer
+
+        installer = get_openclaw_installer()
+        hooks_token = (payload or {}).get("hooks_token")
+
+        result = await installer.setup(hooks_token)
+
+        return result.to_dict()
+    except Exception as e:
+        logger.error(f"初始化 OpenClaw 失败: {e}")
+        raise HTTPException(500, f"初始化失败: {e}")
+
+
+@app.post("/openclaw/gateway/start")
+async def openclaw_start_gateway():
+    """启动 OpenClaw Gateway"""
+    try:
+        from agentserver.openclaw import get_openclaw_installer
+
+        installer = get_openclaw_installer()
+        result = await installer.start_gateway(background=True)
+
+        return result.to_dict()
+    except Exception as e:
+        logger.error(f"启动 Gateway 失败: {e}")
+        raise HTTPException(500, f"启动失败: {e}")
+
+
+@app.post("/openclaw/gateway/stop")
+async def openclaw_stop_gateway():
+    """停止 OpenClaw Gateway"""
+    try:
+        from agentserver.openclaw import get_openclaw_installer
+
+        installer = get_openclaw_installer()
+        result = await installer.stop_gateway()
+
+        return result.to_dict()
+    except Exception as e:
+        logger.error(f"停止 Gateway 失败: {e}")
+        raise HTTPException(500, f"停止失败: {e}")
+
+
+@app.post("/openclaw/gateway/restart")
+async def openclaw_restart_gateway():
+    """重启 OpenClaw Gateway"""
+    try:
+        from agentserver.openclaw import get_openclaw_installer
+
+        installer = get_openclaw_installer()
+        result = await installer.restart_gateway()
+
+        return result.to_dict()
+    except Exception as e:
+        logger.error(f"重启 Gateway 失败: {e}")
+        raise HTTPException(500, f"重启失败: {e}")
+
+
+@app.post("/openclaw/gateway/install")
+async def openclaw_install_gateway_service():
+    """安装 Gateway 为系统服务"""
+    try:
+        from agentserver.openclaw import get_openclaw_installer
+
+        installer = get_openclaw_installer()
+        result = await installer.install_gateway_service()
+
+        return result.to_dict()
+    except Exception as e:
+        logger.error(f"安装 Gateway 服务失败: {e}")
+        raise HTTPException(500, f"安装失败: {e}")
+
+
+@app.get("/openclaw/gateway/status")
+async def openclaw_gateway_status():
+    """获取 Gateway 状态"""
+    try:
+        from agentserver.openclaw import get_openclaw_installer
+
+        installer = get_openclaw_installer()
+        result = await installer.check_gateway_status()
+
+        return result
+    except Exception as e:
+        logger.error(f"获取 Gateway 状态失败: {e}")
+        raise HTTPException(500, f"获取失败: {e}")
+
+
+@app.get("/openclaw/doctor")
+async def openclaw_doctor():
+    """运行 OpenClaw 健康检查"""
+    try:
+        from agentserver.openclaw import get_openclaw_installer
+
+        installer = get_openclaw_installer()
+        result = await installer.run_doctor()
+
+        return result
+    except Exception as e:
+        logger.error(f"健康检查失败: {e}")
+        raise HTTPException(500, f"检查失败: {e}")
+
+
+# ============ OpenClaw 配置管理 API ============
+
+@app.get("/openclaw/config")
+async def openclaw_get_config():
+    """
+    获取 OpenClaw 配置摘要
+
+    只返回安全的配置信息，不包含 token 等敏感数据
+    """
+    try:
+        from agentserver.openclaw import get_openclaw_config_manager
+
+        config_manager = get_openclaw_config_manager()
+        summary = config_manager.get_current_config_summary()
+
+        return {
+            "success": True,
+            "config": summary
+        }
+    except Exception as e:
+        logger.error(f"获取 OpenClaw 配置失败: {e}")
+        raise HTTPException(500, f"获取失败: {e}")
+
+
+@app.post("/openclaw/config/set")
+async def openclaw_set_config(payload: Dict[str, Any]):
+    """
+    设置 OpenClaw 配置
+
+    只允许修改白名单中的字段
+
+    请求体:
+    - field: 字段路径（如 "agents.defaults.model.primary"）
+    - value: 新值
+
+    Returns:
+        更新结果
+    """
+    try:
+        from agentserver.openclaw import get_openclaw_config_manager
+
+        field = payload.get("field")
+        value = payload.get("value")
+
+        if not field:
+            raise HTTPException(400, "field 不能为空")
+
+        config_manager = get_openclaw_config_manager()
+        result = config_manager.set(field, value)
+
+        return result.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"设置 OpenClaw 配置失败: {e}")
+        raise HTTPException(500, f"设置失败: {e}")
+
+
+@app.post("/openclaw/config/model")
+async def openclaw_set_model(payload: Dict[str, Any]):
+    """
+    设置默认模型
+
+    请求体:
+    - model: 模型标识符（如 "zai/glm-4.7"）
+    - alias: 模型别名（可选）
+
+    Returns:
+        更新结果
+    """
+    try:
+        from agentserver.openclaw import get_openclaw_config_manager
+
+        model = payload.get("model")
+        alias = payload.get("alias")
+
+        if not model:
+            raise HTTPException(400, "model 不能为空")
+
+        config_manager = get_openclaw_config_manager()
+
+        results = []
+
+        # 设置主模型
+        result = config_manager.set_primary_model(model)
+        results.append(result.to_dict())
+
+        # 设置别名（如果提供）
+        if alias:
+            alias_result = config_manager.add_model_alias(model, alias)
+            results.append(alias_result.to_dict())
+
+        return {
+            "success": all(r["success"] for r in results),
+            "results": results
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"设置模型失败: {e}")
+        raise HTTPException(500, f"设置失败: {e}")
+
+
+@app.post("/openclaw/config/hooks")
+async def openclaw_configure_hooks(payload: Dict[str, Any]):
+    """
+    配置 Hooks
+
+    请求体:
+    - enabled: 是否启用（可选）
+    - token: Hooks token（可选，不传则自动生成）
+
+    Returns:
+        更新结果
+    """
+    try:
+        from agentserver.openclaw import get_openclaw_config_manager
+
+        config_manager = get_openclaw_config_manager()
+        results = []
+
+        # 启用/禁用
+        if "enabled" in payload:
+            result = config_manager.set_hooks_enabled(payload["enabled"])
+            results.append(result.to_dict())
+
+        # 设置 token
+        if "token" in payload:
+            token = payload["token"]
+        elif payload.get("generate_token"):
+            token = config_manager.generate_hooks_token()
+        else:
+            token = None
+
+        if token:
+            result = config_manager.set_hooks_token(token)
+            results.append(result.to_dict())
+
+        return {
+            "success": all(r["success"] for r in results) if results else True,
+            "results": results,
+            "token": token  # 返回生成的 token
+        }
+    except Exception as e:
+        logger.error(f"配置 Hooks 失败: {e}")
+        raise HTTPException(500, f"配置失败: {e}")
+
+
+# ============ OpenClaw Skills 管理 API ============
+
+@app.get("/openclaw/skills")
+async def openclaw_list_skills():
+    """列出已安装的 Skills"""
+    try:
+        from agentserver.openclaw import get_openclaw_installer
+
+        installer = get_openclaw_installer()
+        skills = await installer.list_skills()
+
+        return {
+            "success": True,
+            "skills": skills
+        }
+    except Exception as e:
+        logger.error(f"列出 Skills 失败: {e}")
+        raise HTTPException(500, f"获取失败: {e}")
+
+
+@app.post("/openclaw/skills/install")
+async def openclaw_install_skill(payload: Dict[str, Any]):
+    """
+    安装 Skill
+
+    请求体:
+    - skill: Skill 标识符
+
+    Returns:
+        安装结果
+    """
+    try:
+        from agentserver.openclaw import get_openclaw_installer
+
+        skill = payload.get("skill")
+        if not skill:
+            raise HTTPException(400, "skill 不能为空")
+
+        installer = get_openclaw_installer()
+        result = await installer.install_skill(skill)
+
+        return result.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"安装 Skill 失败: {e}")
+        raise HTTPException(500, f"安装失败: {e}")
+
+
+@app.post("/openclaw/skills/enable")
+async def openclaw_enable_skill(payload: Dict[str, Any]):
+    """
+    启用/禁用 Skill
+
+    请求体:
+    - skill: Skill 名称
+    - enabled: 是否启用
+
+    Returns:
+        更新结果
+    """
+    try:
+        from agentserver.openclaw import get_openclaw_config_manager
+
+        skill = payload.get("skill")
+        enabled = payload.get("enabled", True)
+
+        if not skill:
+            raise HTTPException(400, "skill 不能为空")
+
+        config_manager = get_openclaw_config_manager()
+        result = config_manager.enable_skill(skill, enabled)
+
+        return result.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"启用/禁用 Skill 失败: {e}")
+        raise HTTPException(500, f"操作失败: {e}")
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -10,6 +10,7 @@ from .openclaw_client import (
     OpenClawClient,
     OpenClawConfig,
     OpenClawTask,
+    OpenClawSessionInfo,
     TaskStatus,
     get_openclaw_client,
     set_openclaw_config
@@ -21,7 +22,22 @@ from .detector import (
     get_openclaw_detector,
     detect_openclaw,
     get_openclaw_token,
+    get_openclaw_hooks_token,
     get_openclaw_gateway_url
+)
+
+from .installer import (
+    OpenClawInstaller,
+    InstallMethod,
+    InstallStatus,
+    InstallResult,
+    get_openclaw_installer
+)
+
+from .config_manager import (
+    OpenClawConfigManager,
+    ConfigUpdateResult,
+    get_openclaw_config_manager
 )
 
 __all__ = [
@@ -29,6 +45,7 @@ __all__ = [
     "OpenClawClient",
     "OpenClawConfig",
     "OpenClawTask",
+    "OpenClawSessionInfo",
     "TaskStatus",
     "get_openclaw_client",
     "set_openclaw_config",
@@ -38,5 +55,16 @@ __all__ = [
     "get_openclaw_detector",
     "detect_openclaw",
     "get_openclaw_token",
-    "get_openclaw_gateway_url"
+    "get_openclaw_hooks_token",
+    "get_openclaw_gateway_url",
+    # Installer
+    "OpenClawInstaller",
+    "InstallMethod",
+    "InstallStatus",
+    "InstallResult",
+    "get_openclaw_installer",
+    # Config Manager
+    "OpenClawConfigManager",
+    "ConfigUpdateResult",
+    "get_openclaw_config_manager",
 ]
