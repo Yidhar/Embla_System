@@ -234,7 +234,7 @@ export class CoreApiClient extends ApiClient {
     item: MarketItem
     openclaw: OpenClawStatus
   }> {
-    return this.instance.post(`/openclaw/market/items/${itemId}/install`, payload ?? {}, {
+    return this.instance.post(`/openclaw/market/items/${itemId}/install`, {}, {
       timeout: 5 * 60 * 1000,
     })
   }
