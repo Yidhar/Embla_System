@@ -63,6 +63,8 @@ hiddenimports = [
     # 异步
     'asyncio',
     'anyio',
+    # 系统信息
+    'psutil',
     # 其他（MCP/redis 已禁用）
     # 'key_value',
     # 'key_value.aio',
