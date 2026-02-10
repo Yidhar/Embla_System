@@ -47,26 +47,6 @@ class TaskSchedulerConfig:
 # 默认任务调度器配置实例
 DEFAULT_TASK_SCHEDULER_CONFIG = TaskSchedulerConfig()
 
-# ============ Agent管理器配置 ============
-
-@dataclass
-class AgentManagerConfig:
-    """Agent管理器配置"""
-    # 会话管理
-    default_session_timeout: int = 3600     # 默认会话超时时间（秒）
-    max_session_history: int = 100          # 最大会话历史记录数
-    
-    # 任务执行
-    max_concurrent_agents: int = 5          # 最大并发Agent数
-    agent_timeout: int = 300                # Agent执行超时时间（秒）
-    
-    # 缓存配置
-    enable_agent_cache: bool = True         # 是否启用Agent缓存
-    cache_ttl: int = 1800                   # 缓存生存时间（秒）
-
-# 默认Agent管理器配置实例
-DEFAULT_AGENT_MANAGER_CONFIG = AgentManagerConfig()
-
 # ============ OpenClaw 配置 ============
 
 @dataclass
@@ -103,7 +83,6 @@ class AgentServerConfig:
 
     # 子模块配置
     task_scheduler: TaskSchedulerConfig = None
-    agent_manager: AgentManagerConfig = None
     openclaw: OpenClawConfig = None
 
     # 日志配置
@@ -118,8 +97,6 @@ class AgentServerConfig:
         # 设置默认子配置
         if self.task_scheduler is None:
             self.task_scheduler = DEFAULT_TASK_SCHEDULER_CONFIG
-        if self.agent_manager is None:
-            self.agent_manager = DEFAULT_AGENT_MANAGER_CONFIG
         if self.openclaw is None:
             self.openclaw = DEFAULT_OPENCLAW_CONFIG
 
@@ -131,10 +108,6 @@ config = AgentServerConfig()
 def get_task_scheduler_config() -> TaskSchedulerConfig:
     """获取任务调度器配置"""
     return config.task_scheduler
-
-def get_agent_manager_config() -> AgentManagerConfig:
-    """获取Agent管理器配置"""
-    return config.agent_manager
 
 def get_openclaw_config() -> OpenClawConfig:
     """获取 OpenClaw 配置"""
