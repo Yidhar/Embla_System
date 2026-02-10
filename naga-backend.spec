@@ -7,7 +7,12 @@ NagaAgent Headless Backend - PyInstaller Spec
 
 import os
 import sys
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+#from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+from PyInstaller.utils.hooks import (
+    collect_submodules, collect_data_files,
+    collect_dynamic_libs
+)
+
 
 block_cipher = None
 
@@ -32,55 +37,14 @@ datas = [
 datas += collect_data_files('tiktoken')
 datas += collect_data_files('tiktoken_ext')
 datas += collect_data_files('litellm')
-
-# 动态导入的模块（PyInstaller 静态分析可能遗漏）
-hiddenimports = [
-    # Web 框架
-    'uvicorn',
-    'uvicorn.logging',
-    'uvicorn.loops',
-    'uvicorn.loops.auto',
-    'uvicorn.protocols',
-    'uvicorn.protocols.http',
-    'uvicorn.protocols.http.auto',
-    'uvicorn.protocols.websockets',
-    'uvicorn.protocols.websockets.auto',
-    'uvicorn.lifespan',
-    'uvicorn.lifespan.on',
-    'fastapi',
-    'starlette',
-    # HTTP 客户端
-    'httpx',
-    'httpcore',
-    # LLM
-    'langchain_openai',
-    'litellm',
-    'openai',
-    # 数据处理
-    'pydantic',
-    'json5',
-    'charset_normalizer',
-    # 异步
-    'asyncio',
-    'anyio',
-    # 系统信息
-    'psutil',
-    # 其他（MCP/redis 已禁用）
-    # 'key_value',
-    # 'key_value.aio',
-    # 'redis',
-    'requests',
-    # tiktoken 编码
-    'tiktoken',
-    'tiktoken_ext',
-    'tiktoken_ext.openai_public',
-]
+datas += collect_data_files('py2neo')
 
 # 排除不需要的大型库（环境有 910 个包，只需约 27 个核心包）
+### 不不不千万不能排除 先全加上再说
 excludes = [
     # PyQt / Qt / UI
-    'PyQt5', 'PyQt5.QtWidgets', 'PyQt5.QtGui', 'PyQt5.QtCore', 'PyQt5.QtOpenGL',
-    'PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtGui', 'PyQt6.QtCore',
+    #'PyQt5', 'PyQt5.QtWidgets', 'PyQt5.QtGui', 'PyQt5.QtCore', 'PyQt5.QtOpenGL',
+    #'PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtGui', 'PyQt6.QtCore',
     'ui', 'tkinter',
     # 深度学习框架（后端调 API，不跑本地模型）
     'torch', 'torchaudio', 'torchvision', 'torchgen', 'torchdata',
@@ -145,16 +109,65 @@ excludes = [
     'jieba',
 ]
 
+# 动态导入的模块（PyInstaller 静态分析可能遗漏）
+hiddenimports = excludes + [
+    # Web 框架
+    'uvicorn',
+    'uvicorn.logging',
+    'uvicorn.loops',
+    'uvicorn.loops.auto',
+    'uvicorn.protocols',
+    'uvicorn.protocols.http',
+    'uvicorn.protocols.http.auto',
+    'uvicorn.protocols.websockets',
+    'uvicorn.protocols.websockets.auto',
+    'uvicorn.lifespan',
+    'uvicorn.lifespan.on',
+    'fastapi',
+    'starlette',
+    # HTTP 客户端
+    'httpx',
+    'httpcore',
+    # LLM
+    'langchain_openai',
+    'litellm',
+    'openai',
+    # 数据处理
+    'pydantic',
+    'json5',
+    'charset_normalizer',
+    # 异步
+    'asyncio',
+    'anyio',
+    # 系统信息
+    'psutil',
+    # 其他（MCP/redis 已禁用）
+    # 'key_value',
+    # 'key_value.aio',
+    # 'redis',
+    'requests',
+    # tiktoken 编码
+    'tiktoken',
+    'tiktoken_ext',
+    'tiktoken_ext.openai_public',
+]
+hiddenimports += collect_submodules('psutil')
+
+
+
+binaries = collect_dynamic_libs('psutil')
+
 a = Analysis(
     ['main.py'],
     pathex=[PROJECT_ROOT],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=excludes,
+    #excludes=excludes,
+    excludes=[],
     cipher=block_cipher,
     noarchive=False,
 )
@@ -170,7 +183,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=True,  # headless 模式需要控制台输出
 )
 
