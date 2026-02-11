@@ -21,6 +21,7 @@ class InstallMethod(Enum):
     """安装方式"""
     NPM = "npm"
     SCRIPT = "script"
+    SOURCE = "source"
     UNKNOWN = "unknown"
 
 
