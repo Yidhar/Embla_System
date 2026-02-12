@@ -5,7 +5,7 @@ import { ref, useTemplateRef } from 'vue'
 import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
-import { isNagaLoggedIn } from '@/composables/useAuth'
+import { isNagaLoggedIn, nagaUser } from '@/composables/useAuth'
 import { CONFIG, DEFAULT_CONFIG, DEFAULT_MODEL, MODELS, SYSTEM_PROMPT } from '@/utils/config'
 import { trackingCalibration } from '@/utils/live2dController'
 
@@ -102,11 +102,11 @@ const accordionValue = useStorage('accordion-config', [])
       <ConfigGroup value="api" header="API 设置">
         <div class="grid gap-4">
           <ConfigItem name="API 地址">
-            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，无需输入</span>
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆 ({{ nagaUser?.username }})，使用 NagaModel 网关</span>
             <InputText v-else v-model="CONFIG.api.base_url" placeholder="https://api.example.com/v1" />
           </ConfigItem>
           <ConfigItem name="API 密钥">
-            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，无需输入</span>
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆 ({{ nagaUser?.username }})，无需输入</span>
             <InputText v-else v-model="CONFIG.api.api_key" type="password" placeholder="sk-..." />
           </ConfigItem>
           <ConfigItem name="模型名称">

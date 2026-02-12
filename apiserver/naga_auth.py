@@ -98,3 +98,11 @@ def get_access_token() -> Optional[str]:
 
 def get_user_info() -> Optional[dict]:
     return _user_info
+
+
+async def register(username: str, password: str) -> dict:
+    """通过 NagaCAS 注册新用户"""
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(f"{CAS_URL}/auth/register", json={"username": username, "password": password})
+        resp.raise_for_status()
+        return resp.json()

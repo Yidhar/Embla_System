@@ -320,6 +320,12 @@ export class CoreApiClient extends ApiClient {
   authLogout(): Promise<{ success: boolean }> {
     return this.instance.post('/auth/logout')
   }
+
+  authRegister(username: string, password: string): Promise<{
+    success: boolean
+  }> {
+    return this.instance.post('/auth/register', { username, password })
+  }
 }
 
 export default new CoreApiClient(8000)

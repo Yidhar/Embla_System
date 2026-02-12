@@ -467,6 +467,30 @@ async def auth_logout():
     return {"success": True}
 
 
+@app.post("/auth/register")
+async def auth_register(body: dict):
+    """NagaCAS 注册"""
+    username = body.get("username", "")
+    password = body.get("password", "")
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="用户名和密码不能为空")
+    try:
+        result = await naga_auth.register(username, password)
+        return {"success": True, **result}
+    except Exception as e:
+        import httpx
+        status = 500
+        detail = f"注册失败: {str(e)}"
+        if isinstance(e, httpx.HTTPStatusError):
+            status = e.response.status_code
+            try:
+                detail = e.response.json().get("detail", detail)
+            except Exception:
+                pass
+        logger.error(f"注册失败: {e}")
+        raise HTTPException(status_code=status, detail=detail)
+
+
 @app.post("/auth/refresh")
 async def auth_refresh(body: dict):
     """刷新 token"""

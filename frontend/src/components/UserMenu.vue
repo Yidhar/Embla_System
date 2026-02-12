@@ -44,6 +44,12 @@ const initial = computed(() => {
     </button>
     <Transition name="dropdown-fade">
       <div v-if="menuOpen" class="dropdown">
+        <!-- 用户信息头部 -->
+        <div class="user-header">
+          <div class="user-header-name">{{ nagaUser?.username }}</div>
+          <div v-if="nagaUser?.sub" class="user-header-id">ID: {{ nagaUser.sub }}</div>
+        </div>
+        <div class="dropdown-divider gold" />
         <button class="dropdown-item" @click="goConfig">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3" /><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" /></svg>
           用户设置
@@ -114,13 +120,29 @@ const initial = computed(() => {
   position: absolute;
   top: 100%;
   right: 0;
-  min-width: 150px;
+  min-width: 180px;
   padding: 4px 0;
   background: rgba(30, 22, 10, 0.96);
   border: 1px solid rgba(212, 175, 55, 0.25);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   z-index: 100;
+}
+
+.user-header {
+  padding: 10px 14px 8px;
+}
+
+.user-header-name {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.user-header-id {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11px;
+  margin-top: 2px;
 }
 
 .dropdown-item {
@@ -151,6 +173,10 @@ const initial = computed(() => {
   height: 1px;
   margin: 4px 10px;
   background: rgba(255, 255, 255, 0.08);
+}
+
+.dropdown-divider.gold {
+  background: linear-gradient(90deg, transparent, rgba(212, 175, 55, 0.35), transparent);
 }
 
 .dropdown-fade-enter-active {

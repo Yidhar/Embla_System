@@ -601,9 +601,17 @@ if __name__ == "__main__":
     # 启动后端服务
     _lazy_init_services()
     print("\n✅ 所有后端服务已启动，等待前端连接...")
+
+    import signal
+
+    def _shutdown(signum=None, frame=None):
+        print("\n👋 正在关闭后端服务...")
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown)
+
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\n👋 正在关闭后端服务...")
-        sys.exit(0)
+        _shutdown()

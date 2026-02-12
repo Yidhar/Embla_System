@@ -5,12 +5,14 @@ let _splashDismissed = false
 
 <script setup lang="ts">
 import { useWindowSize } from '@vueuse/core'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import Toast from 'primevue/toast'
+import { useToast } from 'primevue/usetoast'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import Live2dModel from '@/components/Live2dModel.vue'
 import LoginDialog from '@/components/LoginDialog.vue'
 import SplashScreen from '@/components/SplashScreen.vue'
 import TitleBar from '@/components/TitleBar.vue'
-import { isNagaLoggedIn } from '@/composables/useAuth'
+import { isNagaLoggedIn, nagaUser, sessionRestored } from '@/composables/useAuth'
 import { useParallax } from '@/composables/useParallax'
 import { useStartupProgress } from '@/composables/useStartupProgress'
 import { CONFIG } from '@/utils/config'
@@ -18,6 +20,8 @@ import { clearExpression, setExpression } from '@/utils/live2dController'
 import { initParallax, destroyParallax } from '@/utils/parallax'
 
 const isElectron = !!window.electronAPI
+
+const toast = useToast()
 
 const { width, height } = useWindowSize()
 const scale = computed(() => height.value / (10000 - CONFIG.value.web_live2d.model.size))
@@ -78,6 +82,7 @@ function onSplashDismiss() {
 
 function onLoginSuccess() {
   showLoginDialog.value = false
+  toast.add({ severity: 'success', summary: '欢迎回来', detail: nagaUser.value?.username, life: 3000 })
   enterMainContent()
 }
 
@@ -107,6 +112,13 @@ function enterMainContent() {
   }, 1500)
 }
 
+// ─── 会话自动恢复提示 ─────────────────────────
+watch(sessionRestored, (restored) => {
+  if (restored) {
+    toast.add({ severity: 'info', summary: '已恢复登录状态', detail: nagaUser.value?.username, life: 3000 })
+  }
+})
+
 onMounted(() => {
   initParallax()
   startProgress()
@@ -120,6 +132,7 @@ onUnmounted(() => {
 
 <template>
   <TitleBar />
+  <Toast position="top-center" />
   <div class="h-full sunflower" :style="{ paddingTop: isElectron ? '32px' : '0px' }">
     <!-- Live2D 层：启动时 z-10（在 SplashScreen 遮罩之间），之后降到 -z-1 -->
     <div
