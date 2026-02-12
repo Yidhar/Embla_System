@@ -4,7 +4,7 @@ ChromaDB 向量数据库服务
 替代 Milvus，用于 Windows 本地开发
 """
 
-import asyncio
+import math
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -21,9 +21,6 @@ from .models import get_guide_engine_settings
 class ChromaService:
     """ChromaDB 向量数据库服务"""
 
-    # 使用中文嵌入模型
-    EMBEDDING_MODEL = "BAAI/bge-base-zh-v1.5"
-
     # 游戏ID到内部名称的映射（用于匹配导入时的collection名称）
     GAME_ID_MAP = {
         "honkai-star-rail": "starrail",
@@ -38,7 +35,7 @@ class ChromaService:
 
     def __init__(self, persist_dir: Optional[str] = None):
         self._client = None
-        self._model = None
+        self._openai_client = None
         settings = get_guide_engine_settings()
         self._persist_dir = persist_dir or settings.chroma_persist_dir
 
@@ -54,18 +51,45 @@ class ChromaService:
         return self._client
 
     @property
-    def embedding_model(self):
-        """懒加载嵌入模型"""
-        if self._model is None:
-            from sentence_transformers import SentenceTransformer
+    def openai_client(self):
+        """懒加载 OpenAI 兼容 Embedding 客户端"""
+        if self._openai_client is None:
+            from openai import AsyncOpenAI
 
             settings = get_guide_engine_settings()
-            model_id = settings.embedding_model_path or self.EMBEDDING_MODEL
-            print(f"Loading embedding model: {model_id}")
-            # Force local-only to avoid accidental downloads.
-            self._model = SentenceTransformer(model_id, local_files_only=True)
-            print("Embedding model loaded successfully")
-        return self._model
+            if not settings.embedding_api_key:
+                raise RuntimeError("embedding_api_key 未配置，无法使用外部向量服务")
+            self._openai_client = AsyncOpenAI(
+                api_key=settings.embedding_api_key,
+                base_url=settings.embedding_api_base_url,
+            )
+        return self._openai_client
+
+    @staticmethod
+    def _normalize_embedding(vector: List[float]) -> List[float]:
+        norm = math.sqrt(sum(x * x for x in vector))
+        if norm <= 0:
+            return vector
+        return [x / norm for x in vector]
+
+    async def _embed_texts(self, texts: List[str]) -> List[List[float]]:
+        settings = get_guide_engine_settings()
+        model_name = settings.embedding_api_model
+        if not model_name:
+            raise RuntimeError("embedding_api_model 未配置，无法使用外部向量服务")
+
+        response = await self.openai_client.embeddings.create(
+            model=model_name,
+            input=texts,
+        )
+        ordered_data = sorted(response.data, key=lambda item: item.index)
+        return [self._normalize_embedding([float(x) for x in item.embedding]) for item in ordered_data]
+
+    async def _embed_query(self, query: str) -> List[float]:
+        vectors = await self._embed_texts([query])
+        if not vectors:
+            raise RuntimeError("查询向量生成失败")
+        return vectors[0]
 
     def _get_collection_name(self, game_id: str, collection_type: str = "guides") -> str:
         """
@@ -149,10 +173,10 @@ class ChromaService:
 
         # 生成嵌入向量
         print(f"Generating embeddings for {len(texts)} documents...")
-        embeddings = await asyncio.to_thread(self.embedding_model.encode, texts, normalize_embeddings=True)
+        embeddings = await self._embed_texts(texts)
 
         # 插入数据
-        collection.add(ids=ids, embeddings=embeddings.tolist(), metadatas=metadatas, documents=texts)
+        collection.add(ids=ids, embeddings=embeddings, metadatas=metadatas, documents=texts)
 
         print(f"Inserted {len(documents)} documents")
         return len(documents)
@@ -181,7 +205,7 @@ class ChromaService:
             doc_type_filter: 只返回指定doc_type的文档（如 "map_guide"）
         """
         # 生成查询向量（只需要生成一次）
-        query_embedding = await asyncio.to_thread(self.embedding_model.encode, query, normalize_embeddings=True)
+        query_embedding = await self._embed_query(query)
 
         all_results = []
 
@@ -206,7 +230,7 @@ class ChromaService:
 
             # 构建查询参数
             query_kwargs = {
-                "query_embeddings": [query_embedding.tolist()],
+                "query_embeddings": [query_embedding],
                 "n_results": top_k,
                 "include": ["documents", "metadatas", "distances"],
             }

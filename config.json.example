@@ -149,7 +149,9 @@
   "guide_engine": {
     "enabled": true, // 是否启用游戏攻略引擎
     "chroma_persist_dir": "./data/chroma", // ChromaDB持久化目录
-    "embedding_model_path": "", // Embedding模型路径（空字符串表示使用默认模型）
+    "embedding_api_base_url": "", // OpenAI兼容Embedding API地址（如 https://api.openai.com/v1）
+    "embedding_api_key": "", // OpenAI兼容Embedding API密钥
+    "embedding_api_model": "text-embedding-3-small", // OpenAI兼容Embedding模型名
     "prompt_dir": "./guide_engine/game_prompts", // 游戏Prompt目录
     "neo4j_uri": "neo4j://127.0.0.1:7687", // 攻略图谱Neo4j URI
     "neo4j_user": "neo4j", // 攻略图谱Neo4j用户名

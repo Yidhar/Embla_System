@@ -326,7 +326,11 @@ class GuideEngineConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="是否启用游戏攻略引擎")
     chroma_persist_dir: str = Field(default="./data/chroma", description="ChromaDB持久化目录")
-    embedding_model_path: str | None = Field(default=None, description="Embedding模型路径（为空时使用默认模型）")
+    embedding_api_base_url: str | None = Field(
+        default=None, description="OpenAI兼容Embedding API地址（如 https://xx/v1）"
+    )
+    embedding_api_key: str | None = Field(default=None, description="OpenAI兼容Embedding API密钥")
+    embedding_api_model: str | None = Field(default=None, description="OpenAI兼容Embedding模型名")
     prompt_dir: str = Field(default="./guide_engine/game_prompts", description="游戏Prompt目录")
     neo4j_uri: str = Field(default="neo4j://127.0.0.1:7687", description="攻略图谱Neo4j URI")
     neo4j_user: str = Field(default="neo4j", description="攻略图谱Neo4j用户名")

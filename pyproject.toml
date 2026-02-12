@@ -50,7 +50,6 @@ dependencies = [
     "py2neo>=2021.2.4",
     "neo4j>=5.0.0",
     "chromadb>=0.5.0",
-    "sentence-transformers>=3.0.0",
     "mss>=10.1.0",
     "python-multipart>=0.0.22",
 ]
@@ -69,4 +68,3 @@ line-length = 120
 build = [
     "pyinstaller>=6.18.0",
 ]
-

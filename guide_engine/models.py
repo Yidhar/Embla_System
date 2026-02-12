@@ -35,7 +35,9 @@ class GuideResponse(BaseModel):
 class GuideEngineSettings:
     enabled: bool = True
     chroma_persist_dir: str = "./data/chroma"
-    embedding_model_path: str | None = None
+    embedding_api_base_url: str | None = None
+    embedding_api_key: str | None = None
+    embedding_api_model: str | None = None
     neo4j_uri: str = "neo4j://127.0.0.1:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: str = "your_password"
@@ -59,7 +61,9 @@ class GuideEngineSettings:
         return cls(
             enabled=ge.enabled,
             chroma_persist_dir=chroma_persist_dir,
-            embedding_model_path=ge.embedding_model_path or None,
+            embedding_api_base_url=ge.embedding_api_base_url or config.api.base_url,
+            embedding_api_key=ge.embedding_api_key or config.api.api_key,
+            embedding_api_model=ge.embedding_api_model or "text-embedding-3-small",
             neo4j_uri=ge.neo4j_uri,
             neo4j_user=ge.neo4j_user,
             neo4j_password=ge.neo4j_password,
