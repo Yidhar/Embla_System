@@ -150,7 +150,7 @@ class CalculationService:
 
         # 6. 计算单次伤害
         result.damage_per_hit, result.damage_type = self._calc_damage(
-            result.final_atk, skill_level, params
+            result.final_atk, skill_level, params, char
         )
         result.calculation_steps.append(
             f"单次伤害: {result.damage_per_hit:.0f} ({result.damage_type.value})"
@@ -301,7 +301,8 @@ class CalculationService:
         self,
         final_atk: float,
         skill_level: SkillLevel,
-        params: CalculationParams
+        params: CalculationParams,
+        char: Character | None = None,
     ) -> Tuple[float, DamageType]:
         """
         计算单次伤害
@@ -315,8 +316,8 @@ class CalculationService:
             if "atk_scale" in key.lower():
                 atk_scale = max(atk_scale, value)  # 取最大倍率
 
-        # 判断伤害类型（简化：默认物理，后续可根据技能描述判断）
-        damage_type = DamageType.PHYSICAL
+        # 判断伤害类型
+        damage_type = self._infer_damage_type(char, skill_level)
 
         # 计算敌人有效防御/法抗
         enemy_def = params.enemy_defense * (1 - params.defense_ignore)
@@ -336,6 +337,52 @@ class CalculationService:
             damage = raw_damage
 
         return damage, damage_type
+
+    @staticmethod
+    def _infer_damage_type(char: Character | None, skill_level: SkillLevel) -> DamageType:
+        """根据技能描述和干员职业推断伤害类型"""
+        import re
+
+        desc = skill_level.description or ""
+        desc_clean = re.sub(r"<[^>]+>", "", desc)
+
+        # 优先级1：技能描述中的显式标记
+        if "真实伤害" in desc_clean:
+            return DamageType.TRUE
+        if "法术伤害" in desc_clean:
+            return DamageType.MAGICAL
+        if "治疗" in desc_clean and "伤害" not in desc_clean:
+            return DamageType.HEALING
+
+        # 优先级2：blackboard 中的 damage_type 标记
+        for key in skill_level.blackboard:
+            if key == "damage_type":
+                val = int(skill_level.blackboard[key])
+                if val == 0:
+                    return DamageType.PHYSICAL
+                if val == 1:
+                    return DamageType.MAGICAL
+                if val == 3:
+                    return DamageType.TRUE
+
+        # 优先级3：干员职业
+        if char is not None:
+            profession = (char.profession or "").upper()
+            # 术师默认法术伤害
+            if profession == "CASTER":
+                return DamageType.MAGICAL
+            # 医疗默认治疗
+            if profession == "MEDIC":
+                return DamageType.HEALING
+            # 辅助中部分子职业造成法术伤害
+            if profession == "SUPPORT" and char.sub_profession in (
+                "bard",
+                "craftsman",
+                "slower",
+            ):
+                return DamageType.MAGICAL
+
+        return DamageType.PHYSICAL
 
     def _level_to_str(self, level: int) -> str:
         """技能等级转中文"""

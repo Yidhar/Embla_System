@@ -39,10 +39,27 @@ class GuideTools:
             "metadata": result.metadata,
         }
 
-    async def calculate_damage(self, query: str, game_id: str = "arknights") -> dict[str, Any]:
+    async def ask_guide_with_screenshot(
+        self,
+        query: str,
+        game_id: str | None = None,
+        server_id: str | None = None,
+        images: list[str] | None = None,
+        history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        return await self.ask_guide(
+            query=query,
+            game_id=game_id,
+            server_id=server_id,
+            images=images,
+            auto_screenshot=True,
+            history=history,
+        )
+
+    async def calculate_damage(self, query: str, game_id: str | None = None) -> dict[str, Any]:
         enhanced_query = f"请进行伤害计算：{query}"
         return await self.ask_guide(query=enhanced_query, game_id=game_id, auto_screenshot=False)
 
-    async def get_team_recommendation(self, query: str, game_id: str = "arknights") -> dict[str, Any]:
+    async def get_team_recommendation(self, query: str, game_id: str | None = None) -> dict[str, Any]:
         enhanced_query = f"请给出配队建议：{query}"
         return await self.ask_guide(query=enhanced_query, game_id=game_id, auto_screenshot=True)

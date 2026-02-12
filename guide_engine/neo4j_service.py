@@ -114,6 +114,8 @@ class Neo4jService:
             print("[Neo4j] kantai seed file not found, skip auto import")
             return 0
 
+        await self.init_constraints()
+
         with open(file_path, "r", encoding="utf-8") as f:
             payload = json.load(f)
 

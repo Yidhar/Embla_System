@@ -29,7 +29,7 @@ class GameGuideAgent:
             if not isinstance(history, list):
                 history = []
 
-            if tool_name in ("ask_guide", "ask_guide_with_screenshot"):
+            if tool_name == "ask_guide":
                 auto_screenshot_value = task.get("auto_screenshot")
                 auto_screenshot: bool | None = None
                 if isinstance(auto_screenshot_value, bool):
@@ -40,6 +40,14 @@ class GameGuideAgent:
                     server_id=server_id if isinstance(server_id, str) else None,
                     images=[str(item) for item in images],
                     auto_screenshot=auto_screenshot,
+                    history=[item for item in history if isinstance(item, dict)],
+                )
+            elif tool_name == "ask_guide_with_screenshot":
+                data = await self.tools.ask_guide_with_screenshot(
+                    query=query,
+                    game_id=game_id,
+                    server_id=server_id if isinstance(server_id, str) else None,
+                    images=[str(item) for item in images],
                     history=[item for item in history if isinstance(item, dict)],
                 )
             elif tool_name == "calculate_damage":

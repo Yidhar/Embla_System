@@ -280,7 +280,8 @@ class GuideService:
                 score_threshold=score_threshold,
                 search_mode=search_mode,
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("[GuideService] ChromaDB search failed: %s", exc)
             docs = []
 
         for doc in docs:
@@ -314,7 +315,7 @@ class GuideService:
             return ""
 
         if game_id == "arknights":
-            operator_name = self._guess_operator_name(route, docs)
+            operator_name = self._guess_operator_name(route, docs, request.content)
             if not operator_name:
                 return ""
             params = CalculationParams(
@@ -396,9 +397,21 @@ class GuideService:
         return "full"
 
     @staticmethod
-    def _guess_operator_name(route: RouteResult, docs: list[dict[str, Any]]) -> str | None:
+    def _guess_operator_name(route: RouteResult, docs: list[dict[str, Any]], query: str = "") -> str | None:
         if route.entities.operator_names:
             return route.entities.operator_names[0]
+
+        # 从查询文本中匹配已知干员名（按名字长度降序，优先匹配长名）
+        if query:
+            from .gamedata_loader import get_gamedata_loader
+
+            loader = get_gamedata_loader()
+            loader.load()
+            known_names = sorted(loader._name_mapping.keys(), key=len, reverse=True)
+            for name in known_names:
+                if name in query:
+                    return name
+
         for doc in docs:
             title = str(doc.get("title", ""))
             if " - " in title:
