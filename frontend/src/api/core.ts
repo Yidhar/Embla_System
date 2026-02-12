@@ -269,6 +269,33 @@ export class CoreApiClient extends ApiClient {
     return this.instance.get('/mcp/status')
   }
 
+  getMcpServices(): Promise<{
+    status: string
+    services: Array<{
+      name: string
+      displayName: string
+      description: string
+      source: 'builtin' | 'mcporter'
+      available: boolean
+    }>
+  }> {
+    return this.instance.get('/mcp/services')
+  }
+
+  importMcpConfig(name: string, config: Record<string, any>): Promise<{
+    status: string
+    message: string
+  }> {
+    return this.instance.post('/mcp/import', { name, config })
+  }
+
+  importCustomSkill(name: string, content: string): Promise<{
+    status: string
+    message: string
+  }> {
+    return this.instance.post('/skills/import', { name, content })
+  }
+
   getContextStats(days?: number) {
     return this.instance.get(`/logs/context/statistics?days=${days}`)
   }
