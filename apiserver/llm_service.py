@@ -18,6 +18,7 @@ import litellm
 from litellm import acompletion
 from fastapi import FastAPI, HTTPException
 from system.config import config
+from . import naga_auth
 
 # 配置日志
 logger = logging.getLogger("LLMService")
@@ -61,6 +62,12 @@ class LLMService:
         model = config.api.model
         base_url = config.api.base_url.lower() if config.api.base_url else ""
 
+        # NagaModel 网关始终使用 openai/ 前缀
+        if naga_auth.is_authenticated():
+            if not model.startswith("openai/"):
+                return f"openai/{model}"
+            return model
+
         # 根据 base_url 判断提供商，添加正确的前缀
         if "deepseek" in base_url:
             if not model.startswith("deepseek/"):
@@ -76,6 +83,19 @@ class LLMService:
             if not model.startswith("openai/"):
                 return f"openai/{model}"
         return model
+
+    def _get_llm_params(self) -> Dict[str, Any]:
+        """获取 LLM 调用参数，NagaModel 登录态时自动切换网关"""
+        if naga_auth.is_authenticated():
+            return {
+                "api_key": "naga-authenticated",
+                "api_base": naga_auth.NAGA_MODEL_URL + "/",
+                "extra_body": {"user_token": naga_auth.get_access_token()},
+            }
+        return {
+            "api_key": config.api.api_key,
+            "api_base": config.api.base_url.rstrip("/") + "/" if config.api.base_url else None,
+        }
 
     async def get_response(self, prompt: str, temperature: float = 0.7) -> str:
         """为其他模块提供API调用接口（保持向后兼容，只返回 content）"""
@@ -95,8 +115,7 @@ class LLMService:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=temperature,
                 max_tokens=config.api.max_tokens,
-                api_key=config.api.api_key,
-                api_base=config.api.base_url.rstrip('/') + '/' if config.api.base_url else None
+                **self._get_llm_params()
             )
             message = response.choices[0].message
             return LLMResponse(
@@ -129,8 +148,7 @@ class LLMService:
                 messages=messages,
                 temperature=temperature,
                 max_tokens=config.api.max_tokens if hasattr(config.api, 'max_tokens') else None,
-                api_key=config.api.api_key,
-                api_base=config.api.base_url.rstrip('/') + '/' if config.api.base_url else None
+                **self._get_llm_params()
             )
             message = response.choices[0].message
             return LLMResponse(
@@ -161,8 +179,7 @@ class LLMService:
                 temperature=temperature,
                 max_tokens=config.api.max_tokens if hasattr(config.api, 'max_tokens') else None,
                 stream=True,
-                api_key=config.api.api_key,
-                api_base=config.api.base_url.rstrip('/') + '/' if config.api.base_url else None
+                **self._get_llm_params()
             )
 
             async for chunk in response:

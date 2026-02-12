@@ -65,7 +65,7 @@ export function startBackend(): void {
     // 开发模式：直接用 python
     cwd = join(__dirname, '..', '..')
     cmd = process.platform === 'win32' ? 'python' : 'python3'
-    args = ['main.py']
+    args = ['main.py', '--headless']
   }
 
   console.log(`[Backend] Starting from ${cwd}`)

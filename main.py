@@ -133,7 +133,7 @@ class ServiceManager:
                 return True
         except OSError:
             return False
-    
+
     def start_all_servers(self):
         """并行启动所有服务：API(可选)、MCP、Agent、TTS"""
         print("🚀 正在并行启动所有服务...")
@@ -143,7 +143,7 @@ class ServiceManager:
 
         try:
             self._init_proxy_settings()
-            # 预检查所有端口
+            # 预检查所有端口（端口已在启动前由 kill_port_occupiers 清理）
             from system.config import get_server_port
             port_checks = {
                 'api': config.api_server.enabled and config.api_server.auto_start and
@@ -205,9 +205,32 @@ class ServiceManager:
                 thread.start()
                 print(f"✅ {name}服务器: 启动线程已创建")
 
-            # 等待所有服务启动（给服务器启动时间）
+            # 等待服务启动：轮询端口可连接性，最长等 3s
             print("⏳ 等待服务初始化...")
-            time.sleep(2)
+            expected_ports = []
+            if port_checks.get('api'):
+                expected_ports.append(config.api_server.port)
+            if port_checks.get('mcp'):
+                expected_ports.append(get_server_port("mcp_server"))
+            if port_checks.get('agent'):
+                expected_ports.append(get_server_port("agent_server"))
+            if port_checks.get('tts'):
+                expected_ports.append(config.tts.port)
+
+            if expected_ports:
+                for _ in range(15):  # 最多 15 × 0.2s = 3s
+                    all_ready = True
+                    for p in expected_ports:
+                        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        s.settimeout(0.1)
+                        if s.connect_ex(('127.0.0.1', p)) != 0:
+                            all_ready = False
+                        s.close()
+                        if not all_ready:
+                            break
+                    if all_ready:
+                        break
+                    time.sleep(0.2)
 
             print("-" * 30)
             print(f"🎉 服务启动完成: {len(threads)} 个服务正在运行")
@@ -342,6 +365,60 @@ class ServiceManager:
         except Exception as e:
             logger.error(f"MCP服务系统初始化失败: {e}")
 
+def kill_port_occupiers():
+    """启动前杀掉占用后端端口的进程（跨平台）"""
+    from system.config import get_all_server_ports
+    all_ports = get_all_server_ports()
+    ports = [
+        all_ports["api_server"],
+        all_ports["agent_server"],
+        all_ports["mcp_server"],
+        all_ports["tts_server"],
+    ]
+    my_pid = os.getpid()
+    killed = False
+
+    if sys.platform == "win32":
+        for port in ports:
+            try:
+                result = subprocess.run(
+                    ["netstat", "-ano"], capture_output=True, text=True
+                )
+                for line in result.stdout.splitlines():
+                    if f":{port}" in line and "LISTENING" in line:
+                        parts = line.split()
+                        pid = int(parts[-1])
+                        if pid != my_pid and pid > 0:
+                            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                                           capture_output=True)
+                            print(f"   已终止占用端口 {port} 的进程 (PID {pid})")
+                            killed = True
+            except Exception as e:
+                print(f"   ⚠️ 清理端口 {port} 时出错: {e}")
+    else:
+        # macOS/Linux: 合并为单次 lsof 调用
+        try:
+            port_args = ",".join(str(p) for p in ports)
+            result = subprocess.run(
+                ["lsof", "-ti", f":{port_args}"], capture_output=True, text=True
+            )
+            if result.stdout.strip():
+                for pid_str in result.stdout.strip().split("\n"):
+                    try:
+                        pid = int(pid_str.strip())
+                        if pid != my_pid and pid > 0:
+                            os.kill(pid, 9)
+                            print(f"   已终止占用端口的进程 (PID {pid})")
+                            killed = True
+                    except (ValueError, ProcessLookupError):
+                        pass
+        except Exception as e:
+            print(f"   ⚠️ 清理端口时出错: {e}")
+
+    if killed:
+        time.sleep(0.5)  # SIGKILL 后端口释放很快，0.5s 足够
+
+
 # 工具函数
 def show_help():
     print('系统命令: 清屏, 查看索引, 帮助, 退出')
@@ -356,7 +433,6 @@ def clear():
 def check_and_update_if_needed() -> bool:
     """检查上次系统检测时间，如果检测通过且超过5天则执行更新"""
     from datetime import datetime
-    from charset_normalizer import from_path
     import json5
 
     config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
@@ -365,20 +441,9 @@ def check_and_update_if_needed() -> bool:
         return False
 
     try:
-        # 使用Charset Normalizer自动检测编码
-        charset_results = from_path(config_file)
-        if charset_results:
-            best_match = charset_results.best()
-            if best_match:
-                detected_encoding = best_match.encoding
-                with open(config_file, 'r', encoding=detected_encoding) as f:
-                    config_data = json5.load(f)
-            else:
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    config_data = json5.load(f)
-        else:
-            with open(config_file, 'r', encoding='utf-8') as f:
-                config_data = json5.load(f)
+        # 直接用 UTF-8 读取（本项目 config.json 始终为 UTF-8 编码）
+        with open(config_file, 'r', encoding='utf-8') as f:
+            config_data = json5.load(f)
 
         system_check = config_data.get('system_check', {})
         timestamp_str = system_check.get('timestamp')
@@ -415,13 +480,8 @@ def check_and_update_if_needed() -> bool:
             # 重置检测状态为 false
             config_data['system_check']['passed'] = False
             # 保存配置
-            detected_encoding = 'utf-8'
-            if charset_results:
-                best_match = charset_results.best()
-                if best_match:
-                    detected_encoding = best_match.encoding
-            with open(config_file, 'w', encoding=detected_encoding) as f:
-                import json
+            import json
+            with open(config_file, 'w', encoding='utf-8') as f:
                 json.dump(config_data, f, ensure_ascii=False, indent=2)
 
             print("✅ 检测状态已重置为 false")
@@ -492,6 +552,7 @@ if __name__ == "__main__":
     parser.add_argument("--check-env", action="store_true", help="运行系统环境检测")
     parser.add_argument("--quick-check", action="store_true", help="运行快速环境检测")
     parser.add_argument("--force-check", action="store_true", help="强制运行环境检测（忽略缓存）")
+    parser.add_argument("--headless", action="store_true", help="无头模式（Electron/Web，跳过交互提示）")
 
     args = parser.parse_args()
 
@@ -506,9 +567,15 @@ if __name__ == "__main__":
     # 检查上次系统检测时间，如果超过7天则执行更新
     check_and_update_if_needed()
 
+    # 启动前清理占用端口的进程
+    print("🔍 检查端口占用...")
+    kill_port_occupiers()
+
     # 系统环境检测
     print("🚀 正在启动NagaAgent...")
     print("=" * 50)
+
+    headless = args.headless or not sys.stdin.isatty()
 
     # 如果是打包环境，跳过所有环境检测
     if IS_PACKAGED:
@@ -518,41 +585,12 @@ if __name__ == "__main__":
         if not run_system_check():
             print("\n❌ 系统环境检测失败，程序无法启动")
             print("请根据上述建议修复问题后重新启动")
-            i=input("是否无视检测结果继续启动？是则按y，否则按其他任意键退出...")
-            if i != "y" and i != "Y":
-                sys.exit(1)
+            if headless:
+                print("⚠️ 无头模式：自动继续启动...")
             else:
-                # 用户选择强制启动，将检测状态设置为通过
-                from charset_normalizer import from_path
-                import json5
-                from datetime import datetime
-                
-                config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-                if os.path.exists(config_file):
-                    try:
-                        charset_results = from_path(config_file)
-                        if charset_results:
-                            best_match = charset_results.best()
-                            detected_encoding = best_match.encoding if best_match else 'utf-8'
-                        else:
-                            detected_encoding = 'utf-8'
-                        
-                        with open(config_file, 'r', encoding=detected_encoding) as f:
-                            config_data = json5.load(f)
-                        
-                        if 'system_check' not in config_data:
-                            config_data['system_check'] = {}
-                        
-                        config_data['system_check']['passed'] = True
-                        config_data['system_check']['timestamp'] = datetime.now().isoformat()
-                        
-                        with open(config_file, 'w', encoding=detected_encoding) as f:
-                            import json
-                            json.dump(config_data, f, ensure_ascii=False, indent=2)
-                        
-                        print("✅ 已将检测状态设置为通过")
-                    except Exception as e:
-                        print(f"⚠️ 保存检测状态失败: {e}")
+                i=input("是否无视检测结果继续启动？是则按y，否则按其他任意键退出...")
+                if i != "y" and i != "Y":
+                    sys.exit(1)
 
     print("\n🎉 系统环境检测通过，正在启动应用...")
     print("=" * 50)
