@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # 解析工具
 # ---------------------------------------------------------------------------
 
+
 def _normalize_fullwidth_json_chars(text: str) -> str:
     """将常见全角JSON相关字符归一化为ASCII"""
     if not text:
@@ -43,6 +44,7 @@ def _extract_json_objects(text: str) -> List[Dict[str, Any]]:
     def _loads(s: str) -> Any:
         try:
             import json5 as _json5
+
             return _json5.loads(s)
         except Exception:
             return json.loads(s)
@@ -60,7 +62,7 @@ def _extract_json_objects(text: str) -> List[Dict[str, Any]]:
             if depth > 0:
                 depth -= 1
                 if depth == 0 and start is not None:
-                    candidate = text[start: i + 1].strip()
+                    candidate = text[start : i + 1].strip()
                     start = None
                     if candidate in ("{}", "{ }"):
                         continue
@@ -145,18 +147,42 @@ def parse_tool_calls_from_text(text: str) -> Tuple[str, List[Dict[str, Any]]]:
 # 工具执行
 # ---------------------------------------------------------------------------
 
+
 async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
     """执行单个MCP调用"""
     service_name = call.get("service_name", "")
     tool_name = call.get("tool_name", "")
+
+    if not service_name and tool_name in {
+        "ask_guide",
+        "ask_guide_with_screenshot",
+        "calculate_damage",
+        "get_team_recommendation",
+    }:
+        service_name = "game_guide"
+        call["service_name"] = service_name
+
     try:
         from mcpserver.mcp_manager import get_mcp_manager
+
         manager = get_mcp_manager()
         result = await manager.unified_call(service_name, call)
-        return {"tool_call": call, "result": result, "status": "success", "service_name": service_name, "tool_name": tool_name}
+        return {
+            "tool_call": call,
+            "result": result,
+            "status": "success",
+            "service_name": service_name,
+            "tool_name": tool_name,
+        }
     except Exception as e:
         logger.error(f"[AgenticLoop] MCP调用失败: service={service_name}, error={e}")
-        return {"tool_call": call, "result": f"调用失败: {e}", "status": "error", "service_name": service_name, "tool_name": tool_name}
+        return {
+            "tool_call": call,
+            "result": f"调用失败: {e}",
+            "status": "error",
+            "service_name": service_name,
+            "tool_name": tool_name,
+        }
 
 
 async def _execute_openclaw_call(call: Dict[str, Any], session_id: str) -> Dict[str, Any]:
@@ -167,7 +193,13 @@ async def _execute_openclaw_call(call: Dict[str, Any], session_id: str) -> Dict[
     task_type = call.get("task_type", "message")
 
     if not message:
-        return {"tool_call": call, "result": "缺少message字段", "status": "error", "service_name": "openclaw", "tool_name": task_type}
+        return {
+            "tool_call": call,
+            "result": "缺少message字段",
+            "status": "error",
+            "service_name": "openclaw",
+            "tool_name": task_type,
+        }
 
     payload = {
         "message": message,
@@ -192,12 +224,30 @@ async def _execute_openclaw_call(call: Dict[str, Any], session_id: str) -> Dict[
                 result_data = response.json()
                 replies = result_data.get("replies", [])
                 combined = "\n".join(replies) if replies else "任务已提交，暂无返回结果"
-                return {"tool_call": call, "result": combined, "status": "success", "service_name": "openclaw", "tool_name": task_type}
+                return {
+                    "tool_call": call,
+                    "result": combined,
+                    "status": "success",
+                    "service_name": "openclaw",
+                    "tool_name": task_type,
+                }
             else:
-                return {"tool_call": call, "result": f"HTTP {response.status_code}: {response.text[:200]}", "status": "error", "service_name": "openclaw", "tool_name": task_type}
+                return {
+                    "tool_call": call,
+                    "result": f"HTTP {response.status_code}: {response.text[:200]}",
+                    "status": "error",
+                    "service_name": "openclaw",
+                    "tool_name": task_type,
+                }
     except Exception as e:
         logger.error(f"[AgenticLoop] OpenClaw调用失败: {e}")
-        return {"tool_call": call, "result": f"调用失败: {e}", "status": "error", "service_name": "openclaw", "tool_name": task_type}
+        return {
+            "tool_call": call,
+            "result": f"调用失败: {e}",
+            "status": "error",
+            "service_name": "openclaw",
+            "tool_name": task_type,
+        }
 
 
 async def _send_live2d_actions(live2d_calls: List[Dict[str, Any]], session_id: str):
@@ -249,7 +299,15 @@ async def execute_tool_calls(tool_calls: List[Dict[str, Any]], session_id: str) 
     final = []
     for r in results:
         if isinstance(r, Exception):
-            final.append({"tool_call": {}, "result": f"执行异常: {r}", "status": "error", "service_name": "unknown", "tool_name": "unknown"})
+            final.append(
+                {
+                    "tool_call": {},
+                    "result": f"执行异常: {r}",
+                    "status": "error",
+                    "service_name": "unknown",
+                    "tool_name": "unknown",
+                }
+            )
         else:
             final.append(r)
     return final
@@ -258,6 +316,7 @@ async def execute_tool_calls(tool_calls: List[Dict[str, Any]], session_id: str) 
 # ---------------------------------------------------------------------------
 # 格式化
 # ---------------------------------------------------------------------------
+
 
 def format_tool_results_for_llm(results: List[Dict[str, Any]]) -> str:
     """将工具执行结果格式化为LLM可理解的文本"""
@@ -279,6 +338,7 @@ def format_tool_results_for_llm(results: List[Dict[str, Any]]) -> str:
 # SSE 辅助
 # ---------------------------------------------------------------------------
 
+
 def _format_sse_event(event_type: str, data: Any) -> str:
     """格式化扩展SSE事件（使用与llm_service相同的base64编码格式）"""
     payload = {"type": event_type}
@@ -293,6 +353,7 @@ def _format_sse_event(event_type: str, data: Any) -> str:
 # ---------------------------------------------------------------------------
 # Agentic Loop 核心
 # ---------------------------------------------------------------------------
+
 
 async def run_agentic_loop(
     messages: List[Dict[str, Any]],
@@ -350,7 +411,9 @@ async def run_agentic_loop(
             yield chunk
 
         # 3. 从完整输出中解析工具调用
-        logger.debug(f"[AgenticLoop] Round {round_num} complete_text ({len(complete_text)} chars): {complete_text[:300]!r}")
+        logger.debug(
+            f"[AgenticLoop] Round {round_num} complete_text ({len(complete_text)} chars): {complete_text[:300]!r}"
+        )
         clean_text, tool_calls = parse_tool_calls_from_text(complete_text)
 
         # 4. 分离live2d和可执行调用
@@ -396,12 +459,14 @@ async def run_agentic_loop(
             result_text = r.get("result", "")
             # 截断过长的结果用于前端显示
             display_result = result_text[:500] + "..." if len(result_text) > 500 else result_text
-            result_summaries.append({
-                "service_name": r.get("service_name", "unknown"),
-                "tool_name": r.get("tool_name", ""),
-                "status": r.get("status", "unknown"),
-                "result": display_result,
-            })
+            result_summaries.append(
+                {
+                    "service_name": r.get("service_name", "unknown"),
+                    "tool_name": r.get("tool_name", ""),
+                    "status": r.get("status", "unknown"),
+                    "result": display_result,
+                }
+            )
         yield _format_sse_event("tool_results", {"results": result_summaries})
 
         # 发送本轮结束信号

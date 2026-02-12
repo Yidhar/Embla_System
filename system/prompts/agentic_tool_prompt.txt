@@ -26,3 +26,14 @@
 - 工具执行完成后，结果会以 [工具结果] 格式注入对话，你将看到结果并继续回复
 - 如果不需要工具，正常回复即可，不要输出 ```tool``` 代码块
 - 闲聊、情感交流、简单问答不需要工具调用
+- 当用户在游戏场景下询问攻略、配队、伤害、关卡打法时，优先调用 `service_name=game_guide`
+- `game_guide` 的 `ask_guide` 默认会自动截图注入（无需用户手动上传图片）
+
+### 游戏攻略调用示例
+```tool
+{"agentType":"mcp","service_name":"game_guide","tool_name":"ask_guide","game_id":"arknights","query":"这关怎么打"}
+```
+
+```tool
+{"agentType":"mcp","service_name":"game_guide","tool_name":"calculate_damage","game_id":"arknights","query":"缪尔赛思S3M3打800防DPS"}
+```
