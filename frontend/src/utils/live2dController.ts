@@ -26,8 +26,22 @@ interface ActionsData {
   actions: Record<string, ActionConfig>
 }
 
+/** .exp3.json 中单个参数定义 */
+interface Exp3Param {
+  Id: string
+  Value: number
+  Blend: 'Add' | 'Multiply' | 'Overwrite'
+}
+
+/** 加载后的表情定义 */
+interface ExpressionDef {
+  name: string
+  fadeInTime: number
+  params: Exp3Param[]
+}
+
 export type Live2dState = 'idle' | 'thinking' | 'talking'
-export type EmotionState = 'normal' | 'happy' | 'enjoy' | 'sad' | 'surprise'
+export type EmotionCategory = 'normal' | 'positive' | 'negative' | 'surprise'
 
 // ─── 全局响应式状态 ──────────────────────────────────
 export const live2dState = ref<Live2dState>('idle')
@@ -42,18 +56,21 @@ let originalUpdate: ((dt: number) => void) | null = null
 let lastTickTime = 0
 
 // 通道 1: 身体摇摆（由状态 idle/thinking/talking 控制）
-// → ParamBodyAngleX, ParamAngleZ, mouth 等
+// → ParamBodyAngleX, ParamAngleZ 等
 
 // 通道 2: 头部动作（由动作队列 nod/shake 控制，正交于身体通道）
 // → ParamAngleX, ParamAngleY, ParamEyeBallX, ParamEyeBallY
 let actionQueue: string[] = []
 let activeAction: { config: ActionConfig, startTime: number } | null = null
 
-// 通道 3a: Emotion 表情（由 setEmotion 驱动，从 naga-actions.json 读关键帧）
-let currentExpressionState: EmotionState | null = null
-let expressionStartTime = 0
+// 通道 3: Emotion 表情（独立通道，从 .exp3.json 文件加载）
+// 与身体/头部通道完全正交，使用 .exp3.json 的 Blend 模式合成
+const expressionDefs: Map<string, ExpressionDef> = new Map()
+let currentEmotionName: string | null = null
+let emotionCurrentValues: Record<string, number> = {}
+let emotionFadeStartTime = 0
 
-// 通道 3b: 手动参数覆盖（由 setExpression 驱动，用于开屏闭眼等）
+// 手动参数覆盖（由 setExpression 驱动，用于开屏闭眼等，优先级最高）
 let expressionTarget: Record<string, number> = {}
 let expressionCurrent: Record<string, number> = {}
 let expressionActive = false
@@ -63,7 +80,7 @@ let mouthTarget = 0
 let mouthCurrent = 0
 let mouthNextChangeTime = 0
 
-// ─── 通道3: 表情计算 ─────────────────────────────────
+// ─── 手动覆盖通道 ──────────────────────────────────
 
 /** 表情参数的默认值（清除表情时回归的目标） */
 const EXPRESSION_DEFAULTS: Record<string, number> = {
@@ -76,7 +93,7 @@ const EXPRESSION_DEFAULTS: Record<string, number> = {
   ParamMouthForm: 0,
 }
 
-function computeExpression(dt: number): Record<string, number> {
+function computeManualOverride(dt: number): Record<string, number> {
   if (!expressionActive && Object.keys(expressionCurrent).length === 0) return {}
 
   const allParams = new Set([...Object.keys(expressionTarget), ...Object.keys(expressionCurrent)])
@@ -169,6 +186,44 @@ function setParam(paramId: string, value: number) {
   }
 }
 
+// ─── 表情加载（从 .exp3.json 文件） ─────────────────
+
+async function loadExpressions(modelBasePath: string) {
+  try {
+    const modelRes = await fetch(`${modelBasePath}/naga-test.model3.json`)
+    const modelJson = await modelRes.json()
+    const expressions = modelJson?.FileReferences?.Expressions ?? []
+
+    for (const entry of expressions) {
+      const fileName: string = entry.File
+      // 从文件名提取表情名称（如 happy.exp3.json → happy）
+      const expName = fileName.replace('.exp3.json', '')
+
+      try {
+        const expRes = await fetch(`${modelBasePath}/${fileName}`)
+        const expJson = await expRes.json()
+
+        const def: ExpressionDef = {
+          name: expName,
+          fadeInTime: expJson.FadeInTime ?? 0.5,
+          params: (expJson.Parameters ?? []).map((p: any) => ({
+            Id: p.Id as string,
+            Value: p.Value as number,
+            Blend: (p.Blend ?? 'Add') as 'Add' | 'Multiply' | 'Overwrite',
+          })),
+        }
+        expressionDefs.set(expName, def)
+      }
+      catch {
+        // 单个表情文件加载失败不影响其他
+      }
+    }
+  }
+  catch {
+    // model3.json 加载失败，表情通道不可用
+  }
+}
+
 // ─── 通道计算（只计算不写入） ─────────────────────────
 
 function computeStateParams(now: number): Record<string, number> {
@@ -242,22 +297,57 @@ function computeActionParams(now: number): Record<string, number> {
   return interpolateKeyframes(config.keyframes, progress)
 }
 
-function computeExpressionParams(now: number): Record<string, { value: number, blend: 'add' | 'multiply' | 'overwrite' }> {
-  if (!currentExpressionState || !actionsData)
-    return {}
+/**
+ * 通道 3: Emotion 表情计算
+ * 从 .exp3.json 加载的表情定义，平滑过渡到目标表情。
+ * 返回 { paramId → { value, blend } } 用于与其他通道正确合成。
+ */
+function computeEmotionParams(dt: number): Record<string, { value: number, blend: 'Add' | 'Multiply' | 'Overwrite' }> {
+  const result: Record<string, { value: number, blend: 'Add' | 'Multiply' | 'Overwrite' }> = {}
 
-  const stateCfg = actionsData.states[currentExpressionState]
-  if (!stateCfg || !stateCfg.keyframes || !stateCfg.duration)
-    return {}
+  // 获取目标表情参数
+  const targetDef = currentEmotionName ? expressionDefs.get(currentEmotionName) : null
+  const targetParams: Record<string, { value: number, blend: 'Add' | 'Multiply' | 'Overwrite' }> = {}
 
-  const elapsed = now - expressionStartTime
-  const progress = Math.min(elapsed / stateCfg.duration, 1)
+  if (targetDef) {
+    for (const p of targetDef.params) {
+      targetParams[p.Id] = { value: p.Value, blend: p.Blend }
+    }
+  }
 
-  const result: Record<string, { value: number, blend: 'add' | 'multiply' | 'overwrite' }> = {}
-  const params = interpolateKeyframes(stateCfg.keyframes, progress)
+  // 计算过渡（用 fadeInTime 或固定 halfLife）
+  const fadeInTime = targetDef?.fadeInTime ?? 0.5
+  const halfLife = Math.max(fadeInTime * 300, 80) // 转换为 ms 级别的半衰期
+  const sf = smoothFactor(halfLife, dt)
 
-  for (const [param, value] of Object.entries(params)) {
-    result[param] = { value, blend: 'overwrite' }
+  // 合并所有参与过渡的参数
+  const allParamIds = new Set([
+    ...Object.keys(targetParams),
+    ...Object.keys(emotionCurrentValues),
+  ])
+
+  const toDelete: string[] = []
+
+  for (const paramId of allParamIds) {
+    const target = targetParams[paramId]
+    const targetValue = target?.value ?? 0 // 不在新表情中的参数归零
+    const blend = target?.blend ?? 'Add'
+    const current = emotionCurrentValues[paramId] ?? 0
+
+    const newVal = lerp(current, targetValue, sf)
+    emotionCurrentValues[paramId] = newVal
+
+    // 足够接近零且不是目标参数的，清理掉
+    if (!targetParams[paramId] && Math.abs(newVal) < 0.001) {
+      toDelete.push(paramId)
+    }
+    else {
+      result[paramId] = { value: newVal, blend }
+    }
+  }
+
+  for (const k of toDelete) {
+    delete emotionCurrentValues[k]
   }
 
   return result
@@ -314,35 +404,34 @@ function tick(now: number) {
       mouthCurrent = 0
       mouthTarget = 0
     }
-    if (currentStateName === 'idle') {
-      currentExpressionState = null
-    }
   }
 
   // ── 计算各正交通道 ──
-  const stateParams = computeStateParams(now) // 通道1: 身体摇摆
-  const mouthParams = computeMouth(now, dt)    // 附属: 嘴巴
-  const actionParams = computeActionParams(now) // 通道2: 头部动作
-  const expressionParams = computeExpressionParams(now) // 通道3a: Emotion表情
-  const exprParams = computeExpression(dt)      // 通道3b: 手动参数覆盖
+  const stateParams = computeStateParams(now)     // 通道1: 身体摇摆
+  const mouthParams = computeMouth(now, dt)        // 附属: 嘴巴
+  const actionParams = computeActionParams(now)    // 通道2: 头部动作
+  const emotionParams = computeEmotionParams(dt)   // 通道3: Emotion 表情（从 .exp3.json）
+  const overrideParams = computeManualOverride(dt) // 手动覆盖（setExpression）
 
-  // 合并：后写入的覆盖先写入的（通道间参数正交所以不冲突）
-  const merged: Record<string, number> = { ...stateParams, ...mouthParams, ...actionParams, ...exprParams }
+  // 合并基础通道（身体 + 嘴巴 + 头部 + 手动覆盖）
+  const merged: Record<string, number> = { ...stateParams, ...mouthParams, ...actionParams, ...overrideParams }
 
-  for (const [param, { value, blend }] of Object.entries(expressionParams)) {
+  // 应用 Emotion 表情通道（使用 .exp3.json 的 Blend 模式）
+  for (const [param, { value, blend }] of Object.entries(emotionParams)) {
     switch (blend) {
-      case 'add':
-        merged[param] = (merged[param] || 0) + value
+      case 'Add':
+        merged[param] = (merged[param] ?? 0) + value
         break
-      case 'multiply':
-        merged[param] = (merged[param] || 1) * value
+      case 'Multiply':
+        merged[param] = (merged[param] ?? 1) * value
         break
-      case 'overwrite':
+      case 'Overwrite':
         merged[param] = value
         break
     }
   }
 
+  // 视觉追踪叠加
   const trackParams = computeTracking(dt)
   if (trackBlend > 0) {
     for (const [param, trackValue] of Object.entries(trackParams)) {
@@ -358,56 +447,66 @@ function tick(now: number) {
 
 // ─── 公共 API ────────────────────────────────────────
 
-export async function setEmotion(emotion: 'normal' | 'positive' | 'negative' | 'surprise') {
-  const positiveExpressions: readonly ['happy', 'enjoy'] = ['happy', 'enjoy']
-  let targetExpression: EmotionState
+/**
+ * 设置情绪表情。
+ * 根据情绪类别选择对应的 .exp3.json 表情，平滑过渡。
+ * - 'normal' → normal 表情
+ * - 'positive' → 随机选择 happy 或 enjoy
+ * - 'negative' → sad 表情
+ * - 'surprise' → surprise 表情
+ */
+export async function setEmotion(emotion: EmotionCategory) {
+  const positiveExpressions = ['happy', 'enjoy'] as const
+  let targetName: string
 
   switch (emotion) {
     case 'normal':
-      targetExpression = 'normal'
+      targetName = 'normal'
       break
     case 'positive':
-      targetExpression = positiveExpressions[Math.floor(Math.random() * positiveExpressions.length)]!
+      targetName = positiveExpressions[Math.floor(Math.random() * positiveExpressions.length)]!
       break
     case 'negative':
-      targetExpression = 'sad'
+      targetName = 'sad'
       break
     case 'surprise':
-      targetExpression = 'surprise'
+      targetName = 'surprise'
       break
     default:
-      targetExpression = 'normal'
+      targetName = 'normal'
   }
 
-  currentExpressionState = targetExpression
-  expressionStartTime = performance.now()
+  // 只有在已加载对应表情时才切换
+  if (expressionDefs.has(targetName)) {
+    currentEmotionName = targetName
+    emotionFadeStartTime = performance.now()
+  }
+}
+
+/** 清除情绪表情，平滑回归中性 */
+export function clearEmotion() {
+  currentEmotionName = null
 }
 
 export function triggerAction(name: string) {
   actionQueue.push(name)
 }
 
-/** 设置表情通道参数覆盖（如闭眼：{ ParamEyeLOpen: 0, ParamEyeROpen: 0 }） */
+/** 设置手动参数覆盖（如闭眼：{ ParamEyeLOpen: 0, ParamEyeROpen: 0 }） */
 export function setExpression(params: Record<string, number>) {
   expressionTarget = { ...params }
   expressionActive = true
 }
 
-/** 清除表情覆盖，参数平滑回归默认值 */
+/** 清除手动覆盖，参数平滑回归默认值 */
 export function clearExpression() {
   expressionActive = false
   expressionTarget = {}
 }
 
-/** 触发模型内置 SDK 表情（expression1-9: happy, sad, enjoy, surprise 等） */
-export function triggerModelExpression(name: string) {
-  if (!model) return
-  try {
-    ;(model as any).expression(name)
-  }
-  catch {
-    // 表情不存在则静默忽略
-  }
+/** 获取所有已加载的表情名称 */
+export function getAvailableExpressions(): string[] {
+  return Array.from(expressionDefs.keys())
 }
 
 export function startTracking() {
@@ -426,8 +525,12 @@ export function updateTracking(x: number, y: number) {
 export async function initController(modelInstance: Live2DModel) {
   model = modelInstance
 
+  // 加载身体/头部动作数据
   const response = await fetch('/models/naga-test/naga-actions.json')
   actionsData = await response.json() as ActionsData
+
+  // 加载 .exp3.json 表情文件
+  await loadExpressions('/models/naga-test')
 
   originalUpdate = model.update.bind(model)
   model.update = function (dt: number) {
@@ -444,14 +547,20 @@ export function destroyController() {
   model = null
   actionsData = null
   originalUpdate = null
-  currentExpressionState = null
   actionQueue = []
+  activeAction = null
+  // Emotion 通道
+  currentEmotionName = null
+  emotionCurrentValues = {}
+  emotionFadeStartTime = 0
+  // 手动覆盖通道
   expressionTarget = {}
   expressionCurrent = {}
   expressionActive = false
-  activeAction = null
+  // 嘴巴
   mouthCurrent = 0
   mouthTarget = 0
+  // 追踪
   lastTickTime = 0
   isTracking = false
   trackTargetX = 0

@@ -4,6 +4,7 @@ import coreApi from '@/api/core'
 
 export const nagaUser = ref<{ username: string, sub?: string } | null>(null)
 export const isNagaLoggedIn = computed(() => !!nagaUser.value)
+export const sessionRestored = ref(false)
 
 // 防止多个组件调用 useAuth() 时重复 fetchMe
 let _initFetched = false
@@ -19,11 +20,17 @@ export function useAuth() {
     return res
   }
 
+  async function register(username: string, password: string) {
+    const res = await coreApi.authRegister(username, password)
+    return res
+  }
+
   async function fetchMe() {
     try {
       const res = await coreApi.authMe()
       if (res.user) {
         nagaUser.value = res.user
+        sessionRestored.value = true
       }
     }
     catch {
@@ -54,5 +61,5 @@ export function useAuth() {
     }
   }
 
-  return { login, fetchMe, logout, skipLogin }
+  return { login, register, fetchMe, logout, skipLogin }
 }

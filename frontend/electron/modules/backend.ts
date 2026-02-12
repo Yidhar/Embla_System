@@ -134,27 +134,20 @@ export function stopBackend(): void {
   if (process.platform === 'win32') {
     spawn('taskkill', ['/pid', String(pid), '/f', '/t'])
   } else {
-    // Send SIGTERM first, then SIGKILL immediately after
+    // SIGTERM 让 Python 进程 os._exit(0) 立即退出
     try {
-      if (pid) process.kill(pid, 'SIGTERM')
+      process.kill(pid, 'SIGTERM')
     } catch {
       // already dead
     }
-    // Force kill after 1s — must be short since Electron is exiting
-    try {
-      if (pid) {
-        const timer = setTimeout(() => {
-          try {
-            process.kill(pid, 'SIGKILL')
-          } catch {
-            // already dead
-          }
-        }, 1000)
-        timer.unref() // Don't block Electron exit
+    // 保险：200ms 后 SIGKILL（不 unref，确保定时器一定执行）
+    setTimeout(() => {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // already dead
       }
-    } catch {
-      // already dead
-    }
+    }, 200)
   }
 
   backendProcess = null
