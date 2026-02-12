@@ -27,10 +27,11 @@ interface ActionsData {
 }
 
 export type Live2dState = 'idle' | 'thinking' | 'talking'
+export type EmotionState = 'normal' | 'happy' | 'enjoy' | 'sad' | 'surprise'
 
 // ─── 全局响应式状态 ──────────────────────────────────
 export const live2dState = ref<Live2dState>('idle')
-export const trackingCalibration = ref(false) // 视角校准准星开关
+export const trackingCalibration = ref(false)
 
 // ─── 内部变量 ────────────────────────────────────────
 let model: Live2DModel | null = null
@@ -48,8 +49,11 @@ let lastTickTime = 0
 let actionQueue: string[] = []
 let activeAction: { config: ActionConfig, startTime: number } | null = null
 
-// 通道 3: 表情切换（眼睛开闭、表情参数覆盖）
-// → ParamEyeLOpen, ParamEyeROpen, ParamBrowLY 等
+// 通道 3a: Emotion 表情（由 setEmotion 驱动，从 naga-actions.json 读关键帧）
+let currentExpressionState: EmotionState | null = null
+let expressionStartTime = 0
+
+// 通道 3b: 手动参数覆盖（由 setExpression 驱动，用于开屏闭眼等）
 let expressionTarget: Record<string, number> = {}
 let expressionCurrent: Record<string, number> = {}
 let expressionActive = false
@@ -107,8 +111,6 @@ function computeExpression(dt: number): Record<string, number> {
 }
 
 // ─── 视觉追踪（独立叠加层） ─────────────────────────
-// 追踪不走状态机，直接覆盖视觉方向参数
-// trackBlend 从 0（无追踪）到 1（完全追踪）丝滑过渡
 let isTracking = false
 let trackTargetX = 0
 let trackTargetY = 0
@@ -122,9 +124,7 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * Math.min(1, Math.max(0, t))
 }
 
-/** 基于 deltaTime 的平滑系数（帧率无关） */
 function smoothFactor(halfLife: number, dt: number): number {
-  // halfLife: 到达一半距离所需毫秒数
   if (halfLife <= 0) return 1
   return 1 - Math.exp((-0.693 / halfLife) * dt)
 }
@@ -166,7 +166,6 @@ function setParam(paramId: string, value: number) {
     }
   }
   catch {
-    // 参数不存在则静默忽略
   }
 }
 
@@ -203,7 +202,6 @@ function computeMouth(now: number, dt: number): Record<string, number> {
     mouthTarget = cfg.min + Math.random() * (cfg.max - cfg.min)
     mouthNextChangeTime = now + 80 + Math.random() * 170
   }
-  // cfg.speed 越大嘴巴越慢；转换为半衰期用于帧率无关平滑
   const halfLife = cfg.speed / 3
   mouthCurrent = lerp(mouthCurrent, mouthTarget, smoothFactor(halfLife, dt))
 
@@ -213,7 +211,6 @@ function computeMouth(now: number, dt: number): Record<string, number> {
 function computeActionParams(now: number): Record<string, number> {
   if (!actionsData) return {}
 
-  // 出队
   if (!activeAction && actionQueue.length > 0) {
     const actionName = actionQueue.shift()!
     const cfg = actionsData.actions[actionName]
@@ -229,7 +226,6 @@ function computeActionParams(now: number): Record<string, number> {
   const elapsed = now - startTime
 
   if (elapsed >= totalDuration) {
-    // 动作结束：清零动作参数
     const result: Record<string, number> = {}
     if (config.keyframes.length > 0) {
       const lastFrame = config.keyframes[config.keyframes.length - 1]!
@@ -246,9 +242,29 @@ function computeActionParams(now: number): Record<string, number> {
   return interpolateKeyframes(config.keyframes, progress)
 }
 
+function computeExpressionParams(now: number): Record<string, { value: number, blend: 'add' | 'multiply' | 'overwrite' }> {
+  if (!currentExpressionState || !actionsData)
+    return {}
+
+  const stateCfg = actionsData.states[currentExpressionState]
+  if (!stateCfg || !stateCfg.keyframes || !stateCfg.duration)
+    return {}
+
+  const elapsed = now - expressionStartTime
+  const progress = Math.min(elapsed / stateCfg.duration, 1)
+
+  const result: Record<string, { value: number, blend: 'add' | 'multiply' | 'overwrite' }> = {}
+  const params = interpolateKeyframes(stateCfg.keyframes, progress)
+
+  for (const [param, value] of Object.entries(params)) {
+    result[param] = { value, blend: 'overwrite' }
+  }
+
+  return result
+}
+
 // ─── 视觉追踪计算 ────────────────────────────────────
 
-/** 追踪参数集：方向相关的参数由追踪接管 */
 const TRACK_PARAMS: Record<string, (x: number, y: number) => number> = {
   ParamAngleX: (x, _y) => x * 30,
   ParamAngleY: (_x, y) => y * 30,
@@ -258,12 +274,10 @@ const TRACK_PARAMS: Record<string, (x: number, y: number) => number> = {
 }
 
 function computeTracking(dt: number): Record<string, number> {
-  // 更新混合因子：isTracking → 1, !isTracking → 0
   const blendTarget = isTracking ? 1 : 0
-  const blendHalfLife = isTracking ? 60 : 120 // 开始追踪快(60ms)，松开稍慢(120ms)
+  const blendHalfLife = isTracking ? 60 : 120
   trackBlend = lerp(trackBlend, blendTarget, smoothFactor(blendHalfLife, dt))
 
-  // 精度截断：混合因子极小时直接归零
   if (trackBlend < 0.001) {
     trackBlend = 0
     trackCurrentX = 0
@@ -271,7 +285,6 @@ function computeTracking(dt: number): Record<string, number> {
     return {}
   }
 
-  // 平滑跟随鼠标位置
   const followHalfLife = isTracking ? 40 : 80
   const sf = smoothFactor(followHalfLife, dt)
   const targetX = isTracking ? trackTargetX : 0
@@ -294,7 +307,6 @@ function tick(now: number) {
   const dt = lastTickTime > 0 ? Math.min(now - lastTickTime, 100) : 16
   lastTickTime = now
 
-  // 检测状态切换
   if (currentStateName !== live2dState.value) {
     currentStateName = live2dState.value
     stateStartTime = now
@@ -302,34 +314,74 @@ function tick(now: number) {
       mouthCurrent = 0
       mouthTarget = 0
     }
+    if (currentStateName === 'idle') {
+      currentExpressionState = null
+    }
   }
 
   // ── 计算各正交通道 ──
   const stateParams = computeStateParams(now) // 通道1: 身体摇摆
   const mouthParams = computeMouth(now, dt)    // 附属: 嘴巴
   const actionParams = computeActionParams(now) // 通道2: 头部动作
-  const exprParams = computeExpression(dt)      // 通道3: 表情覆盖
+  const expressionParams = computeExpressionParams(now) // 通道3a: Emotion表情
+  const exprParams = computeExpression(dt)      // 通道3b: 手动参数覆盖
 
   // 合并：后写入的覆盖先写入的（通道间参数正交所以不冲突）
   const merged: Record<string, number> = { ...stateParams, ...mouthParams, ...actionParams, ...exprParams }
 
-  // ── 视觉追踪混合 ──
+  for (const [param, { value, blend }] of Object.entries(expressionParams)) {
+    switch (blend) {
+      case 'add':
+        merged[param] = (merged[param] || 0) + value
+        break
+      case 'multiply':
+        merged[param] = (merged[param] || 1) * value
+        break
+      case 'overwrite':
+        merged[param] = value
+        break
+    }
+  }
+
   const trackParams = computeTracking(dt)
   if (trackBlend > 0) {
-    // 对追踪参数做混合：lerp(通道值, 追踪值, blend)
     for (const [param, trackValue] of Object.entries(trackParams)) {
       const base = merged[param] ?? 0
       merged[param] = lerp(base, trackValue, trackBlend)
     }
   }
 
-  // ── 写入所有参数 ──
   for (const [param, value] of Object.entries(merged)) {
     setParam(param, value)
   }
 }
 
 // ─── 公共 API ────────────────────────────────────────
+
+export async function setEmotion(emotion: 'normal' | 'positive' | 'negative' | 'surprise') {
+  const positiveExpressions: readonly ['happy', 'enjoy'] = ['happy', 'enjoy']
+  let targetExpression: EmotionState
+
+  switch (emotion) {
+    case 'normal':
+      targetExpression = 'normal'
+      break
+    case 'positive':
+      targetExpression = positiveExpressions[Math.floor(Math.random() * positiveExpressions.length)]!
+      break
+    case 'negative':
+      targetExpression = 'sad'
+      break
+    case 'surprise':
+      targetExpression = 'surprise'
+      break
+    default:
+      targetExpression = 'normal'
+  }
+
+  currentExpressionState = targetExpression
+  expressionStartTime = performance.now()
+}
 
 export function triggerAction(name: string) {
   actionQueue.push(name)
@@ -362,50 +414,42 @@ export function startTracking() {
   isTracking = true
 }
 
-export function updateTracking(normalizedX: number, normalizedY: number) {
-  trackTargetX = Math.max(-1, Math.min(1, normalizedX))
-  trackTargetY = Math.max(-1, Math.min(1, normalizedY))
-}
-
 export function stopTracking() {
   isTracking = false
 }
 
-export async function initController(m: Live2DModel) {
-  model = m
-  lastTickTime = 0
+export function updateTracking(x: number, y: number) {
+  trackTargetX = x
+  trackTargetY = y
+}
 
-  try {
-    const resp = await fetch('/models/naga-test/naga-actions.json')
-    actionsData = await resp.json()
-  }
-  catch (e) {
-    console.warn('[Live2D Controller] 无法加载 naga-actions.json:', e)
-    return
-  }
+export async function initController(modelInstance: Live2DModel) {
+  model = modelInstance
 
-  stateStartTime = performance.now()
-  currentStateName = live2dState.value
+  const response = await fetch('/models/naga-test/naga-actions.json')
+  actionsData = await response.json() as ActionsData
 
   originalUpdate = model.update.bind(model)
   model.update = function (dt: number) {
+    const now = performance.now()
     originalUpdate!(dt)
-    tick(performance.now())
+    tick(now)
   }
 }
 
 export function destroyController() {
   if (model && originalUpdate) {
     model.update = originalUpdate
-    originalUpdate = null
   }
   model = null
   actionsData = null
-  activeAction = null
+  originalUpdate = null
+  currentExpressionState = null
   actionQueue = []
   expressionTarget = {}
   expressionCurrent = {}
   expressionActive = false
+  activeAction = null
   mouthCurrent = 0
   mouthTarget = 0
   lastTickTime = 0

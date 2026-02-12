@@ -73,6 +73,11 @@ export class ApiClient {
         return Promise.reject(error)
       }
 
+      // /auth/me 的 401 不触发刷新（启动时可能尚未登录）
+      if (error.config.url?.includes('/auth/me')) {
+        return Promise.reject(error)
+      }
+
       if (isRefreshing) {
         return new Promise((resolve) => {
           refreshSubscribers.push((newToken: string) => {
@@ -121,8 +126,9 @@ export class ApiClient {
   }
 
   private clearAuthDataAndRedirect(): void {
-    ACCESS_TOKEN.value = undefined
-    REFRESH_TOKEN.value = undefined
-    window.location.href = '/login'
+    ACCESS_TOKEN.value = ''
+    REFRESH_TOKEN.value = ''
+    // 不重定向到 /login（该路由不存在），刷新页面重新走 splash → 登录流程
+    window.location.reload()
   }
 }

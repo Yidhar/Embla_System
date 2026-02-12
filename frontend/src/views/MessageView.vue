@@ -6,7 +6,7 @@ import BoxContainer from '@/components/BoxContainer.vue'
 import MessageItem from '@/components/MessageItem.vue'
 import { startToolPolling, stopToolPolling, toolMessage } from '@/composables/useToolStatus'
 import { CONFIG } from '@/utils/config'
-import { live2dState } from '@/utils/live2dController'
+import { live2dState, setEmotion } from '@/utils/live2dController'
 import { CURRENT_SESSION_ID, loadCurrentSession, MESSAGES, newSession, switchSession } from '@/utils/session'
 import { isPlaying, speak } from '@/utils/tts'
 
@@ -27,6 +27,18 @@ export function chatStream(content: string) {
 
     live2dState.value = 'thinking'
 
+    // 情感解析函数
+    function parseEmotionFromText(text: string): 'normal' | 'positive' | 'negative' | 'surprise' {
+      if (text.includes('【正面情感】')) {
+        return 'positive'
+      } else if (text.includes('【负面情感】')) {
+        return 'negative'
+      } else if (text.includes('【惊讶情感】')) {
+        return 'surprise'
+      }
+      return 'normal'
+    }
+
     for await (const chunk of response) {
       if (chunk.type === 'reasoning') {
         message.reasoning = (message.reasoning || '') + chunk.text
@@ -34,6 +46,11 @@ export function chatStream(content: string) {
       else if (chunk.type === 'content') {
         message.content += chunk.text
         spokenContent += chunk.text
+        // 检测情感标记并设置表情
+        const emotion = parseEmotionFromText(chunk.text || '')
+        if (emotion !== 'normal') {
+          void setEmotion(emotion)
+        }
       }
       else if (chunk.type === 'content_clean') {
         // 后端解析出工具调用后，发送清理后的纯文本替换掉含有 ```tool``` 块的原文
@@ -91,10 +108,10 @@ const input = defineModel<string>()
 const containerRef = useTemplateRef('containerRef')
 const fileInput = ref<HTMLInputElement | null>(null)
 
-// TTS 结束后回到 idle
+// TTS 结束后回到 thinking
 watch(isPlaying, (playing) => {
   if (!playing && live2dState.value === 'talking') {
-    live2dState.value = 'idle'
+    live2dState.value = 'thinking'
   }
 })
 

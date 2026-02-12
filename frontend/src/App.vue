@@ -7,8 +7,10 @@ let _splashDismissed = false
 import { useWindowSize } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import Live2dModel from '@/components/Live2dModel.vue'
+import LoginDialog from '@/components/LoginDialog.vue'
 import SplashScreen from '@/components/SplashScreen.vue'
 import TitleBar from '@/components/TitleBar.vue'
+import { isNagaLoggedIn } from '@/composables/useAuth'
 import { useParallax } from '@/composables/useParallax'
 import { useStartupProgress } from '@/composables/useStartupProgress'
 import { CONFIG } from '@/utils/config'
@@ -60,8 +62,31 @@ function onModelReady(pos: { faceX: number, faceY: number }) {
 // progress >= 50 时渐入 Live2D
 const live2dShouldShow = computed(() => progress.value >= 50 && splashVisible.value)
 
+// ─── 登录弹窗状态 ───────────────────────────
+const showLoginDialog = ref(false)
+
 function onSplashDismiss() {
   _splashDismissed = true
+  // 已登录 → 直接进入主界面；未登录 → 显示登录弹窗
+  if (isNagaLoggedIn.value) {
+    enterMainContent()
+  }
+  else {
+    showLoginDialog.value = true
+  }
+}
+
+function onLoginSuccess() {
+  showLoginDialog.value = false
+  enterMainContent()
+}
+
+function onLoginSkip() {
+  showLoginDialog.value = false
+  enterMainContent()
+}
+
+function enterMainContent() {
   // 启用过渡动画
   live2dTransition.value = true
   // 回到正常位置
@@ -141,6 +166,13 @@ onUnmounted(() => {
         @dismiss="onSplashDismiss"
       />
     </Transition>
+
+    <!-- 登录弹窗（在 SplashScreen 之上） -->
+    <LoginDialog
+      :visible="showLoginDialog"
+      @success="onLoginSuccess"
+      @skip="onLoginSkip"
+    />
   </div>
 </template>
 
