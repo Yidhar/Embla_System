@@ -69,14 +69,21 @@ export class CoreApiClient extends ApiClient {
     status: 'success'
     config: Config
   }> {
-    return this.instance('/system/config')
+    // 配置对象使用 snake_case 键名，跳过自动 camelCase 转换以避免键名不匹配
+    return this.instance('/system/config', {
+      transformResponse: [(data: string) => JSON.parse(data)],
+    })
   }
 
   setSystemConfig(config: Config): Promise<{
     status: 'success'
     message: string
   }> {
-    return this.instance.post('/system/config', config)
+    // 配置对象已是 snake_case，跳过自动 snakeCase 转换避免双重处理
+    return this.instance.post('/system/config', config, {
+      transformRequest: [(data: any) => JSON.stringify(data)],
+      transformResponse: [(data: string) => JSON.parse(data)],
+    })
   }
 
   getSystemPrompt(): Promise<{
