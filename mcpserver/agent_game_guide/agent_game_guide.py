@@ -19,7 +19,8 @@ class GameGuideAgent:
                 return json.dumps({"status": "error", "message": "缺少tool_name参数", "data": {}}, ensure_ascii=False)
 
             query = str(task.get("query") or task.get("content") or task.get("message") or "").strip()
-            game_id = str(task.get("game_id") or "arknights")
+            raw_game_id = task.get("game_id")
+            game_id = str(raw_game_id).strip() if isinstance(raw_game_id, str) and raw_game_id.strip() else None
             server_id = task.get("server_id")
             images = task.get("images")
             history = task.get("history")

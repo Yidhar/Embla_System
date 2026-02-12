@@ -25,12 +25,16 @@ class PromptManager:
         self.prompt_dir = Path(prompt_dir or settings.prompt_dir)
 
     def get_prompt_config(self, game_id: str) -> dict[str, Any]:
-        config = self._load_from_file(game_id)
+        normalized_game_id = self.normalize_game_id(game_id)
+        config = self._load_from_file(normalized_game_id)
         if config:
             return config
         result = dict(DEFAULT_PROMPT_CONFIG)
-        result["game_id"] = game_id
+        result["game_id"] = normalized_game_id
         return result
+
+    def normalize_game_id(self, game_id: str) -> str:
+        return self._normalize_game_id(game_id)
 
     def _load_from_file(self, game_id: str) -> dict[str, Any] | None:
         candidates = [
@@ -48,6 +52,7 @@ class PromptManager:
 
     @staticmethod
     def _normalize_game_id(game_id: str) -> str:
+        normalized_input = game_id.strip().lower()
         mapping = {
             "starrail": "honkai-star-rail",
             "honkai_star_rail": "honkai-star-rail",
@@ -58,4 +63,4 @@ class PromptManager:
             "uma_musume": "uma-musume",
             "kantai_collection": "kantai-collection",
         }
-        return mapping.get(game_id, game_id)
+        return mapping.get(normalized_input, normalized_input)

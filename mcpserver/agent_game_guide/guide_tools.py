@@ -13,7 +13,7 @@ class GuideTools:
     async def ask_guide(
         self,
         query: str,
-        game_id: str = "arknights",
+        game_id: str | None = None,
         server_id: str | None = None,
         images: list[str] | None = None,
         auto_screenshot: bool | None = None,

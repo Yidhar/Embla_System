@@ -10,7 +10,7 @@ from system.config import config
 
 class GuideRequest(BaseModel):
     content: str = Field(default="", description="用户问题")
-    game_id: str = Field(default="arknights", description="游戏ID")
+    game_id: str | None = Field(default=None, description="游戏ID（可选）")
     server_id: str | None = Field(default=None, description="服务器ID")
     images: list[str] = Field(default_factory=list, description="图片base64列表")
     auto_screenshot: bool = Field(default=False, description="是否自动截图")
