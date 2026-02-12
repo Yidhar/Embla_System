@@ -39,6 +39,7 @@ class GuideService:
                     "width": shot.width,
                     "height": shot.height,
                     "monitor_index": shot.monitor_index,
+                    "source": shot.source,
                 }
             except Exception as exc:
                 metadata["auto_screenshot_error"] = str(exc)

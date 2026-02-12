@@ -16,6 +16,7 @@
 
 - 无桌面环境（如纯 SSH 服务器）时，自动截图可能失败。
 - 截图失败不会导致服务崩溃，返回里会出现 `metadata.auto_screenshot_error`。
+- 测试环境可用 `TEST_PIC_PATH` 指定本地图片，触发“以图代截屏”模式。
 
 ## 2. 从零开始：安装与初始化
 
@@ -103,6 +104,27 @@ cp config.json.example config.json
 - 若 `embedding_api_base_url` 或 `embedding_api_key` 为空，会回退到 `api.base_url`、`api.api_key`。
 - `embedding_api_model` 建议单独配置，不要复用聊天模型名。
 
+### 2.5 测试图片替代截图（可选）
+
+当设置环境变量 `TEST_PIC_PATH` 时，`ask_guide` 自动截图流程不会抓屏，而是读取该路径图片并注入模型。
+
+Linux/macOS：
+
+```bash
+export TEST_PIC_PATH="/绝对路径/测试图.png"
+```
+
+Windows PowerShell：
+
+```powershell
+$env:TEST_PIC_PATH="C:\\path\\to\\test.png"
+```
+
+预期：
+
+- 返回 `metadata.auto_screenshot.source=env:TEST_PIC_PATH`。
+- 若路径不存在或格式不支持，会返回 `metadata.auto_screenshot_error`。
+
 ## 3. 依赖与服务：Neo4j 与 Embedding API
 
 ### 3.1 Neo4j（建议启动）
@@ -177,7 +199,7 @@ PY
 
 - 返回 JSON 的 `status` 为 `ok`。
 - `metadata` 包含以下之一：
-  - `auto_screenshot`（截图成功）
+  - `auto_screenshot`（截图成功或使用 `TEST_PIC_PATH` 成功）
   - `auto_screenshot_error`（截图失败但流程不中断）
 
 ### 用例三：关闭自动截图
