@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from .message_manager import message_manager  # 导入统一的消息管理器
 
 from .llm_service import get_llm_service  # 导入LLM服务
+from . import naga_auth  # NagaCAS 认证模块
 
 # 导入配置系统
 try:
@@ -428,6 +429,56 @@ class DocumentProcessRequest(BaseModel):
     file_path: str
     action: str = "read"  # read, analyze, summarize
     session_id: Optional[str] = None
+
+
+# ============ NagaCAS 认证端点 ============
+
+
+@app.post("/auth/login")
+async def auth_login(body: dict):
+    """NagaCAS 登录"""
+    username = body.get("username", "")
+    password = body.get("password", "")
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="用户名和密码不能为空")
+    try:
+        result = await naga_auth.login(username, password)
+        return result
+    except Exception as e:
+        logger.error(f"登录失败: {e}")
+        raise HTTPException(status_code=401, detail=f"登录失败: {str(e)}")
+
+
+@app.get("/auth/me")
+async def auth_me():
+    """获取当前用户信息（使用服务端存储的 token）"""
+    if not naga_auth.is_authenticated():
+        raise HTTPException(status_code=401, detail="未登录")
+    user = await naga_auth.get_me()
+    if not user:
+        raise HTTPException(status_code=401, detail="token 已失效")
+    return {"user": user}
+
+
+@app.post("/auth/logout")
+async def auth_logout():
+    """登出"""
+    naga_auth.logout()
+    return {"success": True}
+
+
+@app.post("/auth/refresh")
+async def auth_refresh(body: dict):
+    """刷新 token"""
+    refresh_token = body.get("refresh_token", "")
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="refresh_token 不能为空")
+    try:
+        result = await naga_auth.refresh(refresh_token)
+        return result
+    except Exception as e:
+        logger.error(f"刷新 token 失败: {e}")
+        raise HTTPException(status_code=401, detail=f"刷新失败: {str(e)}")
 
 
 # API路由

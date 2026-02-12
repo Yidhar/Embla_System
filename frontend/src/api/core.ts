@@ -294,6 +294,25 @@ export class CoreApiClient extends ApiClient {
   getLive2dActions(): Promise<{ actions: string[] }> {
     return this.instance.get('/live2d/actions')
   }
+
+  // ── NagaCAS 认证 ──
+
+  authLogin(username: string, password: string): Promise<{
+    success: boolean
+    user: { username: string, sub?: string } | null
+    accessToken: string
+    refreshToken: string
+  }> {
+    return this.instance.post('/auth/login', { username, password })
+  }
+
+  authMe(): Promise<{ user: { username: string, sub?: string } }> {
+    return this.instance.get('/auth/me')
+  }
+
+  authLogout(): Promise<{ success: boolean }> {
+    return this.instance.post('/auth/logout')
+  }
 }
 
 export default new CoreApiClient(8000)

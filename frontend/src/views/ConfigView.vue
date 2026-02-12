@@ -5,6 +5,7 @@ import { ref, useTemplateRef } from 'vue'
 import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
+import { isNagaLoggedIn } from '@/composables/useAuth'
 import { CONFIG, DEFAULT_CONFIG, DEFAULT_MODEL, MODELS, SYSTEM_PROMPT } from '@/utils/config'
 import { trackingCalibration } from '@/utils/live2dController'
 
@@ -98,6 +99,21 @@ const accordionValue = useStorage('accordion-config', [])
           </ConfigItem>
         </div>
       </ConfigGroup>
+      <ConfigGroup value="api" header="API 设置">
+        <div class="grid gap-4">
+          <ConfigItem name="API 地址">
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，无需输入</span>
+            <InputText v-else v-model="CONFIG.api.base_url" placeholder="https://api.example.com/v1" />
+          </ConfigItem>
+          <ConfigItem name="API 密钥">
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，无需输入</span>
+            <InputText v-else v-model="CONFIG.api.api_key" type="password" placeholder="sk-..." />
+          </ConfigItem>
+          <ConfigItem name="模型名称">
+            <InputText v-model="CONFIG.api.model" placeholder="deepseek-chat" />
+          </ConfigItem>
+        </div>
+      </ConfigGroup>
       <ConfigGroup value="portal" header="账号设置">
         <div class="grid gap-4">
           <ConfigItem name="用户名">
@@ -133,3 +149,11 @@ const accordionValue = useStorage('accordion-config', [])
     </Accordion>
   </BoxContainer>
 </template>
+
+<style scoped>
+.naga-authed {
+  color: #4ade80;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+</style>
