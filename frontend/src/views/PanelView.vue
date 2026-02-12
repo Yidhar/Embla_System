@@ -12,7 +12,7 @@ import { useParallax } from '@/composables/useParallax'
 const { height } = useWindowSize()
 const scale = computed(() => height.value / 720)
 
-const { rx, ry } = useParallax({ rotateX: 3, rotateY: 2.5 })
+const { rx, ry, tx, ty } = useParallax({ rotateX: 3, rotateY: 2.5, translateX: 8, translateY: 6 })
 </script>
 
 <template>
@@ -20,7 +20,7 @@ const { rx, ry } = useParallax({ rotateX: 3, rotateY: 2.5 })
     <div
       class="grid grid-rows-3 gap-3 *:gap-3 will-change-transform" :style="{
         transformOrigin: 'left',
-        transform: `perspective(1000px) rotateX(${rx}deg) rotateY(${8 + ry}deg) scale(${scale})`,
+        transform: `perspective(1000px) rotateX(${rx}deg) rotateY(${8 + ry}deg) translate(${tx}px, ${ty}px) scale(${scale})`,
       }"
     >
       <div class="relative size-full">

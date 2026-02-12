@@ -133,7 +133,7 @@ class ServiceManager:
                 return True
         except OSError:
             return False
-    
+
     def start_all_servers(self):
         """并行启动所有服务：API(可选)、MCP、Agent、TTS"""
         print("🚀 正在并行启动所有服务...")
@@ -143,7 +143,7 @@ class ServiceManager:
 
         try:
             self._init_proxy_settings()
-            # 预检查所有端口
+            # 预检查所有端口（端口已在启动前由 kill_port_occupiers 清理）
             from system.config import get_server_port
             port_checks = {
                 'api': config.api_server.enabled and config.api_server.auto_start and
@@ -342,6 +342,50 @@ class ServiceManager:
         except Exception as e:
             logger.error(f"MCP服务系统初始化失败: {e}")
 
+def kill_port_occupiers():
+    """启动前杀掉占用后端端口的进程（跨平台）"""
+    from system.config import get_all_server_ports
+    all_ports = get_all_server_ports()
+    ports = [
+        all_ports["api_server"],
+        all_ports["agent_server"],
+        all_ports["mcp_server"],
+        all_ports["tts_server"],
+    ]
+    my_pid = os.getpid()
+    killed = False
+    for port in ports:
+        try:
+            if sys.platform == "win32":
+                result = subprocess.run(
+                    ["netstat", "-ano"], capture_output=True, text=True
+                )
+                for line in result.stdout.splitlines():
+                    if f":{port}" in line and "LISTENING" in line:
+                        parts = line.split()
+                        pid = int(parts[-1])
+                        if pid != my_pid and pid > 0:
+                            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                                           capture_output=True)
+                            print(f"   已终止占用端口 {port} 的进程 (PID {pid})")
+                            killed = True
+            else:
+                result = subprocess.run(
+                    ["lsof", "-ti", f":{port}"], capture_output=True, text=True
+                )
+                if result.stdout.strip():
+                    for pid_str in result.stdout.strip().split("\n"):
+                        pid = int(pid_str)
+                        if pid != my_pid and pid > 0:
+                            os.kill(pid, 9)
+                            print(f"   已终止占用端口 {port} 的进程 (PID {pid})")
+                            killed = True
+        except Exception as e:
+            print(f"   ⚠️ 清理端口 {port} 时出错: {e}")
+    if killed:
+        time.sleep(2)  # 等待进程完全释放端口
+
+
 # 工具函数
 def show_help():
     print('系统命令: 清屏, 查看索引, 帮助, 退出')
@@ -492,6 +536,7 @@ if __name__ == "__main__":
     parser.add_argument("--check-env", action="store_true", help="运行系统环境检测")
     parser.add_argument("--quick-check", action="store_true", help="运行快速环境检测")
     parser.add_argument("--force-check", action="store_true", help="强制运行环境检测（忽略缓存）")
+    parser.add_argument("--headless", action="store_true", help="无头模式（Electron/Web，跳过交互提示）")
 
     args = parser.parse_args()
 
@@ -506,9 +551,15 @@ if __name__ == "__main__":
     # 检查上次系统检测时间，如果超过7天则执行更新
     check_and_update_if_needed()
 
+    # 启动前清理占用端口的进程
+    print("🔍 检查端口占用...")
+    kill_port_occupiers()
+
     # 系统环境检测
     print("🚀 正在启动NagaAgent...")
     print("=" * 50)
+
+    headless = args.headless or not sys.stdin.isatty()
 
     # 如果是打包环境，跳过所有环境检测
     if IS_PACKAGED:
@@ -518,41 +569,12 @@ if __name__ == "__main__":
         if not run_system_check():
             print("\n❌ 系统环境检测失败，程序无法启动")
             print("请根据上述建议修复问题后重新启动")
-            i=input("是否无视检测结果继续启动？是则按y，否则按其他任意键退出...")
-            if i != "y" and i != "Y":
-                sys.exit(1)
+            if headless:
+                print("⚠️ 无头模式：自动继续启动...")
             else:
-                # 用户选择强制启动，将检测状态设置为通过
-                from charset_normalizer import from_path
-                import json5
-                from datetime import datetime
-                
-                config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-                if os.path.exists(config_file):
-                    try:
-                        charset_results = from_path(config_file)
-                        if charset_results:
-                            best_match = charset_results.best()
-                            detected_encoding = best_match.encoding if best_match else 'utf-8'
-                        else:
-                            detected_encoding = 'utf-8'
-                        
-                        with open(config_file, 'r', encoding=detected_encoding) as f:
-                            config_data = json5.load(f)
-                        
-                        if 'system_check' not in config_data:
-                            config_data['system_check'] = {}
-                        
-                        config_data['system_check']['passed'] = True
-                        config_data['system_check']['timestamp'] = datetime.now().isoformat()
-                        
-                        with open(config_file, 'w', encoding=detected_encoding) as f:
-                            import json
-                            json.dump(config_data, f, ensure_ascii=False, indent=2)
-                        
-                        print("✅ 已将检测状态设置为通过")
-                    except Exception as e:
-                        print(f"⚠️ 保存检测状态失败: {e}")
+                i=input("是否无视检测结果继续启动？是则按y，否则按其他任意键退出...")
+                if i != "y" and i != "Y":
+                    sys.exit(1)
 
     print("\n🎉 系统环境检测通过，正在启动应用...")
     print("=" * 50)
