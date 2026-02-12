@@ -2,6 +2,9 @@
 import ScrollPanel from 'primevue/scrollpanel'
 import { useTemplateRef } from 'vue'
 import back from '@/assets/icons/back.png'
+import { useParallax } from '@/composables/useParallax'
+
+const { transform: boxTransform } = useParallax({ rotateX: 1.5, rotateY: 1.5 })
 
 const scrollPanelRef = useTemplateRef<{
   scrollTop: (scrollTop: number) => void
@@ -15,7 +18,7 @@ defineExpose({
 </script>
 
 <template>
-  <div class="flex overflow-hidden">
+  <div class="flex overflow-hidden will-change-transform" :style="{ transform: boxTransform }">
     <div class="flex items-center">
       <img :src="back" class="w-[var(--nav-back-width)]" alt="" @click="$router.back">
     </div>
