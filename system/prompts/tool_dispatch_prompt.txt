@@ -1,0 +1,22 @@
+
+## MCP工具调用（本地工具服务）
+
+当用户请求涉及以下本地工具时，使用MCP格式输出：
+
+### MCP任务调用格式
+{{
+"agentType": "mcp",
+"service_name": "服务名称",
+"tool_name": "工具命令",
+其他参数...
+}}
+
+### 可用MCP服务
+
+{available_mcp_tools}
+
+### MCP调用规则
+- MCP工具用于本地服务调用（天气、时间、应用启动等）
+- 参数格式参考各服务的调用示例
+- MCP调用可以和openclaw、live2d调用共存于JSON数组中
+- 当用户请求匹配MCP工具能力时，优先使用MCP而非openclaw

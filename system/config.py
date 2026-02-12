@@ -580,7 +580,9 @@ def save_prompt(name: str, content: str):
     get_prompt_manager().save_prompt(name, content)
 
 
-def build_system_prompt(include_skills: bool = True, include_time: bool = False) -> str:
+def build_system_prompt(
+    include_skills: bool = True, include_time: bool = False, include_tool_instructions: bool = False
+) -> str:
     """
     构建完整的系统提示词
 
@@ -589,6 +591,7 @@ def build_system_prompt(include_skills: bool = True, include_time: bool = False)
     Args:
         include_skills: 是否包含技能列表
         include_time: 是否包含当前时间信息
+        include_tool_instructions: 是否注入工具调用指令（agentic loop 模式）
 
     Returns:
         完整的系统提示词
@@ -608,6 +611,24 @@ def build_system_prompt(include_skills: bool = True, include_time: bool = False)
                 parts.append("\n\n" + skills_prompt)
         except ImportError:
             pass  # 技能管理器不可用时忽略
+
+    # 添加工具调用指令（不可被前端编辑，通过代码注入）
+    if include_tool_instructions:
+        try:
+            from mcpserver.mcp_registry import auto_register_mcp
+
+            auto_register_mcp()  # 幂等
+            from mcpserver.mcp_manager import get_mcp_manager
+
+            available_mcp_tools = get_mcp_manager().format_available_services() or "（暂无MCP服务注册）"
+        except Exception:
+            available_mcp_tools = "（MCP服务未启动）"
+
+        # 直接读取原始模板并手动替换占位符，绕过 str.format()
+        # 这样 available_mcp_tools 中的 {} 不会被误解析
+        raw_template = get_prompt_manager()._load_prompt("agentic_tool_prompt") or ""
+        tool_prompt = raw_template.replace("{available_mcp_tools}", available_mcp_tools)
+        parts.append("\n\n" + tool_prompt)
 
     # 添加时间信息
     if include_time:

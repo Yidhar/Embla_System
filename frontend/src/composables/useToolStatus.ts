@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import API from '@/api/core'
+import { triggerAction } from '@/utils/live2dController'
 import { MESSAGES } from '@/utils/session'
 
 export const toolMessage = ref('')
@@ -8,10 +9,11 @@ let timer: ReturnType<typeof setInterval> | null = null
 
 async function poll() {
   try {
-    const [status, clawdbot, tasks] = await Promise.allSettled([
+    const [status, clawdbot, tasks, live2d] = await Promise.allSettled([
       API.getToolStatus(),
       API.getClawdbotReplies(),
       API.getOpenclawTasks(),
+      API.getLive2dActions(),
     ])
 
     if (status.status === 'fulfilled') {
@@ -33,6 +35,12 @@ async function poll() {
       const active = tasks.value.tasks.filter((t: any) => t.status === 'running' || t.status === 'pending')
       if (active.length > 0 && !toolMessage.value) {
         toolMessage.value = `AgentServer: ${active.length} 个任务执行中...`
+      }
+    }
+
+    if (live2d.status === 'fulfilled' && live2d.value.actions?.length) {
+      for (const action of live2d.value.actions) {
+        triggerAction(action)
       }
     }
   }

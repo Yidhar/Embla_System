@@ -21,10 +21,20 @@ JSON花括号必须使用半角ASCII字符 `{{` 和 `}}`，不要使用全角。
 "at": "执行时间（仅一次性提醒，如'10m'）"
 }}
 
+### Live2D表情动作调用
+{{
+"agentType": "live2d",
+"action": "nod" | "shake"
+}}
+
 **task_type说明**：
 - `message`：普通任务（搜索、浏览、分析、查询天气、打开网页等所有即时操作）
 - `cron`：定时循环任务（需要schedule字段）
 - `reminder`：一次性定时提醒（需要at字段）
+
+**Live2D动作说明**：
+- `nod`：点头 — 当AI回复表达肯定、同意、确认时（如"好的"、"没问题"、"可以"）
+- `shake`：摇头 — 当AI回复表达否定、拒绝时（如"不行"、"抱歉做不到"）
 
 **OpenClaw可用工具**：web_fetch、web_search、browser、sessions_list、agents_list、memory_search、cron。所有工具调度都包含在message中描述，由OpenClaw自行决定使用哪些工具。
 
@@ -34,6 +44,9 @@ JSON花括号必须使用半角ASCII字符 `{{` 和 `}}`，不要使用全角。
 ## 规则
 - 仅提取可执行任务，闲聊和状态反馈输出 `{{}}`
 - 所有任务统一使用 `agentType: "openclaw"` 格式，不存在其他agentType
+- Live2D动作使用 `agentType: "live2d"` 格式，可以和openclaw任务同时存在于JSON数组中
+- MCP本地工具使用 `agentType: "mcp"` 格式（天气、时间、应用启动等），当匹配MCP工具能力时优先使用MCP
 - message字段必须包含完整的任务描述，让OpenClaw能独立理解并执行
 - 复合操作可以合并为一条message（如果逻辑连贯），也可以拆分为JSON数组
 - 没有可执行任务时输出 `{{}}`
+- Live2D动作仅在明确的肯定/否定语义时使用，普通回复不触发

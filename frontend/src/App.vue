@@ -22,13 +22,13 @@ const scale = computed(() => height.value / (10000 - CONFIG.value.web_live2d.mod
         :scale="scale" :ssaa="CONFIG.web_live2d.ssaa"
       />
     </div>
-    <div class="h-full px-1/8 py-1/12 grid-container">
+    <div class="h-full px-1/8 py-1/12 grid-container pointer-events-none">
       <RouterView v-slot="{ Component, route }">
         <Transition :name="route.path === '/' ? 'slide-out' : 'slide-in'">
           <component
             :is="Component"
             :key="route.fullPath"
-            class="grid-item size-full"
+            class="grid-item size-full pointer-events-auto"
           />
         </Transition>
       </RouterView>
