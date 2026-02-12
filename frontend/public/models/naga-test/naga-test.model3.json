@@ -6,7 +6,46 @@
 			"naga-test/texture_00.png"
 		],
 		"Physics": "naga-test.physics3.json",
-		"DisplayInfo": "naga-test.cdi3.json"
+		"Pose": "naga-test.pose3.json",
+		"DisplayInfo": "naga-test.cdi3.json",
+		"Expressions": [
+			{
+				"Name": "expression1",
+				"File": "happy.exp3.json"
+			},
+			{
+				"Name": "expression2",
+				"File": "sad.exp3.json"
+			},
+			{
+				"Name": "expression3",
+				"File": "enjoy.exp3.json"
+			},
+			{
+				"Name": "expression4",
+				"File": "surprise.exp3.json"
+			},
+			{
+				"Name": "expression5",
+				"File": "test.exp3.json"
+			},
+			{
+				"Name": "expression6",
+				"File": "close.exp3.json"
+			},
+			{
+				"Name": "expression7",
+				"File": "close2.exp3.json"
+			},
+			{
+				"Name": "expression8",
+				"File": "getup1.exp3.json"
+			},
+			{
+				"Name": "expression9",
+				"File": "normal.exp3.json"
+			}
+		]
 	},
 	"Groups": [
 		{
@@ -19,5 +58,6 @@
 			"Name": "LipSync",
 			"Ids": []
 		}
-	]
+	],
+	"HitAreas": []
 }
