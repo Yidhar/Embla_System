@@ -1,3 +1,8 @@
+<script lang="ts">
+// 模块级标记，HMR 重挂载时不会重置
+let _splashDismissed = false
+</script>
+
 <script setup lang="ts">
 import { useWindowSize } from '@vueuse/core'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -19,12 +24,13 @@ const { tx: lightTx, ty: lightTy } = useParallax({ translateX: 25, translateY: 1
 
 // ─── 启动界面状态 ───────────────────────────
 const { progress, phase, isReady, startProgress, notifyModelReady, cleanup } = useStartupProgress()
-const splashVisible = ref(true)
-const showMainContent = ref(false)
+const splashVisible = ref(!_splashDismissed)
+const showMainContent = ref(_splashDismissed)
 const modelReady = ref(false)
 
 // Live2D 居中/过渡控制
 const live2dTransform = ref('')
+const live2dTransformOrigin = ref('')
 const live2dTransition = ref(false)
 
 // 记录首次 model-ready 是否已处理（避免 watch 重复触发时反复设置 transform）
@@ -39,8 +45,11 @@ function onModelReady(pos: { faceX: number, faceY: number }) {
   // splash 阶段：将 Live2D 面部居中到矩形框中央
   if (splashVisible.value && !initialPositionSet) {
     initialPositionSet = true
-    const cx = window.innerWidth / 2
-    const cy = window.innerHeight * 0.42
+    // frame-mask 中心: left 50%, top 45% (见 SplashScreen.vue --frame-y)
+    const cx = window.innerWidth * 0.5
+    const cy = window.innerHeight * 0.45
+    // 以面部为缩放原点，保证 scale 后面部仍居中
+    live2dTransformOrigin.value = `${pos.faceX}px ${pos.faceY}px`
     live2dTransform.value = `translate(${cx - pos.faceX}px, ${cy - pos.faceY}px) scale(2.2)`
   }
 }
@@ -49,10 +58,12 @@ function onModelReady(pos: { faceX: number, faceY: number }) {
 const live2dShouldShow = computed(() => progress.value >= 50 && splashVisible.value)
 
 function onSplashDismiss() {
+  _splashDismissed = true
   // 启用过渡动画
   live2dTransition.value = true
   // 回到正常位置
   live2dTransform.value = ''
+  live2dTransformOrigin.value = ''
   // 触发 SplashScreen 淡出
   splashVisible.value = false
 
@@ -86,6 +97,7 @@ onUnmounted(() => {
       :class="splashVisible ? 'z-10' : '-z-1'"
       :style="{
         transform: live2dTransform,
+        transformOrigin: live2dTransformOrigin || undefined,
         transition: live2dTransition ? 'transform 1.2s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.8s ease' : 'none',
         opacity: splashVisible ? (live2dShouldShow ? 1 : 0) : 1,
       }"

@@ -53,38 +53,47 @@ export function useStartupProgress() {
     setTarget(25, '连接后端...')
   }
 
+  async function runPostConnect() {
+    // 阶段 25→50：后端已连接
+    setTarget(50, '预加载视图...')
+
+    // 阶段 50→70：预加载视图
+    await preloadAllViews((loaded, total) => {
+      const viewProgress = 50 + (loaded / total) * 20
+      setTarget(viewProgress, '预加载视图...')
+    })
+
+    // 阶段 70→90：获取会话
+    setTarget(70, '获取会话...')
+    try {
+      await API.getSessions()
+    }
+    catch {
+      // 会话获取失败不阻塞启动
+    }
+    setTarget(90, '准备就绪')
+
+    // 阶段 90→100：完成
+    setTimeout(() => setTarget(100, '准备就绪'), 300)
+  }
+
   async function startProgress() {
     // 阶段 0→10：初始化
     setTarget(10, modelReady ? '连接后端...' : '加载模型...')
     rafId = requestAnimationFrame(animateProgress)
 
+    // 如果后端已连接（HMR/重复挂载），直接推进
+    if (backendConnected.value) {
+      runPostConnect()
+      return
+    }
+
     // 监听后端连接
-    const stopWatch = watch(backendConnected, async (connected) => {
+    const stopWatch = watch(backendConnected, (connected) => {
       if (!connected) return
       stopWatch()
-
-      // 阶段 25→50：后端已连接
-      setTarget(50, '预加载视图...')
-
-      // 阶段 50→70：预加载视图
-      await preloadAllViews((loaded, total) => {
-        const viewProgress = 50 + (loaded / total) * 20
-        setTarget(viewProgress, '预加载视图...')
-      })
-
-      // 阶段 70→90：获取会话
-      setTarget(70, '获取会话...')
-      try {
-        await API.getSessions()
-      }
-      catch {
-        // 会话获取失败不阻塞启动
-      }
-      setTarget(90, '准备就绪')
-
-      // 阶段 90→100：完成
-      setTimeout(() => setTarget(100, '准备就绪'), 300)
-    }, { immediate: true })
+      runPostConnect()
+    })
   }
 
   function cleanup() {
