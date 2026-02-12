@@ -25,6 +25,10 @@ const { source, width, height, x, y, scale, ssaa } = defineProps<{
   ssaa: number
 }>()
 
+const emit = defineEmits<{
+  'model-ready': [pos: { faceX: number, faceY: number }]
+}>()
+
 let app: PIXI.Application
 
 const computedScale = computed(() => scale * ssaa)
@@ -124,6 +128,7 @@ onMounted(async () => {
         modelFaceScreenX = (model.x + model.rawWidth * s * 0.5) / ssaa
         modelFaceScreenY = (model.y + model.rawHeight * s * faceY) / ssaa
         markerPos.value = { left: `${modelFaceScreenX}px`, top: `${modelFaceScreenY}px` }
+        emit('model-ready', { faceX: modelFaceScreenX, faceY: modelFaceScreenY })
       }
       // 响应 face_y_ratio 配置变化（设置界面滑块调节时实时更新）
       const centerHandle = watch(
