@@ -38,6 +38,9 @@ class GuideEngineSettings:
     embedding_api_base_url: str | None = None
     embedding_api_key: str | None = None
     embedding_api_model: str | None = None
+    vision_api_base_url: str | None = None
+    vision_api_key: str | None = None
+    vision_api_model: str | None = None
     neo4j_uri: str = "neo4j://127.0.0.1:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: str = "your_password"
@@ -64,6 +67,9 @@ class GuideEngineSettings:
             embedding_api_base_url=ge.embedding_api_base_url or config.api.base_url,
             embedding_api_key=ge.embedding_api_key or config.api.api_key,
             embedding_api_model=ge.embedding_api_model or "text-embedding-3-small",
+            vision_api_base_url=ge.vision_api_base_url or config.api.base_url,
+            vision_api_key=ge.vision_api_key or config.api.api_key,
+            vision_api_model=ge.vision_api_model or config.api.model,
             neo4j_uri=ge.neo4j_uri,
             neo4j_user=ge.neo4j_user,
             neo4j_password=ge.neo4j_password,

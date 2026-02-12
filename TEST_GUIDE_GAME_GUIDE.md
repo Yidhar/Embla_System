@@ -63,6 +63,9 @@ cp config.json.example config.json
     "embedding_api_base_url": "https://你的网关/v1",
     "embedding_api_key": "你的Embedding密钥",
     "embedding_api_model": "text-embedding-3-small",
+    "vision_api_base_url": "https://你的视觉网关/v1",
+    "vision_api_key": "你的视觉模型密钥",
+    "vision_api_model": "qwen-vl-plus",
     "prompt_dir": "./guide_engine/game_prompts",
     "neo4j_uri": "bolt://127.0.0.1:7687",
     "neo4j_user": "neo4j",
@@ -78,6 +81,8 @@ cp config.json.example config.json
 - 向量嵌入统一走 OpenAI 兼容 API，不再使用本地 `sentence-transformers`。
 - `embedding_api_base_url` 与 `embedding_api_key` 必须可用。
 - `embedding_api_model` 建议填写专用 embedding 模型。
+- 截图识图支持单独配置视觉模型：`vision_api_base_url`、`vision_api_key`、`vision_api_model`。
+- 若视觉配置留空，会回退到 `api.base_url`、`api.api_key`、`api.model`。
 - `neo4j_uri` 建议优先 `bolt://127.0.0.1:7687`。
 
 ### 2.4 使用 OpenAI 兼容外部向量 API（必需）
@@ -114,6 +119,14 @@ docker run -d --name neo4j \
 若不启动 Neo4j：
 
 - 服务仍可调用，但图谱相关检索会降级或为空。
+
+自动导入说明：
+
+- 系统在检测到指定游戏图谱为空时，会自动尝试导入一次基础数据。
+- 默认会在以下路径查找种子数据文件：
+  - `data/`
+  - `../guide_engine_backend/backend/app/data/`
+- 明日方舟使用 `arknights_cn_operators.json`，舰C使用 `kantai-collection_start2.json`。
 
 ### 3.2 Embedding API（必需）
 

@@ -153,6 +153,7 @@ class GuideService:
         from apiserver.llm_service import get_llm_service
 
         llm_service = get_llm_service()
+        settings = get_guide_engine_settings()
         system_prompt = str(prompt_config.get("system_prompt", ""))
 
         user_text = request.content
@@ -174,7 +175,15 @@ class GuideService:
                 messages.append({"role": role, "content": content})
         messages.append({"role": "user", "content": user_content})
 
-        llm_response = await llm_service.chat_with_context_and_reasoning(messages)
+        if images:
+            llm_response = await llm_service.chat_with_context_and_reasoning_with_overrides(
+                messages=messages,
+                model_override=settings.vision_api_model,
+                api_key_override=settings.vision_api_key,
+                api_base_override=settings.vision_api_base_url,
+            )
+        else:
+            llm_response = await llm_service.chat_with_context_and_reasoning(messages)
         return llm_response.content
 
     @staticmethod

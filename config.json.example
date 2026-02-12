@@ -152,6 +152,9 @@
     "embedding_api_base_url": "", // OpenAI兼容Embedding API地址（如 https://api.openai.com/v1）
     "embedding_api_key": "", // OpenAI兼容Embedding API密钥
     "embedding_api_model": "text-embedding-3-small", // OpenAI兼容Embedding模型名
+    "vision_api_base_url": "", // 攻略识图专用OpenAI兼容API地址（留空回退到api.base_url）
+    "vision_api_key": "", // 攻略识图专用API密钥（留空回退到api.api_key）
+    "vision_api_model": "", // 攻略识图专用模型名（留空回退到api.model）
     "prompt_dir": "./guide_engine/game_prompts", // 游戏Prompt目录
     "neo4j_uri": "neo4j://127.0.0.1:7687", // 攻略图谱Neo4j URI
     "neo4j_user": "neo4j", // 攻略图谱Neo4j用户名

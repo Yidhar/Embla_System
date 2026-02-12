@@ -26,6 +26,7 @@ logger = logging.getLogger("LLMService")
 @dataclass
 class LLMResponse:
     """LLM响应结构，包含内容和推理过程"""
+
     content: str
     reasoning_content: Optional[str] = None
 
@@ -34,6 +35,7 @@ class LLMResponse:
         if self.reasoning_content:
             result["reasoning_content"] = self.reasoning_content
         return result
+
 
 class LLMService:
     """LLM服务类 - 使用 LiteLLM 提供统一的LLM调用接口，支持 COT/reasoning_content"""
@@ -49,7 +51,7 @@ class LLMService:
             litellm.api_key = config.api.api_key
             # 设置自定义端点（如果不是标准 OpenAI）
             if config.api.base_url and "openai.com" not in config.api.base_url:
-                litellm.api_base = config.api.base_url.rstrip('/') + '/'
+                litellm.api_base = config.api.base_url.rstrip("/") + "/"
             self._initialized = True
             logger.info("LLM服务 (LiteLLM) 初始化成功")
         except Exception as e:
@@ -58,17 +60,20 @@ class LLMService:
 
     def _get_model_name(self) -> str:
         """获取 LiteLLM 格式的模型名称"""
-        model = config.api.model
-        base_url = config.api.base_url.lower() if config.api.base_url else ""
+        return self._format_model_name(config.api.model, config.api.base_url)
+
+    def _format_model_name(self, model: str, base_url: Optional[str]) -> str:
+        """根据 base_url 规范化模型名（LiteLLM 前缀）"""
+        base_url_lower = base_url.lower() if base_url else ""
 
         # 根据 base_url 判断提供商，添加正确的前缀
-        if "deepseek" in base_url:
+        if "deepseek" in base_url_lower:
             if not model.startswith("deepseek/"):
                 return f"deepseek/{model}"
-        elif "openrouter" in base_url:
+        elif "openrouter" in base_url_lower:
             if not model.startswith("openrouter/"):
                 return f"openrouter/{model}"
-        elif "openai.com" in base_url:
+        elif "openai.com" in base_url_lower:
             # OpenAI 不需要前缀
             return model
         else:
@@ -76,6 +81,12 @@ class LLMService:
             if not model.startswith("openai/"):
                 return f"openai/{model}"
         return model
+
+    @staticmethod
+    def _format_api_base(api_base: Optional[str]) -> Optional[str]:
+        if not api_base:
+            return None
+        return api_base.rstrip("/") + "/"
 
     async def get_response(self, prompt: str, temperature: float = 0.7) -> str:
         """为其他模块提供API调用接口（保持向后兼容，只返回 content）"""
@@ -96,12 +107,11 @@ class LLMService:
                 temperature=temperature,
                 max_tokens=config.api.max_tokens,
                 api_key=config.api.api_key,
-                api_base=config.api.base_url.rstrip('/') + '/' if config.api.base_url else None
+                api_base=config.api.base_url.rstrip("/") + "/" if config.api.base_url else None,
             )
             message = response.choices[0].message
             return LLMResponse(
-                content=message.content or "",
-                reasoning_content=getattr(message, 'reasoning_content', None)
+                content=message.content or "", reasoning_content=getattr(message, "reasoning_content", None)
             )
         except Exception as e:
             logger.error(f"API调用失败: {e}")
@@ -116,30 +126,50 @@ class LLMService:
         response = await self.chat_with_context_and_reasoning(messages, temperature)
         return response.content
 
-    async def chat_with_context_and_reasoning(self, messages: List[Dict], temperature: float = 0.7) -> LLMResponse:
-        """带上下文的聊天调用，返回包含 reasoning_content 的完整响应"""
+    async def chat_with_context_and_reasoning_with_overrides(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float = 0.7,
+        model_override: Optional[str] = None,
+        api_key_override: Optional[str] = None,
+        api_base_override: Optional[str] = None,
+    ) -> LLMResponse:
+        """带上下文聊天（支持模型/网关覆写）"""
         if not self._initialized:
             self._initialize_client()
             if not self._initialized:
                 return LLMResponse(content="LLM服务不可用: 客户端初始化失败")
 
+        final_model = model_override or config.api.model
+        final_base = api_base_override or config.api.base_url
+        final_api_key = api_key_override or config.api.api_key
+
         try:
             response = await acompletion(
-                model=self._get_model_name(),
+                model=self._format_model_name(final_model, final_base),
                 messages=messages,
                 temperature=temperature,
-                max_tokens=config.api.max_tokens if hasattr(config.api, 'max_tokens') else None,
-                api_key=config.api.api_key,
-                api_base=config.api.base_url.rstrip('/') + '/' if config.api.base_url else None
+                max_tokens=config.api.max_tokens if hasattr(config.api, "max_tokens") else None,
+                api_key=final_api_key,
+                api_base=self._format_api_base(final_base),
             )
             message = response.choices[0].message
             return LLMResponse(
-                content=message.content or "",
-                reasoning_content=getattr(message, 'reasoning_content', None)
+                content=message.content or "", reasoning_content=getattr(message, "reasoning_content", None)
             )
         except Exception as e:
             logger.error(f"上下文聊天调用失败: {e}")
             return LLMResponse(content=f"聊天调用出错: {str(e)}")
+
+    async def chat_with_context_and_reasoning(self, messages: List[Dict], temperature: float = 0.7) -> LLMResponse:
+        """带上下文的聊天调用，返回包含 reasoning_content 的完整响应"""
+        return await self.chat_with_context_and_reasoning_with_overrides(
+            messages=messages,
+            temperature=temperature,
+            model_override=None,
+            api_key_override=None,
+            api_base_override=None,
+        )
 
     async def stream_chat_with_context(self, messages: List[Dict], temperature: float = 0.7):
         """带上下文的流式聊天调用，支持 reasoning_content 交织输出
@@ -159,10 +189,10 @@ class LLMService:
                 model=self._get_model_name(),
                 messages=messages,
                 temperature=temperature,
-                max_tokens=config.api.max_tokens if hasattr(config.api, 'max_tokens') else None,
+                max_tokens=config.api.max_tokens if hasattr(config.api, "max_tokens") else None,
                 stream=True,
                 api_key=config.api.api_key,
-                api_base=config.api.base_url.rstrip('/') + '/' if config.api.base_url else None
+                api_base=config.api.base_url.rstrip("/") + "/" if config.api.base_url else None,
             )
 
             async for chunk in response:
@@ -172,12 +202,12 @@ class LLMService:
                 delta = chunk.choices[0].delta
 
                 # 处理 reasoning_content（思考过程）
-                reasoning = getattr(delta, 'reasoning_content', None)
+                reasoning = getattr(delta, "reasoning_content", None)
                 if reasoning:
                     yield self._format_sse_chunk("reasoning", reasoning)
 
                 # 处理 content（正式回答）
-                content = getattr(delta, 'content', None)
+                content = getattr(delta, "content", None)
                 if content:
                     yield self._format_sse_chunk("content", content)
 
@@ -197,12 +227,15 @@ class LLMService:
         """
         import base64
         import json
+
         data = {"type": chunk_type, "text": text}
-        b64 = base64.b64encode(json.dumps(data, ensure_ascii=False).encode('utf-8')).decode('ascii')
+        b64 = base64.b64encode(json.dumps(data, ensure_ascii=False).encode("utf-8")).decode("ascii")
         return f"data: {b64}\n\n"
+
 
 # 全局LLM服务实例
 _llm_service: Optional[LLMService] = None
+
 
 def get_llm_service() -> LLMService:
     """获取全局LLM服务实例"""
@@ -211,12 +244,10 @@ def get_llm_service() -> LLMService:
         _llm_service = LLMService()
     return _llm_service
 
+
 # 创建独立的LLM服务API
-llm_app = FastAPI(
-    title="LLM Service API",
-    description="LLM服务API",
-    version="1.0.0"
-)
+llm_app = FastAPI(title="LLM Service API", description="LLM服务API", version="1.0.0")
+
 
 @llm_app.post("/llm/chat")
 async def llm_chat(request: Dict[str, Any]):
@@ -224,20 +255,15 @@ async def llm_chat(request: Dict[str, Any]):
     try:
         prompt = request.get("prompt", "")
         temperature = request.get("temperature", 0.7)
-        
+
         if not prompt:
             raise HTTPException(status_code=400, detail="prompt参数不能为空")
-        
+
         llm_service = get_llm_service()
         response = await llm_service.get_response(prompt, temperature)
-        
-        return {
-            "status": "success",
-            "response": response,
-            "temperature": temperature
-        }
-        
+
+        return {"status": "success", "response": response, "temperature": temperature}
+
     except Exception as e:
         logger.error(f"LLM聊天接口异常: {e}")
         raise HTTPException(status_code=500, detail=f"LLM服务异常: {str(e)}")
-

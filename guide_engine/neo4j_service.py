@@ -1,3 +1,6 @@
+import asyncio
+import json
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from neo4j import AsyncGraphDatabase
@@ -8,8 +11,13 @@ from .models import get_guide_engine_settings
 class Neo4jService:
     """Neo4j 图数据库服务"""
 
+    AUTO_IMPORT_GAMES = {"arknights", "kantai-collection"}
+    ENEMY_NAME_TOKENS = ("级", "鬼", "姬", "栖", "棲", "要塞", "砲台", "飞行场", "飛行場", "集积地", "集積地", "泊地")
+
     def __init__(self):
         self._driver = None
+        self._seed_lock: asyncio.Lock = asyncio.Lock()
+        self._seed_attempted_games: set[str] = set()
 
     async def connect(self):
         """连接 Neo4j"""
@@ -32,10 +40,192 @@ class Neo4jService:
             result = await session.run(query, parameters or {})
             return [record.data() async for record in result]
 
+    async def ensure_seed_data(self, game_id: str) -> None:
+        """检测并自动导入基础图数据（每个 game_id 仅尝试一次）"""
+        if game_id not in self.AUTO_IMPORT_GAMES:
+            return
+        if game_id in self._seed_attempted_games:
+            return
+
+        async with self._seed_lock:
+            if game_id in self._seed_attempted_games:
+                return
+            self._seed_attempted_games.add(game_id)
+
+            try:
+                already_has_data = await self._has_seed_data(game_id)
+                if already_has_data:
+                    return
+                imported_count = await self._auto_import_seed_data(game_id)
+                print(f"[Neo4j] auto import completed: game_id={game_id}, imported={imported_count}")
+            except Exception as exc:
+                print(f"[Neo4j] auto import failed: game_id={game_id}, error={exc}")
+
+    async def _has_seed_data(self, game_id: str) -> bool:
+        if game_id == "arknights":
+            result = await self.execute_query(
+                "MATCH (o:Operator {game_id: $game_id}) RETURN count(o) as c",
+                {"game_id": game_id},
+            )
+            return bool(result and int(result[0].get("c", 0)) > 0)
+
+        if game_id == "kantai-collection":
+            result = await self.execute_query(
+                "MATCH (n {game_id: $game_id}) WHERE n:Ship OR n:EnemyShip RETURN count(n) as c",
+                {"game_id": game_id},
+            )
+            return bool(result and int(result[0].get("c", 0)) > 0)
+
+        return True
+
+    async def _auto_import_seed_data(self, game_id: str) -> int:
+        if game_id == "arknights":
+            return await self._import_arknights_seed_data(game_id)
+        if game_id == "kantai-collection":
+            return await self._import_kantai_seed_data(game_id)
+        return 0
+
+    async def _import_arknights_seed_data(self, game_id: str) -> int:
+        file_path = self._find_seed_file(["arknights_cn_operators.json", "arknights/cn/operators.json"])
+        if file_path is None:
+            print("[Neo4j] arknights seed file not found, skip auto import")
+            return 0
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+
+        operators_raw = payload.get("operators", []) if isinstance(payload, dict) else []
+        operators: List[Dict[str, Any]] = [
+            item
+            for item in operators_raw
+            if isinstance(item, dict) and item.get("id") is not None and item.get("name") is not None
+        ]
+
+        if not operators:
+            print("[Neo4j] arknights seed file is empty, skip auto import")
+            return 0
+
+        await self.init_constraints()
+        return await self.import_operators(game_id, operators)
+
+    async def _import_kantai_seed_data(self, game_id: str) -> int:
+        file_path = self._find_seed_file(["kantai-collection_start2.json", "kantai_collection_start2.json"])
+        if file_path is None:
+            print("[Neo4j] kantai seed file not found, skip auto import")
+            return 0
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+
+        ship_types_raw = payload.get("api_mst_stype", []) if isinstance(payload, dict) else []
+        ship_types: Dict[int, str] = {}
+        for item in ship_types_raw:
+            if not isinstance(item, dict):
+                continue
+            stype_id = self._to_int(item.get("api_id"))
+            stype_name = str(item.get("api_name") or "")
+            if stype_id is not None and stype_name:
+                ship_types[stype_id] = stype_name
+
+        ships_raw = payload.get("api_mst_ship", []) if isinstance(payload, dict) else []
+        ships_rows: List[Dict[str, Any]] = []
+        enemy_rows: List[Dict[str, Any]] = []
+
+        for item in ships_raw:
+            if not isinstance(item, dict):
+                continue
+            ship_id = self._to_int(item.get("api_id"))
+            name = str(item.get("api_name") or "").strip()
+            if ship_id is None or not name:
+                continue
+
+            stype = self._to_int(item.get("api_stype"))
+            ctype = self._to_int(item.get("api_ctype"))
+            row: Dict[str, Any] = {
+                "id": str(ship_id),
+                "name": name,
+                "stype": stype,
+                "stype_name": ship_types.get(stype or -1, ""),
+                "ctype": ctype,
+                "taik": item.get("api_taik"),
+                "souk": item.get("api_souk"),
+                "houg": item.get("api_houg"),
+                "raig": item.get("api_raig"),
+                "tyku": item.get("api_tyku"),
+                "taisen": item.get("api_tais"),
+                "soku": self._to_int(item.get("api_soku")),
+                "leng": self._to_int(item.get("api_leng")),
+            }
+
+            if self._is_enemy_ship(name, ship_id, ctype):
+                enemy_rows.append(row)
+            else:
+                ships_rows.append(row)
+
+        imported_ship_count = await self._upsert_ship_rows(game_id, "Ship", ships_rows)
+        imported_enemy_count = await self._upsert_ship_rows(game_id, "EnemyShip", enemy_rows)
+        return imported_ship_count + imported_enemy_count
+
+    async def _upsert_ship_rows(self, game_id: str, label: str, rows: List[Dict[str, Any]]) -> int:
+        if label not in {"Ship", "EnemyShip"}:
+            raise ValueError("invalid label")
+        if not rows:
+            return 0
+
+        query = f"""
+        UNWIND $rows AS row
+        MERGE (n:{label} {{game_id: $game_id, id: row.id}})
+        SET n += row
+        """
+
+        total = 0
+        for batch in self._chunk_rows(rows, 300):
+            await self.execute_query(query, {"game_id": game_id, "rows": batch})
+            total += len(batch)
+        return total
+
+    @staticmethod
+    def _chunk_rows(rows: List[Dict[str, Any]], size: int) -> List[List[Dict[str, Any]]]:
+        return [rows[index : index + size] for index in range(0, len(rows), size)]
+
+    @staticmethod
+    def _to_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    @classmethod
+    def _is_enemy_ship(cls, name: str, ship_id: int, ctype: int | None) -> bool:
+        if any(token in name for token in cls.ENEMY_NAME_TOKENS):
+            return True
+        if ctype == 1 and ship_id >= 1000:
+            return True
+        return False
+
+    @staticmethod
+    def _candidate_seed_roots() -> List[Path]:
+        repo_root = Path(__file__).resolve().parent.parent
+        return [
+            repo_root / "data",
+            repo_root.parent / "guide_engine_backend" / "backend" / "app" / "data",
+        ]
+
+    def _find_seed_file(self, relative_paths: List[str]) -> Path | None:
+        for root in self._candidate_seed_roots():
+            for relative in relative_paths:
+                file_path = root / relative
+                if file_path.exists():
+                    return file_path
+        return None
+
     # ============ 干员相关查询 ============
 
     async def get_operator(self, game_id: str, operator_name: str) -> Optional[Dict[str, Any]]:
         """获取干员完整信息"""
+        await self.ensure_seed_data(game_id)
         query = """
         MATCH (o:Operator {game_id: $game_id})
         WHERE o.name = $name OR o.name_en = $name OR $name IN o.aliases
@@ -57,6 +247,7 @@ class Neo4jService:
 
     async def get_operator_synergies(self, game_id: str, operator_name: str, limit: int = 5) -> List[Dict[str, Any]]:
         """获取干员配合推荐"""
+        await self.ensure_seed_data(game_id)
         query = """
         MATCH (o:Operator {game_id: $game_id})-[r:SYNERGY_WITH]->(partner:Operator)
         WHERE o.name = $name OR o.name_en = $name OR $name IN o.aliases
@@ -73,6 +264,7 @@ class Neo4jService:
 
     async def get_operator_counters(self, game_id: str, operator_name: str) -> Dict[str, List[Dict]]:
         """获取干员克制关系"""
+        await self.ensure_seed_data(game_id)
         query = """
         MATCH (o:Operator {game_id: $game_id})
         WHERE o.name = $name OR $name IN o.aliases
@@ -92,6 +284,7 @@ class Neo4jService:
 
     async def search_operators(self, game_id: str, keyword: str, limit: int = 10) -> List[Dict[str, Any]]:
         """搜索干员"""
+        await self.ensure_seed_data(game_id)
         query = """
         MATCH (o:Operator {game_id: $game_id})
         WHERE o.name CONTAINS $keyword
@@ -111,9 +304,13 @@ class Neo4jService:
             "CREATE CONSTRAINT IF NOT EXISTS FOR (o:Operator) REQUIRE (o.game_id, o.id) IS UNIQUE",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (s:Skill) REQUIRE (s.game_id, s.id) IS UNIQUE",
             "CREATE CONSTRAINT IF NOT EXISTS FOR (f:Faction) REQUIRE (f.game_id, f.id) IS UNIQUE",
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (s:Ship) REQUIRE (s.game_id, s.id) IS UNIQUE",
+            "CREATE CONSTRAINT IF NOT EXISTS FOR (e:EnemyShip) REQUIRE (e.game_id, e.id) IS UNIQUE",
             "CREATE INDEX IF NOT EXISTS FOR (o:Operator) ON (o.name)",
             "CREATE INDEX IF NOT EXISTS FOR (o:Operator) ON (o.name_en)",
             "CREATE INDEX IF NOT EXISTS FOR (o:Operator) ON (o.game_id)",
+            "CREATE INDEX IF NOT EXISTS FOR (s:Ship) ON (s.name)",
+            "CREATE INDEX IF NOT EXISTS FOR (e:EnemyShip) ON (e.name)",
         ]
 
         for constraint in constraints:
@@ -281,6 +478,7 @@ class Neo4jService:
 
     async def get_ship(self, game_id: str, ship_name: str) -> Optional[Dict[str, Any]]:
         """获取我方舰船信息"""
+        await self.ensure_seed_data(game_id)
         query = """
         MATCH (s:Ship {game_id: $game_id})
         WHERE s.name = $name
@@ -294,6 +492,7 @@ class Neo4jService:
 
     async def get_enemy_ship(self, game_id: str, enemy_name: str) -> Optional[Dict[str, Any]]:
         """获取敌方舰船信息"""
+        await self.ensure_seed_data(game_id)
         query = """
         MATCH (e:EnemyShip {game_id: $game_id})
         WHERE e.name = $name
@@ -307,6 +506,7 @@ class Neo4jService:
 
     async def find_ship_in_text(self, game_id: str, text: str) -> Optional[Dict[str, Any]]:
         """在文本中匹配我方舰船名称"""
+        await self.ensure_seed_data(game_id)
         query = """
         MATCH (s:Ship {game_id: $game_id})
         WHERE $text CONTAINS s.name
@@ -320,6 +520,7 @@ class Neo4jService:
 
     async def find_enemy_in_text(self, game_id: str, text: str) -> Optional[Dict[str, Any]]:
         """在文本中匹配敌方舰船名称"""
+        await self.ensure_seed_data(game_id)
         query = """
         MATCH (e:EnemyShip {game_id: $game_id})
         WHERE $text CONTAINS e.name
