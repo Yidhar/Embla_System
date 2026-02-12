@@ -1,8 +1,5 @@
 <script lang="ts">
-import { Live2DModel } from 'pixi-live2d-display/cubism4'
 import * as PIXI from 'pixi.js'
-import { computed, nextTick, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
-import { destroyController, initController, startTracking, stopTracking, updateTracking } from '@/utils/live2dController'
 
 declare global {
   interface Window {
@@ -13,6 +10,11 @@ window.PIXI = PIXI
 </script>
 
 <script setup lang="ts">
+import { Live2DModel } from 'pixi-live2d-display/cubism4'
+import { computed, nextTick, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
+import { destroyController, initController, startTracking, stopTracking, trackingCalibration, updateTracking } from '@/utils/live2dController'
+import { CONFIG } from '@/utils/config'
+
 const { source, width, height, x, y, scale, ssaa } = defineProps<{
   source: string
   width: number
@@ -30,37 +32,60 @@ const computedWidth = computed(() => width * ssaa)
 const computedHeight = computed(() => height * ssaa)
 
 const canvas = useTemplateRef('canvas')
-const isDragging = ref(false)
+let isDragging = false
 
-function onPointerDown(e: PointerEvent) {
-  isDragging.value = true
-  ;(e.target as Element).setPointerCapture(e.pointerId)
+// 模型面部在屏幕上的位置（由 recalcModelCenter 更新）
+let modelFaceScreenX = 0
+let modelFaceScreenY = 0
+// 准星位置（响应式，供模板绑定）
+const markerPos = ref({ left: '0px', top: '0px' })
+
+// ─── Window 级别事件监听（绕过 CSS 层叠遮挡） ───────
+const INTERACTIVE_SELECTOR = 'button, input, textarea, select, a, [contenteditable], label, [role="button"]'
+
+function isInteractiveTarget(el: EventTarget | null): boolean {
+  if (!(el instanceof Element)) return false
+  if (el.closest(INTERACTIVE_SELECTOR)) return true
+  if (el.closest('.box, .session-panel, .p-scrollpanel')) return true
+  return false
+}
+
+function onWindowPointerDown(e: PointerEvent) {
+  if (isInteractiveTarget(e.target)) return
+  isDragging = true
   startTracking()
-  updateTrackingFromEvent(e)
+  updateTrackingFromPointer(e)
 }
 
-function onPointerMove(e: PointerEvent) {
-  if (!isDragging.value) return
-  updateTrackingFromEvent(e)
+function onWindowPointerMove(e: PointerEvent) {
+  if (!isDragging) return
+  updateTrackingFromPointer(e)
 }
 
-function onPointerUp(e: PointerEvent) {
-  if (!isDragging.value) return
-  isDragging.value = false
-  ;(e.target as Element).releasePointerCapture(e.pointerId)
+function onWindowPointerUp(_e: PointerEvent) {
+  if (!isDragging) return
+  isDragging = false
   stopTracking()
 }
 
-function updateTrackingFromEvent(e: PointerEvent) {
-  const el = canvas.value
-  if (!el) return
-  const rect = el.getBoundingClientRect()
-  const normalizedX = ((e.clientX - rect.left) / rect.width) * 2 - 1
-  const normalizedY = ((e.clientY - rect.top) / rect.height) * 2 - 1
+function clamp(v: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, v))
+}
+
+function updateTrackingFromPointer(e: PointerEvent) {
+  // 从模型面部位置到鼠标的方向，归一化到 [-1, 1]
+  const range = Math.min(window.innerWidth, window.innerHeight) * 0.4
+  const normalizedX = clamp((e.clientX - modelFaceScreenX) / range, -1, 1)
+  // 屏幕 Y 向下，Live2D Y 向上 → 取反
+  const normalizedY = clamp(-(e.clientY - modelFaceScreenY) / range, -1, 1)
   updateTracking(normalizedX, normalizedY)
 }
 
 onMounted(async () => {
+  window.addEventListener('pointerdown', onWindowPointerDown)
+  window.addEventListener('pointermove', onWindowPointerMove)
+  window.addEventListener('pointerup', onWindowPointerUp)
+
   if (!canvas.value)
     return
 
@@ -92,6 +117,21 @@ onMounted(async () => {
         watch(computedY, y => model.y = y / 2, { immediate: true }),
       ]
 
+      // 计算模型面部在屏幕上的位置（PIXI坐标 / ssaa = 屏幕坐标）
+      function recalcModelCenter() {
+        const s = computedScale.value
+        const faceY = CONFIG.value.web_live2d.face_y_ratio ?? 0.25
+        modelFaceScreenX = (model.x + model.rawWidth * s * 0.5) / ssaa
+        modelFaceScreenY = (model.y + model.rawHeight * s * faceY) / ssaa
+        markerPos.value = { left: `${modelFaceScreenX}px`, top: `${modelFaceScreenY}px` }
+      }
+      // 响应 face_y_ratio 配置变化（设置界面滑块调节时实时更新）
+      const centerHandle = watch(
+        [computedScale, computedX, computedY, () => CONFIG.value.web_live2d.face_y_ratio],
+        recalcModelCenter,
+        { immediate: true },
+      )
+
       model.autoInteract = false
       app.stage.addChild(model)
       initController(rawModel)
@@ -101,6 +141,7 @@ onMounted(async () => {
         app.stage.removeChild(model)
         model.destroy()
         handles.forEach(handle => handle.stop())
+        centerHandle.stop()
       })
     }
     catch (error) {
@@ -109,7 +150,12 @@ onMounted(async () => {
   }, { immediate: true })
 })
 
-onUnmounted(() => app && app.destroy())
+onUnmounted(() => {
+  window.removeEventListener('pointerdown', onWindowPointerDown)
+  window.removeEventListener('pointermove', onWindowPointerMove)
+  window.removeEventListener('pointerup', onWindowPointerUp)
+  if (app) app.destroy()
+})
 </script>
 
 <template>
@@ -117,9 +163,15 @@ onUnmounted(() => app && app.destroy())
     ref="canvas"
     :width="computedWidth" :height="computedHeight"
     :style="{ zoom: 1 / ssaa, touchAction: 'none' }"
-    @pointerdown="onPointerDown"
-    @pointermove="onPointerMove"
-    @pointerup="onPointerUp"
-    @pointerleave="onPointerUp"
   />
+  <!-- 视角校准准星 -->
+  <div
+    v-if="trackingCalibration"
+    class="fixed pointer-events-none z-9999"
+    :style="{ ...markerPos, transform: 'translate(-50%, -50%)' }"
+  >
+    <div class="w-6 h-6 border-2 border-red rounded-full" />
+    <div class="absolute left-1/2 top-0 w-0.5 h-full bg-red -translate-x-1/2" />
+    <div class="absolute top-1/2 left-0 h-0.5 w-full bg-red -translate-y-1/2" />
+  </div>
 </template>

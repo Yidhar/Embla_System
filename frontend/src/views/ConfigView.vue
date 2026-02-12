@@ -6,6 +6,7 @@ import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
 import { CONFIG, DEFAULT_CONFIG, DEFAULT_MODEL, MODELS, SYSTEM_PROMPT } from '@/utils/config'
+import { trackingCalibration } from '@/utils/live2dController'
 
 const selectedModel = ref(Object.entries(MODELS).find(([_, model]) => {
   return model.source === CONFIG.value.web_live2d.model.source
@@ -79,6 +80,21 @@ const accordionValue = useStorage('accordion-config', [])
               v-model="CONFIG.web_live2d.ssaa"
               :min="1" :max="4" show-buttons
             />
+          </ConfigItem>
+          <Divider class="m-1!" />
+          <ConfigItem name="视角校准" description="调整追踪参考点到模型面部位置，开启准星后拖动滑块使红色十字对准面部">
+            <div class="flex items-center gap-3 w-full">
+              <Slider
+                v-model="CONFIG.web_live2d.face_y_ratio"
+                class="flex-1" :min="0" :max="1" :step="0.01"
+              />
+              <Button
+                :label="trackingCalibration ? '关闭准星' : '显示准星'"
+                :severity="trackingCalibration ? 'danger' : 'secondary'"
+                size="small"
+                @click="trackingCalibration = !trackingCalibration"
+              />
+            </div>
           </ConfigItem>
         </div>
       </ConfigGroup>
