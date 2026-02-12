@@ -189,6 +189,7 @@ export const DEFAULT_CONFIG = {
   web_live2d: {
     ssaa: 2,
     model: MODELS[DEFAULT_MODEL],
+    face_y_ratio: 0.13, // 视角追踪面部Y轴位置比例（0=模型顶部, 1=底部）
   },
   system_check: {
     passed: false, // 系统检查是否通过

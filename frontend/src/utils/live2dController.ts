@@ -30,6 +30,7 @@ export type Live2dState = 'idle' | 'thinking' | 'talking'
 
 // ─── 全局响应式状态 ──────────────────────────────────
 export const live2dState = ref<Live2dState>('idle')
+export const trackingCalibration = ref(false) // 视角校准准星开关
 
 // ─── 内部变量 ────────────────────────────────────────
 let model: Live2DModel | null = null
