@@ -135,24 +135,24 @@ class ServiceManager:
             return False
     
     def start_all_servers(self):
-        """并行启动所有服务：API(可选)、Agent、TTS（MCP/MQTT 已从启动流程中排除）"""
+        """并行启动所有服务：API(可选)、MCP、Agent、TTS"""
         print("🚀 正在并行启动所有服务...")
         print("=" * 50)
         threads = []
         service_status = {}  # 服务状态跟踪
-        
+
         try:
             self._init_proxy_settings()
-            # 预检查所有端口，减少重复检查（不含 MCP）
+            # 预检查所有端口
             from system.config import get_server_port
             port_checks = {
-                'api': config.api_server.enabled and config.api_server.auto_start and 
+                'api': config.api_server.enabled and config.api_server.auto_start and
                       self.check_port_available(config.api_server.host, config.api_server.port),
-                # 'mcp': 已禁用，不再在 main 启动流程中启动 MCP
+                'mcp': self.check_port_available("0.0.0.0", get_server_port("mcp_server")),
                 'agent': self.check_port_available("0.0.0.0", get_server_port("agent_server")),
                 'tts': self.check_port_available("0.0.0.0", config.tts.port)
             }
-            
+
             # API服务器（可选）
             if port_checks['api']:
                 api_thread = threading.Thread(target=self._start_api_server, daemon=True)
@@ -162,14 +162,14 @@ class ServiceManager:
                 print(f"⚠️  API服务器: 端口 {config.api_server.port} 已被占用，跳过启动")
                 service_status['API'] = "端口占用"
 
-            # MCP服务器（已禁用：不再在 main 启动流程中启动）
-            # if port_checks['mcp']:
-            #     mcp_thread = threading.Thread(target=self._start_mcp_server, daemon=True)
-            #     threads.append(("MCP", mcp_thread))
-            #     service_status['MCP'] = "准备启动"
-            # else:
-            #     print(f"⚠️  MCP服务器: 端口 {get_server_port('mcp_server')} 已被占用，跳过启动")
-            #     service_status['MCP'] = "端口占用"
+            # MCP服务器（提供外部统一HTTP API）
+            if port_checks['mcp']:
+                mcp_thread = threading.Thread(target=self._start_mcp_server, daemon=True)
+                threads.append(("MCP", mcp_thread))
+                service_status['MCP'] = "准备启动"
+            else:
+                print(f"⚠️  MCP服务器: 端口 {get_server_port('mcp_server')} 已被占用，跳过启动")
+                service_status['MCP'] = "端口占用"
 
             # Agent服务器
             if port_checks['agent']:
@@ -258,26 +258,28 @@ class ServiceManager:
         except Exception as e:
             print(f"   ❌ API服务器启动失败: {e}", flush=True)
     
-    # MCP 已从启动流程中排除，不再在 main 中启动
-    # def _start_mcp_server(self):
-    #     """内部MCP服务器启动方法"""
-    #     try:
-    #         import uvicorn
-    #         from mcpserver.mcp_server import app
-    #         from system.config import get_server_port
-    #         uvicorn.run(
-    #             app,
-    #             host="0.0.0.0",
-    #             port=get_server_port("mcp_server"),
-    #             log_level="error",
-    #             access_log=False,
-    #             reload=False,
-    #             ws_ping_interval=None,
-    #             ws_ping_timeout=None
-    #         )
-    #     except Exception as e:
-    #         print(f"   ❌ MCP服务器启动失败: {e}")
-    
+    def _start_mcp_server(self):
+        """内部MCP服务器启动方法"""
+        try:
+            import uvicorn
+            from mcpserver.mcp_server import app
+            from system.config import get_server_port
+
+            uvicorn.run(
+                app,
+                host="0.0.0.0",
+                port=get_server_port("mcp_server"),
+                log_level="error",
+                access_log=False,
+                reload=False,
+                ws_ping_interval=None,
+                ws_ping_timeout=None
+            )
+        except Exception as e:
+            import traceback
+            print(f"   ❌ MCP服务器启动失败: {e}", flush=True)
+            traceback.print_exc()
+
     def _start_agent_server(self):
         """内部Agent服务器启动方法"""
         try:
@@ -332,10 +334,11 @@ class ServiceManager:
             logger.warning(f"记忆系统初始化失败: {e}")
     
     def _init_mcp_services(self):
-        """初始化MCP服务系统"""
+        """初始化MCP服务系统 - in-process 注册 agent"""
         try:
-            # MCP服务现在由mcpserver独立管理，这里只需要记录日志
-            logger.info("MCP服务系统由mcpserver独立管理")
+            from mcpserver.mcp_registry import auto_register_mcp
+            registered = auto_register_mcp()
+            logger.info(f"MCP服务已注册（in-process），共 {len(registered)} 个: {registered}")
         except Exception as e:
             logger.error(f"MCP服务系统初始化失败: {e}")
 
@@ -445,8 +448,8 @@ def _lazy_init_services():
         # conversation_core已删除，相关功能已迁移到apiserver
         n = None
         
-        # 初始化各个系统（MCP 已从启动流程中排除，不再初始化）
-        # service_manager._init_mcp_services()
+        # 初始化各个系统
+        service_manager._init_mcp_services()
         service_manager._init_voice_system()
         service_manager._init_memory_system()
         

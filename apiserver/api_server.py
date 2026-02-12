@@ -666,13 +666,13 @@ async def chat(request: ChatRequest):
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
-    """流式对话接口 - 流式文本处理交给streaming_tool_extractor用于TTS"""
+    """流式对话接口 - 使用 agentic tool loop 实现多轮工具调用"""
 
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="消息内容不能为空")
 
     async def generate_response() -> AsyncGenerator[str, None]:
-        complete_text = ""  # V19: 用于累积完整文本以生成音频
+        complete_text = ""  # 用于累积最终轮的完整文本（供 return_audio 模式使用）
         try:
             # 获取或创建会话ID
             session_id = message_manager.create_session(request.session_id)
@@ -680,10 +680,8 @@ async def chat_stream(request: ChatRequest):
             # 发送会话ID信息
             yield f"data: session_id: {session_id}\n\n"
 
-            # 注意：这里不触发后台分析，将在对话保存后触发
-
-            # 构建系统提示词（只使用对话风格提示词）
-            system_prompt = build_system_prompt(include_skills=True)
+            # 构建系统提示词（含工具调用指令）
+            system_prompt = build_system_prompt(include_skills=True, include_tool_instructions=True)
 
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(
@@ -691,16 +689,13 @@ async def chat_stream(request: ChatRequest):
             )
 
             # 初始化语音集成（根据voice_mode和return_audio决定）
-            # V19: 如果客户端请求返回音频，则在服务器端生成
             voice_integration = None
 
-            # V19: 混合模式下，如果请求return_audio，则在服务器生成音频
-            # 修复双音频问题：return_audio时不启用实时TTS，只在最后生成完整音频
             should_enable_tts = (
                 config.system.voice_enabled
-                and not request.return_audio  # 修复：return_audio时不启用实时TTS
+                and not request.return_audio  # return_audio时不启用实时TTS
                 and config.voice_realtime.voice_mode != "hybrid"
-                and not request.disable_tts  # 兼容旧版本的disable_tts
+                and not request.disable_tts
             )
 
             if should_enable_tts:
@@ -722,27 +717,29 @@ async def chat_stream(request: ChatRequest):
                     logger.info("[API Server] 客户端禁用了TTS (disable_tts=True)")
 
             # 初始化流式文本切割器（仅用于TTS处理）
-            # 始终创建tool_extractor以累积文本内容，确保日志保存
             tool_extractor = None
             try:
                 from .streaming_tool_extractor import StreamingToolCallExtractor
 
                 tool_extractor = StreamingToolCallExtractor()
-                # 只有在需要实时TTS且不是return_audio模式时，才设置voice_integration
                 if voice_integration and not request.return_audio:
                     tool_extractor.set_callbacks(
-                        on_text_chunk=None,  # 不需要回调，直接处理TTS
+                        on_text_chunk=None,
                         voice_integration=voice_integration,
                     )
             except Exception as e:
                 print(f"流式文本切割器初始化失败: {e}")
 
-            # 使用整合后的流式处理（支持 reasoning_content）
-            llm_service = get_llm_service()
-            complete_reasoning = ""  # 累积推理内容
-            async for chunk in llm_service.stream_chat_with_context(messages, config.api.temperature):
-                # 新格式: chunk 是 "data: <base64_json>\n\n"，JSON 结构为 {"type": "content"|"reasoning", "text": "..."}
-                # V19: 如果需要返回音频，累积文本（只累积 content，不累积 reasoning）
+            # ====== Agentic Tool Loop ======
+            from .agentic_tool_loop import run_agentic_loop
+
+            complete_reasoning = ""
+            # 记录每轮的content，用于在每轮结束时完成TTS处理
+            current_round_text = ""
+            is_tool_event = False  # 标记当前是否在处理工具事件（不送TTS）
+
+            async for chunk in run_agentic_loop(messages, session_id):
+                # chunk 格式: "data: <base64_json>\n\n"
                 if chunk.startswith("data: "):
                     try:
                         import base64
@@ -756,43 +753,73 @@ async def chat_stream(request: ChatRequest):
                             chunk_text = chunk_data.get("text", "")
 
                             if chunk_type == "content":
-                                # 累积正式回答内容
+                                # 累积本轮内容（TTS + 保存）
+                                current_round_text += chunk_text
                                 if request.return_audio:
                                     complete_text += chunk_text
-                                # TTS 只处理 content，不处理 reasoning
-                                if tool_extractor:
+                                # TTS：每轮的正常content都发送（不含工具内容）
+                                if tool_extractor and not is_tool_event:
                                     asyncio.create_task(tool_extractor.process_text_chunk(chunk_text))
                             elif chunk_type == "reasoning":
-                                # 累积推理内容（可选：用于日志或 UI 显示）
                                 complete_reasoning += chunk_text
+                            elif chunk_type == "round_end":
+                                # 每轮结束时，完成TTS处理并重置
+                                has_more = chunk_data.get("has_more", False)
+                                if has_more and tool_extractor and not request.return_audio:
+                                    # 中间轮结束，flush TTS缓冲
+                                    try:
+                                        await tool_extractor.finish_processing()
+                                    except Exception as e:
+                                        logger.debug(f"中间轮TTS flush失败: {e}")
+                                    if voice_integration:
+                                        try:
+                                            threading.Thread(
+                                                target=voice_integration.finish_processing,
+                                                daemon=True,
+                                            ).start()
+                                        except Exception:
+                                            pass
+                                    # 重新初始化 tool_extractor 给下一轮使用
+                                    try:
+                                        tool_extractor = StreamingToolCallExtractor()
+                                        if voice_integration and not request.return_audio:
+                                            tool_extractor.set_callbacks(
+                                                on_text_chunk=None,
+                                                voice_integration=voice_integration,
+                                            )
+                                    except Exception:
+                                        pass
+                                current_round_text = ""
+                            elif chunk_type == "tool_calls":
+                                is_tool_event = True
+                            elif chunk_type == "tool_results":
+                                is_tool_event = True
+                            elif chunk_type == "round_start":
+                                # 新一轮开始，重置工具事件标记
+                                is_tool_event = False
 
-                            # 保留 type 字段，将完整 JSON 结构重新 base64 编码后 yield
-                            chunk_json = json_module.dumps({"type": chunk_type, "text": chunk_text})
-                            text_b64 = base64.b64encode(chunk_json.encode("utf-8")).decode("ascii")
-                            yield f"data: {text_b64}\n\n"
+                            # 透传所有 chunk 给前端（content/reasoning/tool events）
+                            yield chunk
                             continue
                     except Exception as e:
                         logger.error(f"[API Server] 流式数据解析错误: {e}")
 
                 yield chunk
 
-            # 处理完成
+            # ====== 流式处理完成 ======
 
             # V19: 如果请求返回音频，在这里生成并返回音频URL
             if request.return_audio and complete_text:
                 try:
                     logger.info(f"[API Server V19] 生成音频，文本长度: {len(complete_text)}")
 
-                    # 使用服务器端的TTS生成音频
                     from voice.tts_wrapper import generate_speech_safe
 
-                    # 生成音频文件
                     tts_voice = config.voice_realtime.tts_voice or "zh-CN-XiaoyiNeural"
                     audio_file = generate_speech_safe(
                         text=complete_text, voice=tts_voice, response_format="mp3", speed=1.0
                     )
 
-                    # 直接使用voice/output播放音频，不再返回给客户端
                     try:
                         from voice.output.voice_integration import get_voice_integration
 
@@ -801,59 +828,52 @@ async def chat_stream(request: ChatRequest):
                         logger.info(f"[API Server V19] 音频已直接播放: {audio_file}")
                     except Exception as e:
                         logger.error(f"[API Server V19] 音频播放失败: {e}")
-                        # 如果播放失败，仍然返回给客户端作为备选
                         yield f"data: audio_url: {audio_file}\n\n"
 
                 except Exception as e:
                     logger.error(f"[API Server V19] 音频生成失败: {e}")
-                    # traceback已经在文件顶部导入，直接使用
-                    print("[API Server V19] 详细错误信息:")
                     traceback.print_exc()
 
-            # 完成流式文本切割器处理（非return_audio模式，不阻塞）
+            # 完成流式文本切割器处理（最终轮）
             if tool_extractor and not request.return_audio:
                 try:
-                    # 1.将剩余文本发送到voice_integration中的缓冲区
                     await tool_extractor.finish_processing()
-                    pass
                 except Exception as e:
                     print(f"流式文本切割器完成处理错误: {e}")
 
-            # 完成语音处理
-            if voice_integration and not request.return_audio:  # V19: return_audio模式不需要这里的处理
+            # 完成语音处理（最终轮）
+            if voice_integration and not request.return_audio:
                 try:
                     threading.Thread(
-                        # 2.处理缓冲区中的剩余文本
                         target=voice_integration.finish_processing,
                         daemon=True,
                     ).start()
                 except Exception as e:
                     print(f"语音集成完成处理错误: {e}")
 
-            # 流式处理完成后，获取完整文本用于保存
+            # 获取完整文本用于保存
             complete_response = ""
             if tool_extractor:
                 try:
-                    # 获取完整文本内容
                     complete_response = tool_extractor.get_complete_text()
                 except Exception as e:
                     print(f"获取完整响应文本失败: {e}")
             elif request.return_audio:
-                # V19: 如果是return_audio模式，使用累积的文本
                 complete_response = complete_text
 
             # 统一保存对话历史与日志
             _save_conversation_and_logs(session_id, request.message, complete_response)
 
-            # 在用户消息保存到历史后触发后台意图分析（除非明确跳过）
+            # Agentic loop 模式下跳过后台意图分析（工具调用已在loop中处理）
+            # 仅在非 agentic 模式或明确需要时触发后台分析
             if not request.skip_intent_analysis:
-                _trigger_background_analysis(session_id)
+                # 后台分析仍可用于 Live2D 检测等辅助功能
+                pass
 
             # [DONE] 信号已由 llm_service.stream_chat_with_context 发送，无需重复
 
         except Exception as e:
             print(f"流式对话处理错误: {e}")
-            # 使用顶部导入的traceback
             traceback.print_exc()
             yield f"data: error:{str(e)}\n\n"
 
@@ -1092,6 +1112,9 @@ _tool_status_store: Dict[str, Dict] = {"current": {"message": "", "visible": Fal
 # Web前端 AgentServer 回复存储（轮询获取）
 _clawdbot_replies: list = []
 
+# Web前端 Live2D 动作队列（轮询获取）
+_live2d_actions: list = []
+
 
 @app.get("/tool_status")
 async def get_tool_status():
@@ -1105,6 +1128,14 @@ async def get_clawdbot_replies():
     replies = list(_clawdbot_replies)
     _clawdbot_replies.clear()
     return {"replies": replies}
+
+
+@app.get("/live2d/actions")
+async def get_live2d_actions():
+    """获取并清空 Live2D 动作队列（供Web前端轮询）"""
+    actions = list(_live2d_actions)
+    _live2d_actions.clear()
+    return {"actions": actions}
 
 
 @app.post("/tool_notification")
@@ -1326,6 +1357,14 @@ async def ui_notification(payload: Dict[str, Any]):
             _clawdbot_replies.append(ai_response)
             logger.info(f"[UI通知] AgentServer 回复已存储到队列，长度: {len(ai_response)}")
             return {"success": True, "message": "AgentServer 回复已存储"}
+
+        # 处理 Live2D 动作
+        if action == "live2d_action":
+            action_name = payload.get("action_name", "")
+            if action_name:
+                _live2d_actions.append(action_name)
+                logger.info(f"[UI通知] Live2D 动作已入队: {action_name}")
+                return {"success": True, "message": f"Live2D 动作 {action_name} 已入队"}
 
         if action == "show_tool_status" and status_text:
             _emit_tool_status_to_ui(status_text, auto_hide_ms)

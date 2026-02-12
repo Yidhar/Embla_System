@@ -290,6 +290,10 @@ export class CoreApiClient extends ApiClient {
     const params = status ? `?status=${status}` : ''
     return this.instance.get(`/mcp/tasks${params}`)
   }
+
+  getLive2dActions(): Promise<{ actions: string[] }> {
+    return this.instance.get('/live2d/actions')
+  }
 }
 
 export default new CoreApiClient(8000)

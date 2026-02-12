@@ -7,11 +7,14 @@
 
 import asyncio
 import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from system.config import config, logger
 from langchain_openai import ChatOpenAI
 
 from system.config import get_prompt
+
+if TYPE_CHECKING:
+    import httpx
 
 
 class ConversationAnalyzer:
@@ -40,11 +43,38 @@ class ConversationAnalyzer:
         conversation = "\n".join(lines)
 
         available_tools = ""
-        return get_prompt(
+
+        # 加载主分析提示词
+        base_prompt = get_prompt(
             "conversation_analyzer_prompt",
             conversation=conversation,
             available_tools=available_tools,
         )
+
+        # 加载工具调度提示词（独立文件，拼接到主提示词后面）
+        try:
+            available_mcp_tools = self._get_mcp_tools_description()
+            tool_dispatch = get_prompt(
+                "tool_dispatch_prompt",
+                available_mcp_tools=available_mcp_tools,
+            )
+            return base_prompt + "\n" + tool_dispatch
+        except Exception as e:
+            logger.debug(f"加载工具调度提示词失败，仅使用基础提示词: {e}")
+            return base_prompt
+
+    def _get_mcp_tools_description(self) -> str:
+        """获取MCP可用工具描述，供提示词注入。自动触发注册（幂等）。"""
+        try:
+            from mcpserver.mcp_registry import auto_register_mcp
+            auto_register_mcp()  # 幂等，重复调用不会重新注册
+
+            from mcpserver.mcp_manager import get_mcp_manager
+            manager = get_mcp_manager()
+            desc = manager.format_available_services()
+            return desc if desc else "（暂无MCP服务注册）"
+        except Exception:
+            return "（MCP服务未启动）"
 
     def analyze(self, messages: List[Dict[str, str]]):
         logger.info(f"[ConversationAnalyzer] 开始分析对话，消息数量: {len(messages)}")
@@ -209,6 +239,14 @@ class BackgroundAnalyzer:
     def __init__(self):
         self.analyzer = ConversationAnalyzer()
         self.running_analyses = {}
+        self._http_client: Optional["httpx.AsyncClient"] = None
+
+    def _get_http_client(self) -> "httpx.AsyncClient":
+        """获取共享的 httpx.AsyncClient 实例（lazy init）"""
+        if self._http_client is None or self._http_client.is_closed:
+            import httpx
+            self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(timeout=150.0, connect=10.0))
+        return self._http_client
 
     async def analyze_intent_async(self, messages: List[Dict[str, str]], session_id: str):
         """异步意图分析 - 基于博弈论的背景分析机制"""
@@ -308,10 +346,6 @@ class BackgroundAnalyzer:
     async def _notify_ui_tool_calls(self, tool_calls: List[Dict[str, Any]], session_id: str):
         """批量通知UI工具调用开始 - 优化网络请求"""
         try:
-            import httpx
-
-            # 批量构建工具调用通知
-            # 批量发送通知（减少HTTP请求次数）
             notification_payload = {
                 "session_id": session_id,
                 "tool_calls": [
@@ -329,10 +363,9 @@ class BackgroundAnalyzer:
 
             from system.config import get_server_port
 
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.post(
-                    f"http://localhost:{get_server_port('api_server')}/tool_notification", json=notification_payload
-                )
+            await self._get_http_client().post(
+                f"http://localhost:{get_server_port('api_server')}/tool_notification", json=notification_payload
+            )
 
         except Exception as e:
             logger.error(f"批量通知UI工具调用失败: {e}")
@@ -340,8 +373,6 @@ class BackgroundAnalyzer:
     async def _notify_ui_tool_status(self, session_id: str, message: str, stage: str, auto_hide_ms: int) -> None:
         """通知UI显示工具调用相关状态"""
         try:
-            import httpx
-
             from system.config import get_server_port
 
             notification_payload = {
@@ -352,23 +383,30 @@ class BackgroundAnalyzer:
                 "message": message,
             }
 
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.post(
-                    f"http://localhost:{get_server_port('api_server')}/tool_notification",
-                    json=notification_payload,
-                )
+            await self._get_http_client().post(
+                f"http://localhost:{get_server_port('api_server')}/tool_notification",
+                json=notification_payload,
+            )
         except Exception as e:
             logger.error(f"通知UI工具状态失败: {e}")
 
     async def _dispatch_tool_calls(
         self, tool_calls: List[Dict[str, Any]], session_id: str, analysis_session_id: Optional[str] = None
     ):
-        """将工具调用分发到OpenClaw"""
+        """将工具调用分发到不同服务"""
         try:
             openclaw_calls = [tc for tc in tool_calls if tc.get("agentType") == "openclaw"]
+            live2d_calls = [tc for tc in tool_calls if tc.get("agentType") == "live2d"]
+            mcp_calls = [tc for tc in tool_calls if tc.get("agentType") == "mcp"]
 
             if openclaw_calls:
                 await self._send_to_openclaw(openclaw_calls, session_id, analysis_session_id)
+
+            if live2d_calls:
+                await self._send_live2d_actions(live2d_calls, session_id)
+
+            if mcp_calls:
+                await self._send_to_mcp(mcp_calls, session_id)
 
         except Exception as e:
             logger.error(f"工具调用分发失败: {e}")
@@ -382,9 +420,9 @@ class BackgroundAnalyzer:
         文档: https://docs.openclaw.ai/automation/webhook
         """
         try:
-            import httpx
-
             from system.config import get_server_port
+
+            client = self._get_http_client()
 
             for call in openclaw_calls:
                 task_type = call.get("task_type", "message")
@@ -394,45 +432,42 @@ class BackgroundAnalyzer:
                     logger.warning(f"[博弈论] OpenClaw任务缺少message字段，跳过: {call}")
                     continue
 
-                # HTTP 超时需要比 OpenClaw 的 timeoutSeconds 更长
-                openclaw_timeout = 120
-                async with httpx.AsyncClient(timeout=openclaw_timeout + 30) as client:
-                    # 所有任务类型都通过 /openclaw/send 发送
-                    # OpenClaw Agent 会自行处理消息内容
-                    payload = {
-                        "message": message,
-                        "session_key": call.get("session_key", f"naga_{session_id}"),
-                        "name": "Naga",  # hook 名称标识
-                        "wake_mode": "now",
-                        "timeout_seconds": openclaw_timeout,  # 同步等待结果
-                    }
+                # 所有任务类型都通过 /openclaw/send 发送
+                # OpenClaw Agent 会自行处理消息内容
+                payload = {
+                    "message": message,
+                    "session_key": call.get("session_key", f"naga_{session_id}"),
+                    "name": "Naga",  # hook 名称标识
+                    "wake_mode": "now",
+                    "timeout_seconds": 120,  # 同步等待结果
+                }
 
-                    # 如果是定时任务或提醒，在消息中包含调度信息
-                    if task_type == "cron" and call.get("schedule"):
-                        payload["message"] = f"[定时任务 cron: {call.get('schedule')}] {message}"
-                    elif task_type == "reminder" and call.get("at"):
-                        payload["message"] = f"[提醒 在 {call.get('at')} 后] {message}"
+                # 如果是定时任务或提醒，在消息中包含调度信息
+                if task_type == "cron" and call.get("schedule"):
+                    payload["message"] = f"[定时任务 cron: {call.get('schedule')}] {message}"
+                elif task_type == "reminder" and call.get("at"):
+                    payload["message"] = f"[提醒 在 {call.get('at')} 后] {message}"
 
-                    response = await client.post(
-                        f"http://localhost:{get_server_port('agent_server')}/openclaw/send", json=payload
+                response = await client.post(
+                    f"http://localhost:{get_server_port('agent_server')}/openclaw/send", json=payload
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    replies = result.get("replies", [])
+                    task_status = result.get("task", {}).get("status", "unknown")
+                    logger.info(
+                        f"[博弈论] OpenClaw {task_type} 任务完成: status={task_status}, replies={len(replies)}条"
                     )
 
-                    if response.status_code == 200:
-                        result = response.json()
-                        replies = result.get("replies", [])
-                        task_status = result.get("task", {}).get("status", "unknown")
-                        logger.info(
-                            f"[博弈论] OpenClaw {task_type} 任务完成: status={task_status}, replies={len(replies)}条"
-                        )
-
-                        if replies:
-                            for i, r in enumerate(replies):
-                                logger.info(
-                                    f"[博弈论] 发送第{i + 1}/{len(replies)}条回复到UI: {r[:50] if r else 'empty'}..."
-                                )
-                                await self._notify_ui_clawdbot_reply(session_id, r)
-                    else:
-                        logger.error(f"[博弈论] OpenClaw任务发送失败: {response.status_code} - {response.text}")
+                    if replies:
+                        for i, r in enumerate(replies):
+                            logger.info(
+                                f"[博弈论] 发送第{i + 1}/{len(replies)}条回复到UI: {r[:50] if r else 'empty'}..."
+                            )
+                            await self._notify_ui_clawdbot_reply(session_id, r)
+                else:
+                    logger.error(f"[博弈论] OpenClaw任务发送失败: {response.status_code} - {response.text}")
 
         except Exception as e:
             logger.error(f"[博弈论] 发送OpenClaw任务失败: {e}")
@@ -440,8 +475,6 @@ class BackgroundAnalyzer:
     async def _notify_ui_clawdbot_reply(self, session_id: str, reply: str):
         """将 ClawdBot 回复发送到 UI 显示"""
         try:
-            import httpx
-
             from system.config import get_server_port
 
             payload = {
@@ -450,21 +483,97 @@ class BackgroundAnalyzer:
                 "ai_response": reply,
             }
 
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await self._get_http_client().post(
+                f"http://localhost:{get_server_port('api_server')}/ui_notification",
+                json=payload,
+            )
+            if response.status_code == 200:
+                logger.info(f"[博弈论] ClawdBot 回复已发送到 UI: {reply[:80]}...")
+            else:
+                logger.error(f"[博弈论] ClawdBot 回复发送失败: {response.status_code}")
+
+        except Exception as e:
+            logger.error(f"[博弈论] 发送 ClawdBot 回复到 UI 失败: {e}")
+
+    async def _send_live2d_actions(self, live2d_calls: List[Dict[str, Any]], session_id: str):
+        """将 Live2D 动作发送到 UI"""
+        try:
+            from system.config import get_server_port
+
+            client = self._get_http_client()
+
+            for call in live2d_calls:
+                action_name = call.get("action", "")
+                if not action_name:
+                    continue
+
+                payload = {
+                    "session_id": session_id,
+                    "action": "live2d_action",
+                    "action_name": action_name,
+                }
+
                 response = await client.post(
                     f"http://localhost:{get_server_port('api_server')}/ui_notification",
                     json=payload,
                 )
                 if response.status_code == 200:
-                    logger.info(f"[博弈论] ClawdBot 回复已发送到 UI: {reply[:80]}...")
+                    logger.info(f"[Live2D] 动作已发送到 UI: {action_name}")
                 else:
-                    logger.error(f"[博弈论] ClawdBot 回复发送失败: {response.status_code}")
+                    logger.error(f"[Live2D] 动作发送失败: {response.status_code}")
 
         except Exception as e:
-            logger.error(f"[博弈论] 发送 ClawdBot 回复到 UI 失败: {e}")
+            logger.error(f"[Live2D] 发送动作到 UI 失败: {e}")
 
+    async def _send_to_mcp(self, mcp_calls: List[Dict[str, Any]], session_id: str):
+        """将MCP工具调用直接 in-process 路由到 MCPManager（多个调用并行执行）"""
+        try:
+            from mcpserver.mcp_manager import get_mcp_manager
 
-# 全局分析器实例
+            manager = get_mcp_manager()
+
+            async def _execute_one(call: Dict[str, Any]):
+                service_name = call.get("service_name", "")
+                tool_name = call.get("tool_name", "")
+                if not service_name and not tool_name:
+                    logger.warning(f"[MCP] 工具调用缺少service_name和tool_name，跳过: {call}")
+                    return
+                try:
+                    result = await manager.unified_call(service_name, call)
+                    logger.info(f"[MCP] 工具调用完成: service={service_name}, result={result[:200] if result else ''}")
+                    await self._notify_ui_mcp_result(session_id, service_name, tool_name, result)
+                except Exception as e:
+                    logger.error(f"[MCP] 工具调用失败: service={service_name}, error={e}")
+                    await self._notify_ui_mcp_result(
+                        session_id, service_name, tool_name, f'{{"status": "error", "message": "{e}"}}'
+                    )
+
+            # 多个 MCP 调用并行执行
+            await asyncio.gather(*[_execute_one(call) for call in mcp_calls], return_exceptions=True)
+
+        except Exception as e:
+            logger.error(f"[MCP] 发送MCP工具调用失败: {e}")
+
+    async def _notify_ui_mcp_result(self, session_id: str, service_name: str, tool_name: str, result: str):
+        """将 MCP 工具调用结果推送到 UI"""
+        try:
+            from system.config import get_server_port
+
+            payload = {
+                "session_id": session_id,
+                "action": "show_mcp_result",
+                "service_name": service_name,
+                "tool_name": tool_name,
+                "result": result,
+            }
+
+            await self._get_http_client().post(
+                f"http://localhost:{get_server_port('api_server')}/ui_notification",
+                json=payload,
+            )
+            logger.info(f"[MCP] 结果已推送到 UI: service={service_name}")
+        except Exception as e:
+            logger.error(f"[MCP] 推送结果到 UI 失败: {e}")
 _background_analyzer = None
 
 

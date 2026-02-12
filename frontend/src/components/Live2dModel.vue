@@ -1,7 +1,8 @@
 <script lang="ts">
 import { Live2DModel } from 'pixi-live2d-display/cubism4'
 import * as PIXI from 'pixi.js'
-import { computed, nextTick, onMounted, onUnmounted, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
+import { destroyController, initController, startTracking, stopTracking, updateTracking } from '@/utils/live2dController'
 
 declare global {
   interface Window {
@@ -29,6 +30,35 @@ const computedWidth = computed(() => width * ssaa)
 const computedHeight = computed(() => height * ssaa)
 
 const canvas = useTemplateRef('canvas')
+const isDragging = ref(false)
+
+function onPointerDown(e: PointerEvent) {
+  isDragging.value = true
+  ;(e.target as Element).setPointerCapture(e.pointerId)
+  startTracking()
+  updateTrackingFromEvent(e)
+}
+
+function onPointerMove(e: PointerEvent) {
+  if (!isDragging.value) return
+  updateTrackingFromEvent(e)
+}
+
+function onPointerUp(e: PointerEvent) {
+  if (!isDragging.value) return
+  isDragging.value = false
+  ;(e.target as Element).releasePointerCapture(e.pointerId)
+  stopTracking()
+}
+
+function updateTrackingFromEvent(e: PointerEvent) {
+  const el = canvas.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  const normalizedX = ((e.clientX - rect.left) / rect.width) * 2 - 1
+  const normalizedY = ((e.clientY - rect.top) / rect.height) * 2 - 1
+  updateTracking(normalizedX, normalizedY)
+}
 
 onMounted(async () => {
   if (!canvas.value)
@@ -64,8 +94,10 @@ onMounted(async () => {
 
       model.autoInteract = false
       app.stage.addChild(model)
+      initController(rawModel)
 
       onCleanUp(() => {
+        destroyController()
         app.stage.removeChild(model)
         model.destroy()
         handles.forEach(handle => handle.stop())
@@ -81,5 +113,13 @@ onUnmounted(() => app && app.destroy())
 </script>
 
 <template>
-  <canvas ref="canvas" :width="computedWidth" :height="computedHeight" :style="{ zoom: 1 / ssaa }" />
+  <canvas
+    ref="canvas"
+    :width="computedWidth" :height="computedHeight"
+    :style="{ zoom: 1 / ssaa, touchAction: 'none' }"
+    @pointerdown="onPointerDown"
+    @pointermove="onPointerMove"
+    @pointerup="onPointerUp"
+    @pointerleave="onPointerUp"
+  />
 </template>

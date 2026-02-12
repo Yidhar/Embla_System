@@ -1,8 +1,12 @@
 export const decoder = new TextDecoder('utf-8')
 
 export interface StreamChunk {
-  type: 'content' | 'reasoning'
-  text: string
+  type: 'content' | 'reasoning' | 'content_clean' | 'round_start' | 'tool_calls' | 'tool_results' | 'round_end'
+  text?: string
+  round?: number
+  calls?: Array<{ agentType: string, service_name?: string, tool_name?: string, message?: string }>
+  results?: Array<{ service_name: string, tool_name?: string, result: string, status: string }>
+  has_more?: boolean
 }
 
 export function decodeBase64(base64: string) {
@@ -20,7 +24,7 @@ export function decodeStreamChunk(base64: string): StreamChunk {
   const decoded = decodeBase64(base64)
   try {
     const parsed = JSON.parse(decoded)
-    if (parsed && typeof parsed === 'object' && 'type' in parsed && 'text' in parsed) {
+    if (parsed && typeof parsed === 'object' && 'type' in parsed) {
       return parsed as StreamChunk
     }
   }

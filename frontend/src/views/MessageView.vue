@@ -1,13 +1,14 @@
 <script lang="ts">
 import { onKeyStroke, useEventListener } from '@vueuse/core'
-import { nextTick, onMounted, onUnmounted, ref, useTemplateRef } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
 import API from '@/api/core'
 import BoxContainer from '@/components/BoxContainer.vue'
 import MessageItem from '@/components/MessageItem.vue'
 import { startToolPolling, stopToolPolling, toolMessage } from '@/composables/useToolStatus'
 import { CONFIG } from '@/utils/config'
+import { live2dState } from '@/utils/live2dController'
 import { CURRENT_SESSION_ID, loadCurrentSession, MESSAGES, newSession, switchSession } from '@/utils/session'
-import { speak } from '@/utils/tts'
+import { isPlaying, speak } from '@/utils/tts'
 
 export function chatStream(content: string) {
   MESSAGES.value.push({ role: 'user', content })
@@ -21,15 +22,49 @@ export function chatStream(content: string) {
     }
     MESSAGES.value.push({ role: 'assistant', content: '', reasoning: '', generating: true })
     const message = MESSAGES.value[MESSAGES.value.length - 1]!
+    // 追踪纯LLM内容（不含工具状态标记），用于TTS朗读
+    let spokenContent = ''
+
+    live2dState.value = 'thinking'
 
     for await (const chunk of response) {
       if (chunk.type === 'reasoning') {
         message.reasoning = (message.reasoning || '') + chunk.text
       }
-      else {
+      else if (chunk.type === 'content') {
         message.content += chunk.text
+        spokenContent += chunk.text
       }
-      window.dispatchEvent(new CustomEvent('token', { detail: chunk.text }))
+      else if (chunk.type === 'content_clean') {
+        // 后端解析出工具调用后，发送清理后的纯文本替换掉含有 ```tool``` 块的原文
+        message.content = chunk.text || ''
+        spokenContent = chunk.text || ''
+      }
+      else if (chunk.type === 'tool_calls') {
+        // 显示工具调用状态
+        const calls = chunk.calls || []
+        const callDesc = calls.map((c: any) => {
+          const name = c.service_name || c.agentType || 'tool'
+          return `🔧 ${name}`
+        }).join(', ')
+        message.content += `\n\n> 正在执行工具: ${callDesc}...\n`
+      }
+      else if (chunk.type === 'tool_results') {
+        // 显示工具结果摘要
+        const results = chunk.results || []
+        for (const r of results) {
+          const status = r.status === 'success' ? '✅' : '❌'
+          const label = r.tool_name ? `${r.service_name}: ${r.tool_name}` : r.service_name
+          message.content += `\n> ${status} ${label}\n`
+        }
+        message.content += '\n'
+      }
+      else if (chunk.type === 'round_start' && (chunk.round ?? 0) > 1) {
+        // 多轮分隔
+        message.content += '\n---\n\n'
+      }
+      // round_end 不需要特殊处理
+      window.dispatchEvent(new CustomEvent('token', { detail: chunk.text || '' }))
     }
 
     delete message.generating
@@ -37,10 +72,15 @@ export function chatStream(content: string) {
       delete message.reasoning
     }
 
-    if (CONFIG.value.system.voice_enabled && message.content) {
-      speak(message.content)
+    if (CONFIG.value.system.voice_enabled && spokenContent) {
+      live2dState.value = 'talking'
+      speak(spokenContent)
+    }
+    else {
+      live2dState.value = 'idle'
     }
   }).catch((err) => {
+    live2dState.value = 'idle'
     MESSAGES.value.push({ role: 'system', content: `Error: ${err.message}` })
   })
 }
@@ -50,6 +90,13 @@ export function chatStream(content: string) {
 const input = defineModel<string>()
 const containerRef = useTemplateRef('containerRef')
 const fileInput = ref<HTMLInputElement | null>(null)
+
+// TTS 结束后回到 idle
+watch(isPlaying, (playing) => {
+  if (!playing && live2dState.value === 'talking') {
+    live2dState.value = 'idle'
+  }
+})
 
 function scrollToBottom() {
   containerRef.value?.scrollToBottom()
@@ -72,7 +119,10 @@ onUnmounted(() => {
   stopToolPolling()
 })
 useEventListener('token', scrollToBottom)
-onKeyStroke('Enter', sendMessage)
+onKeyStroke('Enter', (e) => {
+  if (e.isComposing) return
+  sendMessage()
+})
 
 // Session history
 const showHistory = ref(false)
@@ -168,18 +218,6 @@ async function handleFileUpload(event: Event) {
   }
   target.value = ''
 }
-
-onMounted(() => {
-  loadCurrentSession()
-  startToolPolling()
-  scrollToBottom()
-  startToolPolling()
-})
-onUnmounted(() => {
-  stopToolPolling()
-})
-useEventListener('token', scrollToBottom)
-onKeyStroke('Enter', sendMessage)
 </script>
 
 <template>
