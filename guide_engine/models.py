@@ -15,6 +15,7 @@ class GuideRequest(BaseModel):
     images: list[str] = Field(default_factory=list, description="图片base64列表")
     auto_screenshot: bool = Field(default=False, description="是否自动截图")
     history: list[dict[str, Any]] = Field(default_factory=list, description="可选历史消息")
+    force_query_mode: str | None = Field(default=None, description="强制查询模式，跳过路由")
 
 
 class GuideReference(BaseModel):
@@ -34,6 +35,7 @@ class GuideResponse(BaseModel):
 @dataclass(slots=True)
 class GuideEngineSettings:
     enabled: bool = True
+    gamedata_dir: str = "./data"
     chroma_persist_dir: str = "./data/chroma"
     embedding_api_base_url: str | None = None
     embedding_api_key: str | None = None
@@ -41,6 +43,7 @@ class GuideEngineSettings:
     vision_api_base_url: str | None = None
     vision_api_key: str | None = None
     vision_api_model: str | None = None
+    vision_api_type: str = "openai"
     neo4j_uri: str = "neo4j://127.0.0.1:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: str = "your_password"
@@ -54,15 +57,19 @@ class GuideEngineSettings:
         ge = config.guide_engine
 
         prompt_dir = ge.prompt_dir
+        gamedata_dir = ge.gamedata_dir
         chroma_persist_dir = ge.chroma_persist_dir
 
         if prompt_dir.startswith("./"):
             prompt_dir = str((root / prompt_dir[2:]).resolve())
+        if gamedata_dir.startswith("./"):
+            gamedata_dir = str((root / gamedata_dir[2:]).resolve())
         if chroma_persist_dir.startswith("./"):
             chroma_persist_dir = str((root / chroma_persist_dir[2:]).resolve())
 
         return cls(
             enabled=ge.enabled,
+            gamedata_dir=gamedata_dir,
             chroma_persist_dir=chroma_persist_dir,
             embedding_api_base_url=ge.embedding_api_base_url or config.api.base_url,
             embedding_api_key=ge.embedding_api_key or config.api.api_key,
@@ -70,6 +77,7 @@ class GuideEngineSettings:
             vision_api_base_url=ge.vision_api_base_url or config.api.base_url,
             vision_api_key=ge.vision_api_key or config.api.api_key,
             vision_api_model=ge.vision_api_model or config.api.model,
+            vision_api_type=ge.vision_api_type,
             neo4j_uri=ge.neo4j_uri,
             neo4j_user=ge.neo4j_user,
             neo4j_password=ge.neo4j_password,

@@ -1,135 +1,111 @@
-# Game Guide 从零配置与测试指南
+# Game Guide 攻略引擎测试指南
 
-本文面向测试同学，目标是从零开始完成环境准备、配置、验证，并覆盖核心能力：
+本文面向测试同学，提供从零开始的环境准备、功能验证、真实场景测试方法和过关标准。
 
-1. `game_guide` MCP 服务可注册并调用。
-2. 攻略调用默认自动截图注入（无需用户上传图片）。
-3. `guide_engine` 配置可生效（包含默认模型、Neo4j 配置与开关项）。
+## 目录
+
+- [1. 测试环境要求](#1-测试环境要求)
+- [2. 从零开始：安装与配置](#2-从零开始安装与配置)
+- [3. 依赖服务准备](#3-依赖服务准备)
+- [4. 快速功能验证（无需外部服务）](#4-快速功能验证无需外部服务)
+- [5. 新功能测试场景](#5-新功能测试场景)
+- [6. 真实场景集成测试](#6-真实场景集成测试)
+- [7. 过关标准](#7-过关标准)
+- [8. 常见问题排查](#8-常见问题排查)
+
+---
 
 ## 1. 测试环境要求
 
-- Python 3.11
-- 推荐使用 `uv`（已在项目中使用）
-- 若要验证自动截图成功，机器需有图形桌面和可用显示器
+### 1.1 基础环境
 
-说明：
+- **Python**: 3.11+
+- **包管理器**: 推荐使用 `uv`（项目已配置）
+- **操作系统**: Linux/macOS/Windows
+- **图形环境**: 若测试自动截图功能，需要图形桌面和显示器
 
-- 无桌面环境（如纯 SSH 服务器）时，自动截图可能失败。
-- 截图失败不会导致服务崩溃，返回里会出现 `metadata.auto_screenshot_error`。
-- 测试环境可用 `TEST_PIC_PATH` 指定本地图片，触发“以图代截屏”模式。
+### 1.2 外部服务（可选）
 
-## 2. 从零开始：安装与初始化
+| 服务 | 用途 | 必需性 | 说明 |
+|------|------|--------|------|
+| **Embedding API** | 向量嵌入 | 必需 | OpenAI 兼容接口 |
+| **LLM API** | 生成回答 | 集成测试必需 | 支持视觉模型更佳 |
+| **Neo4j** | 知识图谱 | 可选 | 不启动会降级，但图谱功能不可用 |
+| **ChromaDB** | 向量数据库 | 自动创建 | 本地持久化，无需额外服务 |
+
+---
+
+## 2. 从零开始：安装与配置
 
 ### 2.1 安装依赖
 
-推荐：
-
 ```bash
+# 推荐方式
 uv sync
-```
 
-备选：
-
-```bash
+# 备选方式
 pip install -r requirements.txt
 ```
 
 ### 2.2 准备配置文件
 
-如果当前目录没有 `config.json`，先复制：
-
 ```bash
+# 复制示例配置
 cp config.json.example config.json
 ```
 
-说明：
+### 2.3 最小配置示例
 
-- `config.json.example` 已是 UTF-8。
-- 配置文件支持注释（按 JSON5 解析），可保留 `//` 注释。
-
-### 2.3 最小必填配置（建议）
-
-请至少确认以下配置：
+编辑 `config.json`，至少配置以下字段：
 
 ```jsonc
 {
   "api": {
-    "base_url": "你的模型网关地址",
-    "api_key": "你的模型密钥",
-    "model": "你的模型名"
+    "base_url": "https://你的模型网关/v1",
+    "api_key": "sk-your-api-key",
+    "model": "gpt-4o"
   },
   "guide_engine": {
     "enabled": true,
     "chroma_persist_dir": "./data/chroma",
+
+    // Embedding API（必需）
     "embedding_api_base_url": "https://你的网关/v1",
-    "embedding_api_key": "你的Embedding密钥",
+    "embedding_api_key": "sk-your-embedding-key",
     "embedding_api_model": "text-embedding-3-small",
+
+    // 视觉模型（可选，用于截图识别）
     "vision_api_base_url": "https://你的视觉网关/v1",
-    "vision_api_key": "你的视觉模型密钥",
+    "vision_api_key": "sk-your-vision-key",
     "vision_api_model": "qwen-vl-plus",
-    "prompt_dir": "./guide_engine/game_prompts",
+
+    // Neo4j（可选）
     "neo4j_uri": "bolt://127.0.0.1:7687",
     "neo4j_user": "neo4j",
     "neo4j_password": "your_password",
+
+    // 其他配置
+    "prompt_dir": "./guide_engine/game_prompts",
     "screenshot_monitor_index": 1,
     "auto_screenshot_on_guide": true
   }
 }
 ```
 
-字段说明：
+**配置说明**：
 
-- 向量嵌入统一走 OpenAI 兼容 API，不再使用本地 `sentence-transformers`。
-- `embedding_api_base_url` 与 `embedding_api_key` 必须可用。
-- `embedding_api_model` 建议填写专用 embedding 模型。
-- 截图识图支持单独配置视觉模型：`vision_api_base_url`、`vision_api_key`、`vision_api_model`。
-- 若视觉配置留空，会回退到 `api.base_url`、`api.api_key`、`api.model`。
-- `neo4j_uri` 建议优先 `bolt://127.0.0.1:7687`。
+- `embedding_api_*`：向量嵌入服务，必须配置且可用
+- `vision_api_*`：视觉模型，留空则回退到 `api.*` 配置
+- `neo4j_*`：图数据库，不配置则图谱功能降级
+- `auto_screenshot_on_guide`：默认是否自动截图
 
-### 2.4 使用 OpenAI 兼容外部向量 API（必需）
+---
 
-当前版本已默认使用外部向量服务，示例：
+## 3. 依赖服务准备
 
-```jsonc
-"guide_engine": {
-  "embedding_api_base_url": "https://你的网关/v1",
-  "embedding_api_key": "你的Embedding密钥",
-  "embedding_api_model": "text-embedding-3-small"
-}
-```
+### 3.1 Neo4j（推荐启动）
 
-说明：
-
-- 该接口需兼容 OpenAI SDK `embeddings.create`。
-- 若 `embedding_api_base_url` 或 `embedding_api_key` 为空，会回退到 `api.base_url`、`api.api_key`。
-- `embedding_api_model` 建议单独配置，不要复用聊天模型名。
-
-### 2.5 测试图片替代截图（可选）
-
-当设置环境变量 `TEST_PIC_PATH` 时，`ask_guide` 自动截图流程不会抓屏，而是读取该路径图片并注入模型。
-
-Linux/macOS：
-
-```bash
-export TEST_PIC_PATH="/绝对路径/测试图.png"
-```
-
-Windows PowerShell：
-
-```powershell
-$env:TEST_PIC_PATH="C:\\path\\to\\test.png"
-```
-
-预期：
-
-- 返回 `metadata.auto_screenshot.source=env:TEST_PIC_PATH`。
-- 若路径不存在或格式不支持，会返回 `metadata.auto_screenshot_error`。
-
-## 3. 依赖与服务：Neo4j 与 Embedding API
-
-### 3.1 Neo4j（建议启动）
-
-可用 Docker 快速启动：
+**Docker 快速启动**：
 
 ```bash
 docker run -d --name neo4j \
@@ -138,166 +114,664 @@ docker run -d --name neo4j \
   neo4j:5
 ```
 
-若不启动 Neo4j：
+**验证连接**：
 
-- 服务仍可调用，但图谱相关检索会降级或为空。
+访问 http://localhost:7474，使用 `neo4j/your_password` 登录。
 
-自动导入说明：
+**自动导入说明**：
 
-- 系统在检测到指定游戏图谱为空时，会自动尝试导入一次基础数据。
-- 默认会在以下路径查找种子数据文件：
-  - `data/`
-  - `../guide_engine_backend/backend/app/data/`
-- 明日方舟使用 `arknights_cn_operators.json`，舰C使用 `kantai-collection_start2.json`。
+系统在首次查询时会自动导入基础数据（如果检测到图谱为空）：
+- 明日方舟：`data/arknights_cn_operators.json`
+- 舰队Collection：`data/kantai-collection_start2.json`
+
+若数据文件不存在，图谱功能会降级但不影响其他功能。
 
 ### 3.2 Embedding API（必需）
 
-请确认外部 Embedding API 满足 OpenAI SDK `embeddings.create` 接口。
+确保配置的 Embedding API 满足 OpenAI SDK `embeddings.create` 接口规范。
 
-## 4. 快速自检（语法级）
-
-```bash
-uv run --no-sync python -m compileall system/config.py guide_engine mcpserver/agent_game_guide
-```
-
-预期：无报错。
-
-## 5. 功能测试用例
-
-### 用例一：MCP 注册验证
+**快速验证**：
 
 ```bash
-uv run python -c "from mcpserver.mcp_registry import auto_register_mcp, get_registered_services; auto_register_mcp(); print(get_registered_services())"
-```
-
-预期：输出列表包含 `game_guide`。
-
-### 用例二：默认自动截图（核心）
-
-```bash
-uv run python - <<'PY'
-import asyncio
-from mcpserver.mcp_registry import auto_register_mcp, get_service_instance
-
-auto_register_mcp()
-agent = get_service_instance("game_guide")
-
-async def main() -> None:
-    payload = {
-        "tool_name": "ask_guide",
-        "game_id": "arknights",
-        "query": "这关怎么打"
-    }
-    result = await agent.handle_handoff(payload)
-    print(result)
-
-asyncio.run(main())
-PY
-```
-
-预期：
-
-- 返回 JSON 的 `status` 为 `ok`。
-- `metadata` 包含以下之一：
-  - `auto_screenshot`（截图成功或使用 `TEST_PIC_PATH` 成功）
-  - `auto_screenshot_error`（截图失败但流程不中断）
-
-### 用例三：关闭自动截图
-
-```bash
-uv run python - <<'PY'
-import asyncio
-from mcpserver.mcp_registry import auto_register_mcp, get_service_instance
-
-auto_register_mcp()
-agent = get_service_instance("game_guide")
-
-async def main() -> None:
-    payload = {
-        "tool_name": "ask_guide",
-        "game_id": "arknights",
-        "query": "这关怎么打",
-        "auto_screenshot": False
-    }
-    result = await agent.handle_handoff(payload)
-    print(result)
-
-asyncio.run(main())
-PY
-```
-
-预期：
-
-- 返回 `status=ok`。
-- `metadata` 不包含 `auto_screenshot` 字段。
-
-### 用例四：伤害计算入口
-
-```bash
-uv run python - <<'PY'
-import asyncio
-from mcpserver.mcp_registry import auto_register_mcp, get_service_instance
-
-auto_register_mcp()
-agent = get_service_instance("game_guide")
-
-async def main() -> None:
-    payload = {
-        "tool_name": "calculate_damage",
-        "game_id": "arknights",
-        "query": "缪尔赛思S3M3打800防DPS"
-    }
-    result = await agent.handle_handoff(payload)
-    print(result)
-
-asyncio.run(main())
-PY
-```
-
-预期：
-
-- 返回 `status=ok`。
-- 返回字段中有 `query_mode`，通常为 `calculation`。
-
-### 用例五：OpenAI 兼容向量 API 验证（可选）
-
-前置：已正确配置 `embedding_api_base_url`、`embedding_api_key`、`embedding_api_model`。
-
-```bash
-uv run python - <<'PY'
+uv run python -c "
 import asyncio
 from guide_engine.chroma_service import ChromaService
 
-async def main() -> None:
+async def test():
     service = ChromaService()
-    vec = await service._embed_query("明日方舟 7-18 怎么打")
-    print(type(vec), len(vec), round(float(sum(x * x for x in vec)), 4))
+    vec = await service._embed_query('测试文本')
+    print(f'向量维度: {len(vec)}')
 
-asyncio.run(main())
-PY
+asyncio.run(test())
+"
 ```
 
-预期：
+预期输出：`向量维度: 1536`（或其他维度，取决于模型）
 
-- 输出类型为 `list`，长度大于 0。
-- 最后一项（向量范数平方）接近 `1.0`（系统会做归一化）。
+---
 
-## 6. 结果判定标准
+## 4. 快速功能验证（无需外部服务）
 
-- P0 通过：`game_guide` 可注册 + `ask_guide` 返回 `status=ok`。
-- P1 通过：默认自动截图路径触发（成功或错误字段二选一都算路径有效）。
-- P2 通过：`calculate_damage` 可走通且返回 `query_mode`。
+运行纯单元测试脚本，验证新迁移的核心功能：
 
-## 7. 常见问题与排查
+```bash
+uv run python scripts/test_guide_engine_features.py
+```
 
-- `ModuleNotFoundError`：依赖未安装，先执行 `uv sync`。
-- `chromadb 未安装`：确认已安装 `chromadb`。
-- embedding 调用失败：检查 `embedding_api_base_url`、`embedding_api_key`、`embedding_api_model` 是否正确。
-- Neo4j 连接失败：检查 `guide_engine.neo4j_uri/user/password` 与端口 `7687`。
-- 自动截图失败：检查是否有桌面会话、显示器索引是否正确（`screenshot_monitor_index`）。
+**测试内容**：
 
-## 8. 回归检查点
+1. ✅ **RAG 时效性权重系统** - 时间衰减、版本距离惩罚、内容类型分级
+2. ✅ **别名感知实体提取** - 从 YAML 配置读取别名，正确识别干员
+3. ✅ **Kantai 地图校验** - 舰C攻略模式缺少地图时触发追问
+4. ✅ **Neo4j 格式化方法** - 干员信息、配合推荐格式化
+5. ✅ **模组自动选择逻辑** - CalculationParams 支持模组参数
 
-- 天气/时间与应用启动 MCP 服务仍可注册并调用。
-- `/chat/stream` 正常返回，不因新增 `game_guide` 规则报错。
-- `config.json` 热更新不影响 `guide_engine` 字段解析。
+**预期输出**：
+
+```
+============================================================
+测试结果汇总
+============================================================
+✅ 通过 - 时效性权重系统
+✅ 通过 - 别名感知实体提取
+✅ 通过 - Kantai地图校验
+✅ 通过 - Neo4j格式化方法
+✅ 通过 - 模组自动选择逻辑
+
+总计: 5/5 通过
+
+🎉 所有测试通过！
+```
+
+**过关标准**：所有 5 项测试通过。
+
+---
+
+## 5. 新功能测试场景
+
+### 5.1 时效性权重系统
+
+**功能说明**：对 ChromaDB 搜索结果按时效性重新加权排序，新内容权重更高。
+
+**测试方法**：
+
+已在 `test_guide_engine_features.py` 中覆盖，无需额外测试。
+
+**验证点**：
+
+- 无日期文档默认权重 0.7
+- 今天发布文档权重接近 1.0
+- 1年前活动攻略权重 < 0.3
+- 已标记过时文档权重 0.1
+- 排序后新内容排在前面
+
+---
+
+### 5.2 别名感知实体提取
+
+**功能说明**：从 `arknights.yaml` 的 `entity_patterns.operator_aliases` 读取别名，支持"老银"→"银灰"等映射。
+
+**测试方法**：
+
+1. 检查配置文件：
+
+```bash
+cat guide_engine/game_prompts/arknights.yaml | grep -A 5 operator_aliases
+```
+
+预期输出：
+
+```yaml
+operator_aliases:
+  "银灰": ["老银", "SilverAsh"]
+  "能天使": ["能天", "苹果派", "Exusiai"]
+  "艾雅法拉": ["羊", "小羊", "Eyjafjalla"]
+```
+
+2. 运行单元测试（已在 `test_guide_engine_features.py` 中）
+
+**验证点**：
+
+- "老银配队推荐" 识别出 "银灰"
+- "苹果派DPS" 识别出 "能天使"
+- `_guess_operator_name()` 支持别名参数
+
+---
+
+### 5.3 Neo4j Graph RAG 并行检索
+
+**功能说明**：使用 `asyncio.gather` 并行执行 ChromaDB 向量搜索 + Neo4j 干员查询 + 配合关系查询。
+
+**测试方法**：
+
+需要 Neo4j 服务运行，参见 [6.3 Neo4j 图谱查询测试](#63-neo4j-图谱查询测试)。
+
+**验证点**：
+
+- ChromaDB 和 Neo4j 查询并行执行（通过日志时间戳验证）
+- Neo4j 不可用时不阻塞 ChromaDB 返回
+- 返回结果包含干员信息和配合推荐
+
+---
+
+### 5.4 Kantai 地图校验
+
+**功能说明**：舰C攻略模式（FULL）下，若查询不含地图/海域信息，插入追问提示。
+
+**测试方法**：
+
+已在 `test_guide_engine_features.py` 中覆盖。
+
+**验证点**：
+
+- "编成推荐"（无地图）→ 触发追问
+- "2-5编成推荐"（有地图）→ 不追问
+- "E-3怎么打"（有地图）→ 不追问
+- "海域3-2攻略"（有关键词）→ 不追问
+- 非舰C游戏 → 不触发
+- 非FULL模式 → 不触发
+
+---
+
+### 5.5 模组自动选择 + 详细属性格式化
+
+**功能说明**：计算模式下自动选择干员第一个模组（Lv.3），默认满潜（潜能5），输出详细属性、信赖加成、模组加成。
+
+**测试方法**：
+
+需要游戏数据文件和 LLM API，参见 [6.2 伤害计算测试](#62-伤害计算测试)。
+
+**验证点**：
+
+- 计算结果包含"计算假设"（精英/等级/信赖/潜能）
+- 包含"干员基础属性"（ATK/DEF/HP/攻击间隔/阻挡数）
+- 包含"信赖加成"明细
+- 包含"模组"信息（名称、等级、属性加成）
+- 包含"计算后面板"（最终ATK/攻击间隔/单次伤害/DPS）
+- 包含"技能数据"（SP/持续/总伤/攻击次数）
+- 包含"计算详情"步骤
+
+---
+
+## 6. 真实场景集成测试
+
+### 6.1 MCP 服务注册验证
+
+**测试命令**：
+
+```bash
+uv run python -c "
+from mcpserver.mcp_registry import auto_register_mcp, get_registered_services
+auto_register_mcp()
+print(get_registered_services())
+"
+```
+
+**预期输出**：
+
+```python
+['game_guide', 'weather', 'time', ...]
+```
+
+**过关标准**：输出列表包含 `game_guide`。
+
+---
+
+### 6.2 伤害计算测试
+
+**前置条件**：
+
+- 已配置 LLM API
+- 存在游戏数据文件：`data/arknights/gamedata/character_table.json`、`skill_table.json`、`uniequip_table.json`
+
+**测试命令**：
+
+```bash
+uv run python scripts/test_game_guide_tool_call.py \
+  --game-id arknights \
+  --query "银灰S3专三DPS" \
+  --tool-name calculate_damage \
+  --test-pic ""
+```
+
+**预期输出**：
+
+```
+业务状态: ok
+query_mode: calculation
+response: 【精确计算结果】银灰 - 真银斩（专精三）
+
+计算假设：
+- 精英2 Lv.90，信赖200%，潜能5
+- 敌人防御0，法抗0%
+
+干员基础属性（精英2 Lv.90）：
+- 基础攻击力: 560
+- 防御力: 152
+- 生命值: 1805
+- 基础攻击间隔: 1.3秒
+- 阻挡数: 2
+- 信赖加成（200%）：攻击力+90
+
+模组：真银斩·改 Lv.3（攻击力+60，攻速+8）
+
+计算后面板：
+- 最终攻击力: 1540（包含信赖、天赋、技能加成）
+- 攻击间隔: 0.650秒（攻速200）
+- 单次伤害: 3080（physical伤害）
+- DPS: 4738
+
+技能数据：
+- SP消耗: 25，初始SP: 10
+- 持续时间: 30秒
+- 技能总伤: 142140
+- 技能期间约46.2次攻击
+
+计算详情：
+- 最终攻击力: 1540
+- 攻击间隔: 0.650s (攻速200)
+- 单次伤害: 3080 (physical)
+- DPS: 4738
+```
+
+**过关标准**：
+
+- ✅ `status: ok`
+- ✅ `query_mode: calculation`
+- ✅ 输出包含"计算假设"、"干员基础属性"、"信赖加成"、"模组"、"计算后面板"、"技能数据"、"计算详情"
+- ✅ 潜能显示为 5
+- ✅ 模组信息存在且等级为 3
+
+---
+
+### 6.3 Neo4j 图谱查询测试
+
+**前置条件**：
+
+- Neo4j 服务运行中
+- 已配置 `neo4j_uri`、`neo4j_user`、`neo4j_password`
+- `arknights.yaml` 中 `graph_rag_enabled: true`
+
+**测试命令**：
+
+```bash
+uv run python scripts/test_game_guide_tool_call.py \
+  --game-id arknights \
+  --query "银灰配队推荐" \
+  --tool-name ask_guide \
+  --test-pic ""
+```
+
+**预期输出**：
+
+```
+业务状态: ok
+query_mode: full
+response: 根据知识图谱，银灰的配队推荐如下：
+
+## 干员信息: 银灰
+- 稀有度: 5星
+- 职业: 近卫
+- 分支: 领主
+- 特性: 阻挡数+1，可以进行远程攻击
+...
+
+## 银灰 的配合推荐
+- 推进之王（推荐度 8/10）: 快速再部署配合，银灰S3可以快速清场
+- 德克萨斯（推荐度 7/10）: 先锋配合，提供前期费用
+...
+```
+
+**过关标准**：
+
+- ✅ `status: ok`
+- ✅ 输出包含"## 干员信息: 银灰"
+- ✅ 输出包含"## 银灰 的配合推荐"
+- ✅ 配合推荐包含其他干员名称和推荐理由
+
+**验证 Neo4j 自动导入**：
+
+首次查询时，系统会自动导入 `data/arknights_cn_operators.json`。查看日志：
+
+```
+[Neo4j] auto import completed: game_id=arknights, imported=XXX
+```
+
+---
+
+### 6.4 别名查询测试
+
+**测试命令**：
+
+```bash
+uv run python scripts/test_game_guide_tool_call.py \
+  --game-id arknights \
+  --query "老银S3专三DPS" \
+  --tool-name calculate_damage \
+  --test-pic ""
+```
+
+**预期输出**：
+
+```
+response: 【精确计算结果】银灰 - 真银斩（专精三）
+...
+```
+
+**过关标准**：
+
+- ✅ "老银" 被正确识别为 "银灰"
+- ✅ 计算结果显示 "银灰"
+
+---
+
+### 6.5 Kantai 地图追问测试
+
+**前置条件**：
+
+- `kantai-collection.yaml` 中 `graph_rag_enabled: true`
+
+**测试命令**：
+
+```bash
+uv run python scripts/test_game_guide_tool_call.py \
+  --game-id kantai-collection \
+  --query "编成推荐" \
+  --tool-name ask_guide \
+  --test-pic ""
+```
+
+**预期输出**：
+
+```
+response: 【流程要求】这是攻略模式且未给出具体关卡/海域，请先反问用户想打哪个图/海域（例如 2-5、3-2、E-3）。在得到关卡前不要给阵容与配装结论。
+```
+
+**过关标准**：
+
+- ✅ 输出包含"反问用户想打哪个图/海域"
+- ✅ 输出包含示例地图（2-5、3-2、E-3）
+
+**对比测试（有地图）**：
+
+```bash
+uv run python scripts/test_game_guide_tool_call.py \
+  --game-id kantai-collection \
+  --query "2-5编成推荐" \
+  --tool-name ask_guide \
+  --test-pic ""
+```
+
+预期：不包含追问提示，直接给出编成建议。
+
+---
+
+### 6.6 自动截图测试
+
+**前置条件**：
+
+- 有图形桌面环境
+- 或设置 `TEST_PIC_PATH` 环境变量
+
+**测试命令（使用测试图片）**：
+
+```bash
+export TEST_PIC_PATH="/path/to/test_image.png"
+
+uv run python scripts/test_game_guide_tool_call.py \
+  --game-id arknights \
+  --query "这关怎么打" \
+  --tool-name ask_guide \
+  --test-pic "/path/to/test_image.png"
+```
+
+**预期输出**：
+
+```
+metadata: {"auto_screenshot": {"width": 1920, "height": 1080, "monitor_index": 1, "source": "env:TEST_PIC_PATH"}}
+```
+
+**过关标准**：
+
+- ✅ `metadata.auto_screenshot` 存在
+- ✅ `source: "env:TEST_PIC_PATH"`
+
+---
+
+## 7. 过关标准
+
+### 7.1 P0 级别（必须通过）
+
+| 测试项 | 验证方法 | 过关标准 |
+|--------|----------|----------|
+| **MCP 服务注册** | 运行注册验证脚本 | 输出包含 `game_guide` |
+| **功能单元测试** | `test_guide_engine_features.py` | 5/5 通过 |
+| **基础查询** | `ask_guide` 工具调用 | `status: ok` |
+
+### 7.2 P1 级别（重要功能）
+
+| 测试项 | 验证方法 | 过关标准 |
+|--------|----------|----------|
+| **伤害计算** | 查询"银灰S3专三DPS" | 输出包含详细属性、模组、潜能5 |
+| **别名识别** | 查询"老银S3专三DPS" | 正确识别为"银灰" |
+| **Neo4j 图谱** | 查询"银灰配队推荐" | 输出包含干员信息和配合推荐 |
+| **Kantai 地图校验** | 查询"编成推荐"（无地图） | 触发追问提示 |
+
+### 7.3 P2 级别（增强功能）
+
+| 测试项 | 验证方法 | 过关标准 |
+|--------|----------|----------|
+| **自动截图** | 设置 `TEST_PIC_PATH` | `metadata.auto_screenshot` 存在 |
+| **时效性排序** | 单元测试已覆盖 | 新内容排在前面 |
+
+---
+
+## 8. 常见问题排查
+
+### 8.1 依赖问题
+
+**问题**：`ModuleNotFoundError: No module named 'xxx'`
+
+**解决**：
+
+```bash
+uv sync
+# 或
+pip install -r requirements.txt
+```
+
+---
+
+### 8.2 Embedding API 失败
+
+**问题**：`ChromaDB search failed: Embedding API error`
+
+**排查步骤**：
+
+1. 检查配置：
+
+```bash
+cat config.json | grep -A 3 embedding_api
+```
+
+2. 验证 API 可用性：
+
+```bash
+curl -X POST "https://你的网关/v1/embeddings" \
+  -H "Authorization: Bearer sk-your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"input": "test", "model": "text-embedding-3-small"}'
+```
+
+3. 检查日志：
+
+```bash
+tail -f logs/app.log | grep -i embedding
+```
+
+---
+
+### 8.3 Neo4j 连接失败
+
+**问题**：`Neo4j connection failed`
+
+**排查步骤**：
+
+1. 检查 Neo4j 服务状态：
+
+```bash
+docker ps | grep neo4j
+```
+
+2. 验证连接：
+
+```bash
+curl http://localhost:7474
+```
+
+3. 检查配置：
+
+```bash
+cat config.json | grep -A 3 neo4j
+```
+
+4. 查看 Neo4j 日志：
+
+```bash
+docker logs neo4j
+```
+
+**注意**：Neo4j 不可用时，系统会降级但不影响其他功能。
+
+---
+
+### 8.4 游戏数据文件缺失
+
+**问题**：`[GameDataLoader] 警告: character_table.json 不存在`
+
+**解决**：
+
+从 ArknightsGameData 仓库下载数据文件：
+
+```bash
+# 创建目录
+mkdir -p data/arknights/gamedata
+
+# 下载数据文件（示例）
+wget https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel/character_table.json \
+  -O data/arknights/gamedata/character_table.json
+
+wget https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel/skill_table.json \
+  -O data/arknights/gamedata/skill_table.json
+
+wget https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel/uniequip_table.json \
+  -O data/arknights/gamedata/uniequip_table.json
+```
+
+---
+
+### 8.5 自动截图失败
+
+**问题**：`metadata.auto_screenshot_error: No display found`
+
+**原因**：无图形桌面环境（如 SSH 服务器）
+
+**解决**：使用 `TEST_PIC_PATH` 替代真实截图：
+
+```bash
+export TEST_PIC_PATH="/path/to/test_image.png"
+```
+
+---
+
+### 8.6 LLM API 超时
+
+**问题**：`LLM API timeout`
+
+**排查步骤**：
+
+1. 检查网络连接
+2. 增加超时时间（在 `config.json` 中配置）
+3. 切换到更快的模型
+4. 检查 API 配额
+
+---
+
+## 9. 回归检查点
+
+每次代码变更后，确保以下功能不受影响：
+
+- ✅ MCP 服务注册正常
+- ✅ `/chat/stream` 接口正常返回
+- ✅ `config.json` 热更新生效
+- ✅ 其他 MCP 服务（weather、time）不受影响
+- ✅ 功能单元测试全部通过
+
+---
+
+## 10. 测试报告模板
+
+```markdown
+# Game Guide 测试报告
+
+**测试日期**: YYYY-MM-DD
+**测试人员**: XXX
+**测试环境**: Linux/macOS/Windows
+
+## 测试结果
+
+### P0 级别
+- [ ] MCP 服务注册: ✅/❌
+- [ ] 功能单元测试: 5/5 通过 ✅/❌
+- [ ] 基础查询: ✅/❌
+
+### P1 级别
+- [ ] 伤害计算（模组+潜能5）: ✅/❌
+- [ ] 别名识别: ✅/❌
+- [ ] Neo4j 图谱查询: ✅/❌
+- [ ] Kantai 地图校验: ✅/❌
+
+### P2 级别
+- [ ] 自动截图: ✅/❌
+- [ ] 时效性排序: ✅/❌
+
+## 问题记录
+
+| 问题描述 | 严重程度 | 状态 |
+|----------|----------|------|
+| XXX | P0/P1/P2 | 待修复/已修复 |
+
+## 备注
+
+（其他说明）
+```
+
+---
+
+## 附录：快速命令参考
+
+```bash
+# 1. 安装依赖
+uv sync
+
+# 2. 功能单元测试
+uv run python scripts/test_guide_engine_features.py
+
+# 3. MCP 服务注册验证
+uv run python -c "from mcpserver.mcp_registry import auto_register_mcp, get_registered_services; auto_register_mcp(); print(get_registered_services())"
+
+# 4. 伤害计算测试
+uv run python scripts/test_game_guide_tool_call.py --game-id arknights --query "银灰S3专三DPS" --tool-name calculate_damage --test-pic ""
+
+# 5. 别名识别测试
+uv run python scripts/test_game_guide_tool_call.py --game-id arknights --query "老银S3专三DPS" --tool-name calculate_damage --test-pic ""
+
+# 6. Neo4j 图谱测试
+uv run python scripts/test_game_guide_tool_call.py --game-id arknights --query "银灰配队推荐" --tool-name ask_guide --test-pic ""
+
+# 7. Kantai 地图校验测试
+uv run python scripts/test_game_guide_tool_call.py --game-id kantai-collection --query "编成推荐" --tool-name ask_guide --test-pic ""
+
+# 8. 启动 Neo4j
+docker run -d --name neo4j -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/your_password neo4j:5
+```

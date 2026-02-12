@@ -18,6 +18,7 @@ class GuideTools:
         images: list[str] | None = None,
         auto_screenshot: bool | None = None,
         history: list[dict[str, Any]] | None = None,
+        force_query_mode: str | None = None,
     ) -> dict[str, Any]:
         settings = get_guide_engine_settings()
         use_auto_screenshot = settings.auto_screenshot_on_guide if auto_screenshot is None else auto_screenshot
@@ -29,6 +30,7 @@ class GuideTools:
             images=images or [],
             auto_screenshot=use_auto_screenshot,
             history=history or [],
+            force_query_mode=force_query_mode,
         )
         result = await self.guide_service.ask(request)
         return {
@@ -57,9 +59,11 @@ class GuideTools:
         )
 
     async def calculate_damage(self, query: str, game_id: str | None = None) -> dict[str, Any]:
-        enhanced_query = f"请进行伤害计算：{query}"
-        return await self.ask_guide(query=enhanced_query, game_id=game_id, auto_screenshot=False)
+        return await self.ask_guide(
+            query=query, game_id=game_id, auto_screenshot=False, force_query_mode="calculation",
+        )
 
     async def get_team_recommendation(self, query: str, game_id: str | None = None) -> dict[str, Any]:
-        enhanced_query = f"请给出配队建议：{query}"
-        return await self.ask_guide(query=enhanced_query, game_id=game_id, auto_screenshot=True)
+        return await self.ask_guide(
+            query=query, game_id=game_id, auto_screenshot=True, force_query_mode="full",
+        )

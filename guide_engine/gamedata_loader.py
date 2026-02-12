@@ -11,11 +11,6 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 
 
-# 数据目录
-GAMEDATA_DIR = Path(__file__).parent.parent / "data" / "arknights" / "gamedata"
-INDEX_DIR = Path(__file__).parent.parent / "data" / "arknights" / "index"
-
-
 @dataclass
 class PhaseAttributes:
     """精英阶段属性"""
@@ -187,8 +182,24 @@ class Enemy:
 class GameDataLoader:
     """游戏数据加载器"""
 
-    def __init__(self, gamedata_dir: Path = GAMEDATA_DIR):
-        self.gamedata_dir = gamedata_dir
+    def __init__(self, gamedata_dir: Path | str | None = None):
+        """
+        初始化数据加载器
+
+        Args:
+            gamedata_dir: 游戏数据根目录，默认从配置读取
+        """
+        if gamedata_dir is None:
+            from .models import get_guide_engine_settings
+            settings = get_guide_engine_settings()
+            gamedata_dir = Path(settings.gamedata_dir)
+        else:
+            gamedata_dir = Path(gamedata_dir)
+
+        self.gamedata_root = gamedata_dir
+        self.gamedata_dir = gamedata_dir / "arknights" / "gamedata"
+        self.index_dir = gamedata_dir / "arknights" / "index"
+
         self._characters: Dict[str, Character] = {}
         self._skills: Dict[str, Skill] = {}
         self._modules: Dict[str, Module] = {}
@@ -487,7 +498,7 @@ class GameDataLoader:
 
     def _load_name_mapping(self):
         """加载名字映射"""
-        mapping_file = INDEX_DIR / "operator_mapping.json"
+        mapping_file = self.index_dir / "operator_mapping.json"
         if mapping_file.exists():
             with open(mapping_file, "r", encoding="utf-8") as f:
                 mapping = json.load(f)

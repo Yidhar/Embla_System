@@ -226,12 +226,13 @@ class CalculationService:
                 module_atk = mod_level.attributes.get("atk", 0)
 
         # 技能攻击力加成
+        ATK_BUFF_KEYS = {"atk", "attack@atk"}
         skill_atk_percent = 0
         for key, value in skill_level.blackboard.items():
-            if "atk" in key.lower() and "scale" not in key.lower():
-                # attack@atk 表示攻击力倍率加成 (1.1 = +110%)
-                if value > 0 and value < 10:  # 排除 atk_scale 类的大数值
-                    skill_atk_percent = value - 1  # 1.1 -> 0.1 = +10%
+            if key.lower() in ATK_BUFF_KEYS:
+                if 0 < value < 10:
+                    skill_atk_percent = value - 1
+                break
 
         # 额外buff
         extra_flat = params.extra_atk_flat
@@ -311,10 +312,11 @@ class CalculationService:
             (damage, damage_type)
         """
         # 获取伤害倍率
+        ATK_SCALE_KEYS = {"atk_scale", "attack@atk_scale"}
         atk_scale = 1.0
         for key, value in skill_level.blackboard.items():
-            if "atk_scale" in key.lower():
-                atk_scale = max(atk_scale, value)  # 取最大倍率
+            if key.lower() in ATK_SCALE_KEYS:
+                atk_scale = max(atk_scale, value)
 
         # 判断伤害类型
         damage_type = self._infer_damage_type(char, skill_level)

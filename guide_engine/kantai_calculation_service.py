@@ -638,15 +638,17 @@ class KantaiCalculationService:
     @staticmethod
     @lru_cache(maxsize=1)
     def _load_equipment_map() -> Dict[str, Dict[str, int]]:
-        data_path = os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "data",
-            "kantai-collection_start2.json",
-        )
-        data_path = os.path.abspath(data_path)
-        if not os.path.exists(data_path):
+        """加载装备数据映射"""
+        from pathlib import Path
+        from .models import get_guide_engine_settings
+
+        settings = get_guide_engine_settings()
+        gamedata_dir = Path(settings.gamedata_dir)
+        data_path = gamedata_dir / "kantai-collection_start2.json"
+
+        if not data_path.exists():
             return {}
+
         with open(data_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         items = data.get("api_mst_slotitem", [])

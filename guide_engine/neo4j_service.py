@@ -209,11 +209,25 @@ class Neo4jService:
 
     @staticmethod
     def _candidate_seed_roots() -> List[Path]:
+        """获取候选数据根目录"""
+        settings = get_guide_engine_settings()
+        gamedata_dir = Path(settings.gamedata_dir)
+
+        # 优先使用配置的路径
+        roots = [gamedata_dir]
+
+        # 兼容旧路径（如果配置路径不存在）
         repo_root = Path(__file__).resolve().parent.parent
-        return [
+        fallback_paths = [
             repo_root / "data",
             repo_root.parent / "guide_engine_backend" / "backend" / "app" / "data",
         ]
+
+        for path in fallback_paths:
+            if path != gamedata_dir and path.exists():
+                roots.append(path)
+
+        return roots
 
     def _find_seed_file(self, relative_paths: List[str]) -> Path | None:
         for root in self._candidate_seed_roots():
@@ -233,13 +247,11 @@ class Neo4jService:
         WHERE o.name = $name OR o.name_en = $name OR $name IN o.aliases
         OPTIONAL MATCH (o)-[:HAS_SKILL]->(s:Skill)
         OPTIONAL MATCH (o)-[:HAS_TALENT]->(t:Talent)
-        OPTIONAL MATCH (o)-[:BELONGS_TO]->(f:Faction)
-        WITH o, collect(DISTINCT s {.*}) as skills, collect(DISTINCT t {.*}) as talents, collect(DISTINCT f.name)[0] as faction
+        WITH o, collect(DISTINCT s {.*}) as skills, collect(DISTINCT t {.*}) as talents
         RETURN o {
             .*,
             skills: skills,
-            talents: talents,
-            faction: faction
+            talents: talents
         } as operator
         """
         results = await self.execute_query(query, {"game_id": game_id, "name": operator_name})

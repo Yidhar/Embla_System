@@ -325,6 +325,7 @@ class GuideEngineConfig(BaseModel):
     """游戏攻略引擎配置"""
 
     enabled: bool = Field(default=True, description="是否启用游戏攻略引擎")
+    gamedata_dir: str = Field(default="./data", description="游戏数据目录（存放各游戏的JSON数据文件）")
     chroma_persist_dir: str = Field(default="./data/chroma", description="ChromaDB持久化目录")
     embedding_api_base_url: str | None = Field(
         default=None, description="OpenAI兼容Embedding API地址（如 https://xx/v1）"
@@ -334,6 +335,7 @@ class GuideEngineConfig(BaseModel):
     vision_api_base_url: str | None = Field(default=None, description="攻略识图专用OpenAI兼容API地址")
     vision_api_key: str | None = Field(default=None, description="攻略识图专用API密钥")
     vision_api_model: str | None = Field(default=None, description="攻略识图专用模型名")
+    vision_api_type: str = Field(default="openai", description="攻略识图API类型（openai/gemini）")
     prompt_dir: str = Field(default="./guide_engine/game_prompts", description="游戏Prompt目录")
     neo4j_uri: str = Field(default="neo4j://127.0.0.1:7687", description="攻略图谱Neo4j URI")
     neo4j_user: str = Field(default="neo4j", description="攻略图谱Neo4j用户名")
