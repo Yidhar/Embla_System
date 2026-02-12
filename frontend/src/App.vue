@@ -12,6 +12,7 @@ import TitleBar from '@/components/TitleBar.vue'
 import { useParallax } from '@/composables/useParallax'
 import { useStartupProgress } from '@/composables/useStartupProgress'
 import { CONFIG } from '@/utils/config'
+import { clearExpression, setExpression } from '@/utils/live2dController'
 import { initParallax, destroyParallax } from '@/utils/parallax'
 
 const isElectron = !!window.electronAPI
@@ -20,7 +21,7 @@ const { width, height } = useWindowSize()
 const scale = computed(() => height.value / (10000 - CONFIG.value.web_live2d.model.size))
 
 // ─── 伪3D 视差 ────────────────────────────
-const { tx: lightTx, ty: lightTy } = useParallax({ translateX: 25, translateY: 18, invert: true })
+const { tx: lightTx, ty: lightTy } = useParallax({ translateX: 40, translateY: 30, invert: true })
 
 // ─── 启动界面状态 ───────────────────────────
 const { progress, phase, isReady, startProgress, notifyModelReady, cleanup } = useStartupProgress()
@@ -45,12 +46,14 @@ function onModelReady(pos: { faceX: number, faceY: number }) {
   // splash 阶段：将 Live2D 面部居中到矩形框中央
   if (splashVisible.value && !initialPositionSet) {
     initialPositionSet = true
-    // frame-mask 中心: left 50%, top 45% (见 SplashScreen.vue --frame-y)
+    // frame-mask 中心: left 50%, top 38% (见 SplashScreen.vue --frame-y)
     const cx = window.innerWidth * 0.5
-    const cy = window.innerHeight * 0.45
+    const cy = window.innerHeight * 0.38
     // 以面部为缩放原点，保证 scale 后面部仍居中
     live2dTransformOrigin.value = `${pos.faceX}px ${pos.faceY}px`
     live2dTransform.value = `translate(${cx - pos.faceX}px, ${cy - pos.faceY}px) scale(2.2)`
+    // 开屏闭眼 + 身体静止
+    setExpression({ ParamEyeLOpen: 0, ParamEyeROpen: 0, ParamBodyAngleX: 0, ParamAngleZ: 0 })
   }
 }
 
@@ -66,6 +69,8 @@ function onSplashDismiss() {
   live2dTransformOrigin.value = ''
   // 触发 SplashScreen 淡出
   splashVisible.value = false
+  // 睁眼（平滑过渡）
+  clearExpression()
 
   setTimeout(() => {
     showMainContent.value = true

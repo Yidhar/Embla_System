@@ -68,7 +68,7 @@ const displayProgress = computed(() => Math.min(100, Math.round(props.progress))
   --frame-w: 36vw;
   --frame-h: 52vh;
   --frame-x: calc(50% - var(--frame-w) / 2);
-  --frame-y: calc(45% - var(--frame-h) / 2);
+  --frame-y: calc(38% - var(--frame-h) / 2);
   /* evenodd 填充规则：内外路径交叉区域镂空 */
   clip-path: polygon(
     evenodd,
@@ -87,7 +87,7 @@ const displayProgress = computed(() => Math.min(100, Math.round(props.progress))
   width: 36vw;
   height: 52vh;
   left: 50%;
-  top: 45%;
+  top: 38%;
   transform: translate(-50%, -50%);
   border: 1px solid rgba(212, 175, 55, 0.4);
   box-shadow: 0 0 15px rgba(212, 175, 55, 0.15), inset 0 0 15px rgba(212, 175, 55, 0.05);

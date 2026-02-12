@@ -167,7 +167,7 @@ onUnmounted(() => {
   <canvas
     ref="canvas"
     :width="computedWidth" :height="computedHeight"
-    :style="{ zoom: 1 / ssaa, touchAction: 'none' }"
+    :style="{ transform: `scale(${1 / ssaa})`, transformOrigin: '0 0', touchAction: 'none' }"
   />
   <!-- 视角校准准星 -->
   <div

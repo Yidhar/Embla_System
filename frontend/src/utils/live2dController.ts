@@ -48,13 +48,63 @@ let lastTickTime = 0
 let actionQueue: string[] = []
 let activeAction: { config: ActionConfig, startTime: number } | null = null
 
-// 通道 3: 表情切换（未来扩展）
+// 通道 3: 表情切换（眼睛开闭、表情参数覆盖）
 // → ParamEyeLOpen, ParamEyeROpen, ParamBrowLY 等
+let expressionTarget: Record<string, number> = {}
+let expressionCurrent: Record<string, number> = {}
+let expressionActive = false
 
 // 嘴巴状态（身体通道附属）
 let mouthTarget = 0
 let mouthCurrent = 0
 let mouthNextChangeTime = 0
+
+// ─── 通道3: 表情计算 ─────────────────────────────────
+
+/** 表情参数的默认值（清除表情时回归的目标） */
+const EXPRESSION_DEFAULTS: Record<string, number> = {
+  ParamEyeLOpen: 1,
+  ParamEyeROpen: 1,
+  ParamEyeLSmile: 0,
+  ParamEyeRSmile: 0,
+  ParamBrowLY: 0,
+  ParamBrowRY: 0,
+  ParamMouthForm: 0,
+}
+
+function computeExpression(dt: number): Record<string, number> {
+  if (!expressionActive && Object.keys(expressionCurrent).length === 0) return {}
+
+  const allParams = new Set([...Object.keys(expressionTarget), ...Object.keys(expressionCurrent)])
+  const halfLife = 100 // 100ms 平滑过渡
+  const sf = smoothFactor(halfLife, dt)
+  const result: Record<string, number> = {}
+  const toDelete: string[] = []
+
+  for (const param of allParams) {
+    const target = expressionActive
+      ? (expressionTarget[param] ?? EXPRESSION_DEFAULTS[param] ?? 0)
+      : (EXPRESSION_DEFAULTS[param] ?? 0)
+    const current = expressionCurrent[param] ?? EXPRESSION_DEFAULTS[param] ?? 0
+    const newVal = lerp(current, target, sf)
+    expressionCurrent[param] = newVal
+    result[param] = newVal
+
+    // 参数已回归默认且不再激活，清理
+    if (!expressionActive) {
+      const defaultVal = EXPRESSION_DEFAULTS[param] ?? 0
+      if (Math.abs(newVal - defaultVal) < 0.001) {
+        toDelete.push(param)
+      }
+    }
+  }
+
+  for (const k of toDelete) {
+    delete expressionCurrent[k]
+  }
+
+  return result
+}
 
 // ─── 视觉追踪（独立叠加层） ─────────────────────────
 // 追踪不走状态机，直接覆盖视觉方向参数
@@ -258,10 +308,10 @@ function tick(now: number) {
   const stateParams = computeStateParams(now) // 通道1: 身体摇摆
   const mouthParams = computeMouth(now, dt)    // 附属: 嘴巴
   const actionParams = computeActionParams(now) // 通道2: 头部动作
-  // 通道3: 表情（未来扩展）
+  const exprParams = computeExpression(dt)      // 通道3: 表情覆盖
 
   // 合并：后写入的覆盖先写入的（通道间参数正交所以不冲突）
-  const merged: Record<string, number> = { ...stateParams, ...mouthParams, ...actionParams }
+  const merged: Record<string, number> = { ...stateParams, ...mouthParams, ...actionParams, ...exprParams }
 
   // ── 视觉追踪混合 ──
   const trackParams = computeTracking(dt)
@@ -283,6 +333,29 @@ function tick(now: number) {
 
 export function triggerAction(name: string) {
   actionQueue.push(name)
+}
+
+/** 设置表情通道参数覆盖（如闭眼：{ ParamEyeLOpen: 0, ParamEyeROpen: 0 }） */
+export function setExpression(params: Record<string, number>) {
+  expressionTarget = { ...params }
+  expressionActive = true
+}
+
+/** 清除表情覆盖，参数平滑回归默认值 */
+export function clearExpression() {
+  expressionActive = false
+  expressionTarget = {}
+}
+
+/** 触发模型内置 SDK 表情（expression1-9: happy, sad, enjoy, surprise 等） */
+export function triggerModelExpression(name: string) {
+  if (!model) return
+  try {
+    ;(model as any).expression(name)
+  }
+  catch {
+    // 表情不存在则静默忽略
+  }
 }
 
 export function startTracking() {
@@ -330,6 +403,9 @@ export function destroyController() {
   actionsData = null
   activeAction = null
   actionQueue = []
+  expressionTarget = {}
+  expressionCurrent = {}
+  expressionActive = false
   mouthCurrent = 0
   mouthTarget = 0
   lastTickTime = 0
