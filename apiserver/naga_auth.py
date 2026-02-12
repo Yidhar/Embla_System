@@ -30,6 +30,9 @@ async def login(username: str, password: str) -> dict:
     _access_token = data.get("access_token") or data.get("accessToken")
     _refresh_token = data.get("refresh_token") or data.get("refreshToken")
 
+    if not _access_token:
+        raise ValueError("登录响应中缺少 access_token")
+
     # 登录成功后获取用户信息；若 /auth/me 不可用，从 login 响应中回退
     me = await get_me(_access_token)
     if me:

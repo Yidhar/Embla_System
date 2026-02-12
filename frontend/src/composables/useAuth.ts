@@ -36,8 +36,8 @@ export function useAuth() {
       await coreApi.authLogout()
     }
     finally {
-      ACCESS_TOKEN.value = undefined
-      REFRESH_TOKEN.value = undefined
+      ACCESS_TOKEN.value = ''
+      REFRESH_TOKEN.value = ''
       nagaUser.value = null
     }
   }
@@ -46,10 +46,12 @@ export function useAuth() {
     nagaUser.value = null
   }
 
-  // 首次调用时自动恢复会话
+  // 首次调用时自动恢复会话（仅在有 token 时才请求，避免无谓的 401）
   if (!_initFetched) {
     _initFetched = true
-    fetchMe()
+    if (ACCESS_TOKEN.value) {
+      fetchMe()
+    }
   }
 
   return { login, fetchMe, logout, skipLogin }
