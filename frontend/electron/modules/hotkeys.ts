@@ -1,5 +1,5 @@
 import { globalShortcut } from 'electron'
-import { getMainWindow } from './window'
+import { collapseFloatingWindow, expandFloatingWindow, getFloatingState, getMainWindow } from './window'
 
 export function registerHotkeys(): void {
   // Ctrl+Shift+N (Cmd+Shift+N on macOS) toggles window visibility
@@ -8,12 +8,31 @@ export function registerHotkeys(): void {
     if (!win)
       return
 
-    if (win.isVisible()) {
-      win.hide()
+    const state = getFloatingState()
+
+    if (state === 'classic') {
+      // 经典模式：切换显示/隐藏
+      if (win.isVisible()) {
+        win.hide()
+      }
+      else {
+        win.show()
+        win.focus()
+      }
     }
-    else {
-      win.show()
-      win.focus()
+    else if (state === 'ball') {
+      // 球态：如果可见则展开，如果隐藏则显示
+      if (win.isVisible()) {
+        expandFloatingWindow()
+        win.focus()
+      }
+      else {
+        win.show()
+      }
+    }
+    else if (state === 'compact' || state === 'full') {
+      // 紧凑态/完整态：收起为球态
+      collapseFloatingWindow()
     }
   })
 }

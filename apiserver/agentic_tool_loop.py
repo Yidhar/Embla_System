@@ -299,6 +299,7 @@ async def run_agentic_loop(
     messages: List[Dict[str, Any]],
     session_id: str,
     max_rounds: int = 5,
+    model_override: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[str, None]:
     """Agentic tool loop 核心。
 
@@ -312,6 +313,7 @@ async def run_agentic_loop(
         messages: 完整的对话消息列表（含system prompt）
         session_id: 会话ID
         max_rounds: 最大循环轮数
+        model_override: 临时模型覆盖参数（用于视觉模型等场景）
 
     Yields:
         SSE格式的data chunks
@@ -329,7 +331,8 @@ async def run_agentic_loop(
         complete_text = ""
         complete_reasoning = ""
 
-        async for chunk in llm_service.stream_chat_with_context(messages, config.api.temperature):
+        async for chunk in llm_service.stream_chat_with_context(messages, config.api.temperature,
+                                                                 model_override=model_override):
             # chunk 格式: "data: <base64_json>\n\n"
             if chunk.startswith("data: "):
                 try:

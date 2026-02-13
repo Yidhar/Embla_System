@@ -57,10 +57,15 @@ class LLMService:
             logger.error(f"LLM服务初始化失败: {e}")
             self._initialized = False
 
-    def _get_model_name(self) -> str:
-        """获取 LiteLLM 格式的模型名称"""
-        model = config.api.model
-        base_url = config.api.base_url.lower() if config.api.base_url else ""
+    def _get_model_name(self, model: Optional[str] = None, base_url: Optional[str] = None) -> str:
+        """获取 LiteLLM 格式的模型名称
+
+        Args:
+            model: 模型名称，默认使用 config.api.model
+            base_url: API地址，默认使用 config.api.base_url
+        """
+        model = model or config.api.model
+        base_url = (base_url or config.api.base_url or "").lower()
 
         # NagaModel 网关始终使用 openai/ 前缀
         if naga_auth.is_authenticated():
@@ -159,8 +164,15 @@ class LLMService:
             logger.error(f"上下文聊天调用失败: {e}")
             return LLMResponse(content=f"聊天调用出错: {str(e)}")
 
-    async def stream_chat_with_context(self, messages: List[Dict], temperature: float = 0.7):
+    async def stream_chat_with_context(self, messages: List[Dict], temperature: float = 0.7,
+                                       model_override: Optional[Dict[str, str]] = None):
         """带上下文的流式聊天调用，支持 reasoning_content 交织输出
+
+        Args:
+            messages: 对话消息列表
+            temperature: 生成温度
+            model_override: 临时模型覆盖参数，用于切换到视觉模型等场景
+                格式: {"model": "glm-4.5v", "api_base": "https://...", "api_key": "..."}
 
         Yields:
             格式为 "data: <base64_json>\n\n" 的 SSE 事件
@@ -173,13 +185,31 @@ class LLMService:
                 return
 
         try:
+            # 如果提供了 model_override，使用覆盖参数替代默认配置
+            if model_override:
+                override_base = model_override.get("api_base", "")
+                override_key = model_override.get("api_key", "")
+                # 复用 _get_model_name 的前缀判断逻辑
+                model_name = self._get_model_name(
+                    model=model_override.get("model"),
+                    base_url=override_base,
+                )
+                llm_params = {
+                    "api_key": override_key,
+                    "api_base": override_base.rstrip("/") + "/" if override_base else None,
+                }
+                logger.info(f"使用覆盖模型: {model_name}, api_base: {llm_params.get('api_base')}")
+            else:
+                llm_params = self._get_llm_params()
+                model_name = self._get_model_name()
+
             response = await acompletion(
-                model=self._get_model_name(),
+                model=model_name,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=config.api.max_tokens if hasattr(config.api, 'max_tokens') else None,
                 stream=True,
-                **self._get_llm_params()
+                **llm_params
             )
 
             async for chunk in response:

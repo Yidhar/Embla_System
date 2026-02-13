@@ -277,7 +277,7 @@ class SystemChecker:
     def check_directory_structure(self) -> bool:
         """检测目录结构"""
         required_dirs = [
-            ("ui", "用户界面"),
+            ("frontend", "前端界面"),
             ("apiserver", "API服务器"),
             ("agentserver", "Agent服务器"),
             ("mcpserver", "MCP服务器"),
