@@ -1021,7 +1021,15 @@ async def get_memory_stats():
     """获取记忆统计信息"""
 
     try:
-        # 记忆系统现在由main.py直接管理
+        # 优先使用远程 NagaMemory 服务
+        from summer_memory.memory_client import get_remote_memory_client
+
+        remote = get_remote_memory_client()
+        if remote is not None:
+            stats = await remote.get_stats()
+            return {"status": "success", "memory_stats": stats}
+
+        # 回退到本地 summer_memory
         try:
             from summer_memory.memory_manager import memory_manager
 
@@ -1182,6 +1190,32 @@ enabled: true
 async def get_quintuples():
     """获取所有五元组 (用于知识图谱可视化)"""
     try:
+        # 优先使用远程 NagaMemory 服务
+        from summer_memory.memory_client import get_remote_memory_client
+
+        remote = get_remote_memory_client()
+        if remote is not None:
+            result = await remote.get_quintuples(limit=500)
+            quintuples_raw = result.get("quintuples") or result.get("results") or result.get("data") or []
+            # 兼容 NagaMemory 返回格式：可能是 dict 列表或 tuple 列表
+            quintuples = []
+            for q in quintuples_raw:
+                if isinstance(q, dict):
+                    quintuples.append({
+                        "subject": q.get("subject", ""),
+                        "subject_type": q.get("subject_type", ""),
+                        "predicate": q.get("predicate", q.get("relation", "")),
+                        "object": q.get("object", ""),
+                        "object_type": q.get("object_type", ""),
+                    })
+                elif isinstance(q, (list, tuple)) and len(q) >= 5:
+                    quintuples.append({
+                        "subject": q[0], "subject_type": q[1],
+                        "predicate": q[2], "object": q[3], "object_type": q[4],
+                    })
+            return {"status": "success", "quintuples": quintuples, "count": len(quintuples)}
+
+        # 回退到本地 summer_memory
         from summer_memory.quintuple_graph import get_all_quintuples
 
         quintuples = get_all_quintuples()  # returns set[tuple]
@@ -1208,6 +1242,32 @@ async def search_quintuples(keywords: str = ""):
         keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
         if not keyword_list:
             raise HTTPException(status_code=400, detail="请提供搜索关键词")
+
+        # 优先使用远程 NagaMemory 服务
+        from summer_memory.memory_client import get_remote_memory_client
+
+        remote = get_remote_memory_client()
+        if remote is not None:
+            result = await remote.query_by_keywords(keyword_list)
+            quintuples_raw = result.get("quintuples") or result.get("results") or result.get("data") or []
+            quintuples = []
+            for q in quintuples_raw:
+                if isinstance(q, dict):
+                    quintuples.append({
+                        "subject": q.get("subject", ""),
+                        "subject_type": q.get("subject_type", ""),
+                        "predicate": q.get("predicate", q.get("relation", "")),
+                        "object": q.get("object", ""),
+                        "object_type": q.get("object_type", ""),
+                    })
+                elif isinstance(q, (list, tuple)) and len(q) >= 5:
+                    quintuples.append({
+                        "subject": q[0], "subject_type": q[1],
+                        "predicate": q[2], "object": q[3], "object_type": q[4],
+                    })
+            return {"status": "success", "quintuples": quintuples, "count": len(quintuples)}
+
+        # 回退到本地 summer_memory
         from summer_memory.quintuple_graph import query_graph_by_keywords
 
         results = query_graph_by_keywords(keyword_list)

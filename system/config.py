@@ -321,6 +321,14 @@ class ComputerControlConfig(BaseModel):
     safe_mode: bool = Field(default=True, description="是否启用安全模式（限制高风险操作）")
 
 
+class MemoryServerConfig(BaseModel):
+    """记忆微服务配置（NagaMemory）"""
+
+    enabled: bool = Field(default=False, description="是否启用远程记忆微服务（启用后将通过HTTP调用NagaMemory，替代本地Neo4j）")
+    url: str = Field(default="http://localhost:8004", description="NagaMemory 服务地址")
+    token: Optional[str] = Field(default=None, description="认证 Token（Bearer），留空则不携带认证头")
+
+
 class GuideEngineConfig(BaseModel):
     """游戏攻略引擎配置"""
 
@@ -711,6 +719,7 @@ class NagaConfig(BaseModel):
     system_check: SystemCheckConfig = Field(default_factory=SystemCheckConfig)
     computer_control: ComputerControlConfig = Field(default_factory=ComputerControlConfig)
     guide_engine: GuideEngineConfig = Field(default_factory=GuideEngineConfig)
+    memory_server: MemoryServerConfig = Field(default_factory=MemoryServerConfig)
     window: Any = Field(default=None)
 
     model_config = {

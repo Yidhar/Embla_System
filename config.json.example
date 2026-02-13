@@ -164,6 +164,11 @@
     "screenshot_monitor_index": 1, // 自动截图显示器索引
     "auto_screenshot_on_guide": true // 攻略调用时默认自动截图
   },
+  "memory_server": {
+    "enabled": false, // 是否启用远程记忆微服务（启用后通过HTTP调用NagaMemory，替代本地Neo4j）
+    "url": "http://localhost:8004", // NagaMemory 服务地址
+    "token": null // 认证Token（Bearer），留空则不携带认证头
+  },
   "crawl4ai": {
     "headless": true, // 是否无头模式
     "timeout": 30000, // 超时时间(毫秒)

@@ -189,6 +189,11 @@ export const DEFAULT_CONFIG = {
   floating: {
     enabled: false, // 是否启用悬浮球模式
   },
+  memory_server: {
+    enabled: false, // 是否启用远程记忆微服务
+    url: 'http://localhost:8004', // NagaMemory 服务地址
+    token: null as string | null, // 认证 Token
+  },
   web_live2d: {
     ssaa: 2,
     model: MODELS[DEFAULT_MODEL],

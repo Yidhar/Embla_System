@@ -349,6 +349,14 @@ class ServiceManager:
     def _init_memory_system(self):
         """初始化记忆系统"""
         try:
+            # 优先检查远程 NagaMemory 服务
+            from summer_memory.memory_client import get_remote_memory_client
+            remote = get_remote_memory_client()
+            if remote is not None:
+                logger.info("记忆系统使用远程 NagaMemory 服务")
+                return
+
+            # 回退到本地 summer_memory
             if memory_manager and memory_manager.enabled:
                 logger.info("夏园记忆系统已初始化")
             else:
@@ -515,12 +523,26 @@ def _lazy_init_services():
         
         # 显示系统状态
         print("=" * 30)
-        print(f"GRAG状态: {'启用' if memory_manager.enabled else '禁用'}")
-        if memory_manager.enabled:
-            stats = memory_manager.get_memory_stats()
-            from summer_memory.quintuple_graph import get_graph, GRAG_ENABLED
-            graph = get_graph()
-            print(f"Neo4j连接: {'成功' if graph and GRAG_ENABLED else '失败'}")
+        # 检查远程 NagaMemory 服务
+        from summer_memory.memory_client import get_remote_memory_client
+        remote_memory = get_remote_memory_client()
+        if remote_memory is not None:
+            print(f"记忆系统: 远程 NagaMemory ({config.memory_server.url})")
+            try:
+                # 启动时用同步 httpx 做健康检查，避免 event loop 问题
+                import httpx as _httpx
+                resp = _httpx.get(f"{config.memory_server.url}/health", timeout=5.0)
+                ok = resp.status_code == 200
+                print(f"NagaMemory连接: {'成功' if ok else '失败'}")
+            except Exception as e:
+                print(f"NagaMemory连接: 失败 ({e})")
+        else:
+            print(f"GRAG状态: {'启用' if memory_manager.enabled else '禁用'}")
+            if memory_manager.enabled:
+                stats = memory_manager.get_memory_stats()
+                from summer_memory.quintuple_graph import get_graph, GRAG_ENABLED
+                graph = get_graph()
+                print(f"Neo4j连接: {'成功' if graph and GRAG_ENABLED else '失败'}")
         print("=" * 30)
         print(f'{AI_NAME}系统已启动')
         print("=" * 30)
