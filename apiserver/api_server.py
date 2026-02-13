@@ -399,6 +399,9 @@ class ChatRequest(BaseModel):
     disable_tts: bool = False  # V17: 支持禁用服务器端TTS
     return_audio: bool = False  # V19: 支持返回音频URL供客户端播放
     skip_intent_analysis: bool = False  # 新增：跳过意图分析
+    skill: Optional[str] = None  # 用户主动选择的技能名称，注入完整指令到系统提示词
+    images: Optional[List[str]] = None  # 截屏图片 base64 数据列表（data:image/png;base64,...）
+    temporary: bool = False  # 临时会话标记，临时会话不持久化到磁盘
 
 
 class ChatResponse(BaseModel):
@@ -705,10 +708,10 @@ async def chat(request: ChatRequest):
 
     try:
         # 获取或创建会话ID
-        session_id = message_manager.create_session(request.session_id)
+        session_id = message_manager.create_session(request.session_id, temporary=request.temporary)
 
         # 构建系统提示词（包含技能元数据）
-        system_prompt = build_system_prompt(include_skills=True)
+        system_prompt = build_system_prompt(include_skills=True, skill_name=request.skill)
 
         # 使用消息管理器构建完整的对话消息（纯聊天，不触发工具）
         messages = message_manager.build_conversation_messages(
@@ -750,18 +753,29 @@ async def chat_stream(request: ChatRequest):
         complete_text = ""  # 用于累积最终轮的完整文本（供 return_audio 模式使用）
         try:
             # 获取或创建会话ID
-            session_id = message_manager.create_session(request.session_id)
+            session_id = message_manager.create_session(request.session_id, temporary=request.temporary)
 
             # 发送会话ID信息
             yield f"data: session_id: {session_id}\n\n"
 
-            # 构建系统提示词（含工具调用指令）
-            system_prompt = build_system_prompt(include_skills=True, include_tool_instructions=True)
+            # 构建系统提示词（含工具调用指令 + 用户选择的技能）
+            system_prompt = build_system_prompt(include_skills=True, include_tool_instructions=True, skill_name=request.skill)
 
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(
                 session_id=session_id, system_prompt=system_prompt, current_message=request.message
             )
+
+            # 如果携带截屏图片，将最后一条用户消息改为多模态格式（OpenAI vision 兼容）
+            if request.images:
+                last_msg = messages[-1]
+                content_parts = [{"type": "text", "text": last_msg["content"]}]
+                for img_data in request.images:
+                    content_parts.append({"type": "image_url", "image_url": {"url": img_data}})
+                messages[-1] = {
+                    "role": "user",
+                    "content": content_parts,
+                }
 
             # 初始化语音集成（根据voice_mode和return_audio决定）
             voice_integration = None
@@ -808,12 +822,22 @@ async def chat_stream(request: ChatRequest):
             # ====== Agentic Tool Loop ======
             from .agentic_tool_loop import run_agentic_loop
 
+            # 如果携带截屏图片且电脑控制模型已配置，自动切换到视觉模型
+            model_override = None
+            if request.images and config.computer_control.enabled and config.computer_control.api_key:
+                model_override = {
+                    "model": config.computer_control.model,
+                    "api_base": config.computer_control.model_url,
+                    "api_key": config.computer_control.api_key,
+                }
+                logger.info(f"[API Server] 检测到截屏图片，切换到视觉模型: {config.computer_control.model}")
+
             complete_reasoning = ""
             # 记录每轮的content，用于在每轮结束时完成TTS处理
             current_round_text = ""
             is_tool_event = False  # 标记当前是否在处理工具事件（不送TTS）
 
-            async for chunk in run_agentic_loop(messages, session_id):
+            async for chunk in run_agentic_loop(messages, session_id, model_override=model_override):
                 # chunk 格式: "data: <base64_json>\n\n"
                 if chunk.startswith("data: "):
                     try:

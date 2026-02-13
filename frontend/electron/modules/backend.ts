@@ -62,9 +62,12 @@ export function startBackend(): void {
     cwd = backendDir
   }
   else {
-    // 开发模式：直接用 python
+    // 开发模式：优先使用 venv 中的 Python 解释器，确保依赖版本一致
     cwd = join(__dirname, '..', '..')
-    cmd = process.platform === 'win32' ? 'python' : 'python3'
+    const venvPython = process.platform === 'win32'
+      ? join(cwd, '.venv', 'Scripts', 'python.exe')
+      : join(cwd, '.venv', 'bin', 'python')
+    cmd = venvPython
     args = ['main.py', '--headless']
   }
 

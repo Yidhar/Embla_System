@@ -395,6 +395,10 @@ class Live2DConfig(BaseModel):
     )
 
 
+class FloatingConfig(BaseModel):
+    """悬浮球模式配置"""
+    enabled: bool = Field(default=False, description="是否启用悬浮球模式")
+
 class VoiceRealtimeConfig(BaseModel):
     """实时语音配置"""
 
@@ -604,7 +608,8 @@ def save_prompt(name: str, content: str):
 
 
 def build_system_prompt(
-    include_skills: bool = True, include_time: bool = False, include_tool_instructions: bool = False
+    include_skills: bool = True, include_time: bool = False,
+    include_tool_instructions: bool = False, skill_name: Optional[str] = None,
 ) -> str:
     """
     构建完整的系统提示词
@@ -615,6 +620,7 @@ def build_system_prompt(
         include_skills: 是否包含技能列表
         include_time: 是否包含当前时间信息
         include_tool_instructions: 是否注入工具调用指令（agentic loop 模式）
+        skill_name: 用户主动选择的技能名称，直接注入完整指令
 
     Returns:
         完整的系统提示词
@@ -624,8 +630,17 @@ def build_system_prompt(
 
     parts = [base_prompt]
 
-    # 添加技能元数据
-    if include_skills:
+    # 用户主动选择了技能时，直接注入完整指令，跳过技能元数据列表
+    if skill_name:
+        try:
+            from system.skill_manager import load_skill
+
+            instructions = load_skill(skill_name)
+            if instructions:
+                parts.append(f"\n\n## 当前任务技能\n\n用户已选择使用以下技能处理本次请求，请严格按照技能指令执行：\n\n{instructions}")
+        except ImportError:
+            pass
+    elif include_skills:
         try:
             from system.skill_manager import get_skills_prompt
 
@@ -688,6 +703,7 @@ class NagaConfig(BaseModel):
     mqtt: MQTTConfig = Field(default_factory=MQTTConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     live2d: Live2DConfig = Field(default_factory=Live2DConfig)
+    floating: FloatingConfig = Field(default_factory=FloatingConfig)
     voice_realtime: VoiceRealtimeConfig = Field(default_factory=VoiceRealtimeConfig)  # 实时语音配置
     naga_portal: NagaPortalConfig = Field(default_factory=NagaPortalConfig)
     online_search: OnlineSearchConfig = Field(default_factory=OnlineSearchConfig)

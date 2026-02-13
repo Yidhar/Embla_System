@@ -186,6 +186,9 @@ export const DEFAULT_CONFIG = {
     animation_enabled: true, // 是否启用动画
     touch_interaction: true, // 是否启用触摸交互
   },
+  floating: {
+    enabled: false, // 是否启用悬浮球模式
+  },
   web_live2d: {
     ssaa: 2,
     model: MODELS[DEFAULT_MODEL],

@@ -11,6 +11,7 @@ export const REFRESH_TOKEN = useStorage('naga-refresh-token', '')
 
 let isRefreshing = false
 let refreshSubscribers: Array<(newToken: string) => void> = []
+let isReloading = false
 
 export class ApiClient {
   instance: AxiosInstance
@@ -128,7 +129,11 @@ export class ApiClient {
   private clearAuthDataAndRedirect(): void {
     ACCESS_TOKEN.value = ''
     REFRESH_TOKEN.value = ''
-    // 不重定向到 /login（该路由不存在），刷新页面重新走 splash → 登录流程
-    window.location.reload()
+    // 防止短时间内重复 reload（如多个并发请求同时 401）
+    if (!isReloading) {
+      isReloading = true
+      // 不重定向到 /login（该路由不存在），刷新页面重新走 splash -> 登录流程
+      window.location.reload()
+    }
   }
 }
