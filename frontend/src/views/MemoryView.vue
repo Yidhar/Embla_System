@@ -8,6 +8,7 @@ import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
 import { CONFIG } from '@/utils/config'
+import { isNagaLoggedIn, nagaUser } from '@/composables/useAuth'
 
 const accordionValue = useStorage('accordion-memory', ['grag'])
 
@@ -16,6 +17,8 @@ const testResult = ref<{
   severity: 'success' | 'error'
   message: string
 }>()
+
+const isCloudMode = computed(() => CONFIG.value.memory_server?.enabled && isNagaLoggedIn.value)
 
 const similarityPercent = computed({
   get() {
@@ -83,21 +86,51 @@ onMounted(() => {
           </ConfigItem>
         </div>
       </ConfigGroup>
-      <ConfigGroup value="neo4j" header="Neo4j 数据库">
+      <ConfigGroup value="neo4j">
+        <template #header>
+          <div class="w-full flex justify-between items-center -my-1.5">
+            <span>{{ isCloudMode ? '云端记忆服务' : 'Neo4j 数据库' }}</span>
+            <span v-if="isCloudMode" class="text-xs text-green-400 flex items-center gap-1">
+              <span class="inline-block w-2 h-2 rounded-full bg-green-400" />
+              已登录
+            </span>
+          </div>
+        </template>
         <div class="grid gap-4">
-          <ConfigItem name="连接地址" description="Neo4j 数据库连接 URI">
-            <InputText v-model="CONFIG.grag.neo4j_uri" placeholder="neo4j://127.0.0.1:7687" />
-          </ConfigItem>
-          <ConfigItem name="用户名" description="Neo4j 数据库用户名">
-            <InputText v-model="CONFIG.grag.neo4j_user" placeholder="neo4j" />
-          </ConfigItem>
-          <ConfigItem name="密码" description="Neo4j 数据库密码">
-            <InputText v-model="CONFIG.grag.neo4j_password" placeholder="••••••••" />
-          </ConfigItem>
+          <!-- 云端模式：显示连接状态 -->
+          <template v-if="isCloudMode">
+            <ConfigItem name="服务状态" description="NagaMemory 云端记忆微服务">
+              <div class="text-xs text-white/70">
+                <div>用户: {{ nagaUser?.username }}</div>
+                <div class="mt-1 text-white/40">
+                  {{ CONFIG.memory_server?.url }}
+                </div>
+              </div>
+            </ConfigItem>
+            <ConfigItem
+              v-if="memoryStats"
+              name="五元组数量"
+              description="云端存储的记忆五元组总数"
+            >
+              <span class="text-white/70">{{ memoryStats.totalQuintuples ?? 0 }}</span>
+            </ConfigItem>
+          </template>
+          <!-- 本地模式：显示 Neo4j 配置 -->
+          <template v-else>
+            <ConfigItem name="连接地址" description="Neo4j 数据库连接 URI">
+              <InputText v-model="CONFIG.grag.neo4j_uri" placeholder="neo4j://127.0.0.1:7687" />
+            </ConfigItem>
+            <ConfigItem name="用户名" description="Neo4j 数据库用户名">
+              <InputText v-model="CONFIG.grag.neo4j_user" placeholder="neo4j" />
+            </ConfigItem>
+            <ConfigItem name="密码" description="Neo4j 数据库密码">
+              <InputText v-model="CONFIG.grag.neo4j_password" placeholder="••••••••" />
+            </ConfigItem>
+          </template>
           <Divider class="m-1!" />
           <div class="flex flex-row-reverse justify-between gap-4">
             <Button
-              :label="testResult ? '测试连接' : '测试中...' "
+              :label="testResult ? (isCloudMode ? '检查连接' : '测试连接') : '测试中...'"
               size="small"
               :disabled="!testResult"
               @click="testConnection"

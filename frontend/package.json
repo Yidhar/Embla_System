@@ -1,8 +1,8 @@
 {
   "name": "naga-agent",
-  "type": "module",
-  "version": "1.0.0",
   "private": true,
+  "version": "1.0.0",
+  "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
     "lint": "eslint",

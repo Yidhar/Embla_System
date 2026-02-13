@@ -38,7 +38,7 @@ const { rx, ry, tx, ty } = useParallax({ rotateX: 5, rotateY: 4, translateX: 15,
         </ArkButton>
       </div>
       <div class="grid grid-cols-2 -translate-x-1/5">
-        <ArkButton :icon="brain" title="记忆<br>云海" disabled />
+        <ArkButton :icon="brain" title="记忆<br>云海" @click="useLink({ to: '/mind' }).navigate" />
         <ArkButton :icon="toolkit" title="技能<br>工坊" @click="useLink({ to: '/skill' }).navigate" />
       </div>
       <div class="grid grid-cols-2">
@@ -48,9 +48,9 @@ const { rx, ry, tx, ty } = useParallax({ rotateX: 5, rotateY: 4, translateX: 15,
           </div>
           <div class="grow grid grid-cols-2 font-serif font-bold lh-none">
             <ArkButton @click="useLink({ to: '/model' }).navigate">
-              <div class="size-full text-lg">人格投影</div>
+              <div class="size-full text-lg">模型链接</div>
             </ArkButton>
-            <ArkButton disabled>
+            <ArkButton @click="useLink({ to: '/memory' }).navigate">
               <div class="size-full text-lg">记忆链接</div>
             </ArkButton>
           </div>

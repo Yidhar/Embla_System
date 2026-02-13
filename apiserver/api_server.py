@@ -93,7 +93,7 @@ async def lifespan(app: FastAPI):
 
 
 # 创建FastAPI应用
-app = FastAPI(title="NagaAgent API", description="智能对话助手API服务", version="4.0.0", lifespan=lifespan)
+app = FastAPI(title="NagaAgent API", description="智能对话助手API服务", version="5.0.0", lifespan=lifespan)
 
 # 配置CORS
 app.add_middleware(
@@ -460,7 +460,7 @@ async def auth_me():
     user = await naga_auth.get_me()
     if not user:
         raise HTTPException(status_code=401, detail="token 已失效")
-    return {"user": user}
+    return {"user": user, "memory_url": naga_auth.NAGA_MEMORY_URL}
 
 
 @app.post("/auth/logout")
@@ -472,13 +472,15 @@ async def auth_logout():
 
 @app.post("/auth/register")
 async def auth_register(body: dict):
-    """NagaCAS 注册"""
+    """NagaBusiness 注册"""
     username = body.get("username", "")
+    email = body.get("email", "")
     password = body.get("password", "")
-    if not username or not password:
-        raise HTTPException(status_code=400, detail="用户名和密码不能为空")
+    verification_code = body.get("verification_code", "")
+    if not username or not email or not password or not verification_code:
+        raise HTTPException(status_code=400, detail="用户名、邮箱、密码和验证码不能为空")
     try:
-        result = await naga_auth.register(username, password)
+        result = await naga_auth.register(username, email, password, verification_code)
         return {"success": True, **result}
     except Exception as e:
         import httpx
@@ -491,6 +493,30 @@ async def auth_register(body: dict):
             except Exception:
                 pass
         logger.error(f"注册失败: {e}")
+        raise HTTPException(status_code=status, detail=detail)
+
+
+@app.post("/auth/send-verification")
+async def auth_send_verification(body: dict):
+    """发送邮箱验证码"""
+    email = body.get("email", "")
+    username = body.get("username", "")
+    if not email or not username:
+        raise HTTPException(status_code=400, detail="邮箱和用户名不能为空")
+    try:
+        result = await naga_auth.send_verification(email, username)
+        return {"success": True, "message": "验证码已发送"}
+    except Exception as e:
+        import httpx
+        status = 500
+        detail = f"发送验证码失败: {str(e)}"
+        if isinstance(e, httpx.HTTPStatusError):
+            status = e.response.status_code
+            try:
+                detail = e.response.json().get("message", detail)
+            except Exception:
+                pass
+        logger.error(f"发送验证码失败: {e}")
         raise HTTPException(status_code=status, detail=detail)
 
 
@@ -514,7 +540,7 @@ async def root():
     """API根路径"""
     return {
         "name": "NagaAgent API",
-        "version": "4.0.0",
+        "version": "5.0.0",
         "status": "running",
         "docs": "/docs",
     }
@@ -564,7 +590,7 @@ async def get_system_info():
     """获取系统信息"""
 
     return SystemInfoResponse(
-        version="4.0.0",
+        version="5.0.0",
         status="running",
         available_services=[],  # MCP服务现在由mcpserver独立管理
         api_key_configured=bool(config.api.api_key and config.api.api_key != "sk-placeholder-key-not-set"),
@@ -995,7 +1021,15 @@ async def get_memory_stats():
     """获取记忆统计信息"""
 
     try:
-        # 记忆系统现在由main.py直接管理
+        # 优先使用远程 NagaMemory 服务
+        from summer_memory.memory_client import get_remote_memory_client
+
+        remote = get_remote_memory_client()
+        if remote is not None:
+            stats = await remote.get_stats()
+            return {"status": "success", "memory_stats": stats}
+
+        # 回退到本地 summer_memory
         try:
             from summer_memory.memory_manager import memory_manager
 
@@ -1156,6 +1190,32 @@ enabled: true
 async def get_quintuples():
     """获取所有五元组 (用于知识图谱可视化)"""
     try:
+        # 优先使用远程 NagaMemory 服务
+        from summer_memory.memory_client import get_remote_memory_client
+
+        remote = get_remote_memory_client()
+        if remote is not None:
+            result = await remote.get_quintuples(limit=500)
+            quintuples_raw = result.get("quintuples") or result.get("results") or result.get("data") or []
+            # 兼容 NagaMemory 返回格式：可能是 dict 列表或 tuple 列表
+            quintuples = []
+            for q in quintuples_raw:
+                if isinstance(q, dict):
+                    quintuples.append({
+                        "subject": q.get("subject", ""),
+                        "subject_type": q.get("subject_type", ""),
+                        "predicate": q.get("predicate", q.get("relation", "")),
+                        "object": q.get("object", ""),
+                        "object_type": q.get("object_type", ""),
+                    })
+                elif isinstance(q, (list, tuple)) and len(q) >= 5:
+                    quintuples.append({
+                        "subject": q[0], "subject_type": q[1],
+                        "predicate": q[2], "object": q[3], "object_type": q[4],
+                    })
+            return {"status": "success", "quintuples": quintuples, "count": len(quintuples)}
+
+        # 回退到本地 summer_memory
         from summer_memory.quintuple_graph import get_all_quintuples
 
         quintuples = get_all_quintuples()  # returns set[tuple]
@@ -1182,6 +1242,32 @@ async def search_quintuples(keywords: str = ""):
         keyword_list = [k.strip() for k in keywords.split(",") if k.strip()]
         if not keyword_list:
             raise HTTPException(status_code=400, detail="请提供搜索关键词")
+
+        # 优先使用远程 NagaMemory 服务
+        from summer_memory.memory_client import get_remote_memory_client
+
+        remote = get_remote_memory_client()
+        if remote is not None:
+            result = await remote.query_by_keywords(keyword_list)
+            quintuples_raw = result.get("quintuples") or result.get("results") or result.get("data") or []
+            quintuples = []
+            for q in quintuples_raw:
+                if isinstance(q, dict):
+                    quintuples.append({
+                        "subject": q.get("subject", ""),
+                        "subject_type": q.get("subject_type", ""),
+                        "predicate": q.get("predicate", q.get("relation", "")),
+                        "object": q.get("object", ""),
+                        "object_type": q.get("object_type", ""),
+                    })
+                elif isinstance(q, (list, tuple)) and len(q) >= 5:
+                    quintuples.append({
+                        "subject": q[0], "subject_type": q[1],
+                        "predicate": q[2], "object": q[3], "object_type": q[4],
+                    })
+            return {"status": "success", "quintuples": quintuples, "count": len(quintuples)}
+
+        # 回退到本地 summer_memory
         from summer_memory.quintuple_graph import query_graph_by_keywords
 
         results = query_graph_by_keywords(keyword_list)

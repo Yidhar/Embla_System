@@ -5,7 +5,6 @@ import { ref, useTemplateRef } from 'vue'
 import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
-import { isNagaLoggedIn, nagaUser } from '@/composables/useAuth'
 import { CONFIG, DEFAULT_CONFIG, DEFAULT_MODEL, MODELS, SYSTEM_PROMPT } from '@/utils/config'
 import { trackingCalibration } from '@/utils/live2dController'
 
@@ -119,21 +118,6 @@ function toggleFloatingMode(enabled: boolean) {
           </ConfigItem>
         </div>
       </ConfigGroup>
-      <ConfigGroup value="api" header="API 设置">
-        <div class="grid gap-4">
-          <ConfigItem name="API 地址">
-            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆 ({{ nagaUser?.username }})，使用 NagaModel 网关</span>
-            <InputText v-else v-model="CONFIG.api.base_url" placeholder="https://api.example.com/v1" />
-          </ConfigItem>
-          <ConfigItem name="API 密钥">
-            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆 ({{ nagaUser?.username }})，无需输入</span>
-            <InputText v-else v-model="CONFIG.api.api_key" type="password" placeholder="sk-..." />
-          </ConfigItem>
-          <ConfigItem name="模型名称">
-            <InputText v-model="CONFIG.api.model" placeholder="deepseek-chat" />
-          </ConfigItem>
-        </div>
-      </ConfigGroup>
       <ConfigGroup value="portal" header="账号设置">
         <div class="grid gap-4">
           <ConfigItem name="用户名">
@@ -152,15 +136,6 @@ function toggleFloatingMode(enabled: boolean) {
           </div>
         </template>
         <div class="grid gap-4">
-          <ConfigItem name="最大令牌数" description="单次对话的最大长度限制">
-            <InputNumber v-model="CONFIG.api.max_tokens" show-buttons />
-          </ConfigItem>
-          <ConfigItem name="历史轮数" description="使用最近几轮对话内容作为上下文">
-            <InputNumber v-model="CONFIG.api.max_history_rounds" show-buttons />
-          </ConfigItem>
-          <ConfigItem name="加载天数" description="从最近几天的日志文件中加载历史对话">
-            <InputNumber v-model="CONFIG.api.context_load_days" show-buttons />
-          </ConfigItem>
           <ConfigItem layout="column" name="系统提示词" description="编辑对话风格提示词，影响AI的回复风格和语言特点">
             <Textarea v-model="SYSTEM_PROMPT" rows="10" class="mt-3 resize-none" />
           </ConfigItem>
@@ -169,11 +144,3 @@ function toggleFloatingMode(enabled: boolean) {
     </Accordion>
   </BoxContainer>
 </template>
-
-<style scoped>
-.naga-authed {
-  color: #4ade80;
-  font-size: 0.875rem;
-  font-weight: 500;
-}
-</style>

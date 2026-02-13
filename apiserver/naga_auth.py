@@ -1,6 +1,6 @@
 """
-NagaCAS 认证模块
-对接 NagaCAS 统一认证服务，管理用户登录态
+NagaBusiness 认证模块
+对接 NagaBusiness 统一网关，管理用户登录态
 """
 
 import logging
@@ -10,8 +10,12 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-CAS_URL = "http://62.234.131.204:30001"
-NAGA_MODEL_URL = "http://62.234.131.204:30011"
+# NagaBusiness 统一网关地址（对外唯一暴露的服务）
+BUSINESS_URL = "http://62.234.131.204:30031"
+# 兼容旧代码，LLM 调用也走 NagaBusiness
+NAGA_MODEL_URL = BUSINESS_URL
+# NagaMemory 远程记忆服务地址（NebulaGraph 后端）
+NAGA_MEMORY_URL = f"{BUSINESS_URL}/api/memory"
 
 # 模块级认证状态（单用户场景）
 _access_token: Optional[str] = None
@@ -20,10 +24,10 @@ _user_info: Optional[dict] = None
 
 
 async def login(username: str, password: str) -> dict:
-    """通过 NagaCAS 登录，返回 token 和用户信息"""
+    """通过 NagaBusiness 登录，返回 token 和用户信息"""
     global _access_token, _refresh_token, _user_info
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(f"{CAS_URL}/auth/login", json={"username": username, "password": password})
+        resp = await client.post(f"{BUSINESS_URL}/api/auth/login", json={"username": username, "password": password})
         resp.raise_for_status()
         data = resp.json()
 
@@ -45,6 +49,7 @@ async def login(username: str, password: str) -> dict:
         "user": _user_info,
         "access_token": _access_token,
         "refresh_token": _refresh_token,
+        "memory_url": NAGA_MEMORY_URL,
     }
 
 
@@ -55,7 +60,7 @@ async def get_me(token: Optional[str] = None) -> Optional[dict]:
         return None
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{CAS_URL}/auth/me", headers={"Authorization": f"Bearer {t}"})
+            resp = await client.get(f"{BUSINESS_URL}/api/auth/me", headers={"Authorization": f"Bearer {t}"})
             if resp.status_code != 200:
                 return None
             return resp.json()
@@ -68,7 +73,7 @@ async def refresh(refresh_token: str) -> dict:
     """使用 refresh_token 刷新 access_token"""
     global _access_token, _refresh_token
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(f"{CAS_URL}/oauth/token", json={"refresh_token": refresh_token})
+        resp = await client.post(f"{BUSINESS_URL}/api/auth/refresh", json={"refresh_token": refresh_token})
         resp.raise_for_status()
         data = resp.json()
 
@@ -100,9 +105,23 @@ def get_user_info() -> Optional[dict]:
     return _user_info
 
 
-async def register(username: str, password: str) -> dict:
-    """通过 NagaCAS 注册新用户"""
+async def register(username: str, email: str, password: str, verification_code: str) -> dict:
+    """通过 NagaBusiness 注册新用户"""
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(f"{CAS_URL}/auth/register", json={"username": username, "password": password})
+        resp = await client.post(
+            f"{BUSINESS_URL}/api/auth/register",
+            json={"username": username, "email": email, "password": password, "verification_code": verification_code},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def send_verification(email: str, username: str) -> dict:
+    """发送邮箱验证码"""
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(
+            f"{BUSINESS_URL}/api/auth/send-verification",
+            json={"email": email, "username": username},
+        )
         resp.raise_for_status()
         return resp.json()

@@ -1,14 +1,24 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { useToast } from 'primevue/usetoast'
+import { computed, inject, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { isNagaLoggedIn, nagaUser, useAuth } from '@/composables/useAuth'
 
+const toast = useToast()
 const router = useRouter()
 const { logout } = useAuth()
 const menuOpen = ref(false)
+const openLoginDialog = inject<() => void>('openLoginDialog')
 
 function toggleMenu() {
-  menuOpen.value = !menuOpen.value
+  if (!isNagaLoggedIn.value) {
+    // 未登录时点击打开登录弹窗
+    openLoginDialog?.()
+  }
+  else {
+    // 已登录时切换菜单
+    menuOpen.value = !menuOpen.value
+  }
 }
 
 function closeMenu() {
@@ -22,7 +32,7 @@ function goConfig() {
 
 function openModelPlaza() {
   closeMenu()
-  window.open('http://62.234.131.204:30011', '_blank')
+  toast.add({ severity: 'info', summary: '功能开发中', detail: '模型广场功能即将上线', life: 3000 })
 }
 
 async function handleLogout() {
@@ -31,19 +41,26 @@ async function handleLogout() {
 }
 
 const initial = computed(() => {
+  if (!isNagaLoggedIn.value) {
+    return '?'
+  }
   const name = nagaUser.value?.username ?? ''
   return name.charAt(0).toUpperCase()
+})
+
+const displayName = computed(() => {
+  return isNagaLoggedIn.value ? nagaUser.value?.username : '未登录'
 })
 </script>
 
 <template>
-  <div v-if="isNagaLoggedIn" class="user-menu" @mouseleave="closeMenu">
+  <div class="user-menu" @mouseleave="closeMenu">
     <button class="avatar-btn" @click="toggleMenu">
-      <span class="avatar">{{ initial }}</span>
-      <span class="username">{{ nagaUser?.username }}</span>
+      <span class="avatar" :class="{ 'not-logged-in': !isNagaLoggedIn }">{{ initial }}</span>
+      <span class="username">{{ displayName }}</span>
     </button>
     <Transition name="dropdown-fade">
-      <div v-if="menuOpen" class="dropdown">
+      <div v-if="menuOpen && isNagaLoggedIn" class="dropdown">
         <!-- 用户信息头部 -->
         <div class="user-header">
           <div class="user-header-name">{{ nagaUser?.username }}</div>
@@ -107,6 +124,11 @@ const initial = computed(() => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+.avatar.not-logged-in {
+  background: linear-gradient(135deg, rgba(150, 150, 150, 0.5), rgba(100, 100, 100, 0.5));
+  color: rgba(255, 255, 255, 0.6);
 }
 
 .username {

@@ -6,15 +6,14 @@ import re
 from typing import Any
 
 from .calculation_service import CalculationParams, CalculationResult, get_calculation_service
-from .chroma_service import ChromaService
 from .gamedata_loader import get_gamedata_loader
 from .kantai_calculation_service import KantaiCalcParams, KantaiCalculationService
 from .models import GuideReference, GuideRequest, GuideResponse, get_guide_engine_settings
 from .neo4j_service import Neo4jService
 from .prompt_manager import PromptManager
 from .query_router import QueryMode, RouteResult, get_query_router
-from .rag_utils import apply_freshness_weight
 from .screenshot_provider import get_screenshot_provider
+from .neo4j_service import Neo4jService
 
 
 logger = logging.getLogger("GuideService")
@@ -67,11 +66,9 @@ class GuideService:
 
     def __init__(
         self,
-        chroma_service: ChromaService | None = None,
         neo4j_service: Neo4jService | None = None,
         prompt_manager: PromptManager | None = None,
     ) -> None:
-        self.chroma = chroma_service or ChromaService()
         self.neo4j = neo4j_service or Neo4jService()
         self.prompt_manager = prompt_manager or PromptManager()
         self.router = get_query_router()
@@ -261,7 +258,7 @@ class GuideService:
 
     @staticmethod
     def _iter_supported_game_ids() -> list[str]:
-        game_ids = sorted(set(ChromaService.GAME_ID_MAP.keys()))
+        game_ids = sorted(set(GuideService.GAME_ID_DISPLAY_MAP.keys()))
         if "arknights" not in game_ids:
             game_ids.append("arknights")
         return game_ids
@@ -273,10 +270,6 @@ class GuideService:
         prompt_config: dict[str, Any],
     ) -> tuple[str, list[GuideReference]]:
         game_id = (request.game_id or "arknights").strip() or "arknights"
-        retrieval_config = prompt_config.get("retrieval_config", {})
-        top_k = int(retrieval_config.get("top_k", 5))
-        score_threshold = float(retrieval_config.get("score_threshold", 0.5))
-        search_mode = self._resolve_search_mode(game_id, route.mode, request.content)
         graph_rag_enabled = prompt_config.get("graph_rag_enabled", False)
 
         context_parts: list[str] = []
@@ -287,24 +280,11 @@ class GuideService:
         if map_hint:
             context_parts.append(map_hint)
 
-        # ---- 别名预处理：将查询中的别名替换为正式名 ----
-        search_query = self._apply_alias_substitution(request.content, prompt_config)
-
         # ---- 构建并行任务 ----
         task_keys: list[str] = []
         tasks: list[Any] = []
 
-        # 1. ChromaDB 向量搜索
-        task_keys.append("chroma")
-        tasks.append(self.chroma.search(
-            game_id=game_id,
-            query=search_query,
-            top_k=top_k,
-            score_threshold=score_threshold,
-            search_mode=search_mode,
-        ))
-
-        # 2. Neo4j 干员/配合查询（仅 graph_rag_enabled 时）
+        # 1. Neo4j 干员/配合查询（仅 graph_rag_enabled 时）
         operator_names: list[str] = []
         if graph_rag_enabled:
             operator_names = self._extract_operator_names_for_graph(request.content, route, prompt_config)
@@ -319,27 +299,6 @@ class GuideService:
         # ---- 并行执行 ----
         results = await asyncio.gather(*tasks, return_exceptions=True)
         result_map: dict[str, Any] = dict(zip(task_keys, results))
-
-        # ---- 处理 ChromaDB 结果 ----
-        chroma_result = result_map.get("chroma")
-        docs: list[dict[str, Any]] = []
-        if isinstance(chroma_result, list):
-            docs = apply_freshness_weight(chroma_result)
-        elif isinstance(chroma_result, BaseException):
-            logger.warning("[GuideService] ChromaDB search failed: %s", chroma_result)
-
-        for doc in docs:
-            title = str(doc.get("title", "相关内容"))
-            content = str(doc.get("content", ""))
-            context_parts.append(f"### {title}\n{content}")
-            references.append(
-                GuideReference(
-                    type="document",
-                    title=title,
-                    source=str(doc.get("source_url", "")),
-                    score=float(doc.get("score", 0.0)),
-                )
-            )
 
         # ---- 处理 Neo4j 干员结果 ----
         for name in operator_names:
@@ -361,7 +320,7 @@ class GuideService:
                     context_parts.append(syn_text)
 
         # ---- 计算上下文 ----
-        calc_context = await self._build_calculation_context(request, route, docs, prompt_config)
+        calc_context = await self._build_calculation_context(request, route, [], prompt_config)
         if calc_context:
             context_parts.insert(0, calc_context)
             references.append(GuideReference(type="calculation", title="计算服务", source="guide_engine"))
@@ -632,38 +591,6 @@ class GuideService:
                 provider_hint=settings.game_guide_llm_api_type,
             )
         return llm_response.content
-
-    @staticmethod
-    def _resolve_search_mode(game_id: str, mode: QueryMode, query: str) -> str:
-        if mode == QueryMode.WIKI_ONLY:
-            if game_id == "kantai-collection":
-                enemy_keywords = ["深海", "敌", "敌人", "敌舰", "敌船", "栖", "栖姬", "栖鬼", "boss", "Boss", "BOSS"]
-                if any(keyword in query for keyword in enemy_keywords):
-                    return "enemy_only"
-            return "wiki_only"
-        if mode == QueryMode.CALCULATION:
-            return "full"
-        return "full"
-
-    @staticmethod
-    def _apply_alias_substitution(query: str, prompt_config: dict[str, Any]) -> str:
-        """识别查询中的别名，将对应正式名追加到查询末尾以提升 RAG 召回率"""
-        aliases: dict[str, list[str]] = (
-            prompt_config.get("entity_patterns", {}).get("operator_aliases", {})
-        )
-        if not aliases:
-            return query
-        matched_names: list[str] = []
-        for canonical, alias_list in aliases.items():
-            if canonical in query:
-                continue  # 正式名已在查询中，无需追加
-            for alias in alias_list:
-                if alias in query:
-                    matched_names.append(canonical)
-                    break
-        if not matched_names:
-            return query
-        return query + " " + " ".join(matched_names)
 
     @staticmethod
     def _guess_operator_name(

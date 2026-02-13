@@ -1,6 +1,6 @@
 {
   "system": {
-    "version": "4.0",  // 系统版本号
+    "version": "5.0.0",  // 系统版本号
     "ai_name": "娜迦日达", // AI助手名称
     "voice_enabled": true, // 是否启用语音功能
     "stream_mode": true, // 是否启用流式响应
@@ -11,7 +11,7 @@
   "api": {
     "api_key": "your-api-key-here", // LLM API密钥
     "base_url": "https://api.deepseek.com/v1", // API基础URL
-    "model": "deepseek-chat", // 使用的模型名称
+    "model": "deepseek-v3.2", // 使用的模型名称
     "temperature": 0.7, // 生成温度 (0.0-2.0)
     "max_tokens": 8192, // 最大token数
     "max_history_rounds": 10, // 最大历史对话轮数
@@ -149,7 +149,6 @@
   "guide_engine": {
     "enabled": true, // 是否启用游戏攻略引擎
     "gamedata_dir": "./data", // 游戏数据目录（存放各游戏的JSON数据文件）
-    "chroma_persist_dir": "./data/chroma", // ChromaDB持久化目录
     "embedding_api_base_url": "", // OpenAI兼容Embedding API地址（如 https://api.openai.com/v1）
     "embedding_api_key": "", // OpenAI兼容Embedding API密钥
     "embedding_api_model": "text-embedding-3-small", // OpenAI兼容Embedding模型名
@@ -163,6 +162,11 @@
     "neo4j_password": "your_password", // 攻略图谱Neo4j密码
     "screenshot_monitor_index": 1, // 自动截图显示器索引
     "auto_screenshot_on_guide": true // 攻略调用时默认自动截图
+  },
+  "memory_server": {
+    "enabled": false, // 是否启用远程记忆微服务（启用后通过HTTP调用NagaMemory，替代本地Neo4j）
+    "url": "http://localhost:8004", // NagaMemory 服务地址
+    "token": null // 认证Token（Bearer），留空则不携带认证头
   },
   "crawl4ai": {
     "headless": true, // 是否无头模式

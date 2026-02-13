@@ -8,20 +8,25 @@ import type { FloatingState } from '@/electron.d'
 import { useWindowSize } from '@vueuse/core'
 import Toast from 'primevue/toast'
 import { useToast } from 'primevue/usetoast'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import Live2dModel from '@/components/Live2dModel.vue'
 import LoginDialog from '@/components/LoginDialog.vue'
 import SplashScreen from '@/components/SplashScreen.vue'
 import TitleBar from '@/components/TitleBar.vue'
+import UpdateDialog from '@/components/UpdateDialog.vue'
 import FloatingView from '@/views/FloatingView.vue'
 import { isNagaLoggedIn, nagaUser, sessionRestored } from '@/composables/useAuth'
 import { useParallax } from '@/composables/useParallax'
 import { useStartupProgress } from '@/composables/useStartupProgress'
+import { checkForUpdate, showUpdateDialog, updateInfo } from '@/composables/useVersionCheck'
 import { CONFIG, backendConnected } from '@/utils/config'
 import { clearExpression, setExpression } from '@/utils/live2dController'
 import { initParallax, destroyParallax } from '@/utils/parallax'
 
 const isElectron = !!window.electronAPI
+const isMac = window.electronAPI?.platform === 'darwin'
+// macOS hiddenInset title bar is 28px, Windows/Linux custom title bar is 32px
+const titleBarPadding = isElectron ? (isMac ? '28px' : '32px') : '0px'
 
 const toast = useToast()
 
@@ -76,6 +81,13 @@ const live2dShouldShow = computed(() => progress.value >= 50 && splashVisible.va
 
 // ─── 登录弹窗状态 ───────────────────────────
 const showLoginDialog = ref(false)
+
+function openLoginDialog() {
+  showLoginDialog.value = true
+}
+
+// 提供给子组件使用
+provide('openLoginDialog', openLoginDialog)
 
 function onSplashDismiss() {
   _splashDismissed = true
@@ -150,6 +162,14 @@ onMounted(() => {
         stopConfigWatch()
     })
   }
+
+  // 后端连接成功后检查版本更新
+  const stopVersionWatch = watch(backendConnected, (connected) => {
+    if (!connected)
+      return
+    stopVersionWatch()
+    checkForUpdate()
+  })
 })
 
 onUnmounted(() => {
@@ -167,7 +187,7 @@ onUnmounted(() => {
   <template v-else>
     <TitleBar />
     <Toast position="top-center" />
-    <div class="h-full sunflower" :style="{ paddingTop: isElectron ? '32px' : '0px' }">
+    <div class="h-full sunflower" :style="{ paddingTop: titleBarPadding }">
       <!-- Live2D 层：启动时 z-10（在 SplashScreen 遮罩之间），之后降到 -z-1 -->
       <div
         class="absolute top-0 left-0 size-full"
@@ -219,6 +239,12 @@ onUnmounted(() => {
         :visible="showLoginDialog"
         @success="onLoginSuccess"
         @skip="onLoginSkip"
+      />
+
+      <!-- 版本更新弹窗 -->
+      <UpdateDialog
+        :visible="showUpdateDialog"
+        :info="updateInfo"
       />
     </div>
   </template>

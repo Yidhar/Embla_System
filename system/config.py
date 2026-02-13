@@ -140,7 +140,7 @@ def bootstrap_config_from_example(config_path: str) -> None:
 class SystemConfig(BaseModel):
     """系统基础配置"""
 
-    version: str = Field(default="4.0.0", description="系统版本号")
+    version: str = Field(default="5.0.0", description="系统版本号")
     ai_name: str = Field(default="娜迦日达", description="AI助手名称")
     base_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent, description="项目根目录")
     log_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "logs", description="日志目录")
@@ -164,7 +164,7 @@ class APIConfig(BaseModel):
 
     api_key: str = Field(default="sk-placeholder-key-not-set", description="API密钥")
     base_url: str = Field(default="https://api.deepseek.com/v1", description="API基础URL")
-    model: str = Field(default="deepseek-chat", description="使用的模型名称")
+    model: str = Field(default="deepseek-v3.2", description="使用的模型名称")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="温度参数")
     max_tokens: int = Field(default=10000, ge=1, le=32768, description="最大token数")
     max_history_rounds: int = Field(default=100, ge=1, le=200, description="最大历史轮数")
@@ -321,12 +321,19 @@ class ComputerControlConfig(BaseModel):
     safe_mode: bool = Field(default=True, description="是否启用安全模式（限制高风险操作）")
 
 
+class MemoryServerConfig(BaseModel):
+    """记忆微服务配置（NagaMemory）"""
+
+    enabled: bool = Field(default=False, description="是否启用远程记忆微服务（启用后将通过HTTP调用NagaMemory，替代本地Neo4j）")
+    url: str = Field(default="http://localhost:8004", description="NagaMemory 服务地址")
+    token: Optional[str] = Field(default=None, description="认证 Token（Bearer），留空则不携带认证头")
+
+
 class GuideEngineConfig(BaseModel):
     """游戏攻略引擎配置"""
 
     enabled: bool = Field(default=True, description="是否启用游戏攻略引擎")
     gamedata_dir: str = Field(default="./data", description="游戏数据目录（存放各游戏的JSON数据文件）")
-    chroma_persist_dir: str = Field(default="./data/chroma", description="ChromaDB持久化目录")
     embedding_api_base_url: str | None = Field(
         default=None, description="OpenAI兼容Embedding API地址（如 https://xx/v1）"
     )
@@ -711,6 +718,7 @@ class NagaConfig(BaseModel):
     system_check: SystemCheckConfig = Field(default_factory=SystemCheckConfig)
     computer_control: ComputerControlConfig = Field(default_factory=ComputerControlConfig)
     guide_engine: GuideEngineConfig = Field(default_factory=GuideEngineConfig)
+    memory_server: MemoryServerConfig = Field(default_factory=MemoryServerConfig)
     window: Any = Field(default=None)
 
     model_config = {

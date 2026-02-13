@@ -36,7 +36,6 @@ class GuideResponse(BaseModel):
 class GuideEngineSettings:
     enabled: bool = True
     gamedata_dir: str = "./data"
-    chroma_persist_dir: str = "./data/chroma"
     embedding_api_base_url: str | None = None
     embedding_api_key: str | None = None
     embedding_api_model: str | None = None
@@ -58,19 +57,15 @@ class GuideEngineSettings:
 
         prompt_dir = ge.prompt_dir
         gamedata_dir = ge.gamedata_dir
-        chroma_persist_dir = ge.chroma_persist_dir
 
         if prompt_dir.startswith("./"):
             prompt_dir = str((root / prompt_dir[2:]).resolve())
         if gamedata_dir.startswith("./"):
             gamedata_dir = str((root / gamedata_dir[2:]).resolve())
-        if chroma_persist_dir.startswith("./"):
-            chroma_persist_dir = str((root / chroma_persist_dir[2:]).resolve())
 
         return cls(
             enabled=ge.enabled,
             gamedata_dir=gamedata_dir,
-            chroma_persist_dir=chroma_persist_dir,
             embedding_api_base_url=ge.embedding_api_base_url or config.api.base_url,
             embedding_api_key=ge.embedding_api_key or config.api.api_key,
             embedding_api_model=ge.embedding_api_model or "text-embedding-3-small",
