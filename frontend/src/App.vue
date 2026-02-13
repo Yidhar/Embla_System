@@ -7,7 +7,7 @@ let _splashDismissed = false
 import { useWindowSize } from '@vueuse/core'
 import Toast from 'primevue/toast'
 import { useToast } from 'primevue/usetoast'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import Live2dModel from '@/components/Live2dModel.vue'
 import LoginDialog from '@/components/LoginDialog.vue'
 import SplashScreen from '@/components/SplashScreen.vue'
@@ -68,6 +68,13 @@ const live2dShouldShow = computed(() => progress.value >= 50 && splashVisible.va
 
 // ─── 登录弹窗状态 ───────────────────────────
 const showLoginDialog = ref(false)
+
+function openLoginDialog() {
+  showLoginDialog.value = true
+}
+
+// 提供给子组件使用
+provide('openLoginDialog', openLoginDialog)
 
 function onSplashDismiss() {
   _splashDismissed = true
