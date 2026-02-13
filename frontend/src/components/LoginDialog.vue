@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { Button, InputText } from 'primevue'
+import { useToast } from 'primevue/usetoast'
 import { ref } from 'vue'
 import { useAuth } from '@/composables/useAuth'
 
-const FORGOT_PASSWORD_URL = 'https://naga.furina.chat/reset-password'
+const toast = useToast()
 
 defineProps<{ visible: boolean }>()
 const emit = defineEmits<{ success: [], skip: [] }>()
@@ -91,7 +92,7 @@ function handleSkip() {
 }
 
 function openForgotPassword() {
-  window.open(FORGOT_PASSWORD_URL, '_blank')
+  toast.add({ severity: 'info', summary: '功能开发中', detail: '密码找回功能尚未开放，请联系管理员', life: 3000 })
 }
 </script>
 

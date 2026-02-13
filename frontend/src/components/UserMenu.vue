@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { useToast } from 'primevue/usetoast'
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { isNagaLoggedIn, nagaUser, useAuth } from '@/composables/useAuth'
 
+const toast = useToast()
 const router = useRouter()
 const { logout } = useAuth()
 const menuOpen = ref(false)
@@ -22,7 +24,7 @@ function goConfig() {
 
 function openModelPlaza() {
   closeMenu()
-  window.open('http://62.234.131.204:30011', '_blank')
+  toast.add({ severity: 'info', summary: '功能开发中', detail: '模型广场功能即将上线', life: 3000 })
 }
 
 async function handleLogout() {
