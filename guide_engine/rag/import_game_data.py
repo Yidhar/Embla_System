@@ -18,12 +18,24 @@ from typing import Dict, Type, List
 
 from .base import BaseProcessor, Document
 from .processors.arknights import ArknightsProcessor
+from .processors.genshin import GenshinProcessor
+from .processors.starrail import StarrailProcessor
+from .processors.zenless import ZenlessProcessor
+from .processors.wutheringwaves import WutheringWavesProcessor
+from .processors.pgr import PGRProcessor
+from .processors.umamusume import UmaMusumeProcessor
 from ..chroma_service import ChromaService
 from ..models import get_guide_engine_settings
 
 # 注册所有处理器
 PROCESSORS: Dict[str, Type[BaseProcessor]] = {
     "arknights": ArknightsProcessor,
+    "genshin": GenshinProcessor,
+    "starrail": StarrailProcessor,
+    "zenless": ZenlessProcessor,
+    "wutheringwaves": WutheringWavesProcessor,
+    "pgr": PGRProcessor,
+    "umamusume": UmaMusumeProcessor,
 }
 
 
