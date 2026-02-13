@@ -102,9 +102,23 @@ def get_user_info() -> Optional[dict]:
     return _user_info
 
 
-async def register(username: str, password: str) -> dict:
+async def register(username: str, email: str, password: str, verification_code: str) -> dict:
     """通过 NagaBusiness 注册新用户"""
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(f"{BUSINESS_URL}/api/auth/register", json={"username": username, "password": password})
+        resp = await client.post(
+            f"{BUSINESS_URL}/api/auth/register",
+            json={"username": username, "email": email, "password": password, "verification_code": verification_code},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def send_verification(email: str, username: str) -> dict:
+    """发送邮箱验证码"""
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(
+            f"{BUSINESS_URL}/api/auth/send-verification",
+            json={"email": email, "username": username},
+        )
         resp.raise_for_status()
         return resp.json()

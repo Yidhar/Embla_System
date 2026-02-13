@@ -9,24 +9,33 @@ const toast = useToast()
 defineProps<{ visible: boolean }>()
 const emit = defineEmits<{ success: [], skip: [] }>()
 
-const { login, register } = useAuth()
+const { login, register, sendVerification } = useAuth()
 
 // 'login' | 'register'
 const mode = ref<'login' | 'register'>('login')
 
 const username = ref('')
+const email = ref('')
 const password = ref('')
 const confirmPassword = ref('')
+const verificationCode = ref('')
 const errorMsg = ref('')
 const successMsg = ref('')
 const loading = ref(false)
+const sendingCode = ref(false)
+const codeSent = ref(false)
+const countdown = ref(0)
 
 function resetForm() {
   username.value = ''
+  email.value = ''
   password.value = ''
   confirmPassword.value = ''
+  verificationCode.value = ''
   errorMsg.value = ''
   successMsg.value = ''
+  codeSent.value = false
+  countdown.value = 0
 }
 
 function switchToRegister() {
@@ -59,8 +68,8 @@ async function handleLogin() {
 }
 
 async function handleRegister() {
-  if (!username.value || !password.value) {
-    errorMsg.value = '请输入用户名和密码'
+  if (!username.value || !email.value || !password.value || !verificationCode.value) {
+    errorMsg.value = '请填写完整信息'
     return
   }
   if (password.value !== confirmPassword.value) {
@@ -71,19 +80,55 @@ async function handleRegister() {
   errorMsg.value = ''
   successMsg.value = ''
   try {
-    await register(username.value, password.value)
-    successMsg.value = '注册成功，请登录'
-    // 注册成功后自动切回登录，保留用户名
-    const savedUsername = username.value
-    switchToLogin()
-    username.value = savedUsername
-    successMsg.value = '注册成功，请登录'
+    const res = await register(username.value, email.value, password.value, verificationCode.value)
+    if (res.success) {
+      // 注册成功且返回了 token，直接登录
+      if (res.accessToken) {
+        emit('success')
+      }
+      else {
+        // 注册成功但没返回 token，切回登录页
+        successMsg.value = '注册成功，请登录'
+        const savedUsername = username.value
+        switchToLogin()
+        username.value = savedUsername
+        successMsg.value = '注册成功，请登录'
+      }
+    }
   }
   catch (e: any) {
-    errorMsg.value = e?.response?.data?.detail || e?.message || '注册失败，请稍后重试'
+    errorMsg.value = e?.response?.data?.message || e?.message || '注册失败，请稍后重试'
   }
   finally {
     loading.value = false
+  }
+}
+
+async function sendCode() {
+  if (!username.value || !email.value) {
+    errorMsg.value = '请先输入用户名和邮箱'
+    return
+  }
+  sendingCode.value = true
+  errorMsg.value = ''
+  try {
+    await sendVerification(email.value, username.value)
+    toast.add({ severity: 'success', summary: '验证码已发送', detail: '请查收邮箱', life: 3000 })
+    codeSent.value = true
+    countdown.value = 60
+    const timer = setInterval(() => {
+      countdown.value -= 1
+      if (countdown.value <= 0) {
+        clearInterval(timer)
+        codeSent.value = false
+      }
+    }, 1000)
+  }
+  catch (e: any) {
+    errorMsg.value = e?.response?.data?.message || e?.message || '发送验证码失败'
+  }
+  finally {
+    sendingCode.value = false
   }
 }
 
@@ -151,24 +196,40 @@ function openForgotPassword() {
               v-model="username"
               placeholder="用户名"
               class="login-input"
-              @keyup.enter="handleRegister"
+            />
+            <InputText
+              v-model="email"
+              type="email"
+              placeholder="邮箱"
+              class="login-input"
             />
             <InputText
               v-model="password"
               type="password"
               placeholder="密码"
               class="login-input"
-              @keyup.enter="handleRegister"
             />
-            <InputText
-              v-model="confirmPassword"
-              type="password"
-              placeholder="确认密码"
-              class="login-input"
-              @keyup.enter="handleRegister"
-            />
+            <div class="verification-row">
+              <InputText
+                v-model="verificationCode"
+                placeholder="验证码"
+                class="login-input flex-1"
+                @keyup.enter="handleRegister"
+              />
+              <Button
+                :label="codeSent ? `${countdown}s` : '发送验证码'"
+                :loading="sendingCode"
+                :disabled="codeSent"
+                class="send-code-btn"
+                size="small"
+                @click="sendCode"
+              />
+            </div>
             <div v-if="errorMsg" class="login-error">
               {{ errorMsg }}
+            </div>
+            <div v-if="successMsg" class="login-success">
+              {{ successMsg }}
             </div>
             <Button
               label="注 册"
@@ -228,6 +289,35 @@ function openForgotPassword() {
 
 .login-input {
   width: 100%;
+}
+
+.verification-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.verification-row .flex-1 {
+  flex: 1;
+}
+
+.send-code-btn {
+  min-width: 100px;
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.7), rgba(180, 140, 30, 0.7));
+  border: none;
+  color: #1a1206;
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+
+.send-code-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.9), rgba(180, 140, 30, 0.9));
+}
+
+.send-code-btn:disabled {
+  background: rgba(150, 150, 150, 0.3);
+  color: rgba(255, 255, 255, 0.4);
+  cursor: not-allowed;
 }
 
 .login-error {
