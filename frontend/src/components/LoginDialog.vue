@@ -17,7 +17,6 @@ const mode = ref<'login' | 'register'>('login')
 const username = ref('')
 const email = ref('')
 const password = ref('')
-const confirmPassword = ref('')
 const verificationCode = ref('')
 const errorMsg = ref('')
 const successMsg = ref('')
@@ -25,17 +24,21 @@ const loading = ref(false)
 const sendingCode = ref(false)
 const codeSent = ref(false)
 const countdown = ref(0)
+let countdownTimer: ReturnType<typeof setInterval> | null = null
 
 function resetForm() {
   username.value = ''
   email.value = ''
   password.value = ''
-  confirmPassword.value = ''
   verificationCode.value = ''
   errorMsg.value = ''
   successMsg.value = ''
   codeSent.value = false
   countdown.value = 0
+  if (countdownTimer) {
+    clearInterval(countdownTimer)
+    countdownTimer = null
+  }
 }
 
 function switchToRegister() {
@@ -70,10 +73,6 @@ async function handleLogin() {
 async function handleRegister() {
   if (!username.value || !email.value || !password.value || !verificationCode.value) {
     errorMsg.value = '请填写完整信息'
-    return
-  }
-  if (password.value !== confirmPassword.value) {
-    errorMsg.value = '两次输入的密码不一致'
     return
   }
   loading.value = true
@@ -116,10 +115,11 @@ async function sendCode() {
     toast.add({ severity: 'success', summary: '验证码已发送', detail: '请查收邮箱', life: 3000 })
     codeSent.value = true
     countdown.value = 60
-    const timer = setInterval(() => {
+    countdownTimer = setInterval(() => {
       countdown.value -= 1
       if (countdown.value <= 0) {
-        clearInterval(timer)
+        clearInterval(countdownTimer!)
+        countdownTimer = null
         codeSent.value = false
       }
     }, 1000)
