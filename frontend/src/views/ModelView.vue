@@ -5,6 +5,7 @@ import { computed } from 'vue'
 import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
+import { isNagaLoggedIn, nagaUser } from '@/composables/useAuth'
 import { CONFIG } from '@/utils/config'
 
 const accordionValue = useStorage('accordion-model', ['asr'])
@@ -38,14 +39,26 @@ const TTS_VOICES = {
     <Accordion :value="accordionValue" class="pb-8" multiple>
       <ConfigGroup value="llm" header="大语言模型">
         <div class="grid gap-4">
-          <ConfigItem name="大语言模型" description="用于对话的大语言模型">
+          <ConfigItem name="模型名称" description="用于对话的大语言模型">
             <InputText v-model="CONFIG.api.model" />
           </ConfigItem>
-          <ConfigItem name="大语言模型 API 地址" description="大语言模型的 API 地址">
-            <InputText v-model="CONFIG.api.base_url" />
+          <ConfigItem name="API 地址" description="大语言模型的 API 地址">
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆 ({{ nagaUser?.username }})，使用 NagaModel 网关</span>
+            <InputText v-else v-model="CONFIG.api.base_url" />
           </ConfigItem>
-          <ConfigItem name="大语言模型 API 密钥" description="大语言模型的 API 的密钥">
-            <InputText v-model="CONFIG.api.api_key" />
+          <ConfigItem name="API 密钥" description="大语言模型的 API 密钥">
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆 ({{ nagaUser?.username }})，无需输入</span>
+            <InputText v-else v-model="CONFIG.api.api_key" type="password" />
+          </ConfigItem>
+          <Divider class="m-1!" />
+          <ConfigItem name="最大令牌数" description="单次对话的最大长度限制">
+            <InputNumber v-model="CONFIG.api.max_tokens" show-buttons />
+          </ConfigItem>
+          <ConfigItem name="历史轮数" description="使用最近几轮对话内容作为上下文">
+            <InputNumber v-model="CONFIG.api.max_history_rounds" show-buttons />
+          </ConfigItem>
+          <ConfigItem name="加载天数" description="从最近几天的日志文件中加载历史对话">
+            <InputNumber v-model="CONFIG.api.context_load_days" show-buttons />
           </ConfigItem>
         </div>
       </ConfigGroup>
@@ -151,3 +164,11 @@ const TTS_VOICES = {
     </Accordion>
   </BoxContainer>
 </template>
+
+<style scoped>
+.naga-authed {
+  color: #4ade80;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+</style>
