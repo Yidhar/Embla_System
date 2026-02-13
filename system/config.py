@@ -334,7 +334,6 @@ class GuideEngineConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="是否启用游戏攻略引擎")
     gamedata_dir: str = Field(default="./data", description="游戏数据目录（存放各游戏的JSON数据文件）")
-    chroma_persist_dir: str = Field(default="./data/chroma", description="ChromaDB持久化目录")
     embedding_api_base_url: str | None = Field(
         default=None, description="OpenAI兼容Embedding API地址（如 https://xx/v1）"
     )
