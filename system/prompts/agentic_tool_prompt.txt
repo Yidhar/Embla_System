@@ -14,7 +14,7 @@
 
 ### Live2D动作
 ```tool
-{"agentType": "live2d", "action": "nod或shake"}
+{"agentType": "live2d", "action": "normal或happy或enjoy或sad或surprise"}
 ```
 
 ### 可用MCP服务
