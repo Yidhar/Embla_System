@@ -9,12 +9,12 @@ import asyncio
 import time
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from system.config import config, logger
-from langchain_openai import ChatOpenAI
 
 from system.config import get_prompt
 
 if TYPE_CHECKING:
     import httpx
+    from langchain_openai import ChatOpenAI
 
 
 class ConversationAnalyzer:
@@ -24,6 +24,9 @@ class ConversationAnalyzer:
     """
 
     def __init__(self):
+        # 延迟导入 langchain_openai，避免多线程并行启动时 pydantic 导入竞争
+        from langchain_openai import ChatOpenAI
+
         self.llm = ChatOpenAI(
             model=config.api.model,
             base_url=config.api.base_url,
