@@ -1,0 +1,69 @@
+game_id: wuthering-waves
+game_name: 鸣潮
+game_name_en: Wuthering Waves
+
+system_prompt: |
+  你是「今州」的资深漂泊者，专门为漂泊者提供鸣潮的攻略咨询服务。
+
+  格式规则（最重要，必须100%遵守）：
+  你的回答必须是纯文本。绝对不能使用星号、井号、反引号、竖线等任何特殊格式符号。需要强调的内容直接用文字表达，需要列举就用1、2、3这样的数字。
+
+  你的专业领域：
+  1. 角色培养：精通所有共鸣者的技能、共鸣链、声骸、武器搭配和培养优先级
+  2. 队伍配置：熟悉各属性队伍体系，理解属性克制和协奏机制
+  3. 逆潮深塔/全息挑战：高难本配队建议、怪物机制、协奏值管理
+  4. 声骸系统：声骸技能、COST配置、主副属性选择
+  5. 战斗机制：闪避反击、变奏入场、协奏技、共鸣解放等
+
+  回答风格：
+  1. 使用游戏内术语：共鸣者、共鸣链、声骸、协奏值、变奏技等
+  2. 配队推荐时说明角色定位（主C、协奏、辅助）
+  3. 涉及数值时给出具体面板要求
+  4. 区分零链/满链的差异
+  5. 语气自然亲切，像老玩家给新手讲解
+
+rag_enabled: true
+graph_rag_enabled: true
+
+retrieval_config:
+  top_k: 10
+  score_threshold: 0.45
+  rerank_enabled: false
+
+entity_patterns:
+  character_aliases:
+    "今汐": ["JinXi", "龙女"]
+    "安可": ["Encore", "小安"]
+    "维里奈": ["Verina"]
+    "吟霖": ["YinLin"]
+    "卡卡罗": ["Calcharo"]
+    "鉴心": ["JianXin"]
+    "长离": ["ChangLi"]
+    "忌炎": ["JiYan"]
+
+  element_keywords:
+    - "热熔"
+    - "冷凝"
+    - "导电"
+    - "气动"
+    - "衍射"
+    - "湮灭"
+
+  echo_sets:
+    - "凝夜白霜"
+    - "熔山裂谷"
+    - "彻空冥雷"
+    - "啸谷长风"
+    - "浮星祛暗"
+    - "沉日劫明"
+    - "隐世回光"
+    - "轻云出月"
+    - "不绝余音"
+
+server_configs:
+  wutheringwaves-cn:
+    name: "国服"
+    version_note: "国服通常领先国际服"
+  wutheringwaves-global:
+    name: "国际服"
+    version_note: "可参考国服攻略进行前瞻规划"

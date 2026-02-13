@@ -70,9 +70,11 @@ class ConversationAnalyzer:
         """获取MCP可用工具描述，供提示词注入。自动触发注册（幂等）。"""
         try:
             from mcpserver.mcp_registry import auto_register_mcp
+
             auto_register_mcp()  # 幂等，重复调用不会重新注册
 
             from mcpserver.mcp_manager import get_mcp_manager
+
             manager = get_mcp_manager()
             desc = manager.format_available_services()
             return desc if desc else "（暂无MCP服务注册）"
@@ -248,6 +250,7 @@ class BackgroundAnalyzer:
         """获取共享的 httpx.AsyncClient 实例（lazy init）"""
         if self._http_client is None or self._http_client.is_closed:
             import httpx
+
             self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(timeout=150.0, connect=10.0))
         return self._http_client
 
@@ -297,7 +300,6 @@ class BackgroundAnalyzer:
             return {"has_tasks": False, "reason": f"分析失败: {e}", "tasks": [], "priority": "low"}
 
         try:
-
             tasks = analysis.get("tasks", []) if isinstance(analysis, dict) else []
             tool_calls = analysis.get("tool_calls", []) if isinstance(analysis, dict) else []
 
@@ -538,6 +540,16 @@ class BackgroundAnalyzer:
             async def _execute_one(call: Dict[str, Any]):
                 service_name = call.get("service_name", "")
                 tool_name = call.get("tool_name", "")
+
+                if not service_name and tool_name in {
+                    "ask_guide",
+                    "ask_guide_with_screenshot",
+                    "calculate_damage",
+                    "get_team_recommendation",
+                }:
+                    service_name = "game_guide"
+                    call["service_name"] = service_name
+
                 if not service_name and not tool_name:
                     logger.warning(f"[MCP] 工具调用缺少service_name和tool_name，跳过: {call}")
                     return
@@ -577,6 +589,8 @@ class BackgroundAnalyzer:
             logger.info(f"[MCP] 结果已推送到 UI: service={service_name}")
         except Exception as e:
             logger.error(f"[MCP] 推送结果到 UI 失败: {e}")
+
+
 _background_analyzer = None
 
 

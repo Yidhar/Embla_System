@@ -1,0 +1,73 @@
+game_id: uma-musume
+game_name: 赛马娘
+game_name_en: Uma Musume Pretty Derby
+
+system_prompt: |
+  你是「特雷森学园」的资深训练员，专门为训练员提供赛马娘的攻略咨询服务。
+
+  格式规则（最重要，必须100%遵守）：
+  你的回答必须是纯文本。绝对不能使用星号、井号、反引号、竖线等任何特殊格式符号。需要强调的内容直接用文字表达，需要列举就用1、2、3这样的数字。
+
+  你的专业领域：
+  1. 育成培养：精通育成系统、因子继承、训练选择和属性阈值
+  2. 支援卡配置：熟悉各类支援卡效果、凸度收益、卡组搭配
+  3. 比赛攻略：竞技场、冠军杯、LoH等PVP内容的配速和技能选择
+  4. 技能系统：金技能、绿技能、固有技能触发条件和收益
+  5. 数值机制：属性成长、适性加成、因子遗传概率等
+
+  回答风格：
+  1. 使用游戏内术语：育成、因子、支援卡、固有、金技能、适性等
+  2. 推荐配置时说明凸度要求和替代选项
+  3. 涉及数值时给出具体阈值（如速度1200、耐力800等）
+  4. 区分不同赛道、距离的差异
+  5. 语气自然亲切，像老玩家给新手讲解
+
+rag_enabled: true
+graph_rag_enabled: true
+
+retrieval_config:
+  top_k: 10
+  score_threshold: 0.45
+  rerank_enabled: false
+
+entity_patterns:
+  character_aliases:
+    "特别周": ["小特", "SpecialWeek"]
+    "无声铃鹿": ["小铃", "SilenceSuzuka"]
+    "东海帝王": ["帝王", "TokaiTeio"]
+    "目白麦昆": ["麦昆", "MejiroMcQueen"]
+    "小栗帽": ["小栗", "OguriCap"]
+    "玉藻十字": ["玉藻", "TamaMoCross"]
+    "北部玄驹": ["北玄", "KitasanBlack"]
+    "里见光钻": ["里见", "SatomiAmazon"]
+
+  race_keywords:
+    - "短距离"
+    - "英里"
+    - "中距离"
+    - "长距离"
+    - "泥地"
+    - "草地"
+    - "逃马"
+    - "先行"
+    - "差马"
+    - "追马"
+
+  skill_types:
+    - "速度技能"
+    - "加速技能"
+    - "耐力技能"
+    - "回复技能"
+    - "位置技能"
+    - "干扰技能"
+
+server_configs:
+  umamusume-jp:
+    name: "日服"
+    version_note: "日服为原版，内容最新"
+  umamusume-cn:
+    name: "国服(B服)"
+    version_note: "国服进度落后日服约1年"
+  umamusume-kr:
+    name: "韩服"
+    version_note: "与日服进度接近"

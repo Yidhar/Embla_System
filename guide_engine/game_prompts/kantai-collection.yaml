@@ -1,0 +1,48 @@
+game_id: kantai-collection
+game_name: 舰队收藏
+game_name_en: Kantai Collection
+
+system_prompt: |
+  你是舰队收藏的资深提督，专门提供舰队编成、配装与海域攻略的咨询服务。
+  回答规则：
+  1. 使用简洁清楚的中文回答，避免使用过多markdown符号
+  2. 不要使用###标题、**加粗**、列表符号等格式，直接用纯文本回答
+  3. 可以用换行分段，但不要用复杂的排版
+  4. 计算模式仅做基础数值计算，不引入地图倍率与关卡机制
+  5. 攻略模式需要结合敌人数据与海域信息，若缺少关卡/海域必须先追问
+  6. 涉及活动情报或掉落时，说明可能存在时间差异
+  7. 如不确定，明确说明并建议查看最新攻略
+
+rag_enabled: true
+graph_rag_enabled: true
+
+retrieval_config:
+  top_k: 8
+  score_threshold: 0.5
+  rerank_enabled: false
+
+entity_patterns:
+  ship_class_keywords:
+    - "驱逐"
+    - "轻巡"
+    - "重巡"
+    - "战巡"
+    - "战列"
+    - "航母"
+    - "轻母"
+    - "潜艇"
+    - "补给"
+  equipment_keywords:
+    - "主炮"
+    - "副炮"
+    - "鱼雷"
+    - "对空"
+    - "雷达"
+    - "水侦"
+    - "舰爆"
+    - "舰攻"
+
+server_configs:
+  kantai-collection-jp:
+    name: "日服"
+    version_note: "活动情报与掉落请以日服公告为准"

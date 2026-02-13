@@ -321,6 +321,29 @@ class ComputerControlConfig(BaseModel):
     safe_mode: bool = Field(default=True, description="是否启用安全模式（限制高风险操作）")
 
 
+class GuideEngineConfig(BaseModel):
+    """游戏攻略引擎配置"""
+
+    enabled: bool = Field(default=True, description="是否启用游戏攻略引擎")
+    gamedata_dir: str = Field(default="./data", description="游戏数据目录（存放各游戏的JSON数据文件）")
+    chroma_persist_dir: str = Field(default="./data/chroma", description="ChromaDB持久化目录")
+    embedding_api_base_url: str | None = Field(
+        default=None, description="OpenAI兼容Embedding API地址（如 https://xx/v1）"
+    )
+    embedding_api_key: str | None = Field(default=None, description="OpenAI兼容Embedding API密钥")
+    embedding_api_model: str | None = Field(default=None, description="OpenAI兼容Embedding模型名")
+    game_guide_llm_api_base_url: str | None = Field(default=None, description="攻略专用LLM API地址（需支持图片输入，留空回退到api.base_url）")
+    game_guide_llm_api_key: str | None = Field(default=None, description="攻略专用LLM API密钥（留空回退到api.api_key）")
+    game_guide_llm_api_model: str | None = Field(default=None, description="攻略专用LLM模型名（需支持图片输入，留空回退到api.model）")
+    game_guide_llm_api_type: str = Field(default="openai", description="攻略专用LLM API类型（openai/gemini）")
+    prompt_dir: str = Field(default="./guide_engine/game_prompts", description="游戏Prompt目录")
+    neo4j_uri: str = Field(default="neo4j://127.0.0.1:7687", description="攻略图谱Neo4j URI")
+    neo4j_user: str = Field(default="neo4j", description="攻略图谱Neo4j用户名")
+    neo4j_password: str = Field(default="your_password", description="攻略图谱Neo4j密码")
+    screenshot_monitor_index: int = Field(default=1, ge=1, description="自动截图显示器索引（mss）")
+    auto_screenshot_on_guide: bool = Field(default=True, description="攻略工具调用时是否默认自动截图")
+
+
 # 天气服务使用免费API，无需配置
 
 
@@ -687,6 +710,7 @@ class NagaConfig(BaseModel):
     openclaw: OpenClawConfig = Field(default_factory=OpenClawConfig)
     system_check: SystemCheckConfig = Field(default_factory=SystemCheckConfig)
     computer_control: ComputerControlConfig = Field(default_factory=ComputerControlConfig)
+    guide_engine: GuideEngineConfig = Field(default_factory=GuideEngineConfig)
     window: Any = Field(default=None)
 
     model_config = {
