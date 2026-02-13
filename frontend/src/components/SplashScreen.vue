@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import NetworkCanvas from '@/components/NetworkCanvas.vue'
+import { CONFIG } from '@/utils/config'
 
 const props = defineProps<{
   progress: number
@@ -43,6 +44,11 @@ const displayProgress = computed(() => Math.min(100, Math.round(props.progress))
           :style="{ width: `${displayProgress}%` }"
         />
       </div>
+    </div>
+
+    <!-- 左下角版本号 -->
+    <div class="version-label">
+      v{{ CONFIG.system.version }}
     </div>
 
     <!-- 点击进入提示 -->
@@ -92,6 +98,17 @@ const displayProgress = computed(() => Math.min(100, Math.round(props.progress))
   border: 1px solid rgba(212, 175, 55, 0.4);
   box-shadow: 0 0 15px rgba(212, 175, 55, 0.15), inset 0 0 15px rgba(212, 175, 55, 0.05);
   pointer-events: none;
+}
+
+/* 左下角版本号 */
+.version-label {
+  position: absolute;
+  bottom: 1.2rem;
+  left: 1.5rem;
+  font-size: 0.75rem;
+  color: rgba(212, 175, 55, 0.35);
+  letter-spacing: 0.08em;
+  font-family: 'Segoe UI', sans-serif;
 }
 
 /* 点击进入脉冲动画 */

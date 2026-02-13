@@ -25,7 +25,7 @@ export const DEFAULT_MODEL: keyof typeof MODELS = 'NagaTest'
 
 export const DEFAULT_CONFIG = {
   system: {
-    version: '4.0', // 系统版本号
+    version: '5.0.0', // 系统版本号
     ai_name: '娜杰日达', // AI助手名称
     voice_enabled: true, // 是否启用语音功能
     stream_mode: true, // 是否启用流式响应
@@ -36,7 +36,7 @@ export const DEFAULT_CONFIG = {
   api: {
     api_key: 'your-api-key-here', // LLM API密钥
     base_url: 'https://api.deepseek.com/v1', // API基础URL
-    model: 'deepseek-chat', // 使用的模型名称
+    model: 'deepseek-v3.2', // 使用的模型名称
     temperature: 0.7, // 生成温度 (0.0-2.0)
     max_tokens: 8192, // 最大token数
     max_history_rounds: 10, // 最大历史对话轮数

@@ -3,8 +3,7 @@ import { CONFIG } from '@/utils/config'
 
 // NagaBusiness 统一网关地址（与 naga_auth.py BUSINESS_URL 保持一致）
 const UPDATE_BASE_URL = 'http://62.234.131.204:30031'
-// TODO: 在 NagaBusiness 管理后台创建应用后填入实际 APP_ID
-const APP_ID = '00000000-0000-0000-0000-000000000000'
+const APP_ID = 'NagaAgent'
 
 export interface UpdateInfo {
   hasUpdate: boolean
@@ -51,7 +50,7 @@ export async function checkForUpdate(): Promise<void> {
       file_size: number | null
     }
 
-    const currentVersion = CONFIG.value.system.version ?? '4.0'
+    const currentVersion = CONFIG.value.system.version ?? '5.0.0'
     if (data.version === currentVersion) return
 
     updateInfo.value = {

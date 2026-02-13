@@ -140,7 +140,7 @@ def bootstrap_config_from_example(config_path: str) -> None:
 class SystemConfig(BaseModel):
     """系统基础配置"""
 
-    version: str = Field(default="4.0.0", description="系统版本号")
+    version: str = Field(default="5.0.0", description="系统版本号")
     ai_name: str = Field(default="娜迦日达", description="AI助手名称")
     base_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent, description="项目根目录")
     log_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "logs", description="日志目录")
@@ -164,7 +164,7 @@ class APIConfig(BaseModel):
 
     api_key: str = Field(default="sk-placeholder-key-not-set", description="API密钥")
     base_url: str = Field(default="https://api.deepseek.com/v1", description="API基础URL")
-    model: str = Field(default="deepseek-chat", description="使用的模型名称")
+    model: str = Field(default="deepseek-v3.2", description="使用的模型名称")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="温度参数")
     max_tokens: int = Field(default=10000, ge=1, le=32768, description="最大token数")
     max_history_rounds: int = Field(default=100, ge=1, le=200, description="最大历史轮数")
