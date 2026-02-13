@@ -2,13 +2,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from guide_engine import GuideRequest, get_guide_service
+from guide_engine import GuideRequest
 from guide_engine.models import get_guide_engine_settings
 
 
 class GuideTools:
     def __init__(self) -> None:
-        self.guide_service = get_guide_service()
+        self._guide_service = None
+
+    @property
+    def guide_service(self):
+        if self._guide_service is None:
+            from guide_engine import get_guide_service
+
+            self._guide_service = get_guide_service()
+        return self._guide_service
 
     async def ask_guide(
         self,

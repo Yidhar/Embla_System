@@ -3,7 +3,10 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from neo4j import AsyncGraphDatabase
+try:
+    from neo4j import AsyncGraphDatabase
+except ImportError:
+    AsyncGraphDatabase = None  # type: ignore[assignment,misc]
 
 from .models import get_guide_engine_settings
 
@@ -22,6 +25,8 @@ class Neo4jService:
     async def connect(self):
         """连接 Neo4j"""
         if self._driver is None:
+            if AsyncGraphDatabase is None:
+                raise RuntimeError("neo4j 未安装，请运行 pip install neo4j 或禁用攻略引擎的图数据库功能")
             settings = get_guide_engine_settings()
             self._driver = AsyncGraphDatabase.driver(
                 settings.neo4j_uri, auth=(settings.neo4j_user, settings.neo4j_password)

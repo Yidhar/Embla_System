@@ -460,7 +460,7 @@ async def auth_me():
     user = await naga_auth.get_me()
     if not user:
         raise HTTPException(status_code=401, detail="token 已失效")
-    return {"user": user}
+    return {"user": user, "memory_url": naga_auth.NAGA_MEMORY_URL}
 
 
 @app.post("/auth/logout")

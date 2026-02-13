@@ -104,6 +104,7 @@ class RemoteMemoryClient:
 # ---- 全局单例 ----
 
 _client: Optional[RemoteMemoryClient] = None
+_client_token: Optional[str] = None
 
 
 def get_remote_memory_client() -> Optional[RemoteMemoryClient]:
@@ -112,9 +113,9 @@ def get_remote_memory_client() -> Optional[RemoteMemoryClient]:
 
     仅当 config.memory_server.enabled == True 时返回实例，
     否则返回 None（调用方应回退到本地 summer_memory）。
-    每次调用会重新检查 config.memory_server.enabled，支持热更新。
+    每次调用会重新检查 config，支持热更新和 token 刷新。
     """
-    global _client
+    global _client, _client_token
 
     try:
         from system.config import config
@@ -128,13 +129,20 @@ def get_remote_memory_client() -> Optional[RemoteMemoryClient]:
         if _client is not None:
             logger.info("NagaMemory 远程客户端已因配置关闭而释放")
             _client = None
+            _client_token = None
         return None
+
+    # Token 变更时（如登录/登出/刷新），重新创建客户端
+    if _client is not None and ms.token != _client_token:
+        logger.info("NagaMemory token 已变更，重新创建客户端")
+        _client = None
 
     if _client is not None:
         return _client
 
     try:
         _client = RemoteMemoryClient(base_url=ms.url, token=ms.token)
+        _client_token = ms.token
         logger.info(f"NagaMemory 远程客户端已创建: {ms.url}")
         return _client
     except Exception as e:

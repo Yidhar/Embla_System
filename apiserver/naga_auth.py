@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 BUSINESS_URL = "http://62.234.131.204:30031"
 # 兼容旧代码，LLM 调用也走 NagaBusiness
 NAGA_MODEL_URL = BUSINESS_URL
+# NagaMemory 远程记忆服务地址（NebulaGraph 后端）
+NAGA_MEMORY_URL = f"{BUSINESS_URL}/api/memory"
 
 # 模块级认证状态（单用户场景）
 _access_token: Optional[str] = None
@@ -47,6 +49,7 @@ async def login(username: str, password: str) -> dict:
         "user": _user_info,
         "access_token": _access_token,
         "refresh_token": _refresh_token,
+        "memory_url": NAGA_MEMORY_URL,
     }
 
 

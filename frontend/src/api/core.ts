@@ -341,11 +341,12 @@ export class CoreApiClient extends ApiClient {
     user: { username: string, sub?: string } | null
     accessToken: string
     refreshToken: string
+    memoryUrl?: string
   }> {
     return this.instance.post('/auth/login', { username, password })
   }
 
-  authMe(): Promise<{ user: { username: string, sub?: string } }> {
+  authMe(): Promise<{ user: { username: string, sub?: string }, memoryUrl?: string }> {
     return this.instance.get('/auth/me')
   }
 
