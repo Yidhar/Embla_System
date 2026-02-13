@@ -469,13 +469,15 @@ async def auth_logout():
 
 @app.post("/auth/register")
 async def auth_register(body: dict):
-    """NagaCAS 注册"""
+    """NagaBusiness 注册"""
     username = body.get("username", "")
+    email = body.get("email", "")
     password = body.get("password", "")
-    if not username or not password:
-        raise HTTPException(status_code=400, detail="用户名和密码不能为空")
+    verification_code = body.get("verification_code", "")
+    if not username or not email or not password or not verification_code:
+        raise HTTPException(status_code=400, detail="用户名、邮箱、密码和验证码不能为空")
     try:
-        result = await naga_auth.register(username, password)
+        result = await naga_auth.register(username, email, password, verification_code)
         return {"success": True, **result}
     except Exception as e:
         import httpx
@@ -488,6 +490,30 @@ async def auth_register(body: dict):
             except Exception:
                 pass
         logger.error(f"注册失败: {e}")
+        raise HTTPException(status_code=status, detail=detail)
+
+
+@app.post("/auth/send-verification")
+async def auth_send_verification(body: dict):
+    """发送邮箱验证码"""
+    email = body.get("email", "")
+    username = body.get("username", "")
+    if not email or not username:
+        raise HTTPException(status_code=400, detail="邮箱和用户名不能为空")
+    try:
+        result = await naga_auth.send_verification(email, username)
+        return {"success": True, "message": "验证码已发送"}
+    except Exception as e:
+        import httpx
+        status = 500
+        detail = f"发送验证码失败: {str(e)}"
+        if isinstance(e, httpx.HTTPStatusError):
+            status = e.response.status_code
+            try:
+                detail = e.response.json().get("message", detail)
+            except Exception:
+                pass
+        logger.error(f"发送验证码失败: {e}")
         raise HTTPException(status_code=status, detail=detail)
 
 

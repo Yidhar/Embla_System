@@ -348,10 +348,20 @@ export class CoreApiClient extends ApiClient {
     return this.instance.post('/auth/logout')
   }
 
-  authRegister(username: string, password: string): Promise<{
+  authRegister(username: string, email: string, password: string, verificationCode: string): Promise<{
     success: boolean
+    user?: { username: string, email: string, sub?: string }
+    accessToken?: string
+    refreshToken?: string
   }> {
-    return this.instance.post('/auth/register', { username, password })
+    return this.instance.post('/auth/register', { username, email, password, verification_code: verificationCode })
+  }
+
+  authSendVerification(email: string, username: string): Promise<{
+    success: boolean
+    message: string
+  }> {
+    return this.instance.post('/auth/send-verification', { email, username })
   }
 }
 

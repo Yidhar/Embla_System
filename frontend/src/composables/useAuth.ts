@@ -20,9 +20,18 @@ export function useAuth() {
     return res
   }
 
-  async function register(username: string, password: string) {
-    const res = await coreApi.authRegister(username, password)
+  async function register(username: string, email: string, password: string, verificationCode: string) {
+    const res = await coreApi.authRegister(username, email, password, verificationCode)
+    if (res.success && res.accessToken) {
+      ACCESS_TOKEN.value = res.accessToken
+      REFRESH_TOKEN.value = res.refreshToken
+      nagaUser.value = res.user || null
+    }
     return res
+  }
+
+  async function sendVerification(email: string, username: string) {
+    return await coreApi.authSendVerification(email, username)
   }
 
   async function fetchMe() {
@@ -61,5 +70,5 @@ export function useAuth() {
     }
   }
 
-  return { login, register, fetchMe, logout, skipLogin }
+  return { login, register, sendVerification, fetchMe, logout, skipLogin }
 }
