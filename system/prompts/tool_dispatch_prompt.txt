@@ -24,11 +24,37 @@
 - `game_guide` 的 `ask_guide` 默认自动截图，不需要用户先上传图片
 - `game_id` 可不传；当未提供时，系统会在截图后自动识别游戏
 
-### 游戏攻略推荐调用
+### 游戏攻略调用示例
+不指定 game_id（自动截图识别游戏）：
+{{
+"agentType": "mcp",
+"service_name": "game_guide",
+"tool_name": "ask_guide",
+"query": "这关怎么打"
+}}
+
+指定 game_id：
 {{
 "agentType": "mcp",
 "service_name": "game_guide",
 "tool_name": "ask_guide",
 "game_id": "arknights",
 "query": "这关怎么打"
+}}
+
+伤害计算：
+{{
+"agentType": "mcp",
+"service_name": "game_guide",
+"tool_name": "calculate_damage",
+"game_id": "arknights",
+"query": "缪尔赛思S3M3打800防DPS"
+}}
+
+配队推荐：
+{{
+"agentType": "mcp",
+"service_name": "game_guide",
+"tool_name": "get_team_recommendation",
+"query": "7-18低配怎么组队"
 }}

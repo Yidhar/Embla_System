@@ -10,7 +10,10 @@
 - [4. 快速功能验证（无需外部服务）](#4-快速功能验证无需外部服务)
 - [5. 新功能测试场景](#5-新功能测试场景)
 - [6. 真实场景集成测试](#6-真实场景集成测试)
-- [7. 过关标准](#7-过关标准)
+- [6.7. ChromaDB 向量搜索验证](#67-chromadb-向量搜索验证)
+- [6.8. Kantai 海域攻略搜索测试](#68-kantai-海域攻略搜索测试)
+- [6.9. Kantai 装备/舰娘搜索测试](#69-kantai-装备舰娘搜索测试)
+- [6.10. Kantai 深海栖舰搜索测试](#610-kantai-深海栖舰搜索测试)
 - [8. 常见问题排查](#8-常见问题排查)
 
 ---
@@ -74,10 +77,10 @@ cp config.json.example config.json
     "embedding_api_key": "sk-your-embedding-key",
     "embedding_api_model": "text-embedding-3-small",
 
-    // 视觉模型（可选，用于截图识别）
-    "vision_api_base_url": "https://你的视觉网关/v1",
-    "vision_api_key": "sk-your-vision-key",
-    "vision_api_model": "qwen-vl-plus",
+    // 攻略专用LLM（可选，需支持图片输入）
+    "game_guide_llm_api_base_url": "https://你的视觉网关/v1",
+    "game_guide_llm_api_key": "sk-your-vision-key",
+    "game_guide_llm_api_model": "qwen-vl-plus",
 
     // Neo4j（可选）
     "neo4j_uri": "bolt://127.0.0.1:7687",
@@ -95,7 +98,7 @@ cp config.json.example config.json
 **配置说明**：
 
 - `embedding_api_*`：向量嵌入服务，必须配置且可用
-- `vision_api_*`：视觉模型，留空则回退到 `api.*` 配置
+- `game_guide_llm_api_*`：攻略专用LLM，需支持图片输入，留空则回退到 `api.*` 配置
 - `neo4j_*`：图数据库，不配置则图谱功能降级
 - `auto_screenshot_on_guide`：默认是否自动截图
 
@@ -506,6 +509,161 @@ uv run python scripts/test_game_guide_tool_call.py \
 
 ---
 
+### 6.7 ChromaDB 向量搜索验证
+
+**功能说明**：验证 ChromaDB 4 个 collection 的向量搜索在不同搜索模式下均能正常返回结果。
+
+**前置条件**：
+
+- Embedding API（Ollama nomic-embed-text-v2-moe）运行中
+- ChromaDB 已导入数据（4 个 collection）
+
+**当前 ChromaDB 数据概况**：
+
+| Collection | 文档数 | 内容 |
+|------------|--------|------|
+| `game_arknights_guides` | 4087 | 干员/敌人（攻略用） |
+| `game_arknights` | 4087 | 干员/敌人（Wiki用） |
+| `game_kantai_collection` | 1608 | 舰娘831 + 装备717 + 公式24 + 海域36 |
+| `game_kantai_collection_enemies` | 841 | 深海栖舰 |
+
+**测试命令（一键验证全部搜索模式）**：
+
+```bash
+uv run --no-sync python3 -c "
+import asyncio
+from guide_engine.chroma_service import ChromaService
+
+async def test():
+    s = ChromaService()
+    tests = [
+        ('arknights', '银灰技能', 'full', '全模式搜索干员'),
+        ('arknights', '源石尘感染者', 'wiki_only', 'Wiki搜索敌人'),
+        ('arknights', '大鲍勃', 'guides_only', 'Guides搜索BOSS'),
+        ('kantai-collection', '2-4带路', 'wiki_only', '海域攻略搜索'),
+        ('kantai-collection', '46cm三连装砲', 'wiki_only', '装备搜索'),
+        ('kantai-collection', '深海栖舰', 'enemy_only', '深海敌舰搜索'),
+        ('kantai-collection', 'getDayBattlePower', 'wiki_only', '伤害公式搜索'),
+    ]
+    passed = 0
+    failed = 0
+    for game_id, query, mode, desc in tests:
+        results = await s.search(game_id, query, top_k=3, score_threshold=0.3, search_mode=mode)
+        if results:
+            scores = [f\"{r['score']:.2f}\" for r in results]
+            print(f'  OK  {desc}: \"{query}\" -> {len(results)}条 {scores}')
+            passed += 1
+        else:
+            print(f'  FAIL {desc}: \"{query}\" -> 无结果')
+            failed += 1
+    print(f'\n结果: {passed}/{passed+failed} 通过')
+
+asyncio.run(test())
+"
+```
+
+**预期输出**：
+
+```
+  OK  全模式搜索干员: "银灰技能" -> 3条 ['0.58', '0.55', '0.52']
+  OK  Wiki搜索敌人: "源石尘感染者" -> 3条 ['0.49', '0.45', '0.42']
+  OK  Guides搜索BOSS: "大鲍勃" -> 3条 ['0.55', '0.50', '0.48']
+  OK  海域攻略搜索: "2-4带路" -> 3条 ['0.60', '0.55', '0.50']
+  OK  装备搜索: "46cm三连装砲" -> 3条 ['0.65', '0.55', '0.50']
+  OK  深海敌舰搜索: "深海栖舰" -> 3条 ['0.55', '0.50', '0.45']
+  OK  伤害公式搜索: "getDayBattlePower" -> 3条 ['0.60', '0.55', '0.50']
+
+结果: 7/7 通过
+```
+
+（具体分数会有差异，关键是全部显示 OK 且有结果返回）
+
+**过关标准**：7/7 通过，所有搜索模式均有结果返回。
+
+---
+
+### 6.8 Kantai 海域攻略搜索测试
+
+**测试命令**：
+
+```bash
+uv run python scripts/test_game_guide_tool_call.py \
+  --game-id kantai-collection \
+  --query "6-5怎么打 带路条件" \
+  --tool-name ask_guide \
+  --test-pic ""
+```
+
+**预期输出**：
+
+```
+[ChromaDB] Found X results for query: 6-5怎么打 带路条件
+  [1] 6-5 xxx (score: 0.xx, collection: wiki)
+业务状态: ok
+```
+
+**过关标准**：
+
+- ✅ ChromaDB 搜到 6-5 海域相关文档
+- ✅ LLM 回答包含带路条件、节点、制空值等内容
+- ✅ `status: ok`
+
+---
+
+### 6.9 Kantai 装备/舰娘搜索测试
+
+**测试命令**：
+
+```bash
+uv run python scripts/test_game_guide_tool_call.py \
+  --game-id kantai-collection \
+  --query "46cm三连装砲的属性" \
+  --tool-name ask_guide \
+  --test-pic ""
+```
+
+**预期输出**：
+
+```
+[ChromaDB] Found X results for query: 46cm三连装砲的属性
+  [1] 46cm三连装砲 (score: 0.xx, collection: wiki)
+业务状态: ok
+```
+
+**过关标准**：
+
+- ✅ 搜到对应装备文档
+- ✅ 回答包含火力、命中等属性数值
+
+---
+
+### 6.10 Kantai 深海栖舰搜索测试
+
+**测试命令**：
+
+```bash
+uv run python scripts/test_game_guide_tool_call.py \
+  --game-id kantai-collection \
+  --query "深海双子栖姬的属性" \
+  --tool-name ask_guide \
+  --test-pic ""
+```
+
+**预期输出**：
+
+```
+[ChromaDB] Found X results for query: 深海双子栖姬的属性
+  [1] xxx (score: 0.xx, collection: enemies)
+业务状态: ok
+```
+
+**过关标准**：
+
+- ✅ 从 `enemies` collection 搜到深海栖舰数据
+- ✅ 回答包含敌舰属性（耐久、装甲、火力等）
+
+---
+
 ### 6.6 自动截图测试
 
 **前置条件**：
@@ -547,6 +705,7 @@ metadata: {"auto_screenshot": {"width": 1920, "height": 1080, "monitor_index": 1
 | **MCP 服务注册** | 运行注册验证脚本 | 输出包含 `game_guide` |
 | **功能单元测试** | `test_guide_engine_features.py` | 5/5 通过 |
 | **基础查询** | `ask_guide` 工具调用 | `status: ok` |
+| **ChromaDB 向量搜索** | 一键验证脚本（6.7节） | 7/7 搜索模式均有结果 |
 
 ### 7.2 P1 级别（重要功能）
 
@@ -556,6 +715,9 @@ metadata: {"auto_screenshot": {"width": 1920, "height": 1080, "monitor_index": 1
 | **别名识别** | 查询"老银S3专三DPS" | 正确识别为"银灰" |
 | **Neo4j 图谱** | 查询"银灰配队推荐" | 输出包含干员信息和配合推荐 |
 | **Kantai 地图校验** | 查询"编成推荐"（无地图） | 触发追问提示 |
+| **Kantai 海域搜索** | 查询"6-5怎么打 带路条件" | 搜到海域数据并返回攻略 |
+| **Kantai 装备搜索** | 查询"46cm三连装砲的属性" | 搜到装备并返回属性 |
+| **Kantai 深海搜索** | 查询"深海双子栖姬" | 从 enemies collection 搜到数据 |
 
 ### 7.3 P2 级别（增强功能）
 
@@ -760,18 +922,56 @@ uv run python scripts/test_guide_engine_features.py
 # 3. MCP 服务注册验证
 uv run python -c "from mcpserver.mcp_registry import auto_register_mcp, get_registered_services; auto_register_mcp(); print(get_registered_services())"
 
-# 4. 伤害计算测试
+# 4. ChromaDB 向量搜索一键验证（7项搜索模式）
+uv run --no-sync python3 -c "
+import asyncio
+from guide_engine.chroma_service import ChromaService
+async def test():
+    s = ChromaService()
+    tests = [
+        ('arknights', '银灰技能', 'full', '全模式搜索干员'),
+        ('arknights', '源石尘感染者', 'wiki_only', 'Wiki搜索敌人'),
+        ('arknights', '大鲍勃', 'guides_only', 'Guides搜索BOSS'),
+        ('kantai-collection', '2-4带路', 'wiki_only', '海域攻略搜索'),
+        ('kantai-collection', '46cm三连装砲', 'wiki_only', '装备搜索'),
+        ('kantai-collection', '深海栖舰', 'enemy_only', '深海敌舰搜索'),
+        ('kantai-collection', 'getDayBattlePower', 'wiki_only', '伤害公式搜索'),
+    ]
+    passed = 0
+    for game_id, query, mode, desc in tests:
+        results = await s.search(game_id, query, top_k=3, score_threshold=0.3, search_mode=mode)
+        status = 'OK' if results else 'FAIL'
+        passed += 1 if results else 0
+        scores = [f\"{r['score']:.2f}\" for r in results] if results else []
+        print(f'  {status}  {desc}: \"{query}\" -> {len(results)}条 {scores}')
+    print(f'\n结果: {passed}/{len(tests)} 通过')
+asyncio.run(test())
+"
+
+# 5. 伤害计算测试
 uv run python scripts/test_game_guide_tool_call.py --game-id arknights --query "银灰S3专三DPS" --tool-name calculate_damage --test-pic ""
 
-# 5. 别名识别测试
+# 6. 别名识别测试
 uv run python scripts/test_game_guide_tool_call.py --game-id arknights --query "老银S3专三DPS" --tool-name calculate_damage --test-pic ""
 
-# 6. Neo4j 图谱测试
+# 7. 配队推荐测试（明日方舟）
+uv run python scripts/test_game_guide_tool_call.py --game-id arknights --query "推荐一个高难图的地面队" --tool-name get_team_recommendation --test-pic ""
+
+# 8. Neo4j 图谱测试
 uv run python scripts/test_game_guide_tool_call.py --game-id arknights --query "银灰配队推荐" --tool-name ask_guide --test-pic ""
 
-# 7. Kantai 地图校验测试
+# 9. Kantai 地图校验测试（无地图，应追问）
 uv run python scripts/test_game_guide_tool_call.py --game-id kantai-collection --query "编成推荐" --tool-name ask_guide --test-pic ""
 
-# 8. 启动 Neo4j
+# 10. Kantai 海域攻略测试
+uv run python scripts/test_game_guide_tool_call.py --game-id kantai-collection --query "6-5怎么打 带路条件" --tool-name ask_guide --test-pic ""
+
+# 11. Kantai 装备查询测试
+uv run python scripts/test_game_guide_tool_call.py --game-id kantai-collection --query "46cm三连装砲的属性" --tool-name ask_guide --test-pic ""
+
+# 12. Kantai 深海栖舰测试
+uv run python scripts/test_game_guide_tool_call.py --game-id kantai-collection --query "深海双子栖姬的属性" --tool-name ask_guide --test-pic ""
+
+# 13. 启动 Neo4j
 docker run -d --name neo4j -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/your_password neo4j:5
 ```

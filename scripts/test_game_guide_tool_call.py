@@ -89,13 +89,13 @@ def _enable_gemini_vision_override_if_needed() -> None:
 
     def _get_gemini_runtime() -> tuple[str, str, str | None]:
         settings = get_guide_engine_settings()
-        model_name = (settings.vision_api_model or "").strip()
-        api_key = (settings.vision_api_key or "").strip()
-        custom_base = (settings.vision_api_base_url or "").strip() or None
+        model_name = (settings.game_guide_llm_api_model or "").strip()
+        api_key = (settings.game_guide_llm_api_key or "").strip()
+        custom_base = (settings.game_guide_llm_api_base_url or "").strip() or None
         if not model_name:
-            raise RuntimeError("GEMINI=True 但 vision_api_model 为空")
+            raise RuntimeError("GEMINI=True 但 game_guide_llm_api_model 为空")
         if not api_key:
-            raise RuntimeError("GEMINI=True 但 vision_api_key 为空")
+            raise RuntimeError("GEMINI=True 但 game_guide_llm_api_key 为空")
         return model_name, api_key, custom_base
 
     async def _call_gemini_with_contents(contents: list[Any]) -> str:

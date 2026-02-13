@@ -195,9 +195,10 @@ class GuideService:
 
         response = await llm_service.chat_with_context_and_reasoning_with_overrides(
             messages=messages,
-            model_override=settings.vision_api_model,
-            api_key_override=settings.vision_api_key,
-            api_base_override=settings.vision_api_base_url,
+            model_override=settings.game_guide_llm_api_model,
+            api_key_override=settings.game_guide_llm_api_key,
+            api_base_override=settings.game_guide_llm_api_base_url,
+            provider_hint=settings.game_guide_llm_api_type,
         )
         raw_content = response.content or ""
         detected = self._extract_game_id_from_response(raw_content, supported_game_ids)
@@ -286,6 +287,9 @@ class GuideService:
         if map_hint:
             context_parts.append(map_hint)
 
+        # ---- 别名预处理：将查询中的别名替换为正式名 ----
+        search_query = self._apply_alias_substitution(request.content, prompt_config)
+
         # ---- 构建并行任务 ----
         task_keys: list[str] = []
         tasks: list[Any] = []
@@ -294,7 +298,7 @@ class GuideService:
         task_keys.append("chroma")
         tasks.append(self.chroma.search(
             game_id=game_id,
-            query=request.content,
+            query=search_query,
             top_k=top_k,
             score_threshold=score_threshold,
             search_mode=search_mode,
@@ -614,12 +618,19 @@ class GuideService:
         if images:
             llm_response = await llm_service.chat_with_context_and_reasoning_with_overrides(
                 messages=messages,
-                model_override=settings.vision_api_model,
-                api_key_override=settings.vision_api_key,
-                api_base_override=settings.vision_api_base_url,
+                model_override=settings.game_guide_llm_api_model,
+                api_key_override=settings.game_guide_llm_api_key,
+                api_base_override=settings.game_guide_llm_api_base_url,
+                provider_hint=settings.game_guide_llm_api_type,
             )
         else:
-            llm_response = await llm_service.chat_with_context_and_reasoning(messages)
+            llm_response = await llm_service.chat_with_context_and_reasoning_with_overrides(
+                messages=messages,
+                model_override=settings.game_guide_llm_api_model,
+                api_key_override=settings.game_guide_llm_api_key,
+                api_base_override=settings.game_guide_llm_api_base_url,
+                provider_hint=settings.game_guide_llm_api_type,
+            )
         return llm_response.content
 
     @staticmethod
@@ -633,6 +644,26 @@ class GuideService:
         if mode == QueryMode.CALCULATION:
             return "full"
         return "full"
+
+    @staticmethod
+    def _apply_alias_substitution(query: str, prompt_config: dict[str, Any]) -> str:
+        """识别查询中的别名，将对应正式名追加到查询末尾以提升 RAG 召回率"""
+        aliases: dict[str, list[str]] = (
+            prompt_config.get("entity_patterns", {}).get("operator_aliases", {})
+        )
+        if not aliases:
+            return query
+        matched_names: list[str] = []
+        for canonical, alias_list in aliases.items():
+            if canonical in query:
+                continue  # 正式名已在查询中，无需追加
+            for alias in alias_list:
+                if alias in query:
+                    matched_names.append(canonical)
+                    break
+        if not matched_names:
+            return query
+        return query + " " + " ".join(matched_names)
 
     @staticmethod
     def _guess_operator_name(

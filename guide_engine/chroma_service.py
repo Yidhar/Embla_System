@@ -72,18 +72,33 @@ class ChromaService:
             return vector
         return [x / norm for x in vector]
 
+    # nomic-embed-text-v2-moe 上下文 8192 token，中文约 2-4 token/字
+    MAX_EMBED_CHARS: int = 2048
+
     async def _embed_texts(self, texts: List[str]) -> List[List[float]]:
         settings = get_guide_engine_settings()
         model_name = settings.embedding_api_model
         if not model_name:
             raise RuntimeError("embedding_api_model 未配置，无法使用外部向量服务")
 
-        response = await self.openai_client.embeddings.create(
-            model=model_name,
-            input=texts,
-        )
-        ordered_data = sorted(response.data, key=lambda item: item.index)
-        return [self._normalize_embedding([float(x) for x in item.embedding]) for item in ordered_data]
+        # 逐条嵌入，避免 Ollama batch 上下文长度限制
+        results: List[List[float]] = []
+        for text in texts:
+            truncated = text[:self.MAX_EMBED_CHARS] if len(text) > self.MAX_EMBED_CHARS else text
+            try:
+                response = await self.openai_client.embeddings.create(
+                    model=model_name,
+                    input=[truncated],
+                )
+            except Exception:
+                # 再截短重试
+                truncated = truncated[:512]
+                response = await self.openai_client.embeddings.create(
+                    model=model_name,
+                    input=[truncated],
+                )
+            results.append(self._normalize_embedding([float(x) for x in response.data[0].embedding]))
+        return results
 
     async def _embed_query(self, query: str) -> List[float]:
         vectors = await self._embed_texts([query])
@@ -108,10 +123,10 @@ class ChromaService:
             return f"game_{internal_name}_enemies"
         return f"game_{internal_name}_guides"
 
-    async def create_collection(self, game_id: str) -> bool:
+    async def create_collection(self, game_id: str, collection_type: str = "guides") -> bool:
         """创建或获取集合"""
         try:
-            collection_name = self._get_collection_name(game_id)
+            collection_name = self._get_collection_name(game_id, collection_type)
             self.client.get_or_create_collection(
                 name=collection_name, metadata={"game_id": game_id, "hnsw:space": "cosine"}
             )
@@ -120,22 +135,24 @@ class ChromaService:
             print(f"Failed to create collection: {e}")
             return False
 
-    async def delete_collection(self, game_id: str) -> bool:
+    async def delete_collection(self, game_id: str, collection_type: str = "guides") -> bool:
         """删除集合"""
         try:
-            collection_name = self._get_collection_name(game_id)
+            collection_name = self._get_collection_name(game_id, collection_type)
             self.client.delete_collection(collection_name)
             return True
         except Exception as e:
             print(f"Failed to delete collection: {e}")
             return False
 
-    async def insert_documents(self, game_id: str, documents: List[Dict[str, Any]]) -> int:
+    async def insert_documents(
+        self, game_id: str, documents: List[Dict[str, Any]], collection_type: str = "guides"
+    ) -> int:
         """插入文档"""
         if not documents:
             return 0
 
-        collection_name = self._get_collection_name(game_id)
+        collection_name = self._get_collection_name(game_id, collection_type)
         collection = self.client.get_or_create_collection(
             name=collection_name, metadata={"game_id": game_id, "hnsw:space": "cosine"}
         )
@@ -171,15 +188,33 @@ class ChromaService:
                 }
             )
 
-        # 生成嵌入向量
-        print(f"Generating embeddings for {len(texts)} documents...")
-        embeddings = await self._embed_texts(texts)
+        # 按总字符量动态分批（Ollama 会拼接 batch 内所有文本计算 token）
+        max_batch_chars = 3000  # ≈6000 token，留余量
+        total = len(texts)
+        print(f"Generating embeddings for {total} documents...")
 
-        # 插入数据
-        collection.add(ids=ids, embeddings=embeddings, metadatas=metadatas, documents=texts)
+        start = 0
+        batch_num = 0
+        while start < total:
+            end = start + 1
+            batch_chars = len(texts[start])
+            while end < total and batch_chars + len(texts[end]) <= max_batch_chars:
+                batch_chars += len(texts[end])
+                end += 1
+            batch_embeddings = await self._embed_texts(texts[start:end])
+            collection.add(
+                ids=ids[start:end],
+                embeddings=batch_embeddings,
+                metadatas=metadatas[start:end],
+                documents=texts[start:end],
+            )
+            batch_num += 1
+            if batch_num % 50 == 0 or end >= total:
+                print(f"  Progress: {end}/{total} docs")
+            start = end
 
-        print(f"Inserted {len(documents)} documents")
-        return len(documents)
+        print(f"Inserted {total} documents")
+        return total
 
     async def search(
         self,

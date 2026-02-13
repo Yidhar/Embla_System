@@ -74,10 +74,8 @@ class LLMService:
             if not model.startswith("openrouter/"):
                 return f"openrouter/{model}"
         elif "openai.com" in base_url_lower:
-            # OpenAI 不需要前缀
             return model
         else:
-            # 对于其他自定义端点，使用 openai/ 前缀以兼容 OpenAI 格式
             if not model.startswith("openai/"):
                 return f"openai/{model}"
         return model
@@ -133,6 +131,7 @@ class LLMService:
         model_override: Optional[str] = None,
         api_key_override: Optional[str] = None,
         api_base_override: Optional[str] = None,
+        provider_hint: Optional[str] = None,
     ) -> LLMResponse:
         """带上下文聊天（支持模型/网关覆写）"""
         if not self._initialized:
@@ -145,8 +144,17 @@ class LLMService:
         final_api_key = api_key_override or config.api.api_key
 
         try:
+            model_name = final_model
+            if provider_hint and provider_hint != "openai":
+                # gemini 等非 openai provider，加 LiteLLM 前缀
+                if not model_name.startswith(f"{provider_hint}/"):
+                    model_name = f"{provider_hint}/{model_name}"
+            else:
+                # openai 或未指定: 走原有 base_url 推断逻辑
+                model_name = self._format_model_name(model_name, final_base)
+
             response = await acompletion(
-                model=self._format_model_name(final_model, final_base),
+                model=model_name,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=config.api.max_tokens if hasattr(config.api, "max_tokens") else None,
