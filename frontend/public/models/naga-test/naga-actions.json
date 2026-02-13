@@ -1,7 +1,7 @@
 {
   "states": {
     "idle": {
-      "loop": true,
+      "loop": false,
       "duration": 3000,
       "keyframes": [
         { "t": 0, "params": { "ParamBodyAngleX": 0 } },
@@ -20,7 +20,7 @@
       ]
     },
     "talking": {
-      "loop": true,
+      "loop": false,
       "duration": 2000,
       "keyframes": [
         { "t": 0, "params": { "ParamBodyAngleX": 0 } },
@@ -50,6 +50,51 @@
         { "t": 0.25, "params": { "ParamAngleX": 15, "ParamEyeBallX": 1 } },
         { "t": 0.75, "params": { "ParamAngleX": -15, "ParamEyeBallX": -1 } },
         { "t": 1, "params": { "ParamAngleX": 0, "ParamEyeBallX": 0 } }
+      ]
+    },
+    "normal": {
+      "duration": 5000,
+      "repeat": 1,
+      "keyframes": [
+        { "t": 0, "params": { "ParamEyeLSmile": 0, "ParamEyeRSmile": 0, "ParamMouthForm": 0, "ParamMouthOpenY": 0 } },
+        { "t": 0.2, "params": { "ParamEyeLSmile": 1, "ParamEyeRSmile": 1, "ParamMouthForm": 0.664, "ParamMouthOpenY": 0.061 } },
+        { "t": 1, "params": { "ParamEyeLSmile": 1, "ParamEyeRSmile": 1, "ParamMouthForm": 0.664, "ParamMouthOpenY": 0.061 } }
+      ]
+    },
+    "happy": {
+      "duration": 5000,
+      "repeat": 1,
+      "keyframes": [
+        { "t": 0, "params": { "ParamEyeLSmile": 0, "ParamEyeLOpen": 0, "ParamEyeRSmile": 0, "ParamEyeROpen": 0, "ParamMouthForm": 0, "ParamCheek": 0, "ParamBrowLY": 0, "ParamAngleZ": 0 } },
+        { "t": 0.2, "params": { "ParamEyeLSmile": 1, "ParamEyeLOpen": -1, "ParamEyeRSmile": 1, "ParamEyeROpen": -1, "ParamMouthForm": 1, "ParamCheek": 0, "ParamBrowLY": 1, "ParamAngleZ": -19.895 } },
+        { "t": 1, "params": { "ParamEyeLSmile": 1, "ParamEyeLOpen": -1, "ParamEyeRSmile": 1, "ParamEyeROpen": -1, "ParamMouthForm": 1, "ParamCheek": 0, "ParamBrowLY": 1, "ParamAngleZ": -19.895 } }
+      ]
+    },
+    "enjoy": {
+      "duration": 5000,
+      "repeat": 1,
+      "keyframes": [
+        { "t": 0, "params": { "open06": 0, "ParamEyeLOpen": 0, "ParamEyeLSmile": 0, "ParamEyeROpen": 0, "ParamEyeRSmile": 0, "ParamMouthForm": 0, "ParamMouthOpenY": 0, "ParamEyeBallY": 0, "ParamAngleX": 0, "MouthShrug": 0, "JawOpen": 0 } },
+        { "t": 0.2, "params": { "open06": 1, "ParamEyeLOpen": 0.537, "ParamEyeLSmile": 0.842, "ParamEyeROpen": 0.537, "ParamEyeRSmile": 0.842, "ParamMouthForm": 1, "ParamMouthOpenY": 0.516, "ParamEyeBallY": -0.579, "ParamAngleX": 6.105, "MouthShrug": 1, "JawOpen": 1 } },
+        { "t": 1, "params": { "open06": 1, "ParamEyeLOpen": 0.537, "ParamEyeLSmile": 0.842, "ParamEyeROpen": 0.537, "ParamEyeRSmile": 0.842, "ParamMouthForm": 1, "ParamMouthOpenY": 0.516, "ParamEyeBallY": -0.579, "ParamAngleX": 6.105, "MouthShrug": 1, "JawOpen": 1 } }
+      ]
+    },
+    "sad": {
+      "duration": 5000,
+      "repeat": 1,
+      "keyframes": [
+        { "t": 0, "params": { "tongue_out": 0, "Param5": 0, "Param9": 0, "ParamEyeLOpen": 0, "MouthPressLipOpen": 0, "ParamMouthForm": 0, "ParamEyeROpen": 0 } },
+        { "t": 0.2, "params": { "tongue_out": 1, "Param5": 1, "Param9": 1, "ParamEyeLOpen": -1, "MouthPressLipOpen": 0, "ParamMouthForm": -1, "ParamEyeROpen": -1 } },
+        { "t": 1, "params": { "tongue_out": 1, "Param5": 1, "Param9": 1, "ParamEyeLOpen": -1, "MouthPressLipOpen": 0, "ParamMouthForm": -1, "ParamEyeROpen": -1 } }
+      ]
+    },
+    "surprise": {
+      "duration": 5000,
+      "repeat": 1,
+      "keyframes": [
+        { "t": 0, "params": { "tongue_out": 0, "ParamMouthOpenY": 0, "ParamEyeRSmile": 0, "ParamEyeLSmile": 0, "ParamEyeLOpen": 0, "ParamBrowRY": 0, "ParamBrowRForm": 0, "ParamAngleX": 0, "ParamAngleY": 0, "ParamAngleZ": 0 } },
+        { "t": 0.2, "params": { "tongue_out": 1, "ParamMouthOpenY": 1, "ParamEyeRSmile": 1, "ParamEyeLSmile": 1, "ParamEyeLOpen": 1, "ParamEyeROpen": 1, "ParamBrowRY": 1, "ParamBrowRForm": 1, "ParamAngleX": 5.474, "ParamAngleY": 7.368, "ParamAngleZ": 2.947 } },
+        { "t": 1, "params": { "tongue_out": 1, "ParamMouthOpenY": 1, "ParamEyeRSmile": 1, "ParamEyeLSmile": 1, "ParamEyeLOpen": 1, "ParamEyeROpen": 1, "ParamBrowRY": 1, "ParamBrowRForm": 1, "ParamAngleX": 5.474, "ParamAngleY": 7.368, "ParamAngleZ": 2.947 } }
       ]
     }
   }

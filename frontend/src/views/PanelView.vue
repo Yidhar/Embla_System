@@ -7,17 +7,20 @@ import chip from '@/assets/icons/chip.png'
 import naga from '@/assets/icons/naga.png'
 import toolkit from '@/assets/icons/toolkit.png'
 import ArkButton from '@/components/ArkButton.vue'
+import { useParallax } from '@/composables/useParallax'
 
 const { height } = useWindowSize()
 const scale = computed(() => height.value / 720)
+
+const { rx, ry, tx, ty } = useParallax({ rotateX: 5, rotateY: 4, translateX: 15, translateY: 10 })
 </script>
 
 <template>
   <div class="flex flex-col items-start justify-center px-1/16">
     <div
-      class="grid grid-rows-3 gap-3 *:gap-3" :style="{
+      class="grid grid-rows-3 gap-3 *:gap-3 will-change-transform" :style="{
         transformOrigin: 'left',
-        transform: `perspective(1000px) rotateY(8deg) scale(${scale})`,
+        transform: `perspective(1000px) rotateX(${rx}deg) rotateY(${8 + ry}deg) translate(${tx}px, ${ty}px) scale(${scale})`,
       }"
     >
       <div class="relative size-full">

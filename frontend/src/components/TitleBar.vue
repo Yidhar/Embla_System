@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useElectron } from '../composables/useElectron'
+import UserMenu from './UserMenu.vue'
 
 const { isElectron, isMaximized, isMac, minimize, maximize, close } = useElectron()
 </script>
@@ -19,6 +20,7 @@ const { isElectron, isMaximized, isMac, minimize, maximize, close } = useElectro
       </button>
     </div>
     <div class="drag-region" />
+    <UserMenu />
     <!-- Windows/Linux: controls on right -->
     <div v-if="!isMac" class="window-controls">
       <button class="control-btn" title="最小化" @click="minimize">

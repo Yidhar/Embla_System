@@ -9,13 +9,13 @@
 import sys
 import subprocess
 import importlib
+import importlib.util
 import platform
 import socket
 import psutil
 from pathlib import Path
 from typing import Dict, Optional
 from datetime import datetime
-from charset_normalizer import from_path
 import json5  # 支持带注释的JSON解析
 
 class SystemChecker:
@@ -78,6 +78,17 @@ class SystemChecker:
             ("python_docx", "Word文档处理")
         ]
         
+    def _read_config(self) -> dict:
+        """读取 config.json，统一使用 UTF-8 编码（本项目配置文件始终为 UTF-8）"""
+        with open(self.config_file, 'r', encoding='utf-8') as f:
+            return json5.load(f)
+
+    def _write_config(self, config_data: dict):
+        """写入 config.json，统一使用 UTF-8 编码"""
+        import json
+        with open(self.config_file, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f, ensure_ascii=False, indent=2)
+
     def check_all(self, auto_setup: bool = False) -> Dict[str, bool]:
         """执行所有检测项目"""
         print("🔍 开始系统环境检测...")
@@ -227,10 +238,11 @@ class SystemChecker:
             elif dep == "python_docx":
                 module_name = "docx"
 
-            try:
-                importlib.import_module(module_name)
+            # 使用 find_spec 仅检查包是否存在，不实际加载模块，速度提升显著
+            spec = importlib.util.find_spec(module_name)
+            if spec is not None:
                 print(f"   [OK] {dep} ({desc})")
-            except ImportError:
+            else:
                 print(f"   [WARN] {dep} ({desc}): 未安装")
                 missing_optional.append((dep, desc))
 
@@ -371,21 +383,7 @@ class SystemChecker:
         try:
             # 检查配置文件中是否有Neo4j配置
             if self.config_file.exists():
-                # 使用Charset Normalizer自动检测编码
-                charset_results = from_path(str(self.config_file))
-                if charset_results:
-                    best_match = charset_results.best()
-                    if best_match:
-                        detected_encoding = best_match.encoding
-                        # 使用检测到的编码直接打开文件，然后使用json5读取
-                        with open(self.config_file, 'r', encoding=detected_encoding) as f:
-                            config = json5.load(f)
-                    else:
-                        with open(self.config_file, 'r', encoding='utf-8') as f:
-                            config = json5.load(f)
-                else:
-                    with open(self.config_file, 'r', encoding='utf-8') as f:
-                        config = json5.load(f)
+                config = self._read_config()
 
                 neo4j_config = config.get('grag', {})
                 if neo4j_config.get('enabled', False):
@@ -662,24 +660,9 @@ class SystemChecker:
             """检查是否已经通过过系统检测"""
             if not self.config_file.exists():
                 return False
-    
+
             try:
-                # 使用Charset Normalizer自动检测编码
-                charset_results = from_path(str(self.config_file))
-                if charset_results:
-                    best_match = charset_results.best()
-                    if best_match:
-                        # 使用检测到的编码直接打开文件
-                        detected_encoding = best_match.encoding
-                        with open(self.config_file, 'r', encoding=detected_encoding) as f:
-                            config_data = json5.load(f)
-                    else:
-                        with open(self.config_file, 'r', encoding='utf-8') as f:
-                            config_data = json5.load(f)
-                else:
-                    with open(self.config_file, 'r', encoding='utf-8') as f:
-                        config_data = json5.load(f)
-    
+                config_data = self._read_config()
                 system_check = config_data.get('system_check', {})
                 return system_check.get('passed', False)
             except Exception:
@@ -687,20 +670,9 @@ class SystemChecker:
     def save_check_status(self, passed: bool):
         """保存检测状态到config.json"""
         try:
-            # 自动检测文件编码
-            detected_encoding = 'utf-8'  # 默认编码
+            # 读取现有配置
             if self.config_file.exists():
-                charset_results = from_path(str(self.config_file))
-                if charset_results:
-                    best_match = charset_results.best()
-                    if best_match:
-                        detected_encoding = best_match.encoding
-                        print(f"检测到配置文件编码: {detected_encoding}")
-
-            # 读取现有配置，使用检测到的编码直接打开文件
-            if self.config_file.exists():
-                with open(self.config_file, 'r', encoding=detected_encoding) as f:
-                    config_data = json5.load(f)
+                config_data = self._read_config()
             else:
                 config_data = {}
 
@@ -713,10 +685,8 @@ class SystemChecker:
                 'system': platform.system()
             }
 
-            # 保存配置，使用检测到的编码
-            with open(self.config_file, 'w', encoding=detected_encoding) as f:
-                import json
-                json.dump(config_data, f, ensure_ascii=False, indent=2)
+            # 保存配置
+            self._write_config(config_data)
         except Exception as e:
             print(f"⚠️ 保存检测状态失败: {e}")
     
@@ -729,31 +699,14 @@ class SystemChecker:
         try:
             # 读取现有配置
             if self.config_file.exists():
-                # 使用Charset Normalizer自动检测编码
-                charset_results = from_path(str(self.config_file))
-                detected_encoding = 'utf-8'  # 默认编码
-                if charset_results:
-                    best_match = charset_results.best()
-                    if best_match:
-                        # 使用检测到的编码直接打开文件
-                        detected_encoding = best_match.encoding
-                        with open(self.config_file, 'r', encoding=detected_encoding) as f:
-                            config_data = json5.load(f)
-                    else:
-                        with open(self.config_file, 'r', encoding='utf-8') as f:
-                            config_data = json5.load(f)
-                else:
-                    with open(self.config_file, 'r', encoding='utf-8') as f:
-                        config_data = json5.load(f)
+                config_data = self._read_config()
 
                 # 删除system_check配置
                 if 'system_check' in config_data:
                     del config_data['system_check']
 
-                # 保存配置，使用检测到的编码
-                with open(self.config_file, 'w', encoding=detected_encoding) as f:
-                    import json
-                    json.dump(config_data, f, ensure_ascii=False, indent=2)
+                # 保存配置
+                self._write_config(config_data)
 
                 print("✅ 检测状态已重置，下次启动时将重新检测")
             else:

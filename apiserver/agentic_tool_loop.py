@@ -258,6 +258,7 @@ async def _send_live2d_actions(live2d_calls: List[Dict[str, Any]], session_id: s
         async with httpx.AsyncClient(timeout=httpx.Timeout(timeout=5.0)) as client:
             for call in live2d_calls:
                 action_name = call.get("action", "")
+                logger.info(f"[AgenticLoop] 发送 Live2D 动作: {action_name}, 完整调用: {call}")
                 if not action_name:
                     continue
                 payload = {

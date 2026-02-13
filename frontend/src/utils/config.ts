@@ -263,10 +263,13 @@ function scheduleConfigSync(config: Config) {
   }, CONFIG_SYNC_DELAY_MS)
 }
 
+let connectRetryDelay = 300 // 指数退避起始值
+
 function connectBackend() {
   API.systemConfig().then((res) => {
     CONFIG.value = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CONFIG)), res.config)
     backendConnected.value = true
+    connectRetryDelay = 300 // 重置
     loadSystemPrompt()
     // Only set up sync watch once connected
     if (!configWatchStop) {
@@ -279,8 +282,9 @@ function connectBackend() {
     }
   }).catch(() => {
     if (!backendConnected.value) {
-      // Retry in 3s until backend is available
-      setTimeout(connectBackend, 3000)
+      // 指数退避：300 → 600 → 1200 → 2400（上限 2.5s）
+      setTimeout(connectBackend, connectRetryDelay)
+      connectRetryDelay = Math.min(connectRetryDelay * 2, 2500)
     }
   })
 }

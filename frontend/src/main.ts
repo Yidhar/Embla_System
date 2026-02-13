@@ -1,6 +1,7 @@
 import { definePreset } from '@primeuix/themes'
 import Lara from '@primeuix/themes/lara'
 import PrimeVue from 'primevue/config'
+import ToastService from 'primevue/toastservice'
 import { createApp } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
@@ -29,5 +30,6 @@ createApp(App)
       },
     },
   })
+  .use(ToastService)
   .use(router)
   .mount('#app')

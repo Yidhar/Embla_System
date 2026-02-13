@@ -69,14 +69,21 @@ export class CoreApiClient extends ApiClient {
     status: 'success'
     config: Config
   }> {
-    return this.instance('/system/config')
+    // 配置对象使用 snake_case 键名，跳过自动 camelCase 转换以避免键名不匹配
+    return this.instance('/system/config', {
+      transformResponse: [(data: string) => JSON.parse(data)],
+    })
   }
 
   setSystemConfig(config: Config): Promise<{
     status: 'success'
     message: string
   }> {
-    return this.instance.post('/system/config', config)
+    // 配置对象已是 snake_case，跳过自动 snakeCase 转换避免双重处理
+    return this.instance.post('/system/config', config, {
+      transformRequest: [(data: any) => JSON.stringify(data)],
+      transformResponse: [(data: string) => JSON.parse(data)],
+    })
   }
 
   getSystemPrompt(): Promise<{
@@ -262,6 +269,33 @@ export class CoreApiClient extends ApiClient {
     return this.instance.get('/mcp/status')
   }
 
+  getMcpServices(): Promise<{
+    status: string
+    services: Array<{
+      name: string
+      displayName: string
+      description: string
+      source: 'builtin' | 'mcporter'
+      available: boolean
+    }>
+  }> {
+    return this.instance.get('/mcp/services')
+  }
+
+  importMcpConfig(name: string, config: Record<string, any>): Promise<{
+    status: string
+    message: string
+  }> {
+    return this.instance.post('/mcp/import', { name, config })
+  }
+
+  importCustomSkill(name: string, content: string): Promise<{
+    status: string
+    message: string
+  }> {
+    return this.instance.post('/skills/import', { name, content })
+  }
+
   getContextStats(days?: number) {
     return this.instance.get(`/logs/context/statistics?days=${days}`)
   }
@@ -293,6 +327,31 @@ export class CoreApiClient extends ApiClient {
 
   getLive2dActions(): Promise<{ actions: string[] }> {
     return this.instance.get('/live2d/actions')
+  }
+
+  // ── NagaCAS 认证 ──
+
+  authLogin(username: string, password: string): Promise<{
+    success: boolean
+    user: { username: string, sub?: string } | null
+    accessToken: string
+    refreshToken: string
+  }> {
+    return this.instance.post('/auth/login', { username, password })
+  }
+
+  authMe(): Promise<{ user: { username: string, sub?: string } }> {
+    return this.instance.get('/auth/me')
+  }
+
+  authLogout(): Promise<{ success: boolean }> {
+    return this.instance.post('/auth/logout')
+  }
+
+  authRegister(username: string, password: string): Promise<{
+    success: boolean
+  }> {
+    return this.instance.post('/auth/register', { username, password })
   }
 }
 

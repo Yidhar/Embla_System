@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from .message_manager import message_manager  # 导入统一的消息管理器
 
 from .llm_service import get_llm_service  # 导入LLM服务
+from . import naga_auth  # NagaCAS 认证模块
 
 # 导入配置系统
 try:
@@ -430,6 +431,80 @@ class DocumentProcessRequest(BaseModel):
     session_id: Optional[str] = None
 
 
+# ============ NagaCAS 认证端点 ============
+
+
+@app.post("/auth/login")
+async def auth_login(body: dict):
+    """NagaCAS 登录"""
+    username = body.get("username", "")
+    password = body.get("password", "")
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="用户名和密码不能为空")
+    try:
+        result = await naga_auth.login(username, password)
+        return result
+    except Exception as e:
+        logger.error(f"登录失败: {e}")
+        raise HTTPException(status_code=401, detail=f"登录失败: {str(e)}")
+
+
+@app.get("/auth/me")
+async def auth_me():
+    """获取当前用户信息（使用服务端存储的 token）"""
+    if not naga_auth.is_authenticated():
+        raise HTTPException(status_code=401, detail="未登录")
+    user = await naga_auth.get_me()
+    if not user:
+        raise HTTPException(status_code=401, detail="token 已失效")
+    return {"user": user}
+
+
+@app.post("/auth/logout")
+async def auth_logout():
+    """登出"""
+    naga_auth.logout()
+    return {"success": True}
+
+
+@app.post("/auth/register")
+async def auth_register(body: dict):
+    """NagaCAS 注册"""
+    username = body.get("username", "")
+    password = body.get("password", "")
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="用户名和密码不能为空")
+    try:
+        result = await naga_auth.register(username, password)
+        return {"success": True, **result}
+    except Exception as e:
+        import httpx
+        status = 500
+        detail = f"注册失败: {str(e)}"
+        if isinstance(e, httpx.HTTPStatusError):
+            status = e.response.status_code
+            try:
+                detail = e.response.json().get("detail", detail)
+            except Exception:
+                pass
+        logger.error(f"注册失败: {e}")
+        raise HTTPException(status_code=status, detail=detail)
+
+
+@app.post("/auth/refresh")
+async def auth_refresh(body: dict):
+    """刷新 token"""
+    refresh_token = body.get("refresh_token", "")
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="refresh_token 不能为空")
+    try:
+        result = await naga_auth.refresh(refresh_token)
+        return result
+    except Exception as e:
+        logger.error(f"刷新 token 失败: {e}")
+        raise HTTPException(status_code=401, detail=f"刷新失败: {str(e)}")
+
+
 # API路由
 @app.get("/", response_model=Dict[str, str])
 async def root():
@@ -523,8 +598,8 @@ async def update_system_config(payload: Dict[str, Any]):
 
 
 @app.get("/system/prompt")
-async def get_system_prompt(include_skills: bool = True, include_time: bool = False):
-    """获取系统提示词"""
+async def get_system_prompt(include_skills: bool = False, include_time: bool = False):
+    """获取系统提示词（默认只返回人格提示词，不包含技能列表）"""
     try:
         prompt = build_system_prompt(include_skills=include_skills, include_time=include_time)
         return {"status": "success", "prompt": prompt}
@@ -943,6 +1018,114 @@ async def get_mcp_status_offline():
 async def get_mcp_tasks_offline(status: Optional[str] = None):
     """MCP Server 未启动时返回空任务列表，避免前端 503"""
     return {"tasks": [], "total": 0}
+
+
+# ============ MCP 服务列表 & 导入 ============
+
+
+def _load_mcporter_config() -> Dict[str, Any]:
+    """读取 ~/.mcporter/config.json，不存在或格式错误时返回空 dict"""
+    if not MCPORTER_CONFIG_PATH.exists():
+        return {}
+    try:
+        return json.loads(MCPORTER_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _check_agent_available(manifest: Dict[str, Any]) -> bool:
+    """检查内置 agent 模块是否可导入"""
+    entry = manifest.get("entryPoint", {})
+    module_path = entry.get("module", "")
+    if not module_path:
+        return False
+    try:
+        __import__(module_path)
+        return True
+    except Exception:
+        return False
+
+
+@app.get("/mcp/services")
+async def get_mcp_services():
+    """列出所有 MCP 服务并检查可用性"""
+    services: List[Dict[str, Any]] = []
+
+    # 1. 内置 agent（扫描 mcpserver/**/agent-manifest.json）
+    mcpserver_dir = Path(__file__).resolve().parent.parent / "mcpserver"
+    for manifest_path in mcpserver_dir.glob("*/agent-manifest.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if manifest.get("agentType") != "mcp":
+            continue
+        available = _check_agent_available(manifest)
+        services.append({
+            "name": manifest.get("name", manifest_path.parent.name),
+            "display_name": manifest.get("displayName", manifest.get("name", "")),
+            "description": manifest.get("description", ""),
+            "source": "builtin",
+            "available": available,
+        })
+
+    # 2. mcporter 外部配置（~/.mcporter/config.json 中的 mcpServers）
+    mcporter_config = _load_mcporter_config()
+    for name, cfg in mcporter_config.get("mcpServers", {}).items():
+        cmd = cfg.get("command", "")
+        available = shutil.which(cmd) is not None if cmd else False
+        services.append({
+            "name": name,
+            "display_name": name,
+            "description": f"{cmd} {' '.join(cfg.get('args', []))}" if cmd else "",
+            "source": "mcporter",
+            "available": available,
+        })
+
+    return {"status": "success", "services": services}
+
+
+class McpImportRequest(BaseModel):
+    name: str
+    config: Dict[str, Any]
+
+
+@app.post("/mcp/import")
+async def import_mcp_config(request: McpImportRequest):
+    """将 MCP JSON 配置写入 ~/.mcporter/config.json"""
+    MCPORTER_DIR.mkdir(parents=True, exist_ok=True)
+    mcporter_config = _load_mcporter_config()
+    servers = mcporter_config.setdefault("mcpServers", {})
+    servers[request.name] = request.config
+    mcporter_config["mcpServers"] = servers
+    MCPORTER_CONFIG_PATH.write_text(
+        json.dumps(mcporter_config, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return {"status": "success", "message": f"已添加 MCP 服务: {request.name}"}
+
+
+class SkillImportRequest(BaseModel):
+    name: str
+    content: str
+
+
+@app.post("/skills/import")
+async def import_custom_skill(request: SkillImportRequest):
+    """创建自定义技能 SKILL.md"""
+    skill_content = f"""---
+name: {request.name}
+description: 用户自定义技能
+version: 1.0.0
+author: User
+tags:
+  - custom
+enabled: true
+---
+
+{request.content}
+"""
+    skill_path = _write_skill_file(request.name, skill_content)
+    return {"status": "success", "message": f"技能已创建: {skill_path}"}
 
 
 @app.get("/memory/quintuples")

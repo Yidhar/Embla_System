@@ -24,7 +24,7 @@ JSON花括号必须使用半角ASCII字符 `{{` 和 `}}`，不要使用全角。
 ### Live2D表情动作调用
 {{
 "agentType": "live2d",
-"action": "nod" | "shake"
+"action": "normal" | "happy" | "enjoy" | "sad" | "surprise"
 }}
 
 **task_type说明**：
@@ -33,8 +33,10 @@ JSON花括号必须使用半角ASCII字符 `{{` 和 `}}`，不要使用全角。
 - `reminder`：一次性定时提醒（需要at字段）
 
 **Live2D动作说明**：
-- `nod`：点头 — 当AI回复表达肯定、同意、确认时（如"好的"、"没问题"、"可以"）
-- `shake`：摇头 — 当AI回复表达否定、拒绝时（如"不行"、"抱歉做不到"）
+- `happy`：喜悦 — 当AI回复表达肯定、同意、确认时（如"好的"、"没问题"、"可以"）
+- `sad`：悲伤 — 当AI回复表达否定、拒绝时（如"不行"、"抱歉做不到"）
+- `enjoy`：享受 — 当AI回复表达愉快、满足、享受时（如"很棒"、"很有趣"、"太好了"）
+- `surprise`：惊讶 — 当AI回复表达惊讶、意外时（如"哇"、"没想到"、"太神奇了"）
 
 **OpenClaw可用工具**：web_fetch、web_search、browser、sessions_list、agents_list、memory_search、cron。所有工具调度都包含在message中描述，由OpenClaw自行决定使用哪些工具。
 
