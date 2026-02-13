@@ -162,6 +162,19 @@ async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
         service_name = "game_guide"
         call["service_name"] = service_name
 
+    # 游戏攻略功能仅登录用户可用
+    if service_name == "game_guide":
+        from apiserver import naga_auth
+
+        if not naga_auth.is_authenticated():
+            return {
+                "tool_call": call,
+                "result": "游戏攻略功能需要登录 Naga 账号后才能使用，请先登录。",
+                "status": "error",
+                "service_name": service_name,
+                "tool_name": tool_name,
+            }
+
     try:
         from mcpserver.mcp_manager import get_mcp_manager
 

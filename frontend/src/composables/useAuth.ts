@@ -21,6 +21,13 @@ function syncMemoryServer(enabled: boolean, memoryUrl?: string) {
   }
 }
 
+/**
+ * 同步游戏攻略开关：仅登录态可用
+ */
+function syncGameEnabled(loggedIn: boolean) {
+  CONFIG.value.game.enabled = loggedIn
+}
+
 // Token 刷新时自动同步到 memory_server.token
 watch(ACCESS_TOKEN, (newToken) => {
   if (nagaUser.value && CONFIG.value.memory_server.enabled) {
@@ -36,6 +43,7 @@ export function useAuth() {
       REFRESH_TOKEN.value = res.refreshToken
       nagaUser.value = res.user
       syncMemoryServer(true, res.memoryUrl)
+      syncGameEnabled(true)
     }
     return res
   }
@@ -47,6 +55,7 @@ export function useAuth() {
       REFRESH_TOKEN.value = res.refreshToken
       nagaUser.value = res.user || null
       syncMemoryServer(true)
+      syncGameEnabled(true)
     }
     return res
   }
@@ -62,12 +71,14 @@ export function useAuth() {
         nagaUser.value = res.user
         sessionRestored.value = true
         syncMemoryServer(true, res.memoryUrl)
+        syncGameEnabled(true)
 
         // 防止 fetchMe 在 connectBackend 之前完成导致 CONFIG 被覆盖
         if (!backendConnected.value) {
           const stop = watch(backendConnected, (connected) => {
             if (connected) {
               syncMemoryServer(true, res.memoryUrl)
+              syncGameEnabled(true)
               stop()
             }
           })
@@ -88,6 +99,7 @@ export function useAuth() {
       REFRESH_TOKEN.value = ''
       nagaUser.value = null
       syncMemoryServer(false)
+      syncGameEnabled(false)
     }
   }
 

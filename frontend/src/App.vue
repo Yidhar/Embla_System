@@ -13,10 +13,12 @@ import Live2dModel from '@/components/Live2dModel.vue'
 import LoginDialog from '@/components/LoginDialog.vue'
 import SplashScreen from '@/components/SplashScreen.vue'
 import TitleBar from '@/components/TitleBar.vue'
+import UpdateDialog from '@/components/UpdateDialog.vue'
 import FloatingView from '@/views/FloatingView.vue'
 import { isNagaLoggedIn, nagaUser, sessionRestored } from '@/composables/useAuth'
 import { useParallax } from '@/composables/useParallax'
 import { useStartupProgress } from '@/composables/useStartupProgress'
+import { checkForUpdate, showUpdateDialog, updateInfo } from '@/composables/useVersionCheck'
 import { CONFIG, backendConnected } from '@/utils/config'
 import { clearExpression, setExpression } from '@/utils/live2dController'
 import { initParallax, destroyParallax } from '@/utils/parallax'
@@ -160,6 +162,14 @@ onMounted(() => {
         stopConfigWatch()
     })
   }
+
+  // 后端连接成功后检查版本更新
+  const stopVersionWatch = watch(backendConnected, (connected) => {
+    if (!connected)
+      return
+    stopVersionWatch()
+    checkForUpdate()
+  })
 })
 
 onUnmounted(() => {
@@ -229,6 +239,12 @@ onUnmounted(() => {
         :visible="showLoginDialog"
         @success="onLoginSuccess"
         @skip="onLoginSkip"
+      />
+
+      <!-- 版本更新弹窗 -->
+      <UpdateDialog
+        :visible="showUpdateDialog"
+        :info="updateInfo"
       />
     </div>
   </template>

@@ -1,6 +1,6 @@
 import type { Buffer } from 'node:buffer'
 import type { ChildProcess } from 'node:child_process'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
@@ -11,6 +11,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
 let backendProcess: ChildProcess | null = null
+let devRetryCount = 0
 
 type AppPackageMetadata = {
   nagaDebugConsole?: boolean
@@ -99,6 +100,9 @@ export function startBackend(): void {
     return
   }
 
+  // Dev mode: collect stderr for dependency error detection
+  let stderrBuffer = ''
+
   backendProcess = spawn(cmd, args, {
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -110,7 +114,11 @@ export function startBackend(): void {
   })
 
   backendProcess.stderr?.on('data', (data: Buffer) => {
-    console.error(`[Backend] ${data.toString().trimEnd()}`)
+    const text = data.toString()
+    console.error(`[Backend] ${text.trimEnd()}`)
+    if (!app.isPackaged) {
+      stderrBuffer += text
+    }
   })
 
   backendProcess.on('error', (err) => {
@@ -120,6 +128,51 @@ export function startBackend(): void {
   backendProcess.on('exit', (code) => {
     console.log(`[Backend] Exited with code ${code}`)
     backendProcess = null
+
+    // Dev-only auto-recovery: detect dependency errors and retry once
+    if (!app.isPackaged && code === 1 && devRetryCount < 1) {
+      const depErrorPattern = /ModuleNotFoundError|ImportError|No module named/u
+      if (depErrorPattern.test(stderrBuffer)) {
+        devRetryCount++
+        console.log('[Backend] Dependency error detected, auto-installing...')
+
+        const venvPython = process.platform === 'win32'
+          ? join(cwd, '.venv', 'Scripts', 'python.exe')
+          : join(cwd, '.venv', 'bin', 'python')
+        const reqFile = join(cwd, 'requirements.txt')
+
+        // Try uv first, fallback to pip
+        let installOk = false
+        try {
+          const uvResult = spawnSync('uv', ['pip', 'install', '--python', venvPython, '-r', reqFile], {
+            cwd,
+            stdio: 'inherit',
+            timeout: 120_000,
+          })
+          installOk = uvResult.status === 0
+          if (!installOk && uvResult.error) {
+            throw uvResult.error
+          }
+        }
+        catch {
+          console.log('[Backend] uv not available, falling back to pip...')
+          const pipResult = spawnSync(venvPython, ['-m', 'pip', 'install', '-r', reqFile], {
+            cwd,
+            stdio: 'inherit',
+            timeout: 120_000,
+          })
+          installOk = pipResult.status === 0
+        }
+
+        if (installOk) {
+          console.log('[Backend] Dependencies installed, restarting backend...')
+          startBackend()
+        }
+        else {
+          console.error('[Backend] Dependency installation failed. Please install manually.')
+        }
+      }
+    }
   })
 }
 
