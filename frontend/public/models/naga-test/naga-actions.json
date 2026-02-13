@@ -51,6 +51,41 @@
         { "t": 0.75, "params": { "ParamAngleX": -15, "ParamEyeBallX": -1 } },
         { "t": 1, "params": { "ParamAngleX": 0, "ParamEyeBallX": 0 } }
       ]
+    },
+    "normal": {
+      "duration": 100,
+      "repeat": 1,
+      "keyframes": [
+        { "t": 0, "params": { "ParamEyeLSmile": 1, "ParamEyeRSmile": 1, "ParamMouthForm": 0.664, "ParamMouthOpenY": 0.061 } }
+      ]
+    },
+    "happy": {
+      "duration": 100,
+      "repeat": 1,
+      "keyframes": [
+        { "t": 0, "params": { "ParamEyeLSmile": 1, "ParamEyeLOpen": -1, "ParamEyeRSmile": 1, "ParamEyeROpen": -1, "ParamMouthForm": 1, "ParamCheek": 0, "ParamBrowLY": 1, "ParamAngleZ": -19.895 } }
+      ]
+    },
+    "enjoy": {
+      "duration": 100,
+      "repeat": 1,
+      "keyframes": [
+        { "t": 0, "params": { "open06": 1, "ParamEyeLOpen": -0.463, "ParamEyeLSmile": 0.842, "ParamEyeROpen": -0.463, "ParamEyeRSmile": 0.842, "ParamMouthForm": 1, "ParamMouthOpenY": 0.516, "ParamEyeBallY": -0.579, "ParamAngleX": -16.105, "MouthShrug": 1, "JawOpen": 1 } }
+      ]
+    },
+    "sad": {
+      "duration": 100,
+      "repeat": 1,
+      "keyframes": [
+        { "t": 0, "params": { "tongue_out": 1, "Param5": 1, "Param9": 1, "ParamEyeLOpen": -1, "MouthPressLipOpen": 0, "ParamMouthForm": -1, "ParamEyeROpen": -1 } }
+      ]
+    },
+    "surprise": {
+      "duration": 100,
+      "repeat": 1,
+      "keyframes": [
+        { "t": 0, "params": { "tongue_out": 1, "ParamMouthOpenY": 1, "ParamEyeRSmile": 1, "ParamEyeLSmile": 1, "ParamEyeLOpen": 0, "ParamBrowRY": 1, "ParamBrowRForm": 1, "ParamAngleX": -15.474, "ParamAngleY": -17.368, "ParamAngleZ": -12.947 } }
+      ]
     }
   }
 }
