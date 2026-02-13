@@ -3,6 +3,9 @@ import { CONFIG } from '@/utils/config'
 
 const audio = ref<HTMLAudioElement | null>(null)
 export const isPlaying = ref(false)
+let maxDurationTimer: number | null = null
+
+const MAX_PLAYBACK_DURATION = 30000 // 30秒最大播放时长
 
 export function speak(text: string) {
   stop()
@@ -27,18 +30,42 @@ export function speak(text: string) {
     const el = new Audio(objectUrl)
     audio.value = el
     isPlaying.value = true
+    
+    // 设置30秒最大播放时长定时器
+    maxDurationTimer = window.setTimeout(() => {
+      if (audio.value) {
+        stop()
+      }
+    }, MAX_PLAYBACK_DURATION)
+    
     el.onended = () => {
+      // 清除定时器
+      if (maxDurationTimer) {
+        clearTimeout(maxDurationTimer)
+        maxDurationTimer = null
+      }
       isPlaying.value = false
       URL.revokeObjectURL(objectUrl)
       audio.value = null
     }
     el.play()
   }).catch(() => {
+    // 清除定时器
+    if (maxDurationTimer) {
+      clearTimeout(maxDurationTimer)
+      maxDurationTimer = null
+    }
     isPlaying.value = false
   })
 }
 
 export function stop() {
+  // 清除定时器
+  if (maxDurationTimer) {
+    clearTimeout(maxDurationTimer)
+    maxDurationTimer = null
+  }
+  
   if (audio.value) {
     audio.value.pause()
     audio.value = null
