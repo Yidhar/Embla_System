@@ -50,6 +50,7 @@ pre:has(code) {
   padding: 1em;
   background-color: rgba(255, 255, 255, 0.1);
   border-radius: 0.5em;
+  overflow-x: auto;
 }
 
 input.p-inputnumber-input {

@@ -1,6 +1,7 @@
 import type { Config } from '@/utils/config'
 import type { StreamChunk } from '@/utils/encoding'
 import { aiter } from 'iterator-helper'
+import snakecaseKeys from 'snakecase-keys'
 import { decodeStreamChunk, readerToMessageStream } from '@/utils/encoding'
 import { ACCESS_TOKEN, ApiClient } from './index'
 
@@ -117,6 +118,9 @@ export class CoreApiClient extends ApiClient {
     returnAudio?: boolean
     disableTTS?: boolean
     skipIntentAnalysis?: boolean
+    skill?: string
+    images?: string[]
+    temporary?: boolean
   }): Promise<{
     sessionId?: string
     response: AsyncGenerator<StreamChunk>
@@ -129,7 +133,7 @@ export class CoreApiClient extends ApiClient {
         'Connection': 'keep-alive',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ message, ...options }),
+      body: JSON.stringify(snakecaseKeys({ message, ...options }, { deep: true })),
     })
 
     const reader = await body?.getReader()
@@ -154,6 +158,7 @@ export class CoreApiClient extends ApiClient {
       createdAt: string
       lastActiveAt: string
       conversationRounds: number
+      temporary: boolean
     }>
     totalSessions: number
   }> {

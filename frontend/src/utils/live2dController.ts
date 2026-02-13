@@ -268,9 +268,12 @@ function computeActionParams(now: number): Record<string, number> {
 
   if (!activeAction && actionQueue.length > 0) {
     const actionName = actionQueue.shift()!
+    console.log('[Live2D] Starting action:', actionName)
     const cfg = actionsData.actions[actionName]
     if (cfg) {
       activeAction = { config: cfg, startTime: now }
+    } else {
+      console.warn('[Live2D] Action not found:', actionName)
     }
   }
 
@@ -285,9 +288,10 @@ function computeActionParams(now: number): Record<string, number> {
     if (config.keyframes.length > 0) {
       const lastFrame = config.keyframes[config.keyframes.length - 1]!
       for (const k of Object.keys(lastFrame.params)) {
-        result[k] = 0
+        result[k] = lastFrame.params[k] ?? 0
       }
     }
+    console.log('[Live2D] Action completed, keeping last frame')
     activeAction = null
     return result
   }
@@ -489,7 +493,9 @@ export function clearEmotion() {
 }
 
 export function triggerAction(name: string) {
-  actionQueue.push(name)
+  console.log('[Live2D] Trigger action:', name)
+  actionQueue = [name]
+  activeAction = null
 }
 
 /** 设置手动参数覆盖（如闭眼：{ ParamEyeLOpen: 0, ParamEyeROpen: 0 }） */

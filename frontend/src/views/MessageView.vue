@@ -7,15 +7,18 @@ import MessageItem from '@/components/MessageItem.vue'
 import { startToolPolling, stopToolPolling, toolMessage } from '@/composables/useToolStatus'
 import { CONFIG } from '@/utils/config'
 import { live2dState, setEmotion } from '@/utils/live2dController'
-import { CURRENT_SESSION_ID, loadCurrentSession, MESSAGES, newSession, switchSession } from '@/utils/session'
+import { CURRENT_SESSION_ID, IS_TEMPORARY_SESSION, formatRelativeTime, loadCurrentSession, MESSAGES, newSession, switchSession } from '@/utils/session'
 import { isPlaying, speak } from '@/utils/tts'
 
-export function chatStream(content: string) {
-  MESSAGES.value.push({ role: 'user', content })
+export function chatStream(content: string, options?: { skill?: string, images?: string[] }) {
+  MESSAGES.value.push({ role: 'user', content: options?.images?.length ? `[截图x${options.images.length}] ${content}` : content })
 
   API.chatStream(content, {
     sessionId: CURRENT_SESSION_ID.value ?? undefined,
     disableTTS: true,
+    skill: options?.skill,
+    images: options?.images,
+    temporary: IS_TEMPORARY_SESSION.value || undefined,
   }).then(async ({ sessionId, response }) => {
     if (sessionId) {
       CURRENT_SESSION_ID.value = sessionId
@@ -148,6 +151,7 @@ const sessions = ref<Array<{
   createdAt: string
   lastActiveAt: string
   conversationRounds: number
+  temporary: boolean
 }>>([])
 const loadingSessions = ref(false)
 
@@ -187,24 +191,6 @@ async function handleDeleteSession(id: string) {
   catch { /* ignore */ }
 }
 
-function formatTime(iso: string) {
-  const d = new Date(iso)
-  const now = new Date()
-  const diffMs = now.getTime() - d.getTime()
-  const diffMin = Math.floor(diffMs / 60000)
-  if (diffMin < 1)
-    return '刚刚'
-  if (diffMin < 60)
-    return `${diffMin} 分钟前`
-  const diffHour = Math.floor(diffMin / 60)
-  if (diffHour < 24)
-    return `${diffHour} 小时前`
-  const diffDay = Math.floor(diffHour / 24)
-  if (diffDay < 7)
-    return `${diffDay} 天前`
-  return d.toLocaleDateString()
-}
-
 function handleNewSession() {
   newSession()
   showHistory.value = false
@@ -235,6 +221,8 @@ async function handleFileUpload(event: Event) {
   }
   target.value = ''
 }
+
+
 </script>
 
 <template>
@@ -280,7 +268,7 @@ async function handleFileUpload(event: Event) {
                 {{ s.sessionId.slice(0, 8) }}...
               </div>
               <div class="text-white/40 text-xs">
-                {{ formatTime(s.lastActiveAt) }} · {{ s.conversationRounds }} 轮对话
+                {{ formatRelativeTime(s.lastActiveAt) }} · {{ s.conversationRounds }} 轮对话
               </div>
             </div>
             <button

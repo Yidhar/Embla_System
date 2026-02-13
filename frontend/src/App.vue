@@ -4,6 +4,7 @@ let _splashDismissed = false
 </script>
 
 <script setup lang="ts">
+import type { FloatingState } from '@/electron.d'
 import { useWindowSize } from '@vueuse/core'
 import Toast from 'primevue/toast'
 import { useToast } from 'primevue/usetoast'
@@ -12,10 +13,11 @@ import Live2dModel from '@/components/Live2dModel.vue'
 import LoginDialog from '@/components/LoginDialog.vue'
 import SplashScreen from '@/components/SplashScreen.vue'
 import TitleBar from '@/components/TitleBar.vue'
+import FloatingView from '@/views/FloatingView.vue'
 import { isNagaLoggedIn, nagaUser, sessionRestored } from '@/composables/useAuth'
 import { useParallax } from '@/composables/useParallax'
 import { useStartupProgress } from '@/composables/useStartupProgress'
-import { CONFIG } from '@/utils/config'
+import { CONFIG, backendConnected } from '@/utils/config'
 import { clearExpression, setExpression } from '@/utils/live2dController'
 import { initParallax, destroyParallax } from '@/utils/parallax'
 
@@ -28,6 +30,12 @@ const toast = useToast()
 
 const { width, height } = useWindowSize()
 const scale = computed(() => height.value / (10000 - CONFIG.value.web_live2d.model.size))
+
+// ─── 悬浮球模式状态 ──────────────────────────
+const floatingState = ref<FloatingState>('classic')
+const isFloatingMode = computed(() => floatingState.value !== 'classic')
+
+let unsubStateChange: (() => void) | undefined
 
 // ─── 伪3D 视差 ────────────────────────────
 const { tx: lightTx, ty: lightTy } = useParallax({ translateX: 40, translateY: 30, invert: true })
@@ -132,71 +140,98 @@ watch(sessionRestored, (restored) => {
 onMounted(() => {
   initParallax()
   startProgress()
+
+  // 悬浮球模式监听
+  const api = window.electronAPI
+  if (api) {
+    api.floating.getState().then((state) => {
+      floatingState.value = state
+    })
+    unsubStateChange = api.floating.onStateChange((state) => {
+      floatingState.value = state
+    })
+
+    // 后端连接成功后，根据持久化配置自动恢复悬浮球模式
+    const stopConfigWatch = watch(backendConnected, (connected) => {
+      if (connected && CONFIG.value.floating.enabled) {
+        api.floating.enter()
+      }
+      if (connected)
+        stopConfigWatch()
+    })
+  }
 })
 
 onUnmounted(() => {
   destroyParallax()
   cleanup()
+  unsubStateChange?.()
 })
 </script>
 
 <template>
-  <TitleBar />
-  <Toast position="top-center" />
-  <div class="h-full sunflower" :style="{ paddingTop: titleBarPadding }">
-    <!-- Live2D 层：启动时 z-10（在 SplashScreen 遮罩之间），之后降到 -z-1 -->
-    <div
-      class="absolute top-0 left-0 size-full"
-      :class="splashVisible ? 'z-10' : '-z-1'"
-      :style="{
-        transform: live2dTransform,
-        transformOrigin: live2dTransformOrigin || undefined,
-        transition: live2dTransition ? 'transform 1.2s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.8s ease' : 'none',
-        opacity: splashVisible ? (live2dShouldShow ? 1 : 0) : 1,
-      }"
-    >
-      <img src="/assets/light.png" alt="" class="absolute right-0 bottom-0 w-80vw h-60vw op-40 -z-1 will-change-transform" :style="{ transform: `translate(${lightTx}px, ${lightTy}px)` }">
-      <Live2dModel
-        v-bind="CONFIG.web_live2d.model"
-        :width="width" :height="height"
-        :scale="scale" :ssaa="CONFIG.web_live2d.ssaa"
-        @model-ready="onModelReady"
+  <!-- 悬浮球模式 -->
+  <FloatingView v-if="isFloatingMode" />
+
+  <!-- 经典模式 -->
+  <template v-else>
+    <TitleBar />
+    <Toast position="top-center" />
+    <div class="h-full sunflower" :style="{ paddingTop: titleBarPadding }">
+      <!-- Live2D 层：启动时 z-10（在 SplashScreen 遮罩之间），之后降到 -z-1 -->
+      <div
+        class="absolute top-0 left-0 size-full"
+        :class="splashVisible ? 'z-10' : '-z-1'"
+        :style="{
+          transform: live2dTransform,
+          transformOrigin: live2dTransformOrigin || undefined,
+          transition: live2dTransition ? 'transform 1.2s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.8s ease' : 'none',
+          opacity: splashVisible ? (live2dShouldShow ? 1 : 0) : 1,
+        }"
+      >
+        <img src="/assets/light.png" alt="" class="absolute right-0 bottom-0 w-80vw h-60vw op-40 -z-1 will-change-transform" :style="{ transform: `translate(${lightTx}px, ${lightTy}px)` }">
+        <Live2dModel
+          v-bind="CONFIG.web_live2d.model"
+          :width="width" :height="height"
+          :scale="scale" :ssaa="CONFIG.web_live2d.ssaa"
+          @model-ready="onModelReady"
+        />
+      </div>
+
+      <!-- 主内容区域 -->
+      <Transition name="fade">
+        <div v-if="showMainContent" class="h-full px-1/8 py-1/12 grid-container pointer-events-none">
+          <RouterView v-slot="{ Component, route }">
+            <Transition :name="route.path === '/' ? 'slide-out' : 'slide-in'">
+              <component
+                :is="Component"
+                :key="route.fullPath"
+                class="grid-item size-full pointer-events-auto"
+              />
+            </Transition>
+          </RouterView>
+        </div>
+      </Transition>
+
+      <!-- 启动界面遮罩（Transition 在父级控制淡出动画） -->
+      <Transition name="splash-fade">
+        <SplashScreen
+          v-if="splashVisible"
+          :progress="progress"
+          :phase="phase"
+          :model-ready="modelReady"
+          @dismiss="onSplashDismiss"
+        />
+      </Transition>
+
+      <!-- 登录弹窗（在 SplashScreen 之上） -->
+      <LoginDialog
+        :visible="showLoginDialog"
+        @success="onLoginSuccess"
+        @skip="onLoginSkip"
       />
     </div>
-
-    <!-- 主内容区域 -->
-    <Transition name="fade">
-      <div v-if="showMainContent" class="h-full px-1/8 py-1/12 grid-container pointer-events-none">
-        <RouterView v-slot="{ Component, route }">
-          <Transition :name="route.path === '/' ? 'slide-out' : 'slide-in'">
-            <component
-              :is="Component"
-              :key="route.fullPath"
-              class="grid-item size-full pointer-events-auto"
-            />
-          </Transition>
-        </RouterView>
-      </div>
-    </Transition>
-
-    <!-- 启动界面遮罩（Transition 在父级控制淡出动画） -->
-    <Transition name="splash-fade">
-      <SplashScreen
-        v-if="splashVisible"
-        :progress="progress"
-        :phase="phase"
-        :model-ready="modelReady"
-        @dismiss="onSplashDismiss"
-      />
-    </Transition>
-
-    <!-- 登录弹窗（在 SplashScreen 之上） -->
-    <LoginDialog
-      :visible="showLoginDialog"
-      @success="onLoginSuccess"
-      @skip="onLoginSkip"
-    />
-  </div>
+  </template>
 </template>
 
 <style scoped>

@@ -1,0 +1,36 @@
+{
+  "name": "game_guide",
+  "displayName": "游戏攻略服务",
+  "version": "0.1.0",
+  "description": "游戏攻略问答与计算服务，支持调用时自动截图注入。",
+  "author": "NagaAgent",
+  "agentType": "mcp",
+  "entryPoint": {
+    "module": "mcpserver.agent_game_guide.agent_game_guide",
+    "class": "GameGuideAgent"
+  },
+  "capabilities": {
+    "invocationCommands": [
+      {
+        "command": "ask_guide",
+        "description": "文字攻略问答。默认 auto_screenshot=true，调用时自动截图并注入图片上下文；game_id 可选，缺省时自动识别。",
+        "example": "{\"tool_name\":\"ask_guide\",\"game_id\":\"arknights\",\"query\":\"这关怎么打\"}"
+      },
+      {
+        "command": "ask_guide_with_screenshot",
+        "description": "显式截图攻略问答。若未提供 images，会自动截图。",
+        "example": "{\"tool_name\":\"ask_guide_with_screenshot\",\"game_id\":\"arknights\",\"query\":\"这关怎么打\"}"
+      },
+      {
+        "command": "calculate_damage",
+        "description": "伤害计算入口。",
+        "example": "{\"tool_name\":\"calculate_damage\",\"game_id\":\"arknights\",\"query\":\"缪尔赛思S3M3打800防DPS\"}"
+      },
+      {
+        "command": "get_team_recommendation",
+        "description": "配队推荐入口。",
+        "example": "{\"tool_name\":\"get_team_recommendation\",\"game_id\":\"arknights\",\"query\":\"7-18低配怎么组队\"}"
+      }
+    ]
+  }
+}

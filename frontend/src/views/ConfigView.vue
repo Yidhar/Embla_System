@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useStorage } from '@vueuse/core'
-import { Accordion, Button, Divider, InputNumber, InputText, Select, Slider, Textarea } from 'primevue'
+import { Accordion, Button, Divider, InputNumber, InputText, Select, Slider, Textarea, ToggleSwitch } from 'primevue'
 import { ref, useTemplateRef } from 'vue'
 import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
@@ -32,6 +32,20 @@ function recoverUiConfig() {
 }
 
 const accordionValue = useStorage('accordion-config', [])
+
+const isElectron = !!window.electronAPI
+
+function toggleFloatingMode(enabled: boolean) {
+  CONFIG.value.floating.enabled = enabled
+  if (!isElectron)
+    return
+  if (enabled) {
+    window.electronAPI?.floating.enter()
+  }
+  else {
+    window.electronAPI?.floating.exit()
+  }
+}
 </script>
 
 <template>
@@ -45,6 +59,12 @@ const accordionValue = useStorage('accordion-config', [])
           </div>
         </template>
         <div class="grid gap-4">
+          <ConfigItem v-if="isElectron" name="悬浮球模式" description="启用后窗口变为可拖拽的悬浮球，点击展开聊天面板">
+            <ToggleSwitch
+              :model-value="CONFIG.floating.enabled"
+              @update:model-value="toggleFloatingMode"
+            />
+          </ConfigItem>
           <ConfigItem name="AI 昵称" description="聊天窗口显示的 AI 昵称">
             <InputText v-model="CONFIG.system.ai_name" />
           </ConfigItem>

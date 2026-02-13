@@ -48,6 +48,9 @@ dependencies = [
     "Flask>=3.1.0",
     "gevent>=25.0.0",
     "py2neo>=2021.2.4",
+    "neo4j>=5.0.0",
+    "chromadb>=0.5.0",
+    "mss>=10.1.0",
     "python-multipart>=0.0.22",
 ]
 
@@ -65,4 +68,6 @@ line-length = 120
 build = [
     "pyinstaller>=6.18.0",
 ]
-
+test = [
+    "google-genai>=1.63.0",
+]
