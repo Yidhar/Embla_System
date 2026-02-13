@@ -1,8 +1,9 @@
 import { ref } from 'vue'
 import { CONFIG } from '@/utils/config'
 
-// 占位，后续替换为实际地址
-const UPDATE_BASE_URL = 'https://example.com'
+// NagaBusiness 统一网关地址（与 naga_auth.py BUSINESS_URL 保持一致）
+const UPDATE_BASE_URL = 'http://62.234.131.204:30031'
+// TODO: 在 NagaBusiness 管理后台创建应用后填入实际 APP_ID
 const APP_ID = '00000000-0000-0000-0000-000000000000'
 
 export interface UpdateInfo {
