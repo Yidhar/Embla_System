@@ -48,7 +48,7 @@ const { rx, ry, tx, ty } = useParallax({ rotateX: 5, rotateY: 4, translateX: 15,
           </div>
           <div class="grow grid grid-cols-2 font-serif font-bold lh-none">
             <ArkButton @click="useLink({ to: '/model' }).navigate">
-              <div class="size-full text-lg">人格投影</div>
+              <div class="size-full text-lg">模型链接</div>
             </ArkButton>
             <ArkButton disabled>
               <div class="size-full text-lg">记忆链接</div>
