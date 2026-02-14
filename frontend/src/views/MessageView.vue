@@ -227,7 +227,7 @@ async function handleFileUpload(event: Event) {
 
 <template>
   <div class="flex flex-col gap-8 overflow-hidden relative">
-    <BoxContainer ref="containerRef" class="w-full grow">
+    <BoxContainer ref="containerRef" class="w-full grow" :parallax="false">
       <div class="grid gap-4 pb-8">
         <MessageItem
           v-for="item, index in MESSAGES" :key="index"
