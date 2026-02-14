@@ -12,7 +12,7 @@ import { useParallax } from '@/composables/useParallax'
 const { height } = useWindowSize()
 const scale = computed(() => height.value / 720)
 
-const { rx, ry, tx, ty } = useParallax({ rotateX: 5, rotateY: 4, translateX: 15, translateY: 10 })
+const { rx, ry, tx, ty } = useParallax({ rotateX: 5, rotateY: 4, translateX: 15, translateY: 10, invertRotate: true })
 </script>
 
 <template>

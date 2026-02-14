@@ -59,7 +59,7 @@ const displayProgress = computed(() => Math.min(100, Math.round(props.progress))
         @click="emit('dismiss')"
       >
         <span class="click-hint text-sm tracking-[0.3em]" style="color: rgba(212, 175, 55, 0.8);">
-          点 击 进 入
+          点 击 唤 醒
         </span>
       </div>
     </Transition>

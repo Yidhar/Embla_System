@@ -12,6 +12,8 @@ interface ParallaxOptions {
   translateY?: number
   /** Reverse direction (for background layers) */
   invert?: boolean
+  /** Reverse tilt only: mouse left -> component tilts right */
+  invertRotate?: boolean
   /** CSS perspective value */
   perspective?: number
 }
@@ -23,13 +25,15 @@ export function useParallax(opts: ParallaxOptions = {}) {
     translateX = 0,
     translateY = 0,
     invert = false,
+    invertRotate = false,
     perspective = 1000,
   } = opts
 
   const sign = invert ? -1 : 1
+  const rotateSign = invertRotate ? -1 : 1
 
-  const rx = computed(() => +(pY.value * rotateX * sign).toFixed(3))
-  const ry = computed(() => +(pX.value * rotateY * sign).toFixed(3))
+  const rx = computed(() => +(pY.value * rotateX * sign * rotateSign).toFixed(3))
+  const ry = computed(() => +(pX.value * rotateY * sign * rotateSign).toFixed(3))
   const tx = computed(() => +(pX.value * translateX * sign).toFixed(2))
   const ty = computed(() => +(pY.value * translateY * sign).toFixed(2))
 
