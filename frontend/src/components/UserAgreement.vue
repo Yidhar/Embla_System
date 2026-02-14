@@ -24,6 +24,13 @@ defineEmits<{ 'update:visible': [value: boolean] }>()
         <p>我们有权根据法律法规变化及业务发展需要修订本协议，更新后的协议将在软件内公布，继续使用即视为同意修订后的条款。</p>
       </section>
 
+      <section class="beta-notice">
+        <h4>特别声明：内测版本</h4>
+        <p><b>本软件当前处于内测阶段（Beta），仅供测试与体验使用，不进行任何形式的收费。</b></p>
+        <p>内测期间，我们不对用户数据的完整性、持久性作任何保障。用户数据（包括但不限于账号信息、对话记录、知识图谱数据、上传文件等）可能因系统升级、架构调整或其他原因被部分或全部清除，届时恕不另行通知。</p>
+        <p>请勿在本服务中存储重要或敏感数据。因数据清除造成的任何损失，我们不承担责任。</p>
+      </section>
+
       <section>
         <h4>二、服务内容</h4>
         <p>本服务主要包括但不限于以下功能：</p>
@@ -155,5 +162,13 @@ defineEmits<{ 'update:visible': [value: boolean] }>()
 
 .agreement-content section {
   margin-bottom: 4px;
+}
+
+.beta-notice {
+  background: rgba(212, 175, 55, 0.08);
+  border: 1px solid rgba(212, 175, 55, 0.25);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 10px 0;
 }
 </style>

@@ -210,6 +210,21 @@ export class CoreApiClient extends ApiClient {
     })
   }
 
+  parseDocument(file: File): Promise<{
+    status: 'success'
+    filename: string
+    content: string
+    truncated: boolean
+    charCount: number
+  }> {
+    const formData = new FormData()
+    formData.append('file', file)
+    return this.instance.post('/upload/parse', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000,
+    })
+  }
+
   getMemoryStats(): Promise<{
     status: string
     memoryStats: { enabled: true } & MemoryStats

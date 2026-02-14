@@ -1383,6 +1383,70 @@ async def upload_document(file: UploadFile = File(...), description: str = Form(
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
 
 
+@app.post("/upload/parse")
+async def upload_parse(file: UploadFile = File(...)):
+    """上传并解析文档内容（支持 .docx / .xlsx / .txt）"""
+    import tempfile
+    filename = file.filename or "unknown"
+    suffix = Path(filename).suffix.lower()
+
+    if suffix not in (".docx", ".xlsx", ".txt", ".csv", ".md"):
+        raise HTTPException(status_code=400, detail=f"不支持的文件格式: {suffix}，支持 .docx / .xlsx / .txt / .csv / .md")
+
+    # 写入临时文件
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = Path(tmp.name)
+
+    try:
+        if suffix == ".docx":
+            import importlib.util
+            _docx_spec = importlib.util.spec_from_file_location(
+                "docx_extract", Path(__file__).parent / "skills_templates" / "office-docs" / "tools" / "docx_extract.py"
+            )
+            _docx_mod = importlib.util.module_from_spec(_docx_spec)
+            _docx_spec.loader.exec_module(_docx_mod)
+            lines = _docx_mod.extract_docx_text(tmp_path)
+            content = "\n".join(lines)
+        elif suffix == ".xlsx":
+            import importlib.util, zipfile as _zf
+            _xlsx_spec = importlib.util.spec_from_file_location(
+                "xlsx_extract", Path(__file__).parent / "skills_templates" / "office-docs" / "tools" / "xlsx_extract.py"
+            )
+            _xlsx_mod = importlib.util.module_from_spec(_xlsx_spec)
+            _xlsx_spec.loader.exec_module(_xlsx_mod)
+            with _zf.ZipFile(tmp_path, "r") as archive:
+                shared_strings = _xlsx_mod._load_shared_strings(archive)
+                sheets = _xlsx_mod._load_sheet_targets(archive)
+                parts = []
+                for name, path in sheets:
+                    rows = _xlsx_mod._parse_sheet(archive, path, shared_strings, max_rows=500)
+                    parts.append(f"## Sheet: {name}\n{_xlsx_mod._format_sheet_csv(rows, ',')}")
+                content = "\n".join(parts)
+        else:
+            # txt / csv / md 直接读取
+            content = tmp_path.read_text(encoding="utf-8", errors="replace")
+
+        # 截断过长内容
+        max_chars = 50000
+        truncated = len(content) > max_chars
+        if truncated:
+            content = content[:max_chars]
+
+        return {
+            "status": "success",
+            "filename": filename,
+            "content": content,
+            "truncated": truncated,
+            "char_count": len(content),
+        }
+    except Exception as e:
+        logger.error(f"文档解析失败: {e}")
+        raise HTTPException(status_code=500, detail=f"解析失败: {str(e)}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 # 挂载LLM服务路由以支持 /llm/chat
 from .llm_service import llm_app
 
