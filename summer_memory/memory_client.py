@@ -83,14 +83,14 @@ class RemoteMemoryClient:
         data: Dict[str, Any] = {"user_input": user_input, "ai_response": ai_response}
         if quintuples:
             data["quintuples"] = quintuples
-        return await self._request("POST", "/memory/add", json=data)
+        return await self._request("POST", "/add", json=data)
 
     async def query_memory(self, question: str = "", keywords: Optional[List[str]] = None,
                            limit: int = 5) -> Dict[str, Any]:
         data: Dict[str, Any] = {"question": question, "limit": limit}
         if keywords:
             data["keywords"] = keywords
-        return await self._request("POST", "/memory/query", json=data)
+        return await self._request("POST", "/query", json=data)
 
     # ---- 图查询 ----
 

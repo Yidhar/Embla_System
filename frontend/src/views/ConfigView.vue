@@ -5,6 +5,7 @@ import { ref, useTemplateRef } from 'vue'
 import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
+import { nagaUser } from '@/composables/useAuth'
 import { CONFIG, DEFAULT_CONFIG, DEFAULT_MODEL, MODELS, SYSTEM_PROMPT } from '@/utils/config'
 import { trackingCalibration } from '@/utils/live2dController'
 
@@ -118,21 +119,24 @@ function toggleFloatingMode(enabled: boolean) {
           </ConfigItem>
           <ConfigItem name="视角追踪延迟" description="按住鼠标超过该时间(毫秒)后才开始视角追踪，0=点击即追踪">
             <InputNumber
-              :model-value="CONFIG.web_live2d.tracking_hold_delay_ms ?? 200"
+              :model-value="CONFIG.web_live2d.tracking_hold_delay_ms ?? 100"
               :min="0" :max="5000" :step="100"
               show-buttons
-              @update:model-value="(v: number | null) => { CONFIG.web_live2d.tracking_hold_delay_ms = v ?? 200 }"
+              @update:model-value="(v: number | null) => { CONFIG.web_live2d.tracking_hold_delay_ms = v ?? 100 }"
             />
           </ConfigItem>
         </div>
       </ConfigGroup>
       <ConfigGroup value="portal" header="账号设置">
         <div class="grid gap-4">
-          <ConfigItem name="用户名">
-            <InputText v-model="CONFIG.naga_portal.username" />
-          </ConfigItem>
-          <ConfigItem name="用户密码">
-            <InputText v-model="CONFIG.naga_portal.password" />
+          <ConfigItem name="当前账号">
+            <div v-if="nagaUser" class="flex items-center gap-3">
+              <div class="w-8 h-8 rounded-full bg-amber-600/60 flex items-center justify-center text-white text-sm font-bold shrink-0">
+                {{ nagaUser.username.charAt(0).toUpperCase() }}
+              </div>
+              <span class="text-white/80">{{ nagaUser.username }}</span>
+            </div>
+            <span v-else class="text-white/40">未登录</span>
           </ConfigItem>
         </div>
       </ConfigGroup>
