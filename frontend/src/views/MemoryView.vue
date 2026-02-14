@@ -103,7 +103,7 @@ onMounted(() => {
               <div class="text-xs text-white/70">
                 <div>用户: {{ nagaUser?.username }}</div>
                 <div class="mt-1 text-white/40">
-                  {{ CONFIG.memory_server?.url }}
+                  云端记忆服务已连接
                 </div>
               </div>
             </ConfigItem>

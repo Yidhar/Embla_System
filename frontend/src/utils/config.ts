@@ -19,6 +19,12 @@ export const MODELS = {
     y: 1.3,
     size: 6800,
   }),
+  NagaTest2: defineModel({
+    source: './models/NagaTest2/NagaTest2.model3.json',
+    x: 0.5,
+    y: 1.3,
+    size: 6800,
+  }),
 } as const
 
 export const DEFAULT_MODEL: keyof typeof MODELS = 'NagaTest'
@@ -105,7 +111,7 @@ export const DEFAULT_CONFIG = {
     enabled: false, // 是否启用实时语音
     provider: 'qwen', // 语音提供商
     api_key: 'your-dashscope-api-key-here', // DashScope API密钥
-    model: 'qwen3-omni-flash-realtime', // 实时语音模型
+    model: 'qwen3-asr-realtime', // 实时语音模型
     voice: 'Cherry', // 语音名称
     voice_mode: 'auto', // 语音模式
     tts_voice: 'zh-CN-XiaoyiNeural', // TTS语音
@@ -198,7 +204,7 @@ export const DEFAULT_CONFIG = {
     ssaa: 2,
     model: MODELS[DEFAULT_MODEL],
     face_y_ratio: 0.13, // 视角追踪面部Y轴位置比例（0=模型顶部, 1=底部）
-    tracking_hold_delay_ms: 600, // 按住超过该毫秒数后才开始视角追踪，0=点击即追踪
+    tracking_hold_delay_ms: 100, // 按住超过该毫秒数后才开始视角追踪，0=点击即追踪
   },
   system_check: {
     passed: false, // 系统检查是否通过

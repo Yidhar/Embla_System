@@ -442,14 +442,22 @@ async def auth_login(body: dict):
     """NagaCAS 登录"""
     username = body.get("username", "")
     password = body.get("password", "")
+    captcha_id = body.get("captcha_id", "")
+    captcha_answer = body.get("captcha_answer", "")
     if not username or not password:
         raise HTTPException(status_code=400, detail="用户名和密码不能为空")
     try:
-        result = await naga_auth.login(username, password)
+        result = await naga_auth.login(username, password, captcha_id, captcha_answer)
         return result
     except Exception as e:
-        logger.error(f"登录失败: {e}")
-        raise HTTPException(status_code=401, detail=f"登录失败: {str(e)}")
+        import httpx
+        status = 401
+        detail = str(e)
+        if isinstance(e, httpx.HTTPStatusError):
+            status = e.response.status_code
+            detail = e.response.text
+        logger.error(f"登录失败 [{status}]: {detail}")
+        raise HTTPException(status_code=status, detail=detail)
 
 
 @app.get("/auth/me")
@@ -488,12 +496,20 @@ async def auth_register(body: dict):
         detail = f"注册失败: {str(e)}"
         if isinstance(e, httpx.HTTPStatusError):
             status = e.response.status_code
-            try:
-                detail = e.response.json().get("detail", detail)
-            except Exception:
-                pass
-        logger.error(f"注册失败: {e}")
+            detail = e.response.text
+        logger.error(f"注册失败 [{status}]: {detail}")
         raise HTTPException(status_code=status, detail=detail)
+
+
+@app.get("/auth/captcha")
+async def auth_captcha():
+    """获取验证码（数学计算题）"""
+    try:
+        result = await naga_auth.get_captcha()
+        return result
+    except Exception as e:
+        logger.error(f"获取验证码失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取验证码失败: {str(e)}")
 
 
 @app.post("/auth/send-verification")
@@ -501,22 +517,21 @@ async def auth_send_verification(body: dict):
     """发送邮箱验证码"""
     email = body.get("email", "")
     username = body.get("username", "")
+    captcha_id = body.get("captcha_id", "")
+    captcha_answer = body.get("captcha_answer", "")
     if not email or not username:
         raise HTTPException(status_code=400, detail="邮箱和用户名不能为空")
     try:
-        result = await naga_auth.send_verification(email, username)
+        result = await naga_auth.send_verification(email, username, captcha_id, captcha_answer)
         return {"success": True, "message": "验证码已发送"}
     except Exception as e:
         import httpx
         status = 500
-        detail = f"发送验证码失败: {str(e)}"
+        detail = str(e)
         if isinstance(e, httpx.HTTPStatusError):
             status = e.response.status_code
-            try:
-                detail = e.response.json().get("message", detail)
-            except Exception:
-                pass
-        logger.error(f"发送验证码失败: {e}")
+            detail = e.response.text
+        logger.error(f"发送验证码失败 [{status}]: {detail}")
         raise HTTPException(status_code=status, detail=detail)
 
 
@@ -1366,6 +1381,93 @@ async def upload_document(file: UploadFile = File(...), description: str = Form(
     except Exception as e:
         logger.error(f"文件上传失败: {e}")
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
+
+
+@app.post("/upload/parse")
+async def upload_parse(file: UploadFile = File(...)):
+    """上传并解析文档内容（支持 .docx / .xlsx / .txt）"""
+    import tempfile
+    filename = file.filename or "unknown"
+    suffix = Path(filename).suffix.lower()
+
+    if suffix not in (".docx", ".xlsx", ".txt", ".csv", ".md"):
+        raise HTTPException(status_code=400, detail=f"不支持的文件格式: {suffix}，支持 .docx / .xlsx / .txt / .csv / .md")
+
+    # 写入临时文件
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = Path(tmp.name)
+
+    try:
+        if suffix == ".docx":
+            import importlib.util
+            _docx_spec = importlib.util.spec_from_file_location(
+                "docx_extract", Path(__file__).parent / "skills_templates" / "office-docs" / "tools" / "docx_extract.py"
+            )
+            _docx_mod = importlib.util.module_from_spec(_docx_spec)
+            _docx_spec.loader.exec_module(_docx_mod)
+            lines = _docx_mod.extract_docx_text(tmp_path)
+            content = "\n".join(lines)
+        elif suffix == ".xlsx":
+            import importlib.util, zipfile as _zf
+            _xlsx_spec = importlib.util.spec_from_file_location(
+                "xlsx_extract", Path(__file__).parent / "skills_templates" / "office-docs" / "tools" / "xlsx_extract.py"
+            )
+            _xlsx_mod = importlib.util.module_from_spec(_xlsx_spec)
+            _xlsx_spec.loader.exec_module(_xlsx_mod)
+            with _zf.ZipFile(tmp_path, "r") as archive:
+                shared_strings = _xlsx_mod._load_shared_strings(archive)
+                sheets = _xlsx_mod._load_sheet_targets(archive)
+                parts = []
+                for name, path in sheets:
+                    rows = _xlsx_mod._parse_sheet(archive, path, shared_strings, max_rows=500)
+                    parts.append(f"## Sheet: {name}\n{_xlsx_mod._format_sheet_csv(rows, ',')}")
+                content = "\n".join(parts)
+        else:
+            # txt / csv / md 直接读取
+            content = tmp_path.read_text(encoding="utf-8", errors="replace")
+
+        # 截断过长内容
+        max_chars = 50000
+        truncated = len(content) > max_chars
+        if truncated:
+            content = content[:max_chars]
+
+        return {
+            "status": "success",
+            "filename": filename,
+            "content": content,
+            "truncated": truncated,
+            "char_count": len(content),
+        }
+    except Exception as e:
+        logger.error(f"文档解析失败: {e}")
+        raise HTTPException(status_code=500, detail=f"解析失败: {str(e)}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@app.get("/update/latest")
+async def proxy_update_check(platform: str = "windows"):
+    """代理更新检查请求，避免前端直接暴露服务器地址"""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{naga_auth.BUSINESS_URL}/api/app/NagaAgent/latest",
+                params={"platform": platform},
+            )
+            if resp.status_code == 404:
+                return {"has_update": False}
+            resp.raise_for_status()
+            data = resp.json()
+            # 将相对下载路径拼成完整URL
+            if data.get("download_url"):
+                data["download_url"] = f"{naga_auth.BUSINESS_URL}{data['download_url']}"
+            return data
+    except Exception as e:
+        logger.warning(f"更新检查失败: {e}")
+        return {"has_update": False}
 
 
 # 挂载LLM服务路由以支持 /llm/chat

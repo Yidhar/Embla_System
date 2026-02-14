@@ -1,5 +1,5 @@
 import process from 'node:process'
-import { app, BrowserWindow, desktopCapturer, ipcMain } from 'electron'
+import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, nativeTheme, shell, systemPreferences } from 'electron'
 import { startBackend, stopBackend } from './modules/backend'
 import { registerHotkeys, unregisterHotkeys } from './modules/hotkeys'
 import { createMenu } from './modules/menu'
@@ -38,6 +38,9 @@ app.on('second-instance', () => {
 })
 
 app.whenReady().then(() => {
+  // 强制暗色主题（确保原生菜单等 UI 为深色）
+  nativeTheme.themeSource = 'dark'
+
   // Start backend services
   startBackend()
 
@@ -67,12 +70,17 @@ app.whenReady().then(() => {
     }
   })
   ipcMain.on('window:close', () => {
-    // 悬浮球模式下关闭按钮收起为球态
     const state = getFloatingState()
     if (state === 'compact' || state === 'full') {
+      // 悬浮球展开态：收起为球态
       collapseFloatingWindow()
     }
+    else if (state === 'classic') {
+      // 经典模式：关闭窗口 → 自动进入悬浮球
+      enterFloatingMode()
+    }
     else {
+      // 已经是球态，隐藏到托盘
       getMainWindow()?.hide()
     }
   })
@@ -117,30 +125,80 @@ app.whenReady().then(() => {
   ipcMain.on('updater:download', () => downloadUpdate())
   ipcMain.on('updater:install', () => installUpdate())
 
+  // App quit
+  ipcMain.on('app:quit', () => {
+    isQuitting = true
+    app.quit()
+  })
+
+  // 悬浮球右键菜单
+  ipcMain.on('context-menu:show', () => {
+    const menu = Menu.buildFromTemplate([
+      {
+        label: '打开主界面',
+        click: () => exitFloatingMode(),
+      },
+      {
+        label: '隐藏到托盘',
+        click: () => getMainWindow()?.hide(),
+      },
+      { type: 'separator' },
+      {
+        label: '退出应用',
+        click: () => {
+          isQuitting = true
+          app.quit()
+        },
+      },
+    ])
+    menu.popup()
+  })
+
   // 窗口截屏功能
   ipcMain.handle('capture:getSources', async () => {
-    const sources = await desktopCapturer.getSources({
-      types: ['window'],
-      thumbnailSize: { width: 320, height: 180 },
-      fetchWindowIcons: true,
-    })
-    return sources.map(s => ({
-      id: s.id,
-      name: s.name,
-      thumbnail: s.thumbnail.toDataURL(),
-      appIcon: s.appIcon?.toDataURL() || null,
-    }))
+    // macOS 需要屏幕录制权限
+    if (process.platform === 'darwin') {
+      const status = systemPreferences.getMediaAccessStatus('screen')
+      if (status !== 'granted') {
+        return { permission: status }
+      }
+    }
+
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ['window', 'screen'],
+        thumbnailSize: { width: 320, height: 180 },
+        fetchWindowIcons: true,
+      })
+      return sources.map(s => ({
+        id: s.id,
+        name: s.name,
+        thumbnail: s.thumbnail.toDataURL(),
+        appIcon: s.appIcon?.toDataURL() || null,
+      }))
+    }
+    catch {
+      // desktopCapturer 可能因权限问题抛出异常
+      return { permission: 'denied' }
+    }
   })
 
   ipcMain.handle('capture:captureWindow', async (_event, sourceId: string) => {
     const sources = await desktopCapturer.getSources({
-      types: ['window'],
+      types: ['window', 'screen'],
       thumbnailSize: { width: 1920, height: 1080 },
     })
     const target = sources.find(s => s.id === sourceId)
     if (!target)
       return null
     return target.thumbnail.toDataURL()
+  })
+
+  // 打开 macOS 屏幕录制权限设置
+  ipcMain.handle('capture:openScreenSettings', async () => {
+    if (process.platform === 'darwin') {
+      await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')
+    }
   })
 
   // Minimize to tray on close instead of quitting

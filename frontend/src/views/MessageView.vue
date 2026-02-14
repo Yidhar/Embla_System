@@ -68,6 +68,14 @@ export function chatStream(content: string, options?: { skill?: string, images?:
           return `🔧 ${name}`
         }).join(', ')
         message.content += `\n\n> 正在执行工具: ${callDesc}...\n`
+        // OpenClaw 工具可能耗时较长，添加提示
+        const hasOpenclaw = calls.some((c: any) => {
+          const name = (c.service_name || c.agentType || '').toLowerCase()
+          return name.includes('openclaw') || name.includes('agent')
+        })
+        if (hasOpenclaw) {
+          message.content += '> ⏳ OpenClaw 工具处理可能会比较久，预计需要两分钟\n'
+        }
       }
       else if (chunk.type === 'tool_results') {
         // 显示工具结果摘要
@@ -206,28 +214,109 @@ async function handleFileUpload(event: Event) {
   if (!file)
     return
 
-  MESSAGES.value.push({ role: 'system', content: `正在上传文件: ${file.name}...` })
-  try {
-    const result = await API.uploadDocument(file)
-    const msg = MESSAGES.value[MESSAGES.value.length - 1]!
-    msg.content = `文件上传成功: ${file.name}`
-    if (result.filePath) {
-      chatStream(`请分析我刚上传的文件: ${file.name}`)
+  const ext = file.name.split('.').pop()?.toLowerCase()
+  const parseable = ['docx', 'xlsx', 'txt', 'csv', 'md']
+
+  if (ext && parseable.includes(ext)) {
+    // 解析文档内容后发送给文本模型
+    MESSAGES.value.push({ role: 'system', content: `正在解析文件: ${file.name}...` })
+    try {
+      const result = await API.parseDocument(file)
+      const msg = MESSAGES.value[MESSAGES.value.length - 1]!
+      const truncNote = result.truncated ? '（内容过长，已截断）' : ''
+      msg.content = `文件解析完成: ${file.name}${truncNote}`
+      chatStream(`以下是文件「${file.name}」的内容：\n\n${result.content}\n\n请分析这个文件的内容。`)
+      nextTick().then(scrollToBottom)
+    }
+    catch (err: any) {
+      const msg = MESSAGES.value[MESSAGES.value.length - 1]!
+      msg.content = `文件解析失败: ${err?.response?.data?.detail || err.message}`
     }
   }
-  catch (err: any) {
-    const msg = MESSAGES.value[MESSAGES.value.length - 1]!
-    msg.content = `文件上传失败: ${err.message}`
+  else {
+    // 其他格式走原有上传逻辑
+    MESSAGES.value.push({ role: 'system', content: `正在上传文件: ${file.name}...` })
+    try {
+      const result = await API.uploadDocument(file)
+      const msg = MESSAGES.value[MESSAGES.value.length - 1]!
+      msg.content = `文件上传成功: ${file.name}`
+      if (result.filePath) {
+        chatStream(`请分析我刚上传的文件「${file.name}」，文件完整路径: ${result.filePath}`)
+      }
+    }
+    catch (err: any) {
+      const msg = MESSAGES.value[MESSAGES.value.length - 1]!
+      msg.content = `文件上传失败: ${err.message}`
+    }
   }
   target.value = ''
+}
+
+// ── 语音输入 ──
+const isRecording = ref(false)
+let recognition: any = null
+
+function toggleVoiceInput() {
+  if (isRecording.value) {
+    stopVoiceInput()
+    return
+  }
+
+  const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+  if (!SpeechRecognition) {
+    MESSAGES.value.push({ role: 'system', content: '当前浏览器不支持语音识别，请使用 Chrome 或 Edge' })
+    return
+  }
+
+  recognition = new SpeechRecognition()
+  recognition.lang = 'zh-CN'
+  recognition.interimResults = true
+  recognition.continuous = false
+
+  recognition.onresult = (event: any) => {
+    let transcript = ''
+    for (let i = 0; i < event.results.length; i++) {
+      transcript += event.results[i][0].transcript
+    }
+    input.value = transcript
+  }
+
+  recognition.onend = () => {
+    isRecording.value = false
+    recognition = null
+  }
+
+  recognition.onerror = (event: any) => {
+    isRecording.value = false
+    recognition = null
+    if (event.error === 'network') {
+      MESSAGES.value.push({ role: 'system', content: '语音识别网络错误：浏览器语音识别需要连接 Google 服务器，请检查网络连接或使用代理。' })
+    }
+    else if (event.error === 'not-allowed') {
+      MESSAGES.value.push({ role: 'system', content: '语音识别权限被拒绝，请在浏览器设置中允许麦克风访问。' })
+    }
+    else if (event.error !== 'no-speech') {
+      MESSAGES.value.push({ role: 'system', content: `语音识别错误: ${event.error}` })
+    }
+  }
+
+  recognition.start()
+  isRecording.value = true
+}
+
+function stopVoiceInput() {
+  if (recognition) {
+    recognition.stop()
+  }
+  isRecording.value = false
 }
 
 
 </script>
 
 <template>
-  <div class="flex flex-col gap-8 overflow-hidden relative">
-    <BoxContainer ref="containerRef" class="w-full grow" :parallax="false">
+  <div class="flex flex-col gap-8 relative">
+    <BoxContainer ref="containerRef" class="w-full grow">
       <div class="grid gap-4 pb-8">
         <MessageItem
           v-for="item, index in MESSAGES" :key="index"
@@ -310,15 +399,25 @@ async function handleFileUpload(event: Event) {
           placeholder="Type a message..."
         >
         <button
-          class="p-2 text-white/60 hover:text-white bg-transparent border-none cursor-pointer text-sm shrink-0"
-          title="上传文件"
+          class="input-icon-btn shrink-0"
+          :class="{ 'recording': isRecording }"
+          :title="isRecording ? '停止录音' : '语音输入'"
+          @click="toggleVoiceInput"
+        >
+          <svg v-if="!isRecording" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" x2="12" y1="19" y2="22" /></svg>
+          <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+        </button>
+        <button
+          class="input-icon-btn shrink-0"
+          title="上传文件 (Word/Excel/文本)"
           @click="triggerUpload"
         >
-          +F
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /><path d="M12 18v-6" /><path d="m9 15 3-3 3 3" /></svg>
         </button>
         <input
           ref="fileInput"
           type="file"
+          accept=".docx,.xlsx,.txt,.csv,.md,.pdf,.png,.jpg,.jpeg"
           class="hidden"
           @change="handleFileUpload"
         >
@@ -361,5 +460,34 @@ async function handleFileUpload(event: Event) {
 .slide-up-leave-to {
   opacity: 0;
   transform: translateY(8px);
+}
+
+.input-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s;
+}
+
+.input-icon-btn:hover {
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.input-icon-btn.recording {
+  color: #e85d5d;
+  animation: recording-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes recording-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 </style>

@@ -46,10 +46,16 @@ class RemoteMemoryClient:
         try:
             resp = await self._client.request(method, url, **kwargs)
             resp.raise_for_status()
+            if not resp.content:
+                logger.warning(f"NagaMemory 返回空响应 [{method} {path}] status={resp.status_code}")
+                return {"success": False, "error": "服务返回空响应，请检查网络或代理设置"}
             return resp.json()
         except httpx.HTTPError as e:
             logger.error(f"NagaMemory 请求失败 [{method} {path}]: {e}")
             return {"success": False, "error": str(e)}
+        except ValueError as e:
+            logger.error(f"NagaMemory 响应解析失败 [{method} {path}]: {e}")
+            return {"success": False, "error": f"服务返回非JSON响应: {e}"}
 
     # ---- 健康 / 统计 ----
 
@@ -80,14 +86,14 @@ class RemoteMemoryClient:
         data: Dict[str, Any] = {"user_input": user_input, "ai_response": ai_response}
         if quintuples:
             data["quintuples"] = quintuples
-        return await self._request("POST", "/memory/add", json=data)
+        return await self._request("POST", "/add", json=data)
 
     async def query_memory(self, question: str = "", keywords: Optional[List[str]] = None,
                            limit: int = 5) -> Dict[str, Any]:
         data: Dict[str, Any] = {"question": question, "limit": limit}
         if keywords:
             data["keywords"] = keywords
-        return await self._request("POST", "/memory/query", json=data)
+        return await self._request("POST", "/query", json=data)
 
     # ---- 图查询 ----
 

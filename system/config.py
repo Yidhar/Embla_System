@@ -308,10 +308,10 @@ class ComputerControlConfig(BaseModel):
     """电脑控制配置"""
 
     enabled: bool = Field(default=True, description="是否启用电脑控制功能")
-    model: str = Field(default="glm-4.5v", description="视觉/坐标识别模型")
+    model: str = Field(default="gemini-2.5-flash", description="视觉/坐标识别模型")
     model_url: str = Field(default="https://open.bigmodel.cn/api/paas/v4", description="模型API地址")
     api_key: str = Field(default="", description="模型API密钥")
-    grounding_model: str = Field(default="glm-4.5v", description="元素定位/grounding模型")
+    grounding_model: str = Field(default="gemini-2.5-flash", description="元素定位/grounding模型")
     grounding_url: str = Field(default="https://open.bigmodel.cn/api/paas/v4", description="grounding模型API地址")
     grounding_api_key: str = Field(default="", description="grounding模型API密钥")
     screen_width: int = Field(default=1920, description="逻辑屏幕宽度（用于缩放体系）")
@@ -413,6 +413,8 @@ class VoiceRealtimeConfig(BaseModel):
     provider: str = Field(default="qwen", description="语音服务提供商 (qwen/openai/local)")
     api_key: str = Field(default="", description="语音服务API密钥")
     model: str = Field(default="qwen3-omni-flash-realtime", description="语音模型名称")
+    tts_model: str = Field(default="qwen3-tts-realtime", description="TTS模型名称")
+    asr_model: str = Field(default="qwen3-asr-realtime", description="ASR模型名称")
     voice: str = Field(default="Cherry", description="语音角色")
     input_sample_rate: int = Field(default=16000, description="输入采样率")
     output_sample_rate: int = Field(default=24000, description="输出采样率")

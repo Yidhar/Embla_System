@@ -23,6 +23,7 @@ IS_PACKAGED = getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
 
 # 标准库导入
 import asyncio
+import json as _json
 import logging
 import socket
 import threading
@@ -79,6 +80,12 @@ logging.getLogger("live2d.config").setLevel(logging.WARNING)
 logging.getLogger("live2d.config_dialog").setLevel(logging.WARNING)
 logging.getLogger("OpenGL").setLevel(logging.WARNING)
 logging.getLogger("OpenGL.acceleratesupport").setLevel(logging.WARNING)
+
+
+def _emit_progress(percent: int, phase: str):
+    """向 stdout 发送结构化进度信号，供 Electron 主进程解析"""
+    print(f"##PROGRESS##{_json.dumps({'percent': percent, 'phase': phase})}", flush=True)
+
 
 # 服务管理器类
 class ServiceManager:
@@ -232,6 +239,8 @@ class ServiceManager:
                         break
                     time.sleep(0.2)
 
+            _emit_progress(45, "等待服务就绪...")
+
             print("-" * 30)
             print(f"🎉 服务启动完成: {len(threads)} 个服务正在运行")
             print("=" * 50)
@@ -240,7 +249,16 @@ class ServiceManager:
             print(f"❌ 并行启动服务异常: {e}")
 
     def _init_proxy_settings(self):
-        """初始化代理设置：若不启用代理，则清空系统代理环境变量"""
+        """初始化代理设置：若不启用代理，则清空系统代理环境变量；始终为内部通信设置 NO_PROXY"""
+        # 始终确保本地服务通信不走代理
+        no_proxy_hosts = "localhost,127.0.0.1,0.0.0.0"
+        existing = os.environ.get("NO_PROXY", os.environ.get("no_proxy", ""))
+        if existing:
+            no_proxy_hosts = f"{existing},{no_proxy_hosts}"
+        os.environ["NO_PROXY"] = no_proxy_hosts
+        os.environ["no_proxy"] = no_proxy_hosts
+        print(f"已设置 NO_PROXY={no_proxy_hosts}")
+
         # 检测 applied_proxy 状态
         if not config.api.applied_proxy:  # 当 applied_proxy 为 False 时
             print("检测到不启用代理，正在清空系统代理环境变量...")
@@ -512,14 +530,17 @@ def _lazy_init_services():
         # 初始化服务管理器
         service_manager = ServiceManager()
         service_manager.start_background_services()
-        
+        _emit_progress(15, "初始化服务...")
+
         # conversation_core已删除，相关功能已迁移到apiserver
         n = None
-        
+
         # 初始化各个系统
         service_manager._init_mcp_services()
+        _emit_progress(20, "注册MCP服务...")
         service_manager._init_voice_system()
         service_manager._init_memory_system()
+        _emit_progress(25, "初始化子系统...")
         
         # 显示系统状态
         print("=" * 30)
@@ -548,7 +569,9 @@ def _lazy_init_services():
         print("=" * 30)
         
         # 启动服务（并行异步）
+        _emit_progress(30, "启动服务器...")
         service_manager.start_all_servers()
+        _emit_progress(50, "后端就绪")
         
         show_help()
         

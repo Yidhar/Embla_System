@@ -1,9 +1,6 @@
 import { ref } from 'vue'
 import { CONFIG } from '@/utils/config'
-
-// NagaBusiness 统一网关地址（与 naga_auth.py BUSINESS_URL 保持一致）
-const UPDATE_BASE_URL = 'http://62.234.131.204:30031'
-const APP_ID = 'NagaAgent'
+import API from '@/api/core'
 
 export interface UpdateInfo {
   hasUpdate: boolean
@@ -33,22 +30,22 @@ export const showUpdateDialog = ref(false)
 export async function checkForUpdate(): Promise<void> {
   try {
     const platform = detectPlatform()
-    const url = `${UPDATE_BASE_URL}/api/app/${APP_ID}/latest?platform=${platform}`
-    const res = await fetch(url, { signal: AbortSignal.timeout(10_000) })
+    const res = await fetch(`${API.endpoint}/update/latest?platform=${platform}`, {
+      signal: AbortSignal.timeout(10_000),
+    })
 
-    if (!res.ok) {
-      // 404 = 应用不存在或无可用版本，静默忽略
-      if (res.status === 404) return
-      return
-    }
+    if (!res.ok) return
 
     const data = await res.json() as {
-      version: string
-      description: string
-      force_update: boolean
-      download_url: string | null
-      file_size: number | null
+      version?: string
+      description?: string
+      force_update?: boolean
+      download_url?: string | null
+      file_size?: number | null
+      has_update?: boolean
     }
+
+    if (!data.version || data.has_update === false) return
 
     const currentVersion = CONFIG.value.system.version ?? '5.0.0'
     if (data.version === currentVersion) return
@@ -56,10 +53,10 @@ export async function checkForUpdate(): Promise<void> {
     updateInfo.value = {
       hasUpdate: true,
       latestVersion: data.version,
-      description: data.description,
-      forceUpdate: data.force_update,
-      downloadUrl: data.download_url ? `${UPDATE_BASE_URL}${data.download_url}` : null,
-      fileSize: data.file_size,
+      description: data.description ?? '',
+      forceUpdate: data.force_update ?? false,
+      downloadUrl: data.download_url ?? null,
+      fileSize: data.file_size ?? null,
     }
     showUpdateDialog.value = true
   }
