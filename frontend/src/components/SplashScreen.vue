@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef } from 'vue'
 import NetworkCanvas from '@/components/NetworkCanvas.vue'
 import { CONFIG } from '@/utils/config'
 
@@ -18,14 +18,136 @@ const emit = defineEmits<{
 const titleOverlayVisible = ref(true)
 
 function onTitleAnimEnd() {
-  // 标题文字动画结束 → 淡出黑色遮罩
+  // 标题图片动画结束 → 淡出黑色遮罩
   titleOverlayVisible.value = false
 }
 
 function onOverlayAfterLeave() {
-  // 黑色遮罩完全淡出 → 标题阶段结束
+  // 黑色遮罩完全淡出 → 标题阶段结束，清理粒子
+  stopParticles()
   emit('title-done')
 }
+
+// ─── 标题粒子效果（从下往上飘） ──────────────────
+const particleCanvas = useTemplateRef<HTMLCanvasElement>('particleCanvas')
+let particleRaf = 0
+
+interface Particle {
+  x: number
+  y: number
+  vy: number // 上升速度
+  vx: number // 微小水平漂移
+  size: number
+  alpha: number
+  maxAlpha: number
+  life: number    // 剩余帧
+  maxLife: number
+}
+
+function initParticles() {
+  const canvas = particleCanvas.value
+  if (!canvas) return
+
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  const dpr = window.devicePixelRatio || 1
+  canvas.width = canvas.clientWidth * dpr
+  canvas.height = canvas.clientHeight * dpr
+  ctx.scale(dpr, dpr)
+
+  const w = canvas.clientWidth
+  const h = canvas.clientHeight
+  const particles: Particle[] = []
+  const PARTICLE_COUNT = 40
+
+  function spawnParticle(): Particle {
+    return {
+      x: Math.random() * w,
+      y: h + Math.random() * 20, // 从底部稍下方生成
+      vy: -(0.3 + Math.random() * 0.8), // 上升速度
+      vx: (Math.random() - 0.5) * 0.3,  // 微小水平漂移
+      size: 1 + Math.random() * 2.5,
+      alpha: 0,
+      maxAlpha: 0.2 + Math.random() * 0.5,
+      life: 200 + Math.random() * 200,
+      maxLife: 0, // 在生成后设置
+    }
+  }
+
+  // 初始化粒子（分散在不同高度）
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const p = spawnParticle()
+    p.y = Math.random() * h // 初始分散
+    p.life = Math.random() * 300
+    p.maxLife = p.life
+    particles.push(p)
+  }
+
+  function animate() {
+    ctx.clearRect(0, 0, w, h)
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i]
+      p.x += p.vx
+      p.y += p.vy
+      p.life--
+
+      // 淡入淡出
+      const lifeRatio = p.maxLife > 0 ? p.life / p.maxLife : 0
+      if (lifeRatio > 0.8) {
+        // 前 20%: 淡入
+        p.alpha = p.maxAlpha * ((1 - lifeRatio) / 0.2)
+      }
+      else if (lifeRatio < 0.3) {
+        // 后 30%: 淡出
+        p.alpha = p.maxAlpha * (lifeRatio / 0.3)
+      }
+      else {
+        p.alpha = p.maxAlpha
+      }
+
+      // 绘制发光粒子
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2)
+      ctx.fillStyle = `rgba(212, 175, 55, ${p.alpha})`
+      ctx.fill()
+
+      // 外发光
+      if (p.size > 1.5) {
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, p.size * 2.5, 0, Math.PI * 2)
+        ctx.fillStyle = `rgba(212, 175, 55, ${p.alpha * 0.15})`
+        ctx.fill()
+      }
+
+      // 回收并重新生成
+      if (p.life <= 0 || p.y < -10) {
+        particles[i] = spawnParticle()
+        particles[i].maxLife = particles[i].life
+      }
+    }
+
+    particleRaf = requestAnimationFrame(animate)
+  }
+
+  particleRaf = requestAnimationFrame(animate)
+}
+
+function stopParticles() {
+  if (particleRaf) {
+    cancelAnimationFrame(particleRaf)
+    particleRaf = 0
+  }
+}
+
+onMounted(() => {
+  initParticles()
+})
+
+onBeforeUnmount(() => {
+  stopParticles()
+})
 
 // ─── 进度 ─────────────────────────────────
 const canDismiss = computed(() => props.progress >= 100)
@@ -79,16 +201,14 @@ const displayProgress = computed(() => Math.min(100, Math.round(props.progress))
       </div>
     </Transition>
 
-    <!-- 标题阶段：纯黑遮罩 + 标题动画 -->
+    <!-- 标题阶段：纯黑遮罩 + 标题图片 + 上升粒子 -->
     <Transition name="title-overlay" @after-leave="onOverlayAfterLeave">
       <div v-if="titleOverlayVisible" class="title-overlay">
+        <!-- 上升粒子 canvas -->
+        <canvas ref="particleCanvas" class="absolute inset-0 w-full h-full" />
+        <!-- 标题图片 -->
         <div class="title-content" @animationend="onTitleAnimEnd">
-          <h1 class="title-main">
-            娜迦智能体
-          </h1>
-          <p class="title-sub">
-            NAGA AGENT
-          </p>
+          <img src="/assets/title.png" alt="娜迦协议" class="title-img">
         </div>
       </div>
     </Transition>
@@ -171,33 +291,23 @@ const displayProgress = computed(() => Math.min(100, Math.round(props.progress))
 }
 
 .title-content {
-  text-align: center;
+  position: relative;
+  z-index: 1;
   /* 0→0.6s 渐入, 0.6→1.6s 保持, 1.6→2.4s 渐出 */
   animation: title-sequence 2.4s ease-in-out forwards;
 }
 
-.title-main {
-  font-size: 2.5rem;
-  color: rgba(212, 175, 55, 0.9);
-  letter-spacing: 0.3em;
-  font-weight: 300;
-  margin: 0;
-  text-shadow: 0 0 30px rgba(212, 175, 55, 0.3);
-}
-
-.title-sub {
-  font-size: 0.85rem;
-  color: rgba(212, 175, 55, 0.45);
-  letter-spacing: 0.5em;
-  margin-top: 0.6rem;
-  font-weight: 300;
+.title-img {
+  width: min(60vw, 500px);
+  height: auto;
+  filter: drop-shadow(0 0 30px rgba(212, 175, 55, 0.25));
 }
 
 @keyframes title-sequence {
-  0%   { opacity: 0; }
-  25%  { opacity: 1; }    /* 0.6s — 渐入完成 */
-  67%  { opacity: 1; }    /* 1.6s — 保持至少 1 秒 */
-  100% { opacity: 0; }    /* 2.4s — 渐出完成 */
+  0%   { opacity: 0; transform: scale(0.96); }
+  25%  { opacity: 1; transform: scale(1); }     /* 0.6s — 渐入完成 */
+  67%  { opacity: 1; transform: scale(1); }     /* 1.6s — 保持至少 1 秒 */
+  100% { opacity: 0; transform: scale(1.02); }  /* 2.4s — 渐出完成 */
 }
 
 /* 黑色遮罩淡出 */
