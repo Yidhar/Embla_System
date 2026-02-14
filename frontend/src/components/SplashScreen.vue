@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import NetworkCanvas from '@/components/NetworkCanvas.vue'
 import { CONFIG } from '@/utils/config'
 
@@ -11,8 +11,23 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   dismiss: []
+  'title-done': []
 }>()
 
+// ─── 标题阶段 ───────────────────────────────
+const titleOverlayVisible = ref(true)
+
+function onTitleAnimEnd() {
+  // 标题文字动画结束 → 淡出黑色遮罩
+  titleOverlayVisible.value = false
+}
+
+function onOverlayAfterLeave() {
+  // 黑色遮罩完全淡出 → 标题阶段结束
+  emit('title-done')
+}
+
+// ─── 进度 ─────────────────────────────────
 const canDismiss = computed(() => props.progress >= 100)
 const displayProgress = computed(() => Math.min(100, Math.round(props.progress)))
 </script>
@@ -61,6 +76,20 @@ const displayProgress = computed(() => Math.min(100, Math.round(props.progress))
         <span class="click-hint text-sm tracking-[0.3em]" style="color: rgba(212, 175, 55, 0.8);">
           点 击 唤 醒
         </span>
+      </div>
+    </Transition>
+
+    <!-- 标题阶段：纯黑遮罩 + 标题动画 -->
+    <Transition name="title-overlay" @after-leave="onOverlayAfterLeave">
+      <div v-if="titleOverlayVisible" class="title-overlay">
+        <div class="title-content" @animationend="onTitleAnimEnd">
+          <h1 class="title-main">
+            娜迦智能体
+          </h1>
+          <p class="title-sub">
+            NAGA AGENT
+          </p>
+        </div>
       </div>
     </Transition>
   </div>
@@ -126,6 +155,56 @@ const displayProgress = computed(() => Math.min(100, Math.round(props.progress))
   transition: opacity 0.6s ease;
 }
 .fade-enter-from {
+  opacity: 0;
+}
+
+/* ─── 标题阶段 ─────────────────────────────── */
+.title-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.title-content {
+  text-align: center;
+  /* 0→0.6s 渐入, 0.6→1.6s 保持, 1.6→2.4s 渐出 */
+  animation: title-sequence 2.4s ease-in-out forwards;
+}
+
+.title-main {
+  font-size: 2.5rem;
+  color: rgba(212, 175, 55, 0.9);
+  letter-spacing: 0.3em;
+  font-weight: 300;
+  margin: 0;
+  text-shadow: 0 0 30px rgba(212, 175, 55, 0.3);
+}
+
+.title-sub {
+  font-size: 0.85rem;
+  color: rgba(212, 175, 55, 0.45);
+  letter-spacing: 0.5em;
+  margin-top: 0.6rem;
+  font-weight: 300;
+}
+
+@keyframes title-sequence {
+  0%   { opacity: 0; }
+  25%  { opacity: 1; }    /* 0.6s — 渐入完成 */
+  67%  { opacity: 1; }    /* 1.6s — 保持至少 1 秒 */
+  100% { opacity: 0; }    /* 2.4s — 渐出完成 */
+}
+
+/* 黑色遮罩淡出 */
+.title-overlay-leave-active {
+  transition: opacity 0.8s ease;
+}
+.title-overlay-leave-to {
   opacity: 0;
 }
 </style>

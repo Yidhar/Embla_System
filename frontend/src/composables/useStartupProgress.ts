@@ -16,10 +16,11 @@ export function useStartupProgress() {
   // requestAnimationFrame 驱动的丝滑插值
   function animateProgress() {
     const diff = targetProgress - progress.value
-    if (Math.abs(diff) > 0.1) {
-      progress.value += diff * 0.08
+    if (diff > 0.5) {
+      // 比例追赶 + 最低速度，避免接近目标时卡顿
+      progress.value = Math.min(progress.value + Math.max(diff * 0.12, 0.5), targetProgress)
     }
-    else {
+    else if (diff > 0) {
       progress.value = targetProgress
     }
 

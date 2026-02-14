@@ -49,6 +49,7 @@ const { progress, phase, isReady, startProgress, notifyModelReady, cleanup } = u
 const splashVisible = ref(!_splashDismissed)
 const showMainContent = ref(_splashDismissed)
 const modelReady = ref(false)
+const titlePhaseDone = ref(false)
 
 // Live2D 居中/过渡控制
 const live2dTransform = ref('')
@@ -78,8 +79,12 @@ function onModelReady(pos: { faceX: number, faceY: number }) {
   }
 }
 
-// progress >= 50 时渐入 Live2D
-const live2dShouldShow = computed(() => progress.value >= 50 && splashVisible.value)
+// progress >= 50 且标题阶段结束后渐入 Live2D
+const live2dShouldShow = computed(() => progress.value >= 50 && splashVisible.value && titlePhaseDone.value)
+
+function onTitleDone() {
+  titlePhaseDone.value = true
+}
 
 // ─── 登录弹窗状态 ───────────────────────────
 const showLoginDialog = ref(false)
@@ -269,6 +274,7 @@ onUnmounted(() => {
           :phase="phase"
           :model-ready="modelReady"
           @dismiss="onSplashDismiss"
+          @title-done="onTitleDone"
         />
       </Transition>
 
