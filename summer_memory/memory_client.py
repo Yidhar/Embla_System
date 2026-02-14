@@ -46,6 +46,9 @@ class RemoteMemoryClient:
         try:
             resp = await self._client.request(method, url, **kwargs)
             resp.raise_for_status()
+            if not resp.content:
+                logger.warning(f"NagaMemory 返回空响应 [{method} {path}] status={resp.status_code}")
+                return {"success": False, "error": "服务返回空响应，请检查网络或代理设置"}
             return resp.json()
         except httpx.HTTPError as e:
             logger.error(f"NagaMemory 请求失败 [{method} {path}]: {e}")

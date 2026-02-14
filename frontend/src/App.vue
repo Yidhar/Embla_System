@@ -16,11 +16,12 @@ import SplashScreen from '@/components/SplashScreen.vue'
 import TitleBar from '@/components/TitleBar.vue'
 import UpdateDialog from '@/components/UpdateDialog.vue'
 import FloatingView from '@/views/FloatingView.vue'
-import { isNagaLoggedIn, nagaUser, sessionRestored } from '@/composables/useAuth'
+import { isNagaLoggedIn, nagaUser, sessionRestored, useAuth } from '@/composables/useAuth'
 import { useParallax } from '@/composables/useParallax'
 import { useStartupProgress } from '@/composables/useStartupProgress'
 import { checkForUpdate, showUpdateDialog, updateInfo } from '@/composables/useVersionCheck'
 import { CONFIG, backendConnected } from '@/utils/config'
+import { ACCESS_TOKEN, REFRESH_TOKEN, authExpired } from '@/api'
 import { clearExpression, setExpression } from '@/utils/live2dController'
 import { initParallax, destroyParallax } from '@/utils/parallax'
 
@@ -86,6 +87,30 @@ const showLoginDialog = ref(false)
 // ─── 后端错误弹窗状态 ──────────────────────────
 const backendErrorVisible = ref(false)
 const backendErrorLogs = ref('')
+
+// ─── CAS 会话失效弹窗 ──────────────────────────
+const authExpiredVisible = ref(false)
+const { logout: doLogout } = useAuth()
+
+watch(authExpired, (expired) => {
+  if (expired && !authExpiredVisible.value) {
+    authExpiredVisible.value = true
+  }
+})
+
+function onAuthExpiredRelogin() {
+  authExpiredVisible.value = false
+  authExpired.value = false
+  ACCESS_TOKEN.value = ''
+  REFRESH_TOKEN.value = ''
+  doLogout()
+  showLoginDialog.value = true
+}
+
+function onAuthExpiredDismiss() {
+  authExpiredVisible.value = false
+  authExpired.value = false
+}
 
 function openLoginDialog() {
   showLoginDialog.value = true
@@ -266,6 +291,33 @@ onUnmounted(() => {
         :logs="backendErrorLogs"
         @update:visible="backendErrorVisible = $event"
       />
+
+      <!-- CAS 会话失效弹窗 -->
+      <Teleport to="body">
+        <Transition name="fade">
+          <div v-if="authExpiredVisible" class="auth-expired-overlay">
+            <div class="auth-expired-card">
+              <div class="auth-expired-icon">
+                &#x26A0;
+              </div>
+              <h3 class="auth-expired-title">
+                账号验证失效
+              </h3>
+              <p class="auth-expired-desc">
+                服务器账号资源验证失效，可能是网络波动或账号已在其他设备登录。是否重新登录？
+              </p>
+              <div class="auth-expired-actions">
+                <button class="auth-expired-btn primary" @click="onAuthExpiredRelogin">
+                  重新登录
+                </button>
+                <button class="auth-expired-btn secondary" @click="onAuthExpiredDismiss">
+                  暂时忽略
+                </button>
+              </div>
+            </div>
+          </div>
+        </Transition>
+      </Teleport>
     </div>
   </template>
 </template>
@@ -326,5 +378,75 @@ onUnmounted(() => {
 }
 .splash-fade-leave-to {
   opacity: 0;
+}
+</style>
+
+<style>
+/* Teleport 到 body 的弹窗样式（不能 scoped） */
+.auth-expired-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(6px);
+}
+
+.auth-expired-card {
+  background: rgba(30, 30, 30, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 32px;
+  max-width: 380px;
+  text-align: center;
+}
+
+.auth-expired-icon {
+  font-size: 36px;
+  margin-bottom: 8px;
+}
+
+.auth-expired-title {
+  color: #fff;
+  font-size: 18px;
+  margin: 0 0 12px;
+}
+
+.auth-expired-desc {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0 0 24px;
+}
+
+.auth-expired-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.auth-expired-btn {
+  padding: 8px 24px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  transition: opacity 0.2s;
+}
+
+.auth-expired-btn:hover {
+  opacity: 0.85;
+}
+
+.auth-expired-btn.primary {
+  background: rgba(212, 175, 55, 0.9);
+  color: #000;
+}
+
+.auth-expired-btn.secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
 }
 </style>

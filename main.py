@@ -249,7 +249,16 @@ class ServiceManager:
             print(f"❌ 并行启动服务异常: {e}")
 
     def _init_proxy_settings(self):
-        """初始化代理设置：若不启用代理，则清空系统代理环境变量"""
+        """初始化代理设置：若不启用代理，则清空系统代理环境变量；始终为内部通信设置 NO_PROXY"""
+        # 始终确保本地服务通信不走代理
+        no_proxy_hosts = "localhost,127.0.0.1,0.0.0.0"
+        existing = os.environ.get("NO_PROXY", os.environ.get("no_proxy", ""))
+        if existing:
+            no_proxy_hosts = f"{existing},{no_proxy_hosts}"
+        os.environ["NO_PROXY"] = no_proxy_hosts
+        os.environ["no_proxy"] = no_proxy_hosts
+        print(f"已设置 NO_PROXY={no_proxy_hosts}")
+
         # 检测 applied_proxy 状态
         if not config.api.applied_proxy:  # 当 applied_proxy 为 False 时
             print("检测到不启用代理，正在清空系统代理环境变量...")

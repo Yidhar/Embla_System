@@ -4,10 +4,13 @@ import { useStorage } from '@vueuse/core'
 import axios from 'axios'
 import camelcaseKeys from 'camelcase-keys'
 import snakecaseKeys from 'snakecase-keys'
-import { unref, watch } from 'vue'
+import { ref, unref, watch } from 'vue'
 
 export const ACCESS_TOKEN = useStorage('naga-access-token', '')
 export const REFRESH_TOKEN = useStorage('naga-refresh-token', '')
+
+/** 当 CAS 会话失效（refresh 也失败）时触发，由 App.vue 监听弹窗 */
+export const authExpired = ref(false)
 
 let isRefreshing = false
 let refreshSubscribers: Array<(newToken: string) => void> = []
@@ -127,13 +130,9 @@ export class ApiClient {
   }
 
   private clearAuthDataAndRedirect(): void {
-    ACCESS_TOKEN.value = ''
-    REFRESH_TOKEN.value = ''
-    // 防止短时间内重复 reload（如多个并发请求同时 401）
-    if (!isReloading) {
-      isReloading = true
-      // 不重定向到 /login（该路由不存在），刷新页面重新走 splash -> 登录流程
-      window.location.reload()
+    // 不直接清空 token / reload，改为触发失效标记，由 App.vue 弹窗让用户决定
+    if (!authExpired.value) {
+      authExpired.value = true
     }
   }
 }

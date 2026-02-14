@@ -1447,6 +1447,29 @@ async def upload_parse(file: UploadFile = File(...)):
         tmp_path.unlink(missing_ok=True)
 
 
+@app.get("/update/latest")
+async def proxy_update_check(platform: str = "windows"):
+    """代理更新检查请求，避免前端直接暴露服务器地址"""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{naga_auth.BUSINESS_URL}/api/app/NagaAgent/latest",
+                params={"platform": platform},
+            )
+            if resp.status_code == 404:
+                return {"has_update": False}
+            resp.raise_for_status()
+            data = resp.json()
+            # 将相对下载路径拼成完整URL
+            if data.get("download_url"):
+                data["download_url"] = f"{naga_auth.BUSINESS_URL}{data['download_url']}"
+            return data
+    except Exception as e:
+        logger.warning(f"更新检查失败: {e}")
+        return {"has_update": False}
+
+
 # 挂载LLM服务路由以支持 /llm/chat
 from .llm_service import llm_app
 
