@@ -31,6 +31,12 @@ const pendingImages = ref<string[]>([]) // 待发送的截图 dataURL 列表
 const fileInputRef = useTemplateRef<HTMLInputElement>('fileInputRef')
 let suppressBlur = false // 文件选择器打开期间抑制失焦收缩
 
+// 右键菜单（通过 Electron 原生菜单实现，避免小窗口裁剪）
+function showBallContextMenu(e: MouseEvent) {
+  e.preventDefault()
+  window.electronAPI?.showContextMenu()
+}
+
 // 是否有消息历史（用于决定展开到 compact 还是 full）
 const hasMessages = computed(() => MESSAGES.value.length > 0)
 
@@ -315,6 +321,8 @@ function handleQuickSkill(index: number) {
 }
 
 // 窗口截屏功能
+const capturePermissionDenied = ref(false)
+
 async function handleCapture() {
   if (showCapturePanel.value) {
     closeCapturePanel()
@@ -326,10 +334,18 @@ async function handleCapture() {
   }
   loadingCapture.value = true
   showCapturePanel.value = true
+  capturePermissionDenied.value = false
   try {
-    const sources = await window.electronAPI?.capture.getSources() ?? []
-    // 过滤掉自身窗口
-    captureSources.value = sources.filter(s => !s.name.includes('NagaAgent'))
+    const result = await window.electronAPI?.capture.getSources()
+    if (result && 'permission' in result) {
+      // macOS 屏幕录制权限未授予
+      capturePermissionDenied.value = true
+      captureSources.value = []
+    }
+    else {
+      const sources = (result as Array<{ id: string, name: string, thumbnail: string, appIcon: string | null }>) ?? []
+      captureSources.value = sources.filter(s => !s.name.includes('NagaAgent'))
+    }
   }
   catch {
     captureSources.value = []
@@ -344,6 +360,10 @@ async function closeCapturePanel() {
   await nextTick()
   await nextTick()
   fitWindowHeight()
+}
+
+function openScreenSettings() {
+  window.electronAPI?.capture.openScreenSettings()
 }
 
 async function selectCaptureSource(source: CaptureSource) {
@@ -416,18 +436,55 @@ async function handleFileUpload(event: Event) {
     window.electronAPI?.floating.expandToFull()
   }
 
-  MESSAGES.value.push({ role: 'system', content: `正在上传文件: ${file.name}...` })
-  try {
-    const result = await API.uploadDocument(file)
-    const msg = MESSAGES.value[MESSAGES.value.length - 1]!
-    msg.content = `文件上传成功: ${file.name}`
-    if (result.filePath) {
-      chatStream(`请分析我刚上传的文件: ${file.name}`)
+  const ext = file.name.split('.').pop()?.toLowerCase()
+  const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']
+  const parseableExts = ['docx', 'xlsx', 'txt', 'csv', 'md']
+
+  if (ext && imageExts.includes(ext)) {
+    // 图片文件：读取为 dataURL 加入 pendingImages，走 VLM
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        pendingImages.value.push(reader.result)
+        nextTick().then(() => {
+          inputRef.value?.focus()
+          fitWindowHeight()
+        })
+      }
+    }
+    reader.readAsDataURL(file)
+  }
+  else if (ext && parseableExts.includes(ext)) {
+    // 可解析文件：解析后发送内容到对话
+    MESSAGES.value.push({ role: 'system', content: `正在解析文件: ${file.name}...` })
+    try {
+      const result = await API.parseDocument(file)
+      const msg = MESSAGES.value[MESSAGES.value.length - 1]!
+      const truncNote = result.truncated ? '（内容过长，已截断）' : ''
+      msg.content = `文件解析完成: ${file.name}${truncNote}`
+      chatStream(`以下是文件「${file.name}」的内容：\n\n${result.content}\n\n请分析这个文件的内容。`)
+      nextTick().then(scrollToBottom)
+    }
+    catch (err: any) {
+      const msg = MESSAGES.value[MESSAGES.value.length - 1]!
+      msg.content = `文件解析失败: ${err?.response?.data?.detail || err.message}`
     }
   }
-  catch (err: any) {
-    const msg = MESSAGES.value[MESSAGES.value.length - 1]!
-    msg.content = `文件上传失败: ${err.message}`
+  else {
+    // 其他格式：二进制上传
+    MESSAGES.value.push({ role: 'system', content: `正在上传文件: ${file.name}...` })
+    try {
+      const result = await API.uploadDocument(file)
+      const msg = MESSAGES.value[MESSAGES.value.length - 1]!
+      msg.content = `文件上传成功: ${file.name}`
+      if (result.filePath) {
+        chatStream(`请分析我刚上传的文件「${file.name}」，文件完整路径: ${result.filePath}`)
+      }
+    }
+    catch (err: any) {
+      const msg = MESSAGES.value[MESSAGES.value.length - 1]!
+      msg.content = `文件上传失败: ${err.message}`
+    }
   }
   target.value = ''
 }
@@ -545,6 +602,7 @@ useEventListener('token', () => {
     @pointerdown="onDragPointerDown"
     @pointermove="onDragPointerMove"
     @pointerup="onBallPointerUp"
+    @contextmenu.prevent="showBallContextMenu"
   >
     <div class="ball-glow" :class="{ 'glow-pulse': isGenerating }" />
     <div class="ball-content">
@@ -580,7 +638,8 @@ useEventListener('token', () => {
           <button class="action-btn" :class="{ active: IS_TEMPORARY_SESSION }" title="临时聊天" @click="handleNewTemporarySession">🕶</button>
           <button class="action-btn" title="对话历史" @click="toggleHistory">📋</button>
           <button class="action-btn" :class="{ active: isPinned }" :title="isPinned ? '取消固定' : '固定窗口'" @click="togglePin">📌</button>
-          <button class="action-btn" title="退出悬浮球" @click="handleExitFloating">✕</button>
+          <button class="action-btn" title="打开主界面" @click="handleExitFloating"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 5V1h4M9 1h4v4M13 9v4H9M5 13H1V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button class="action-btn" title="退出悬浮球" @click="handleCollapse">✕</button>
         </div>
       </div>
       <div class="flex items-center gap-1 overflow-x-auto" @pointerdown.stop>
@@ -644,7 +703,8 @@ useEventListener('token', () => {
             <button class="action-btn" :class="{ active: IS_TEMPORARY_SESSION }" title="临时聊天" @click="handleNewTemporarySession">🕶</button>
             <button class="action-btn" :class="{ active: showHistory }" title="对话历史" @click="toggleHistory">📋</button>
             <button class="action-btn" :class="{ active: isPinned }" :title="isPinned ? '取消固定' : '固定窗口'" @click="togglePin">📌</button>
-            <button class="action-btn" title="退出悬浮球" @click="handleExitFloating">✕</button>
+            <button class="action-btn" title="打开主界面" @click="handleExitFloating"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 5V1h4M9 1h4v4M13 9v4H9M5 13H1V9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <button class="action-btn" title="收起" @click="handleCollapse">✕</button>
           </div>
         </div>
         <div class="flex items-center gap-1 overflow-x-auto" @pointerdown.stop>
@@ -750,8 +810,19 @@ useEventListener('token', () => {
           <div v-if="loadingCapture" class="text-white/40 text-xs text-center py-3 col-span-2">
             加载中...
           </div>
+          <div v-else-if="capturePermissionDenied" class="text-white/40 text-xs text-center py-3 col-span-2">
+            需要屏幕录制权限，请前往<br>系统设置 &gt; 隐私与安全性 &gt; 屏幕录制<br>中授权 NagaAgent
+            <button class="mt-2 px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-white/60 hover:text-white/80 text-xs border-none cursor-pointer transition-colors" @click="openScreenSettings">
+              打开系统设置
+            </button>
+          </div>
           <div v-else-if="captureSources.length === 0" class="text-white/40 text-xs text-center py-3 col-span-2">
-            未检测到可截取的窗口
+            未检测到可截取的窗口<br>
+            <span class="text-white/30">可能是屏幕录制权限未授予，请检查<br>系统设置 &gt; 隐私与安全性 &gt; 屏幕录制</span>
+            <br>
+            <button class="mt-2 px-3 py-1 rounded bg-white/10 hover:bg-white/20 text-white/60 hover:text-white/80 text-xs border-none cursor-pointer transition-colors" @click="openScreenSettings">
+              打开系统设置
+            </button>
           </div>
           <div
             v-for="src in captureSources" :key="src.id"
@@ -794,6 +865,7 @@ useEventListener('token', () => {
   <input
     ref="fileInputRef"
     type="file"
+    accept=".docx,.xlsx,.txt,.csv,.md,.pdf,.png,.jpg,.jpeg,.gif,.webp"
     class="hidden"
     @change="handleFileUpload"
   >

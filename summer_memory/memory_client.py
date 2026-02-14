@@ -53,6 +53,9 @@ class RemoteMemoryClient:
         except httpx.HTTPError as e:
             logger.error(f"NagaMemory 请求失败 [{method} {path}]: {e}")
             return {"success": False, "error": str(e)}
+        except ValueError as e:
+            logger.error(f"NagaMemory 响应解析失败 [{method} {path}]: {e}")
+            return {"success": False, "error": f"服务返回非JSON响应: {e}"}
 
     # ---- 健康 / 统计 ----
 

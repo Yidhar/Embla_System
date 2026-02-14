@@ -6,6 +6,8 @@ const electronAPI = {
   maximize: () => ipcRenderer.send('window:maximize'),
   close: () => ipcRenderer.send('window:close'),
   isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+  quit: () => ipcRenderer.send('app:quit'),
+  showContextMenu: () => ipcRenderer.send('context-menu:show'),
 
   // Window state events
   onMaximized: (callback: (maximized: boolean) => void) => {
@@ -55,13 +57,12 @@ const electronAPI = {
 
   // 窗口截屏功能
   capture: {
-    getSources: () => ipcRenderer.invoke('capture:getSources') as Promise<Array<{
-      id: string
-      name: string
-      thumbnail: string
-      appIcon: string | null
-    }>>,
+    getSources: () => ipcRenderer.invoke('capture:getSources') as Promise<
+      | { permission: string }
+      | Array<{ id: string, name: string, thumbnail: string, appIcon: string | null }>
+    >,
     captureWindow: (sourceId: string) => ipcRenderer.invoke('capture:captureWindow', sourceId) as Promise<string | null>,
+    openScreenSettings: () => ipcRenderer.invoke('capture:openScreenSettings') as Promise<void>,
   },
 
   // 后端进程通信

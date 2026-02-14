@@ -8,8 +8,9 @@ export interface CaptureSource {
 }
 
 export interface CaptureAPI {
-  getSources: () => Promise<CaptureSource[]>
+  getSources: () => Promise<CaptureSource[] | { permission: string }>
   captureWindow: (sourceId: string) => Promise<string | null>
+  openScreenSettings: () => Promise<void>
 }
 
 export interface BackendAPI {
@@ -37,6 +38,8 @@ export interface ElectronAPI {
   maximize: () => void
   close: () => void
   isMaximized: () => Promise<boolean>
+  quit: () => void
+  showContextMenu: () => void
   onMaximized: (callback: (maximized: boolean) => void) => () => void
   downloadUpdate: () => void
   installUpdate: () => void

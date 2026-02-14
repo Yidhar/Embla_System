@@ -24,6 +24,7 @@ import { CONFIG, backendConnected } from '@/utils/config'
 import { ACCESS_TOKEN, REFRESH_TOKEN, authExpired } from '@/api'
 import { clearExpression, setExpression } from '@/utils/live2dController'
 import { initParallax, destroyParallax } from '@/utils/parallax'
+import { playBgm, playWakeVoice, playClickEffect, stopBgm } from '@/composables/useAudio'
 
 const isElectron = !!window.electronAPI
 const isMac = window.electronAPI?.platform === 'darwin'
@@ -50,6 +51,15 @@ const splashVisible = ref(!_splashDismissed)
 const showMainContent = ref(_splashDismissed)
 const modelReady = ref(false)
 const titlePhaseDone = ref(false)
+
+// 悬浮球模式下停止 BGM，退出悬浮球时恢复
+watch(isFloatingMode, (floating) => {
+  if (floating) {
+    stopBgm()
+  } else if (showMainContent.value) {
+    playBgm('8.日常的小曲.mp3')
+  }
+})
 
 // Live2D 居中/过渡控制
 const live2dTransform = ref('')
@@ -126,6 +136,8 @@ provide('openLoginDialog', openLoginDialog)
 
 function onSplashDismiss() {
   _splashDismissed = true
+  // 播放随机唤醒语音
+  playWakeVoice()
   // 已登录 → 直接进入主界面；未登录 → 显示登录弹窗
   if (isNagaLoggedIn.value) {
     enterMainContent()
@@ -147,6 +159,8 @@ function onLoginSkip() {
 }
 
 function enterMainContent() {
+  // 切换为日常 BGM（淡入淡出）
+  playBgm('8.日常的小曲.mp3')
   // 启用过渡动画
   live2dTransition.value = true
   // 回到正常位置
@@ -177,6 +191,19 @@ watch(sessionRestored, (restored) => {
 onMounted(() => {
   initParallax()
   startProgress()
+
+  // 启动 BGM（非悬浮球模式时播放）
+  if (!isFloatingMode.value) {
+    playBgm('9.快乐的小曲.mp3')
+  }
+
+  // 全局点击音效
+  document.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement
+    if (target.closest('button, a, [role="button"], .p-button, .p-toggleswitch, .clickable')) {
+      playClickEffect()
+    }
+  })
 
   // 悬浮球模式监听
   const api = window.electronAPI
@@ -339,11 +366,13 @@ onUnmounted(() => {
 .grid-container {
   display: grid;
   grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
 }
 
 .grid-item {
   grid-column: 1;
   grid-row: 1;
+  min-height: 0;
 }
 
 .slide-in-enter-from {

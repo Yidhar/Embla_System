@@ -68,6 +68,14 @@ export function chatStream(content: string, options?: { skill?: string, images?:
           return `🔧 ${name}`
         }).join(', ')
         message.content += `\n\n> 正在执行工具: ${callDesc}...\n`
+        // OpenClaw 工具可能耗时较长，添加提示
+        const hasOpenclaw = calls.some((c: any) => {
+          const name = (c.service_name || c.agentType || '').toLowerCase()
+          return name.includes('openclaw') || name.includes('agent')
+        })
+        if (hasOpenclaw) {
+          message.content += '> ⏳ OpenClaw 工具处理可能会比较久，预计需要两分钟\n'
+        }
       }
       else if (chunk.type === 'tool_results') {
         // 显示工具结果摘要
@@ -233,7 +241,7 @@ async function handleFileUpload(event: Event) {
       const msg = MESSAGES.value[MESSAGES.value.length - 1]!
       msg.content = `文件上传成功: ${file.name}`
       if (result.filePath) {
-        chatStream(`请分析我刚上传的文件: ${file.name}`)
+        chatStream(`请分析我刚上传的文件「${file.name}」，文件完整路径: ${result.filePath}`)
       }
     }
     catch (err: any) {
@@ -281,7 +289,13 @@ function toggleVoiceInput() {
   recognition.onerror = (event: any) => {
     isRecording.value = false
     recognition = null
-    if (event.error !== 'no-speech') {
+    if (event.error === 'network') {
+      MESSAGES.value.push({ role: 'system', content: '语音识别网络错误：浏览器语音识别需要连接 Google 服务器，请检查网络连接或使用代理。' })
+    }
+    else if (event.error === 'not-allowed') {
+      MESSAGES.value.push({ role: 'system', content: '语音识别权限被拒绝，请在浏览器设置中允许麦克风访问。' })
+    }
+    else if (event.error !== 'no-speech') {
       MESSAGES.value.push({ role: 'system', content: `语音识别错误: ${event.error}` })
     }
   }
@@ -301,8 +315,8 @@ function stopVoiceInput() {
 </script>
 
 <template>
-  <div class="flex flex-col gap-8 overflow-hidden relative">
-    <BoxContainer ref="containerRef" class="w-full grow" :parallax="false">
+  <div class="flex flex-col gap-8 relative">
+    <BoxContainer ref="containerRef" class="w-full grow">
       <div class="grid gap-4 pb-8">
         <MessageItem
           v-for="item, index in MESSAGES" :key="index"
