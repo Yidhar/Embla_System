@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { Button, InputText } from 'primevue'
+import { Button, Checkbox, InputText } from 'primevue'
+import { useStorage } from '@vueuse/core'
 import { useToast } from 'primevue/usetoast'
-import { onMounted, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { useAuth } from '@/composables/useAuth'
 import { backendConnected } from '@/utils/config'
+import UserAgreement from './UserAgreement.vue'
 
 const toast = useToast()
 
@@ -26,6 +28,10 @@ const sendingCode = ref(false)
 const codeSent = ref(false)
 const countdown = ref(0)
 let countdownTimer: ReturnType<typeof setInterval> | null = null
+
+// 协议勾选状态（持久化）
+const agreementAccepted = useStorage('naga-agreement-accepted', false)
+const showAgreement = ref(false)
 
 // 验证码状态
 const captchaId = ref('')
@@ -190,10 +196,14 @@ function openForgotPassword() {
   toast.add({ severity: 'info', summary: '功能开发中', detail: '密码找回功能尚未开放，请联系管理员', life: 3000 })
 }
 
-// 后端连接后加载验证码
+// 弹窗打开时重置到登录模式并加载验证码
 watch(() => props.visible, (v) => {
-  if (v && backendConnected.value) {
-    fetchCaptcha()
+  if (v) {
+    mode.value = 'login'
+    resetForm()
+    if (backendConnected.value) {
+      fetchCaptcha()
+    }
   }
 })
 
@@ -246,9 +256,17 @@ const stopWatch = watch(backendConnected, (connected) => {
             <div v-if="successMsg" class="login-success">
               {{ successMsg }}
             </div>
+            <div class="agreement-row">
+              <Checkbox v-model="agreementAccepted" :binary="true" input-id="agree-login" />
+              <label for="agree-login" class="agreement-label">
+                我已阅读并同意
+                <span class="agreement-link" @click.prevent="showAgreement = true">《用户使用协议》</span>
+              </label>
+            </div>
             <Button
               label="登 录"
               :loading="loading"
+              :disabled="!agreementAccepted"
               class="login-btn"
               @click="handleLogin"
             />
@@ -318,9 +336,17 @@ const stopWatch = watch(backendConnected, (connected) => {
             <div v-if="successMsg" class="login-success">
               {{ successMsg }}
             </div>
+            <div class="agreement-row">
+              <Checkbox v-model="agreementAccepted" :binary="true" input-id="agree-register" />
+              <label for="agree-register" class="agreement-label">
+                我已阅读并同意
+                <span class="agreement-link" @click.prevent="showAgreement = true">《用户使用协议》</span>
+              </label>
+            </div>
             <Button
               label="注 册"
               :loading="loading"
+              :disabled="!agreementAccepted"
               class="login-btn"
               @click="handleRegister"
             />
@@ -336,6 +362,7 @@ const stopWatch = watch(backendConnected, (connected) => {
       </div>
     </div>
   </Transition>
+  <UserAgreement v-model:visible="showAgreement" />
 </template>
 
 <style scoped>
@@ -463,8 +490,39 @@ const stopWatch = watch(backendConnected, (connected) => {
   font-weight: 600;
 }
 
-.login-btn:hover {
+.login-btn:hover:not(:disabled) {
   background: linear-gradient(135deg, rgba(212, 175, 55, 1), rgba(180, 140, 30, 1));
+}
+
+.login-btn:disabled {
+  background: rgba(150, 150, 150, 0.25);
+  color: rgba(255, 255, 255, 0.35);
+  cursor: not-allowed;
+}
+
+.agreement-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+.agreement-label {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  user-select: none;
+}
+
+.agreement-link {
+  color: rgba(212, 175, 55, 0.85);
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.agreement-link:hover {
+  color: rgba(212, 175, 55, 1);
+  text-decoration: underline;
 }
 
 .login-links {
