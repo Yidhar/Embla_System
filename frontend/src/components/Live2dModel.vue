@@ -37,6 +37,9 @@ const computedHeight = computed(() => height * ssaa)
 
 const canvas = useTemplateRef('canvas')
 let isDragging = false
+// 按住超过 delay 后才开启追踪；0 表示点击即追踪
+let trackingHoldTimer: ReturnType<typeof setTimeout> | null = null
+let trackingActive = false // 是否已过延迟、正在追踪
 
 // 模型面部在屏幕上的位置（由 recalcModelCenter 更新）
 let modelFaceScreenX = 0
@@ -54,22 +57,48 @@ function isInteractiveTarget(el: EventTarget | null): boolean {
   return false
 }
 
+function clearHoldTimer() {
+  if (trackingHoldTimer !== null) {
+    clearTimeout(trackingHoldTimer)
+    trackingHoldTimer = null
+  }
+}
+
 function onWindowPointerDown(e: PointerEvent) {
   if (isInteractiveTarget(e.target)) return
   isDragging = true
-  startTracking()
-  updateTrackingFromPointer(e)
+  trackingActive = false
+  clearHoldTimer()
+  const delay = CONFIG.value.web_live2d?.tracking_hold_delay_ms ?? 1000
+  if (delay <= 0) {
+    trackingActive = true
+    startTracking()
+    updateTrackingFromPointer(e)
+    return
+  }
+  trackingHoldTimer = setTimeout(() => {
+    trackingHoldTimer = null
+    if (isDragging) {
+      trackingActive = true
+      startTracking()
+      // 位置由后续 pointermove 更新
+    }
+  }, delay)
 }
 
 function onWindowPointerMove(e: PointerEvent) {
   if (!isDragging) return
-  updateTrackingFromPointer(e)
+  if (trackingActive) updateTrackingFromPointer(e)
 }
 
 function onWindowPointerUp(_e: PointerEvent) {
   if (!isDragging) return
+  clearHoldTimer()
   isDragging = false
-  stopTracking()
+  if (trackingActive) {
+    trackingActive = false
+    stopTracking()
+  }
 }
 
 function clamp(v: number, min: number, max: number) {

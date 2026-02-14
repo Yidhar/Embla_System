@@ -116,6 +116,14 @@ function toggleFloatingMode(enabled: boolean) {
               />
             </div>
           </ConfigItem>
+          <ConfigItem name="视角追踪延迟" description="按住鼠标超过该时间(毫秒)后才开始视角追踪，0=点击即追踪">
+            <InputNumber
+              :model-value="CONFIG.web_live2d.tracking_hold_delay_ms ?? 1000"
+              :min="0" :max="5000" :step="100"
+              show-buttons
+              @update:model-value="(v: number | null) => { CONFIG.web_live2d.tracking_hold_delay_ms = v ?? 1000 }"
+            />
+          </ConfigItem>
         </div>
       </ConfigGroup>
       <ConfigGroup value="portal" header="账号设置">

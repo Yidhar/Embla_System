@@ -944,8 +944,9 @@ watch(nodeCount, () => {
 </script>
 
 <template>
-  <BoxContainer class="w-full h-full flex flex-col">
-    <div class="text-white flex flex-col h-full">
+  <!-- 与技能工坊一致：不加 h-full，用 max-h+overflow 限制高度并在组件内滚动 -->
+  <BoxContainer class="text-sm">
+    <div class="text-white flex flex-col h-[75vh] min-h-0 overflow-y-auto">
       <!-- Header -->
       <div class="flex items-center gap-3 mb-3 shrink-0">
         <h2 class="text-lg font-bold">
@@ -980,8 +981,8 @@ watch(nodeCount, () => {
         <span>实体: {{ nodeCount }}</span>
       </div>
 
-      <!-- 3D Canvas -->
-      <div class="flex-1 relative min-h-0 rounded-lg overflow-hidden">
+      <!-- 3D Canvas：在限定高度内占满剩余空间 -->
+      <div class="flex-1 relative min-h-[360px] rounded-lg overflow-hidden">
         <!-- Loading overlay -->
         <div v-if="loading" class="absolute inset-0 flex items-center justify-center bg-[#030810] z-10">
           <span class="text-[#3366aa] text-base tracking-widest">Loading...</span>
