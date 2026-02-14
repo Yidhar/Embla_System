@@ -336,14 +336,14 @@ export class CoreApiClient extends ApiClient {
 
   // ── NagaCAS 认证 ──
 
-  authLogin(username: string, password: string): Promise<{
+  authLogin(username: string, password: string, captchaId?: string, captchaAnswer?: string): Promise<{
     success: boolean
     user: { username: string, sub?: string } | null
     accessToken: string
     refreshToken: string
     memoryUrl?: string
   }> {
-    return this.instance.post('/auth/login', { username, password })
+    return this.instance.post('/auth/login', { username, password, captcha_id: captchaId, captcha_answer: captchaAnswer })
   }
 
   authMe(): Promise<{ user: { username: string, sub?: string }, memoryUrl?: string }> {
@@ -363,11 +363,18 @@ export class CoreApiClient extends ApiClient {
     return this.instance.post('/auth/register', { username, email, password, verification_code: verificationCode })
   }
 
-  authSendVerification(email: string, username: string): Promise<{
+  authSendVerification(email: string, username: string, captchaId?: string, captchaAnswer?: string): Promise<{
     success: boolean
     message: string
   }> {
-    return this.instance.post('/auth/send-verification', { email, username })
+    return this.instance.post('/auth/send-verification', { email, username, captcha_id: captchaId, captcha_answer: captchaAnswer })
+  }
+
+  authGetCaptcha(): Promise<{
+    captchaId: string
+    question: string
+  }> {
+    return this.instance.get('/auth/captcha')
   }
 }
 

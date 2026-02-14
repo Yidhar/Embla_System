@@ -12,6 +12,11 @@ export interface CaptureAPI {
   captureWindow: (sourceId: string) => Promise<string | null>
 }
 
+export interface BackendAPI {
+  onProgress: (callback: (payload: { percent: number, phase: string }) => void) => () => void
+  onError: (callback: (payload: { code: number, logs: string }) => void) => () => void
+}
+
 export interface FloatingAPI {
   enter: () => Promise<void>
   exit: () => Promise<void>
@@ -39,6 +44,7 @@ export interface ElectronAPI {
   onUpdateDownloaded: (callback: () => void) => () => void
   floating: FloatingAPI
   capture: CaptureAPI
+  backend: BackendAPI
   platform: string
 }
 

@@ -11,6 +11,7 @@ import { useToast } from 'primevue/usetoast'
 import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import Live2dModel from '@/components/Live2dModel.vue'
 import LoginDialog from '@/components/LoginDialog.vue'
+import BackendErrorDialog from '@/components/BackendErrorDialog.vue'
 import SplashScreen from '@/components/SplashScreen.vue'
 import TitleBar from '@/components/TitleBar.vue'
 import UpdateDialog from '@/components/UpdateDialog.vue'
@@ -81,6 +82,10 @@ const live2dShouldShow = computed(() => progress.value >= 50 && splashVisible.va
 
 // ─── 登录弹窗状态 ───────────────────────────
 const showLoginDialog = ref(false)
+
+// ─── 后端错误弹窗状态 ──────────────────────────
+const backendErrorVisible = ref(false)
+const backendErrorLogs = ref('')
 
 function openLoginDialog() {
   showLoginDialog.value = true
@@ -170,6 +175,14 @@ onMounted(() => {
     stopVersionWatch()
     checkForUpdate()
   })
+
+  // 监听后端启动失败
+  if (api?.backend) {
+    api.backend.onError((payload) => {
+      backendErrorLogs.value = payload.logs
+      backendErrorVisible.value = true
+    })
+  }
 })
 
 onUnmounted(() => {
@@ -245,6 +258,13 @@ onUnmounted(() => {
       <UpdateDialog
         :visible="showUpdateDialog"
         :info="updateInfo"
+      />
+
+      <!-- 后端启动失败弹窗 -->
+      <BackendErrorDialog
+        :visible="backendErrorVisible"
+        :logs="backendErrorLogs"
+        @update:visible="backendErrorVisible = $event"
       />
     </div>
   </template>

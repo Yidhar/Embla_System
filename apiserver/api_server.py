@@ -442,14 +442,22 @@ async def auth_login(body: dict):
     """NagaCAS 登录"""
     username = body.get("username", "")
     password = body.get("password", "")
+    captcha_id = body.get("captcha_id", "")
+    captcha_answer = body.get("captcha_answer", "")
     if not username or not password:
         raise HTTPException(status_code=400, detail="用户名和密码不能为空")
     try:
-        result = await naga_auth.login(username, password)
+        result = await naga_auth.login(username, password, captcha_id, captcha_answer)
         return result
     except Exception as e:
-        logger.error(f"登录失败: {e}")
-        raise HTTPException(status_code=401, detail=f"登录失败: {str(e)}")
+        import httpx
+        status = 401
+        detail = str(e)
+        if isinstance(e, httpx.HTTPStatusError):
+            status = e.response.status_code
+            detail = e.response.text
+        logger.error(f"登录失败 [{status}]: {detail}")
+        raise HTTPException(status_code=status, detail=detail)
 
 
 @app.get("/auth/me")
@@ -488,12 +496,20 @@ async def auth_register(body: dict):
         detail = f"注册失败: {str(e)}"
         if isinstance(e, httpx.HTTPStatusError):
             status = e.response.status_code
-            try:
-                detail = e.response.json().get("detail", detail)
-            except Exception:
-                pass
-        logger.error(f"注册失败: {e}")
+            detail = e.response.text
+        logger.error(f"注册失败 [{status}]: {detail}")
         raise HTTPException(status_code=status, detail=detail)
+
+
+@app.get("/auth/captcha")
+async def auth_captcha():
+    """获取验证码（数学计算题）"""
+    try:
+        result = await naga_auth.get_captcha()
+        return result
+    except Exception as e:
+        logger.error(f"获取验证码失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取验证码失败: {str(e)}")
 
 
 @app.post("/auth/send-verification")
@@ -501,22 +517,21 @@ async def auth_send_verification(body: dict):
     """发送邮箱验证码"""
     email = body.get("email", "")
     username = body.get("username", "")
+    captcha_id = body.get("captcha_id", "")
+    captcha_answer = body.get("captcha_answer", "")
     if not email or not username:
         raise HTTPException(status_code=400, detail="邮箱和用户名不能为空")
     try:
-        result = await naga_auth.send_verification(email, username)
+        result = await naga_auth.send_verification(email, username, captcha_id, captcha_answer)
         return {"success": True, "message": "验证码已发送"}
     except Exception as e:
         import httpx
         status = 500
-        detail = f"发送验证码失败: {str(e)}"
+        detail = str(e)
         if isinstance(e, httpx.HTTPStatusError):
             status = e.response.status_code
-            try:
-                detail = e.response.json().get("message", detail)
-            except Exception:
-                pass
-        logger.error(f"发送验证码失败: {e}")
+            detail = e.response.text
+        logger.error(f"发送验证码失败 [{status}]: {detail}")
         raise HTTPException(status_code=status, detail=detail)
 
 

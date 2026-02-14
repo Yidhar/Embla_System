@@ -64,6 +64,20 @@ const electronAPI = {
     captureWindow: (sourceId: string) => ipcRenderer.invoke('capture:captureWindow', sourceId) as Promise<string | null>,
   },
 
+  // 后端进程通信
+  backend: {
+    onProgress: (callback: (payload: { percent: number, phase: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { percent: number, phase: string }) => callback(payload)
+      ipcRenderer.on('backend:progress', handler)
+      return () => ipcRenderer.removeListener('backend:progress', handler)
+    },
+    onError: (callback: (payload: { code: number, logs: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { code: number, logs: string }) => callback(payload)
+      ipcRenderer.on('backend:error', handler)
+      return () => ipcRenderer.removeListener('backend:error', handler)
+    },
+  },
+
   // Platform info
   platform: process.platform,
 }

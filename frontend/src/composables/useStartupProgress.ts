@@ -3,22 +3,15 @@ import { backendConnected } from '@/utils/config'
 import { preloadAllViews } from '@/utils/viewPreloader'
 import API from '@/api/core'
 
-type Phase =
-  | '初始化...'
-  | '加载模型...'
-  | '连接后端...'
-  | '预加载视图...'
-  | '获取会话...'
-  | '准备就绪'
-
 export function useStartupProgress() {
   const progress = ref(0)
-  const phase = ref<Phase>('初始化...')
+  const phase = ref<string>('初始化...')
   const isReady = ref(false)
 
   let targetProgress = 0
   let rafId = 0
   let modelReady = false
+  let unsubProgress: (() => void) | undefined
 
   // requestAnimationFrame 驱动的丝滑插值
   function animateProgress() {
@@ -40,7 +33,7 @@ export function useStartupProgress() {
     }
   }
 
-  function setTarget(value: number, newPhase: Phase) {
+  function setTarget(value: number, newPhase: string) {
     if (value > targetProgress) {
       targetProgress = value
       phase.value = newPhase
@@ -54,6 +47,10 @@ export function useStartupProgress() {
   }
 
   async function runPostConnect() {
+    // 取消后端进度监听
+    unsubProgress?.()
+    unsubProgress = undefined
+
     // 阶段 25→50：后端已连接
     setTarget(50, '预加载视图...')
 
@@ -82,6 +79,16 @@ export function useStartupProgress() {
     setTarget(10, modelReady ? '连接后端...' : '加载模型...')
     rafId = requestAnimationFrame(animateProgress)
 
+    // 监听后端进度信号（Electron 环境）
+    const api = window.electronAPI
+    if (api?.backend) {
+      unsubProgress = api.backend.onProgress((payload) => {
+        // 后端 percent 0~50 映射到前端 10~50 区间
+        const mapped = 10 + (payload.percent / 50) * 40
+        setTarget(Math.min(mapped, 50), payload.phase)
+      })
+    }
+
     // 如果后端已连接（HMR/重复挂载），直接推进
     if (backendConnected.value) {
       runPostConnect()
@@ -98,6 +105,7 @@ export function useStartupProgress() {
 
   function cleanup() {
     if (rafId) cancelAnimationFrame(rafId)
+    unsubProgress?.()
   }
 
   return {

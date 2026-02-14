@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { Button, InputText } from 'primevue'
 import { useToast } from 'primevue/usetoast'
-import { ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useAuth } from '@/composables/useAuth'
+import { backendConnected } from '@/utils/config'
 
 const toast = useToast()
 
-defineProps<{ visible: boolean }>()
+const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits<{ success: [], skip: [] }>()
 
-const { login, register, sendVerification } = useAuth()
+const { login, register, sendVerification, getCaptcha } = useAuth()
 
 // 'login' | 'register'
 const mode = ref<'login' | 'register'>('login')
@@ -26,6 +27,12 @@ const codeSent = ref(false)
 const countdown = ref(0)
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 
+// 验证码状态
+const captchaId = ref('')
+const captchaQuestion = ref('')
+const captchaAnswer = ref('')
+const captchaLoading = ref(false)
+
 function resetForm() {
   username.value = ''
   email.value = ''
@@ -35,20 +42,41 @@ function resetForm() {
   successMsg.value = ''
   codeSent.value = false
   countdown.value = 0
+  captchaAnswer.value = ''
   if (countdownTimer) {
     clearInterval(countdownTimer)
     countdownTimer = null
   }
 }
 
+async function fetchCaptcha() {
+  captchaId.value = ''
+  captchaQuestion.value = ''
+  captchaAnswer.value = ''
+  captchaLoading.value = true
+  try {
+    const res = await getCaptcha()
+    captchaId.value = res.captchaId
+    captchaQuestion.value = res.question
+  }
+  catch {
+    // 验证码获取失败不阻塞，用户操作时再提示
+  }
+  finally {
+    captchaLoading.value = false
+  }
+}
+
 function switchToRegister() {
   resetForm()
   mode.value = 'register'
+  fetchCaptcha()
 }
 
 function switchToLogin() {
   resetForm()
   mode.value = 'login'
+  fetchCaptcha()
 }
 
 async function handleLogin() {
@@ -56,14 +84,25 @@ async function handleLogin() {
     errorMsg.value = '请输入用户名和密码'
     return
   }
+  if (!captchaId.value) {
+    errorMsg.value = '验证码未加载，请点击刷新'
+    fetchCaptcha()
+    return
+  }
+  if (!captchaAnswer.value) {
+    errorMsg.value = '请输入验证码答案'
+    return
+  }
   loading.value = true
   errorMsg.value = ''
   try {
-    await login(username.value, password.value)
+    await login(username.value, password.value, captchaId.value, captchaAnswer.value)
     emit('success')
   }
-  catch {
-    errorMsg.value = '登录失败，请检查用户名和密码'
+  catch (e: any) {
+    errorMsg.value = e?.response?.data?.detail || e?.response?.data?.message || '登录失败，请检查用户名和密码'
+    // 验证码用完即失效，刷新
+    fetchCaptcha()
   }
   finally {
     loading.value = false
@@ -96,7 +135,7 @@ async function handleRegister() {
     }
   }
   catch (e: any) {
-    errorMsg.value = e?.response?.data?.message || e?.message || '注册失败，请稍后重试'
+    errorMsg.value = e?.response?.data?.detail || e?.response?.data?.message || e?.message || '注册失败，请稍后重试'
   }
   finally {
     loading.value = false
@@ -108,10 +147,19 @@ async function sendCode() {
     errorMsg.value = '请先输入用户名和邮箱'
     return
   }
+  if (!captchaId.value) {
+    errorMsg.value = '验证码未加载，请点击刷新'
+    fetchCaptcha()
+    return
+  }
+  if (!captchaAnswer.value) {
+    errorMsg.value = '请先输入验证码答案'
+    return
+  }
   sendingCode.value = true
   errorMsg.value = ''
   try {
-    await sendVerification(email.value, username.value)
+    await sendVerification(email.value, username.value, captchaId.value, captchaAnswer.value)
     toast.add({ severity: 'success', summary: '验证码已发送', detail: '请查收邮箱', life: 3000 })
     codeSent.value = true
     countdown.value = 60
@@ -125,7 +173,9 @@ async function sendCode() {
     }, 1000)
   }
   catch (e: any) {
-    errorMsg.value = e?.response?.data?.message || e?.message || '发送验证码失败'
+    errorMsg.value = e?.response?.data?.detail || e?.response?.data?.message || e?.message || '发送验证码失败'
+    // 验证码用完即失效，刷新
+    fetchCaptcha()
   }
   finally {
     sendingCode.value = false
@@ -139,6 +189,21 @@ function handleSkip() {
 function openForgotPassword() {
   toast.add({ severity: 'info', summary: '功能开发中', detail: '密码找回功能尚未开放，请联系管理员', life: 3000 })
 }
+
+// 后端连接后加载验证码
+watch(() => props.visible, (v) => {
+  if (v && backendConnected.value) {
+    fetchCaptcha()
+  }
+})
+
+// 如果弹窗已显示但后端还没连上，等连接后再加载
+const stopWatch = watch(backendConnected, (connected) => {
+  if (connected && props.visible) {
+    fetchCaptcha()
+    stopWatch()
+  }
+})
 </script>
 
 <template>
@@ -164,6 +229,17 @@ function openForgotPassword() {
               class="login-input"
               @keyup.enter="handleLogin"
             />
+            <!-- 验证码 -->
+            <div class="captcha-row">
+              <span class="captcha-question">{{ captchaQuestion || '加载中...' }}</span>
+              <InputText
+                v-model="captchaAnswer"
+                placeholder="答案"
+                class="captcha-input"
+                @keyup.enter="handleLogin"
+              />
+              <span class="captcha-refresh" title="换一题" @click="fetchCaptcha">&#x21bb;</span>
+            </div>
             <div v-if="errorMsg" class="login-error">
               {{ errorMsg }}
             </div>
@@ -209,10 +285,21 @@ function openForgotPassword() {
               placeholder="密码"
               class="login-input"
             />
+            <!-- 验证码 -->
+            <div class="captcha-row">
+              <span class="captcha-question">{{ captchaQuestion || '加载中...' }}</span>
+              <InputText
+                v-model="captchaAnswer"
+                placeholder="答案"
+                class="captcha-input"
+                @keyup.enter="sendCode"
+              />
+              <span class="captcha-refresh" title="换一题" @click="fetchCaptcha">&#x21bb;</span>
+            </div>
             <div class="verification-row">
               <InputText
                 v-model="verificationCode"
-                placeholder="验证码"
+                placeholder="邮箱验证码"
                 class="login-input flex-1"
                 @keyup.enter="handleRegister"
               />
@@ -289,6 +376,41 @@ function openForgotPassword() {
 
 .login-input {
   width: 100%;
+}
+
+.captcha-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  background: rgba(212, 175, 55, 0.06);
+  border: 1px solid rgba(212, 175, 55, 0.15);
+}
+
+.captcha-question {
+  flex: 1;
+  font-size: 0.9rem;
+  color: rgba(212, 175, 55, 0.85);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.captcha-input {
+  width: 70px;
+  text-align: center;
+}
+
+.captcha-refresh {
+  font-size: 1.2rem;
+  color: rgba(212, 175, 55, 0.5);
+  cursor: pointer;
+  transition: color 0.2s;
+  user-select: none;
+}
+
+.captcha-refresh:hover {
+  color: rgba(212, 175, 55, 0.9);
 }
 
 .verification-row {
