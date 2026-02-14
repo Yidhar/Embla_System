@@ -7,6 +7,7 @@ const props = defineProps<{
   progress: number
   phase: string
   modelReady: boolean
+  stallHint: boolean
 }>()
 
 const emit = defineEmits<{
@@ -181,6 +182,10 @@ const displayProgress = computed(() => Math.min(100, Math.round(props.progress))
           :style="{ width: `${displayProgress}%` }"
         />
       </div>
+      <!-- 停滞提示 -->
+      <Transition name="fade">
+        <span v-if="stallHint" class="stall-hint">如果中途卡死，请重启应用</span>
+      </Transition>
     </div>
 
     <!-- 左下角版本号 -->
@@ -247,6 +252,14 @@ const displayProgress = computed(() => Math.min(100, Math.round(props.progress))
   border: 1px solid rgba(212, 175, 55, 0.4);
   box-shadow: 0 0 15px rgba(212, 175, 55, 0.15), inset 0 0 15px rgba(212, 175, 55, 0.05);
   pointer-events: none;
+}
+
+/* 停滞提示 */
+.stall-hint {
+  margin-top: 0.5rem;
+  font-size: 0.65rem;
+  color: rgba(212, 175, 55, 0.45);
+  letter-spacing: 0.05em;
 }
 
 /* 左下角版本号 */

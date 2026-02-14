@@ -45,7 +45,7 @@ let unsubStateChange: (() => void) | undefined
 const { tx: lightTx, ty: lightTy } = useParallax({ translateX: 40, translateY: 30, invert: true })
 
 // ─── 启动界面状态 ───────────────────────────
-const { progress, phase, isReady, startProgress, notifyModelReady, cleanup } = useStartupProgress()
+const { progress, phase, isReady, stallHint, startProgress, notifyModelReady, cleanup } = useStartupProgress()
 const splashVisible = ref(!_splashDismissed)
 const showMainContent = ref(_splashDismissed)
 const modelReady = ref(false)
@@ -273,6 +273,7 @@ onUnmounted(() => {
           :progress="progress"
           :phase="phase"
           :model-ready="modelReady"
+          :stall-hint="stallHint"
           @dismiss="onSplashDismiss"
           @title-done="onTitleDone"
         />
