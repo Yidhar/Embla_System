@@ -904,6 +904,7 @@ async def openclaw_send_message(payload: Dict[str, Any]):
             "task": task.to_dict(),
             "reply": task.result.get("reply") if task.result else None,
             "replies": task.result.get("replies") if task.result else None,
+            "error": task.error,
         }
     except Exception as e:
         logger.error(f"OpenClaw 发送消息失败: {e}")

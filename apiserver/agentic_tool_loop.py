@@ -8,6 +8,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from system.config import config, get_server_port
@@ -87,7 +88,6 @@ def _extract_tool_blocks(text: str) -> Tuple[str, List[Dict[str, Any]]]:
     Returns:
         (clean_text, tool_calls) — clean_text 是移除代码块后的纯文本
     """
-    import re
 
     tool_calls: List[Dict[str, Any]] = []
     # 匹配 ```tool ... ``` 代码块（允许未闭合的尾部块用 \Z 兜底）
@@ -235,8 +235,24 @@ async def _execute_openclaw_call(call: Dict[str, Any], session_id: str) -> Dict[
             )
             if response.status_code == 200:
                 result_data = response.json()
-                replies = result_data.get("replies", [])
-                combined = "\n".join(replies) if replies else "任务已提交，暂无返回结果"
+                # 先检查 agent_server 返回的 success 标记
+                if not result_data.get("success", True):
+                    error_msg = result_data.get("error") or "OpenClaw任务执行失败"
+                    return {
+                        "tool_call": call,
+                        "result": f"联网搜索失败: {error_msg}",
+                        "status": "error",
+                        "service_name": "openclaw",
+                        "tool_name": task_type,
+                    }
+                # agent_server 返回两个字段：replies(列表，异步轮询时填充) 和 reply(字符串，同步完成时填充)
+                replies = result_data.get("replies") or []
+                if replies:
+                    combined = "\n".join(replies)
+                elif result_data.get("reply"):
+                    combined = result_data["reply"]
+                else:
+                    combined = "任务已提交，暂无返回结果"
                 return {
                     "tool_call": call,
                     "result": combined,
@@ -443,7 +459,12 @@ async def run_agentic_loop(
 
         # 4b. 如果检测到了任何工具调用，发送 content_clean 让前端替换掉带有工具代码块的原文
         if tool_calls and clean_text != complete_text:
-            yield _format_sse_event("content_clean", {"text": clean_text})
+            if actionable_calls:
+                # 有实际工具调用时，清空已显示的文字，避免在工具返回前展示未经验证的内容
+                yield _format_sse_event("content_clean", {"text": ""})
+            else:
+                # 仅有 live2d 调用时，保留完整 clean_text
+                yield _format_sse_event("content_clean", {"text": clean_text})
 
         # 5. 如果没有可执行的工具调用，循环结束
         if not actionable_calls:
@@ -490,7 +511,8 @@ async def run_agentic_loop(
         yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
 
         # 9. 将本轮LLM输出 + 工具结果注入消息历史
-        messages.append({"role": "assistant", "content": complete_text})
+        #    不注入工具调用前的文字，因为LLM可能在调用前输出未经验证的分析内容
+        messages.append({"role": "assistant", "content": "(工具调用中)"})
         tool_result_text = format_tool_results_for_llm(results)
         messages.append({"role": "user", "content": tool_result_text})
 
