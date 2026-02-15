@@ -639,17 +639,8 @@ def build_system_prompt(
 
     parts = [base_prompt]
 
-    # 用户主动选择了技能时，直接注入完整指令，跳过技能元数据列表
-    if skill_name:
-        try:
-            from system.skill_manager import load_skill
-
-            instructions = load_skill(skill_name)
-            if instructions:
-                parts.append(f"\n\n## 当前任务技能\n\n用户已选择使用以下技能处理本次请求，请严格按照技能指令执行：\n\n{instructions}")
-        except ImportError:
-            pass
-    elif include_skills:
+    # 技能元数据列表（仅在未主动选择技能时注入）
+    if not skill_name and include_skills:
         try:
             from system.skill_manager import get_skills_prompt
 
