@@ -754,9 +754,14 @@ async def chat(request: ChatRequest):
         # 构建系统提示词（包含技能元数据）
         system_prompt = build_system_prompt(include_skills=True, skill_name=request.skill)
 
+        # 如果用户选择了技能，在用户消息中添加简短标记（完整指令已在系统提示词中）
+        effective_message = request.message
+        if request.skill:
+            effective_message = f"[使用技能: {request.skill}] {request.message}"
+
         # 使用消息管理器构建完整的对话消息（纯聊天，不触发工具）
         messages = message_manager.build_conversation_messages(
-            session_id=session_id, system_prompt=system_prompt, current_message=request.message
+            session_id=session_id, system_prompt=system_prompt, current_message=effective_message
         )
 
         # 使用整合后的LLM服务（支持 reasoning_content）
@@ -802,13 +807,10 @@ async def chat_stream(request: ChatRequest):
             # 构建系统提示词（含工具调用指令 + 用户选择的技能）
             system_prompt = build_system_prompt(include_skills=True, include_tool_instructions=True, skill_name=request.skill)
 
-            # 如果用户选择了技能，将技能指令包裹在用户消息中，避免被长系统提示词淹没
+            # 如果用户选择了技能，在用户消息中添加简短标记（完整指令已在系统提示词中）
             effective_message = request.message
             if request.skill:
-                from system.skill_manager import load_skill
-                skill_instructions = load_skill(request.skill)
-                if skill_instructions:
-                    effective_message = f"[技能指令] 请严格按照以下技能要求处理我的输入，直接输出结果：\n{skill_instructions}\n\n[用户输入] {request.message}"
+                effective_message = f"[使用技能: {request.skill}] {request.message}"
 
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(
@@ -1008,6 +1010,10 @@ async def chat_stream(request: ChatRequest):
                     print(f"获取完整响应文本失败: {e}")
             elif request.return_audio:
                 complete_response = complete_text
+
+            # fallback: 如果 tool_extractor 没有累积到文本，使用最后一轮的 current_round_text
+            if not complete_response and current_round_text:
+                complete_response = current_round_text
 
             # 统一保存对话历史与日志
             _save_conversation_and_logs(session_id, request.message, complete_response)
