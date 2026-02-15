@@ -11,6 +11,12 @@ export const ACCESS_TOKEN = useStorage('naga-access-token', '')
 /** 当 CAS 会话失效（refresh 也失败）时触发，由 App.vue 监听弹窗 */
 export const authExpired = ref(false)
 
+/** 重新登录期间抑制 authExpired 触发（避免清空 token 后在途请求再次触发弹窗） */
+export let suppressAuthExpired = false
+export function setAuthExpiredSuppressed(value: boolean) {
+  suppressAuthExpired = value
+}
+
 let isRefreshing = false
 let refreshSubscribers: Array<(newToken: string) => void> = []
 
@@ -132,8 +138,8 @@ export class ApiClient {
   }
 
   private clearAuthDataAndRedirect(): void {
-    // 不直接清空 token / reload，改为触发失效标记，由 App.vue 弹窗让用户决定
-    if (!authExpired.value) {
+    // 重新登录期间不触发（避免清空 token 后在途请求的 401 再次弹窗）
+    if (!authExpired.value && !suppressAuthExpired) {
       authExpired.value = true
     }
   }
