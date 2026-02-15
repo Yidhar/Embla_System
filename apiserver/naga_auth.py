@@ -23,11 +23,25 @@ _refresh_token: Optional[str] = None
 _user_info: Optional[dict] = None
 
 
-async def login(username: str, password: str) -> dict:
+async def get_captcha() -> dict:
+    """获取验证码（数学计算题）"""
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(f"{BUSINESS_URL}/api/auth/captcha")
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def login(username: str, password: str, captcha_id: str = "", captcha_answer: str = "") -> dict:
     """通过 NagaBusiness 登录，返回 token 和用户信息"""
     global _access_token, _refresh_token, _user_info
+    payload: dict = {"username": username, "password": password}
+    if captcha_id and captcha_answer:
+        payload["captcha_id"] = captcha_id
+        payload["captcha_answer"] = captcha_answer
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(f"{BUSINESS_URL}/api/auth/login", json={"username": username, "password": password})
+        resp = await client.post(f"{BUSINESS_URL}/api/auth/login", json=payload)
+        if resp.status_code != 200:
+            logger.error(f"NagaBusiness login 返回 {resp.status_code}: {resp.text}")
         resp.raise_for_status()
         data = resp.json()
 
@@ -116,12 +130,19 @@ async def register(username: str, email: str, password: str, verification_code: 
         return resp.json()
 
 
-async def send_verification(email: str, username: str) -> dict:
+async def send_verification(email: str, username: str, captcha_id: str = "", captcha_answer: str = "") -> dict:
     """发送邮箱验证码"""
+    payload: dict = {"email": email, "username": username}
+    if captcha_id and captcha_answer:
+        payload["captcha_id"] = captcha_id
+        payload["captcha_answer"] = captcha_answer
+    logger.info(f"send_verification payload: {payload}")
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(
             f"{BUSINESS_URL}/api/auth/send-verification",
-            json={"email": email, "username": username},
+            json=payload,
         )
+        if resp.status_code != 200:
+            logger.error(f"NagaBusiness send-verification 返回 {resp.status_code}: {resp.text}")
         resp.raise_for_status()
         return resp.json()

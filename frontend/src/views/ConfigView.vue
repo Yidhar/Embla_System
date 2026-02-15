@@ -5,6 +5,8 @@ import { ref, useTemplateRef } from 'vue'
 import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
+import { nagaUser } from '@/composables/useAuth'
+import { audioSettings, wakeVoiceOptions, effectFileOptions } from '@/composables/useAudio'
 import { CONFIG, DEFAULT_CONFIG, DEFAULT_MODEL, MODELS, SYSTEM_PROMPT } from '@/utils/config'
 import { trackingCalibration } from '@/utils/live2dController'
 
@@ -32,20 +34,6 @@ function recoverUiConfig() {
 }
 
 const accordionValue = useStorage('accordion-config', [])
-
-const isElectron = !!window.electronAPI
-
-function toggleFloatingMode(enabled: boolean) {
-  CONFIG.value.floating.enabled = enabled
-  if (!isElectron)
-    return
-  if (enabled) {
-    window.electronAPI?.floating.enter()
-  }
-  else {
-    window.electronAPI?.floating.exit()
-  }
-}
 </script>
 
 <template>
@@ -59,12 +47,6 @@ function toggleFloatingMode(enabled: boolean) {
           </div>
         </template>
         <div class="grid gap-4">
-          <ConfigItem v-if="isElectron" name="悬浮球模式" description="启用后窗口变为可拖拽的悬浮球，点击展开聊天面板">
-            <ToggleSwitch
-              :model-value="CONFIG.floating.enabled"
-              @update:model-value="toggleFloatingMode"
-            />
-          </ConfigItem>
           <ConfigItem name="AI 昵称" description="聊天窗口显示的 AI 昵称">
             <InputText v-model="CONFIG.system.ai_name" />
           </ConfigItem>
@@ -118,21 +100,48 @@ function toggleFloatingMode(enabled: boolean) {
           </ConfigItem>
           <ConfigItem name="视角追踪延迟" description="按住鼠标超过该时间(毫秒)后才开始视角追踪，0=点击即追踪">
             <InputNumber
-              :model-value="CONFIG.web_live2d.tracking_hold_delay_ms ?? 1000"
+              :model-value="CONFIG.web_live2d.tracking_hold_delay_ms ?? 100"
               :min="0" :max="5000" :step="100"
               show-buttons
-              @update:model-value="(v: number | null) => { CONFIG.web_live2d.tracking_hold_delay_ms = v ?? 1000 }"
+              @update:model-value="(v: number | null) => { CONFIG.web_live2d.tracking_hold_delay_ms = v ?? 100 }"
             />
+          </ConfigItem>
+        </div>
+      </ConfigGroup>
+      <ConfigGroup value="audio" header="音乐设置">
+        <div class="grid gap-4">
+          <ConfigItem name="背景音乐" description="启用/关闭背景音乐">
+            <ToggleSwitch v-model="audioSettings.bgmEnabled" />
+          </ConfigItem>
+          <ConfigItem name="音乐音量">
+            <Slider v-model="audioSettings.bgmVolume" :min="0" :max="1" :step="0.01" />
+          </ConfigItem>
+          <Divider class="m-1!" />
+          <ConfigItem name="点击音效" description="启用/关闭UI交互音效">
+            <ToggleSwitch v-model="audioSettings.effectEnabled" />
+          </ConfigItem>
+          <ConfigItem name="音效音量">
+            <Slider v-model="audioSettings.effectVolume" :min="0" :max="1" :step="0.01" />
+          </ConfigItem>
+          <ConfigItem name="音效文件" description="选择点击音效">
+            <Select v-model="audioSettings.clickEffect" :options="effectFileOptions" />
+          </ConfigItem>
+          <Divider class="m-1!" />
+          <ConfigItem name="唤醒语音" description="点击唤醒时播放的语音包">
+            <Select v-model="audioSettings.wakeVoice" :options="wakeVoiceOptions" />
           </ConfigItem>
         </div>
       </ConfigGroup>
       <ConfigGroup value="portal" header="账号设置">
         <div class="grid gap-4">
-          <ConfigItem name="用户名">
-            <InputText v-model="CONFIG.naga_portal.username" />
-          </ConfigItem>
-          <ConfigItem name="用户密码">
-            <InputText v-model="CONFIG.naga_portal.password" />
+          <ConfigItem name="当前账号">
+            <div v-if="nagaUser" class="flex items-center gap-3">
+              <div class="w-8 h-8 rounded-full bg-amber-600/60 flex items-center justify-center text-white text-sm font-bold shrink-0">
+                {{ nagaUser.username.charAt(0).toUpperCase() }}
+              </div>
+              <span class="text-white/80">{{ nagaUser.username }}</span>
+            </div>
+            <span v-else class="text-white/40">未登录</span>
           </ConfigItem>
         </div>
       </ConfigGroup>

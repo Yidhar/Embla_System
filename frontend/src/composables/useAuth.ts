@@ -36,8 +36,8 @@ watch(ACCESS_TOKEN, (newToken) => {
 })
 
 export function useAuth() {
-  async function login(username: string, password: string) {
-    const res = await coreApi.authLogin(username, password)
+  async function login(username: string, password: string, captchaId?: string, captchaAnswer?: string) {
+    const res = await coreApi.authLogin(username, password, captchaId, captchaAnswer)
     if (res.success) {
       ACCESS_TOKEN.value = res.accessToken
       REFRESH_TOKEN.value = res.refreshToken
@@ -60,8 +60,12 @@ export function useAuth() {
     return res
   }
 
-  async function sendVerification(email: string, username: string) {
-    return await coreApi.authSendVerification(email, username)
+  async function sendVerification(email: string, username: string, captchaId?: string, captchaAnswer?: string) {
+    return await coreApi.authSendVerification(email, username, captchaId, captchaAnswer)
+  }
+
+  async function getCaptcha() {
+    return await coreApi.authGetCaptcha()
   }
 
   async function fetchMe() {
@@ -115,5 +119,5 @@ export function useAuth() {
     }
   }
 
-  return { login, register, sendVerification, fetchMe, logout, skipLogin }
+  return { login, register, sendVerification, getCaptcha, fetchMe, logout, skipLogin }
 }

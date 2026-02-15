@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { app } from 'electron'
+import { getMainWindow } from './window'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -102,6 +103,9 @@ export function startBackend(): void {
 
   // Dev mode: collect stderr for dependency error detection
   let stderrBuffer = ''
+  // Collect all output for error reporting
+  const outputLines: string[] = []
+  const PROGRESS_PREFIX = '##PROGRESS##'
 
   backendProcess = spawn(cmd, args, {
     cwd,
@@ -110,12 +114,32 @@ export function startBackend(): void {
   })
 
   backendProcess.stdout?.on('data', (data: Buffer) => {
-    console.log(`[Backend] ${data.toString().trimEnd()}`)
+    const text = data.toString()
+    const lines = text.split('\n')
+    for (const line of lines) {
+      const trimmed = line.trimEnd()
+      if (!trimmed) continue
+      outputLines.push(trimmed)
+
+      // Parse progress signals
+      if (trimmed.startsWith(PROGRESS_PREFIX)) {
+        try {
+          const payload = JSON.parse(trimmed.slice(PROGRESS_PREFIX.length))
+          getMainWindow()?.webContents.send('backend:progress', payload)
+        }
+        catch {
+          // malformed progress line, ignore
+        }
+        continue
+      }
+    }
+    console.log(`[Backend] ${text.trimEnd()}`)
   })
 
   backendProcess.stderr?.on('data', (data: Buffer) => {
     const text = data.toString()
     console.error(`[Backend] ${text.trimEnd()}`)
+    outputLines.push(text.trimEnd())
     if (!app.isPackaged) {
       stderrBuffer += text
     }
@@ -128,6 +152,12 @@ export function startBackend(): void {
   backendProcess.on('exit', (code) => {
     console.log(`[Backend] Exited with code ${code}`)
     backendProcess = null
+
+    // Notify renderer of backend crash (non-zero exit, not a manual stop)
+    if (code !== null && code !== 0) {
+      const logs = outputLines.slice(-200).join('\n')
+      getMainWindow()?.webContents.send('backend:error', { code, logs })
+    }
 
     // Dev-only auto-recovery: detect dependency errors and retry once
     if (!app.isPackaged && code === 1 && devRetryCount < 1) {

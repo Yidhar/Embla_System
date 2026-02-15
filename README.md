@@ -1,392 +1,590 @@
+<div align="center">
+
 # NagaAgent
 
-[简体中文](README.md)|[繁體中文](README_tw.md)|[English](README_en.md)
+**四服务协同的 AI 桌面助手 — 流式工具调用 · 知识图谱记忆 · Live2D · 语音交互**
 
-![NagaAgent Logo](https://img.shields.io/badge/NagaAgent-4.0-blue?style=for-the-badge&logo=python&logoColor=white)
+[简体中文](README.md) | [繁體中文](README_tw.md) | [English](README_en.md)
+
+![NagaAgent](https://img.shields.io/badge/NagaAgent-5.0.0-blue?style=for-the-badge&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-green?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)
-![Status](https://img.shields.io/badge/Status-Active-brightgreen?style=for-the-badge)
 
-![Star History](https://img.shields.io/github/stars/Xxiii8322766509/NagaAgent?style=social)![Forks](https://img.shields.io/github/forks/Xxiii8322766509/NagaAgent?style=social)![Issues](https://img.shields.io/github/issues/Xxiii8322766509/NagaAgent)![Pull Requests](https://img.shields.io/github/issues-pr/Xxiii8322766509/NagaAgent)
+[![Stars](https://img.shields.io/github/stars/Xxiii8322766509/NagaAgent?style=social)](https://github.com/Xxiii8322766509/NagaAgent)
+[![Forks](https://img.shields.io/github/forks/Xxiii8322766509/NagaAgent?style=social)](https://github.com/Xxiii8322766509/NagaAgent)
+[![Issues](https://img.shields.io/github/issues/Xxiii8322766509/NagaAgent)](https://github.com/Xxiii8322766509/NagaAgent/issues)
+
+**[教程视频与一键运行包](https://www.pylindex.top/naga)** · **[QQ 机器人联动：Undefined QQbot](https://github.com/69gg/Undefined/)**
+
 ![UI 预览](ui/img/README.jpg)
+
+</div>
+
 ---
 
-## [此处获取教程视频与一键运行整合包](https://www.pylindex.top/naga)
+## 概述
 
-### 框架联动（QQ机器人）：[Undefined QQbot](https://github.com/69gg/Undefined/)
+NagaAgent 由四个独立微服务组成：
+
+| 服务 | 端口 | 职责 |
+|------|------|------|
+| **API Server** | 8000 | 对话、流式工具调用、文档上传、认证代理、记忆 API、配置管理 |
+| **Agent Server** | 8001 | 后台意图分析、OpenClaw 集成、任务调度与压缩记忆 |
+| **MCP Server** | 8003 | MCP 工具注册/发现/并行调度 |
+| **Voice Service** | 5048 | TTS (Edge-TTS) + ASR (FunASR) + 实时语音 (Qwen Omni) |
+
+`main.py` 统一编排启动，所有服务以 daemon thread 运行。前端可选 Electron + Vue 3 桌面端或 PyQt5 原生 GUI。
+
 ---
-## 介绍
 
-NagaAgent 是一个功能丰富的智能对话助手系统，具有以下特色功能：
+## 更新日志
 
-### 🎯 核心功能
-- **智能对话系统**：支持流式对话和工具调用循环
-- **多Agent协作**：基于博弈论的智能任务调度
-- **知识图谱记忆**：GRAG系统支持长期记忆和智能检索
-- **完整语音交互**：实时语音输入输出处理
-- **现代化界面**：PyQt5 GUI + Live2D虚拟形象
-- **系统托盘集成**：后台运行和快捷操作
+| 日期 | 内容 |
+|------|------|
+| **2026-02-14** | 5.0.0 发布：远程记忆微服务（NagaMemory 云端 + 本地 GRAG 回退）、意识海 3D 重写、启动标题动画与粒子效果、进度条停滞检测与健康轮询、版本更新检查弹窗、用户使用协议 |
+| **2026-02-14** | Captcha 验证码集成、注册流程（用户名 + 邮箱 + 验证码）、CAS 会话失效弹窗、语音输入按钮、文件解析按钮、IME 中文输入法回车误发修复 |
+| **2026-02-14** | 移除 ChromaDB 本地依赖（-1119 行），游戏攻略全云端化，攻略功能增加登录态门控 |
+| **2026-02-13** | 悬浮球模式（4 状态动画：classic / ball / compact / full）、截屏多模态视觉模型自动切换 |
+| **2026-02-13** | 技能工坊重构 + Live2D 表情通道独立 + naga-config 技能 |
+| **2026-02-12** | NagaCAS 认证 + NagaModel 网关路由 + 登录弹窗 + 用户菜单 |
+| **2026-02-12** | Live2D 4 通道正交动画架构（体态/动作/表情/追踪），窗口级视觉追踪与校准 |
+| **2026-02-12** | Agentic Tool Loop：流式工具提取 + 多轮自动执行 + 并行 MCP/OpenClaw/Live2D 调度 |
+| **2026-02-12** | 明日方舟风格启动界面 + 进度跟踪 + 视图预加载 + 鼠标视差浮动效果 |
+| **2026-02-12** | 游戏攻略 MCP 接通（自动截图 + 视觉模型 + Neo4j 导入 + 6 款游戏 RAG 处理器） |
+| **2026-02-11** | 嵌入式 OpenClaw 打包、启动时自动从模板生成配置文件 |
+| **2026-02-10** | 后端打包优化、技能工坊 MCP 状态修复、前端 bug 修复 |
+| **2026-02-09** | 前端重构、Live2D 禁用眼睛追踪、OpenClaw 更名为 AgentServer |
 
-### 🛠️ 技术架构
+---
 
-#### 系统整体架构
-```mermaid
-graph TB
-    %% 用户界面层
-    subgraph "用户界面层 (UI Layer)"
-        UI[PyQt5 GUI界面]
-        Live2D[Live2D虚拟形象]
-        Tray[系统托盘]
-        Chat[聊天界面]
-    end
+## 核心模块
 
-    %% 核心服务层
-    subgraph "核心服务层 (Core Services)"
-        API[API服务器<br/>:8000]
-        Agent[Agent服务器<br/>:8001]
-        MCP[MCP服务器<br/>:8003]
-        TTS[TTS服务器<br/>:5048]
-    end
+### 流式工具调用循环
 
-    %% 业务逻辑层
-    subgraph "业务逻辑层 (Business Logic)"
-        Game[博弈论系统<br/>多Agent协作]
-        Memory[GRAG记忆系统<br/>知识图谱]
-        Voice[语音处理系统<br/>实时语音交互]
-        Tools[工具调用系统<br/>MCP协议]
-    end
+NagaAgent 的工具调用不依赖 OpenAI Function Calling API，而是让 LLM 在文本输出中以 ` ```tool``` ` 代码块内嵌 JSON 描述工具调用。这意味着**任何 OpenAI 兼容的 LLM 提供商都可以直接使用**，无需模型本身支持 function calling。
 
-    %% 数据存储层
-    subgraph "数据存储层 (Data Storage)"
-        Neo4j[(Neo4j图数据库<br/>知识图谱存储)]
-        Files[文件系统<br/>配置/日志/缓存]
-        MemoryCache[内存缓存<br/>会话状态]
-    end
-
-    %% 外部服务层
-    subgraph "外部服务层 (External Services)"
-        LLM[LLM服务商<br/>OpenAI/通义千问等]
-        Portal[NagaPortal<br/>门户服务]
-        MQTT[物联网设备<br/>MQTT通讯]
-        Web[网络爬虫<br/>在线搜索]
-    end
-
-    %% 连接关系
-    UI --> API
-    UI --> Agent
-    UI --> MCP
-    UI --> TTS
-    
-    API --> Game
-    API --> Memory
-    API --> Voice
-    API --> Tools
-    
-    Agent --> Game
-    Agent --> Tools
-    
-    MCP --> Tools
-    MCP --> Portal
-    MCP --> MQTT
-    MCP --> Web
-    
-    TTS --> Voice
-    
-    Game --> Memory
-    Memory --> Neo4j
-    Voice --> LLM
-    Tools --> LLM
-    
-    API --> MemoryCache
-    Agent --> MemoryCache
-    MCP --> MemoryCache
-    
-    %% 样式
-    classDef uiLayer fill:#e1f5fe
-    classDef coreLayer fill:#f3e5f5
-    classDef businessLayer fill:#e8f5e8
-    classDef dataLayer fill:#fff3e0
-    classDef externalLayer fill:#fce4ec
-    
-    class UI,Live2D,Tray,Chat uiLayer
-    class API,Agent,MCP,TTS coreLayer
-    class Game,Memory,Voice,Tools businessLayer
-    class Neo4j,Files,MemoryCache dataLayer
-    class LLM,Portal,MQTT,Web externalLayer
+**单轮流程**：
 
 ```
-
-#### 核心特性
-- **多服务并行**：API服务器(8000)、Agent服务器(8001)、MCP服务器(8003)、TTS服务器(5048)
-- **模块化设计**：各服务独立运行，支持热插拔
-- **配置驱动**：实时配置热更新，无需重启
-- **跨平台支持**：Windows、macOS、Linux
-
-### 🔧 技术栈
-
-#### 技术栈架构
-```mermaid
-graph TB
-    %% 前端技术栈
-    subgraph "前端技术栈 (Frontend Stack)"
-        PyQt5[PyQt5<br/>GUI框架]
-        Live2D[Live2D<br/>虚拟形象]
-        QSS[QSS<br/>样式表]
-    end
-    
-    %% 后端技术栈
-    subgraph "后端技术栈 (Backend Stack)"
-        FastAPI[FastAPI<br/>Web框架]
-        Uvicorn[Uvicorn<br/>ASGI服务器]
-        AsyncIO[AsyncIO<br/>异步编程]
-    end
-    
-    %% 数据库技术栈
-    subgraph "数据库技术栈 (Database Stack)"
-        Neo4j[Neo4j<br/>图数据库]
-        GRAG[GRAG<br/>知识图谱]
-        Memory[内存缓存<br/>会话管理]
-    end
-    
-    %% AI技术栈
-    subgraph "AI技术栈 (AI Stack)"
-        OpenAI[OpenAI API<br/>GPT模型]
-        Qwen[通义千问<br/>多模态模型]
-        MCP[MCP协议<br/>工具调用]
-    end
-    
-    %% 语音技术栈
-    subgraph "语音技术栈 (Voice Stack)"
-        ASR[语音识别<br/>ASR]
-        TTS[语音合成<br/>TTS]
-        Realtime[实时语音<br/>WebRTC]
-    end
-    
-    %% 网络技术栈
-    subgraph "网络技术栈 (Network Stack)"
-        HTTP[HTTP/HTTPS<br/>RESTful API]
-        WebSocket[WebSocket<br/>实时通信]
-        MQTT[MQTT<br/>物联网协议]
-    end
-    
-    %% 样式
-    classDef frontend fill:#e3f2fd
-    classDef backend fill:#f1f8e9
-    classDef database fill:#fff3e0
-    classDef ai fill:#fce4ec
-    classDef voice fill:#e8f5e8
-    classDef network fill:#f3e5f5
-    
-    class PyQt5,Live2D,QSS frontend
-    class FastAPI,Uvicorn,AsyncIO backend
-    class Neo4j,GRAG,Memory database
-    class OpenAI,Qwen,MCP ai
-    class ASR,TTS,Realtime voice
-    class HTTP,WebSocket,MQTT network
+LLM 流式输出 ──SSE──▶ 前端实时显示文本
+       │                    │
+       ▼                    ▼
+  完整文本拼接         TTS 分句播放
+       │
+       ▼
+parse_tool_calls_from_text()
+  ├─ Phase 1: 提取 ```tool``` 代码块内的 JSON
+  └─ Phase 2: 兜底提取裸 JSON（向后兼容）
+       │
+       ▼
+  按 agentType 分类
+  ├─ "mcp"     → MCPManager.unified_call()（进程内）
+  ├─ "openclaw" → HTTP POST → Agent Server /openclaw/send
+  └─ "live2d"  → asyncio.create_task() → UI 通知
+       │
+       ▼
+  asyncio.gather() 并行执行
+       │
+       ▼
+  工具结果注入 messages，进入下一轮 LLM 调用
 ```
 
-#### 核心技术
-- **Python 3.11** + PyQt5 + FastAPI
-- **Neo4j图数据库** + GRAG知识图谱
-- **MCP (Model Context Protocol)** 工具调用
-- **OpenAI兼容API** + 多种LLM服务商支持
+**实现细节**：
 
+- **文本解析**：正则 `r"```tool\s*\n([\s\S]*?)(?:```|\Z)"` 提取代码块，`json5` 容错解析（兜底 `json`），全角字符（`｛｝：`）自动标准化
+- **循环控制**：最大 5 轮（`max_loop_stream` 可配），每轮 LLM 输出无 `agentType` JSON 则终止
+- **SSE 编码**：每个 chunk 为 `data: base64(json({"type":"content"|"reasoning","text":"..."}))\n\n`，前端 `ReadableStream` + `TextDecoder` 实时拆分
+- **工具结果回注**：格式化为 `[工具结果 1/N - service: tool (status)]` 追加到 messages 中
+
+源码：[`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py)、[`apiserver/streaming_tool_extractor.py`](apiserver/streaming_tool_extractor.py)
 
 ---
 
-## 部署运行教程
+### GRAG 知识图谱记忆
+
+GRAG（Graph-RAG）从对话中自动提取五元组 `(主体, 主体类型, 谓词, 客体, 客体类型)` 并存入 Neo4j，对话时自动检索相关记忆作为 LLM 上下文。
+
+**提取流程**：
+
+1. **结构化提取**（优先）：调用 `beta.chat.completions.parse()` + Pydantic 模型 `QuintupleResponse`，`temperature=0.3`，最多重试 3 次
+2. **JSON 兜底**：Prompt 要求 LLM 返回 JSON 数组，解析失败则取首个 `[` 到末尾 `]` 之间的内容
+3. **过滤规则**：只提取事实信息（行为、实体关系、状态、偏好），过滤隐喻、假设、纯情感、闲聊
+4. **实体类型**：person / location / organization / item / concept / time / event / activity
+
+**任务管理器**：
+
+- 3 个 asyncio worker 协程消费 `asyncio.Queue(maxsize=100)`
+- SHA-256 去重：相同文本的 PENDING/RUNNING 任务自动跳过
+- 每小时自动清理超过 24h 的已完成任务
+- 可配置超时（默认 12 秒）和重试次数（默认 2 次）
+
+**双重存储**：
+
+- 本地文件 `logs/knowledge_graph/quintuples.json`（JSON 数组，set 去重）
+- Neo4j 图数据库：`Entity` 节点 + 类型化 `Relationship` 关系边，`graph.merge()` upsert
+
+**RAG 检索**：
+
+1. 提取用户问题关键词（LLM 生成）
+2. Cypher 查询：`MATCH (e1:Entity)-[r]->(e2:Entity) WHERE e1.name CONTAINS '{kw}' ... LIMIT 5`
+3. 格式化为 `主体(类型) —[谓词]→ 客体(类型)` 注入 LLM 上下文
+
+**远程记忆**（5.0.0 新增）：
+
+- `summer_memory/memory_client.py` 对接 NagaMemory 云端服务
+- 登录用户自动使用云端存储，退出登录或离线时自动回退本地 GRAG
+- API Server 新增 `/api/memory/*` 代理端点，前端通过 API Server 中转
+
+源码：[`summer_memory/`](summer_memory/)
+
+---
+
+### MCP 工具系统
+
+基于 [Model Context Protocol](https://modelcontextprotocol.io/) 的可插拔工具架构，每个工具以独立 Agent 形式运行。
+
+**内置 Agent**：
+
+| Agent | 目录 | 功能 |
+|-------|------|------|
+| `weather_time` | `mcpserver/agent_weather_time/` | 天气查询/预报、系统时间、自动城市/IP 检测 |
+| `open_launcher` | `mcpserver/agent_open_launcher/` | 扫描系统已安装应用，自然语言启动程序 |
+| `game_guide` | `mcpserver/agent_game_guide/` | 游戏策略问答、伤害计算、配队推荐、自动截图注入 |
+| `online_search` | `mcpserver/agent_online_search/` | 基于 SearXNG 的网络搜索 |
+| `crawl4ai` | `mcpserver/agent_crawl4ai/` | 基于 Crawl4AI 的网页内容提取 |
+| `playwright_master` | `mcpserver/agent_playwright_master/` | 基于 Playwright 的浏览器自动化 |
+| `vision` | `mcpserver/agent_vision/` | 截图分析与视觉问答 |
+| `mqtt_tool` | `mcpserver/agent_mqtt_tool/` | MQTT 协议 IoT 设备控制 |
+| `office_doc` | `mcpserver/agent_office_doc/` | docx/xlsx 内容提取 |
+
+**注册与发现**：
+
+```
+mcpserver/
+├── agent_weather_time/
+│   ├── agent-manifest.json    ← 声明 name, entryPoint.module/class, capabilities
+│   └── weather_time_agent.py
+├── agent_online_search/
+│   ├── agent-manifest.json
+│   └── ...
+└── mcp_registry.py            ← scan_and_register_mcp_agents() glob 扫描 **/agent-manifest.json
+                                   importlib.import_module(module).ClassName() 动态实例化
+```
+
+- `MCPManager.unified_call(service_name, tool_call)` 路由到对应 Agent 的 `handle_handoff()`
+- MCP Server `POST /schedule` 支持批量调用，`asyncio.gather()` 并行执行
+- **Skill Market**：前端技能工坊支持一键安装社区 Skill（Agent Browser、Brainstorming、Context7、Firecrawl Search 等），后端 `GET /openclaw/market/items` + `POST /openclaw/market/items/{id}/install`
+
+源码：[`mcpserver/`](mcpserver/)
+
+---
+
+### Electron 桌面端
+
+基于 Electron + Vue 3 + Vite + UnoCSS + PrimeVue 的桌面客户端。
+
+#### Live2D 渲染与动画
+
+使用 **pixi-live2d-display** + **PixiJS WebGL** 渲染 Cubism Live2D 模型。SSAA 超采样抗锯齿：Canvas 按 `width * ssaa` 渲染，CSS `transform: scale(1/ssaa)` 缩放。
+
+**4 通道正交动画系统**（`live2dController.ts`）：
+
+| 通道 | 说明 | 参数 |
+|------|------|------|
+| **体态 (State)** | 关键帧循环动画（idle/thinking/talking），hermite 平滑插值 | 从 `naga-actions.json` 加载 |
+| **动作 (Action)** | 队列式头部动作（点头/摇头），FIFO 单一执行 | AngleX/Y, EyeBallX/Y |
+| **表情 (Emotion)** | `.exp3.json` 表情文件，三种混合模式（Add/Multiply/Overwrite） | 指数衰减过渡 |
+| **追踪 (Tracking)** | 鼠标指针跟随视线，可配延迟启动（`tracking_hold_delay_ms`） | Angle ±30, EyeBall ±1, BodyAngle ±10 |
+
+合并顺序：体态 → 嘴形 → 动作 → 手动覆盖 → 表情混合 → 追踪混合。
+
+#### 意识海可视化（MindView）
+
+Canvas 2D + 手写 3D 投影（非 WebGL/SVG），球面坐标相机 `(theta, phi, distance)`，透视除法 `700 / depth`。
+
+**7 层渲染**：背景渐变 → 地面网格 → 水面平面 → 体积光（3 束光柱） → 粒子系统（3 层 125 颗） → 生物荧光浮游生物（10 个带拖尾） → 知识图谱节点与边（深度排序 painter's algorithm）。
+
+五元组到图的映射：`subject`/`object` → 节点，`predicate` → 有向边，度中心性 → 节点高度权重（高权节点上浮），100 节点上限。
+
+交互：单击拖拽旋转、中键/Shift+拖拽平移、滚轮缩放、节点拖拽/点选、关键词搜索过滤、触屏手势。
+
+#### 悬浮球模式
+
+4 状态动画窗口系统：`classic`（正常）→ `ball`（100×100 圆球）→ `compact`（420×100 折叠）→ `full`（420×N 展开）。
+
+easeOutCubic 缓动（`1 - (1 - t)^3`），160ms / 60FPS 过渡。智能定位：从球位置向右展开，自动贴合屏幕边界。
+
+#### 启动动画
+
+1. **标题阶段**：黑色遮罩 + 40 颗金色上升粒子 + 标题图片 2.4s CSS keyframe（渐入 → 停留 → 渐出）
+2. **进度阶段**：Neural Network 粒子背景 + Live2D 透出框 + 金色进度条（`requestAnimationFrame` 插值，最低速度 0.5 兜底）
+3. **停滞检测**：3 秒无进度变化显示重启提示，25% 后每秒轮询后端 `/health` 防止信号丢失
+4. **唤醒**：进度 100% 后显示"点击唤醒"脉冲提示
+
+源码：[`frontend/`](frontend/)
+
+---
+
+### 语音交互
+
+**TTS（语音合成）**：
+
+- Edge-TTS 引擎，OpenAI 兼容接口 `/v1/audio/speech`
+- 3 线程流水线：分句队列 → TTS API 调用（Semaphore(2) 并发控制）→ pygame 播放
+- Live2D 口型同步：`AdvancedLipSyncEngineV2` 60FPS 提取 5 个参数（mouth_open / mouth_form / mouth_smile / eye_brow_up / eye_wide）
+- 支持 mp3 / aac / wav / opus / flac 格式，FFmpeg 可选转码
+
+**ASR（语音识别）**：
+
+- FunASR 本地服务器，支持 VAD 端点检测和 WebSocket 实时流
+- 三模式自动切换：LOCAL（FunASR）→ END_TO_END（Qwen Omni）→ HYBRID（Qwen ASR + API Server）
+
+**实时语音对话**（需 DashScope API Key）：
+
+- 基于 Qwen Omni 的全双工 WebSocket 语音交互
+- 回声抑制、VAD 检测、音频分块（200ms）、会话冷却、最大语音时长控制
+
+源码：[`voice/`](voice/)
+
+---
+
+### Agent Server 与任务调度
+
+**后台意图分析器**（`BackgroundAnalyzer`）：
+
+- 基于 LangChain `ChatOpenAI`，`temperature=0`，从对话中提取可执行的工具调用
+- 逐会话去重（防止同一会话并发分析）、60 秒超时
+- 提取的工具调用按 `agentType` 分发到 MCP / OpenClaw / Live2D
+
+**OpenClaw 集成**：
+
+- 对接 OpenClaw Gateway（端口 18789），通过自然语言调度 AI 编程助手执行电脑任务
+- 三级回退：打包内嵌 → 全局 `openclaw` 命令 → 自动 `npm install -g openclaw`
+- `POST /openclaw/send` 发送指令，最长等待 120 秒
+
+**任务调度器**（`TaskScheduler`）：
+
+- 任务步骤记录（目的/内容/输出/分析/成功与否）
+- 自动提取关键事实和"关键发现"/"重要"标记
+- 内存压缩：步骤数超过阈值时调用 LLM 生成 `CompressedMemory`（key_findings / failed_attempts / current_status / next_steps），只保留最近 N 步
+- `schedule_parallel_execution()` 通过 `asyncio.gather()` 并行执行任务列表
+
+源码：[`agentserver/`](agentserver/)
+
+---
+
+## 架构
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                   Electron / PyQt5 前端                    │
+│  Vue 3 + Vite + UnoCSS + PrimeVue + pixi-live2d-display  │
+└────────────┬────────────┬────────────┬───────────────────┘
+             │            │            │
+     ┌───────▼──────┐ ┌──▼──────┐ ┌──▼──────┐
+     │  API Server  │ │ Agent   │ │  Voice  │
+     │   :8000      │ │ Server  │ │ Service │
+     │              │ │  :8001  │ │  :5048  │
+     │ - 对话/SSE   │ │         │ │         │
+     │ - 工具调用   │ │ - 意图  │ │ - TTS   │
+     │ - 文档上传   │ │   分析  │ │ - ASR   │
+     │ - 认证代理   │ │ - 任务  │ │ - 实时  │
+     │ - 记忆API    │ │   调度  │ │   语音  │
+     │ - Skill市场  │ │ - Open  │ │         │
+     │ - 配置管理   │ │   Claw  │ │         │
+     └──────┬───────┘ └────┬────┘ └─────────┘
+            │              │
+     ┌──────▼──────┐  ┌───▼──────────┐
+     │ MCP Server  │  │   OpenClaw   │
+     │   :8003     │  │   Gateway    │
+     │             │  │   :18789     │
+     │ - 工具注册  │  └──────────────┘
+     │ - Agent发现 │
+     │ - 并行调度  │
+     └──────┬──────┘
+            │
+    ┌───────┴──────────────────────┐
+    │   MCP Agents (可插拔工具)     │
+    │ 天气 | 搜索 | 抓取 | 视觉    │
+    │ 启动器 | 攻略 | 文档 | MQTT  │
+    └──────────────────────────────┘
+            │
+     ┌──────▼──────┐
+     │   Neo4j     │
+     │   :7687     │
+     │  知识图谱   │
+     └─────────────┘
+```
+
+### 目录结构
+
+```
+NagaAgent/
+├── apiserver/            # API Server — 对话、流式工具调用、认证、配置管理
+│   ├── api_server.py     #   FastAPI 主应用
+│   ├── agentic_tool_loop.py  #   多轮工具调用循环
+│   ├── llm_service.py    #   LiteLLM 统一 LLM 调用
+│   └── streaming_tool_extractor.py  #   流式分句 + TTS 分发
+├── agentserver/          # Agent Server — 意图分析、任务调度、OpenClaw
+│   ├── agent_server.py   #   FastAPI 主应用
+│   └── task_scheduler.py #   任务编排 + 压缩记忆
+├── mcpserver/            # MCP Server — 工具注册与调度
+│   ├── mcp_server.py     #   FastAPI 主应用
+│   ├── mcp_registry.py   #   manifest 扫描 + 动态注册
+│   ├── mcp_manager.py    #   unified_call() 路由
+│   ├── agent_weather_time/
+│   ├── agent_open_launcher/
+│   ├── agent_game_guide/
+│   ├── agent_online_search/
+│   ├── agent_crawl4ai/
+│   ├── agent_playwright_master/
+│   ├── agent_vision/
+│   ├── agent_mqtt_tool/
+│   └── agent_office_doc/
+├── summer_memory/        # GRAG 知识图谱
+│   ├── quintuple_extractor.py  #   五元组提取（结构化输出 + JSON 兜底）
+│   ├── quintuple_graph.py      #   Neo4j + 文件双重存储
+│   ├── quintuple_rag_query.py  #   Cypher 关键词 RAG 检索
+│   ├── task_manager.py         #   3 worker 异步任务管理器
+│   ├── memory_manager.py       #   GRAG 总管理器
+│   └── memory_client.py        #   NagaMemory 远程客户端
+├── voice/                # 语音服务
+│   ├── output/           #   TTS (Edge-TTS) + 口型同步
+│   └── input/            #   ASR (FunASR) + 实时语音 (Qwen Omni)
+├── guide_engine/         # 游戏攻略引擎 — 云端 RAG 服务
+├── frontend/             # Electron + Vue 3 前端
+│   ├── electron/         #   主进程（窗口管理、悬浮球、后端管理、热键）
+│   └── src/              #   Vue 3 应用
+│       ├── views/        #     MessageView / MindView / SkillView / ModelView / MemoryView / ConfigView
+│       ├── components/   #     Live2dModel / SplashScreen / LoginDialog / ...
+│       ├── composables/  #     useAuth / useStartupProgress / useVersionCheck / useToolStatus
+│       └── utils/        #     live2dController (4通道动画) / encoding / session
+├── ui/                   # PyQt5 GUI (MVC)
+├── system/               # 配置加载、环境检测、系统提示词、后台分析器
+├── main.py               # 统一入口，编排所有服务
+├── config.json           # 运行时配置（从 config.json.example 复制）
+└── pyproject.toml        # 项目元数据与依赖
+```
+
+---
+
+## 快速开始
 
 ### 环境要求
-- Python 3.11
-- 可选：uv工具（加速依赖安装，且无需特定python版本）
 
-### 快速开始
+- Python 3.11（`>=3.11, <3.12`）
+- 可选：[uv](https://github.com/astral-sh/uv)（加速依赖安装）
+- 可选：Neo4j（知识图谱记忆）
 
->  如果您的部署有困难，可以参考视频教程或下载一键运行整合包。
-
-#### 1. 安装依赖
-##### 使用setup脚本
+### 安装
 
 ```bash
-# 可选：先安装uv
-pip install uv
+git clone https://github.com/Xxiii8322766509/NagaAgent.git
+cd NagaAgent
 
-# 使用 setup.py 自动初始化
+# 方式一：setup 脚本（自动检测环境、创建虚拟环境、安装依赖）
 python setup.py
 
-# 或使用 setup.sh (Linux/macOS)
-./setup.sh
-
-# 或使用 setup.bat (Windows)
-setup.bat
-```
-
-初始化脚本会自动：
-- 检测Python版本
-- 创建虚拟环境
-- 安装依赖包
-- 复制配置文件模板
-- 打开配置文件供编辑
-</details>
-
-<details><summary>手动部署</summary>
-
-```bash
-# 无uv
-python -m venv .venv
-
-# linux/Mac OS
-source .venv/bin/activate
-# Windows
-.\.venv\Scripts\activate
-
-pip install -r requirements.txt
-
-# 使用uv
+# 方式二：uv
 uv sync
-```
-</details>
 
-#### 2. 配置LLM API
-编辑 `config.json` 文件，配置您的LLM API信息：
+# 方式三：手动
+python -m venv .venv
+source .venv/bin/activate  # Windows: .\.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 配置
+
+复制 `config.json.example` 为 `config.json`，填入 LLM API 信息：
+
 ```json
 {
   "api": {
-    "api_key": "你的api_key",
-    "base_url": "模型服务商OPENAI API端点",
-    "model": "模型名称"
+    "api_key": "your-api-key",
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-v3.2"
   }
 }
 ```
 
-<details><summary>可选配置</summary>
+支持所有 OpenAI 兼容 API（DeepSeek、通义千问、OpenAI、Ollama 等）。
 
-#### 启用知识图谱记忆
+### 启动
 
-使用 `docker` 安装 `neo4j` 或安装 `neo4j desktop` 并在 `config.json` 中配置 Neo4j 连接参数：
+```bash
+python main.py             # 完整启动（API + Agent + MCP + Voice + GUI）
+uv run main.py             # 使用 uv
+python main.py --headless  # 无 GUI 模式（配合 Electron 前端）
+```
+
+所有服务由 `main.py` 统一编排，也可单独启动：
+
+```bash
+uvicorn apiserver.api_server:app --host 127.0.0.1 --port 8000 --reload
+uvicorn agentserver.agent_server:app --host 0.0.0.0 --port 8001
+```
+
+### Electron 前端开发
+
+```bash
+cd frontend
+npm install
+npm run dev    # 开发模式（Vite + Electron）
+npm run build  # 构建生产包
+```
+
+---
+
+## 可选配置
+
+<details>
+<summary><b>知识图谱记忆（Neo4j）</b></summary>
+
+安装 Neo4j（[Docker](https://hub.docker.com/_/neo4j) 或 [Neo4j Desktop](https://neo4j.com/download/)），然后配置：
+
 ```json
 {
   "grag": {
     "enabled": true,
     "neo4j_uri": "neo4j://127.0.0.1:7687",
     "neo4j_user": "neo4j",
-    "neo4j_password": "你安装neo4j时设置的密码"
+    "neo4j_password": "your-password"
   }
 }
 ```
+</details>
 
-#### 启用语音输出功能
+<details>
+<summary><b>语音交互</b></summary>
+
 ```json
 {
-  "system": {
-    "voice_enabled": true
-  },
-  "tts": {
-    "port": 5048
+  "system": { "voice_enabled": true },
+  "tts": { "port": 5048, "default_voice": "zh-CN-XiaoxiaoNeural" }
+}
+```
+
+实时语音对话（需通义千问 DashScope API Key）：
+
+```json
+{
+  "voice_realtime": {
+    "enabled": true,
+    "provider": "qwen",
+    "api_key": "your-dashscope-key",
+    "model": "qwen3-omni-flash-realtime"
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>Live2D 虚拟形象</b></summary>
+
+```json
+{
+  "live2d": {
+    "enabled": true,
+    "model_path": "path/to/your/model.model3.json"
   }
 }
 ```
 
-#### Live2D 相关配置
+Electron 前端 Live2D 配置：
 
-```json5
-  "live2d": {
-    "enabled": false, # 是否启用Live2D
-    "model_path": "ui/live2d_local/live2d_models/重音テト/重音テト.model3.json", # Live2D模型路径
-    "fallback_image": "ui/img/standby.png", # 备用图片
-    "auto_switch": true, # 是否自动切换
-    "animation_enabled": true, # 是否启用动画
-    "touch_interaction": true # 是否启用触摸交互
-  },
-  ```
-
-> 其他配置项可参考注释
-
+```json
+{
+  "web_live2d": {
+    "ssaa": 2,
+    "model": {
+      "source": "./models/your-model/model.model3.json",
+      "x": 0.5,
+      "y": 1.3,
+      "size": 6800
+    },
+    "face_y_ratio": 0.13,
+    "tracking_hold_delay_ms": 100
+  }
+}
+```
 </details>
 
-#### 3. 启动应用
-```bash
-# 使用启动脚本
-./start.sh          # Linux/macOS
-start.bat           # Windows
+<details>
+<summary><b>MQTT 物联网</b></summary>
 
-
-# 或直接运行py文件
-# linux/Mac OS
-source .venv/bin/activate
-# Windows
-.\.venv\Scripts\activate
-python main.py
-
-# uv
-uv run main.py
+```json
+{
+  "mqtt": {
+    "enabled": true,
+    "broker": "mqtt-broker-address",
+    "port": 1883,
+    "topic": "naga/agent/topic"
+  }
+}
 ```
-
-> 程序会自动检测上次系统检测时间，如果检测通过且超过7天，会自动执行更新并重启。
-
-#### 手动更新
-```bash
-# 使用更新脚本
-./update.sh         # Linux/macOS
-update.bat          # Windows
-
-# 或直接运行py文件
-python update.py
-```
-
-更新脚本会自动执行 git pull（自动检测当前分支）和 uv sync 同步依赖。
-
-
-<details><summary>故障排除</summary>
-
-1. **Python 版本不兼容**：确保使用Python 3.11
-2. **端口被占用**：检查8000、8001、8003、5048端口是否可用
-3. **Neo4j 连接失败**：确保Neo4j服务正在运行
-4. **检测 Neo4j 连接时出现 json 解析错误**：退出并重新启动程序
-5. **未知错误**：请创建issue以反馈
-
 </details>
 
-<details><summary>环境检测</summary>
+---
+
+## 端口一览
+
+| 服务 | 端口 | 说明 |
+|------|------|------|
+| API Server | 8000 | 主接口：对话、配置、认证、Skill 市场 |
+| Agent Server | 8001 | 意图分析、任务调度、OpenClaw |
+| MCP Server | 8003 | MCP 工具注册与调度 |
+| Voice Service | 5048 | TTS / ASR |
+| Neo4j | 7687 | 知识图谱（可选） |
+| OpenClaw Gateway | 18789 | AI 编程助手（可选） |
+
+---
+
+## 更新
 
 ```bash
-# 运行系统环境检测
-python main.py --check-env --force-check
-
-# 快速检测
-python main.py --quick-check
+python update.py  # 自动 git pull + 依赖同步
 ```
 
-</details>
+---
 
+## 故障排除
 
-## 许可证
+| 问题 | 解决方案 |
+|------|----------|
+| Python 版本不兼容 | 使用 Python 3.11；或使用 uv（自动管理 Python 版本） |
+| 端口被占用 | 检查 8000、8001、8003、5048 是否可用 |
+| Neo4j 连接失败 | 确认 Neo4j 服务已启动，检查 config.json 中的连接参数 |
+| 启动卡在进度条 | 检查 API Key 是否配置正确；3 秒后出现重启提示；Electron 会自动轮询后端健康状态 |
 
-[NagaAgent License](LICENSE)
+```bash
+python main.py --check-env --force-check  # 环境诊断
+python main.py --quick-check              # 快速检查
+```
 
+---
+
+## 构建
+
+```bash
+python build.py  # 构建 Windows 一键运行整合包，输出到 dist/
+```
+
+---
 
 ## 贡献
 
-欢迎创建Issue和Pull Request！
+欢迎提交 Issue 和 Pull Request。如有问题，可加入 QQ 频道 nagaagent1。
 
-<details><summary>构建一键运行整合包</summary>
+---
 
-```bash
-python build.py
-```
-构建完成的文件位于`dist/`目录下
+## 许可证
 
-</details>
+参见 [LICENSE](LICENSE)。如需商业部署或合作，请联系 contact@nagaagent.com，或 bilibili 私信【柏斯阔落】。
+
+---
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Xxiii8322766509/NagaAgent&type=date&legend=top-left)](https://www.star-history.com/#Xxiii8322766509/NagaAgent&type=date&legend=top-left)
-
-<div align="center">
-
-**感谢所有开发者对本项目做出的贡献**
-
-**⭐ 如果这个项目对您有帮助，请考虑给我们一个 Star**
-
-</div>
+[![Star History Chart](https://api.star-history.com/svg?repos=RTGS2017/NagaAgent&type=date&legend=top-left)](https://www.star-history.com/#RTGS2017/NagaAgent&type=date&legend=top-left)

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { useStorage } from '@vueuse/core'
-import { Accordion, Divider, InputNumber, InputText, Message, Select, ToggleSwitch } from 'primevue'
-import { computed } from 'vue'
+import { Accordion, Divider, InputNumber, InputText, Select, ToggleSwitch } from 'primevue'
 import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
@@ -9,15 +8,6 @@ import { isNagaLoggedIn, nagaUser } from '@/composables/useAuth'
 import { CONFIG } from '@/utils/config'
 
 const accordionValue = useStorage('accordion-model', ['asr'])
-
-const vad_percent = computed({
-  get() {
-    return CONFIG.value.voice_realtime.vad_threshold * 100
-  },
-  set(value) {
-    CONFIG.value.voice_realtime.vad_threshold = value / 100
-  },
-})
 
 const ASR_PROVIDERS = {
   qwen: '通义千问',
@@ -77,20 +67,24 @@ const TTS_VOICES = {
             <InputText v-model="CONFIG.computer_control.model" />
           </ConfigItem>
           <ConfigItem name="控制模型 API 地址" description="控制模型的 API 地址">
-            <InputText v-model="CONFIG.computer_control.model_url" />
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，使用 NagaModel 网关</span>
+            <InputText v-else v-model="CONFIG.computer_control.model_url" />
           </ConfigItem>
           <ConfigItem name="控制模型 API 密钥" description="控制模型的 API 密钥">
-            <InputText v-model="CONFIG.computer_control.api_key" />
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，无需输入</span>
+            <InputText v-else v-model="CONFIG.computer_control.api_key" />
           </ConfigItem>
           <Divider class="m-1!" />
           <ConfigItem name="定位模型" description="用于元素定位和坐标识别的模型">
             <InputText v-model="CONFIG.computer_control.grounding_model" />
           </ConfigItem>
           <ConfigItem name="定位模型 API 地址" description="定位模型的 API 地址">
-            <InputText v-model="CONFIG.computer_control.grounding_url" />
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，使用 NagaModel 网关</span>
+            <InputText v-else v-model="CONFIG.computer_control.grounding_url" />
           </ConfigItem>
           <ConfigItem name="定位模型 API 密钥" description="定位模型的 API 密钥">
-            <InputText v-model="CONFIG.computer_control.grounding_api_key" />
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，无需输入</span>
+            <InputText v-else v-model="CONFIG.computer_control.grounding_api_key" />
           </ConfigItem>
         </div>
       </ConfigGroup>
@@ -105,30 +99,26 @@ const TTS_VOICES = {
           </div>
         </template>
         <div class="grid gap-4">
-          <ConfigItem name="语音识别模型" description="用于语音识别的模型">
+          <ConfigItem name="模型名称" description="用于语音识别的模型">
             <InputText v-model="CONFIG.voice_realtime.model" />
           </ConfigItem>
-          <ConfigItem name="语音识别模型提供者" description="语音识别模型的提供者">
-            <Select v-model="CONFIG.voice_realtime.provider" :options="Object.keys(ASR_PROVIDERS)">
-              <template #option="{ option }">
-                {{ ASR_PROVIDERS[option as keyof typeof ASR_PROVIDERS] }}
-              </template>
-              <template #value="{ value }">
-                {{ ASR_PROVIDERS[value as keyof typeof ASR_PROVIDERS] }}
-              </template>
-            </Select>
-          </ConfigItem>
-          <ConfigItem
-            v-if="CONFIG.voice_realtime.provider !== 'local'"
-            name="语音识别模型 API 密钥" description="语音识别模型的 API 密钥"
-          >
-            <InputText v-model="CONFIG.voice_realtime.api_key" />
-          </ConfigItem>
-          <Message v-else severity="error">
-            暂不支持 ASR 本地模型
-          </Message>
-          <ConfigItem name="静音检测阈值" description="VAD 静音检测灵敏度">
-            <InputNumber v-model="vad_percent" :min="0" :max="100" suffix="%" show-buttons />
+          <template v-if="!isNagaLoggedIn">
+            <ConfigItem name="模型提供者" description="语音识别模型的提供者">
+              <Select v-model="CONFIG.voice_realtime.provider" :options="Object.keys(ASR_PROVIDERS)">
+                <template #option="{ option }">
+                  {{ ASR_PROVIDERS[option as keyof typeof ASR_PROVIDERS] }}
+                </template>
+                <template #value="{ value }">
+                  {{ ASR_PROVIDERS[value as keyof typeof ASR_PROVIDERS] }}
+                </template>
+              </Select>
+            </ConfigItem>
+            <ConfigItem name="API 密钥" description="语音识别模型的 API 密钥">
+              <InputText v-model="CONFIG.voice_realtime.api_key" />
+            </ConfigItem>
+          </template>
+          <ConfigItem v-else name="API 密钥">
+            <span class="naga-authed">&#10003; 已登陆，无需输入</span>
           </ConfigItem>
         </div>
       </ConfigGroup>
@@ -143,7 +133,11 @@ const TTS_VOICES = {
           </div>
         </template>
         <div class="grid gap-4">
-          <ConfigItem name="语音合成模型声线" description="语音合成模型的声线">
+          <ConfigItem name="模型名称" description="用于语音合成的模型">
+            <span v-if="isNagaLoggedIn" class="text-white/60">qwen-tts-realtime</span>
+            <InputText v-else :model-value="'edge-tts'" disabled />
+          </ConfigItem>
+          <ConfigItem name="声线" description="语音合成模型的声线">
             <Select v-model="CONFIG.tts.default_voice" :options="Object.keys(TTS_VOICES)">
               <template #option="{ option }">
                 {{ TTS_VOICES[option as keyof typeof TTS_VOICES] }}
@@ -153,11 +147,16 @@ const TTS_VOICES = {
               </template>
             </Select>
           </ConfigItem>
-          <ConfigItem name="语音合成模型端口" description="用于语音合成的模型端口">
-            <InputNumber v-model="CONFIG.tts.port" :min="1000" :max="65535" show-buttons />
-          </ConfigItem>
-          <ConfigItem name="语音合成模型 API 密钥" description="语音合成模型的 API 密钥">
-            <InputText v-model="CONFIG.tts.api_key" />
+          <template v-if="!isNagaLoggedIn">
+            <ConfigItem name="服务端口" description="用于语音合成的本地服务端口">
+              <InputNumber v-model="CONFIG.tts.port" :min="1000" :max="65535" show-buttons />
+            </ConfigItem>
+            <ConfigItem name="API 密钥" description="语音合成模型的 API 密钥">
+              <InputText v-model="CONFIG.tts.api_key" />
+            </ConfigItem>
+          </template>
+          <ConfigItem v-else name="API 密钥">
+            <span class="naga-authed">&#10003; 已登陆，无需输入</span>
           </ConfigItem>
         </div>
       </ConfigGroup>

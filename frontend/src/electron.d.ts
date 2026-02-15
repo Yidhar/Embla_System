@@ -8,8 +8,14 @@ export interface CaptureSource {
 }
 
 export interface CaptureAPI {
-  getSources: () => Promise<CaptureSource[]>
+  getSources: () => Promise<CaptureSource[] | { permission: string }>
   captureWindow: (sourceId: string) => Promise<string | null>
+  openScreenSettings: () => Promise<void>
+}
+
+export interface BackendAPI {
+  onProgress: (callback: (payload: { percent: number, phase: string }) => void) => () => void
+  onError: (callback: (payload: { code: number, logs: string }) => void) => () => void
 }
 
 export interface FloatingAPI {
@@ -32,6 +38,8 @@ export interface ElectronAPI {
   maximize: () => void
   close: () => void
   isMaximized: () => Promise<boolean>
+  quit: () => void
+  showContextMenu: () => void
   onMaximized: (callback: (maximized: boolean) => void) => () => void
   downloadUpdate: () => void
   installUpdate: () => void
@@ -39,6 +47,7 @@ export interface ElectronAPI {
   onUpdateDownloaded: (callback: () => void) => () => void
   floating: FloatingAPI
   capture: CaptureAPI
+  backend: BackendAPI
   platform: string
 }
 
