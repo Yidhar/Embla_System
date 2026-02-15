@@ -118,6 +118,9 @@ async def login(username: str, password: str, captcha_id: str = "", captcha_answ
     if rt:
         _refresh_token = rt
         _save_refresh_token()
+        logger.info("登录成功，refresh_token 已持久化")
+    else:
+        logger.warning("登录成功，但未获取到 refresh_token（Set-Cookie 和 body 均无）")
 
     # 登录成功后获取用户信息；若 /auth/me 不可用，从 login 响应中回退
     me = await get_me(_access_token)
@@ -158,15 +161,19 @@ async def refresh(refresh_token_override: Optional[str] = None) -> dict:
     """
     global _access_token, _refresh_token
     token = refresh_token_override or _refresh_token
+    source = "override" if refresh_token_override else ("file" if _refresh_token else "none")
     if not token:
+        logger.error(f"refresh 失败: 无可用 refresh_token (stored={_refresh_token is not None}, file={_TOKEN_FILE.exists()})")
         raise ValueError("无可用的 refresh_token，请重新登录")
 
+    logger.info(f"尝试刷新 token (source={source}, token_prefix={token[:20]}...)")
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(f"{BUSINESS_URL}/api/auth/refresh", json={"refresh_token": token})
         resp.raise_for_status()
         data = resp.json()
 
     _access_token = data.get("access_token") or data.get("accessToken")
+    logger.info(f"token 刷新成功, new_access_token_prefix={_access_token[:20] if _access_token else 'None'}...")
 
     # 提取新的 refresh_token（Token 轮换：旧 token 立即作废）
     new_rt = _extract_refresh_token(resp)

@@ -287,9 +287,9 @@ class LLMService:
                         continue  # 重试
                     except Exception as refresh_err:
                         logger.error(f"Token 刷新失败: {refresh_err}")
-                # 刷新失败或已是第二次尝试
+                # 刷新失败或已是第二次尝试 → 通知前端触发重新登录
                 logger.error(f"流式聊天认证失败: {e}")
-                yield self._format_sse_chunk("content", f"认证失败，请重新登录: {str(e)}")
+                yield self._format_sse_chunk("auth_expired", "登录已过期，请重新登录")
                 return
 
             except Exception as e:

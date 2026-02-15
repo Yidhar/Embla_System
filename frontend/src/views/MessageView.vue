@@ -2,6 +2,7 @@
 import { onKeyStroke, useEventListener } from '@vueuse/core'
 import { nextTick, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
 import API from '@/api/core'
+import { authExpired } from '@/api'
 import BoxContainer from '@/components/BoxContainer.vue'
 import MessageItem from '@/components/MessageItem.vue'
 import { startToolPolling, stopToolPolling, toolMessage } from '@/composables/useToolStatus'
@@ -90,6 +91,11 @@ export function chatStream(content: string, options?: { skill?: string, images?:
       else if (chunk.type === 'round_start' && (chunk.round ?? 0) > 1) {
         // 多轮分隔
         message.content += '\n---\n\n'
+      }
+      else if (chunk.type === 'auth_expired') {
+        // LLM 认证失败，触发重新登录
+        authExpired.value = true
+        message.content += chunk.text || '登录已过期，请重新登录'
       }
       // round_end 不需要特殊处理
       window.dispatchEvent(new CustomEvent('token', { detail: chunk.text || '' }))
