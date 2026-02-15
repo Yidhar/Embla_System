@@ -47,7 +47,7 @@ _vlm_sessions: set = set()
 
 # 导入配置系统
 try:
-    from system.config import config, AI_NAME  # 使用新的配置系统
+    from system.config import get_config, AI_NAME  # 使用新的配置系统
     from system.config import get_prompt, build_system_prompt  # 导入提示词仓库
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 except ImportError:
@@ -55,7 +55,7 @@ except ImportError:
     import os
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from system.config import config  # 使用新的配置系统
+    from system.config import get_config  # 使用新的配置系统
     from system.config import build_system_prompt  # 导入提示词仓库
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 from apiserver.response_util import extract_message  # 导入消息提取工具
@@ -647,7 +647,7 @@ async def get_system_info():
         version="5.0.0",
         status="running",
         available_services=[],  # MCP服务现在由mcpserver独立管理
-        api_key_configured=bool(config.api.api_key and config.api.api_key != "sk-placeholder-key-not-set"),
+        api_key_configured=bool(get_config().api.api_key and get_config().api.api_key != "sk-placeholder-key-not-set"),
     )
 
 
@@ -712,8 +712,8 @@ async def update_system_prompt(payload: Dict[str, Any]):
 
 
 @app.get("/openclaw/market/items")
-async def list_openclaw_market_items():
-    """获取OpenClaw技能市场条目"""
+def list_openclaw_market_items():
+    """获取OpenClaw技能市场条目（同步端点，由 FastAPI 在线程池中执行）"""
     try:
         status = _get_market_items_status()
         return {"status": "success", **status}
@@ -724,8 +724,8 @@ async def list_openclaw_market_items():
 
 
 @app.post("/openclaw/market/items/{item_id}/install")
-async def install_openclaw_market_item(item_id: str, payload: Optional[Dict[str, Any]] = None):
-    """安装指定OpenClaw技能市场条目"""
+def install_openclaw_market_item(item_id: str, payload: Optional[Dict[str, Any]] = None):
+    """安装指定OpenClaw技能市场条目（同步端点，由 FastAPI 在线程池中执行）"""
     item = next((entry for entry in MARKET_ITEMS if entry.get("id") == item_id), None)
     if not item:
         raise HTTPException(status_code=404, detail="条目不存在")
@@ -830,7 +830,7 @@ async def chat(request: ChatRequest):
 
         # 使用整合后的LLM服务（支持 reasoning_content）
         llm_service = get_llm_service()
-        llm_response = await llm_service.chat_with_context_and_reasoning(messages, config.api.temperature)
+        llm_response = await llm_service.chat_with_context_and_reasoning(messages, get_config().api.temperature)
 
         # 处理完成
         # 统一保存对话历史与日志
@@ -932,9 +932,9 @@ async def chat_stream(request: ChatRequest):
             voice_integration = None
 
             should_enable_tts = (
-                config.system.voice_enabled
+                get_config().system.voice_enabled
                 and not request.return_audio  # return_audio时不启用实时TTS
-                and config.voice_realtime.voice_mode != "hybrid"
+                and get_config().voice_realtime.voice_mode != "hybrid"
                 and not request.disable_tts
             )
 
@@ -944,14 +944,14 @@ async def chat_stream(request: ChatRequest):
 
                     voice_integration = get_voice_integration()
                     logger.info(
-                        f"[API Server] 实时语音集成已启用 (return_audio={request.return_audio}, voice_mode={config.voice_realtime.voice_mode})"
+                        f"[API Server] 实时语音集成已启用 (return_audio={request.return_audio}, voice_mode={get_config().voice_realtime.voice_mode})"
                     )
                 except Exception as e:
                     print(f"语音集成初始化失败: {e}")
             else:
                 if request.return_audio:
                     logger.info("[API Server] return_audio模式，将在最后生成完整音频")
-                elif config.voice_realtime.voice_mode == "hybrid" and not request.return_audio:
+                elif get_config().voice_realtime.voice_mode == "hybrid" and not request.return_audio:
                     logger.info("[API Server] 混合模式下且未请求音频，不处理TTS")
                 elif request.disable_tts:
                     logger.info("[API Server] 客户端禁用了TTS (disable_tts=True)")
@@ -980,13 +980,13 @@ async def chat_stream(request: ChatRequest):
             # 如果当前会话曾发送过图片，持续使用视觉模型
             model_override = None
             use_vlm = session_id in _vlm_sessions
-            if use_vlm and config.computer_control.enabled and config.computer_control.api_key:
+            if use_vlm and get_config().computer_control.enabled and get_config().computer_control.api_key:
                 model_override = {
-                    "model": config.computer_control.model,
-                    "api_base": config.computer_control.model_url,
-                    "api_key": config.computer_control.api_key,
+                    "model": get_config().computer_control.model,
+                    "api_base": get_config().computer_control.model_url,
+                    "api_key": get_config().computer_control.api_key,
                 }
-                logger.info(f"[API Server] VLM 会话，使用视觉模型: {config.computer_control.model}")
+                logger.info(f"[API Server] VLM 会话，使用视觉模型: {get_config().computer_control.model}")
 
             complete_reasoning = ""
             # 记录每轮的content，用于在每轮结束时完成TTS处理
@@ -1070,7 +1070,7 @@ async def chat_stream(request: ChatRequest):
 
                     from voice.tts_wrapper import generate_speech_safe
 
-                    tts_voice = config.voice_realtime.tts_voice or "zh-CN-XiaoyiNeural"
+                    tts_voice = get_config().voice_realtime.tts_voice or "zh-CN-XiaoyiNeural"
                     audio_file = generate_speech_safe(
                         text=complete_text, voice=tts_voice, response_format="mp3", speed=1.0
                     )
@@ -1235,8 +1235,8 @@ def _check_agent_available(manifest: Dict[str, Any]) -> bool:
 
 
 @app.get("/mcp/services")
-async def get_mcp_services():
-    """列出所有 MCP 服务并检查可用性"""
+def get_mcp_services():
+    """列出所有 MCP 服务并检查可用性（同步端点，由 FastAPI 在线程池中执行）"""
     services: List[Dict[str, Any]] = []
 
     # 1. 内置 agent（扫描 mcpserver/**/agent-manifest.json）

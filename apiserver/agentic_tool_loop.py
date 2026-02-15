@@ -11,7 +11,7 @@ import logging
 import re
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
-from system.config import config, get_server_port
+from system.config import get_config, get_server_port
 
 logger = logging.getLogger(__name__)
 
@@ -421,7 +421,7 @@ async def run_agentic_loop(
         complete_text = ""
         complete_reasoning = ""
 
-        async for chunk in llm_service.stream_chat_with_context(messages, config.api.temperature,
+        async for chunk in llm_service.stream_chat_with_context(messages, get_config().api.temperature,
                                                                  model_override=model_override):
             # chunk 格式: "data: <base64_json>\n\n"
             if chunk.startswith("data: "):

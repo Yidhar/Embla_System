@@ -32,4 +32,19 @@ export default defineConfig({
     }),
   ],
   resolve: { alias: { '@': '/src' } },
+  optimizeDeps: {
+    include: [
+      'primevue/accordion',
+      'primevue/inputtext',
+      'primevue/inputnumber',
+      'primevue/select',
+      'primevue/toggleswitch',
+      'primevue/divider',
+      'primevue/datatable',
+      'primevue/column',
+      'd3',
+      'd3-force',
+      '@vueuse/core',
+    ],
+  },
 })

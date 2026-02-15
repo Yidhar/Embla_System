@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import litellm
 from litellm import acompletion
 from fastapi import FastAPI, HTTPException
-from system.config import config
+from system.config import get_config
 from . import naga_auth
 
 # 配置日志
@@ -48,11 +48,12 @@ class LLMService:
     def _initialize_client(self):
         """初始化 LiteLLM 配置"""
         try:
+            cfg = get_config()
             # 配置 LiteLLM 使用自定义 base_url
-            litellm.api_key = config.api.api_key
+            litellm.api_key = cfg.api.api_key
             # 设置自定义端点（如果不是标准 OpenAI）
-            if config.api.base_url and "openai.com" not in config.api.base_url:
-                litellm.api_base = config.api.base_url.rstrip("/") + "/"
+            if cfg.api.base_url and "openai.com" not in cfg.api.base_url:
+                litellm.api_base = cfg.api.base_url.rstrip("/") + "/"
             self._initialized = True
             logger.info("LLM服务 (LiteLLM) 初始化成功")
         except Exception as e:
@@ -66,8 +67,9 @@ class LLMService:
             model: 模型名称，默认使用 config.api.model
             base_url: API地址，默认使用 config.api.base_url
         """
-        model = model or config.api.model
-        base_url = (base_url or config.api.base_url or "").lower()
+        cfg = get_config()
+        model = model or cfg.api.model
+        base_url = (base_url or cfg.api.base_url or "").lower()
 
         # NagaModel 网关始终使用 openai/ 前缀
         if naga_auth.is_authenticated():
@@ -98,9 +100,10 @@ class LLMService:
                 "api_base": naga_auth.NAGA_MODEL_URL + "/",
                 "extra_body": {"user_token": token},
             }
+        cfg = get_config()
         return {
-            "api_key": config.api.api_key,
-            "api_base": config.api.base_url.rstrip("/") + "/" if config.api.base_url else None,
+            "api_key": cfg.api.api_key,
+            "api_base": cfg.api.base_url.rstrip("/") + "/" if cfg.api.base_url else None,
         }
 
     def _get_overridden_llm_params(
@@ -114,10 +117,11 @@ class LLMService:
                 "api_base": naga_auth.NAGA_MODEL_URL + "/",
                 "extra_body": {"user_token": token},
             }
+        cfg = get_config()
         return {
-            "api_key": api_key or config.api.api_key,
+            "api_key": api_key or cfg.api.api_key,
             "api_base": (api_base.rstrip("/") + "/" if api_base else None)
-            or (config.api.base_url.rstrip("/") + "/" if config.api.base_url else None),
+            or (cfg.api.base_url.rstrip("/") + "/" if cfg.api.base_url else None),
         }
 
     async def get_response(self, prompt: str, temperature: float = 0.7) -> str:
@@ -137,7 +141,7 @@ class LLMService:
                 model=self._get_model_name(),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=temperature,
-                max_tokens=config.api.max_tokens,
+                max_tokens=get_config().api.max_tokens,
                 **self._get_llm_params()
             )
             message = response.choices[0].message
@@ -172,9 +176,9 @@ class LLMService:
             if not self._initialized:
                 return LLMResponse(content="LLM服务不可用: 客户端初始化失败")
 
-        final_model = model_override or config.api.model
-        final_base = api_base_override or config.api.base_url
-        final_api_key = api_key_override or config.api.api_key
+        final_model = model_override or get_config().api.model
+        final_base = api_base_override or get_config().api.base_url
+        final_api_key = api_key_override or get_config().api.api_key
 
         try:
             model_name = final_model
@@ -190,7 +194,7 @@ class LLMService:
                 model=model_name,
                 messages=messages,
                 temperature=temperature,
-                max_tokens=config.api.max_tokens if hasattr(config.api, 'max_tokens') else None,
+                    max_tokens=get_config().api.max_tokens if hasattr(get_config().api, 'max_tokens') else None,
                 **self._get_overridden_llm_params(final_api_key, final_base)
             )
             message = response.choices[0].message
@@ -263,7 +267,7 @@ class LLMService:
                     model=model_name,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=config.api.max_tokens if hasattr(config.api, "max_tokens") else None,
+                    max_tokens=get_config().api.max_tokens if hasattr(get_config().api, "max_tokens") else None,
                     stream=True,
                     **llm_params
                 )
