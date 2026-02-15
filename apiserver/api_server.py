@@ -823,9 +823,14 @@ async def chat(request: ChatRequest):
         except Exception as e:
             logger.debug(f"[RAG] 记忆召回失败（不影响对话）: {e}")
 
+        # 如果用户选择了技能，在用户消息中添加简短标记（完整指令已在系统提示词中）
+        effective_message = request.message
+        if request.skill:
+            effective_message = f"[使用技能: {request.skill}] {request.message}"
+
         # 使用消息管理器构建完整的对话消息（纯聊天，不触发工具）
         messages = message_manager.build_conversation_messages(
-            session_id=session_id, system_prompt=system_prompt, current_message=user_message
+            session_id=session_id, system_prompt=system_prompt, current_message=effective_message
         )
 
         # 使用整合后的LLM服务（支持 reasoning_content）
@@ -897,20 +902,16 @@ async def chat_stream(request: ChatRequest):
                             system_prompt += memory_context
                             logger.info(f"[RAG] 召回 {len(mem_lines)} 条记忆注入上下文")
                     elif mem_result.get("success") and mem_result.get("answer"):
-                        # 某些实现直接返回 answer 文本
                         memory_context = f"\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆：\n{mem_result['answer']}"
                         system_prompt += memory_context
                         logger.info(f"[RAG] 召回记忆（answer 模式）注入上下文")
             except Exception as e:
                 logger.debug(f"[RAG] 记忆召回失败（不影响对话）: {e}")
 
-            # 如果用户选择了技能，将技能指令包裹在用户消息中，避免被长系统提示词淹没
+            # 如果用户选择了技能，在用户消息中添加简短标记（完整指令已在系统提示词中）
             effective_message = user_message
             if request.skill:
-                from system.skill_manager import load_skill
-                skill_instructions = load_skill(request.skill)
-                if skill_instructions:
-                    effective_message = f"[技能指令] 请严格按照以下技能要求处理我的输入，直接输出结果：\n{skill_instructions}\n\n[用户输入] {request.message}"
+                effective_message = f"[使用技能: {request.skill}] {request.message}"
 
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(
@@ -1115,6 +1116,10 @@ async def chat_stream(request: ChatRequest):
                     print(f"获取完整响应文本失败: {e}")
             elif request.return_audio:
                 complete_response = complete_text
+
+            # fallback: 如果 tool_extractor 没有累积到文本，使用最后一轮的 current_round_text
+            if not complete_response and current_round_text:
+                complete_response = current_round_text
 
             # 统一保存对话历史与日志
             _save_conversation_and_logs(session_id, user_message, complete_response)

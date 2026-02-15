@@ -412,6 +412,9 @@ async def run_agentic_loop(
 
     llm_service = get_llm_service()
 
+    consecutive_failures = 0  # 连续全部失败的轮次计数
+    needs_summary = False  # 是否需要进行最终总结轮
+
     for round_num in range(1, max_rounds + 1):
         # 1. 通知前端开始新一轮
         if round_num > 1:
@@ -459,12 +462,8 @@ async def run_agentic_loop(
 
         # 4b. 如果检测到了任何工具调用，发送 content_clean 让前端替换掉带有工具代码块的原文
         if tool_calls and clean_text != complete_text:
-            if actionable_calls:
-                # 有实际工具调用时，清空已显示的文字，避免在工具返回前展示未经验证的内容
-                yield _format_sse_event("content_clean", {"text": ""})
-            else:
-                # 仅有 live2d 调用时，保留完整 clean_text
-                yield _format_sse_event("content_clean", {"text": clean_text})
+            # 保留工具调用前的简短说明文字（如"让我查一下"），仅移除 ```tool``` 代码块
+            yield _format_sse_event("content_clean", {"text": clean_text})
 
         # 5. 如果没有可执行的工具调用，循环结束
         if not actionable_calls:
@@ -491,6 +490,14 @@ async def run_agentic_loop(
         # 7. 并行执行工具调用
         results = await execute_tool_calls(actionable_calls, session_id)
 
+        # 7a. 检测连续失败：本轮所有工具是否全部失败
+        all_failed = all(r.get("status") == "error" for r in results)
+        if all_failed:
+            consecutive_failures += 1
+            logger.warning(f"[AgenticLoop] Round {round_num}: 本轮所有工具调用失败 (连续 {consecutive_failures} 轮)")
+        else:
+            consecutive_failures = 0
+
         # 8. 通知前端工具结果
         result_summaries = []
         for r in results:
@@ -507,18 +514,49 @@ async def run_agentic_loop(
             )
         yield _format_sse_event("tool_results", {"results": result_summaries})
 
-        # 发送本轮结束信号
-        yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
-
         # 9. 将本轮LLM输出 + 工具结果注入消息历史
-        #    不注入工具调用前的文字，因为LLM可能在调用前输出未经验证的分析内容
-        messages.append({"role": "assistant", "content": "(工具调用中)"})
+        #    保留工具调用前的简短说明文字，如果没有则用占位符
+        assistant_content = clean_text if clean_text else "(工具调用中)"
+        messages.append({"role": "assistant", "content": assistant_content})
         tool_result_text = format_tool_results_for_llm(results)
         messages.append({"role": "user", "content": tool_result_text})
+
+        # 9a. 连续失败达到阈值时提前终止，进入总结轮
+        if consecutive_failures >= 2:
+            logger.warning(f"[AgenticLoop] 连续 {consecutive_failures} 轮工具全部失败，提前终止循环")
+            yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
+            needs_summary = True
+            break
+
+        # 发送本轮结束信号
+        yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
 
         logger.info(f"[AgenticLoop] Round {round_num}: 工具结果已注入，继续下一轮")
 
     else:
         # max_rounds 用尽
-        logger.warning(f"[AgenticLoop] 达到最大轮数 {max_rounds}，强制结束")
-        yield _format_sse_event("round_end", {"round": max_rounds, "has_more": False})
+        needs_summary = True
+
+    # 最终总结轮：强制 LLM 基于已有工具结果生成回复，不再允许工具调用
+    if needs_summary:
+        logger.warning(f"[AgenticLoop] 执行最终总结轮")
+
+        # 通知前端开始总结轮（重要：触发 api_server 重置 is_tool_event 标记）
+        yield _format_sse_event("round_start", {"round": max_rounds + 1, "summary": True})
+
+        # 注入总结指令
+        messages.append({
+            "role": "user",
+            "content": (
+                "[系统提示] 工具调用轮次已用尽。请根据以上所有工具返回结果，直接回答用户的问题。"
+                "如果所有工具都失败了，请诚实告知用户当前无法完成该操作，并给出建议。"
+                "不要再发起任何工具调用。"
+            ),
+        })
+
+        # 最终总结轮：流式输出
+        async for chunk in llm_service.stream_chat_with_context(messages, config.api.temperature,
+                                                                 model_override=model_override):
+            yield chunk
+
+        yield _format_sse_event("round_end", {"round": max_rounds + 1, "has_more": False})

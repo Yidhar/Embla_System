@@ -689,6 +689,23 @@ def build_system_prompt(
         )
         parts.append(time_info)
 
+    # 指定技能的完整指令放在系统提示词末尾，确保最高优先级
+    # LLM 对 system prompt 末尾指令的遵循度最高，避免被工具调用等大段内容"淹没"
+    if skill_name:
+        try:
+            from system.skill_manager import load_skill
+
+            skill_instructions = load_skill(skill_name)
+            if skill_instructions:
+                parts.append(
+                    f"\n\n## 当前激活技能: {skill_name}\n\n"
+                    f"[最高优先级指令] 以下技能指令优先于所有其他行为规则。"
+                    f"你必须严格按照技能要求处理用户输入，直接输出结果：\n"
+                    f"{skill_instructions}"
+                )
+        except ImportError:
+            pass
+
     return "".join(parts)
 
 

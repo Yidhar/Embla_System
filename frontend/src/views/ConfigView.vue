@@ -51,6 +51,18 @@ async function onAutoLaunchChange(value: boolean) {
     autoLaunchEnabled.value = value
   }
 }
+
+function toggleFloatingMode(enabled: boolean) {
+  CONFIG.value.floating.enabled = enabled
+  if (!isElectron)
+    return
+  if (enabled) {
+    window.electronAPI?.floating.enter()
+  }
+  else {
+    window.electronAPI?.floating.exit()
+  }
+}
 </script>
 
 <template>
@@ -121,6 +133,13 @@ async function onAutoLaunchChange(value: boolean) {
               :min="0" :max="5000" :step="100"
               show-buttons
               @update:model-value="(v: number | null) => { CONFIG.web_live2d.tracking_hold_delay_ms = v ?? 100 }"
+            />
+          </ConfigItem>
+          <Divider class="m-1!" />
+          <ConfigItem v-if="isElectron" name="悬浮球模式" description="启用后窗口变为可拖拽的悬浮球，点击展开聊天面板">
+            <ToggleSwitch
+              :model-value="CONFIG.floating.enabled"
+              @update:model-value="toggleFloatingMode"
             />
           </ConfigItem>
         </div>
