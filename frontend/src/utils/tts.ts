@@ -7,12 +7,12 @@ let maxDurationTimer: number | null = null
 
 const MAX_PLAYBACK_DURATION = 30000 // 30秒最大播放时长
 
-export function speak(text: string) {
+export function speak(text: string): Promise<void> {
   stop()
   const tts = CONFIG.value.tts
   const url = `http://localhost:${tts.port}/v1/audio/speech`
 
-  fetch(url, {
+  return fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -24,20 +24,20 @@ export function speak(text: string) {
     }),
   }).then(async (res) => {
     if (!res.ok)
-      return
+      throw new Error(`TTS responded ${res.status}`)
     const blob = await res.blob()
     const objectUrl = URL.createObjectURL(blob)
     const el = new Audio(objectUrl)
     audio.value = el
     isPlaying.value = true
-    
+
     // 设置30秒最大播放时长定时器
     maxDurationTimer = window.setTimeout(() => {
       if (audio.value) {
         stop()
       }
     }, MAX_PLAYBACK_DURATION)
-    
+
     el.onended = () => {
       // 清除定时器
       if (maxDurationTimer) {
@@ -49,13 +49,14 @@ export function speak(text: string) {
       audio.value = null
     }
     el.play()
-  }).catch(() => {
+  }).catch((err) => {
     // 清除定时器
     if (maxDurationTimer) {
       clearTimeout(maxDurationTimer)
       maxDurationTimer = null
     }
     isPlaying.value = false
+    throw err
   })
 }
 

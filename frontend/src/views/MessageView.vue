@@ -107,8 +107,9 @@ export function chatStream(content: string, options?: { skill?: string, images?:
     }
 
     if (CONFIG.value.system.voice_enabled && spokenContent) {
-      live2dState.value = 'talking'
-      speak(spokenContent)
+      speak(spokenContent).catch(() => {
+        live2dState.value = 'idle'
+      })
     }
     else {
       live2dState.value = 'idle'
@@ -125,11 +126,9 @@ const input = defineModel<string>()
 const containerRef = useTemplateRef('containerRef')
 const fileInput = ref<HTMLInputElement | null>(null)
 
-// TTS 结束后回到 thinking
+// TTS 播放状态驱动嘴部动画：开始播放→talking，结束→idle
 watch(isPlaying, (playing) => {
-  if (!playing && live2dState.value === 'talking') {
-    live2dState.value = 'thinking'
-  }
+  live2dState.value = playing ? 'talking' : 'idle'
 })
 
 function scrollToBottom() {

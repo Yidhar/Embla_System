@@ -4,13 +4,15 @@ NagaMemory 远程记忆微服务客户端
 轻量级 HTTP 客户端，将本地 summer_memory 的图谱/五元组操作
 代理到远程 NagaMemory 服务（NebulaGraph 后端）。
 
+已登录时自动启用（优先使用 naga_auth 动态 token），未登录时返回 None。
+
 用法::
 
     from summer_memory.memory_client import get_remote_memory_client
 
     client = get_remote_memory_client()
     if client is None:
-        # memory_server 未启用，走本地 summer_memory 逻辑
+        # 未登录，走本地 summer_memory 逻辑
         ...
     else:
         stats = await client.get_stats()
@@ -117,29 +119,46 @@ def get_remote_memory_client() -> Optional[RemoteMemoryClient]:
     """
     获取远程记忆客户端单例。
 
-    仅当 config.memory_server.enabled == True 时返回实例，
-    否则返回 None（调用方应回退到本地 summer_memory）。
-    每次调用会重新检查 config，支持热更新和 token 刷新。
+    优先使用 naga_auth 的动态 access_token（登录/刷新后自动更新），
+    回退到 config.memory_server.token。无可用 token 时返回 None
+    （调用方应回退到本地 summer_memory）。
+    每次调用会重新检查 token，支持热更新和 token 刷新。
     """
     global _client, _client_token
 
+    # 优先使用 naga_auth 动态 token（延迟 import 避免循环引用）
+    token: Optional[str] = None
     try:
-        from system.config import config
-        ms = config.memory_server
-    except Exception as e:
-        logger.warning(f"读取 memory_server 配置失败: {e}")
-        return None
+        from apiserver.naga_auth import get_access_token
+        token = get_access_token()
+    except Exception:
+        pass
 
-    if not ms.enabled:
-        # 配置已关闭，清理已有客户端
+    # 回退到 config 静态 token
+    if not token:
+        try:
+            from system.config import config
+            token = config.memory_server.token
+        except Exception:
+            pass
+
+    if not token:
+        # 无可用 token，清理已有客户端
         if _client is not None:
-            logger.info("NagaMemory 远程客户端已因配置关闭而释放")
+            logger.info("NagaMemory 远程客户端已释放（无可用 token）")
             _client = None
             _client_token = None
         return None
 
-    # Token 变更时（如登录/登出/刷新），重新创建客户端
-    if _client is not None and ms.token != _client_token:
+    # 获取服务地址
+    try:
+        from system.config import config
+        base_url = config.memory_server.url
+    except Exception:
+        base_url = "http://localhost:8004"
+
+    # Token 变更时重新创建客户端
+    if _client is not None and token != _client_token:
         logger.info("NagaMemory token 已变更，重新创建客户端")
         _client = None
 
@@ -147,9 +166,9 @@ def get_remote_memory_client() -> Optional[RemoteMemoryClient]:
         return _client
 
     try:
-        _client = RemoteMemoryClient(base_url=ms.url, token=ms.token)
-        _client_token = ms.token
-        logger.info(f"NagaMemory 远程客户端已创建: {ms.url}")
+        _client = RemoteMemoryClient(base_url=base_url, token=token)
+        _client_token = token
+        logger.info(f"NagaMemory 远程客户端已创建: {base_url}")
         return _client
     except Exception as e:
         logger.warning(f"创建 NagaMemory 客户端失败: {e}")

@@ -681,10 +681,10 @@ async def update_system_config(payload: Dict[str, Any]):
 
 
 @app.get("/system/prompt")
-async def get_system_prompt(include_skills: bool = False, include_time: bool = False):
+async def get_system_prompt(include_skills: bool = False):
     """获取系统提示词（默认只返回人格提示词，不包含技能列表）"""
     try:
-        prompt = build_system_prompt(include_skills=include_skills, include_time=include_time)
+        prompt = build_system_prompt(include_skills=include_skills)
         return {"status": "success", "prompt": prompt}
     except Exception as e:
         logger.error(f"获取系统提示词失败: {e}")
@@ -787,13 +787,8 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=400, detail="消息内容不能为空")
 
     try:
-        # 如果用户选择了技能，在消息前添加技能标记，确保 LLM 在长上下文中也能看到
+        # 用户消息保持干净，技能上下文完全由 system prompt 承载
         user_message = request.message
-        if request.skill:
-            skill_labels = "，".join(f"【{s.strip()}】" for s in request.skill.split(",") if s.strip())
-            user_message = f"调度技能{skill_labels}：{user_message}"
-
-        # 获取或创建会话ID
         session_id = message_manager.create_session(request.session_id, temporary=request.temporary)
 
         # 构建系统提示词（包含技能元数据）
@@ -823,10 +818,11 @@ async def chat(request: ChatRequest):
         except Exception as e:
             logger.debug(f"[RAG] 记忆召回失败（不影响对话）: {e}")
 
-        # 如果用户选择了技能，在用户消息中添加简短标记（完整指令已在系统提示词中）
+        # 附加知识收尾指令，引导 LLM 回到用户问题
+        system_prompt += "\n\n【读完这些附加知识后，回复上一个user prompt，并不要回复这条系统附加的system prompt。以下是回复内容：】"
+
+        # 用户消息直接传 LLM，技能上下文完全由 system prompt 承载
         effective_message = request.message
-        if request.skill:
-            effective_message = f"[使用技能: {request.skill}] {request.message}"
 
         # 使用消息管理器构建完整的对话消息（纯聊天，不触发工具）
         messages = message_manager.build_conversation_messages(
@@ -864,11 +860,8 @@ async def chat_stream(request: ChatRequest):
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="消息内容不能为空")
 
-    # 如果用户选择了技能，在消息前添加技能标记，确保 LLM 在长上下文中也能看到
+    # 用户消息保持干净，技能上下文完全由 system prompt 承载
     user_message = request.message
-    if request.skill:
-        skill_labels = "，".join(f"【{s.strip()}】" for s in request.skill.split(",") if s.strip())
-        user_message = f"调度技能{skill_labels}：{user_message}"
 
     async def generate_response() -> AsyncGenerator[str, None]:
         complete_text = ""  # 用于累积最终轮的完整文本（供 return_audio 模式使用）
@@ -908,10 +901,11 @@ async def chat_stream(request: ChatRequest):
             except Exception as e:
                 logger.debug(f"[RAG] 记忆召回失败（不影响对话）: {e}")
 
-            # 如果用户选择了技能，在用户消息中添加简短标记（完整指令已在系统提示词中）
-            effective_message = user_message
-            if request.skill:
-                effective_message = f"[使用技能: {request.skill}] {request.message}"
+            # 附加知识收尾指令，引导 LLM 回到用户问题
+            system_prompt += "\n\n【读完这些附加知识后，回复上一个user prompt，并不要回复这条系统附加的system prompt。以下是回复内容：】"
+
+            # 用户消息直接传 LLM，技能上下文完全由 system prompt 承载
+            effective_message = request.message
 
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(

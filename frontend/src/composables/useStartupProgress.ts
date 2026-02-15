@@ -86,13 +86,15 @@ export function useStartupProgress() {
   // 轮询后端健康检查，确保不会卡在 50%
   function startHealthPolling() {
     if (healthPollTimer) return
+    let pollCount = 0
     console.log('[Startup] 开始轮询后端健康状态...')
     healthPollTimer = setInterval(async () => {
+      pollCount++
       try {
         await API.health()
         // 健康检查成功 → 确保 backendConnected 置位（供 config sync 使用）
         if (!backendConnected.value) {
-          console.log('[Startup] 健康轮询成功，置位 backendConnected')
+          console.log(`[Startup] 健康轮询成功 (第 ${pollCount} 次)，置位 backendConnected`)
           backendConnected.value = true
         }
         // 直接触发 postConnect（幂等，重复调用安全）
@@ -100,6 +102,9 @@ export function useStartupProgress() {
       }
       catch {
         // 后端尚未就绪，继续轮询
+        if (pollCount % 3 === 0) {
+          console.log(`[Startup] 等待后端就绪... 已轮询 ${pollCount} 次`)
+        }
       }
     }, 1000)
   }
@@ -129,22 +134,25 @@ export function useStartupProgress() {
       stopHealthPolling()
 
       // 阶段 25→50：后端已连接
-      console.log('[Startup] 后端已连接，开始视图预加载')
+      console.log('[Startup] 后端已连接，开始后连接任务')
       setTarget(50, '预加载视图...')
 
       // 阶段 50→70：预加载视图（8 秒超时，超时不阻塞启动）
+      console.log('[Startup] 开始预加载 7 个视图组件...')
       await withTimeout(
         preloadAllViews((loaded, total) => {
           const viewProgress = 50 + (loaded / total) * 20
-          console.log(`[Startup] 预加载视图 ${loaded}/${total}`)
-          setTarget(viewProgress, '预加载视图...')
+          console.log(`[Startup] 预加载视图 ${loaded}/${total} (${viewProgress.toFixed(0)}%)`)
+          setTarget(viewProgress, `预加载视图 ${loaded}/${total}...`)
         }),
         8000,
         'preloadAllViews',
       )
+      console.log('[Startup] 视图预加载完成')
 
       // 阶段 70→90：获取会话（5 秒超时）
       setTarget(70, '获取会话...')
+      console.log('[Startup] 获取会话列表...')
       try {
         await withTimeout(API.getSessions(), 5000, 'getSessions')
         console.log('[Startup] 会话获取完成')
@@ -153,6 +161,7 @@ export function useStartupProgress() {
         console.warn('[Startup] 会话获取失败，不阻塞启动')
       }
       setTarget(90, '准备就绪')
+      console.log('[Startup] 所有启动任务完成，进入主界面')
 
       // 阶段 90→100：完成
       setTimeout(() => setTarget(100, '准备就绪'), 300)

@@ -11,12 +11,11 @@ export const sessionRestored = ref(false)
 let _initFetched = false
 
 /**
- * 同步 memory_server 配置：登录时启用云端记忆，登出时回退到本地
+ * 同步 memory_server 配置：登录时设置 token/url，登出时清除
  */
-function syncMemoryServer(enabled: boolean, memoryUrl?: string) {
-  CONFIG.value.memory_server.enabled = enabled
-  CONFIG.value.memory_server.token = enabled ? ACCESS_TOKEN.value : null
-  if (enabled && memoryUrl) {
+function syncMemoryServer(loggedIn: boolean, memoryUrl?: string) {
+  CONFIG.value.memory_server.token = loggedIn ? ACCESS_TOKEN.value : null
+  if (loggedIn && memoryUrl) {
     CONFIG.value.memory_server.url = memoryUrl
   }
 }
@@ -30,7 +29,7 @@ function syncGameEnabled(loggedIn: boolean) {
 
 // Token 刷新时自动同步到 memory_server.token
 watch(ACCESS_TOKEN, (newToken) => {
-  if (nagaUser.value && CONFIG.value.memory_server.enabled) {
+  if (nagaUser.value) {
     CONFIG.value.memory_server.token = newToken || null
   }
 })

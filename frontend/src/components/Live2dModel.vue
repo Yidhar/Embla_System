@@ -168,7 +168,7 @@ onMounted(async () => {
 
       model.autoInteract = false
       app.stage.addChild(model)
-      initController(rawModel)
+      initController(rawModel, source)
 
       onCleanUp(() => {
         destroyController()

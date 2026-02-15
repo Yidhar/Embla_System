@@ -81,7 +81,7 @@
     "provider": "qwen", // 语音提供商
     "api_key": "your-dashscope-api-key-here", // DashScope API密钥
     "model": "qwen3-omni-flash-realtime", // 实时语音模型
-    "tts_model": "qwen3-tts-realtime", // TTS模型
+    "tts_model": "qwen-tts-realtime", // TTS模型
     "asr_model": "qwen3-asr-realtime", // ASR模型
     "voice": "Cherry", // 语音名称
     "voice_mode": "auto", // 语音模式
@@ -166,9 +166,13 @@
     "auto_screenshot_on_guide": true // 攻略调用时默认自动截图
   },
   "memory_server": {
-    "enabled": false, // 是否启用远程记忆微服务（启用后通过HTTP调用NagaMemory，替代本地Neo4j）
     "url": "http://localhost:8004", // NagaMemory 服务地址
-    "token": null // 认证Token（Bearer），留空则不携带认证头
+    "token": null // 认证Token（Bearer），登录后自动设置
+  },
+  "embedding": {
+    "model": "tongyi-embedding", // 嵌入模型名称
+    "api_base": "", // 嵌入模型API地址（留空回退到api.base_url）
+    "api_key": "" // 嵌入模型API密钥（留空回退到api.api_key）
   },
   "crawl4ai": {
     "headless": true, // 是否无头模式

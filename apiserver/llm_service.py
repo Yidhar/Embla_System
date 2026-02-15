@@ -235,8 +235,13 @@ class LLMService:
                 yield self._format_sse_chunk("content", "LLM服务不可用: 客户端初始化失败")
                 return
 
-        # 最多重试 1 次（首次 401 → 刷新 token → 重试）
-        for attempt in range(2):
+        # 重试策略：最多 3 次
+        #   - 401 AuthenticationError → 刷新 token 后重试（最多 1 次）
+        #   - 连接错误 / 流中断  → 直接重试（最多 2 次）
+        max_attempts = 3
+        auth_retried = False
+
+        for attempt in range(max_attempts):
             try:
                 # 如果提供了 model_override，使用覆盖参数替代默认配置
                 if model_override:
@@ -269,6 +274,9 @@ class LLMService:
                     temperature=temperature,
                     max_tokens=get_config().api.max_tokens if hasattr(get_config().api, "max_tokens") else None,
                     stream=True,
+                    timeout=120,           # 连接+首字节超时 120s
+                    stream_timeout=120,    # 流式传输 chunk 间超时 120s
+                    num_retries=0,         # 禁用 litellm 内部重试/fallback，避免 MidStreamFallbackError
                     **llm_params
                 )
 
@@ -296,7 +304,8 @@ class LLMService:
                 logger.error(f"LLM 401 诊断: attempt={attempt} is_auth={naga_auth.is_authenticated()} "
                              f"token={'set(' + _tk[:20] + '...)' if _tk else 'None'} "
                              f"has_refresh={naga_auth.has_refresh_token()}")
-                if attempt == 0 and naga_auth.is_authenticated():
+                if not auth_retried and naga_auth.is_authenticated():
+                    auth_retried = True
                     logger.warning(f"LLM 调用 401，尝试刷新 token 后重试: {e}")
                     try:
                         await naga_auth.refresh()
@@ -304,9 +313,20 @@ class LLMService:
                         continue  # 重试
                     except Exception as refresh_err:
                         logger.error(f"Token 刷新失败: {refresh_err}")
-                # 刷新失败或已是第二次尝试 → 通知前端触发重新登录
+                # 刷新失败或已刷新过 → 通知前端触发重新登录
                 logger.error(f"流式聊天认证失败: {e}")
                 yield self._format_sse_chunk("auth_expired", "登录已过期，请重新登录")
+                return
+
+            except (litellm.APIConnectionError, litellm.ServiceUnavailableError, litellm.Timeout) as e:
+                # 连接错误 / 流中断 / 超时 → 重试
+                if attempt < max_attempts - 1:
+                    logger.warning(f"[LLM] 流式调用连接异常 (attempt {attempt + 1}/{max_attempts})，重试中: {e}")
+                    import asyncio
+                    await asyncio.sleep(1)  # 短暂等待后重试
+                    continue
+                logger.error(f"[LLM] 流式调用连接异常，已耗尽重试次数: {e}")
+                yield self._format_sse_chunk("content", f"流式调用出错（连接异常，已重试 {max_attempts} 次）: {str(e)}")
                 return
 
             except Exception as e:

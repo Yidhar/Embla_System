@@ -27,7 +27,7 @@ export const MODELS = {
   }),
 } as const
 
-export const DEFAULT_MODEL: keyof typeof MODELS = 'NagaTest'
+export const DEFAULT_MODEL: keyof typeof MODELS = 'NagaTest2'
 
 export const DEFAULT_CONFIG = {
   system: {
@@ -112,6 +112,8 @@ export const DEFAULT_CONFIG = {
     provider: 'qwen', // 语音提供商
     api_key: 'your-dashscope-api-key-here', // DashScope API密钥
     model: 'qwen3-asr-realtime', // 实时语音模型
+    tts_model: 'qwen-tts-realtime', // TTS模型
+    asr_model: 'qwen3-asr-realtime', // ASR模型
     voice: 'Cherry', // 语音名称
     voice_mode: 'auto', // 语音模式
     tts_voice: 'zh-CN-XiaoyiNeural', // TTS语音
@@ -165,10 +167,10 @@ export const DEFAULT_CONFIG = {
   },
   computer_control: {
     enabled: true, // 是否启用计算机控制
-    model: 'glm-4.5v', // 视觉模型
+    model: 'gemini-2.5-flash', // 视觉模型
     model_url: 'https://open.bigmodel.cn/api/paas/v4', // 模型API URL
     api_key: '', // 模型API密钥
-    grounding_model: 'glm-4.5v', // 基础模型
+    grounding_model: 'gemini-2.5-flash', // 基础模型
     grounding_url: 'https://open.bigmodel.cn/api/paas/v4', // 基础模型URL
     grounding_api_key: '', // 基础模型API密钥
     screen_width: 1920, // 屏幕宽度
@@ -196,9 +198,13 @@ export const DEFAULT_CONFIG = {
     enabled: false, // 是否启用悬浮球模式
   },
   memory_server: {
-    enabled: false, // 是否启用远程记忆微服务
     url: 'http://localhost:8004', // NagaMemory 服务地址
     token: null as string | null, // 认证 Token
+  },
+  embedding: {
+    model: 'tongyi-embedding', // 嵌入模型名称
+    api_base: '', // 嵌入模型API地址（留空使用主模型地址）
+    api_key: '', // 嵌入模型API密钥（留空使用主模型密钥）
   },
   web_live2d: {
     ssaa: 2,

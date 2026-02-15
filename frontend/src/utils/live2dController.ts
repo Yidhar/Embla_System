@@ -188,9 +188,9 @@ function setParam(paramId: string, value: number) {
 
 // ─── 表情加载（从 .exp3.json 文件） ─────────────────
 
-async function loadExpressions(modelBasePath: string) {
+async function loadExpressions(modelBasePath: string, modelSource: string) {
   try {
-    const modelRes = await fetch(`${modelBasePath}/naga-test.model3.json`)
+    const modelRes = await fetch(modelSource)
     const modelJson = await modelRes.json()
     const expressions = modelJson?.FileReferences?.Expressions ?? []
 
@@ -528,15 +528,19 @@ export function updateTracking(x: number, y: number) {
   trackTargetY = y
 }
 
-export async function initController(modelInstance: Live2DModel) {
+export async function initController(modelInstance: Live2DModel, modelSource: string) {
   model = modelInstance
 
+  // Derive base path from model3.json URL
+  // e.g. './models/NagaTest2/NagaTest2.model3.json' → './models/NagaTest2'
+  const basePath = modelSource.replace(/\/[^/]+$/, '')
+
   // 加载身体/头部动作数据
-  const response = await fetch('/models/naga-test/naga-actions.json')
+  const response = await fetch(`${basePath}/naga-actions.json`)
   actionsData = await response.json() as ActionsData
 
   // 加载 .exp3.json 表情文件
-  await loadExpressions('/models/naga-test')
+  await loadExpressions(basePath, modelSource)
 
   originalUpdate = model.update.bind(model)
   model.update = function (dt: number) {

@@ -223,14 +223,8 @@ class MessageManager:
         """
         messages = []
 
-        # 添加当前时间信息到系统提示词
-        from datetime import datetime
-        current_time = datetime.now()
-        time_info = f"\n\n【当前时间信息】\n当前日期：{current_time.strftime('%Y年%m月%d日')}\n当前时间：{current_time.strftime('%H:%M:%S')}\n当前星期：{current_time.strftime('%A')}\n"
-        enhanced_system_prompt = system_prompt + time_info
-
-        # 添加系统提示词
-        messages.append({"role": "system", "content": enhanced_system_prompt})
+        # 添加系统提示词（时间信息已由 build_system_prompt() 统一注入）
+        messages.append({"role": "system", "content": system_prompt})
 
         # 获取本会话的消息
         session_messages = self.get_recent_messages(session_id) if include_history else []
@@ -265,16 +259,10 @@ class MessageManager:
             List[Dict]: 完整的对话消息列表
         """
         messages = []
-        
-        # 添加当前时间信息到系统提示词
-        from datetime import datetime
-        current_time = datetime.now()
-        time_info = f"\n\n【当前时间信息】\n当前日期：{current_time.strftime('%Y年%m月%d日')}\n当前时间：{current_time.strftime('%H:%M:%S')}\n当前星期：{current_time.strftime('%A')}\n"
-        enhanced_system_prompt = system_prompt + time_info
-        
-        # 添加系统提示词
-        messages.append({"role": "system", "content": enhanced_system_prompt})
-        
+
+        # 添加系统提示词（时间信息已由 build_system_prompt() 统一注入）
+        messages.append({"role": "system", "content": system_prompt})
+
         # 计算最大消息数量
         if max_history_rounds is None:
             max_history_rounds = self.max_history_rounds
