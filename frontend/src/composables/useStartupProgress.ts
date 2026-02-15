@@ -3,6 +3,19 @@ import { backendConnected } from '@/utils/config'
 import { preloadAllViews } from '@/utils/viewPreloader'
 import API from '@/api/core'
 
+/** 将 promise 限制在 ms 毫秒内完成，超时则 resolve(undefined) 而非 reject */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T | undefined> {
+  return Promise.race([
+    promise,
+    new Promise<undefined>((resolve) => {
+      setTimeout(() => {
+        console.warn(`[Startup] ${label} 超时 (${ms}ms)，跳过`)
+        resolve(undefined)
+      }, ms)
+    }),
+  ])
+}
+
 export function useStartupProgress() {
   const progress = ref(0)
   const phase = ref<string>('初始化...')
@@ -12,6 +25,7 @@ export function useStartupProgress() {
   let targetProgress = 0
   let rafId = 0
   let modelReady = false
+  let postConnectStarted = false
   let unsubProgress: (() => void) | undefined
   let lastProgressValue = 0
   let lastProgressChangeTime = Date.now()
@@ -76,14 +90,13 @@ export function useStartupProgress() {
     healthPollTimer = setInterval(async () => {
       try {
         await API.health()
+        // 健康检查成功 → 确保 backendConnected 置位（供 config sync 使用）
         if (!backendConnected.value) {
-          console.log('[Startup] 健康轮询成功，后端已就绪，但 backendConnected 尚未置位')
-        }
-        // 如果后端健康但还卡在 50% 以下，强制推进
-        if (targetProgress <= 50 && !backendConnected.value) {
-          console.log('[Startup] 健康轮询检测到后端就绪，手动触发 postConnect')
+          console.log('[Startup] 健康轮询成功，置位 backendConnected')
           backendConnected.value = true
         }
+        // 直接触发 postConnect（幂等，重复调用安全）
+        runPostConnect()
       }
       catch {
         // 后端尚未就绪，继续轮询
@@ -99,35 +112,54 @@ export function useStartupProgress() {
   }
 
   async function runPostConnect() {
-    // 取消后端进度监听和健康轮询
-    unsubProgress?.()
-    unsubProgress = undefined
-    stopHealthPolling()
+    // 幂等守卫：防止 watcher + 健康轮询重复触发
+    if (postConnectStarted) return
+    postConnectStarted = true
 
-    // 阶段 25→50：后端已连接
-    console.log('[Startup] 后端已连接，开始视图预加载')
-    setTarget(50, '预加载视图...')
+    // 全局安全超时：无论什么原因，15 秒后强制完成启动
+    const safetyTimer = setTimeout(() => {
+      console.warn('[Startup] runPostConnect 全局超时 (15s)，强制完成启动')
+      setTarget(100, '准备就绪')
+    }, 15000)
 
-    // 阶段 50→70：预加载视图
-    await preloadAllViews((loaded, total) => {
-      const viewProgress = 50 + (loaded / total) * 20
-      console.log(`[Startup] 预加载视图 ${loaded}/${total}`)
-      setTarget(viewProgress, '预加载视图...')
-    })
-
-    // 阶段 70→90：获取会话
-    setTarget(70, '获取会话...')
     try {
-      await API.getSessions()
-      console.log('[Startup] 会话获取完成')
-    }
-    catch {
-      console.warn('[Startup] 会话获取失败，不阻塞启动')
-    }
-    setTarget(90, '准备就绪')
+      // 取消后端进度监听和健康轮询
+      unsubProgress?.()
+      unsubProgress = undefined
+      stopHealthPolling()
 
-    // 阶段 90→100：完成
-    setTimeout(() => setTarget(100, '准备就绪'), 300)
+      // 阶段 25→50：后端已连接
+      console.log('[Startup] 后端已连接，开始视图预加载')
+      setTarget(50, '预加载视图...')
+
+      // 阶段 50→70：预加载视图（8 秒超时，超时不阻塞启动）
+      await withTimeout(
+        preloadAllViews((loaded, total) => {
+          const viewProgress = 50 + (loaded / total) * 20
+          console.log(`[Startup] 预加载视图 ${loaded}/${total}`)
+          setTarget(viewProgress, '预加载视图...')
+        }),
+        8000,
+        'preloadAllViews',
+      )
+
+      // 阶段 70→90：获取会话（5 秒超时）
+      setTarget(70, '获取会话...')
+      try {
+        await withTimeout(API.getSessions(), 5000, 'getSessions')
+        console.log('[Startup] 会话获取完成')
+      }
+      catch {
+        console.warn('[Startup] 会话获取失败，不阻塞启动')
+      }
+      setTarget(90, '准备就绪')
+
+      // 阶段 90→100：完成
+      setTimeout(() => setTarget(100, '准备就绪'), 300)
+    }
+    finally {
+      clearTimeout(safetyTimer)
+    }
   }
 
   async function startProgress() {
@@ -151,18 +183,13 @@ export function useStartupProgress() {
       return
     }
 
-    // 到达 25% 后开始轮询后端健康状态（防止信号丢失卡在 50%）
-    const stopPollWatch = watch(() => progress.value >= 25, (ready) => {
-      if (!ready) return
-      stopPollWatch()
-      startHealthPolling()
-    })
+    // 立即开始轮询后端健康状态（不再等待 progress >= 25，避免动画延迟导致卡死）
+    startHealthPolling()
 
-    // 监听后端连接
+    // 监听后端连接（由 config.ts connectBackend 或健康轮询触发）
     const stopWatch = watch(backendConnected, (connected) => {
       if (!connected) return
       stopWatch()
-      stopPollWatch()
       runPostConnect()
     })
   }

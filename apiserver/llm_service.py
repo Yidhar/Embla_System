@@ -229,53 +229,73 @@ class LLMService:
                 yield self._format_sse_chunk("content", "LLM服务不可用: 客户端初始化失败")
                 return
 
-        try:
-            # 如果提供了 model_override，使用覆盖参数替代默认配置
-            if model_override:
-                override_base = model_override.get("api_base", "")
-                override_key = model_override.get("api_key", "")
-                # 复用 _get_model_name 的前缀判断逻辑
-                model_name = self._get_model_name(
-                    model=model_override.get("model"),
-                    base_url=override_base,
+        # 最多重试 1 次（首次 401 → 刷新 token → 重试）
+        for attempt in range(2):
+            try:
+                # 如果提供了 model_override，使用覆盖参数替代默认配置
+                if model_override:
+                    override_base = model_override.get("api_base", "")
+                    override_key = model_override.get("api_key", "")
+                    # 复用 _get_model_name 的前缀判断逻辑
+                    model_name = self._get_model_name(
+                        model=model_override.get("model"),
+                        base_url=override_base,
+                    )
+                    llm_params = {
+                        "api_key": override_key,
+                        "api_base": override_base.rstrip("/") + "/" if override_base else None,
+                    }
+                    logger.info(f"使用覆盖模型: {model_name}, api_base: {llm_params.get('api_base')}")
+                else:
+                    llm_params = self._get_llm_params()
+                    model_name = self._get_model_name()
+
+                response = await acompletion(
+                    model=model_name,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=config.api.max_tokens if hasattr(config.api, "max_tokens") else None,
+                    stream=True,
+                    **llm_params
                 )
-                llm_params = {
-                    "api_key": override_key,
-                    "api_base": override_base.rstrip("/") + "/" if override_base else None,
-                }
-                logger.info(f"使用覆盖模型: {model_name}, api_base: {llm_params.get('api_base')}")
-            else:
-                llm_params = self._get_llm_params()
-                model_name = self._get_model_name()
 
-            response = await acompletion(
-                model=model_name,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=config.api.max_tokens if hasattr(config.api, "max_tokens") else None,
-                stream=True,
-                **llm_params
-            )
+                async for chunk in response:
+                    if not chunk.choices:
+                        continue
 
-            async for chunk in response:
-                if not chunk.choices:
-                    continue
+                    delta = chunk.choices[0].delta
 
-                delta = chunk.choices[0].delta
+                    # 处理 reasoning_content（思考过程）
+                    reasoning = getattr(delta, "reasoning_content", None)
+                    if reasoning:
+                        yield self._format_sse_chunk("reasoning", reasoning)
 
-                # 处理 reasoning_content（思考过程）
-                reasoning = getattr(delta, "reasoning_content", None)
-                if reasoning:
-                    yield self._format_sse_chunk("reasoning", reasoning)
+                    # 处理 content（正式回答）
+                    content = getattr(delta, "content", None)
+                    if content:
+                        yield self._format_sse_chunk("content", content)
 
-                # 处理 content（正式回答）
-                content = getattr(delta, "content", None)
-                if content:
-                    yield self._format_sse_chunk("content", content)
+                # 流式响应正常完成，跳出重试循环
+                return
 
-        except Exception as e:
-            logger.error(f"流式聊天调用失败: {e}")
-            yield self._format_sse_chunk("content", f"流式调用出错: {str(e)}")
+            except litellm.AuthenticationError as e:
+                if attempt == 0 and naga_auth.is_authenticated():
+                    logger.warning(f"LLM 调用 401，尝试刷新 token 后重试: {e}")
+                    try:
+                        await naga_auth.refresh()
+                        logger.info("Token 刷新成功，重试 LLM 调用")
+                        continue  # 重试
+                    except Exception as refresh_err:
+                        logger.error(f"Token 刷新失败: {refresh_err}")
+                # 刷新失败或已是第二次尝试
+                logger.error(f"流式聊天认证失败: {e}")
+                yield self._format_sse_chunk("content", f"认证失败，请重新登录: {str(e)}")
+                return
+
+            except Exception as e:
+                logger.error(f"流式聊天调用失败: {e}")
+                yield self._format_sse_chunk("content", f"流式调用出错: {str(e)}")
+                return
 
     def _format_sse_chunk(self, chunk_type: str, text: str) -> str:
         """格式化 SSE 数据块

@@ -197,7 +197,7 @@ const displayProgress = computed(() => Math.min(100, Math.round(props.progress))
     <Transition name="fade">
       <div
         v-if="canDismiss"
-        class="absolute inset-0 flex items-end justify-center pb-28 cursor-pointer"
+        class="absolute inset-0 flex items-end justify-center pb-28 cursor-pointer clickable"
         @click="emit('dismiss')"
       >
         <span class="click-hint text-sm tracking-[0.3em]" style="color: rgba(212, 175, 55, 0.8);">

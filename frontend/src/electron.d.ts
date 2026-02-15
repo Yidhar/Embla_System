@@ -33,6 +33,11 @@ export interface FloatingAPI {
   onWindowBlur: (callback: () => void) => () => void
 }
 
+export interface AutoLaunchAPI {
+  get: () => Promise<boolean>
+  set: (enabled: boolean) => Promise<void>
+}
+
 export interface ElectronAPI {
   minimize: () => void
   maximize: () => void
@@ -48,6 +53,7 @@ export interface ElectronAPI {
   floating: FloatingAPI
   capture: CaptureAPI
   backend: BackendAPI
+  autoLaunch: AutoLaunchAPI
   platform: string
 }
 

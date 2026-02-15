@@ -17,7 +17,7 @@ const { login, register, sendVerification, getCaptcha } = useAuth()
 // 'login' | 'register'
 const mode = ref<'login' | 'register'>('login')
 
-const username = ref('')
+const username = useStorage('naga-login-username', '')
 const email = ref('')
 const password = ref('')
 const verificationCode = ref('')
@@ -40,7 +40,7 @@ const captchaAnswer = ref('')
 const captchaLoading = ref(false)
 
 function resetForm() {
-  username.value = ''
+  // username 持久化在 localStorage，不清空
   email.value = ''
   password.value = ''
   verificationCode.value = ''

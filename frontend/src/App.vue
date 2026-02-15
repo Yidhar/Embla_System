@@ -21,7 +21,7 @@ import { useParallax } from '@/composables/useParallax'
 import { useStartupProgress } from '@/composables/useStartupProgress'
 import { checkForUpdate, showUpdateDialog, updateInfo } from '@/composables/useVersionCheck'
 import { CONFIG, backendConnected } from '@/utils/config'
-import { ACCESS_TOKEN, REFRESH_TOKEN, authExpired } from '@/api'
+import { ACCESS_TOKEN, authExpired } from '@/api'
 import { clearExpression, setExpression } from '@/utils/live2dController'
 import { initParallax, destroyParallax } from '@/utils/parallax'
 import { playBgm, playWakeVoice, playClickEffect, stopBgm } from '@/composables/useAudio'
@@ -117,7 +117,6 @@ function onAuthExpiredRelogin() {
   authExpiredVisible.value = false
   authExpired.value = false
   ACCESS_TOKEN.value = ''
-  REFRESH_TOKEN.value = ''
   doLogout()
   showLoginDialog.value = true
 }
