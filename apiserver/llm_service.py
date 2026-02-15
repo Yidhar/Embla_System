@@ -92,10 +92,11 @@ class LLMService:
     def _get_llm_params(self) -> Dict[str, Any]:
         """获取 LLM 调用参数，NagaModel 登录态时自动切换网关"""
         if naga_auth.is_authenticated():
+            token = naga_auth.get_access_token()
             return {
-                "api_key": "naga-authenticated",
+                "api_key": token,
                 "api_base": naga_auth.NAGA_MODEL_URL + "/",
-                "extra_body": {"user_token": naga_auth.get_access_token()},
+                "extra_body": {"user_token": token},
             }
         return {
             "api_key": config.api.api_key,
@@ -107,10 +108,11 @@ class LLMService:
     ) -> Dict[str, Any]:
         """获取 LLM 调用参数，支持覆写。NagaModel 登录态优先，否则使用覆写值"""
         if naga_auth.is_authenticated():
+            token = naga_auth.get_access_token()
             return {
-                "api_key": "naga-authenticated",
+                "api_key": token,
                 "api_base": naga_auth.NAGA_MODEL_URL + "/",
-                "extra_body": {"user_token": naga_auth.get_access_token()},
+                "extra_body": {"user_token": token},
             }
         return {
             "api_key": api_key or config.api.api_key,
@@ -250,6 +252,13 @@ class LLMService:
                     llm_params = self._get_llm_params()
                     model_name = self._get_model_name()
 
+                # 诊断日志：打印认证状态和 token 前缀
+                _tk = naga_auth.get_access_token()
+                logger.debug(f"[LLM] attempt={attempt} is_auth={naga_auth.is_authenticated()} "
+                             f"token_prefix={_tk[:20] + '...' if _tk else 'None'} "
+                             f"api_key_prefix={str(llm_params.get('api_key', ''))[:20]}... "
+                             f"api_base={llm_params.get('api_base')}")
+
                 response = await acompletion(
                     model=model_name,
                     messages=messages,
@@ -279,6 +288,10 @@ class LLMService:
                 return
 
             except litellm.AuthenticationError as e:
+                _tk = naga_auth.get_access_token()
+                logger.error(f"LLM 401 诊断: attempt={attempt} is_auth={naga_auth.is_authenticated()} "
+                             f"token={'set(' + _tk[:20] + '...)' if _tk else 'None'} "
+                             f"has_refresh={naga_auth.has_refresh_token()}")
                 if attempt == 0 and naga_auth.is_authenticated():
                     logger.warning(f"LLM 调用 401，尝试刷新 token 后重试: {e}")
                     try:
