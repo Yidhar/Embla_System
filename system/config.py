@@ -329,6 +329,14 @@ class MemoryServerConfig(BaseModel):
     token: Optional[str] = Field(default=None, description="认证 Token（Bearer），留空则不携带认证头")
 
 
+class EmbeddingConfig(BaseModel):
+    """嵌入模型配置"""
+
+    model: str = Field(default="tongyi-embedding", description="嵌入模型名称")
+    api_base: str = Field(default="", description="嵌入模型API地址（留空回退到api.base_url）")
+    api_key: str = Field(default="", description="嵌入模型API密钥（留空回退到api.api_key）")
+
+
 class GuideEngineConfig(BaseModel):
     """游戏攻略引擎配置"""
 
@@ -413,7 +421,7 @@ class VoiceRealtimeConfig(BaseModel):
     provider: str = Field(default="qwen", description="语音服务提供商 (qwen/openai/local)")
     api_key: str = Field(default="", description="语音服务API密钥")
     model: str = Field(default="qwen3-omni-flash-realtime", description="语音模型名称")
-    tts_model: str = Field(default="qwen3-tts-realtime", description="TTS模型名称")
+    tts_model: str = Field(default="qwen-tts-realtime", description="TTS模型名称")
     asr_model: str = Field(default="qwen3-asr-realtime", description="ASR模型名称")
     voice: str = Field(default="Cherry", description="语音角色")
     input_sample_rate: int = Field(default=16000, description="输入采样率")
@@ -712,6 +720,7 @@ class NagaConfig(BaseModel):
     computer_control: ComputerControlConfig = Field(default_factory=ComputerControlConfig)
     guide_engine: GuideEngineConfig = Field(default_factory=GuideEngineConfig)
     memory_server: MemoryServerConfig = Field(default_factory=MemoryServerConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     window: Any = Field(default=None)
 
     model_config = {
