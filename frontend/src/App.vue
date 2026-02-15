@@ -24,7 +24,7 @@ import { CONFIG, backendConnected } from '@/utils/config'
 import { ACCESS_TOKEN, REFRESH_TOKEN, authExpired } from '@/api'
 import { clearExpression, setExpression } from '@/utils/live2dController'
 import { initParallax, destroyParallax } from '@/utils/parallax'
-import { playBgm, playWakeVoice, playClickEffect, stopBgm } from '@/composables/useAudio'
+import { playBgm, playClickEffect, stopBgm } from '@/composables/useAudio'
 
 const isElectron = !!window.electronAPI
 const isMac = window.electronAPI?.platform === 'darwin'
@@ -136,8 +136,7 @@ provide('openLoginDialog', openLoginDialog)
 
 function onSplashDismiss() {
   _splashDismissed = true
-  // 播放随机唤醒语音
-  playWakeVoice()
+  // 开机语音已在 SplashScreen 标题出现时播放，此处不再播放
   // 已登录 → 直接进入主界面；未登录 → 显示登录弹窗
   if (isNagaLoggedIn.value) {
     enterMainContent()

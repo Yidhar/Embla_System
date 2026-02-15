@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef } from 'vue'
 import NetworkCanvas from '@/components/NetworkCanvas.vue'
+import { playWakeVoice } from '@/composables/useAudio'
 import { CONFIG } from '@/utils/config'
 
 const props = defineProps<{
@@ -17,6 +18,11 @@ const emit = defineEmits<{
 
 // ─── 标题阶段 ───────────────────────────────
 const titleOverlayVisible = ref(true)
+
+onMounted(() => {
+  // 标题图标出现时同时播放开机语音
+  playWakeVoice()
+})
 
 function onTitleAnimEnd() {
   // 标题图片动画结束 → 淡出黑色遮罩
