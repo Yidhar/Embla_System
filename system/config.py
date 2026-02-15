@@ -324,9 +324,16 @@ class ComputerControlConfig(BaseModel):
 class MemoryServerConfig(BaseModel):
     """记忆微服务配置（NagaMemory）"""
 
-    enabled: bool = Field(default=False, description="是否启用远程记忆微服务（启用后将通过HTTP调用NagaMemory，替代本地Neo4j）")
     url: str = Field(default="http://localhost:8004", description="NagaMemory 服务地址")
     token: Optional[str] = Field(default=None, description="认证 Token（Bearer），留空则不携带认证头")
+
+
+class EmbeddingConfig(BaseModel):
+    """嵌入模型配置"""
+
+    model: str = Field(default="tongyi-embedding", description="嵌入模型名称")
+    api_base: str = Field(default="", description="嵌入模型API地址（留空回退到api.base_url）")
+    api_key: str = Field(default="", description="嵌入模型API密钥（留空回退到api.api_key）")
 
 
 class GuideEngineConfig(BaseModel):
@@ -413,7 +420,7 @@ class VoiceRealtimeConfig(BaseModel):
     provider: str = Field(default="qwen", description="语音服务提供商 (qwen/openai/local)")
     api_key: str = Field(default="", description="语音服务API密钥")
     model: str = Field(default="qwen3-omni-flash-realtime", description="语音模型名称")
-    tts_model: str = Field(default="qwen3-tts-realtime", description="TTS模型名称")
+    tts_model: str = Field(default="qwen-tts-realtime", description="TTS模型名称")
     asr_model: str = Field(default="qwen3-asr-realtime", description="ASR模型名称")
     voice: str = Field(default="Cherry", description="语音角色")
     input_sample_rate: int = Field(default=16000, description="输入采样率")
@@ -617,27 +624,40 @@ def save_prompt(name: str, content: str):
 
 
 def build_system_prompt(
-    include_skills: bool = True, include_time: bool = False,
+    include_skills: bool = True,
     include_tool_instructions: bool = False, skill_name: Optional[str] = None,
 ) -> str:
     """
     构建完整的系统提示词
 
-    将基础对话风格提示词与技能元数据组合
+    将基础对话风格提示词与技能元数据组合。
+    所有动态内容统一放在「附加知识」分隔符之后，便于后续扩展。
 
     Args:
         include_skills: 是否包含技能列表
-        include_time: 是否包含当前时间信息
         include_tool_instructions: 是否注入工具调用指令（agentic loop 模式）
         skill_name: 用户主动选择的技能名称，直接注入完整指令
 
     Returns:
         完整的系统提示词
     """
-    # 基础提示词
+    # 基础提示词（可被前端编辑）
     base_prompt = get_prompt("conversation_style_prompt", ai_name=config.system.ai_name)
 
     parts = [base_prompt]
+
+    # ━━━ 附加知识分隔符 ━━━
+    parts.append("\n\n━━━━━━━━━━ 以下是附加知识 ━━━━━━━━━━\n")
+
+    # 始终添加时间信息（最先出现）
+    current_time = datetime.now()
+    time_info = (
+        f"\n【当前时间信息】\n"
+        f"当前日期：{current_time.strftime('%Y年%m月%d日')}\n"
+        f"当前时间：{current_time.strftime('%H:%M:%S')}\n"
+        f"当前星期：{current_time.strftime('%A')}"
+    )
+    parts.append(time_info)
 
     # 技能元数据列表（仅在未主动选择技能时注入）
     if not skill_name and include_skills:
@@ -668,19 +688,6 @@ def build_system_prompt(
         tool_prompt = raw_template.replace("{available_mcp_tools}", available_mcp_tools)
         parts.append("\n\n" + tool_prompt)
 
-    # 添加时间信息
-    if include_time:
-        from datetime import datetime
-
-        current_time = datetime.now()
-        time_info = (
-            f"\n\n【当前时间信息】\n"
-            f"当前日期：{current_time.strftime('%Y年%m月%d日')}\n"
-            f"当前时间：{current_time.strftime('%H:%M:%S')}\n"
-            f"当前星期：{current_time.strftime('%A')}"
-        )
-        parts.append(time_info)
-
     # 指定技能的完整指令放在系统提示词末尾，确保最高优先级
     # LLM 对 system prompt 末尾指令的遵循度最高，避免被工具调用等大段内容"淹没"
     if skill_name:
@@ -698,6 +705,7 @@ def build_system_prompt(
         except ImportError:
             pass
 
+    # 注意：收尾指令不在此处添加，由 api_server.py 在 RAG 记忆注入之后追加
     return "".join(parts)
 
 
@@ -729,6 +737,7 @@ class NagaConfig(BaseModel):
     computer_control: ComputerControlConfig = Field(default_factory=ComputerControlConfig)
     guide_engine: GuideEngineConfig = Field(default_factory=GuideEngineConfig)
     memory_server: MemoryServerConfig = Field(default_factory=MemoryServerConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     window: Any = Field(default=None)
 
     model_config = {

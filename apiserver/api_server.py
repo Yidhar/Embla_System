@@ -26,7 +26,7 @@ logging.getLogger("httpcore.connection").setLevel(logging.WARNING)
 # 创建logger实例
 logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -42,9 +42,12 @@ from .message_manager import message_manager  # 导入统一的消息管理器
 from .llm_service import get_llm_service  # 导入LLM服务
 from . import naga_auth  # NagaCAS 认证模块
 
+# 记录哪些会话曾发送过图片，后续消息继续走 VLM 直到新会话
+_vlm_sessions: set = set()
+
 # 导入配置系统
 try:
-    from system.config import config, AI_NAME  # 使用新的配置系统
+    from system.config import get_config, AI_NAME  # 使用新的配置系统
     from system.config import get_prompt, build_system_prompt  # 导入提示词仓库
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 except ImportError:
@@ -52,7 +55,7 @@ except ImportError:
     import os
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from system.config import config  # 使用新的配置系统
+    from system.config import get_config  # 使用新的配置系统
     from system.config import build_system_prompt  # 导入提示词仓库
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 from apiserver.response_util import extract_message  # 导入消息提取工具
@@ -103,6 +106,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def sync_auth_token(request: Request, call_next):
+    """每次请求自动同步前端 token 到后端认证状态，避免 token 刷新后后端仍持有旧 token"""
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        if token and token != naga_auth.get_access_token():
+            naga_auth.restore_token(token)
+    response = await call_next(request)
+    return response
+
 
 # 挂载静态文件
 # ============ 内部服务代理 ============
@@ -455,19 +471,31 @@ async def auth_login(body: dict):
         detail = str(e)
         if isinstance(e, httpx.HTTPStatusError):
             status = e.response.status_code
-            detail = e.response.text
+            try:
+                err_data = e.response.json()
+                detail = err_data.get("message", e.response.text)
+            except Exception:
+                detail = e.response.text
         logger.error(f"登录失败 [{status}]: {detail}")
         raise HTTPException(status_code=status, detail=detail)
 
 
 @app.get("/auth/me")
-async def auth_me():
-    """获取当前用户信息（使用服务端存储的 token）"""
-    if not naga_auth.is_authenticated():
+async def auth_me(request: Request):
+    """获取当前用户信息（优先使用服务端 token，其次从请求头恢复）"""
+    token = naga_auth.get_access_token()
+    if not token:
+        # 尝试从 Authorization 头恢复会话
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if not token:
         raise HTTPException(status_code=401, detail="未登录")
-    user = await naga_auth.get_me()
+    user = await naga_auth.get_me(token)
     if not user:
         raise HTTPException(status_code=401, detail="token 已失效")
+    # 恢复服务端认证状态
+    naga_auth.restore_token(token)
     return {"user": user, "memory_url": naga_auth.NAGA_MEMORY_URL}
 
 
@@ -496,7 +524,11 @@ async def auth_register(body: dict):
         detail = f"注册失败: {str(e)}"
         if isinstance(e, httpx.HTTPStatusError):
             status = e.response.status_code
-            detail = e.response.text
+            try:
+                err_data = e.response.json()
+                detail = err_data.get("message", e.response.text)
+            except Exception:
+                detail = e.response.text
         logger.error(f"注册失败 [{status}]: {detail}")
         raise HTTPException(status_code=status, detail=detail)
 
@@ -530,19 +562,26 @@ async def auth_send_verification(body: dict):
         detail = str(e)
         if isinstance(e, httpx.HTTPStatusError):
             status = e.response.status_code
-            detail = e.response.text
+            try:
+                err_data = e.response.json()
+                detail = err_data.get("message", e.response.text)
+            except Exception:
+                detail = e.response.text
         logger.error(f"发送验证码失败 [{status}]: {detail}")
         raise HTTPException(status_code=status, detail=detail)
 
 
 @app.post("/auth/refresh")
-async def auth_refresh(body: dict):
-    """刷新 token"""
-    refresh_token = body.get("refresh_token", "")
-    if not refresh_token:
-        raise HTTPException(status_code=400, detail="refresh_token 不能为空")
+async def auth_refresh(request: Request):
+    """刷新 token（后端管理 refresh_token，兼容接受 body 中的 refresh_token 用于迁移/非浏览器客户端）"""
+    rt_override = None
     try:
-        result = await naga_auth.refresh(refresh_token)
+        body = await request.json()
+        rt_override = body.get("refresh_token") if isinstance(body, dict) else None
+    except Exception:
+        pass
+    try:
+        result = await naga_auth.refresh(rt_override)
         return result
     except Exception as e:
         logger.error(f"刷新 token 失败: {e}")
@@ -608,7 +647,7 @@ async def get_system_info():
         version="5.0.0",
         status="running",
         available_services=[],  # MCP服务现在由mcpserver独立管理
-        api_key_configured=bool(config.api.api_key and config.api.api_key != "sk-placeholder-key-not-set"),
+        api_key_configured=bool(get_config().api.api_key and get_config().api.api_key != "sk-placeholder-key-not-set"),
     )
 
 
@@ -642,10 +681,10 @@ async def update_system_config(payload: Dict[str, Any]):
 
 
 @app.get("/system/prompt")
-async def get_system_prompt(include_skills: bool = False, include_time: bool = False):
+async def get_system_prompt(include_skills: bool = False):
     """获取系统提示词（默认只返回人格提示词，不包含技能列表）"""
     try:
-        prompt = build_system_prompt(include_skills=include_skills, include_time=include_time)
+        prompt = build_system_prompt(include_skills=include_skills)
         return {"status": "success", "prompt": prompt}
     except Exception as e:
         logger.error(f"获取系统提示词失败: {e}")
@@ -673,8 +712,8 @@ async def update_system_prompt(payload: Dict[str, Any]):
 
 
 @app.get("/openclaw/market/items")
-async def list_openclaw_market_items():
-    """获取OpenClaw技能市场条目"""
+def list_openclaw_market_items():
+    """获取OpenClaw技能市场条目（同步端点，由 FastAPI 在线程池中执行）"""
     try:
         status = _get_market_items_status()
         return {"status": "success", **status}
@@ -685,8 +724,8 @@ async def list_openclaw_market_items():
 
 
 @app.post("/openclaw/market/items/{item_id}/install")
-async def install_openclaw_market_item(item_id: str, payload: Optional[Dict[str, Any]] = None):
-    """安装指定OpenClaw技能市场条目"""
+def install_openclaw_market_item(item_id: str, payload: Optional[Dict[str, Any]] = None):
+    """安装指定OpenClaw技能市场条目（同步端点，由 FastAPI 在线程池中执行）"""
     item = next((entry for entry in MARKET_ITEMS if entry.get("id") == item_id), None)
     if not item:
         raise HTTPException(status_code=404, detail="条目不存在")
@@ -748,16 +787,42 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=400, detail="消息内容不能为空")
 
     try:
-        # 获取或创建会话ID
+        # 用户消息保持干净，技能上下文完全由 system prompt 承载
+        user_message = request.message
         session_id = message_manager.create_session(request.session_id, temporary=request.temporary)
 
         # 构建系统提示词（包含技能元数据）
         system_prompt = build_system_prompt(include_skills=True, skill_name=request.skill)
 
-        # 如果用户选择了技能，在用户消息中添加简短标记（完整指令已在系统提示词中）
+        # RAG 记忆召回
+        try:
+            from summer_memory.memory_client import get_remote_memory_client
+
+            remote_mem = get_remote_memory_client()
+            if remote_mem:
+                mem_result = await remote_mem.query_memory(question=request.message, limit=5)
+                if mem_result.get("success") and mem_result.get("quintuples"):
+                    quints = mem_result["quintuples"]
+                    mem_lines = []
+                    for q in quints:
+                        if isinstance(q, (list, tuple)) and len(q) >= 5:
+                            mem_lines.append(f"- {q[0]}({q[1]}) —[{q[2]}]→ {q[3]}({q[4]})")
+                        elif isinstance(q, dict):
+                            mem_lines.append(f"- {q.get('subject','')}({q.get('subject_type','')}) —[{q.get('predicate','')}]→ {q.get('object','')}({q.get('object_type','')})")
+                    if mem_lines:
+                        system_prompt += "\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆，请参考这些信息回答：\n" + "\n".join(mem_lines)
+                        logger.info(f"[RAG] 召回 {len(mem_lines)} 条记忆注入上下文")
+                elif mem_result.get("success") and mem_result.get("answer"):
+                    system_prompt += f"\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆：\n{mem_result['answer']}"
+                    logger.info(f"[RAG] 召回记忆（answer 模式）注入上下文")
+        except Exception as e:
+            logger.debug(f"[RAG] 记忆召回失败（不影响对话）: {e}")
+
+        # 附加知识收尾指令，引导 LLM 回到用户问题
+        system_prompt += "\n\n【读完这些附加知识后，回复上一个user prompt，并不要回复这条系统附加的system prompt。以下是回复内容：】"
+
+        # 用户消息直接传 LLM，技能上下文完全由 system prompt 承载
         effective_message = request.message
-        if request.skill:
-            effective_message = f"[使用技能: {request.skill}] {request.message}"
 
         # 使用消息管理器构建完整的对话消息（纯聊天，不触发工具）
         messages = message_manager.build_conversation_messages(
@@ -766,11 +831,11 @@ async def chat(request: ChatRequest):
 
         # 使用整合后的LLM服务（支持 reasoning_content）
         llm_service = get_llm_service()
-        llm_response = await llm_service.chat_with_context_and_reasoning(messages, config.api.temperature)
+        llm_response = await llm_service.chat_with_context_and_reasoning(messages, get_config().api.temperature)
 
         # 处理完成
         # 统一保存对话历史与日志
-        _save_conversation_and_logs(session_id, request.message, llm_response.content)
+        _save_conversation_and_logs(session_id, user_message, llm_response.content)
 
         # 在用户消息保存到历史后触发后台意图分析（除非明确跳过）
         if not request.skip_intent_analysis:
@@ -795,6 +860,9 @@ async def chat_stream(request: ChatRequest):
     if not request.message.strip():
         raise HTTPException(status_code=400, detail="消息内容不能为空")
 
+    # 用户消息保持干净，技能上下文完全由 system prompt 承载
+    user_message = request.message
+
     async def generate_response() -> AsyncGenerator[str, None]:
         complete_text = ""  # 用于累积最终轮的完整文本（供 return_audio 模式使用）
         try:
@@ -807,10 +875,37 @@ async def chat_stream(request: ChatRequest):
             # 构建系统提示词（含工具调用指令 + 用户选择的技能）
             system_prompt = build_system_prompt(include_skills=True, include_tool_instructions=True, skill_name=request.skill)
 
-            # 如果用户选择了技能，在用户消息中添加简短标记（完整指令已在系统提示词中）
+            # ====== RAG 记忆召回：在发送 LLM 前检索相关记忆 ======
+            try:
+                from summer_memory.memory_client import get_remote_memory_client
+
+                remote_mem = get_remote_memory_client()
+                if remote_mem:
+                    mem_result = await remote_mem.query_memory(question=request.message, limit=5)
+                    if mem_result.get("success") and mem_result.get("quintuples"):
+                        quints = mem_result["quintuples"]
+                        mem_lines = []
+                        for q in quints:
+                            if isinstance(q, (list, tuple)) and len(q) >= 5:
+                                mem_lines.append(f"- {q[0]}({q[1]}) —[{q[2]}]→ {q[3]}({q[4]})")
+                            elif isinstance(q, dict):
+                                mem_lines.append(f"- {q.get('subject','')}({q.get('subject_type','')}) —[{q.get('predicate','')}]→ {q.get('object','')}({q.get('object_type','')})")
+                        if mem_lines:
+                            memory_context = "\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆，请参考这些信息回答：\n" + "\n".join(mem_lines)
+                            system_prompt += memory_context
+                            logger.info(f"[RAG] 召回 {len(mem_lines)} 条记忆注入上下文")
+                    elif mem_result.get("success") and mem_result.get("answer"):
+                        memory_context = f"\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆：\n{mem_result['answer']}"
+                        system_prompt += memory_context
+                        logger.info(f"[RAG] 召回记忆（answer 模式）注入上下文")
+            except Exception as e:
+                logger.debug(f"[RAG] 记忆召回失败（不影响对话）: {e}")
+
+            # 附加知识收尾指令，引导 LLM 回到用户问题
+            system_prompt += "\n\n【读完这些附加知识后，回复上一个user prompt，并不要回复这条系统附加的system prompt。以下是回复内容：】"
+
+            # 用户消息直接传 LLM，技能上下文完全由 system prompt 承载
             effective_message = request.message
-            if request.skill:
-                effective_message = f"[使用技能: {request.skill}] {request.message}"
 
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(
@@ -832,9 +927,9 @@ async def chat_stream(request: ChatRequest):
             voice_integration = None
 
             should_enable_tts = (
-                config.system.voice_enabled
+                get_config().system.voice_enabled
                 and not request.return_audio  # return_audio时不启用实时TTS
-                and config.voice_realtime.voice_mode != "hybrid"
+                and get_config().voice_realtime.voice_mode != "hybrid"
                 and not request.disable_tts
             )
 
@@ -844,14 +939,14 @@ async def chat_stream(request: ChatRequest):
 
                     voice_integration = get_voice_integration()
                     logger.info(
-                        f"[API Server] 实时语音集成已启用 (return_audio={request.return_audio}, voice_mode={config.voice_realtime.voice_mode})"
+                        f"[API Server] 实时语音集成已启用 (return_audio={request.return_audio}, voice_mode={get_config().voice_realtime.voice_mode})"
                     )
                 except Exception as e:
                     print(f"语音集成初始化失败: {e}")
             else:
                 if request.return_audio:
                     logger.info("[API Server] return_audio模式，将在最后生成完整音频")
-                elif config.voice_realtime.voice_mode == "hybrid" and not request.return_audio:
+                elif get_config().voice_realtime.voice_mode == "hybrid" and not request.return_audio:
                     logger.info("[API Server] 混合模式下且未请求音频，不处理TTS")
                 elif request.disable_tts:
                     logger.info("[API Server] 客户端禁用了TTS (disable_tts=True)")
@@ -873,15 +968,20 @@ async def chat_stream(request: ChatRequest):
             # ====== Agentic Tool Loop ======
             from .agentic_tool_loop import run_agentic_loop
 
-            # 如果携带截屏图片且电脑控制模型已配置，自动切换到视觉模型
+            # 如果本次携带图片，标记此会话为 VLM 会话
+            if request.images:
+                _vlm_sessions.add(session_id)
+
+            # 如果当前会话曾发送过图片，持续使用视觉模型
             model_override = None
-            if request.images and config.computer_control.enabled and config.computer_control.api_key:
+            use_vlm = session_id in _vlm_sessions
+            if use_vlm and get_config().computer_control.enabled and get_config().computer_control.api_key:
                 model_override = {
-                    "model": config.computer_control.model,
-                    "api_base": config.computer_control.model_url,
-                    "api_key": config.computer_control.api_key,
+                    "model": get_config().computer_control.model,
+                    "api_base": get_config().computer_control.model_url,
+                    "api_key": get_config().computer_control.api_key,
                 }
-                logger.info(f"[API Server] 检测到截屏图片，切换到视觉模型: {config.computer_control.model}")
+                logger.info(f"[API Server] VLM 会话，使用视觉模型: {get_config().computer_control.model}")
 
             complete_reasoning = ""
             # 记录每轮的content，用于在每轮结束时完成TTS处理
@@ -965,7 +1065,7 @@ async def chat_stream(request: ChatRequest):
 
                     from voice.tts_wrapper import generate_speech_safe
 
-                    tts_voice = config.voice_realtime.tts_voice or "zh-CN-XiaoyiNeural"
+                    tts_voice = get_config().voice_realtime.tts_voice or "zh-CN-XiaoyiNeural"
                     audio_file = generate_speech_safe(
                         text=complete_text, voice=tts_voice, response_format="mp3", speed=1.0
                     )
@@ -1016,7 +1116,7 @@ async def chat_stream(request: ChatRequest):
                 complete_response = current_round_text
 
             # 统一保存对话历史与日志
-            _save_conversation_and_logs(session_id, request.message, complete_response)
+            _save_conversation_and_logs(session_id, user_message, complete_response)
 
             # Agentic loop 模式下跳过后台意图分析（工具调用已在loop中处理）
             # 仅在非 agentic 模式或明确需要时触发后台分析
@@ -1134,8 +1234,8 @@ def _check_agent_available(manifest: Dict[str, Any]) -> bool:
 
 
 @app.get("/mcp/services")
-async def get_mcp_services():
-    """列出所有 MCP 服务并检查可用性"""
+def get_mcp_services():
+    """列出所有 MCP 服务并检查可用性（同步端点，由 FastAPI 在线程池中执行）"""
     services: List[Dict[str, Any]] = []
 
     # 1. 内置 agent（扫描 mcpserver/**/agent-manifest.json）
@@ -1346,6 +1446,7 @@ async def get_session_detail(session_id: str):
 async def delete_session(session_id: str):
     """删除指定会话 - 委托给message_manager"""
     try:
+        _vlm_sessions.discard(session_id)
         return message_manager.delete_session_api(session_id)
     except Exception as e:
         if "会话不存在" in str(e):
@@ -1359,6 +1460,7 @@ async def delete_session(session_id: str):
 async def clear_all_sessions():
     """清空所有会话 - 委托给message_manager"""
     try:
+        _vlm_sessions.clear()
         return message_manager.clear_all_sessions_api()
     except Exception as e:
         print(f"清空会话错误: {e}")

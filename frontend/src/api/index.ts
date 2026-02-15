@@ -7,14 +7,18 @@ import snakecaseKeys from 'snakecase-keys'
 import { ref, unref, watch } from 'vue'
 
 export const ACCESS_TOKEN = useStorage('naga-access-token', '')
-export const REFRESH_TOKEN = useStorage('naga-refresh-token', '')
 
 /** 当 CAS 会话失效（refresh 也失败）时触发，由 App.vue 监听弹窗 */
 export const authExpired = ref(false)
 
+/** 重新登录期间抑制 authExpired 触发（避免清空 token 后在途请求再次触发弹窗） */
+export let suppressAuthExpired = false
+export function setAuthExpiredSuppressed(value: boolean) {
+  suppressAuthExpired = value
+}
+
 let isRefreshing = false
 let refreshSubscribers: Array<(newToken: string) => void> = []
-let isReloading = false
 
 export class ApiClient {
   instance: AxiosInstance
@@ -88,27 +92,30 @@ export class ApiClient {
 
       error.config._retry = true
       isRefreshing = true
-      if (!REFRESH_TOKEN.value) {
+
+      // 未登录时（无 access_token）不尝试刷新
+      if (!ACCESS_TOKEN.value) {
         isRefreshing = false
-        // 启动时可能没有 refresh_token（未登录），静默失败而非弹窗
         if (error.config.url?.includes('/auth/me')) {
           return Promise.reject(error)
         }
         this.clearAuthDataAndRedirect()
-        return Promise.reject(new Error('No refresh token available'))
+        return Promise.reject(new Error('Not authenticated'))
       }
 
       try {
+        // refresh_token 由后端管理，前端只需发空请求
+        // 迁移兼容：如果旧版 localStorage 中有 refresh_token，作为 fallback 发给后端
+        const legacyToken = localStorage.getItem('naga-refresh-token')
+        const refreshBody = legacyToken ? { refresh_token: legacyToken } : {}
         const response = await axios.post<{
           access_token: string
-          refresh_token: string
-        }>(`${this.endpoint}/auth/refresh`, {
-          refresh_token: REFRESH_TOKEN.value,
-        })
-        const { access_token, refresh_token } = response.data
+        }>(`${this.endpoint}/auth/refresh`, refreshBody)
+        const { access_token } = response.data
 
         ACCESS_TOKEN.value = access_token
-        REFRESH_TOKEN.value = refresh_token
+        // 刷新成功后清理旧 localStorage key（后端已持久化 refresh_token）
+        localStorage.removeItem('naga-refresh-token')
 
         isRefreshing = false
         refreshSubscribers.forEach(callback => callback(access_token))
@@ -119,6 +126,8 @@ export class ApiClient {
       }
       catch (refreshError) {
         isRefreshing = false
+        refreshSubscribers.forEach(callback => callback(''))
+        refreshSubscribers = []
         this.clearAuthDataAndRedirect()
         return Promise.reject(refreshError)
       }
@@ -129,8 +138,8 @@ export class ApiClient {
   }
 
   private clearAuthDataAndRedirect(): void {
-    // 不直接清空 token / reload，改为触发失效标记，由 App.vue 弹窗让用户决定
-    if (!authExpired.value) {
+    // 重新登录期间不触发（避免清空 token 后在途请求的 401 再次弹窗）
+    if (!authExpired.value && !suppressAuthExpired) {
       authExpired.value = true
     }
   }

@@ -201,6 +201,14 @@ app.whenReady().then(() => {
     }
   })
 
+  // 开机自启动
+  ipcMain.handle('autoLaunch:get', () => {
+    return app.getLoginItemSettings().openAtLogin
+  })
+  ipcMain.handle('autoLaunch:set', (_event, enabled: boolean) => {
+    app.setLoginItemSettings({ openAtLogin: enabled })
+  })
+
   // Minimize to tray on close instead of quitting
   win.on('close', (event) => {
     if (!isQuitting) {

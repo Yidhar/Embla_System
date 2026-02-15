@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useStorage } from '@vueuse/core'
 import { Accordion, Button, Divider, InputNumber, InputText, Select, Slider, Textarea, ToggleSwitch } from 'primevue'
-import { ref, useTemplateRef } from 'vue'
+import { ref, onMounted, useTemplateRef } from 'vue'
 import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
@@ -35,7 +35,22 @@ function recoverUiConfig() {
 
 const accordionValue = useStorage('accordion-config', [])
 
+// 开机自启动（仅 Electron）
+const autoLaunchEnabled = ref(false)
 const isElectron = !!window.electronAPI
+
+onMounted(async () => {
+  if (isElectron) {
+    autoLaunchEnabled.value = await window.electronAPI!.autoLaunch.get()
+  }
+})
+
+async function onAutoLaunchChange(value: boolean) {
+  if (isElectron) {
+    await window.electronAPI!.autoLaunch.set(value)
+    autoLaunchEnabled.value = value
+  }
+}
 
 function toggleFloatingMode(enabled: boolean) {
   CONFIG.value.floating.enabled = enabled
@@ -174,6 +189,9 @@ function toggleFloatingMode(enabled: boolean) {
           </div>
         </template>
         <div class="grid gap-4">
+          <ConfigItem v-if="isElectron" name="开机自启动" description="系统启动时自动运行应用">
+            <ToggleSwitch :model-value="autoLaunchEnabled" @update:model-value="onAutoLaunchChange" />
+          </ConfigItem>
           <ConfigItem layout="column" name="系统提示词" description="编辑对话风格提示词，影响AI的回复风格和语言特点">
             <Textarea v-model="SYSTEM_PROMPT" rows="10" class="mt-3 resize-none" />
           </ConfigItem>

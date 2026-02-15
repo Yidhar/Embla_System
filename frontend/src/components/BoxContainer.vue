@@ -20,14 +20,14 @@ defineExpose({
 
 <template>
   <div
-    class="flex"
-    :class="{ 'overflow-hidden will-change-transform': parallax }"
+    class="flex min-h-0"
+    :class="{ 'will-change-transform': parallax }"
     :style="parallax ? { transform: boxTransform } : undefined"
   >
     <div class="flex items-center">
       <img :src="back" class="w-[var(--nav-back-width)]" alt="" @click="$router.back">
     </div>
-    <div class="box w-3/5 flex">
+    <div class="box w-3/5 flex min-h-0 overflow-hidden">
       <ScrollPanel
         ref="scrollPanelRef"
         class="size-full"
@@ -37,7 +37,7 @@ defineExpose({
           },
         }"
       >
-        <div class="p-4 size-full">
+        <div class="p-4 w-full">
           <slot />
         </div>
       </ScrollPanel>

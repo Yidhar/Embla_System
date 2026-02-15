@@ -79,6 +79,12 @@ const electronAPI = {
     },
   },
 
+  // 开机自启动
+  autoLaunch: {
+    get: () => ipcRenderer.invoke('autoLaunch:get') as Promise<boolean>,
+    set: (enabled: boolean) => ipcRenderer.invoke('autoLaunch:set', enabled) as Promise<void>,
+  },
+
   // Platform info
   platform: process.platform,
 }

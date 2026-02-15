@@ -1,5 +1,5 @@
 import { computed, ref, watch } from 'vue'
-import { ACCESS_TOKEN, REFRESH_TOKEN } from '@/api'
+import { ACCESS_TOKEN } from '@/api'
 import coreApi from '@/api/core'
 import { CONFIG, backendConnected } from '@/utils/config'
 
@@ -11,12 +11,11 @@ export const sessionRestored = ref(false)
 let _initFetched = false
 
 /**
- * 同步 memory_server 配置：登录时启用云端记忆，登出时回退到本地
+ * 同步 memory_server 配置：登录时设置 token/url，登出时清除
  */
-function syncMemoryServer(enabled: boolean, memoryUrl?: string) {
-  CONFIG.value.memory_server.enabled = enabled
-  CONFIG.value.memory_server.token = enabled ? ACCESS_TOKEN.value : null
-  if (enabled && memoryUrl) {
+function syncMemoryServer(loggedIn: boolean, memoryUrl?: string) {
+  CONFIG.value.memory_server.token = loggedIn ? ACCESS_TOKEN.value : null
+  if (loggedIn && memoryUrl) {
     CONFIG.value.memory_server.url = memoryUrl
   }
 }
@@ -30,7 +29,7 @@ function syncGameEnabled(loggedIn: boolean) {
 
 // Token 刷新时自动同步到 memory_server.token
 watch(ACCESS_TOKEN, (newToken) => {
-  if (nagaUser.value && CONFIG.value.memory_server.enabled) {
+  if (nagaUser.value) {
     CONFIG.value.memory_server.token = newToken || null
   }
 })
@@ -40,7 +39,7 @@ export function useAuth() {
     const res = await coreApi.authLogin(username, password, captchaId, captchaAnswer)
     if (res.success) {
       ACCESS_TOKEN.value = res.accessToken
-      REFRESH_TOKEN.value = res.refreshToken
+      // refresh_token 由后端管理，前端不再存储
       nagaUser.value = res.user
       syncMemoryServer(true, res.memoryUrl)
       syncGameEnabled(true)
@@ -52,7 +51,6 @@ export function useAuth() {
     const res = await coreApi.authRegister(username, email, password, verificationCode)
     if (res.success && res.accessToken) {
       ACCESS_TOKEN.value = res.accessToken
-      REFRESH_TOKEN.value = res.refreshToken
       nagaUser.value = res.user || null
       syncMemoryServer(true)
       syncGameEnabled(true)
@@ -100,7 +98,6 @@ export function useAuth() {
     }
     finally {
       ACCESS_TOKEN.value = ''
-      REFRESH_TOKEN.value = ''
       nagaUser.value = null
       syncMemoryServer(false)
       syncGameEnabled(false)
@@ -112,10 +109,21 @@ export function useAuth() {
   }
 
   // 首次调用时自动恢复会话（仅在有 token 时才请求，避免无谓的 401）
+  // 等后端就绪后再请求，避免后端还没启动就 fetchMe 失败导致登录态丢失
   if (!_initFetched) {
     _initFetched = true
     if (ACCESS_TOKEN.value) {
-      fetchMe()
+      if (backendConnected.value) {
+        fetchMe()
+      }
+      else {
+        const stop = watch(backendConnected, (connected) => {
+          if (connected) {
+            fetchMe()
+            stop()
+          }
+        })
+      }
     }
   }
 

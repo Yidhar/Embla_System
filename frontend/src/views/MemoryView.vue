@@ -18,7 +18,7 @@ const testResult = ref<{
   message: string
 }>()
 
-const isCloudMode = computed(() => CONFIG.value.memory_server?.enabled && isNagaLoggedIn.value)
+const isCloudMode = computed(() => isNagaLoggedIn.value)
 
 const similarityPercent = computed({
   get() {

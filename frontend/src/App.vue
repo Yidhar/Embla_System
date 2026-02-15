@@ -21,7 +21,7 @@ import { useParallax } from '@/composables/useParallax'
 import { useStartupProgress } from '@/composables/useStartupProgress'
 import { checkForUpdate, showUpdateDialog, updateInfo } from '@/composables/useVersionCheck'
 import { CONFIG, backendConnected } from '@/utils/config'
-import { ACCESS_TOKEN, REFRESH_TOKEN, authExpired } from '@/api'
+import { ACCESS_TOKEN, authExpired, setAuthExpiredSuppressed } from '@/api'
 import { clearExpression, setExpression } from '@/utils/live2dController'
 import { initParallax, destroyParallax } from '@/utils/parallax'
 import { playBgm, playClickEffect, stopBgm } from '@/composables/useAudio'
@@ -116,8 +116,9 @@ watch(authExpired, (expired) => {
 function onAuthExpiredRelogin() {
   authExpiredVisible.value = false
   authExpired.value = false
+  // 抑制在途请求的 401 再次触发弹窗，直到登录成功
+  setAuthExpiredSuppressed(true)
   ACCESS_TOKEN.value = ''
-  REFRESH_TOKEN.value = ''
   doLogout()
   showLoginDialog.value = true
 }
@@ -148,12 +149,14 @@ function onSplashDismiss() {
 
 function onLoginSuccess() {
   showLoginDialog.value = false
+  setAuthExpiredSuppressed(false)
   toast.add({ severity: 'success', summary: '欢迎回来', detail: nagaUser.value?.username, life: 3000 })
   enterMainContent()
 }
 
 function onLoginSkip() {
   showLoginDialog.value = false
+  setAuthExpiredSuppressed(false)
   enterMainContent()
 }
 

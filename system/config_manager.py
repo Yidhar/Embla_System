@@ -8,6 +8,7 @@
 import os
 import sys
 import json
+import tempfile
 import threading
 import time
 from typing import Dict, Any, List, Callable, Optional
@@ -17,7 +18,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from .config import hot_reload_config, add_config_listener
-from charset_normalizer import from_path
 import json5  # 支持带注释的JSON解析
 
 class ConfigManager:
@@ -206,71 +206,40 @@ class ConfigManager:
             return False
     
     def _load_config_file(self, config_path: str) -> Optional[Dict[str, Any]]:
-        """加载配置文件"""
+        """加载配置文件（json5 优先，标准 json 兜底，始终 UTF-8）"""
         try:
-            # 使用Charset Normalizer自动检测编码
-            charset_results = from_path(config_path)
-            if charset_results:
-                best_match = charset_results.best()
-                if best_match:
-                    detected_encoding = best_match.encoding
-                    print(f"检测到配置文件编码: {detected_encoding}")
-
-                    # 使用检测到的编码直接打开文件，然后使用json5读取
-                    with open(config_path, 'r', encoding=detected_encoding) as f:
-                        # 使用json5解析支持注释的JSON
-                        try:
-                            return json5.load(f)
-                        except Exception as json5_error:
-                            print(f"json5解析失败: {json5_error}")
-                            print("尝试使用标准JSON库解析（将忽略注释）...")
-                            # 回退到标准JSON库，但需要先去除注释
-                            f.seek(0)  # 重置文件指针
-                            content = f.read()
-                            # 去除注释行
-                            lines = content.split('\n')
-                            cleaned_lines = []
-                            for line in lines:
-                                # 移除行内注释（#后面的内容）
-                                if '#' in line:
-                                    line = line.split('#')[0].rstrip()
-                                if line.strip():  # 只保留非空行
-                                    cleaned_lines.append(line)
-                            cleaned_content = '\n'.join(cleaned_lines)
-                            return json.loads(cleaned_content)
-                else:
-                    print(f"警告：无法检测 {config_path} 的编码")
-            else:
-                print(f"警告：无法检测 {config_path} 的编码")
-
-            # 如果自动检测失败，回退到原来的方法
-            print("使用回退方法加载配置")
             with open(config_path, 'r', encoding='utf-8') as f:
-                # 使用json5解析支持注释的JSON
-                return json5.load(f)
+                content = f.read()
+            # 优先 json5（支持注释）
+            try:
+                return json5.loads(content)
+            except Exception:
+                pass
+            # 兜底标准 json（不做任何注释剥离，避免破坏字符串值）
+            return json.loads(content)
         except Exception as e:
-            print(f"加载配置文件失败: {e}")  # 去除Emoji #
+            print(f"加载配置文件失败: {e}")
             return None
     
     def _save_config_file(self, config_path: str, config_data: Dict[str, Any]) -> bool:
-        """保存配置文件"""
+        """原子保存配置文件（先写临时文件再 rename，防止写入中途崩溃导致截断）"""
         try:
-            # 自动检测文件编码
-            detected_encoding = 'utf-8'  # 默认编码
-            if os.path.exists(config_path):
-                charset_results = from_path(config_path)
-                if charset_results:
-                    best_match = charset_results.best()
-                    if best_match:
-                        detected_encoding = best_match.encoding
-                        print(f"检测到配置文件编码: {detected_encoding}")
-
-            with open(config_path, 'w', encoding=detected_encoding) as f:
-                import json
-                json.dump(config_data, f, ensure_ascii=False, indent=2)
+            dir_path = os.path.dirname(config_path)
+            fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix='.tmp', prefix='.config_')
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                    json.dump(config_data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, config_path)
+            except BaseException:
+                # 写入或 rename 失败，清理临时文件
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
             return True
         except Exception as e:
-            print(f"保存配置文件失败: {e}")  # 去除Emoji #
+            print(f"保存配置文件失败: {e}")
             return False
     
     def _recursive_update(self, target: Dict[str, Any], updates: Dict[str, Any]):
@@ -284,91 +253,38 @@ class ConfigManager:
                 target[key] = value
     
     def get_config_snapshot(self) -> Dict[str, Any]:
-        """获取配置快照"""
-        # 直接读取config.json文件，避免序列化问题
-        try:
-            config_path = str(Path(__file__).parent.parent / "config.json")
-            # 使用Charset Normalizer自动检测编码
-            charset_results = from_path(config_path)
-            if charset_results:
-                best_match = charset_results.best()
-                if best_match:
-                    detected_encoding = best_match.encoding
-                    print(f"检测到配置文件编码: {detected_encoding}")
-
-                    # 使用检测到的编码直接打开文件，然后使用json5读取
-                    with open(config_path, 'r', encoding=detected_encoding) as f:
-                        # 使用json5解析支持注释的JSON
-                        try:
-                            return json5.load(f)
-                        except Exception as json5_error:
-                            print(f"json5解析失败: {json5_error}")
-                            print("尝试使用标准JSON库解析（将忽略注释）...")
-                            # 回退到标准JSON库，但需要先去除注释
-                            f.seek(0)  # 重置文件指针
-                            content = f.read()
-                            # 去除注释行
-                            lines = content.split('\n')
-                            cleaned_lines = []
-                            for line in lines:
-                                # 移除行内注释（#后面的内容）
-                                if '#' in line:
-                                    line = line.split('#')[0].rstrip()
-                                if line.strip():  # 只保留非空行
-                                    cleaned_lines.append(line)
-                            cleaned_content = '\n'.join(cleaned_lines)
-                            return json.loads(cleaned_content)
-                else:
-                    print(f"警告：无法检测 {config_path} 的编码")
-            else:
-                print(f"警告：无法检测 {config_path} 的编码")
-
-            # 如果自动检测失败，回退到原来的方法
-            print("使用回退方法加载配置")
-            with open(config_path, 'r', encoding='utf-8') as f:
-                # 使用json5解析支持注释的JSON
-                return json5.load(f)
-        except Exception as e:
-            print(f"获取配置快照失败: {e}")  # 去除Emoji #
-            # 如果读取失败，返回一个基本的配置结构
-            return {
-                "system": {"version": "5.0.0"},
-                "api": {"api_key": ""},
-                "api_server": {"enabled": True},
-                "grag": {"enabled": False},
-                "handoff": {"max_loop_stream": 5},
-                "browser": {"playwright_headless": False},
-                "tts": {"port": 5048},
-                "weather": {"api_key": ""},
-                "mqtt": {"enabled": False},
-                "ui": {"user_name": "用户"},
-                "naga_portal": {"portal_url": "https://naga.furina.chat/"},
-                "online_search": {"Bocha_API_KEY": "-"}
-            }
+        """获取配置快照（复用 _load_config_file 避免重复逻辑）"""
+        config_path = str(Path(__file__).parent.parent / "config.json")
+        data = self._load_config_file(config_path)
+        if data is not None:
+            return data
+        print("获取配置快照失败，返回兜底配置")
+        return {
+            "system": {"version": "5.0.0"},
+            "api": {"api_key": ""},
+            "api_server": {"enabled": True},
+            "grag": {"enabled": False},
+            "handoff": {"max_loop_stream": 5},
+            "browser": {"playwright_headless": False},
+            "tts": {"port": 5048},
+            "weather": {"api_key": ""},
+            "mqtt": {"enabled": False},
+            "ui": {"user_name": "用户"},
+            "naga_portal": {"portal_url": "https://naga.furina.chat/"},
+            "online_search": {"Bocha_API_KEY": "-"}
+        }
     
     def restore_config_snapshot(self, snapshot: Dict[str, Any]) -> bool:
-        """恢复配置快照"""
+        """恢复配置快照（复用 _save_config_file 原子写入）"""
         try:
             config_path = str(Path(__file__).parent.parent / "config.json")
-
-            # 自动检测文件编码
-            detected_encoding = 'utf-8'  # 默认编码
-            if os.path.exists(config_path):
-                charset_results = from_path(config_path)
-                if charset_results:
-                    best_match = charset_results.best()
-                    if best_match:
-                        detected_encoding = best_match.encoding
-                        print(f"检测到配置文件编码: {detected_encoding}")
-
-            with open(config_path, 'w', encoding=detected_encoding) as f:
-                json.dump(snapshot, f, ensure_ascii=False, indent=2)
-
+            if not self._save_config_file(config_path, snapshot):
+                return False
             hot_reload_config()
-            print("配置快照恢复成功")  # 去除Emoji #
+            print("配置快照恢复成功")
             return True
         except Exception as e:
-            print(f"配置快照恢复失败: {e}")  # 去除Emoji #
+            print(f"配置快照恢复失败: {e}")
             return False
 
 # 全局配置管理器实例

@@ -12,6 +12,7 @@ export const audioSettings = useStorage('naga-audio-settings', {
 })
 
 // ─── 静态资源文件列表（构建时收集） ─────────────────────
+const AUDIO_EXTENSIONS = /\.(mp3|m4a|ogg|wav|flac|aac|webm)$/i
 const startVoiceGlob = import.meta.glob('/public/voices/start/**/*.*', { query: '?url', import: 'default' })
 const effectGlob = import.meta.glob('/public/voices/effect/*.*', { query: '?url', import: 'default' })
 
@@ -25,6 +26,8 @@ function parseStartVoices() {
     if (slashIdx === -1) continue
     const folder = rel.substring(0, slashIdx)
     const file = rel.substring(slashIdx + 1)
+    // 过滤非音频文件（.DS_Store 等）
+    if (!AUDIO_EXTENSIONS.test(file)) continue
     if (!map[folder]) map[folder] = []
     map[folder].push(file)
   }
@@ -36,6 +39,7 @@ function parseEffectFiles() {
   for (const key of Object.keys(effectGlob)) {
     // key: /public/voices/effect/做出选择.ogg
     const file = key.replace('/public/voices/effect/', '')
+    if (!AUDIO_EXTENSIONS.test(file)) continue
     files.push(file)
   }
   return files
@@ -107,12 +111,18 @@ export function stopBgm() {
 export function playWakeVoice() {
   const pack = audioSettings.value.wakeVoice
   const files = wakeVoiceMap[pack]
-  if (!files || files.length === 0) return
+  if (!files || files.length === 0) {
+    console.warn(`[Audio] 唤醒语音包 "${pack}" 无可用文件`)
+    return
+  }
 
   const file = files[Math.floor(Math.random() * files.length)]
-  const audio = new Audio(`/voices/start/${encodeURIComponent(pack)}/${encodeURIComponent(file)}`)
+  const url = `/voices/start/${encodeURIComponent(pack)}/${encodeURIComponent(file)}`
+  const audio = new Audio(url)
   audio.volume = audioSettings.value.effectVolume
-  audio.play().catch(() => {})
+  audio.play().catch((e) => {
+    console.error(`[Audio] 唤醒语音播放失败: ${url}`, e)
+  })
 }
 
 // ─── 点击音效 ──────────────────────────────────────
@@ -121,7 +131,9 @@ export function playClickEffect() {
   const file = audioSettings.value.clickEffect
   const audio = new Audio(`/voices/effect/${encodeURIComponent(file)}`)
   audio.volume = audioSettings.value.effectVolume
-  audio.play().catch(() => {})
+  audio.play().catch((e) => {
+    console.warn(`[Audio] 点击音效播放失败:`, e.message)
+  })
 }
 
 // ─── 响应设置变化 ──────────────────────────────────

@@ -16,11 +16,7 @@ const ASR_PROVIDERS = {
 }
 
 const TTS_VOICES = {
-  'zh-CN-XiaoyiNeural': '晓伊',
-  'zh-CN-YunxiNeural': '云溪',
-  'zh-CN-XiaoxiaoNeural': '小萱',
-  'en-US-JennyNeural': 'Jenny',
-  'en-US-GuyNeural': 'Guy',
+  Cherry: '默认',
 }
 </script>
 
@@ -100,7 +96,7 @@ const TTS_VOICES = {
         </template>
         <div class="grid gap-4">
           <ConfigItem name="模型名称" description="用于语音识别的模型">
-            <InputText v-model="CONFIG.voice_realtime.model" />
+            <InputText v-model="CONFIG.voice_realtime.asr_model" />
           </ConfigItem>
           <template v-if="!isNagaLoggedIn">
             <ConfigItem name="模型提供者" description="语音识别模型的提供者">
@@ -134,8 +130,8 @@ const TTS_VOICES = {
         </template>
         <div class="grid gap-4">
           <ConfigItem name="模型名称" description="用于语音合成的模型">
-            <span v-if="isNagaLoggedIn" class="text-white/60">qwen-tts-realtime</span>
-            <InputText v-else :model-value="'edge-tts'" disabled />
+            <span v-if="isNagaLoggedIn" class="text-white/60">{{ CONFIG.voice_realtime.tts_model }}</span>
+            <InputText v-else v-model="CONFIG.voice_realtime.tts_model" />
           </ConfigItem>
           <ConfigItem name="声线" description="语音合成模型的声线">
             <Select v-model="CONFIG.tts.default_voice" :options="Object.keys(TTS_VOICES)">
@@ -157,6 +153,21 @@ const TTS_VOICES = {
           </template>
           <ConfigItem v-else name="API 密钥">
             <span class="naga-authed">&#10003; 已登陆，无需输入</span>
+          </ConfigItem>
+        </div>
+      </ConfigGroup>
+      <ConfigGroup value="embedding" header="嵌入模型">
+        <div class="grid gap-4">
+          <ConfigItem name="模型名称" description="用于向量嵌入的模型">
+            <InputText v-model="CONFIG.embedding.model" />
+          </ConfigItem>
+          <ConfigItem name="API 地址" description="嵌入模型的 API 地址（留空使用主模型地址）">
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，使用 NagaModel 网关</span>
+            <InputText v-else v-model="CONFIG.embedding.api_base" />
+          </ConfigItem>
+          <ConfigItem name="API 密钥" description="嵌入模型的 API 密钥（留空使用主模型密钥）">
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，无需输入</span>
+            <InputText v-else v-model="CONFIG.embedding.api_key" type="password" />
           </ConfigItem>
         </div>
       </ConfigGroup>

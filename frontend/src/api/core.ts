@@ -54,7 +54,8 @@ export class CoreApiClient extends ApiClient {
     agentReady: true
     timestamp: string
   }> {
-    return this.instance.get('/health')
+    // 添加时间戳防止 Chromium HTTP 缓存返回旧响应（快速重启场景）
+    return this.instance.get(`/health?_t=${Date.now()}`)
   }
 
   systemInfo(): Promise<{
@@ -71,7 +72,8 @@ export class CoreApiClient extends ApiClient {
     config: Config
   }> {
     // 配置对象使用 snake_case 键名，跳过自动 camelCase 转换以避免键名不匹配
-    return this.instance('/system/config', {
+    // 添加时间戳防止 HTTP 缓存（快速重启场景）
+    return this.instance(`/system/config?_t=${Date.now()}`, {
       transformResponse: [(data: string) => JSON.parse(data)],
     })
   }
@@ -355,7 +357,6 @@ export class CoreApiClient extends ApiClient {
     success: boolean
     user: { username: string, sub?: string } | null
     accessToken: string
-    refreshToken: string
     memoryUrl?: string
   }> {
     return this.instance.post('/auth/login', { username, password, captcha_id: captchaId, captcha_answer: captchaAnswer })
@@ -373,7 +374,6 @@ export class CoreApiClient extends ApiClient {
     success: boolean
     user?: { username: string, email: string, sub?: string }
     accessToken?: string
-    refreshToken?: string
   }> {
     return this.instance.post('/auth/register', { username, email, password, verification_code: verificationCode })
   }
