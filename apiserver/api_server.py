@@ -802,9 +802,17 @@ async def chat_stream(request: ChatRequest):
             # 构建系统提示词（含工具调用指令 + 用户选择的技能）
             system_prompt = build_system_prompt(include_skills=True, include_tool_instructions=True, skill_name=request.skill)
 
+            # 如果用户选择了技能，将技能指令包裹在用户消息中，避免被长系统提示词淹没
+            effective_message = request.message
+            if request.skill:
+                from system.skill_manager import load_skill
+                skill_instructions = load_skill(request.skill)
+                if skill_instructions:
+                    effective_message = f"[技能指令] 请严格按照以下技能要求处理我的输入，直接输出结果：\n{skill_instructions}\n\n[用户输入] {request.message}"
+
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(
-                session_id=session_id, system_prompt=system_prompt, current_message=request.message
+                session_id=session_id, system_prompt=system_prompt, current_message=effective_message
             )
 
             # 如果携带截屏图片，将最后一条用户消息改为多模态格式（OpenAI vision 兼容）
