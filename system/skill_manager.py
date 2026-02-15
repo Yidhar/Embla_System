@@ -281,8 +281,8 @@ class SkillManager:
 
         lines = ["## 可用技能"]
         lines.append("")
-        lines.append("以下是你可以使用的专业技能。当用户请求匹配某个技能的描述时，")
-        lines.append("你应该调用该技能来处理任务。")
+        lines.append("以下是你可以使用的专业技能。当用户选择了某个技能时，")
+        lines.append("该技能的完整指令会自动注入到系统提示词中，请按照指令处理用户输入。")
         lines.append("")
 
         for skill in enabled_skills:
@@ -291,8 +291,6 @@ class SkillManager:
             if skill.tags:
                 lines.append(f"- **标签**: {', '.join(skill.tags)}")
             lines.append("")
-
-        lines.append("要使用技能，请调用 `load_skill(skill_name)` 工具加载完整指令。")
 
         return "\n".join(lines)
 

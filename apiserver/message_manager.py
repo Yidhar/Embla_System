@@ -643,7 +643,11 @@ class MessageManager:
         try:
             # 保存对话历史到消息管理器（临时会话的 add_message 内部已跳过磁盘持久化）
             self.add_message(session_id, "user", user_message)
-            self.add_message(session_id, "assistant", assistant_response)
+            # 空响应不保存到会话历史，避免 LLM 在后续对话中模仿空回复模式
+            if assistant_response and assistant_response.strip():
+                self.add_message(session_id, "assistant", assistant_response)
+            else:
+                logger.warning(f"会话 {session_id}: assistant 响应为空，跳过保存到会话历史")
 
             # 临时会话不保存日志文件，也不触发记忆提取
             session = self.sessions.get(session_id)
