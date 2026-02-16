@@ -55,7 +55,7 @@ function initParticles() {
   const canvas = particleCanvas.value
   if (!canvas) return
 
-  const ctx = canvas.getContext('2d')
+  const ctx = canvas.getContext('2d')!
   if (!ctx) return
 
   const dpr = window.devicePixelRatio || 1
@@ -95,7 +95,7 @@ function initParticles() {
     ctx.clearRect(0, 0, w, h)
 
     for (let i = particles.length - 1; i >= 0; i--) {
-      const p = particles[i]
+      const p = particles[i]!
       p.x += p.vx
       p.y += p.vy
       p.life--
@@ -130,8 +130,9 @@ function initParticles() {
 
       // 回收并重新生成
       if (p.life <= 0 || p.y < -10) {
-        particles[i] = spawnParticle()
-        particles[i].maxLife = particles[i].life
+        const np = spawnParticle()
+        np.maxLife = np.life
+        particles[i] = np
       }
     }
 
@@ -320,6 +321,7 @@ const displayProgress = computed(() => Math.min(100, Math.round(props.progress))
   width: min(60vw, 500px);
   height: auto;
   filter: drop-shadow(0 0 30px rgba(212, 175, 55, 0.25));
+  image-rendering: -webkit-optimize-contrast;
 }
 
 @keyframes title-sequence {

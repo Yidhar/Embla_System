@@ -71,11 +71,10 @@ class LLMService:
         model = model or cfg.api.model
         base_url = (base_url or cfg.api.base_url or "").lower()
 
-        # NagaModel 网关始终使用 openai/ 前缀
+        # NagaModel 网关：模型名称统一为 default，由服务端路由
+        # 需要 openai/ 前缀让 LiteLLM 识别为 OpenAI 兼容提供商
         if naga_auth.is_authenticated():
-            if not model.startswith("openai/"):
-                return f"openai/{model}"
-            return model
+            return "openai/default"
 
         # 根据 base_url 判断提供商，添加正确的前缀
         if "deepseek" in base_url:
@@ -245,17 +244,29 @@ class LLMService:
             try:
                 # 如果提供了 model_override，使用覆盖参数替代默认配置
                 if model_override:
-                    override_base = model_override.get("api_base", "")
-                    override_key = model_override.get("api_key", "")
-                    # 复用 _get_model_name 的前缀判断逻辑
-                    model_name = self._get_model_name(
-                        model=model_override.get("model"),
-                        base_url=override_base,
-                    )
-                    llm_params = {
-                        "api_key": override_key,
-                        "api_base": override_base.rstrip("/") + "/" if override_base else None,
-                    }
+                    # NagaModel 登录态：只取 model 名，api_base/api_key 走网关
+                    if naga_auth.is_authenticated():
+                        token = naga_auth.get_access_token()
+                        model_name = self._get_model_name(
+                            model=model_override.get("model"),
+                            base_url=naga_auth.NAGA_MODEL_URL,
+                        )
+                        llm_params = {
+                            "api_key": token,
+                            "api_base": naga_auth.NAGA_MODEL_URL + "/",
+                            "extra_body": {"user_token": token},
+                        }
+                    else:
+                        override_base = model_override.get("api_base", "")
+                        override_key = model_override.get("api_key", "")
+                        model_name = self._get_model_name(
+                            model=model_override.get("model"),
+                            base_url=override_base,
+                        )
+                        llm_params = {
+                            "api_key": override_key,
+                            "api_base": override_base.rstrip("/") + "/" if override_base else None,
+                        }
                     logger.info(f"使用覆盖模型: {model_name}, api_base: {llm_params.get('api_base')}")
                 else:
                     llm_params = self._get_llm_params()

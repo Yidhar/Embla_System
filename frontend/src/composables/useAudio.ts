@@ -116,7 +116,7 @@ export function playWakeVoice() {
     return
   }
 
-  const file = files[Math.floor(Math.random() * files.length)]
+  const file = files[Math.floor(Math.random() * files.length)]!
   const url = `/voices/start/${encodeURIComponent(pack)}/${encodeURIComponent(file)}`
   const audio = new Audio(url)
   audio.volume = audioSettings.value.effectVolume

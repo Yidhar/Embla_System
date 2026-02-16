@@ -4,7 +4,7 @@ import { useTemplateRef } from 'vue'
 import back from '@/assets/icons/back.png'
 import { useParallax } from '@/composables/useParallax'
 
-const props = withDefaults(defineProps<{ parallax?: boolean }>(), { parallax: true })
+const props = withDefaults(defineProps<{ parallax?: boolean, boxClass?: string }>(), { parallax: true, boxClass: 'w-3/5' })
 const { transform: boxTransform } = useParallax({ rotateX: 3, rotateY: 3, translateX: 12, translateY: 8, invertRotate: true })
 
 const scrollPanelRef = useTemplateRef<{
@@ -27,7 +27,7 @@ defineExpose({
     <div class="flex items-center">
       <img :src="back" class="w-[var(--nav-back-width)]" alt="" @click="$router.back">
     </div>
-    <div class="box w-3/5 flex min-h-0 overflow-hidden">
+    <div class="box flex min-h-0 overflow-hidden" :class="boxClass">
       <ScrollPanel
         ref="scrollPanelRef"
         class="size-full"

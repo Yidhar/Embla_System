@@ -52,6 +52,8 @@ logs/audio_temp/*.flac
 !logs/audio_temp/README.md
 
 # Session and history
+sessions/
+uploaded_documents/
 *.session
 *.history
 *.cache

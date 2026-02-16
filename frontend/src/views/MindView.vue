@@ -161,8 +161,8 @@ const infoNode = ref<{ id: string, type: string, weight: number, outCount: numbe
 function tc(t: string): string {
   t = t || '?'
   if (!cmap[t])
-    cmap[t] = COLORS[cidx++ % COLORS.length]
-  return cmap[t]
+    cmap[t] = COLORS[cidx++ % COLORS.length]!
+  return cmap[t]!
 }
 
 function proj(x: number, y: number, z: number) {
@@ -324,7 +324,7 @@ function simPlankton() {
   const now = (performance.now() - t0) * 0.001
   const surfY = SURFACE_H * cfg.hScale
   for (let i = 0; i < plankton.length; i++) {
-    const p = plankton[i]
+    const p = plankton[i]!
     p.life++
     if (p.life > p.maxLife) { plankton[i] = spawnPlankton(); continue }
     p.x += Math.sin(now * p.pf1 + p.pa) * p.amp1 * 0.12 + Math.cos(now * p.pf3 + p.pa2) * p.amp3 * 0.06
@@ -347,7 +347,7 @@ function drawPlankton() {
     else if (lifeRatio > 0.8) fade = 1 - (lifeRatio - 0.8) / 0.2
     if (fade < 0.01) continue
     for (let i = 0; i < p.trail.length - 1; i++) {
-      const t = p.trail[i]
+      const t = p.trail[i]!
       const pp = proj(t.x, t.y, t.z)
       if (pp.d < 50) continue
       const fog = Math.min(1, Math.max(0.05, 250 / pp.d))
@@ -397,13 +397,13 @@ function simulate() {
   const fric = 0.88
   for (let i = 0; i < nodes.length; i++) {
     for (let j = i + 1; j < nodes.length; j++) {
-      let dx = nodes[j].px - nodes[i].px
-      let dz = nodes[j].pz - nodes[i].pz
+      let dx = nodes[j]!.px - nodes[i]!.px
+      let dz = nodes[j]!.pz - nodes[i]!.pz
       let d2 = dx * dx + dz * dz; if (d2 < 4) d2 = 4
       const d = Math.sqrt(d2)
       const f = cfg.spread * alpha / d2
-      nodes[i].vx -= dx / d * f; nodes[i].vz -= dz / d * f
-      nodes[j].vx += dx / d * f; nodes[j].vz += dz / d * f
+      nodes[i]!.vx -= dx / d * f; nodes[i]!.vz -= dz / d * f
+      nodes[j]!.vx += dx / d * f; nodes[j]!.vz += dz / d * f
     }
   }
   for (const l of links) {
@@ -446,8 +446,8 @@ function drawSurface() {
   const surfY = SURFACE_H * cfg.hScale; const half = 300
   const corners = [[-half, surfY, -half], [half, surfY, -half], [half, surfY, half], [-half, surfY, half]] as const
   const pc = corners.map(c => proj(c[0], c[1], c[2]))
-  cx.beginPath(); cx.moveTo(pc[0].sx, pc[0].sy)
-  for (let i = 1; i < 4; i++) cx.lineTo(pc[i].sx, pc[i].sy)
+  cx.beginPath(); cx.moveTo(pc[0]!.sx, pc[0]!.sy)
+  for (let i = 1; i < 4; i++) cx.lineTo(pc[i]!.sx, pc[i]!.sy)
   cx.closePath()
   cx.fillStyle = 'rgba(20,80,180,0.06)'; cx.fill()
   cx.strokeStyle = 'rgba(40,100,200,0.15)'; cx.lineWidth = 1; cx.stroke()
@@ -853,47 +853,49 @@ function setupEvents() {
   cv.addEventListener('touchstart', (e) => {
     if (e.touches.length === 1) {
       const rect = cv.getBoundingClientRect()
-      const n = findNode(e.touches[0].clientX - rect.left, e.touches[0].clientY - rect.top)
-      if (n) { dragging = n; dragMoved = false; prevMX = e.touches[0].clientX; prevMY = e.touches[0].clientY }
-      else { rotating = true; rsx = e.touches[0].clientX; rsy = e.touches[0].clientY; rst = camT; rsp = camP }
+      const t0 = e.touches[0]!
+      const n = findNode(t0.clientX - rect.left, t0.clientY - rect.top)
+      if (n) { dragging = n; dragMoved = false; prevMX = t0.clientX; prevMY = t0.clientY }
+      else { rotating = true; rsx = t0.clientX; rsy = t0.clientY; rst = camT; rsp = camP }
     }
     else if (e.touches.length === 2) {
-      const dx = e.touches[1].clientX - e.touches[0].clientX
-      const dy = e.touches[1].clientY - e.touches[0].clientY
+      const dx = e.touches[1]!.clientX - e.touches[0]!.clientX
+      const dy = e.touches[1]!.clientY - e.touches[0]!.clientY
       td = Math.sqrt(dx * dx + dy * dy)
     }
     else if (e.touches.length === 3) {
-      tpan = true; rsx = e.touches[0].clientX; rsy = e.touches[0].clientY; panOX = panX; panOY = panY
+      tpan = true; rsx = e.touches[0]!.clientX; rsy = e.touches[0]!.clientY; panOX = panX; panOY = panY
     }
   }, { passive: true })
 
   cv.addEventListener('touchmove', (e) => {
     e.preventDefault()
     if (dragging && e.touches.length === 1) {
+      const t0 = e.touches[0]!
       const dp = proj(dragging.px, dragging.py, dragging.pz)
       const scale = dp.d / 700
-      const dx = e.touches[0].clientX - prevMX; const dy = e.touches[0].clientY - prevMY
+      const dx = t0.clientX - prevMX; const dy = t0.clientY - prevMY
       if (Math.abs(dx) + Math.abs(dy) > 2) dragMoved = true
       const ct = Math.cos(camT); const st = Math.sin(camT)
       const cp = Math.cos(camP); const sp = Math.sin(camP)
       dragging.px += dx * scale * ct - dy * scale * sp * st
       dragging.pz += dx * scale * st + dy * scale * sp * ct
       dragging.py -= dy * scale * cp
-      prevMX = e.touches[0].clientX; prevMY = e.touches[0].clientY
+      prevMX = t0.clientX; prevMY = t0.clientY
     }
     else if (e.touches.length === 1 && rotating) {
-      camT = rst - (e.touches[0].clientX - rsx) * 0.005
-      camP = rsp - (e.touches[0].clientY - rsy) * 0.005
+      camT = rst - (e.touches[0]!.clientX - rsx) * 0.005
+      camP = rsp - (e.touches[0]!.clientY - rsy) * 0.005
     }
     else if (e.touches.length === 2) {
-      const dx = e.touches[1].clientX - e.touches[0].clientX
-      const dy = e.touches[1].clientY - e.touches[0].clientY
+      const dx = e.touches[1]!.clientX - e.touches[0]!.clientX
+      const dy = e.touches[1]!.clientY - e.touches[0]!.clientY
       const nd = Math.sqrt(dx * dx + dy * dy)
       camD *= td / nd; camD = Math.max(80, Math.min(3000, camD)); td = nd
     }
     else if (e.touches.length === 3 && tpan) {
-      panX = panOX + (e.touches[0].clientX - rsx)
-      panY = panOY + (e.touches[0].clientY - rsy)
+      panX = panOX + (e.touches[0]!.clientX - rsx)
+      panY = panOY + (e.touches[0]!.clientY - rsy)
     }
   }, { passive: false })
 
@@ -944,9 +946,8 @@ watch(nodeCount, () => {
 </script>
 
 <template>
-  <!-- 与技能工坊一致：不加 h-full，用 max-h+overflow 限制高度并在组件内滚动 -->
-  <BoxContainer class="text-sm">
-    <div class="text-white flex flex-col h-[75vh] min-h-0 overflow-y-auto">
+  <BoxContainer class="text-sm" box-class="flex-1">
+    <div class="text-white flex flex-col h-full min-h-0">
       <!-- Header -->
       <div class="flex items-center gap-3 mb-3 shrink-0">
         <h2 class="text-lg font-bold">

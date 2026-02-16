@@ -26,7 +26,8 @@ const TTS_VOICES = {
       <ConfigGroup value="llm" header="大语言模型">
         <div class="grid gap-4">
           <ConfigItem name="模型名称" description="用于对话的大语言模型">
-            <InputText v-model="CONFIG.api.model" />
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，无需填写</span>
+            <InputText v-else v-model="CONFIG.api.model" />
           </ConfigItem>
           <ConfigItem name="API 地址" description="大语言模型的 API 地址">
             <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆 ({{ nagaUser?.username }})，使用 NagaModel 网关</span>
@@ -60,7 +61,8 @@ const TTS_VOICES = {
         </template>
         <div class="grid gap-4">
           <ConfigItem name="控制模型" description="用于电脑控制任务的主要模型">
-            <InputText v-model="CONFIG.computer_control.model" />
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，无需填写</span>
+            <InputText v-else v-model="CONFIG.computer_control.model" />
           </ConfigItem>
           <ConfigItem name="控制模型 API 地址" description="控制模型的 API 地址">
             <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，使用 NagaModel 网关</span>
@@ -72,7 +74,8 @@ const TTS_VOICES = {
           </ConfigItem>
           <Divider class="m-1!" />
           <ConfigItem name="定位模型" description="用于元素定位和坐标识别的模型">
-            <InputText v-model="CONFIG.computer_control.grounding_model" />
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，无需填写</span>
+            <InputText v-else v-model="CONFIG.computer_control.grounding_model" />
           </ConfigItem>
           <ConfigItem name="定位模型 API 地址" description="定位模型的 API 地址">
             <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，使用 NagaModel 网关</span>
@@ -96,7 +99,8 @@ const TTS_VOICES = {
         </template>
         <div class="grid gap-4">
           <ConfigItem name="模型名称" description="用于语音识别的模型">
-            <InputText v-model="CONFIG.voice_realtime.asr_model" />
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，无需填写</span>
+            <InputText v-else v-model="CONFIG.voice_realtime.asr_model" />
           </ConfigItem>
           <template v-if="!isNagaLoggedIn">
             <ConfigItem name="模型提供者" description="语音识别模型的提供者">
@@ -130,7 +134,7 @@ const TTS_VOICES = {
         </template>
         <div class="grid gap-4">
           <ConfigItem name="模型名称" description="用于语音合成的模型">
-            <span v-if="isNagaLoggedIn" class="text-white/60">{{ CONFIG.voice_realtime.tts_model }}</span>
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，无需填写</span>
             <InputText v-else v-model="CONFIG.voice_realtime.tts_model" />
           </ConfigItem>
           <ConfigItem name="声线" description="语音合成模型的声线">
@@ -159,7 +163,8 @@ const TTS_VOICES = {
       <ConfigGroup value="embedding" header="嵌入模型">
         <div class="grid gap-4">
           <ConfigItem name="模型名称" description="用于向量嵌入的模型">
-            <InputText v-model="CONFIG.embedding.model" />
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，无需填写</span>
+            <InputText v-else v-model="CONFIG.embedding.model" />
           </ConfigItem>
           <ConfigItem name="API 地址" description="嵌入模型的 API 地址（留空使用主模型地址）">
             <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，使用 NagaModel 网关</span>
