@@ -15,7 +15,7 @@
 [![Forks](https://img.shields.io/github/forks/Xxiii8322766509/NagaAgent?style=social)](https://github.com/Xxiii8322766509/NagaAgent)
 [![Issues](https://img.shields.io/github/issues/Xxiii8322766509/NagaAgent)](https://github.com/Xxiii8322766509/NagaAgent/issues)
 
-**[Tutorial Videos & One-Click Runner](https://www.pylindex.top/naga)** · **[QQ Bot Integration: Undefined QQbot](https://github.com/69gg/Undefined/)**
+**[QQ Bot Integration: Undefined QQbot](https://github.com/69gg/Undefined/)**
 
 ![UI Preview](ui/img/README.jpg)
 
