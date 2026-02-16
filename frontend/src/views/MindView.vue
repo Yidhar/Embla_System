@@ -946,7 +946,7 @@ watch(nodeCount, () => {
 </script>
 
 <template>
-  <BoxContainer class="text-sm" box-class="flex-1">
+  <BoxContainer class="text-sm">
     <div class="text-white flex flex-col h-full min-h-0">
       <!-- Header -->
       <div class="flex items-center gap-3 mb-3 shrink-0">
