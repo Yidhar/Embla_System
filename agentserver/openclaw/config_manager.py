@@ -73,6 +73,9 @@ class OpenClawConfigManager:
         # Agent 并发
         "agents.defaults.maxConcurrent",
         "agents.defaults.subagents.maxConcurrent",
+
+        # 环境变量
+        "env.BRAVE_API_KEY",
     }
 
     # 禁止修改的字段（安全敏感）
@@ -360,6 +363,8 @@ class OpenClawConfigManager:
         updates = {
             "hooks.enabled": True,
             "hooks.token": hooks_token,
+            # 搜索集成：设置 BRAVE_API_KEY 占位值，走本地代理
+            "env.BRAVE_API_KEY": "naga-proxy",
         }
 
         return self.batch_update(updates)

@@ -122,7 +122,10 @@ class OpenClawInstaller:
                 "lastTouchedVersion": "naga-generated",
                 "lastTouchedAt": "",
             },
-            "env": {"shellEnv": {"enabled": False}},
+            "env": {
+                "shellEnv": {"enabled": False},
+                "BRAVE_API_KEY": "naga-proxy",
+            },
             "models": {
                 "providers": {
                     "naga-provider": {

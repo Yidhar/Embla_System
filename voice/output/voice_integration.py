@@ -247,20 +247,28 @@ class VoiceIntegration:
                 return None
                 
             headers = {}
-            if config.tts.require_api_key:
-                headers["Authorization"] = f"Bearer {config.tts.api_key}"
-            
             payload = {
                 "input": text,
                 "voice": config.tts.default_voice,
                 "response_format": config.tts.default_format,
                 "speed": config.tts.default_speed
             }
-            
+
+            # 认证态 → NagaModel 网关；否则 → 本地 Flask
+            from apiserver import naga_auth
+            if naga_auth.is_authenticated():
+                tts_url = naga_auth.NAGA_MODEL_URL + "/audio/speech"
+                headers["Authorization"] = f"Bearer {naga_auth.get_access_token()}"
+                payload["model"] = "default"
+            else:
+                tts_url = self.tts_url  # http://127.0.0.1:{port}/v1/audio/speech
+                if config.tts.require_api_key:
+                    headers["Authorization"] = f"Bearer {config.tts.api_key}"
+
             # 使用requests进行同步调用
             import requests
             response = requests.post(
-                self.tts_url,
+                tts_url,
                 json=payload,
                 headers=headers,
                 timeout=30  # 硬编码超时时间（秒）

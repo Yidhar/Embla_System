@@ -975,13 +975,14 @@ async def chat_stream(request: ChatRequest):
             # 如果当前会话曾发送过图片，持续使用视觉模型
             model_override = None
             use_vlm = session_id in _vlm_sessions
-            if use_vlm and get_config().computer_control.enabled and get_config().computer_control.api_key:
+            cc = get_config().computer_control
+            if use_vlm and cc.enabled and (cc.api_key or naga_auth.is_authenticated()):
                 model_override = {
-                    "model": get_config().computer_control.model,
-                    "api_base": get_config().computer_control.model_url,
-                    "api_key": get_config().computer_control.api_key,
+                    "model": cc.model,
+                    "api_base": cc.model_url,
+                    "api_key": cc.api_key,
                 }
-                logger.info(f"[API Server] VLM 会话，使用视觉模型: {get_config().computer_control.model}")
+                logger.info(f"[API Server] VLM 会话，使用视觉模型: {cc.model}")
 
             complete_reasoning = ""
             # 记录每轮的content，用于在每轮结束时完成TTS处理
@@ -1143,6 +1144,28 @@ async def chat_stream(request: ChatRequest):
             "X-Accel-Buffering": "no",  # 禁用nginx缓冲
         },
     )
+
+
+@app.api_route("/tools/search", methods=["GET", "POST"])
+async def proxy_search(request: Request):
+    """Brave Search 兼容代理 → NagaModel /v1/tools/search"""
+    if not naga_auth.is_authenticated():
+        raise HTTPException(status_code=401, detail="未登录 NagaModel")
+
+    if request.method == "GET":
+        params = dict(request.query_params)
+    else:
+        params = await request.json()
+
+    import httpx
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            naga_auth.NAGA_MODEL_URL + "/tools/search",
+            json=params,
+            headers={"Authorization": f"Bearer {naga_auth.get_access_token()}"},
+            timeout=30,
+        )
+    return resp.json()
 
 
 @app.get("/memory/stats")

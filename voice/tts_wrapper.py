@@ -58,6 +58,25 @@ class TTSWrapper:
     async def _generate_audio_async(self, text, voice, response_format, speed):
         """异步生成音频"""
         try:
+            # NagaModel 网关优先
+            from apiserver import naga_auth
+            if naga_auth.is_authenticated():
+                import requests as _req
+                resp = _req.post(
+                    naga_auth.NAGA_MODEL_URL + "/audio/speech",
+                    json={"model": "default", "input": text, "voice": voice,
+                          "response_format": response_format, "speed": speed},
+                    headers={"Authorization": f"Bearer {naga_auth.get_access_token()}"},
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{response_format}")
+                temp_file.write(resp.content)
+                temp_file.close()
+                logger.info(f"[TTS包装器] NagaModel 语音生成成功: {temp_file.name}")
+                return temp_file.name
+
+            # 本地 edge_tts 回退
             # 创建临时文件
             temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{response_format}")
             temp_path = temp_file.name

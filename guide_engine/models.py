@@ -63,15 +63,32 @@ class GuideEngineSettings:
         if gamedata_dir.startswith("./"):
             gamedata_dir = str((root / gamedata_dir[2:]).resolve())
 
+        # NagaModel 网关优先：认证态走统一网关
+        from apiserver import naga_auth
+        if naga_auth.is_authenticated():
+            _emb_base = naga_auth.NAGA_MODEL_URL
+            _emb_key = naga_auth.get_access_token()
+            _emb_model = "default"
+            _llm_base = naga_auth.NAGA_MODEL_URL
+            _llm_key = naga_auth.get_access_token()
+            _llm_model = "default"
+        else:
+            _emb_base = ge.embedding_api_base_url or config.api.base_url
+            _emb_key = ge.embedding_api_key or config.api.api_key
+            _emb_model = ge.embedding_api_model or "text-embedding-3-small"
+            _llm_base = ge.game_guide_llm_api_base_url or config.api.base_url
+            _llm_key = ge.game_guide_llm_api_key or config.api.api_key
+            _llm_model = ge.game_guide_llm_api_model or config.api.model
+
         return cls(
             enabled=ge.enabled,
             gamedata_dir=gamedata_dir,
-            embedding_api_base_url=ge.embedding_api_base_url or config.api.base_url,
-            embedding_api_key=ge.embedding_api_key or config.api.api_key,
-            embedding_api_model=ge.embedding_api_model or "text-embedding-3-small",
-            game_guide_llm_api_base_url=ge.game_guide_llm_api_base_url or config.api.base_url,
-            game_guide_llm_api_key=ge.game_guide_llm_api_key or config.api.api_key,
-            game_guide_llm_api_model=ge.game_guide_llm_api_model or config.api.model,
+            embedding_api_base_url=_emb_base,
+            embedding_api_key=_emb_key,
+            embedding_api_model=_emb_model,
+            game_guide_llm_api_base_url=_llm_base,
+            game_guide_llm_api_key=_llm_key,
+            game_guide_llm_api_model=_llm_model,
             game_guide_llm_api_type=ge.game_guide_llm_api_type,
             neo4j_uri=ge.neo4j_uri,
             neo4j_user=ge.neo4j_user,

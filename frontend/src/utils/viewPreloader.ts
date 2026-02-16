@@ -17,7 +17,7 @@ export async function preloadAllViews(
 ): Promise<void> {
   const total = VIEW_IMPORTS.length
   for (let i = 0; i < total; i++) {
-    const view = VIEW_IMPORTS[i]
+    const view = VIEW_IMPORTS[i]!
     console.log(`[Preload] 加载 ${view.name} (${i + 1}/${total})...`)
     try {
       await view.load()
