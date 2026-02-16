@@ -15,7 +15,7 @@
 [![Forks](https://img.shields.io/github/forks/Xxiii8322766509/NagaAgent?style=social)](https://github.com/Xxiii8322766509/NagaAgent)
 [![Issues](https://img.shields.io/github/issues/Xxiii8322766509/NagaAgent)](https://github.com/Xxiii8322766509/NagaAgent/issues)
 
-**[教程视频与一键运行包](https://www.pylindex.top/naga)** · **[QQ 机器人联动：Undefined QQbot](https://github.com/69gg/Undefined/)**
+ **[QQ 机器人联动：Undefined QQbot](https://github.com/69gg/Undefined/)**
 
 ![UI 预览](ui/img/README.jpg)
 
