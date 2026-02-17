@@ -42,18 +42,13 @@ NagaAgent consists of four independent microservices:
 
 | Date | Changes |
 |------|---------|
-| **2026-02-14** | 5.0.0 release: Remote memory service (NagaMemory cloud + local GRAG fallback), Mind Sea 3D rewrite, splash title animation with particles, progress bar stall detection & health polling, version update dialog, user agreement |
-| **2026-02-14** | Captcha integration, registration flow (username + email + verification code), CAS session expiry dialog, voice input button, file parsing button, IME composition enter fix |
-| **2026-02-14** | Remove ChromaDB local dependency (-1119 lines), game guide fully cloud-based, guide feature gated by login |
-| **2026-02-13** | Floating ball mode (4-state animation: classic / ball / compact / full), screenshot multimodal vision model auto-switch |
-| **2026-02-13** | Skill workshop refactor + Live2D emotion channel independent + naga-config skill |
-| **2026-02-12** | NagaCAS authentication + NagaModel gateway routing + login dialog + user menu |
-| **2026-02-12** | Live2D 4-channel orthogonal animation (body state / actions / emotions / tracking), window-level gaze tracking with calibration |
-| **2026-02-12** | Agentic Tool Loop: streaming tool extraction + multi-round auto-execution + parallel MCP/OpenClaw/Live2D dispatch |
-| **2026-02-12** | Arknights-style splash screen + progress tracking + view preloading + mouse parallax effect |
-| **2026-02-12** | Game guide MCP integration (auto-screenshot + vision model + Neo4j import + 6 game RAG processors) |
+| **2026-02-16** | 5.0.0 release: NagaModel gateway unified access (TTS/Embeddings/WebSearch), DeepSeek reasoning process real-time display, Mind Sea UI adaptive fix, BoxContainer noScroll mode |
+| **2026-02-15** | Unified knowledge block injection + history pollution fix, LLM streaming retry, config hot-reload fix, skill workshop loading optimization, config.json write truncation fix, 7-day auto-login + auto-start on boot |
+| **2026-02-14** | Remote memory service (NagaMemory cloud + local GRAG fallback), Mind Sea 3D rewrite, splash title animation with particles, progress bar stall detection & health polling, version update dialog, user agreement |
+| **2026-02-13** | Floating ball mode (4-state animation), screenshot multimodal vision auto-switch, skill workshop refactor + Live2D emotion channel independent, login/registration flow improvements |
+| **2026-02-12** | NagaCAS authentication + NagaModel gateway routing, Live2D 4-channel orthogonal animation, Agentic Tool Loop, Arknights-style splash screen, game guide MCP integration |
 | **2026-02-11** | Embedded OpenClaw packaging, auto-generate config from template on startup |
-| **2026-02-10** | Backend packaging optimization, skill workshop MCP status fix, frontend bug fixes |
+| **2026-02-10** | Backend packaging optimization, skill workshop MCP status fix, terminal settings blank page fix, remove redundant Agent/MCP keeping only OpenClaw dispatch |
 | **2026-02-09** | Frontend refactor, Live2D eye tracking disable, OpenClaw renamed to AgentServer |
 
 ---
