@@ -17,7 +17,6 @@
 
 **[QQ Bot Integration: Undefined QQbot](https://github.com/69gg/Undefined/)**
 
-![UI Preview](logs/README.png)
 
 </div>
 
