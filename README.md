@@ -17,7 +17,6 @@
 
  **[QQ 机器人联动：Undefined QQbot](https://github.com/69gg/Undefined/)**
 
-![UI 预览](logs/README.png)
 
 </div>
 
