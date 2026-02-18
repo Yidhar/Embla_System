@@ -583,6 +583,11 @@ python build.py  # 构建 Windows 一键运行整合包，输出到 dist/
 
 ---
 
+<<<<<<< HEAD
+=======
+---
+
+>>>>>>> ab668726c1af0745149115e4e3057fc42cbf363f
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=RTGS2017/NagaAgent&type=date&legend=top-left)](https://www.star-history.com/#RTGS2017/NagaAgent&type=date&legend=top-left)
