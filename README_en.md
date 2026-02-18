@@ -17,9 +17,13 @@
 
 **[QQ Bot Integration: Undefined QQbot](https://github.com/69gg/Undefined/)**
 
-![UI Preview](ui/img/README.jpg)
+![UI Preview](logs/README.png)
 
 </div>
+
+---
+
+**Dual licensed** · [AGPL-3.0](LICENSE) for open source | [Proprietary](CLOSED-SOURCE.LICENSE) for closed-source use (written consent required). Commercial: contact@nagaagent.com
 
 ---
 
@@ -577,12 +581,6 @@ python build.py  # Build Windows one-click runner package, output to dist/
 ## Contributing
 
 Issues and Pull Requests are welcome.
-
----
-
-## License
-
-**Dual licensed** · [AGPL-3.0](LICENSE) for open source | [Proprietary](CLOSED-SOURCE.LICENSE) for closed-source use (written consent required). Commercial: contact@nagaagent.com
 
 ---
 

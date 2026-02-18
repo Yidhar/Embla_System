@@ -17,9 +17,13 @@
 
  **[QQ 机器人联动：Undefined QQbot](https://github.com/69gg/Undefined/)**
 
-![UI 预览](ui/img/README.jpg)
+![UI 预览](logs/README.png)
 
 </div>
+
+---
+
+**双许可证** · 开源采用 [AGPL-3.0](LICENSE)，闭源采用 [专属许可](CLOSED-SOURCE.LICENSE)（需书面授权）。商业合作：contact@nagaagent.com / bilibili【柏斯阔落】
 
 ---
 
@@ -576,12 +580,6 @@ python build.py  # 构建 Windows 一键运行整合包，输出到 dist/
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request。如有问题，可加入 QQ 频道 nagaagent1。
-
----
-
-## 许可证
-
-**双许可证** · 开源采用 [AGPL-3.0](LICENSE)，闭源采用 [专属许可](CLOSED-SOURCE.LICENSE)（需书面授权）。商业合作：contact@nagaagent.com / bilibili【柏斯阔落】。
 
 ---
 
