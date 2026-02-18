@@ -8,7 +8,7 @@
 
 ![NagaAgent](https://img.shields.io/badge/NagaAgent-5.0.0-blue?style=for-the-badge&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-green?style=for-the-badge)
-![License](https://img.shields.io/badge/License-AGPL%203.0-yellow?style=for-the-badge)
+![License](https://img.shields.io/badge/License-AGPL%203.0%20%7C%20Proprietary-yellow?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)
 
 [![Stars](https://img.shields.io/github/stars/Xxiii8322766509/NagaAgent?style=social)](https://github.com/Xxiii8322766509/NagaAgent)
@@ -581,7 +581,7 @@ python build.py  # 构建 Windows 一键运行整合包，输出到 dist/
 
 ## 许可证
 
-参见 [LICENSE](LICENSE)。如需商业部署或合作，请联系 contact@nagaagent.com，或 bilibili 私信【柏斯阔落】。
+**双许可证** · 开源采用 [AGPL-3.0](LICENSE)，闭源采用 [专属许可](CLOSED-SOURCE.LICENSE)（需书面授权）。商业合作：contact@nagaagent.com / bilibili【柏斯阔落】。
 
 ---
 
