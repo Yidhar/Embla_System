@@ -13,6 +13,7 @@ import logging
 import time
 import threading
 import subprocess
+import locale
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, AsyncGenerator, Any, Tuple
 from urllib.request import Request as UrlRequest, urlopen
@@ -255,7 +256,15 @@ MARKET_ITEMS: List[Dict[str, Any]] = [
 
 
 def _run_command(command: List[str], timeout: int = 30) -> Tuple[int, str, str]:
-    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+    process_encoding = locale.getpreferredencoding(False) or "utf-8"
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding=process_encoding,
+        errors="replace",
+        timeout=timeout,
+    )
     return result.returncode, result.stdout.strip(), result.stderr.strip()
 
 
@@ -1599,13 +1608,24 @@ async def proxy_update_check(platform: str = "windows"):
             if resp.status_code == 404:
                 return {"has_update": False}
             resp.raise_for_status()
-            data = resp.json()
+            raw_text = (resp.text or "").strip()
+            if not raw_text:
+                logger.info("更新检查返回空响应，跳过更新")
+                return {"has_update": False}
+            try:
+                data = resp.json()
+            except ValueError:
+                logger.info("更新检查返回非JSON响应，跳过更新")
+                return {"has_update": False}
             # 将相对下载路径拼成完整URL
             if data.get("download_url"):
                 data["download_url"] = f"{naga_auth.BUSINESS_URL}{data['download_url']}"
             return data
-    except Exception as e:
+    except httpx.HTTPError as e:
         logger.warning(f"更新检查失败: {e}")
+        return {"has_update": False}
+    except Exception as e:
+        logger.error(f"更新检查处理异常: {e}")
         return {"has_update": False}
 
 

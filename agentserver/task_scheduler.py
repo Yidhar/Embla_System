@@ -6,9 +6,12 @@ import asyncio  # 异步支持 #
 import uuid  # 任务ID #
 import json  # JSON处理 #
 import logging  # 日志 #
+import re  # 正则解析 #
 import time  # 时间处理 #
 from typing import Any, Dict, List, Optional  # 类型标注 #
 from dataclasses import dataclass, field  # 数据类 #
+
+import httpx
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -69,7 +72,136 @@ class _TaskScheduler:
 
     def set_llm_config(self, config: Dict[str, Any]) -> None:
         """设置LLM配置用于智能压缩"""
-        self.llm_config = config
+        self.llm_config = dict(config)
+
+    @staticmethod
+    def _is_google_native_config(llm_config: Dict[str, Any]) -> bool:
+        protocol = str(llm_config.get("protocol", "") or "").strip().lower()
+        if protocol in {"google_generate_content", "google", "gemini"}:
+            return True
+        if protocol in {"openai_chat_completions", "openai", "openai_compatible"}:
+            return False
+
+        base = str(llm_config.get("api_base", "") or "").strip().lower()
+        if "generativelanguage.googleapis.com" in base:
+            return True
+
+        provider = str(llm_config.get("provider", "") or "").strip().lower()
+        if provider in {"google", "gemini", "google_ai_studio", "google_genai"}:
+            return True
+        if provider in {"openai", "openai_compatible"}:
+            return False
+
+        return False
+
+    @staticmethod
+    def _extract_google_text(data: Any) -> str:
+        if not isinstance(data, dict):
+            return ""
+        candidates = data.get("candidates") or []
+        if not isinstance(candidates, list):
+            return ""
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content") or {}
+            if not isinstance(content, dict):
+                continue
+            parts = content.get("parts") or []
+            if not isinstance(parts, list):
+                continue
+            texts: List[str] = []
+            for part in parts:
+                if isinstance(part, dict):
+                    text = part.get("text")
+                    if isinstance(text, str) and text:
+                        texts.append(text)
+            if texts:
+                return "".join(texts)
+        return ""
+
+    @staticmethod
+    def _parse_json_result_from_text(text: str) -> Dict[str, Any]:
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+
+        try:
+            return json.loads(cleaned)
+        except Exception:
+            start = cleaned.find("{")
+            end = cleaned.rfind("}")
+            if start != -1 and end > start:
+                return json.loads(cleaned[start : end + 1])
+            raise
+
+    async def _call_google_native_compression(self, prompt: str) -> Dict[str, Any]:
+        if not self.llm_config:
+            raise RuntimeError("LLM配置未初始化")
+
+        api_base = str(self.llm_config.get("api_base", "") or "").strip().rstrip("/")
+        if not api_base:
+            api_base = "https://generativelanguage.googleapis.com/v1beta"
+        lowered_base = api_base.lower()
+        for suffix in ("/openai/chat/completions", "/chat/completions", "/completions", "/openai"):
+            if lowered_base.endswith(suffix):
+                api_base = api_base[: -len(suffix)]
+                lowered_base = api_base.lower()
+                break
+        if "/models/" in lowered_base and ":" in lowered_base:
+            api_base = api_base.split("/models/", 1)[0]
+            lowered_base = api_base.lower()
+        if "/v1alpha" not in lowered_base and "/v1beta" not in lowered_base and "/v1/" not in lowered_base and not lowered_base.endswith("/v1"):
+            api_base = f"{api_base.rstrip('/')}/v1beta"
+
+        model = str(self.llm_config.get("model", "") or "").strip()
+        if ":" in model:
+            maybe_model, maybe_method = model.rsplit(":", 1)
+            if maybe_method in {"generateContent", "streamGenerateContent", "BidiGenerateContent"}:
+                model = maybe_model
+        if model.startswith("models/"):
+            model = model[len("models/") :]
+        if "/" in model:
+            prefix = model.split("/", 1)[0].lower()
+            if prefix in {"openai", "openrouter", "deepseek", "google", "gemini"}:
+                model = model.split("/")[-1]
+        if not model:
+            model = "gemini-2.0-flash"
+
+        api_key = str(self.llm_config.get("api_key", "") or "").strip()
+        timeout_seconds = int(self.llm_config.get("request_timeout") or 120)
+        use_system_proxy = bool(self.llm_config.get("applied_proxy", False))
+        extra_headers = self.llm_config.get("extra_headers") if isinstance(self.llm_config.get("extra_headers"), dict) else {}
+        extra_body = self.llm_config.get("extra_body") if isinstance(self.llm_config.get("extra_body"), dict) else {}
+
+        url = f"{api_base}/models/{model}:generateContent"
+        params: Dict[str, str] = {}
+        if api_key:
+            params["key"] = api_key
+        logger.info("[TaskScheduler] Google request mode=generateContent url=%s", f"{url}?key=***" if params else url)
+        logger.info("[TaskScheduler] Google request proxy=%s", use_system_proxy)
+
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        headers.update({str(k): str(v) for k, v in extra_headers.items()})
+
+        payload: Dict[str, Any] = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": 1024,
+            },
+        }
+        payload.update(extra_body)
+
+        async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=use_system_proxy) as client:
+            response = await client.post(url, params=params, headers=headers, json=payload)
+
+        if response.status_code >= 400:
+            raise RuntimeError(f"Google API error ({response.status_code}): {response.text}")
+
+        response_text = self._extract_google_text(response.json())
+        return self._parse_json_result_from_text(response_text)
 
     async def create_task(self, task_id: str, purpose: str, session_id: Optional[str] = None, 
                          analysis_session_id: Optional[str] = None) -> str:
@@ -265,6 +397,9 @@ class _TaskScheduler:
     async def _call_llm_compression(self, prompt: str) -> Dict[str, Any]:
         """调用LLM进行记忆压缩"""
         try:
+            if self.llm_config and self._is_google_native_config(self.llm_config):
+                return await self._call_google_native_compression(prompt)
+
             import litellm
             litellm.enable_json_schema_validation = True
             

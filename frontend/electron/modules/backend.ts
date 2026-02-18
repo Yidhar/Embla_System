@@ -4,6 +4,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
+import { StringDecoder } from 'node:string_decoder'
 import { fileURLToPath } from 'node:url'
 import { app } from 'electron'
 import { getMainWindow } from './window'
@@ -14,7 +15,7 @@ const __dirname = dirname(__filename)
 let backendProcess: ChildProcess | null = null
 let devRetryCount = 0
 
-type AppPackageMetadata = {
+interface AppPackageMetadata {
   nagaDebugConsole?: boolean
 }
 
@@ -76,7 +77,13 @@ export function startBackend(): void {
   console.log(`[Backend] Starting from ${cwd}`)
   console.log(`[Backend] Command: ${cmd} ${args.join(' ')}`)
 
-  const env = { ...process.env, PYTHONUNBUFFERED: '1' }
+  const env = {
+    ...process.env,
+    PYTHONUNBUFFERED: '1',
+    PYTHONIOENCODING: 'utf-8',
+    PYTHONUTF8: '1',
+    LITELLM_LOG: process.env.LITELLM_LOG || 'WARNING',
+  }
   const useDebugConsole = process.platform === 'win32' && shouldOpenDebugConsole()
 
   if (useDebugConsole) {
@@ -106,6 +113,8 @@ export function startBackend(): void {
   // Collect all output for error reporting
   const outputLines: string[] = []
   const PROGRESS_PREFIX = '##PROGRESS##'
+  const stdoutDecoder = new StringDecoder('utf8')
+  const stderrDecoder = new StringDecoder('utf8')
 
   backendProcess = spawn(cmd, args, {
     cwd,
@@ -114,11 +123,13 @@ export function startBackend(): void {
   })
 
   backendProcess.stdout?.on('data', (data: Buffer) => {
-    const text = data.toString()
+    const text = stdoutDecoder.write(data)
     const lines = text.split('\n')
     for (const line of lines) {
       const trimmed = line.trimEnd()
-      if (!trimmed) continue
+      if (!trimmed) {
+        continue
+      }
       outputLines.push(trimmed)
 
       // Parse progress signals
@@ -137,7 +148,7 @@ export function startBackend(): void {
   })
 
   backendProcess.stderr?.on('data', (data: Buffer) => {
-    const text = data.toString()
+    const text = stderrDecoder.write(data)
     console.error(`[Backend] ${text.trimEnd()}`)
     outputLines.push(text.trimEnd())
     if (!app.isPackaged) {
@@ -150,6 +161,20 @@ export function startBackend(): void {
   })
 
   backendProcess.on('exit', (code) => {
+    const remainOut = stdoutDecoder.end().trimEnd()
+    if (remainOut) {
+      console.log(`[Backend] ${remainOut}`)
+      outputLines.push(remainOut)
+    }
+    const remainErr = stderrDecoder.end().trimEnd()
+    if (remainErr) {
+      console.error(`[Backend] ${remainErr}`)
+      outputLines.push(remainErr)
+      if (!app.isPackaged) {
+        stderrBuffer += remainErr
+      }
+    }
+
     console.log(`[Backend] Exited with code ${code}`)
     backendProcess = null
 
@@ -219,18 +244,21 @@ export function stopBackend(): void {
 
   if (process.platform === 'win32') {
     spawn('taskkill', ['/pid', String(pid), '/f', '/t'])
-  } else {
+  }
+  else {
     // SIGTERM 让 Python 进程 os._exit(0) 立即退出
     try {
       process.kill(pid, 'SIGTERM')
-    } catch {
+    }
+    catch {
       // already dead
     }
     // 保险：200ms 后 SIGKILL（不 unref，确保定时器一定执行）
     setTimeout(() => {
       try {
         process.kill(pid, 'SIGKILL')
-      } catch {
+      }
+      catch {
         // already dead
       }
     }, 200)

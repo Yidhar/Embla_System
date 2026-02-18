@@ -1,32 +1,41 @@
 #!/usr/bin/env python3
 """
-LLM服务模块
-提供统一的LLM调用接口，替代conversation_core.py中的get_response方法
-使用 LiteLLM 统一处理多模型的 COT/reasoning_content
+LLM service module.
+
+This module keeps backward compatibility for the existing OpenAI-compatible flow,
+and adds native Google Generative Language API protocol support.
 """
 
+import asyncio
+import base64
+import inspect
+import json
 import logging
-import sys
 import os
-from typing import Optional, Dict, Any, List
+import re
+import sys
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote, urlencode, urlparse
 
-# 添加项目根目录到Python路径
+import httpx
+import litellm
+import websockets
+from fastapi import FastAPI, HTTPException
+from litellm import acompletion
+
+# Add project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import litellm
-from litellm import acompletion
-from fastapi import FastAPI, HTTPException
 from system.config import get_config
 from . import naga_auth
 
-# 配置日志
 logger = logging.getLogger("LLMService")
 
 
 @dataclass
 class LLMResponse:
-    """LLM响应结构，包含内容和推理过程"""
+    """LLM response structure."""
 
     content: str
     reasoning_content: Optional[str] = None
@@ -39,124 +48,763 @@ class LLMResponse:
 
 
 class LLMService:
-    """LLM服务类 - 使用 LiteLLM 提供统一的LLM调用接口，支持 COT/reasoning_content"""
+    """Unified LLM service (OpenAI-compatible + Google native protocol)."""
+
+    PROTOCOL_OPENAI_CHAT = "openai_chat_completions"
+    PROTOCOL_GOOGLE_GENERATE = "google_generate_content"
+
+    GOOGLE_DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta"
+    GOOGLE_LIVE_WS_PATH_TEMPLATE = "/ws/google.ai.generativelanguage.{version}.GenerativeService.BidiGenerateContent"
+    OPENAI_HINTS = {"openai", "openai_compatible"}
+    GOOGLE_HINTS = {"google", "gemini", "google_ai_studio", "google_genai"}
+    DATA_URL_PATTERN = re.compile(r"^data:(?P<mime>[^;]+);base64,(?P<data>.+)$", re.IGNORECASE)
+    GOOGLE_METHOD_PATTERN = re.compile(
+        r"/models/(?P<model>[^:]+):(?P<method>generateContent|streamGenerateContent|BidiGenerateContent)$",
+        re.IGNORECASE,
+    )
+    GOOGLE_URL_KEY_PATTERN = re.compile(r"([?&](?:key|api_key|x-goog-api-key)=)([^&]+)", re.IGNORECASE)
 
     def __init__(self):
         self._initialized = False
         self._initialize_client()
 
     def _initialize_client(self):
-        """初始化 LiteLLM 配置"""
+        """Initialize LiteLLM global configuration."""
         try:
             cfg = get_config()
-            # 配置 LiteLLM 使用自定义 base_url
             litellm.api_key = cfg.api.api_key
-            # 设置自定义端点（如果不是标准 OpenAI）
-            if cfg.api.base_url and "openai.com" not in cfg.api.base_url:
-                litellm.api_base = cfg.api.base_url.rstrip("/") + "/"
+
+            protocol = self._resolve_protocol(api_base=cfg.api.base_url)
+            if protocol != self.PROTOCOL_GOOGLE_GENERATE and cfg.api.base_url:
+                # Keep existing behavior for OpenAI-compatible providers.
+                if "openai.com" not in cfg.api.base_url:
+                    litellm.api_base = cfg.api.base_url.rstrip("/") + "/"
+
             self._initialized = True
-            logger.info("LLM服务 (LiteLLM) 初始化成功")
+            logger.info("LLM service initialized")
         except Exception as e:
-            logger.error(f"LLM服务初始化失败: {e}")
+            logger.error("LLM service init failed: %s", e)
             self._initialized = False
 
-    def _get_model_name(self, model: Optional[str] = None, base_url: Optional[str] = None) -> str:
-        """获取 LiteLLM 格式的模型名称
+    def _normalize_protocol(self, protocol: Optional[str]) -> str:
+        value = (protocol or "").strip().lower()
+        if value in {"openai_chat_completions", "openai", "openai_compatible"}:
+            return self.PROTOCOL_OPENAI_CHAT
+        if value in {"google", "gemini", "google_generate_content", "generativeai"}:
+            return self.PROTOCOL_GOOGLE_GENERATE
+        return self.PROTOCOL_OPENAI_CHAT
 
-        Args:
-            model: 模型名称，默认使用 config.api.model
-            base_url: API地址，默认使用 config.api.base_url
-        """
+    def _is_auto_protocol(self, protocol: Optional[str]) -> bool:
+        value = (protocol or "").strip().lower()
+        return value in {"", "auto", "autodetect", "auto_detect"}
+
+    def _resolve_protocol(
+        self,
+        provider_hint: Optional[str] = None,
+        api_base: Optional[str] = None,
+        protocol_override: Optional[str] = None,
+    ) -> str:
+        """Resolve protocol from explicit hint/config/base_url."""
+        if protocol_override and not self._is_auto_protocol(protocol_override):
+            return self._normalize_protocol(protocol_override)
+
+        hint = (provider_hint or "").strip().lower()
+        if hint in self.OPENAI_HINTS:
+            return self.PROTOCOL_OPENAI_CHAT
+        if hint in self.GOOGLE_HINTS:
+            return self.PROTOCOL_GOOGLE_GENERATE
+
+        cfg = get_config()
+        configured_protocol = getattr(cfg.api, "protocol", "")
+        if configured_protocol and not self._is_auto_protocol(configured_protocol):
+            return self._normalize_protocol(configured_protocol)
+
+        # In auto mode, base URL detection has higher priority than configured provider.
+        # This avoids stale provider config (e.g. openai_compatible) forcing a wrong route.
+        base = (api_base or cfg.api.base_url or "").strip().lower()
+        if "generativelanguage.googleapis.com" in base:
+            return self.PROTOCOL_GOOGLE_GENERATE
+
+        configured_provider = getattr(cfg.api, "provider", "").strip().lower()
+        if configured_provider in self.OPENAI_HINTS:
+            return self.PROTOCOL_OPENAI_CHAT
+        if configured_provider in self.GOOGLE_HINTS:
+            return self.PROTOCOL_GOOGLE_GENERATE
+
+        return self.PROTOCOL_OPENAI_CHAT
+
+    def _get_model_name(self, model: Optional[str] = None, base_url: Optional[str] = None) -> str:
+        """Get LiteLLM-style model identifier for OpenAI-compatible flow."""
         cfg = get_config()
         model = model or cfg.api.model
         base_url = (base_url or cfg.api.base_url or "").lower()
 
-        # NagaModel 网关：模型名称统一为 default，由服务端路由
-        # 需要 openai/ 前缀让 LiteLLM 识别为 OpenAI 兼容提供商
+        # Keep existing gateway behavior
         if naga_auth.is_authenticated():
             return "openai/default"
 
-        # 根据 base_url 判断提供商，添加正确的前缀
-        if "deepseek" in base_url:
-            if not model.startswith("deepseek/"):
-                return f"deepseek/{model}"
-        elif "openrouter" in base_url:
-            if not model.startswith("openrouter/"):
-                return f"openrouter/{model}"
-        elif "openai.com" in base_url:
+        if "deepseek" in base_url and not model.startswith("deepseek/"):
+            return f"deepseek/{model}"
+        if "openrouter" in base_url and not model.startswith("openrouter/"):
+            return f"openrouter/{model}"
+        if "openai.com" in base_url:
             return model
-        else:
-            if not model.startswith("openai/"):
-                return f"openai/{model}"
+        if not model.startswith("openai/"):
+            return f"openai/{model}"
         return model
 
-    def _get_llm_params(self) -> Dict[str, Any]:
-        """获取 LLM 调用参数，NagaModel 登录态时自动切换网关"""
-        if naga_auth.is_authenticated():
-            token = naga_auth.get_access_token()
-            return {
-                "api_key": token,
-                "api_base": naga_auth.NAGA_MODEL_URL + "/",
-                "extra_body": {"user_token": token},
-            }
+    def _get_litellm_params(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        protocol: str,
+    ) -> Dict[str, Any]:
+        """Build LiteLLM params for OpenAI-compatible flow."""
         cfg = get_config()
-        return {
-            "api_key": cfg.api.api_key,
-            "api_base": cfg.api.base_url.rstrip("/") + "/" if cfg.api.base_url else None,
+
+        extra_body: Dict[str, Any] = {}
+        if isinstance(getattr(cfg.api, "extra_body", None), dict):
+            extra_body.update(cfg.api.extra_body)
+
+        params: Dict[str, Any] = {}
+
+        if naga_auth.is_authenticated() and protocol != self.PROTOCOL_GOOGLE_GENERATE:
+            token = naga_auth.get_access_token()
+            params["api_key"] = token
+            params["api_base"] = naga_auth.NAGA_MODEL_URL + "/"
+            extra_body["user_token"] = token
+        else:
+            params["api_key"] = api_key or cfg.api.api_key
+            base = api_base or cfg.api.base_url
+            params["api_base"] = base.rstrip("/") + "/" if base else None
+
+        if extra_body:
+            params["extra_body"] = extra_body
+
+        if isinstance(getattr(cfg.api, "extra_headers", None), dict) and cfg.api.extra_headers:
+            params["extra_headers"] = cfg.api.extra_headers
+
+        return params
+
+    def _build_google_headers(self) -> Dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        cfg = get_config()
+        if isinstance(getattr(cfg.api, "extra_headers", None), dict):
+            headers.update(cfg.api.extra_headers)
+        return headers
+
+    def _build_google_ws_headers(self, api_key: Optional[str]) -> Dict[str, str]:
+        headers: Dict[str, str] = {}
+        if api_key:
+            headers["x-goog-api-key"] = api_key
+
+        cfg = get_config()
+        if isinstance(getattr(cfg.api, "extra_headers", None), dict):
+            for key, value in cfg.api.extra_headers.items():
+                if isinstance(key, str):
+                    headers[key] = str(value)
+        return headers
+
+    def _is_google_live_enabled(self) -> bool:
+        cfg = get_config()
+        return bool(getattr(cfg.api, "google_live_api", False))
+
+    def _use_system_proxy(self) -> bool:
+        cfg = get_config()
+        return bool(getattr(cfg.api, "applied_proxy", False))
+
+    def _normalize_google_model_name(self, model: Optional[str]) -> str:
+        model_name = (model or "").strip()
+        if model_name.startswith("models/"):
+            model_name = model_name[len("models/") :]
+
+        # Allow accidental model input like "gemini-2.5-flash:generateContent".
+        if ":" in model_name:
+            maybe_model, maybe_method = model_name.rsplit(":", 1)
+            if maybe_method in {"generateContent", "streamGenerateContent", "BidiGenerateContent"}:
+                model_name = maybe_model
+
+        # Convert OpenAI-style prefixed model ids into raw Gemini model id.
+        if "/" in model_name and not model_name.startswith(("publishers/", "tunedModels/")):
+            prefix = model_name.split("/", 1)[0].lower()
+            if prefix in {"openai", "openrouter", "deepseek", "google", "gemini"}:
+                model_name = model_name.split("/")[-1]
+
+        model_name = model_name.strip().strip("/")
+        return model_name or "gemini-2.0-flash"
+
+    def _normalize_google_base_and_model(self, api_base: Optional[str], model: Optional[str]) -> tuple[str, str]:
+        base_input = (api_base or self.GOOGLE_DEFAULT_BASE).strip()
+        if not base_input:
+            base_input = self.GOOGLE_DEFAULT_BASE
+
+        parsed = urlparse(base_input if "://" in base_input else f"https://{base_input}")
+        scheme = parsed.scheme or "https"
+        if scheme in {"ws", "wss"}:
+            scheme = "https"
+
+        host = parsed.netloc or "generativelanguage.googleapis.com"
+        raw_path = (parsed.path or "").strip()
+        lowered_path = raw_path.lower()
+
+        extracted_model: Optional[str] = None
+        method_match = self.GOOGLE_METHOD_PATTERN.search(raw_path)
+        if method_match:
+            extracted_model = method_match.group("model")
+            raw_path = raw_path[: method_match.start()]
+            lowered_path = raw_path.lower()
+
+        for suffix in (
+            "/openai/chat/completions",
+            "/chat/completions",
+            "/completions",
+            "/openai",
+        ):
+            if lowered_path.endswith(suffix):
+                raw_path = raw_path[: -len(suffix)]
+                lowered_path = raw_path.lower()
+                break
+
+        if "/v1alpha" in lowered_path:
+            version_path = "/v1alpha"
+        elif "/v1beta" in lowered_path:
+            version_path = "/v1beta"
+        elif lowered_path.endswith("/v1") or "/v1/" in lowered_path:
+            version_path = "/v1"
+        else:
+            version_path = "/v1beta"
+
+        normalized_base = f"{scheme}://{host}{version_path}"
+        normalized_model = self._normalize_google_model_name(model or extracted_model)
+        return normalized_base.rstrip("/"), normalized_model
+
+    def _mask_google_url(self, url: str, params: Optional[Dict[str, str]] = None) -> str:
+        final_url = url
+        if params:
+            query = urlencode(params)
+            if query:
+                final_url = f"{final_url}{'&' if '?' in final_url else '?'}{query}"
+        return self.GOOGLE_URL_KEY_PATTERN.sub(r"\1***", final_url)
+
+    def _build_google_url(self, model: str, api_base: Optional[str], method: str) -> tuple[str, str, str]:
+        base, model_name = self._normalize_google_base_and_model(api_base, model)
+        method_name = method.strip()
+        if method_name not in {"generateContent", "streamGenerateContent"}:
+            method_name = "generateContent"
+        return f"{base}/models/{model_name}:{method_name}", base, model_name
+
+    def _build_google_live_ws_url(self, api_base: Optional[str]) -> str:
+        base_input = (api_base or "").strip()
+        lowered_input = base_input.lower()
+        if lowered_input.startswith(("ws://", "wss://")) and "bidigeneratecontent" in lowered_input:
+            return base_input
+
+        normalized_base, _ = self._normalize_google_base_and_model(api_base, None)
+        lowered = normalized_base.lower()
+        if lowered.startswith(("ws://", "wss://")) and "bidigeneratecontent" in lowered:
+            return normalized_base
+
+        parsed = urlparse(normalized_base if "://" in normalized_base else f"https://{normalized_base}")
+        host = parsed.netloc or "generativelanguage.googleapis.com"
+        path = (parsed.path or "").lower()
+
+        version = "v1beta"
+        if "/v1alpha" in path:
+            version = "v1alpha"
+        elif "/v1beta" in path:
+            version = "v1beta"
+        elif "/v1/" in path or path.endswith("/v1"):
+            version = "v1"
+
+        return f"wss://{host}{self.GOOGLE_LIVE_WS_PATH_TEMPLATE.format(version=version)}"
+
+    def _convert_image_url_to_google_part(self, image_url: str) -> Optional[Dict[str, Any]]:
+        if not image_url:
+            return None
+
+        match = self.DATA_URL_PATTERN.match(image_url)
+        if match:
+            return {
+                "inlineData": {
+                    "mimeType": match.group("mime"),
+                    "data": match.group("data"),
+                }
+            }
+
+        # For non data-url image, avoid hard failure. Keep minimal textual hint.
+        if image_url.startswith("http://") or image_url.startswith("https://"):
+            return {"text": f"Image URL: {image_url}"}
+        return None
+
+    def _convert_content_to_google_parts(self, content: Any) -> List[Dict[str, Any]]:
+        parts: List[Dict[str, Any]] = []
+
+        if isinstance(content, str):
+            if content:
+                parts.append({"text": content})
+            return parts
+
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, str):
+                    if block:
+                        parts.append({"text": block})
+                    continue
+                if not isinstance(block, dict):
+                    continue
+
+                block_type = str(block.get("type", "")).lower()
+                if block_type in {"text", "input_text"}:
+                    text = block.get("text")
+                    if isinstance(text, str) and text:
+                        parts.append({"text": text})
+                    continue
+
+                if block_type == "image_url":
+                    image_url_obj = block.get("image_url")
+                    if isinstance(image_url_obj, dict):
+                        image_url = str(image_url_obj.get("url", "") or "")
+                    else:
+                        image_url = str(image_url_obj or "")
+                    image_part = self._convert_image_url_to_google_part(image_url)
+                    if image_part:
+                        parts.append(image_part)
+                    continue
+
+                # Fallback: if a block still has text, preserve it.
+                text = block.get("text")
+                if isinstance(text, str) and text:
+                    parts.append({"text": text})
+
+        return parts
+
+    def _convert_messages_to_google_payload(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float,
+        max_tokens: Optional[int],
+    ) -> Dict[str, Any]:
+        contents: List[Dict[str, Any]] = []
+        system_texts: List[str] = []
+
+        for message in messages:
+            role = str(message.get("role", "user")).lower()
+            content = message.get("content", "")
+
+            if role == "system":
+                for part in self._convert_content_to_google_parts(content):
+                    text = part.get("text")
+                    if isinstance(text, str) and text:
+                        system_texts.append(text)
+                continue
+
+            parts = self._convert_content_to_google_parts(content)
+            if not parts:
+                continue
+
+            google_role = "model" if role == "assistant" else "user"
+            if contents and contents[-1]["role"] == google_role:
+                contents[-1]["parts"].extend(parts)
+            else:
+                contents.append({"role": google_role, "parts": parts})
+
+        if not contents:
+            contents = [{"role": "user", "parts": [{"text": ""}]}]
+
+        payload: Dict[str, Any] = {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": max_tokens,
+            },
         }
 
-    def _get_overridden_llm_params(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """获取 LLM 调用参数，支持覆写。NagaModel 登录态优先，否则使用覆写值"""
-        if naga_auth.is_authenticated():
-            token = naga_auth.get_access_token()
-            return {
-                "api_key": token,
-                "api_base": naga_auth.NAGA_MODEL_URL + "/",
-                "extra_body": {"user_token": token},
-            }
+        if system_texts:
+            payload["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_texts)}]}
+
         cfg = get_config()
-        return {
-            "api_key": api_key or cfg.api.api_key,
-            "api_base": (api_base.rstrip("/") + "/" if api_base else None)
-            or (cfg.api.base_url.rstrip("/") + "/" if cfg.api.base_url else None),
+        if isinstance(getattr(cfg.api, "extra_body", None), dict) and cfg.api.extra_body:
+            payload.update(cfg.api.extra_body)
+
+        return payload
+
+    def _build_google_live_setup_and_turns(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float,
+        max_tokens: Optional[int],
+        model: str,
+    ) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        payload = self._convert_messages_to_google_payload(messages, temperature, max_tokens)
+        model_name = self._normalize_google_model_name(model)
+
+        setup: Dict[str, Any] = {"model": f"models/{model_name}"}
+        generation_config = payload.get("generationConfig")
+        if isinstance(generation_config, dict):
+            setup["generationConfig"] = generation_config
+
+        system_instruction = payload.get("systemInstruction")
+        if isinstance(system_instruction, dict):
+            setup["systemInstruction"] = system_instruction
+
+        for key, value in payload.items():
+            if key not in {"contents", "generationConfig", "systemInstruction"}:
+                setup[key] = value
+
+        turns = payload.get("contents")
+        if not isinstance(turns, list) or not turns:
+            turns = [{"role": "user", "parts": [{"text": ""}]}]
+
+        return setup, turns
+
+    def _extract_google_text(self, data: Any) -> str:
+        if isinstance(data, list):
+            for item in data:
+                text = self._extract_google_text(item)
+                if text:
+                    return text
+            return ""
+
+        if not isinstance(data, dict):
+            return ""
+
+        candidates = data.get("candidates") or []
+        if not isinstance(candidates, list):
+            return ""
+
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content") or {}
+            if not isinstance(content, dict):
+                continue
+            parts = content.get("parts") or []
+            if not isinstance(parts, list):
+                continue
+            texts: List[str] = []
+            for part in parts:
+                if isinstance(part, dict):
+                    text = part.get("text")
+                    if isinstance(text, str) and text:
+                        texts.append(text)
+            if texts:
+                return "".join(texts)
+
+        return ""
+
+    def _extract_google_error(self, data: Any) -> str:
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict):
+                message = err.get("message")
+                if isinstance(message, str) and message:
+                    return message
+            message = data.get("message")
+            if isinstance(message, str) and message:
+                return message
+        if isinstance(data, str):
+            return data
+        return "Unknown Google API error"
+
+    def _extract_google_live_text(self, server_content: Dict[str, Any]) -> str:
+        model_turn = server_content.get("modelTurn") or {}
+        if not isinstance(model_turn, dict):
+            return ""
+
+        parts = model_turn.get("parts") or []
+        if not isinstance(parts, list):
+            return ""
+
+        texts: List[str] = []
+        for part in parts:
+            if isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str) and text:
+                    texts.append(text)
+        return "".join(texts)
+
+    async def _connect_google_live_ws(
+        self,
+        ws_url: str,
+        headers: Dict[str, str],
+        api_key: Optional[str],
+        timeout_seconds: int,
+    ):
+        use_system_proxy = self._use_system_proxy()
+        connect_kwargs = {
+            "open_timeout": timeout_seconds,
+            "close_timeout": timeout_seconds,
+            "ping_timeout": timeout_seconds,
         }
+        try:
+            if "proxy" in inspect.signature(websockets.connect).parameters:
+                connect_kwargs["proxy"] = True if use_system_proxy else None
+        except Exception:
+            pass
+
+        candidates: List[tuple[str, Dict[str, str]]] = [(ws_url, headers)]
+        if api_key and "key=" not in ws_url:
+            sep = "&" if "?" in ws_url else "?"
+            ws_with_query_key = f"{ws_url}{sep}key={quote(api_key)}"
+            query_headers = {k: v for k, v in headers.items() if k.lower() != "x-goog-api-key"}
+            candidates.append((ws_with_query_key, query_headers))
+
+        last_error: Optional[Exception] = None
+        attempted_urls: List[str] = []
+        for url, ws_headers in candidates:
+            safe_url = self._mask_google_url(url)
+            try:
+                try:
+                    return await websockets.connect(url, additional_headers=ws_headers, **connect_kwargs)
+                except TypeError:
+                    return await websockets.connect(url, extra_headers=ws_headers, **connect_kwargs)
+            except Exception as e:  # pragma: no cover - network/runtime branch
+                attempted_urls.append(safe_url)
+                logger.warning("[LLM] Google Live connect failed url=%s error=%s", safe_url, e)
+                last_error = e
+
+        raise RuntimeError(
+            f"Failed to connect Google Live API websocket, attempted={attempted_urls}, last_error={last_error}"
+        )
+
+    async def _call_google_generate_content(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float,
+        model: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+    ) -> LLMResponse:
+        cfg = get_config()
+        timeout_seconds = getattr(cfg.api, "request_timeout", 120)
+        max_tokens = getattr(cfg.api, "max_tokens", None)
+        use_system_proxy = self._use_system_proxy()
+
+        payload = self._convert_messages_to_google_payload(messages, temperature, max_tokens)
+        url, normalized_base, normalized_model = self._build_google_url(
+            model=model,
+            api_base=api_base,
+            method="generateContent",
+        )
+        params: Dict[str, str] = {}
+        if api_key:
+            params["key"] = api_key
+
+        headers = self._build_google_headers()
+        logger.info(
+            "[LLM] Google request mode=generateContent base=%s model=%s url=%s timeout=%ss proxy=%s",
+            normalized_base,
+            normalized_model,
+            self._mask_google_url(url, params),
+            timeout_seconds,
+            use_system_proxy,
+        )
+
+        async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=use_system_proxy) as client:
+            response = await client.post(url, params=params, headers=headers, json=payload)
+
+        if response.status_code >= 400:
+            detail = response.text
+            try:
+                detail_json = response.json()
+                detail = self._extract_google_error(detail_json)
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"Google API error ({response.status_code}) url={self._mask_google_url(url, params)}: {detail}"
+            )
+
+        data = response.json()
+        text = self._extract_google_text(data)
+        return LLMResponse(content=text or "", reasoning_content=None)
+
+    async def _stream_google_generate_content(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float,
+        model: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+    ):
+        cfg = get_config()
+        timeout_seconds = getattr(cfg.api, "request_timeout", 120)
+        max_tokens = getattr(cfg.api, "max_tokens", None)
+        use_system_proxy = self._use_system_proxy()
+
+        payload = self._convert_messages_to_google_payload(messages, temperature, max_tokens)
+        url, normalized_base, normalized_model = self._build_google_url(
+            model=model,
+            api_base=api_base,
+            method="streamGenerateContent",
+        )
+        params: Dict[str, str] = {"alt": "sse"}
+        if api_key:
+            params["key"] = api_key
+
+        headers = self._build_google_headers()
+        accumulated_text = ""
+        log_url = self._mask_google_url(url, params)
+        logger.info(
+            "[LLM] Google request mode=streamGenerateContent base=%s model=%s url=%s timeout=%ss proxy=%s",
+            normalized_base,
+            normalized_model,
+            log_url,
+            timeout_seconds,
+            use_system_proxy,
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=use_system_proxy) as client:
+                async with client.stream("POST", url, params=params, headers=headers, json=payload) as response:
+                    if response.status_code >= 400:
+                        raw = await response.aread()
+                        detail = raw.decode("utf-8", errors="ignore")
+                        try:
+                            detail_json = json.loads(detail)
+                            detail = self._extract_google_error(detail_json)
+                        except Exception:
+                            pass
+                        yield self._format_sse_chunk(
+                            "content",
+                            f"Google API error ({response.status_code}) url={log_url}: {detail}",
+                        )
+                        return
+
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        data_str = line[5:].strip()
+                        if not data_str or data_str == "[DONE]":
+                            continue
+
+                        try:
+                            chunk_obj = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+
+                        chunk_text = self._extract_google_text(chunk_obj)
+                        if not chunk_text:
+                            continue
+
+                        if chunk_text.startswith(accumulated_text):
+                            delta = chunk_text[len(accumulated_text) :]
+                            accumulated_text = chunk_text
+                        elif accumulated_text and chunk_text in accumulated_text:
+                            delta = ""
+                        else:
+                            delta = chunk_text
+                            accumulated_text += chunk_text
+
+                        if delta:
+                            yield self._format_sse_chunk("content", delta)
+        except Exception as e:
+            logger.error("Google streaming failed (url=%s): %s", log_url, e)
+            yield self._format_sse_chunk("content", f"Google streaming error (url={log_url}): {e}")
+
+    async def _stream_google_bidi_generate_content(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float,
+        model: str,
+        api_key: Optional[str],
+        api_base: Optional[str],
+    ):
+        cfg = get_config()
+        timeout_seconds = getattr(cfg.api, "request_timeout", 120)
+        max_tokens = getattr(cfg.api, "max_tokens", None)
+        ws_url = self._build_google_live_ws_url(api_base)
+        ws_headers = self._build_google_ws_headers(api_key)
+        setup_payload, turns = self._build_google_live_setup_and_turns(
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model=model,
+        )
+        logger.info(
+            "[LLM] Google request mode=BidiGenerateContent url=%s timeout=%ss proxy=%s",
+            self._mask_google_url(ws_url),
+            timeout_seconds,
+            self._use_system_proxy(),
+        )
+
+        try:
+            websocket = await self._connect_google_live_ws(
+                ws_url=ws_url,
+                headers=ws_headers,
+                api_key=api_key,
+                timeout_seconds=timeout_seconds,
+            )
+            async with websocket:
+                await websocket.send(json.dumps({"setup": setup_payload}, ensure_ascii=False))
+
+                pending_messages: List[Dict[str, Any]] = []
+                try:
+                    first_raw = await asyncio.wait_for(websocket.recv(), timeout=timeout_seconds)
+                    first_obj = json.loads(first_raw)
+                    if not first_obj.get("setupComplete"):
+                        pending_messages.append(first_obj)
+                except asyncio.TimeoutError:
+                    raise RuntimeError("Google Live API setup timeout")
+                except json.JSONDecodeError:
+                    pass
+
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "clientContent": {
+                                "turns": turns,
+                                "turnComplete": True,
+                            }
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+
+                while True:
+                    if pending_messages:
+                        message_obj = pending_messages.pop(0)
+                    else:
+                        raw = await asyncio.wait_for(websocket.recv(), timeout=timeout_seconds)
+                        message_obj = json.loads(raw)
+
+                    go_away = message_obj.get("goAway")
+                    if isinstance(go_away, dict):
+                        reason = go_away.get("reason") or "server sent goAway"
+                        raise RuntimeError(str(reason))
+
+                    server_content = message_obj.get("serverContent")
+                    if not isinstance(server_content, dict):
+                        continue
+
+                    chunk_text = self._extract_google_live_text(server_content)
+                    if chunk_text:
+                        yield self._format_sse_chunk("content", chunk_text)
+
+                    if server_content.get("turnComplete"):
+                        break
+        except Exception as e:
+            safe_ws_url = self._mask_google_url(ws_url)
+            logger.error("Google Live streaming failed (url=%s): %s", safe_ws_url, e)
+            yield self._format_sse_chunk("content", f"Google Live streaming error (url={safe_ws_url}): {e}")
 
     async def get_response(self, prompt: str, temperature: float = 0.7) -> str:
-        """为其他模块提供API调用接口（保持向后兼容，只返回 content）"""
         response = await self.get_response_with_reasoning(prompt, temperature)
         return response.content
 
     async def get_response_with_reasoning(self, prompt: str, temperature: float = 0.7) -> LLMResponse:
-        """为其他模块提供API调用接口，返回包含 reasoning_content 的完整响应"""
-        if not self._initialized:
-            self._initialize_client()
-            if not self._initialized:
-                return LLMResponse(content="LLM服务不可用: 客户端初始化失败")
-
-        try:
-            response = await acompletion(
-                model=self._get_model_name(),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=get_config().api.max_tokens,
-                **self._get_llm_params()
-            )
-            message = response.choices[0].message
-            return LLMResponse(
-                content=message.content or "", reasoning_content=getattr(message, "reasoning_content", None)
-            )
-        except Exception as e:
-            logger.error(f"API调用失败: {e}")
-            return LLMResponse(content=f"API调用出错: {str(e)}")
+        return await self.chat_with_context_and_reasoning_with_overrides(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            model_override=None,
+            api_key_override=None,
+            api_base_override=None,
+            provider_hint=None,
+        )
 
     def is_available(self) -> bool:
-        """检查LLM服务是否可用"""
         return self._initialized
 
     async def chat_with_context(self, messages: List[Dict], temperature: float = 0.7) -> str:
-        """带上下文的聊天调用（保持向后兼容，只返回 content）"""
         response = await self.chat_with_context_and_reasoning(messages, temperature)
         return response.content
 
@@ -169,43 +817,55 @@ class LLMService:
         api_base_override: Optional[str] = None,
         provider_hint: Optional[str] = None,
     ) -> LLMResponse:
-        """带上下文聊天（支持模型/网关覆写）"""
         if not self._initialized:
             self._initialize_client()
             if not self._initialized:
-                return LLMResponse(content="LLM服务不可用: 客户端初始化失败")
+                return LLMResponse(content="LLM service unavailable: client init failed")
 
-        final_model = model_override or get_config().api.model
-        final_base = api_base_override or get_config().api.base_url
-        final_api_key = api_key_override or get_config().api.api_key
+        cfg = get_config()
+        final_model = model_override or cfg.api.model
+        final_base = api_base_override or cfg.api.base_url
+        final_api_key = api_key_override or cfg.api.api_key
+        protocol = self._resolve_protocol(provider_hint=provider_hint, api_base=final_base)
+
+        if protocol == self.PROTOCOL_GOOGLE_GENERATE:
+            try:
+                return await self._call_google_generate_content(
+                    messages=messages,
+                    temperature=temperature,
+                    model=final_model,
+                    api_key=final_api_key,
+                    api_base=final_base,
+                )
+            except Exception as e:
+                logger.error("Google chat call failed: %s", e)
+                return LLMResponse(content=f"Google API call error: {e}")
 
         try:
             model_name = final_model
             if provider_hint and provider_hint != "openai":
-                # gemini 等非 openai provider，加 LiteLLM 前缀
                 if not model_name.startswith(f"{provider_hint}/"):
                     model_name = f"{provider_hint}/{model_name}"
             else:
-                # openai 或未指定: 走原有 base_url 推断逻辑
                 model_name = self._get_model_name(model_name, final_base)
 
             response = await acompletion(
                 model=model_name,
                 messages=messages,
                 temperature=temperature,
-                    max_tokens=get_config().api.max_tokens if hasattr(get_config().api, 'max_tokens') else None,
-                **self._get_overridden_llm_params(final_api_key, final_base)
+                max_tokens=cfg.api.max_tokens if hasattr(cfg.api, "max_tokens") else None,
+                **self._get_litellm_params(final_api_key, final_base, protocol),
             )
             message = response.choices[0].message
             return LLMResponse(
-                content=message.content or "", reasoning_content=getattr(message, "reasoning_content", None)
+                content=message.content or "",
+                reasoning_content=getattr(message, "reasoning_content", None),
             )
         except Exception as e:
-            logger.error(f"上下文聊天调用失败: {e}")
-            return LLMResponse(content=f"聊天调用出错: {str(e)}")
+            logger.error("Context chat call failed: %s", e)
+            return LLMResponse(content=f"Chat call error: {e}")
 
     async def chat_with_context_and_reasoning(self, messages: List[Dict], temperature: float = 0.7) -> LLMResponse:
-        """带上下文的聊天调用，返回包含 reasoning_content 的完整响应"""
         return await self.chat_with_context_and_reasoning_with_overrides(
             messages=messages,
             temperature=temperature,
@@ -214,81 +874,79 @@ class LLMService:
             api_base_override=None,
         )
 
-    async def stream_chat_with_context(self, messages: List[Dict], temperature: float = 0.7,
-                                       model_override: Optional[Dict[str, str]] = None):
-        """带上下文的流式聊天调用，支持 reasoning_content 交织输出
-
-        Args:
-            messages: 对话消息列表
-            temperature: 生成温度
-            model_override: 临时模型覆盖参数，用于切换到视觉模型等场景
-                格式: {"model": "glm-4.5v", "api_base": "https://...", "api_key": "..."}
-
-        Yields:
-            格式为 "data: <base64_json>\n\n" 的 SSE 事件
-            JSON 结构: {"type": "content"|"reasoning", "text": "..."}
-        """
+    async def stream_chat_with_context(
+        self,
+        messages: List[Dict],
+        temperature: float = 0.7,
+        model_override: Optional[Dict[str, str]] = None,
+    ):
         if not self._initialized:
             self._initialize_client()
             if not self._initialized:
-                yield self._format_sse_chunk("content", "LLM服务不可用: 客户端初始化失败")
+                yield self._format_sse_chunk("content", "LLM service unavailable: client init failed")
                 return
 
-        # 重试策略：最多 3 次
-        #   - 401 AuthenticationError → 刷新 token 后重试（最多 1 次）
-        #   - 连接错误 / 流中断  → 直接重试（最多 2 次）
+        cfg = get_config()
         max_attempts = 3
         auth_retried = False
 
+        if model_override:
+            final_model = model_override.get("model") or cfg.api.model
+            final_base = model_override.get("api_base") or cfg.api.base_url
+            final_api_key = model_override.get("api_key") or cfg.api.api_key
+        else:
+            final_model = cfg.api.model
+            final_base = cfg.api.base_url
+            final_api_key = cfg.api.api_key
+
+        protocol = self._resolve_protocol(api_base=final_base)
+        if protocol == self.PROTOCOL_GOOGLE_GENERATE:
+            if self._is_google_live_enabled():
+                logger.info("[LLM] Google stream route: BidiGenerateContent (Live API)")
+                async for chunk in self._stream_google_bidi_generate_content(
+                    messages=messages,
+                    temperature=temperature,
+                    model=final_model,
+                    api_key=final_api_key,
+                    api_base=final_base,
+                ):
+                    yield chunk
+            else:
+                logger.info("[LLM] Google stream route: streamGenerateContent (SSE)")
+                async for chunk in self._stream_google_generate_content(
+                    messages=messages,
+                    temperature=temperature,
+                    model=final_model,
+                    api_key=final_api_key,
+                    api_base=final_base,
+                ):
+                    yield chunk
+            return
+
         for attempt in range(max_attempts):
             try:
-                # 如果提供了 model_override，使用覆盖参数替代默认配置
-                if model_override:
-                    # NagaModel 登录态：只取 model 名，api_base/api_key 走网关
-                    if naga_auth.is_authenticated():
-                        token = naga_auth.get_access_token()
-                        model_name = self._get_model_name(
-                            model=model_override.get("model"),
-                            base_url=naga_auth.NAGA_MODEL_URL,
-                        )
-                        llm_params = {
-                            "api_key": token,
-                            "api_base": naga_auth.NAGA_MODEL_URL + "/",
-                            "extra_body": {"user_token": token},
-                        }
-                    else:
-                        override_base = model_override.get("api_base", "")
-                        override_key = model_override.get("api_key", "")
-                        model_name = self._get_model_name(
-                            model=model_override.get("model"),
-                            base_url=override_base,
-                        )
-                        llm_params = {
-                            "api_key": override_key,
-                            "api_base": override_base.rstrip("/") + "/" if override_base else None,
-                        }
-                    logger.info(f"使用覆盖模型: {model_name}, api_base: {llm_params.get('api_base')}")
-                else:
-                    llm_params = self._get_llm_params()
-                    model_name = self._get_model_name()
+                model_name = self._get_model_name(model=final_model, base_url=final_base)
+                llm_params = self._get_litellm_params(final_api_key, final_base, protocol)
+                timeout_seconds = getattr(cfg.api, "request_timeout", 120)
 
-                # 诊断日志：打印认证状态和 token 前缀
-                _tk = naga_auth.get_access_token()
-                logger.debug(f"[LLM] attempt={attempt} is_auth={naga_auth.is_authenticated()} "
-                             f"token_prefix={_tk[:20] + '...' if _tk else 'None'} "
-                             f"api_key_prefix={str(llm_params.get('api_key', ''))[:20]}... "
-                             f"api_base={llm_params.get('api_base')}")
+                logger.debug(
+                    "[LLM] attempt=%s is_auth=%s api_base=%s model=%s",
+                    attempt,
+                    naga_auth.is_authenticated(),
+                    llm_params.get("api_base"),
+                    model_name,
+                )
 
                 response = await acompletion(
                     model=model_name,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=get_config().api.max_tokens if hasattr(get_config().api, "max_tokens") else None,
+                    max_tokens=cfg.api.max_tokens if hasattr(cfg.api, "max_tokens") else None,
                     stream=True,
-                    timeout=120,           # 连接+首字节超时 120s
-                    stream_timeout=120,    # 流式传输 chunk 间超时 120s
-                    num_retries=0,         # 禁用 litellm 内部重试/fallback，避免 MidStreamFallbackError
-                    **llm_params
+                    timeout=timeout_seconds,
+                    stream_timeout=timeout_seconds,
+                    num_retries=0,
+                    **llm_params,
                 )
 
                 async for chunk in response:
@@ -296,104 +954,81 @@ class LLMService:
                         continue
 
                     delta = chunk.choices[0].delta
-
-                    # 处理 reasoning_content（思考过程）
                     reasoning = getattr(delta, "reasoning_content", None)
                     if reasoning:
                         yield self._format_sse_chunk("reasoning", reasoning)
 
-                    # 处理 content（正式回答）
                     content = getattr(delta, "content", None)
                     if content:
                         yield self._format_sse_chunk("content", content)
-
-                # 流式响应正常完成，跳出重试循环
                 return
 
             except litellm.AuthenticationError as e:
-                _tk = naga_auth.get_access_token()
-                logger.error(f"LLM 401 诊断: attempt={attempt} is_auth={naga_auth.is_authenticated()} "
-                             f"token={'set(' + _tk[:20] + '...)' if _tk else 'None'} "
-                             f"has_refresh={naga_auth.has_refresh_token()}")
+                logger.error(
+                    "LLM 401 diagnostic: attempt=%s is_auth=%s has_refresh=%s",
+                    attempt,
+                    naga_auth.is_authenticated(),
+                    naga_auth.has_refresh_token(),
+                )
                 if not auth_retried and naga_auth.is_authenticated():
                     auth_retried = True
-                    logger.warning(f"LLM 调用 401，尝试刷新 token 后重试: {e}")
                     try:
                         await naga_auth.refresh()
-                        logger.info("Token 刷新成功，重试 LLM 调用")
-                        continue  # 重试
+                        logger.info("Token refresh success, retrying LLM call")
+                        continue
                     except Exception as refresh_err:
-                        logger.error(f"Token 刷新失败: {refresh_err}")
-                # 刷新失败或已刷新过 → 通知前端触发重新登录
-                logger.error(f"流式聊天认证失败: {e}")
-                yield self._format_sse_chunk("auth_expired", "登录已过期，请重新登录")
+                        logger.error("Token refresh failed: %s", refresh_err)
+                yield self._format_sse_chunk("auth_expired", "Login expired, please sign in again")
                 return
 
             except (litellm.APIConnectionError, litellm.ServiceUnavailableError, litellm.Timeout) as e:
-                # 连接错误 / 流中断 / 超时 → 重试
                 if attempt < max_attempts - 1:
-                    logger.warning(f"[LLM] 流式调用连接异常 (attempt {attempt + 1}/{max_attempts})，重试中: {e}")
-                    import asyncio
-                    await asyncio.sleep(1)  # 短暂等待后重试
+                    logger.warning("Streaming call connection issue (attempt %s/%s): %s", attempt + 1, max_attempts, e)
+                    await asyncio.sleep(1)
                     continue
-                logger.error(f"[LLM] 流式调用连接异常，已耗尽重试次数: {e}")
-                yield self._format_sse_chunk("content", f"流式调用出错（连接异常，已重试 {max_attempts} 次）: {str(e)}")
+                yield self._format_sse_chunk(
+                    "content",
+                    f"Streaming call error (connection issue after {max_attempts} retries): {e}",
+                )
                 return
 
             except Exception as e:
-                logger.error(f"流式聊天调用失败: {e}")
-                yield self._format_sse_chunk("content", f"流式调用出错: {str(e)}")
+                logger.error("Streaming chat failed: %s", e)
+                yield self._format_sse_chunk("content", f"Streaming call error: {e}")
                 return
 
     def _format_sse_chunk(self, chunk_type: str, text: str) -> str:
-        """格式化 SSE 数据块
-
-        Args:
-            chunk_type: "content" 或 "reasoning"
-            text: 文本内容
-
-        Returns:
-            SSE 格式的数据块
-        """
-        import base64
-        import json
-
         data = {"type": chunk_type, "text": text}
         b64 = base64.b64encode(json.dumps(data, ensure_ascii=False).encode("utf-8")).decode("ascii")
         return f"data: {b64}\n\n"
 
 
-# 全局LLM服务实例
 _llm_service: Optional[LLMService] = None
 
 
 def get_llm_service() -> LLMService:
-    """获取全局LLM服务实例"""
     global _llm_service
     if _llm_service is None:
         _llm_service = LLMService()
     return _llm_service
 
 
-# 创建独立的LLM服务API
-llm_app = FastAPI(title="LLM Service API", description="LLM服务API", version="1.0.0")
+llm_app = FastAPI(title="LLM Service API", description="LLM service API", version="1.0.0")
 
 
 @llm_app.post("/llm/chat")
 async def llm_chat(request: Dict[str, Any]):
-    """LLM聊天接口 - 为其他模块提供LLM调用服务"""
     try:
         prompt = request.get("prompt", "")
         temperature = request.get("temperature", 0.7)
 
         if not prompt:
-            raise HTTPException(status_code=400, detail="prompt参数不能为空")
+            raise HTTPException(status_code=400, detail="prompt cannot be empty")
 
         llm_service = get_llm_service()
         response = await llm_service.get_response(prompt, temperature)
 
         return {"status": "success", "response": response, "temperature": temperature}
-
     except Exception as e:
-        logger.error(f"LLM聊天接口异常: {e}")
-        raise HTTPException(status_code=500, detail=f"LLM服务异常: {str(e)}")
+        logger.error("LLM chat endpoint error: %s", e)
+        raise HTTPException(status_code=500, detail=f"LLM service error: {e}")

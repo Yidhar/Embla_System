@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useStorage } from '@vueuse/core'
-import { Accordion, Divider, InputNumber, InputText, Select, ToggleSwitch } from 'primevue'
+import { Accordion, Divider, InputNumber, InputText, Select, Textarea, ToggleSwitch } from 'primevue'
+import { ref, watch } from 'vue'
 import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
@@ -17,6 +18,89 @@ const ASR_PROVIDERS = {
 
 const TTS_VOICES = {
   Cherry: '默认',
+}
+
+const API_PROVIDERS = {
+  auto: '自动识别',
+  openai_compatible: 'OpenAI 兼容',
+  google: 'Google Gemini',
+}
+
+const API_PROTOCOLS = {
+  auto: '自动识别',
+  openai_chat_completions: 'OpenAI Chat Completions',
+  google_generate_content: 'Google Generate Content',
+}
+
+const apiExtraHeadersText = ref('{}')
+const apiExtraBodyText = ref('{}')
+const apiExtraHeadersError = ref('')
+const apiExtraBodyError = ref('')
+
+function prettyJson(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return '{}'
+  }
+  try {
+    return JSON.stringify(value, null, 2)
+  }
+  catch {
+    return '{}'
+  }
+}
+
+watch(
+  () => CONFIG.value.api.extra_headers,
+  (value) => {
+    apiExtraHeadersText.value = prettyJson(value)
+  },
+  { immediate: true, deep: true },
+)
+
+watch(
+  () => CONFIG.value.api.extra_body,
+  (value) => {
+    apiExtraBodyText.value = prettyJson(value)
+  },
+  { immediate: true, deep: true },
+)
+
+function applyApiJson(field: 'extra_headers' | 'extra_body', rawText: string) {
+  const text = (rawText || '').trim()
+  const errorRef = field === 'extra_headers' ? apiExtraHeadersError : apiExtraBodyError
+
+  if (!text) {
+    CONFIG.value.api[field] = {}
+    errorRef.value = ''
+    if (field === 'extra_headers') {
+      apiExtraHeadersText.value = '{}'
+    }
+    else {
+      apiExtraBodyText.value = '{}'
+    }
+    return
+  }
+
+  try {
+    const parsed = JSON.parse(text)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      errorRef.value = '请输入 JSON 对象，例如 {"x-foo":"bar"}'
+      return
+    }
+
+    CONFIG.value.api[field] = parsed
+    errorRef.value = ''
+    const pretty = JSON.stringify(parsed, null, 2)
+    if (field === 'extra_headers') {
+      apiExtraHeadersText.value = pretty
+    }
+    else {
+      apiExtraBodyText.value = pretty
+    }
+  }
+  catch {
+    errorRef.value = 'JSON 格式无效，请检查引号和逗号'
+  }
 }
 </script>
 
@@ -36,6 +120,68 @@ const TTS_VOICES = {
           <ConfigItem name="API 密钥" description="大语言模型的 API 密钥">
             <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆 ({{ nagaUser?.username }})，无需输入</span>
             <InputText v-else v-model="CONFIG.api.api_key" type="password" />
+          </ConfigItem>
+          <ConfigItem name="API 提供商" description="用于协议自动识别（可选）">
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，使用 NagaModel 网关</span>
+            <Select v-else v-model="CONFIG.api.provider" :options="Object.keys(API_PROVIDERS)">
+              <template #option="{ option }">
+                {{ API_PROVIDERS[option as keyof typeof API_PROVIDERS] }}
+              </template>
+              <template #value="{ value }">
+                {{ API_PROVIDERS[value as keyof typeof API_PROVIDERS] }}
+              </template>
+            </Select>
+          </ConfigItem>
+          <ConfigItem name="API 协议" description="建议保持 auto，让系统按地址自动路由">
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，使用 NagaModel 网关</span>
+            <Select v-else v-model="CONFIG.api.protocol" :options="Object.keys(API_PROTOCOLS)">
+              <template #option="{ option }">
+                {{ API_PROTOCOLS[option as keyof typeof API_PROTOCOLS] }}
+              </template>
+              <template #value="{ value }">
+                {{ API_PROTOCOLS[value as keyof typeof API_PROTOCOLS] }}
+              </template>
+            </Select>
+          </ConfigItem>
+          <ConfigItem
+            name="Google Live API"
+            description="启用后 Google 流式对话使用 BidiGenerateContent（WebSocket）"
+          >
+            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，使用 NagaModel 网关</span>
+            <label v-else class="inline-flex items-center gap-3">
+              启用
+              <ToggleSwitch v-model="CONFIG.api.google_live_api" />
+            </label>
+          </ConfigItem>
+          <ConfigItem
+            name="系统代理"
+            description="启用后按系统环境变量（HTTP_PROXY/HTTPS_PROXY）发起模型请求"
+          >
+            <label class="inline-flex items-center gap-3">
+              启用
+              <ToggleSwitch v-model="CONFIG.api.applied_proxy" />
+            </label>
+          </ConfigItem>
+          <ConfigItem name="请求超时（秒）" description="模型请求超时时间">
+            <InputNumber v-model="CONFIG.api.request_timeout" :min="1" :max="600" show-buttons />
+          </ConfigItem>
+          <ConfigItem name="附加请求头（JSON）" description="例如 {&quot;x-trace-id&quot;:&quot;demo&quot;}">
+            <Textarea
+              v-model="apiExtraHeadersText"
+              rows="4"
+              class="w-full font-mono text-xs"
+              @blur="applyApiJson('extra_headers', apiExtraHeadersText)"
+            />
+            <small v-if="apiExtraHeadersError" class="config-error">{{ apiExtraHeadersError }}</small>
+          </ConfigItem>
+          <ConfigItem name="附加请求体（JSON）" description="例如 {&quot;candidateCount&quot;:1}">
+            <Textarea
+              v-model="apiExtraBodyText"
+              rows="4"
+              class="w-full font-mono text-xs"
+              @blur="applyApiJson('extra_body', apiExtraBodyText)"
+            />
+            <small v-if="apiExtraBodyError" class="config-error">{{ apiExtraBodyError }}</small>
           </ConfigItem>
           <Divider class="m-1!" />
           <ConfigItem name="最大令牌数" description="单次对话的最大长度限制">
@@ -185,5 +331,10 @@ const TTS_VOICES = {
   color: #4ade80;
   font-size: 0.875rem;
   font-weight: 500;
+}
+
+.config-error {
+  color: #f87171;
+  font-size: 0.75rem;
 }
 </style>

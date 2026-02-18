@@ -9,10 +9,13 @@ import asyncio
 import uuid
 import shutil
 import logging
-from typing import Dict, Any, Optional, List
+import os
+import ipaddress
+import secrets
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Header, Depends
 from contextlib import asynccontextmanager
 
 from system.config import config, add_config_listener
@@ -23,6 +26,195 @@ from agentserver.openclaw.embedded_runtime import get_embedded_runtime, Embedded
 
 # 配置日志
 logger = logging.getLogger(__name__)
+
+SCRIPT_INSTALL_CONFIRM_HEADER = "x-openclaw-script-confirm"
+SCRIPT_INSTALL_CONFIRM_VALUE = "CONFIRM_SCRIPT_INSTALL"
+
+
+def _normalize_token(token: Optional[str]) -> Optional[str]:
+    """Normalize configured or header token values."""
+    if token is None:
+        return None
+    token = str(token).strip()
+    return token or None
+
+
+def _get_env_bool(name: str) -> Optional[bool]:
+    """Parse environment boolean values."""
+    raw = _normalize_token(os.getenv(name))
+    if raw is None:
+        return None
+
+    lowered = raw.lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _is_loopback_host(host: Optional[str]) -> bool:
+    """Whether a client host belongs to local loopback interfaces."""
+    if not host:
+        return False
+
+    normalized = host.strip().lower()
+    if normalized == "localhost":
+        return True
+
+    if normalized.startswith("::ffff:"):
+        normalized = normalized.split("::ffff:", 1)[1]
+    if "%" in normalized:
+        normalized = normalized.split("%", 1)[0]
+
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def _get_openclaw_management_tokens() -> Tuple[Optional[str], Optional[str]]:
+    """
+    Resolve management tokens from env and config.
+
+    Env has higher priority than config:
+    - NAGA_OPENCLAW_MGMT_READ_TOKEN
+    - NAGA_OPENCLAW_MGMT_ADMIN_TOKEN
+    If admin token is not configured, fallback to config.openclaw.token.
+    """
+    openclaw_cfg = getattr(config, "openclaw", None)
+    cfg_read = getattr(openclaw_cfg, "management_read_token", None) if openclaw_cfg else None
+    cfg_admin = getattr(openclaw_cfg, "management_admin_token", None) if openclaw_cfg else None
+    cfg_token = getattr(openclaw_cfg, "token", None) if openclaw_cfg else None
+
+    read_token = _normalize_token(os.getenv("NAGA_OPENCLAW_MGMT_READ_TOKEN")) or _normalize_token(cfg_read)
+    admin_token = (
+        _normalize_token(os.getenv("NAGA_OPENCLAW_MGMT_ADMIN_TOKEN"))
+        or _normalize_token(cfg_admin)
+        or _normalize_token(cfg_token)
+    )
+    if read_token is None:
+        read_token = admin_token
+    return read_token, admin_token
+
+
+def _resolve_request_token(
+    authorization: Optional[str],
+    x_openclaw_management_token: Optional[str],
+) -> Optional[str]:
+    """Extract token from Authorization header or x-openclaw-management-token."""
+    bearer = _normalize_token(authorization)
+    if bearer and bearer.lower().startswith("bearer "):
+        token = _normalize_token(bearer[7:])
+        if token:
+            return token
+    return _normalize_token(x_openclaw_management_token)
+
+
+def _enforce_management_source(request: Request) -> None:
+    """By default management routes are restricted to loopback clients."""
+    openclaw_cfg = getattr(config, "openclaw", None)
+    allow_remote_from_env = _get_env_bool("NAGA_OPENCLAW_ALLOW_REMOTE_MANAGEMENT")
+    if allow_remote_from_env is None:
+        allow_remote = bool(getattr(openclaw_cfg, "allow_remote_management", False)) if openclaw_cfg else False
+    else:
+        allow_remote = allow_remote_from_env
+    client_host = request.client.host if request.client else None
+
+    if not allow_remote and not _is_loopback_host(client_host):
+        raise HTTPException(403, "OpenClaw 管理接口仅允许本地访问")
+
+
+def _verify_openclaw_management_access(
+    request: Request,
+    authorization: Optional[str],
+    x_openclaw_management_token: Optional[str],
+    require_admin: bool,
+) -> None:
+    _enforce_management_source(request)
+
+    read_token, admin_token = _get_openclaw_management_tokens()
+    if not read_token and not admin_token:
+        logger.error("OpenClaw 管理接口鉴权未配置，已拒绝请求")
+        raise HTTPException(503, "OpenClaw 管理接口未配置鉴权令牌")
+
+    request_token = _resolve_request_token(authorization, x_openclaw_management_token)
+    if not request_token:
+        raise HTTPException(401, "缺少管理接口鉴权令牌")
+
+    read_ok = bool(read_token and secrets.compare_digest(request_token, read_token))
+    admin_ok = bool(admin_token and secrets.compare_digest(request_token, admin_token))
+
+    if require_admin and not admin_ok:
+        raise HTTPException(403, "需要管理员权限")
+    if not require_admin and not (read_ok or admin_ok):
+        raise HTTPException(403, "管理接口鉴权失败")
+
+
+def require_openclaw_manage_read(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    x_openclaw_management_token: Optional[str] = Header(default=None),
+) -> None:
+    """Dependency: read-level access for OpenClaw management routes."""
+    _verify_openclaw_management_access(
+        request=request,
+        authorization=authorization,
+        x_openclaw_management_token=x_openclaw_management_token,
+        require_admin=False,
+    )
+
+
+def require_openclaw_manage_admin(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    x_openclaw_management_token: Optional[str] = Header(default=None),
+) -> None:
+    """Dependency: admin-level access for OpenClaw management routes."""
+    _verify_openclaw_management_access(
+        request=request,
+        authorization=authorization,
+        x_openclaw_management_token=x_openclaw_management_token,
+        require_admin=True,
+    )
+
+
+def _require_script_install_confirmation(request: Request) -> None:
+    """Script install is only allowed for local confirmed requests."""
+    client_host = request.client.host if request.client else None
+    if not _is_loopback_host(client_host):
+        raise HTTPException(403, "script 安装仅允许本地请求")
+
+    openclaw_cfg = getattr(config, "openclaw", None)
+    allow_script_install_from_env = _get_env_bool("NAGA_OPENCLAW_ALLOW_SCRIPT_INSTALL")
+    if allow_script_install_from_env is None:
+        allow_script_install = bool(getattr(openclaw_cfg, "allow_script_install", False))
+    else:
+        allow_script_install = allow_script_install_from_env
+
+    if not allow_script_install:
+        raise HTTPException(403, "script 安装已禁用")
+
+    require_confirmation_from_env = _get_env_bool("NAGA_OPENCLAW_REQUIRE_SCRIPT_INSTALL_CONFIRM")
+    if require_confirmation_from_env is None:
+        require_confirmation = bool(
+            getattr(openclaw_cfg, "require_script_install_local_confirmation", True)
+        )
+    else:
+        require_confirmation = require_confirmation_from_env
+
+    if not require_confirmation:
+        return
+
+    confirmed = request.headers.get(SCRIPT_INSTALL_CONFIRM_HEADER)
+    if confirmed != SCRIPT_INSTALL_CONFIRM_VALUE:
+        raise HTTPException(
+            400,
+            (
+                "script 安装需要本地确认，请设置请求头 "
+                f"{SCRIPT_INSTALL_CONFIRM_HEADER}: {SCRIPT_INSTALL_CONFIRM_VALUE}"
+            ),
+        )
 
 
 async def _start_gateway_if_port_free(runtime: EmbeddedRuntime) -> bool:
@@ -132,7 +324,17 @@ async def lifespan(app: FastAPI):
 
         # 设置LLM配置用于智能压缩
         if hasattr(config, "api") and config.api:
-            llm_config = {"model": config.api.model, "api_key": config.api.api_key, "api_base": config.api.base_url}
+            llm_config = {
+                "model": config.api.model,
+                "api_key": config.api.api_key,
+                "api_base": config.api.base_url,
+                "provider": getattr(config.api, "provider", ""),
+                "protocol": getattr(config.api, "protocol", ""),
+                "applied_proxy": bool(getattr(config.api, "applied_proxy", False)),
+                "request_timeout": getattr(config.api, "request_timeout", 120),
+                "extra_headers": dict(getattr(config.api, "extra_headers", {}) or {}),
+                "extra_body": dict(getattr(config.api, "extra_body", {}) or {}),
+            }
             Modules.task_scheduler.set_llm_config(llm_config)
 
         # 初始化 OpenClaw 客户端 - 三层回退策略
@@ -820,7 +1022,7 @@ async def openclaw_health_check():
         return {"success": False, "status": "error", "error": str(e)}
 
 
-@app.post("/openclaw/config")
+@app.post("/openclaw/config", dependencies=[Depends(require_openclaw_manage_admin)])
 async def configure_openclaw(payload: Dict[str, Any]):
     """配置 OpenClaw 连接
 
@@ -1134,7 +1336,7 @@ async def openclaw_get_status():
 # ============ OpenClaw 安装和配置管理 API ============
 
 
-@app.get("/openclaw/install/check")
+@app.get("/openclaw/install/check", dependencies=[Depends(require_openclaw_manage_read)])
 async def openclaw_check_installation():
     """
     检查 OpenClaw 安装状态
@@ -1164,8 +1366,8 @@ async def openclaw_check_installation():
         raise HTTPException(500, f"检查失败: {e}")
 
 
-@app.post("/openclaw/install")
-async def openclaw_install(payload: Dict[str, Any] = None):
+@app.post("/openclaw/install", dependencies=[Depends(require_openclaw_manage_admin)])
+async def openclaw_install(request: Request, payload: Dict[str, Any] = None):
     """
     安装 OpenClaw
 
@@ -1180,8 +1382,17 @@ async def openclaw_install(payload: Dict[str, Any] = None):
 
         installer = get_openclaw_installer()
 
-        method_str = (payload or {}).get("method", "npm")
-        method = InstallMethod.NPM if method_str == "npm" else InstallMethod.SCRIPT
+        method_str = str((payload or {}).get("method", "npm")).strip().lower()
+        method_map = {
+            "npm": InstallMethod.NPM,
+            "script": InstallMethod.SCRIPT,
+        }
+        if method_str not in method_map:
+            raise HTTPException(400, f"不支持的安装方式: {method_str}")
+
+        method = method_map[method_str]
+        if method == InstallMethod.SCRIPT:
+            _require_script_install_confirmation(request)
 
         result = await installer.install(method)
 
@@ -1191,7 +1402,7 @@ async def openclaw_install(payload: Dict[str, Any] = None):
         raise HTTPException(500, f"安装失败: {e}")
 
 
-@app.post("/openclaw/setup")
+@app.post("/openclaw/setup", dependencies=[Depends(require_openclaw_manage_admin)])
 async def openclaw_setup(payload: Dict[str, Any] = None):
     """
     初始化 OpenClaw 配置
@@ -1216,7 +1427,7 @@ async def openclaw_setup(payload: Dict[str, Any] = None):
         raise HTTPException(500, f"初始化失败: {e}")
 
 
-@app.post("/openclaw/gateway/start")
+@app.post("/openclaw/gateway/start", dependencies=[Depends(require_openclaw_manage_admin)])
 async def openclaw_start_gateway():
     """启动 OpenClaw Gateway"""
     try:
@@ -1231,7 +1442,7 @@ async def openclaw_start_gateway():
         raise HTTPException(500, f"启动失败: {e}")
 
 
-@app.post("/openclaw/gateway/stop")
+@app.post("/openclaw/gateway/stop", dependencies=[Depends(require_openclaw_manage_admin)])
 async def openclaw_stop_gateway():
     """停止 OpenClaw Gateway"""
     try:
@@ -1246,7 +1457,7 @@ async def openclaw_stop_gateway():
         raise HTTPException(500, f"停止失败: {e}")
 
 
-@app.post("/openclaw/gateway/restart")
+@app.post("/openclaw/gateway/restart", dependencies=[Depends(require_openclaw_manage_admin)])
 async def openclaw_restart_gateway():
     """重启 OpenClaw Gateway"""
     try:
@@ -1261,7 +1472,7 @@ async def openclaw_restart_gateway():
         raise HTTPException(500, f"重启失败: {e}")
 
 
-@app.post("/openclaw/gateway/install")
+@app.post("/openclaw/gateway/install", dependencies=[Depends(require_openclaw_manage_admin)])
 async def openclaw_install_gateway_service():
     """安装 Gateway 为系统服务"""
     try:
@@ -1276,7 +1487,7 @@ async def openclaw_install_gateway_service():
         raise HTTPException(500, f"安装失败: {e}")
 
 
-@app.get("/openclaw/gateway/status")
+@app.get("/openclaw/gateway/status", dependencies=[Depends(require_openclaw_manage_read)])
 async def openclaw_gateway_status():
     """获取 Gateway 状态"""
     try:
@@ -1291,7 +1502,7 @@ async def openclaw_gateway_status():
         raise HTTPException(500, f"获取失败: {e}")
 
 
-@app.get("/openclaw/doctor")
+@app.get("/openclaw/doctor", dependencies=[Depends(require_openclaw_manage_read)])
 async def openclaw_doctor():
     """运行 OpenClaw 健康检查"""
     try:
@@ -1309,7 +1520,7 @@ async def openclaw_doctor():
 # ============ OpenClaw 配置管理 API ============
 
 
-@app.get("/openclaw/config")
+@app.get("/openclaw/config", dependencies=[Depends(require_openclaw_manage_read)])
 async def openclaw_get_config():
     """
     获取 OpenClaw 配置摘要
@@ -1328,7 +1539,7 @@ async def openclaw_get_config():
         raise HTTPException(500, f"获取失败: {e}")
 
 
-@app.post("/openclaw/config/set")
+@app.post("/openclaw/config/set", dependencies=[Depends(require_openclaw_manage_admin)])
 async def openclaw_set_config(payload: Dict[str, Any]):
     """
     设置 OpenClaw 配置
@@ -1362,7 +1573,7 @@ async def openclaw_set_config(payload: Dict[str, Any]):
         raise HTTPException(500, f"设置失败: {e}")
 
 
-@app.post("/openclaw/config/model")
+@app.post("/openclaw/config/model", dependencies=[Depends(require_openclaw_manage_admin)])
 async def openclaw_set_model(payload: Dict[str, Any]):
     """
     设置默认模型
@@ -1404,7 +1615,7 @@ async def openclaw_set_model(payload: Dict[str, Any]):
         raise HTTPException(500, f"设置失败: {e}")
 
 
-@app.post("/openclaw/config/hooks")
+@app.post("/openclaw/config/hooks", dependencies=[Depends(require_openclaw_manage_admin)])
 async def openclaw_configure_hooks(payload: Dict[str, Any]):
     """
     配置 Hooks
@@ -1452,7 +1663,7 @@ async def openclaw_configure_hooks(payload: Dict[str, Any]):
 # ============ OpenClaw Skills 管理 API ============
 
 
-@app.get("/openclaw/skills")
+@app.get("/openclaw/skills", dependencies=[Depends(require_openclaw_manage_read)])
 async def openclaw_list_skills():
     """列出已安装的 Skills"""
     try:
@@ -1467,7 +1678,7 @@ async def openclaw_list_skills():
         raise HTTPException(500, f"获取失败: {e}")
 
 
-@app.post("/openclaw/skills/install")
+@app.post("/openclaw/skills/install", dependencies=[Depends(require_openclaw_manage_admin)])
 async def openclaw_install_skill(payload: Dict[str, Any]):
     """
     安装 Skill
@@ -1496,7 +1707,7 @@ async def openclaw_install_skill(payload: Dict[str, Any]):
         raise HTTPException(500, f"安装失败: {e}")
 
 
-@app.post("/openclaw/skills/enable")
+@app.post("/openclaw/skills/enable", dependencies=[Depends(require_openclaw_manage_admin)])
 async def openclaw_enable_skill(payload: Dict[str, Any]):
     """
     启用/禁用 Skill
@@ -1532,4 +1743,4 @@ if __name__ == "__main__":
     import uvicorn
     from agentserver.config import AGENT_SERVER_PORT
 
-    uvicorn.run(app, host="0.0.0.0", port=AGENT_SERVER_PORT)
+    uvicorn.run(app, host="127.0.0.1", port=AGENT_SERVER_PORT)

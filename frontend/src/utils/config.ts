@@ -43,13 +43,19 @@ export const DEFAULT_CONFIG = {
     api_key: 'your-api-key-here', // LLM API密钥
     base_url: 'https://api.deepseek.com/v1', // API基础URL
     model: 'deepseek-v3.2', // 使用的模型名称
+    provider: 'openai_compatible', // API提供商类型（openai_compatible/google）
+    protocol: 'auto', // API协议（auto/openai_chat_completions/google_generate_content）
+    google_live_api: false, // Google Live API（BidiGenerateContent）开关
     temperature: 0.7, // 生成温度 (0.0-2.0)
     max_tokens: 8192, // 最大token数
     max_history_rounds: 10, // 最大历史对话轮数
     persistent_context: true, // 是否持久化上下文
     context_load_days: 3, // 上下文加载天数
     context_parse_logs: true, // 是否解析日志中的上下文
-    applied_proxy: false, // 是否应用代理
+    applied_proxy: false, // 是否使用系统代理环境变量（HTTP_PROXY/HTTPS_PROXY）
+    request_timeout: 120, // 模型请求超时时间（秒）
+    extra_headers: {}, // 附加HTTP请求头
+    extra_body: {}, // 附加请求体参数
   },
   api_server: {
     enabled: true, // 是否启用API服务器

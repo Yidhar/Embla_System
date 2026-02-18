@@ -53,7 +53,7 @@ def setup_logging() -> None:
     openclaw_handler.setFormatter(fmt)
 
     # 控制台 Handler — 简洁输出
-    console_handler = logging.StreamHandler()
+    console_handler = logging.StreamHandler(stream=sys.stdout)
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(
         logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -69,5 +69,17 @@ def setup_logging() -> None:
     logging.getLogger("agentserver.openclaw").addHandler(openclaw_handler)
 
     # 抑制第三方库噪音
-    for name in ["httpcore", "httpx", "urllib3", "asyncio"]:
+    for name in [
+        "httpcore",
+        "httpx",
+        "urllib3",
+        "asyncio",
+        "LiteLLM",
+        "litellm",
+        "openai",
+        "openai._base_client",
+        "py2neo",
+        "py2neo.client",
+        "py2neo.client.bolt",
+    ]:
         logging.getLogger(name).setLevel(logging.WARNING)

@@ -12,6 +12,7 @@ import importlib
 import importlib.util
 import platform
 import socket
+import locale
 import psutil
 from pathlib import Path
 from typing import Dict, Optional
@@ -525,7 +526,14 @@ class SystemChecker:
             
             # 创建虚拟环境
             venv_cmd = [python_cmd, "-m", "venv", str(self.venv_path)]
-            result = subprocess.run(venv_cmd, capture_output=True, text=True)
+            process_encoding = locale.getpreferredencoding(False) or "utf-8"
+            result = subprocess.run(
+                venv_cmd,
+                capture_output=True,
+                text=True,
+                encoding=process_encoding,
+                errors="replace",
+            )
             
             if result.returncode == 0:
                 print(f"   ✅ 虚拟环境创建成功: {self.venv_path}")

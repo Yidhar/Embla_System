@@ -7,7 +7,7 @@
   "scripts": {
     "lint": "eslint",
     "lint:fix": "eslint --fix",
-    "dev": "vite",
+    "dev": "node scripts/dev.mjs",
     "dev:web": "npx cross-env WEB_ONLY=1 vite",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",

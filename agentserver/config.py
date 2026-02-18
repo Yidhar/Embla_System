@@ -78,7 +78,7 @@ DEFAULT_OPENCLAW_CONFIG = OpenClawConfig()
 class AgentServerConfig:
     """Agent服务器全局配置"""
     # 服务器配置
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = None
 
     # 子模块配置

@@ -257,6 +257,29 @@ class OpenClawInstaller:
             )
 
         # 3. 执行安装
+        # script 安装默认禁用，必须显式开启
+        if method == InstallMethod.SCRIPT:
+            from system.config import config
+
+            allow_script_install_env = os.getenv("NAGA_OPENCLAW_ALLOW_SCRIPT_INSTALL")
+            if allow_script_install_env is None:
+                allow_script_install = bool(getattr(config.openclaw, "allow_script_install", False))
+            else:
+                allow_script_install = str(allow_script_install_env).strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }
+
+            if not allow_script_install:
+                self._install_status = InstallStatus.FAILED
+                return InstallResult(
+                    success=False,
+                    status=InstallStatus.FAILED,
+                    message="script 安装已禁用，请在配置中显式开启后重试",
+                )
+
         self._install_status = InstallStatus.INSTALLING
 
         if method == InstallMethod.NPM:

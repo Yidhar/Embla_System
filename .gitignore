@@ -216,3 +216,4 @@ tmp/
 
 # Cursor
 .cursorrules
+*.md

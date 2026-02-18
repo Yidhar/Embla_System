@@ -2,16 +2,33 @@
 import os
 import sys
 import subprocess
-# Windows 控制台 UTF-8，避免打印 emoji/中文 时 UnicodeEncodeError
-if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
-    try:
-        if hasattr(sys.stdout, "reconfigure"):
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        else:
-            import io
-            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+import locale
+
+# Windows 控制台输出编码处理：
+# 不强制改成 UTF-8，避免在非 UTF-8 codepage 下出现中文乱码。
+def _configure_windows_console_streams():
+    if sys.platform != "win32":
+        return
+
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None:
+            continue
+        try:
+            is_tty = bool(getattr(stream, "isatty", lambda: False)())
+            # Pipe output (Electron child process): force UTF-8 to avoid mojibake in renderer logs.
+            target_encoding = "utf-8" if not is_tty else (getattr(stream, "encoding", None) or locale.getpreferredencoding(False) or "utf-8")
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding=target_encoding, errors="replace")
+            elif hasattr(stream, "buffer"):
+                import io
+
+                setattr(sys, stream_name, io.TextIOWrapper(stream.buffer, encoding=target_encoding, errors="replace"))
+        except Exception:
+            pass
+
+
+_configure_windows_console_streams()
 if os.path.exists("_internal"):
     os.chdir("_internal")
 
@@ -25,11 +42,13 @@ IS_PACKAGED = getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
 import asyncio
 import json as _json
 import logging
+import re
 import socket
 import threading
 import time
 import warnings
-import requests
+from urllib.parse import urlparse
+from urllib.request import getproxies
 
 # 过滤弃用警告，提升启动体验
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="websockets")
@@ -156,7 +175,7 @@ class ServiceManager:
                 'api': config.api_server.enabled and config.api_server.auto_start and
                       self.check_port_available(config.api_server.host, config.api_server.port),
                 'mcp': self.check_port_available("0.0.0.0", get_server_port("mcp_server")),
-                'agent': self.check_port_available("0.0.0.0", get_server_port("agent_server")),
+                'agent': self.check_port_available("127.0.0.1", get_server_port("agent_server")),
                 'tts': self.check_port_available("0.0.0.0", config.tts.port)
             }
 
@@ -249,32 +268,211 @@ class ServiceManager:
             print(f"❌ 并行启动服务异常: {e}")
 
     def _init_proxy_settings(self):
-        """初始化代理设置：若不启用代理，则清空系统代理环境变量；始终为内部通信设置 NO_PROXY"""
-        # 始终确保本地服务通信不走代理
-        no_proxy_hosts = "localhost,127.0.0.1,0.0.0.0"
-        existing = os.environ.get("NO_PROXY", os.environ.get("no_proxy", ""))
-        if existing:
-            no_proxy_hosts = f"{existing},{no_proxy_hosts}"
+        """初始化代理设置：本地地址始终 NO_PROXY，系统代理按配置/环境变量开关控制。"""
+
+        def _parse_bool_env(name: str):
+            raw = os.environ.get(name)
+            if raw is None:
+                return None
+            value = str(raw).strip().lower()
+            if value in {"1", "true", "yes", "on"}:
+                return True
+            if value in {"0", "false", "no", "off"}:
+                return False
+            return None
+
+        def _split_no_proxy(raw: str):
+            values = []
+            if not raw:
+                return values
+            for segment in str(raw).replace(";", ",").split(","):
+                item = segment.strip()
+                if item:
+                    values.append(item)
+            return values
+
+        def _sanitize_proxy_url(proxy_url: str):
+            try:
+                parsed = urlparse(str(proxy_url))
+            except Exception:
+                return str(proxy_url)
+
+            if not parsed.scheme:
+                return str(proxy_url)
+
+            host = parsed.hostname or ""
+            port = f":{parsed.port}" if parsed.port else ""
+            auth = ""
+            if parsed.username:
+                auth = f"{parsed.username}:***@"
+            return f"{parsed.scheme}://{auth}{host}{port}"
+
+        config_proxy_enabled = bool(getattr(config.api, "applied_proxy", False))
+        env_proxy_override = _parse_bool_env("NAGA_USE_SYSTEM_PROXY")
+        use_system_proxy = config_proxy_enabled if env_proxy_override is None else env_proxy_override
+        print(
+            f"系统代理开关: {use_system_proxy} "
+            f"(config.api.applied_proxy={config_proxy_enabled}, env.NAGA_USE_SYSTEM_PROXY={env_proxy_override})"
+        )
+
+        proxy_vars = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]
+        has_env_proxy = any(os.environ.get(var) for var in proxy_vars)
+
+        def _get_windows_registry_proxy():
+            proxies = {}
+            bypass = []
+            if sys.platform != "win32":
+                return proxies, bypass
+
+            try:
+                import winreg
+            except ImportError:
+                return proxies, bypass
+
+            key = None
+            try:
+                key = winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+                )
+                proxy_enable = int(winreg.QueryValueEx(key, "ProxyEnable")[0])
+                if proxy_enable:
+                    proxy_server = str(winreg.QueryValueEx(key, "ProxyServer")[0] or "").strip()
+                    if proxy_server:
+                        if "=" not in proxy_server and ";" not in proxy_server:
+                            proxy_server = f"http={proxy_server};https={proxy_server};ftp={proxy_server}"
+
+                        for segment in proxy_server.split(";"):
+                            segment = segment.strip()
+                            if not segment:
+                                continue
+                            if "=" in segment:
+                                protocol, address = segment.split("=", 1)
+                            else:
+                                protocol, address = "http", segment
+                            protocol = protocol.strip().lower()
+                            address = address.strip()
+                            if not address:
+                                continue
+                            if not re.match(r"(?:[^/:]+)://", address):
+                                if protocol in ("http", "https", "ftp"):
+                                    address = "http://" + address
+                                elif protocol == "socks":
+                                    address = "socks://" + address
+                            proxies[protocol] = address
+
+                        if proxies.get("socks"):
+                            socks_proxy = re.sub(r"^socks://", "socks4://", proxies["socks"])
+                            proxies["http"] = proxies.get("http") or socks_proxy
+                            proxies["https"] = proxies.get("https") or socks_proxy
+
+                try:
+                    override_raw = str(winreg.QueryValueEx(key, "ProxyOverride")[0] or "")
+                except OSError:
+                    override_raw = ""
+
+                if override_raw:
+                    for item in override_raw.split(";"):
+                        value = item.strip()
+                        if not value:
+                            continue
+                        if value.lower() == "<local>":
+                            bypass.extend(["localhost", "127.0.0.1", "::1"])
+                        else:
+                            bypass.append(value)
+            except (OSError, ValueError, TypeError):
+                pass
+            finally:
+                if key is not None:
+                    key.Close()
+
+            return proxies, bypass
+
+        registry_proxies, registry_bypass = _get_windows_registry_proxy()
+        synced_from_registry = False
+        if has_env_proxy:
+            proxy_source = "env"
+        elif sys.platform == "win32" and registry_proxies:
+            proxy_source = "windows_registry"
+        else:
+            proxy_source = "none"
+
+        # Windows 下若仅使用系统代理（注册表）且无环境变量代理，
+        # 先写入 HTTP(S)_PROXY，避免后续设置 NO_PROXY 使 urllib.getproxies 失去注册表回退。
+        if use_system_proxy and sys.platform == "win32" and not has_env_proxy and registry_proxies:
+            hydrate_mapping = {
+                "http": ("HTTP_PROXY", "http_proxy"),
+                "https": ("HTTPS_PROXY", "https_proxy"),
+                "all": ("ALL_PROXY", "all_proxy"),
+            }
+            hydrated = []
+            for scheme, env_names in hydrate_mapping.items():
+                proxy_value = registry_proxies.get(scheme)
+                if not proxy_value:
+                    continue
+                for env_name in env_names:
+                    if not os.environ.get(env_name):
+                        os.environ[env_name] = proxy_value
+                hydrated.append(f"{scheme}={_sanitize_proxy_url(proxy_value)}")
+
+            if hydrated:
+                print(
+                    "代理来源: Windows 系统代理（注册表），已同步到当前进程环境变量: "
+                    + ", ".join(hydrated)
+                )
+                synced_from_registry = True
+            has_env_proxy = True
+            proxy_source = "windows_registry"
+
+        # 始终确保本地服务通信不走代理，同时尽量保留系统代理例外列表
+        no_proxy_values = ["localhost", "127.0.0.1", "0.0.0.0"]
+        existing_no_proxy = os.environ.get("NO_PROXY", os.environ.get("no_proxy", ""))
+        if not existing_no_proxy and registry_bypass:
+            existing_no_proxy = ",".join(registry_bypass)
+        if existing_no_proxy:
+            no_proxy_values = _split_no_proxy(existing_no_proxy) + no_proxy_values
+
+        dedup_no_proxy = []
+        seen = set()
+        for host in no_proxy_values:
+            if host not in seen:
+                seen.add(host)
+                dedup_no_proxy.append(host)
+        no_proxy_hosts = ",".join(dedup_no_proxy)
         os.environ["NO_PROXY"] = no_proxy_hosts
         os.environ["no_proxy"] = no_proxy_hosts
         print(f"已设置 NO_PROXY={no_proxy_hosts}")
 
-        # 检测 applied_proxy 状态
-        if not config.api.applied_proxy:  # 当 applied_proxy 为 False 时
-            print("检测到不启用代理，正在清空系统代理环境变量...")
+        if use_system_proxy:
+            if proxy_source == "env":
+                print("代理来源: 进程环境变量（HTTP(S)_PROXY/ALL_PROXY）")
+            elif proxy_source == "windows_registry":
+                if not synced_from_registry:
+                    print("代理来源: Windows 系统代理（已同步到当前进程环境变量）")
+            else:
+                print("代理来源: 未检测到环境变量或系统代理配置")
 
-            # 清空 HTTP/HTTPS 代理环境变量（跨平台兼容）
-            proxy_vars = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]
-            for var in proxy_vars:
-                if var in os.environ:
-                    del os.environ[var]  # 删除环境变量
-                    print(f"已清除代理环境变量: {var}")
+            detected_proxies = getproxies()
+            proxy_entries = []
+            for key in ("https", "http", "all", "socks", "ftp"):
+                value = detected_proxies.get(key)
+                if value:
+                    proxy_entries.append(f"{key}={_sanitize_proxy_url(str(value))}")
 
-            # 额外：确保 requests Session 没有全局代理配置
-            global_session = requests.Session()
-            if global_session.proxies:
-                global_session.proxies.clear()
-                print("已清空 requests Session 全局代理配置")
+            if proxy_entries:
+                print(
+                    "系统代理生效配置（当前进程）: "
+                    + ", ".join(proxy_entries)
+                )
+            else:
+                print("系统代理已启用，但当前进程未解析到可用代理配置")
+            return
+
+        print("检测到不启用代理，正在清空系统代理环境变量...")
+        for var in proxy_vars:
+            if var in os.environ:
+                del os.environ[var]
+                print(f"已清除代理环境变量: {var}")
     def _start_api_server(self):
         """内部API服务器启动方法"""
         try:
@@ -330,7 +528,7 @@ class ServiceManager:
 
             uvicorn.run(
                 app,
-                host="0.0.0.0",
+                host="127.0.0.1",
                 port=get_server_port("agent_server"),
                 log_level="error",
                 access_log=False,
@@ -393,6 +591,18 @@ class ServiceManager:
 
 def kill_port_occupiers():
     """启动前杀掉占用后端端口的进程（跨平台）"""
+    def _decode_subprocess_output(data):
+        if not data:
+            return ""
+        if isinstance(data, str):
+            return data
+        for encoding in ("utf-8", "cp936", "gbk"):
+            try:
+                return data.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return data.decode("utf-8", errors="replace")
+
     from system.config import get_all_server_ports
     all_ports = get_all_server_ports()
     ports = [
@@ -408,15 +618,25 @@ def kill_port_occupiers():
         for port in ports:
             try:
                 result = subprocess.run(
-                    ["netstat", "-ano"], capture_output=True, text=True
+                    ["netstat", "-ano"], capture_output=True, text=False, check=False
                 )
-                for line in result.stdout.splitlines():
+                stdout_text = _decode_subprocess_output(result.stdout)
+                for line in stdout_text.splitlines():
                     if f":{port}" in line and "LISTENING" in line:
                         parts = line.split()
-                        pid = int(parts[-1])
+                        if not parts:
+                            continue
+                        pid_str = parts[-1].strip()
+                        if not pid_str.isdigit():
+                            continue
+                        pid = int(pid_str)
                         if pid != my_pid and pid > 0:
-                            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
-                                           capture_output=True)
+                            subprocess.run(
+                                ["taskkill", "/F", "/PID", str(pid)],
+                                capture_output=True,
+                                text=False,
+                                check=False,
+                            )
                             print(f"   已终止占用端口 {port} 的进程 (PID {pid})")
                             killed = True
             except Exception as e:

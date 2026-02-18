@@ -165,13 +165,19 @@ class APIConfig(BaseModel):
     api_key: str = Field(default="sk-placeholder-key-not-set", description="API密钥")
     base_url: str = Field(default="https://api.deepseek.com/v1", description="API基础URL")
     model: str = Field(default="deepseek-v3.2", description="使用的模型名称")
+    provider: str = Field(default="openai_compatible", description="API提供商类型")
+    protocol: str = Field(default="auto", description="API协议类型")
+    google_live_api: bool = Field(default=False, description="Google Live API（BidiGenerateContent）开关")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="温度参数")
     max_tokens: int = Field(default=10000, ge=1, le=32768, description="最大token数")
     max_history_rounds: int = Field(default=100, ge=1, le=200, description="最大历史轮数")
     persistent_context: bool = Field(default=True, description="是否启用持久化上下文")
     context_load_days: int = Field(default=3, ge=1, le=30, description="加载历史上下文的天数")
     context_parse_logs: bool = Field(default=True, description="是否从日志文件解析上下文")
-    applied_proxy: bool = Field(default=True, description="是否应用代理")
+    applied_proxy: bool = Field(default=False, description="是否使用系统代理环境变量（HTTP_PROXY/HTTPS_PROXY）")
+    request_timeout: int = Field(default=120, ge=1, le=600, description="模型请求超时时间（秒）")
+    extra_headers: Dict[str, Any] = Field(default_factory=dict, description="附加HTTP请求头")
+    extra_body: Dict[str, Any] = Field(default_factory=dict, description="附加请求体参数")
 
 
 class APIServerConfig(BaseModel):

@@ -7,13 +7,13 @@
 
 import asyncio
 import time
+import httpx
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 from system.config import config, logger
 
 from system.config import get_prompt
 
 if TYPE_CHECKING:
-    import httpx
     from langchain_openai import ChatOpenAI
 
 
@@ -24,6 +24,13 @@ class ConversationAnalyzer:
     """
 
     def __init__(self):
+        self.llm: Optional["ChatOpenAI"] = None
+        self._use_google_native = self._should_use_google_native_protocol()
+
+        if self._use_google_native:
+            logger.info("[ConversationAnalyzer] 使用 Google 原生 generateContent 协议")
+            return
+
         # 延迟导入 langchain_openai，避免多线程并行启动时 pydantic 导入竞争
         from langchain_openai import ChatOpenAI
 
@@ -33,6 +40,118 @@ class ConversationAnalyzer:
             api_key=config.api.api_key,  # type: ignore[arg-type]
             temperature=0,
         )
+
+    @staticmethod
+    def _should_use_google_native_protocol() -> bool:
+        protocol = str(getattr(config.api, "protocol", "") or "").strip().lower()
+        if protocol in {"google_generate_content", "google", "gemini"}:
+            return True
+        if protocol in {"openai_chat_completions", "openai", "openai_compatible"}:
+            return False
+
+        base = (config.api.base_url or "").strip().lower()
+        if "generativelanguage.googleapis.com" in base:
+            return True
+
+        provider = str(getattr(config.api, "provider", "") or "").strip().lower()
+        if provider in {"google", "gemini", "google_ai_studio", "google_genai"}:
+            return True
+        if provider in {"openai", "openai_compatible"}:
+            return False
+
+        return False
+
+    @staticmethod
+    def _extract_google_text(data: Any) -> str:
+        if not isinstance(data, dict):
+            return ""
+
+        candidates = data.get("candidates") or []
+        if not isinstance(candidates, list):
+            return ""
+
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            content = candidate.get("content") or {}
+            if not isinstance(content, dict):
+                continue
+            parts = content.get("parts") or []
+            if not isinstance(parts, list):
+                continue
+            texts: List[str] = []
+            for part in parts:
+                if isinstance(part, dict):
+                    text = part.get("text")
+                    if isinstance(text, str) and text:
+                        texts.append(text)
+            if texts:
+                return "".join(texts)
+        return ""
+
+    def _invoke_google_native(self, prompt: str) -> str:
+        base = (config.api.base_url or "https://generativelanguage.googleapis.com/v1beta").strip().rstrip("/")
+        lowered_base = base.lower()
+        for suffix in ("/openai/chat/completions", "/chat/completions", "/completions", "/openai"):
+            if lowered_base.endswith(suffix):
+                base = base[: -len(suffix)]
+                lowered_base = base.lower()
+                break
+        if "/models/" in lowered_base and ":" in lowered_base:
+            base = base.split("/models/", 1)[0]
+            lowered_base = base.lower()
+        if "/v1alpha" not in lowered_base and "/v1beta" not in lowered_base and "/v1/" not in lowered_base and not lowered_base.endswith("/v1"):
+            base = f"{base.rstrip('/')}/v1beta"
+
+        model = (config.api.model or "").strip()
+        if ":" in model:
+            maybe_model, maybe_method = model.rsplit(":", 1)
+            if maybe_method in {"generateContent", "streamGenerateContent", "BidiGenerateContent"}:
+                model = maybe_model
+        if model.startswith("models/"):
+            model = model[len("models/") :]
+        if "/" in model:
+            prefix = model.split("/", 1)[0].lower()
+            if prefix in {"openai", "openrouter", "deepseek", "google", "gemini"}:
+                model = model.split("/")[-1]
+        if not model:
+            model = "gemini-2.0-flash"
+
+        url = f"{base}/models/{model}:generateContent"
+        timeout_seconds = int(getattr(config.api, "request_timeout", 120))
+        max_tokens = getattr(config.api, "max_tokens", None)
+
+        payload: Dict[str, Any] = {
+            "systemInstruction": {"parts": [{"text": "你是精确的任务意图提取器与MCP调用规划器。"}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": max_tokens,
+            },
+        }
+
+        if isinstance(getattr(config.api, "extra_body", None), dict) and config.api.extra_body:
+            payload.update(config.api.extra_body)
+
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if isinstance(getattr(config.api, "extra_headers", None), dict):
+            headers.update({str(k): str(v) for k, v in config.api.extra_headers.items()})
+
+        params: Dict[str, str] = {}
+        if config.api.api_key:
+            params["key"] = config.api.api_key
+        logger.info("[ConversationAnalyzer] Google request mode=generateContent url=%s", f"{url}?key=***" if params else url)
+        use_system_proxy = bool(getattr(config.api, "applied_proxy", False))
+        logger.info("[ConversationAnalyzer] Google request proxy=%s", use_system_proxy)
+
+        with httpx.Client(timeout=timeout_seconds, trust_env=use_system_proxy) as client:
+            response = client.post(url, params=params, headers=headers, json=payload)
+
+        if response.status_code >= 400:
+            raise RuntimeError(f"Google API error ({response.status_code}): {response.text}")
+
+        data = response.json()
+        return self._extract_google_text(data).strip()
 
     def _build_prompt(self, messages: List[Dict[str, str]]) -> str:
         lines = []
@@ -99,20 +218,27 @@ class ConversationAnalyzer:
         """非标准JSON格式解析 - 直接调用LLM，避免嵌套线程池"""
         logger.info("[ConversationAnalyzer] 尝试非标准JSON格式解析")
         try:
-            # 直接调用LLM，避免嵌套线程池
-            resp = self.llm.invoke(
-                [
-                    {"role": "system", "content": "你是精确的任务意图提取器与MCP调用规划器。"},
-                    {"role": "user", "content": prompt},
-                ]
-            )
-
-            raw_content: Any = getattr(resp, "content", "")
-            if isinstance(raw_content, str):
-                text = raw_content.strip()
+            if self._use_google_native:
+                text = self._invoke_google_native(prompt)
             else:
-                # 兼容LangChain对多模态/分段内容的返回类型
-                text = str(raw_content).strip()
+                if self.llm is None:
+                    raise RuntimeError("ConversationAnalyzer LLM is not initialized")
+
+                # 直接调用LLM，避免嵌套线程池
+                resp = self.llm.invoke(
+                    [
+                        {"role": "system", "content": "你是精确的任务意图提取器与MCP调用规划器。"},
+                        {"role": "user", "content": prompt},
+                    ]
+                )
+
+                raw_content: Any = getattr(resp, "content", "")
+                if isinstance(raw_content, str):
+                    text = raw_content.strip()
+                else:
+                    # 兼容LangChain对多模态/分段内容的返回类型
+                    text = str(raw_content).strip()
+
             logger.info(f"[ConversationAnalyzer] LLM响应完成，响应长度: {len(text)}")
             logger.info(f"[ConversationAnalyzer] LLM原始响应内容: {text}")
 
