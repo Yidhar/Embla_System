@@ -22,7 +22,7 @@
 
 ---
 
-**Dual licensed** · [AGPL-3.0](LICENSE) for open source | [Proprietary](CLOSED-SOURCE.LICENSE) for closed-source use (written consent required). Commercial: contact@nagaagent.com
+**Dual licensed** · [AGPL-3.0](LICENSE) for open source | [Proprietary](LICENSE-CLOSED-SOURCE) for closed-source use (written consent required). Commercial: contact@nagaagent.com
 
 ---
 

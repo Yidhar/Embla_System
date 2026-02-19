@@ -22,7 +22,7 @@
 
 ---
 
-**双许可证** · 开源采用 [AGPL-3.0](LICENSE)，闭源采用 [专属许可](CLOSED-SOURCE.LICENSE)（需书面授权）。商业合作：contact@nagaagent.com / bilibili【柏斯阔落】
+**双许可证** · 开源采用 [AGPL-3.0](LICENSE)，闭源采用 [专属许可](LICENSE-CLOSED-SOURCE)（需书面授权）。商业合作：contact@nagaagent.com / bilibili【柏斯阔落】
 
 ---
 
