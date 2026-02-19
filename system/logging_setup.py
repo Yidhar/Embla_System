@@ -6,6 +6,7 @@
 所有环境下均将详细日志写入 logs/details/ 文件夹，支持轮转。
 """
 
+import os
 import sys
 import logging
 from pathlib import Path
@@ -18,10 +19,12 @@ IS_PACKAGED: bool = getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
 def _resolve_log_dir() -> Path:
     """推导日志根目录（logs/）"""
     if IS_PACKAGED:
-        install_dir = Path(sys._MEIPASS).parent.parent  # type: ignore[attr-defined]
-        return install_dir / "logs"
-    else:
-        return Path(__file__).resolve().parent.parent / "logs"
+        if sys.platform == "win32":
+            base = Path(os.environ.get("APPDATA", Path.home()))
+        else:
+            base = Path.home()
+        return base / "NagaAgent" / "logs"
+    return Path(__file__).resolve().parent.parent / "logs"
 
 
 def setup_logging() -> None:
