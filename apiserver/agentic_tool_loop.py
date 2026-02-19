@@ -5,7 +5,6 @@ Agentic Tool Loop 核心引擎
 """
 
 import asyncio
-import base64
 import json
 import logging
 import re
@@ -370,14 +369,13 @@ def format_tool_results_for_llm(results: List[Dict[str, Any]]) -> str:
 
 
 def _format_sse_event(event_type: str, data: Any) -> str:
-    """格式化扩展SSE事件（使用与llm_service相同的base64编码格式）"""
+    """格式化扩展SSE事件"""
     payload = {"type": event_type}
     if isinstance(data, dict):
         payload.update(data)
     else:
         payload["data"] = data
-    b64 = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode("utf-8")).decode("ascii")
-    return f"data: {b64}\n\n"
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 # ---------------------------------------------------------------------------
@@ -426,13 +424,11 @@ async def run_agentic_loop(
 
         async for chunk in llm_service.stream_chat_with_context(messages, get_config().api.temperature,
                                                                  model_override=model_override):
-            # chunk 格式: "data: <base64_json>\n\n"
             if chunk.startswith("data: "):
                 try:
                     data_str = chunk[6:].strip()
                     if data_str and data_str != "[DONE]":
-                        decoded = base64.b64decode(data_str).decode("utf-8")
-                        chunk_data = json.loads(decoded)
+                        chunk_data = json.loads(data_str)
                         chunk_type = chunk_data.get("type", "content")
                         chunk_text = chunk_data.get("text", "")
 

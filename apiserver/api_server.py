@@ -979,16 +979,13 @@ async def chat_stream(request: ChatRequest):
             is_tool_event = False  # 标记当前是否在处理工具事件（不送TTS）
 
             async for chunk in run_agentic_loop(messages, session_id, model_override=model_override):
-                # chunk 格式: "data: <base64_json>\n\n"
                 if chunk.startswith("data: "):
                     try:
-                        import base64
                         import json as json_module
 
                         data_str = chunk[6:].strip()
                         if data_str and data_str != "[DONE]":
-                            decoded = base64.b64decode(data_str).decode("utf-8")
-                            chunk_data = json_module.loads(decoded)
+                            chunk_data = json_module.loads(data_str)
                             chunk_type = chunk_data.get("type", "content")
                             chunk_text = chunk_data.get("text", "")
 

@@ -89,7 +89,7 @@ parse_tool_calls_from_text()
 
 - **Text parsing**: Regex `r"```tool\s*\n([\s\S]*?)(?:```|\Z)"` extracts code blocks, `json5` for tolerant parsing (fallback to `json`), fullwidth characters (`｛｝：`) auto-normalized
 - **Loop control**: Max 5 rounds (`max_loop_stream` configurable), terminates when no `agentType` JSON found in LLM output
-- **SSE encoding**: Each chunk is `data: base64(json({"type":"content"|"reasoning","text":"..."}))\n\n`, frontend splits via `ReadableStream` + `TextDecoder`
+- **SSE encoding**: Each chunk is `data: {"type":"content"|"reasoning","text":"..."}\n\n`, frontend splits via `ReadableStream` + `TextDecoder`
 - **Result injection**: Formatted as `[Tool Result 1/N - service: tool (status)]` and appended to messages
 
 Source: [`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py), [`apiserver/streaming_tool_extractor.py`](apiserver/streaming_tool_extractor.py)

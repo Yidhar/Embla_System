@@ -225,7 +225,7 @@ class LLMService:
                 格式: {"model": "glm-4.5v", "api_base": "https://...", "api_key": "..."}
 
         Yields:
-            格式为 "data: <base64_json>\n\n" 的 SSE 事件
+            格式为 "data: <json>\n\n" 的 SSE 事件
             JSON 结构: {"type": "content"|"reasoning", "text": "..."}
         """
         if not self._initialized:
@@ -355,12 +355,10 @@ class LLMService:
         Returns:
             SSE 格式的数据块
         """
-        import base64
         import json
 
         data = {"type": chunk_type, "text": text}
-        b64 = base64.b64encode(json.dumps(data, ensure_ascii=False).encode("utf-8")).decode("ascii")
-        return f"data: {b64}\n\n"
+        return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 # 全局LLM服务实例

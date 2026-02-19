@@ -6,6 +6,7 @@
 """
 
 import re
+import json
 import logging
 import asyncio
 import sys
@@ -177,14 +178,14 @@ class StreamingToolCallExtractor:
         
         async for chunk in llm_service.stream_chat_with_context(messages, temperature):
             if chunk.startswith("data: "):
-                # 解码base64内容
                 try:
-                    import base64
                     data_str = chunk[6:].strip()
                     if data_str == '[DONE]':
                         break
-                    decoded = base64.b64decode(data_str).decode('utf-8')
-                    await self.process_text_chunk(decoded)
+                    chunk_data = json.loads(data_str)
+                    text = chunk_data.get("text", "")
+                    if text:
+                        await self.process_text_chunk(text)
                 except Exception as e:
                     logger.error(f"处理流式响应块失败: {e}")
                     continue

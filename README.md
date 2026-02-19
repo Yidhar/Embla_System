@@ -89,7 +89,7 @@ parse_tool_calls_from_text()
 
 - **文本解析**：正则 `r"```tool\s*\n([\s\S]*?)(?:```|\Z)"` 提取代码块，`json5` 容错解析（兜底 `json`），全角字符（`｛｝：`）自动标准化
 - **循环控制**：最大 5 轮（`max_loop_stream` 可配），每轮 LLM 输出无 `agentType` JSON 则终止
-- **SSE 编码**：每个 chunk 为 `data: base64(json({"type":"content"|"reasoning","text":"..."}))\n\n`，前端 `ReadableStream` + `TextDecoder` 实时拆分
+- **SSE 编码**：每个 chunk 为 `data: {"type":"content"|"reasoning","text":"..."}\n\n`，前端 `ReadableStream` + `TextDecoder` 实时拆分
 - **工具结果回注**：格式化为 `[工具结果 1/N - service: tool (status)]` 追加到 messages 中
 
 源码：[`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py)、[`apiserver/streaming_tool_extractor.py`](apiserver/streaming_tool_extractor.py)
