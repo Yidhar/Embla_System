@@ -212,11 +212,16 @@ def extract_node_runtime(zip_path: Path) -> None:
     log("Node.js 便携版解压完成")
 
 
-def preinstall_openclaw() -> None:
+def preinstall_openclaw(force: bool = False) -> None:
     """在内嵌运行时目录中预装 OpenClaw"""
     npm_cmd = NODE_RUNTIME_DIR / "npm.cmd"
     if not npm_cmd.exists():
         raise FileNotFoundError(f"npm.cmd 不存在: {npm_cmd}")
+
+    openclaw_cmd = OPENCLAW_RUNTIME_DIR / "node_modules" / ".bin" / "openclaw.cmd"
+    if not force and openclaw_cmd.exists():
+        log("OpenClaw 已预装，跳过安装（删除 openclaw-runtime/openclaw 可强制重装）")
+        return
 
     if OPENCLAW_RUNTIME_DIR.exists():
         log(f"清理旧 OpenClaw 运行时: {OPENCLAW_RUNTIME_DIR}")
@@ -275,12 +280,12 @@ def preinstall_openclaw() -> None:
     log(f"OpenClaw 预装完成: {openclaw_cmd}")
 
 
-def prepare_openclaw_runtime() -> None:
+def prepare_openclaw_runtime(force: bool = False) -> None:
     """准备 OpenClaw 运行时：Node.js 便携版 + OpenClaw 预装"""
     RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     zip_path = download_node_runtime()
     extract_node_runtime(zip_path)
-    preinstall_openclaw()
+    preinstall_openclaw(force=force)
     log("OpenClaw 运行时准备完成（已预装，无需首次启动安装）")
 
 
@@ -393,6 +398,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--backend-only", action="store_true", help="仅编译后端，不打包 Electron")
     parser.add_argument(
+        "--force-openclaw",
+        action="store_true",
+        help="强制重新安装 OpenClaw（先删除旧安装）",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="调试打包：安装后启动时弹出后端日志终端（仅 Windows 生效）",
@@ -430,7 +440,7 @@ def main() -> None:
     if not args.skip_openclaw:
         step += 1
         log_step(step, total_steps, "准备 OpenClaw 运行时（含预装）")
-        prepare_openclaw_runtime()
+        prepare_openclaw_runtime(force=args.force_openclaw)
 
     # Step 4: 编译后端
     step += 1

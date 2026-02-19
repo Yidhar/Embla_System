@@ -14,10 +14,21 @@ from datetime import datetime
 IS_PACKAGED: bool = getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
 
 
+def _get_user_data_dir() -> Path:
+    """返回用户可写的应用数据目录"""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA", Path.home()))
+    else:
+        base = Path.home()
+    return base / "NagaAgent"
+
+
 def get_config_path() -> str:
-    """返回 config.json 的可写路径（打包后在 exe 同级目录，开发时在项目根目录）"""
+    """返回 config.json 的可写路径"""
     if IS_PACKAGED:
-        return str(Path(sys.executable).parent / "config.json")
+        d = _get_user_data_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        return str(d / "config.json")
     return str(Path(__file__).parent.parent / "config.json")
 
 from pydantic import BaseModel, Field, field_validator
@@ -130,7 +141,10 @@ def bootstrap_config_from_example(config_path: str) -> None:
         return
 
     if IS_PACKAGED:
+        # spec 只打包了 config.json，优先找 example，没有则用 config.json 本身作模板
         example_path = str(Path(sys._MEIPASS) / "config.json.example")  # type: ignore[attr-defined]
+        if not os.path.exists(example_path):
+            example_path = str(Path(sys._MEIPASS) / "config.json")  # type: ignore[attr-defined]
     else:
         example_path = str(Path(config_path).with_name("config.json.example"))
     if not os.path.exists(example_path):
@@ -666,7 +680,7 @@ def build_system_prompt(
     current_time = datetime.now()
     time_info = (
         f"\n【当前时间信息】\n"
-        f"当前日期：{current_time.strftime('%Y年%m月%d日')}\n"
+        f"当前日期：{current_time.year}年{current_time.month:02d}月{current_time.day:02d}日\n"
         f"当前时间：{current_time.strftime('%H:%M:%S')}\n"
         f"当前星期：{current_time.strftime('%A')}"
     )
