@@ -896,14 +896,17 @@ async def chat_stream(request: ChatRequest):
             # 用户消息直接传 LLM，技能上下文完全由 system prompt 承载
             effective_message = request.message
 
-            # ====== 启动压缩：将上一个会话的历史压缩为摘要注入 system prompt ======
+            # ====== 启动压缩：将上一个会话的历史 + 更早的压缩记录合并压缩，注入 system prompt ======
             try:
                 from .context_compressor import compress_for_startup, build_compact_block
+                prev_session_id = message_manager._get_previous_session_id(session_id)
+                previous_compact = message_manager.get_session_compact(prev_session_id) if prev_session_id else ""
                 prev_messages = message_manager._get_previous_session_messages(session_id)
-                if prev_messages:
-                    summary = await compress_for_startup(prev_messages)
+                if prev_messages or previous_compact:
+                    summary = await compress_for_startup(prev_messages, previous_compact=previous_compact)
                     if summary:
                         system_prompt += build_compact_block(summary)
+                        message_manager.set_session_compact(session_id, summary)
                         logger.info(f"[启动压缩] 已将上一会话摘要注入 system prompt ({len(summary)} 字)")
             except Exception as e:
                 logger.debug(f"[启动压缩] 跳过: {e}")

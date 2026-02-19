@@ -91,6 +91,7 @@ class MessageManager:
                 "agent_type": session.get("agent_type", "default"),
                 "temporary": session.get("temporary", False),
                 "messages": session["messages"],
+                "compact": session.get("compact", ""),
             }
             self._get_session_file(session_id).write_text(
                 json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -112,6 +113,7 @@ class MessageManager:
                     "agent_type": data.get("agent_type", "default"),
                     "temporary": data.get("temporary", False),
                     "messages": data.get("messages", []),
+                    "compact": data.get("compact", ""),
                 }
                 loaded += 1
             except Exception as e:
@@ -210,6 +212,31 @@ class MessageManager:
         candidates.sort(key=lambda x: x[1].get("last_activity", ""), reverse=True)
         prev_messages = candidates[0][1]["messages"]
         return prev_messages[-max_messages:]
+
+    def _get_previous_session_id(self, current_session_id: str) -> Optional[str]:
+        """获取上一个会话的 ID（按最后活动时间排序，排除当前会话）"""
+        candidates = [
+            (sid, s) for sid, s in self.sessions.items()
+            if sid != current_session_id and s.get("messages")
+        ]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: x[1].get("last_activity", ""), reverse=True)
+        return candidates[0][0]
+
+    def get_session_compact(self, session_id: str) -> str:
+        """获取会话的压缩摘要"""
+        session = self.sessions.get(session_id)
+        return (session.get("compact", "") if session else "") or ""
+
+    def set_session_compact(self, session_id: str, compact: str):
+        """设置会话的压缩摘要并持久化"""
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        session["compact"] = compact
+        if not session.get("temporary"):
+            self._save_session_to_disk(session_id)
 
     def build_conversation_messages(self, session_id: str, system_prompt: str,
                                   current_message: str, include_history: bool = True) -> List[Dict]:

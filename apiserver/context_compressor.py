@@ -37,10 +37,14 @@ COMPRESS_MODEL = "gpt-4.1-nano"
 COMPACT_MARKER = "以下是上次对话的压缩记录："
 
 SUMMARIZE_PROMPT = """\
-你是对话状态压缩器。你的任务是将多轮对话历史压缩为一份结构化的工作状态记录，\
+你是对话状态压缩器。你的任务是将对话历史压缩为一份结构化的工作状态记录，\
 使得后续对话可以无缝衔接，无需重新提问。
 
-请严格按照以下 6 个分区输出，每个分区不可省略（如该分区无内容则写"无"）：
+输入可能包含两部分：
+- "更早对话的压缩记录"：这是之前多次对话累积的压缩结果，必须继承其中仍然有效的信息
+- "最近一次对话的内容"：这是最新一次对话的原始消息
+
+请将两部分合并，严格按照以下 6 个分区输出，每个分区不可省略（如该分区无内容则写"无"）：
 
 1. 用户意图
    用户提出了什么需求？过程中需求是否有变更或追加？
@@ -64,7 +68,8 @@ SUMMARIZE_PROMPT = """\
 - 使用中文
 - 直接输出分区内容，不要添加额外的开头语或总结语
 - 每个分区以"【分区名】"开头，内容紧跟其后
-- 总长度控制在 1000 字以内
+- 总长度控制在 3000～5000 字
+- 继承旧压缩记录中仍然有效的信息，丢弃已过时或已完成的内容
 - 侧重事实和细节，不要使用模糊描述"""
 
 
@@ -100,49 +105,43 @@ def _msg_text(msg: Dict) -> str:
     return str(content)
 
 
-# ── 判断是否已压缩 ──
-
-def is_already_compact(prev_messages: List[Dict]) -> bool:
-    """检查上一个会话的消息是否已经是压缩产物。
-
-    判据：最后一条消息是 system 角色且第一行匹配压缩标记。
-    """
-    if not prev_messages:
-        return False
-    last = prev_messages[-1]
-    if last.get("role") != "system":
-        return False
-    content = (last.get("content") or "").lstrip()
-    return content.startswith(COMPACT_MARKER)
-
-
 # ── 启动压缩 ──
 
-async def compress_for_startup(prev_messages: List[Dict]) -> Optional[str]:
-    """将上一个会话的消息压缩为摘要文本（用于注入 system prompt）。
+async def compress_for_startup(
+    prev_messages: List[Dict],
+    previous_compact: str = "",
+) -> Optional[str]:
+    """将上一个会话的消息 + 更早的压缩记录合并压缩为新的摘要。
 
-    如果上一个会话已经是压缩产物，直接提取 <compact> 内容返回。
+    滚动继承：previous_compact 是上一个 session 存储的压缩结果，
+    包含更早对话的累积上下文。新摘要会继承其中仍有效的信息。
+
+    Args:
+        prev_messages: 上一个会话的原始消息列表
+        previous_compact: 上一个会话继承的压缩记录（可为空）
 
     Returns:
         压缩后的摘要文本，失败返回 None
     """
-    if not prev_messages:
+    if not prev_messages and not previous_compact:
         return None
 
-    # 已经压缩过 → 提取现有 <compact> 内容
-    if is_already_compact(prev_messages):
-        content = prev_messages[-1].get("content", "")
-        start = content.find("<compact>")
-        end = content.find("</compact>")
-        if start != -1 and end != -1:
-            return content[start + len("<compact>"):end].strip()
-        return None
+    # 组装压缩输入：旧 compact + 新对话
+    parts = []
+    if previous_compact:
+        parts.append(f"=== 更早对话的压缩记录 ===\n{previous_compact}")
+    if prev_messages:
+        conversation_text = _format_messages_for_summary(prev_messages)
+        parts.append(f"=== 最近一次对话的内容 ===\n{conversation_text}")
 
-    # 格式化并生成摘要
-    conversation_text = _format_messages_for_summary(prev_messages)
-    summary = await _generate_summary(conversation_text)
+    full_text = "\n\n".join(parts)
+    summary = await _generate_summary(full_text)
     if summary:
-        logger.info(f"[启动压缩] 压缩 {len(prev_messages)} 条上一会话消息为 {len(summary)} 字摘要")
+        logger.info(
+            f"[启动压缩] 压缩完成: {len(prev_messages)} 条消息"
+            f"{f' + {len(previous_compact)} 字旧摘要' if previous_compact else ''}"
+            f" → {len(summary)} 字新摘要"
+        )
     return summary
 
 
@@ -350,8 +349,8 @@ async def _generate_summary(conversation_text: str) -> Optional[str]:
                 {"role": "user", "content": conversation_text},
             ],
             temperature=0.3,
-            max_tokens=2000,
-            timeout=30,
+            max_tokens=5000,
+            timeout=60,
             **_get_compress_llm_params(),
         )
         summary = response.choices[0].message.content or ""
