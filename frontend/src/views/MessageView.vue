@@ -43,6 +43,44 @@ export function chatStream(content: string, options?: { skill?: string, images?:
       return 'normal'
     }
 
+    function formatToolStageLine(chunk: any): string {
+      const phaseMap: Record<string, string> = {
+        plan: 'PLAN',
+        execute: 'EXECUTE',
+        verify: 'VERIFY',
+        repair: 'REPAIR',
+      }
+      const statusMap: Record<string, string> = {
+        start: 'START',
+        success: 'OK',
+        error: 'ERROR',
+        skip: 'SKIP',
+      }
+      const round = chunk.round ?? '?'
+      const phase = phaseMap[chunk.phase || ''] || String(chunk.phase || 'UNKNOWN').toUpperCase()
+      const status = statusMap[chunk.status || ''] || String(chunk.status || 'UNKNOWN').toUpperCase()
+      const parts: string[] = []
+      if (typeof chunk.actionable_calls === 'number') {
+        parts.push(`calls=${chunk.actionable_calls}`)
+      }
+      if (typeof chunk.success_count === 'number' || typeof chunk.error_count === 'number') {
+        const success = typeof chunk.success_count === 'number' ? chunk.success_count : 0
+        const error = typeof chunk.error_count === 'number' ? chunk.error_count : 0
+        parts.push(`ok=${success}, err=${error}`)
+      }
+      if (typeof chunk.threshold === 'number') {
+        parts.push(`threshold=${chunk.threshold}`)
+      }
+      if (chunk.reason) {
+        parts.push(`reason=${chunk.reason}`)
+      }
+      if (chunk.decision) {
+        parts.push(`decision=${chunk.decision}`)
+      }
+      const detail = parts.length ? ` (${parts.join(', ')})` : ''
+      return `> [R${round}] [${phase}] ${status}${detail}\n`
+    }
+
     for await (const chunk of response) {
       if (chunk.type === 'reasoning') {
         message.reasoning = (message.reasoning || '') + chunk.text
@@ -87,6 +125,9 @@ export function chatStream(content: string, options?: { skill?: string, images?:
           message.content += `\n> ${status} ${label}\n`
         }
         message.content += '\n'
+      }
+      else if (chunk.type === 'tool_stage') {
+        message.content += `${formatToolStageLine(chunk)}`
       }
       else if (chunk.type === 'round_start' && (chunk.round ?? 0) > 1) {
         // 多轮分隔

@@ -214,6 +214,29 @@ class HandoffConfig(BaseModel):
     show_output: bool = Field(default=False, description="是否显示工具调用输出")
 
 
+class AgenticLoopConfig(BaseModel):
+    """Agentic Tool Loop 编排与控制配置"""
+
+    max_rounds_stream: int = Field(default=500, ge=1, le=5000, description="流式模式最大循环轮次")
+    max_rounds_non_stream: int = Field(default=500, ge=1, le=5000, description="非流式模式最大循环轮次")
+    enable_summary_round: bool = Field(default=True, description="循环结束时是否执行总结轮")
+
+    max_consecutive_tool_failures: int = Field(default=2, ge=1, le=20, description="连续工具执行失败阈值")
+    max_consecutive_validation_failures: int = Field(default=2, ge=1, le=20, description="连续参数校验失败阈值")
+    max_consecutive_no_tool_rounds: int = Field(default=2, ge=1, le=20, description="连续无工具调用阈值")
+
+    inject_no_tool_feedback: bool = Field(default=True, description="无工具调用时是否注入纠偏反馈继续下一轮")
+    tool_result_preview_chars: int = Field(default=500, ge=120, le=20000, description="前端工具结果预览长度")
+    emit_workflow_stage_events: bool = Field(
+        default=True, description="是否输出 plan/execute/verify/repair 阶段事件（SSE可视化）"
+    )
+
+    max_parallel_tool_calls: int = Field(default=8, ge=1, le=64, description="单轮最大并行工具调用数")
+    retry_failed_tool_calls: bool = Field(default=True, description="是否自动重试失败工具调用")
+    max_tool_retries: int = Field(default=1, ge=0, le=5, description="失败工具调用最大重试次数")
+    retry_backoff_seconds: float = Field(default=0.8, ge=0.0, le=10.0, description="重试退避秒数")
+
+
 class BrowserConfig(BaseModel):
     """浏览器配置"""
 
@@ -723,6 +746,7 @@ class NagaConfig(BaseModel):
     api_server: APIServerConfig = Field(default_factory=APIServerConfig)
     grag: GRAGConfig = Field(default_factory=GRAGConfig)
     handoff: HandoffConfig = Field(default_factory=HandoffConfig)
+    agentic_loop: AgenticLoopConfig = Field(default_factory=AgenticLoopConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
     asr: ASRConfig = Field(default_factory=ASRConfig)  # ASR输入服务配置 #

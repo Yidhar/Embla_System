@@ -997,7 +997,12 @@ async def chat_stream(request: ChatRequest):
             # 记录每轮的content，用于在每轮结束时完成TTS处理
             current_round_text = ""
             is_tool_event = False  # 标记当前是否在处理工具事件（不送TTS）
-            loop_max_rounds = get_config().handoff.max_loop_stream
+            cfg = get_config()
+            loop_cfg = getattr(cfg, "agentic_loop", None)
+            if loop_cfg is not None:
+                loop_max_rounds = int(getattr(loop_cfg, "max_rounds_stream", 500))
+            else:
+                loop_max_rounds = int(cfg.handoff.max_loop_stream)
 
             async for chunk in run_agentic_loop(
                 messages,

@@ -7,13 +7,23 @@
 - 文档查询（README/doc/docs）
 - 关键词搜索
 - 目录或文件列表
+- Git状态、差异、提交历史与责任归因分析
+- 数学计算/数据统计（优先 `python_repl`）
+
+调度原则（自治执行）：
+- 默认由系统直接执行并返回结果，不把操作步骤转交给用户。
+- 对代码任务优先形成“读取 -> 修改 -> 验证”链路，而不是只读不改或只给建议。
+- 仅在缺少必要信息或需要风险确认时才中断并请求用户输入。
 
 ### Native任务调用格式
 {{
 "agentType": "native",
-"tool_name": "read_file" | "write_file" | "run_cmd" | "search_keyword" | "query_docs" | "list_files",
+"tool_name": "read_file" | "write_file" | "run_cmd" | "search_keyword" | "query_docs" | "list_files" | "git_status" | "git_diff" | "git_log" | "git_show" | "git_blame" | "git_grep" | "git_changed_files" | "git_checkout_file" | "python_repl",
 其他参数...
 }}
+
+补充规则：
+- `git_checkout_file` 属于破坏性操作，必须显式带 `confirm=true`。
 
 ## MCP工具调用（本地工具服务）
 

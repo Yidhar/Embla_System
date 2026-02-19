@@ -1020,7 +1020,27 @@ class LLMService:
         protocol = self._resolve_protocol(api_base=final_base)
         if protocol == self.PROTOCOL_GOOGLE_GENERATE:
             if tools:
-                logger.warning("[LLM] Google protocol path currently ignores tool definitions")
+                msg = (
+                    "当前模型路由不支持原生 function calling（Google protocol path）。"
+                    "请切换到支持 tools/function-calling 的 OpenAI-compatible 模型。"
+                )
+                logger.error("[LLM] %s", msg)
+                yield self._format_sse_chunk(
+                    "tool_calls",
+                    json.dumps(
+                        [
+                            {
+                                "id": "tool_protocol_not_supported",
+                                "name": "",
+                                "arguments": {},
+                                "arguments_raw": "",
+                                "parse_error": msg,
+                            }
+                        ],
+                        ensure_ascii=False,
+                    ),
+                )
+                return
             if self._is_google_live_enabled():
                 logger.info("[LLM] Google stream route: BidiGenerateContent (Live API)")
                 async for chunk in self._stream_google_bidi_generate_content(

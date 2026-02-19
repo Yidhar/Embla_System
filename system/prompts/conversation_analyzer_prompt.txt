@@ -6,6 +6,7 @@
 2. **只分析最新一条用户消息**，忽略历史中已执行过的相同操作
 3. **是复合操作吗？** 包含"并"、"然后"或连续动词（"打开B站搜索AI"）→ 输出JSON数组（每个元素都是openclaw调用）
 4. **有可执行任务吗？** 有 → 输出工具调用；无 → 输出 `{{}}`
+5. **技术任务默认可执行**：包含“排查/修复/改造/实现/优化/重构/审阅/写代码/跑测试”等语义时，优先输出可直接执行的 native/mcp/openclaw 调用，不要输出建议性空结果
 
 ## 输出格式
 
@@ -24,12 +25,19 @@ JSON花括号必须使用半角ASCII字符 `{{` 和 `}}`，不要使用全角。
 ### Native基础工具调用（本地优先）
 {{
 "agentType": "native",
-"tool_name": "read_file" | "write_file" | "run_cmd" | "search_keyword" | "query_docs" | "list_files",
+"tool_name": "read_file" | "write_file" | "run_cmd" | "search_keyword" | "query_docs" | "list_files" | "git_status" | "git_diff" | "git_log" | "git_show" | "git_blame" | "git_grep" | "git_changed_files" | "git_checkout_file" | "python_repl",
 "path": "文件或目录路径（按工具需要）",
+"repo_path": "git仓库路径（可选）",
 "command": "命令字符串（run_cmd）",
 "content": "文件内容（write_file）",
 "keyword": "关键词（search_keyword）",
-"query": "查询词（query_docs）"
+"query": "查询词（query_docs）",
+"pattern": "grep模式（git_grep，可选）",
+"ref": "git引用（分支/提交，可选）",
+"confirm": "破坏性操作确认（git_checkout_file 需要 true）",
+"code": "Python代码（python_repl）",
+"expression": "Python表达式（python_repl，可选）",
+"sandbox": "restricted | docker（python_repl，可选）"
 }}
 
 ### Live2D表情动作调用
@@ -56,8 +64,10 @@ JSON花括号必须使用半角ASCII字符 `{{` 和 `}}`，不要使用全角。
 
 ## 规则
 - 仅提取可执行任务，闲聊和状态反馈输出 `{{}}`
-- 基础本地任务优先使用 `agentType: "native"`（文件读写、命令执行、文档查询、关键词搜索、目录查看）
+- 基础本地任务优先使用 `agentType: "native"`（文件读写、命令执行、文档查询、关键词搜索、目录查看、git分析、受限Python计算）
+- 涉及 `git_checkout_file` 时必须附带 `confirm: true`
 - 复杂跨应用或需要浏览器/联网自动化时使用 `agentType: "openclaw"`
+- 对“代码修复/功能实现/问题定位/自动审阅”类请求，默认生成能落地执行的调用，不要退化为“请用户自行查看”。
 - Live2D动作使用 `agentType: "live2d"` 格式，可以和openclaw任务同时存在于JSON数组中
 - MCP本地工具使用 `agentType: "mcp"` 格式（天气、时间、应用启动等），当匹配MCP工具能力时优先使用MCP
 - message字段必须包含完整的任务描述，让OpenClaw能独立理解并执行

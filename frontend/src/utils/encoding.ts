@@ -1,11 +1,35 @@
 export const decoder = new TextDecoder('utf-8')
 
 export interface StreamChunk {
-  type: 'content' | 'reasoning' | 'content_clean' | 'round_start' | 'tool_calls' | 'tool_results' | 'round_end' | 'auth_expired'
+  type:
+    | 'content'
+    | 'reasoning'
+    | 'content_clean'
+    | 'round_start'
+    | 'tool_calls'
+    | 'tool_results'
+    | 'round_end'
+    | 'tool_stage'
+    | 'auth_expired'
   text?: string
   round?: number
   calls?: Array<{ agentType: string, service_name?: string, tool_name?: string, message?: string }>
   results?: Array<{ service_name: string, tool_name?: string, result: string, status: string }>
+  phase?: 'plan' | 'execute' | 'verify' | 'repair'
+  status?: 'start' | 'success' | 'error' | 'skip'
+  reason?: string
+  decision?: string
+  actionable_calls?: number
+  success_count?: number
+  error_count?: number
+  validation_errors?: number
+  live2d_calls?: number
+  consecutive_no_tool_rounds?: number
+  consecutive_tool_failures?: number
+  consecutive_validation_failures?: number
+  threshold?: number
+  pending_tool_intent?: boolean
+  summary?: boolean
   has_more?: boolean
 }
 

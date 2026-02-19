@@ -7,16 +7,10 @@
 """
 
 import base64
+import importlib
 import time
 import logging
 from typing import Optional, Callable, Dict, Any
-from dashscope.audio.qwen_omni import (
-    OmniRealtimeConversation,
-    OmniRealtimeCallback,
-    MultiModality,
-    AudioFormat
-)
-import dashscope
 
 from ...core.audio_manager import AudioManager
 from ...core.state_manager import StateManager, ConversationState
@@ -27,6 +21,25 @@ logging.basicConfig(
     format='[%(asctime)s] %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def _load_dashscope_sdk() -> tuple[Any, Any, Any, Any, Any]:
+    """Lazily load dashscope SDK to avoid hard import-time dependency."""
+    try:
+        dashscope_mod = importlib.import_module("dashscope")
+        qwen_mod = importlib.import_module("dashscope.audio.qwen_omni")
+    except ModuleNotFoundError as e:
+        raise RuntimeError(
+            "缺少依赖: dashscope。请先安装后再使用通义实时语音功能（例如: pip install dashscope）。"
+        ) from e
+
+    return (
+        dashscope_mod,
+        getattr(qwen_mod, "OmniRealtimeConversation"),
+        getattr(qwen_mod, "OmniRealtimeCallback"),
+        getattr(qwen_mod, "MultiModality"),
+        getattr(qwen_mod, "AudioFormat"),
+    )
 
 
 class QwenVoiceClientRefactored:
@@ -58,8 +71,16 @@ class QwenVoiceClientRefactored:
         self.debug = debug
         self.use_voice_prompt = use_voice_prompt  # 保存是否使用语音提示词的设置
 
+        (
+            self._dashscope,
+            self._omni_conversation_cls,
+            self._omni_callback_cls,
+            self._multi_modality,
+            self._audio_format,
+        ) = _load_dashscope_sdk()
+
         # 设置API密钥
-        dashscope.api_key = api_key
+        self._dashscope.api_key = api_key
 
         # 核心组件
         self.audio_manager = AudioManager(
@@ -77,7 +98,7 @@ class QwenVoiceClientRefactored:
         self.state_manager = StateManager(debug=debug)
 
         # DashScope会话
-        self.conversation: Optional[OmniRealtimeConversation] = None
+        self.conversation: Optional[Any] = None
 
         # 回调函数
         self.on_text_callback: Optional[Callable[[str], None]] = None
@@ -531,7 +552,9 @@ class QwenVoiceClientRefactored:
         }
 
         # 创建回调包装类
-        class CallbackWrapper(OmniRealtimeCallback):
+        callback_base = self._omni_callback_cls
+
+        class CallbackWrapper(callback_base):
             def __init__(self, client):
                 self.client = client
 
@@ -547,7 +570,7 @@ class QwenVoiceClientRefactored:
         callback = CallbackWrapper(self)
 
         # 创建会话
-        self.conversation = OmniRealtimeConversation(
+        self.conversation = self._omni_conversation_cls(
             model=self.model,
             callback=callback,
             url="wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
@@ -578,10 +601,10 @@ class QwenVoiceClientRefactored:
 
         # 尝试设置instructions参数
         session_config = {
-            'output_modalities': [MultiModality.AUDIO, MultiModality.TEXT],
+            'output_modalities': [self._multi_modality.AUDIO, self._multi_modality.TEXT],
             'voice': self.voice,
-            'input_audio_format': AudioFormat.PCM_16000HZ_MONO_16BIT,
-            'output_audio_format': AudioFormat.PCM_24000HZ_MONO_16BIT,
+            'input_audio_format': self._audio_format.PCM_16000HZ_MONO_16BIT,
+            'output_audio_format': self._audio_format.PCM_24000HZ_MONO_16BIT,
             'enable_input_audio_transcription': True,
             'input_audio_transcription_model': 'gummy-realtime-v1',
             'enable_turn_detection': True,

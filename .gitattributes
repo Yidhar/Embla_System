@@ -1,2 +1,10 @@
-* text=auto eol=crlf
+# Normalize text files to LF to keep diffs stable across platforms.
+* text=auto eol=lf
+
+# Keep Windows script files in CRLF for better cmd.exe compatibility.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Explicit shell script rule.
 *.sh text eol=lf

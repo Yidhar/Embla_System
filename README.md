@@ -60,44 +60,42 @@ NagaAgent 由四个独立微服务组成：
 
 ## 核心模块
 
-### 流式工具调用循环
+### 流式工具调用循环（结构化 tool_calls）
 
-NagaAgent 的工具调用不依赖 OpenAI Function Calling API，而是让 LLM 在文本输出中以 ` ```tool``` ` 代码块内嵌 JSON 描述工具调用。这意味着**任何 OpenAI 兼容的 LLM 提供商都可以直接使用**，无需模型本身支持 function calling。
+NagaAgent 的工具调用采用 **OpenAI 兼容的 tools schema** 与 **结构化 tool_calls 流式通道**：
+工具调用不再写入 assistant 的文本 content，而是作为独立的 `tool_calls` 结构化事件由后端接收、执行与回注。
 
 **单轮流程**：
 
 ```
-LLM 流式输出 ──SSE──▶ 前端实时显示文本
-       │                    │
-       ▼                    ▼
-  完整文本拼接         TTS 分句播放
-       │
-       ▼
-parse_tool_calls_from_text()
-  ├─ Phase 1: 提取 ```tool``` 代码块内的 JSON
-  └─ Phase 2: 兜底提取裸 JSON（向后兼容）
-       │
-       ▼
-  按 agentType 分类
-  ├─ "mcp"     → MCPManager.unified_call()（进程内）
-  ├─ "openclaw" → HTTP POST → Agent Server /openclaw/send
-  └─ "live2d"  → asyncio.create_task() → UI 通知
-       │
-       ▼
-  asyncio.gather() 并行执行
-       │
-       ▼
-  工具结果注入 messages，进入下一轮 LLM 调用
+LLM 流式输出(content/reasoning) ──SSE──▶ 前端实时显示与 TTS
+            │
+            ├─（可选）delta.tool_calls 增量到达
+            ▼
+      LLMService 合并 tool_calls 增量
+            │
+            ├─ SSE: type=content/reasoning → 透传前端
+            └─ SSE: type=tool_calls        → 仅供 AgenticLoop 消费（不混入正文）
+                               │
+                               ▼
+AgenticLoop 消费结构化 tool_calls → 转换为统一 agentType 调度 → 并行执行
+   ├─ mcp      → MCPManager.unified_call()（进程内）
+   ├─ native   → NativeToolExecutor.execute()（本地沙盒）
+   ├─ openclaw → Agent Server /openclaw/send（并支持 local-first 拦截为 native）
+   └─ live2d   → UI 通知（fire-and-forget）
+            │
+            ▼
+工具结果以 tool_results 事件回传前端，并注入 messages 进入下一轮
 ```
 
-**实现细节**：
+**实现要点**：
 
-- **文本解析**：正则 `r"```tool\s*\n([\s\S]*?)(?:```|\Z)"` 提取代码块，`json5` 容错解析（兜底 `json`），全角字符（`｛｝：`）自动标准化
-- **循环控制**：最大 5 轮（`max_loop_stream` 可配），每轮 LLM 输出无 `agentType` JSON 则终止
-- **SSE 编码**：每个 chunk 为 `data: base64(json({"type":"content"|"reasoning","text":"..."}))\n\n`，前端 `ReadableStream` + `TextDecoder` 实时拆分
-- **工具结果回注**：格式化为 `[工具结果 1/N - service: tool (status)]` 追加到 messages 中
+- **工具定义**：后端向模型传入 `tools=[...]`（OpenAI-compatible）。
+- **结构化 tool_calls 提取**：`apiserver/llm_service.py` 在流式响应中合并 `delta.tool_calls`，并输出 `type="tool_calls"` SSE 事件。
+- **Loop 执行与回注**：`apiserver/agentic_tool_loop.py` 消费结构化 tool_calls 并并行执行，不依赖 ```tool 文本解析。
+- **兼容说明**：仓库中可能存在历史构建产物/旧文档仍提及 ```tool 代码块机制；以当前源码主链路的结构化 tool_calls 为准。
 
-源码：[`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py)、[`apiserver/streaming_tool_extractor.py`](apiserver/streaming_tool_extractor.py)
+源码：[`apiserver/llm_service.py`](apiserver/llm_service.py)、[`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py)
 
 ---
 

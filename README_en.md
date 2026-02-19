@@ -60,44 +60,42 @@ NagaAgent consists of four independent microservices:
 
 ## Core Modules
 
-### Streaming Tool Call Loop
+### Streaming Tool Call Loop (Structured tool_calls)
 
-NagaAgent's tool calling does not rely on OpenAI's Function Calling API. Instead, the LLM embeds tool calls as JSON inside ` ```tool``` ` code blocks in its text output. This means **any OpenAI-compatible LLM provider works out of the box** — no function calling support required from the model.
+NagaAgent uses an **OpenAI-compatible tools schema** and a **structured streaming tool_calls channel**.
+Tool calls are not embedded in assistant text content anymore. Instead, the backend receives and executes them as standalone `tool_calls` events, then injects tool results back into the conversation.
 
 **Single-round flow**:
 
 ```
-LLM streaming output ──SSE──▶ Frontend displays text in real-time
-       │                              │
-       ▼                              ▼
-  Accumulate full text          TTS sentence splitting
-       │
-       ▼
-parse_tool_calls_from_text()
-  ├─ Phase 1: Extract JSON from ```tool``` code blocks
-  └─ Phase 2: Fallback to bare JSON extraction (backward compat)
-       │
-       ▼
-  Classify by agentType
-  ├─ "mcp"      → MCPManager.unified_call() (in-process)
-  ├─ "openclaw"  → HTTP POST → Agent Server /openclaw/send
-  └─ "live2d"   → asyncio.create_task() → UI notification
-       │
-       ▼
-  asyncio.gather() parallel execution
-       │
-       ▼
-  Inject tool results into messages, start next LLM round
+LLM streams content/reasoning ──SSE──▶ Frontend renders & TTS
+         │
+         ├─ (optional) delta.tool_calls arrive
+         ▼
+  LLMService merges tool_calls deltas
+         │
+         ├─ SSE type=content/reasoning → forwarded to frontend
+         └─ SSE type=tool_calls        → consumed by AgenticLoop only (not mixed into text)
+                            │
+                            ▼
+AgenticLoop consumes structured tool_calls → unified agentType dispatch → parallel execution
+   ├─ mcp      → MCPManager.unified_call() (in-process)
+   ├─ native   → NativeToolExecutor.execute() (sandboxed local tools)
+   ├─ openclaw → Agent Server /openclaw/send (with local-first interception to native)
+   └─ live2d   → UI notifications (fire-and-forget)
+         │
+         ▼
+Tool results are sent as tool_results events and injected into messages for the next round
 ```
 
-**Implementation details**:
+**Key points**:
 
-- **Text parsing**: Regex `r"```tool\s*\n([\s\S]*?)(?:```|\Z)"` extracts code blocks, `json5` for tolerant parsing (fallback to `json`), fullwidth characters (`｛｝：`) auto-normalized
-- **Loop control**: Max 5 rounds (`max_loop_stream` configurable), terminates when no `agentType` JSON found in LLM output
-- **SSE encoding**: Each chunk is `data: base64(json({"type":"content"|"reasoning","text":"..."}))\n\n`, frontend splits via `ReadableStream` + `TextDecoder`
-- **Result injection**: Formatted as `[Tool Result 1/N - service: tool (status)]` and appended to messages
+- **Tool definitions** are passed via `tools=[...]` (OpenAI-compatible).
+- **Structured tool_calls extraction**: `apiserver/llm_service.py` merges `delta.tool_calls` and emits an SSE chunk `type="tool_calls"`.
+- **Loop execution & injection**: `apiserver/agentic_tool_loop.py` consumes structured tool_calls and executes them; the main path does not rely on ```tool text parsing.
+- **Compatibility note**: legacy ```tool-block descriptions may still exist in historical build artifacts/old docs; the source code mainline uses structured tool_calls.
 
-Source: [`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py), [`apiserver/streaming_tool_extractor.py`](apiserver/streaming_tool_extractor.py)
+Source: [`apiserver/llm_service.py`](apiserver/llm_service.py), [`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py)
 
 ---
 
