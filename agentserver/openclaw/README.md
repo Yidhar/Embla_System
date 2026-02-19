@@ -154,3 +154,23 @@ async def wake_agent():
 1. 确保 OpenClaw Gateway 已启动并运行在 `localhost:18789`
 2. 如果启用了认证，需要配置正确的 token
 3. OpenClaw 的 Cron 任务通过 Gateway 内部管理，不通过 HTTP API
+
+## 日志与排障（看清楚调用了哪些 API 和输出）
+
+推荐先看专用日志（详细且更干净）：
+
+- `logs/details/openclaw.log`
+
+全量后端日志也会包含同样信息（但噪音更多）：
+
+- `logs/details/naga-backend.log`
+
+OpenClawClient 会主要调用两个 Gateway API：
+
+- `POST /hooks/agent`: 发送消息给 Agent（常见返回 `200` 或 `202`）。
+- `POST /tools/invoke` + `tool=sessions_history`: 轮询会话历史，拿到 assistant 的最终回复内容与元信息（`api/provider/model/stopReason` 等）。
+
+如果你想用结构化方式查看某次任务的完整过程（不靠翻日志），可以用 Agent Server 的任务详情接口：
+
+- `GET /openclaw/tasks/{task_id}/detail?include_history=true`
+- 如需包含工具消息/命令输出：追加 `include_tools=true`

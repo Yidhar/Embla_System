@@ -8,140 +8,12 @@ import asyncio
 import base64
 import json
 import logging
-import re
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from system.config import get_config, get_server_port
+from .native_tools import get_native_tool_executor
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# 解析工具
-# ---------------------------------------------------------------------------
-
-
-def _normalize_fullwidth_json_chars(text: str) -> str:
-    """将常见全角JSON相关字符归一化为ASCII"""
-    if not text:
-        return text
-    translation_table = str.maketrans(
-        {
-            "｛": "{",
-            "｝": "}",
-            "：": ":",
-            "，": ",",
-            "\u201c": '"',
-            "\u201d": '"',
-            "\u2018": "'",
-            "\u2019": "'",
-        }
-    )
-    return text.translate(translation_table)
-
-
-def _extract_json_objects(text: str) -> List[Dict[str, Any]]:
-    """从文本中提取所有顶层JSON对象（花括号深度匹配 + json5/json 解析 + agentType过滤）"""
-
-    def _loads(s: str) -> Any:
-        try:
-            import json5 as _json5
-
-            return _json5.loads(s)
-        except Exception:
-            return json.loads(s)
-
-    objects: List[Dict[str, Any]] = []
-    start: Optional[int] = None
-    depth = 0
-
-    for i, ch in enumerate(text):
-        if ch == "{":
-            if depth == 0:
-                start = i
-            depth += 1
-        elif ch == "}":
-            if depth > 0:
-                depth -= 1
-                if depth == 0 and start is not None:
-                    candidate = text[start : i + 1].strip()
-                    start = None
-                    if candidate in ("{}", "{ }"):
-                        continue
-                    try:
-                        parsed = _loads(candidate)
-                    except Exception:
-                        continue
-                    if isinstance(parsed, dict):
-                        objects.append(parsed)
-                    elif isinstance(parsed, list):
-                        for item in parsed:
-                            if isinstance(item, dict):
-                                objects.append(item)
-
-    # 只保留含 agentType 字段的对象
-    return [obj for obj in objects if isinstance(obj.get("agentType"), str) and obj["agentType"]]
-
-
-def _extract_tool_blocks(text: str) -> Tuple[str, List[Dict[str, Any]]]:
-    """从 ```tool``` 代码块中提取工具调用JSON。
-
-    Returns:
-        (clean_text, tool_calls) — clean_text 是移除代码块后的纯文本
-    """
-
-    tool_calls: List[Dict[str, Any]] = []
-    # 匹配 ```tool ... ``` 代码块（允许未闭合的尾部块用 \Z 兜底）
-    # 注意: 用 [ \t]* 而非 \s* 避免吃掉换行符; 用 \Z 而非 $ 避免 MULTILINE 下提前匹配行尾
-    pattern = re.compile(r"```tool[ \t]*\n([\s\S]*?)(?:```|\Z)")
-
-    for match in pattern.finditer(text):
-        block_content = match.group(1).strip()
-        if not block_content:
-            continue
-        normalized = _normalize_fullwidth_json_chars(block_content)
-        extracted = _extract_json_objects(normalized)
-        tool_calls.extend(extracted)
-
-    # 从文本中移除 ```tool...``` 代码块
-    clean_text = pattern.sub("", text).strip()
-    # 清理多余空行
-    clean_text = re.sub(r"\n{3,}", "\n\n", clean_text)
-    return clean_text, tool_calls
-
-
-def parse_tool_calls_from_text(text: str) -> Tuple[str, List[Dict[str, Any]]]:
-    """从LLM完整输出中提取所有工具调用JSON。
-
-    优先从 ```tool``` 代码块提取，回退到裸JSON行提取（向后兼容）。
-
-    Returns:
-        (clean_text, tool_calls) — clean_text 是去掉工具调用后的纯文本
-    """
-    # 优先使用 ```tool``` 代码块
-    clean_text, tool_calls = _extract_tool_blocks(text)
-    if tool_calls:
-        return clean_text, tool_calls
-
-    # 回退：从裸文本中提取含 agentType 的JSON对象（向后兼容）
-    normalized = _normalize_fullwidth_json_chars(text)
-    tool_calls = _extract_json_objects(normalized)
-
-    if not tool_calls:
-        return text, []
-
-    # 从原始文本中移除工具调用JSON所在的行
-    clean_lines = []
-    for line in text.split("\n"):
-        norm_line = _normalize_fullwidth_json_chars(line.strip())
-        if norm_line:
-            extracted = _extract_json_objects(norm_line)
-            if extracted:
-                continue  # 跳过包含工具调用的行
-        clean_lines.append(line)
-
-    clean_text = "\n".join(clean_lines).strip()
-    return clean_text, tool_calls
-
 
 # ---------------------------------------------------------------------------
 # 工具执行
@@ -202,6 +74,19 @@ async def _execute_openclaw_call(call: Dict[str, Any], session_id: str) -> Dict[
     """执行单个OpenClaw调用"""
     import httpx
 
+    native_executor = get_native_tool_executor()
+    intercepted_call = native_executor.maybe_intercept_openclaw_call(call, session_id=session_id)
+    if intercepted_call:
+        logger.info(
+            "[AgenticLoop] local-first拦截OpenClaw调用，改为native执行: %s",
+            intercepted_call.get("tool_name", "unknown"),
+        )
+        result = await native_executor.execute(intercepted_call, session_id=session_id)
+        # 保留原始调用，便于诊断
+        result["tool_call"] = call
+        result["service_name"] = "native"
+        return result
+
     message = call.get("message", "")
     task_type = call.get("task_type", "message")
 
@@ -219,7 +104,7 @@ async def _execute_openclaw_call(call: Dict[str, Any], session_id: str) -> Dict[
         "session_key": call.get("session_key", f"naga_{session_id}"),
         "name": "Naga",
         "wake_mode": "now",
-        "timeout_seconds": 120,
+        "timeout_seconds": 1200,
     }
 
     if task_type == "cron" and call.get("schedule"):
@@ -279,6 +164,12 @@ async def _execute_openclaw_call(call: Dict[str, Any], session_id: str) -> Dict[
         }
 
 
+async def _execute_native_call(call: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+    """执行单个本地native调用"""
+    executor = get_native_tool_executor()
+    return await executor.execute(call, session_id=session_id)
+
+
 async def _send_live2d_actions(live2d_calls: List[Dict[str, Any]], session_id: str):
     """Fire-and-forget发送Live2D动作到UI"""
     import httpx
@@ -317,6 +208,8 @@ async def execute_tool_calls(tool_calls: List[Dict[str, Any]], session_id: str) 
         agent_type = call.get("agentType", "")
         if agent_type == "mcp":
             tasks.append(_execute_mcp_call(call))
+        elif agent_type == "native":
+            tasks.append(_execute_native_call(call, session_id))
         elif agent_type == "openclaw":
             tasks.append(_execute_openclaw_call(call, session_id))
         else:
@@ -364,6 +257,212 @@ def format_tool_results_for_llm(results: List[Dict[str, Any]]) -> str:
     return "\n\n".join(parts)
 
 
+def get_agentic_tool_definitions() -> List[Dict[str, Any]]:
+    """原生工具调用定义（OpenAI-compatible tools schema）"""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "native_call",
+                "description": "Execute a local native tool in current project workspace.",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "tool_name": {
+                            "type": "string",
+                            "enum": [
+                                "read_file",
+                                "write_file",
+                                "run_cmd",
+                                "search_keyword",
+                                "query_docs",
+                                "list_files",
+                            ],
+                        },
+                        "path": {"type": "string"},
+                        "file_path": {"type": "string"},
+                        "content": {"type": "string"},
+                        "mode": {"type": "string", "enum": ["overwrite", "append"]},
+                        "encoding": {"type": "string"},
+                        "command": {"type": "string"},
+                        "cmd": {"type": "string"},
+                        "cwd": {"type": "string"},
+                        "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 1200},
+                        "keyword": {"type": "string"},
+                        "query": {"type": "string"},
+                        "search_path": {"type": "string"},
+                        "glob": {"type": "string"},
+                        "case_sensitive": {"type": "boolean"},
+                        "max_results": {"type": "integer", "minimum": 1, "maximum": 1000},
+                        "max_file_size_kb": {"type": "integer", "minimum": 64, "maximum": 4096},
+                        "start_line": {"type": "integer", "minimum": 1},
+                        "end_line": {"type": "integer", "minimum": 1},
+                        "max_chars": {"type": "integer", "minimum": 200, "maximum": 100000},
+                        "recursive": {"type": "boolean"},
+                    },
+                    "required": ["tool_name"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "mcp_call",
+                "description": "Invoke one MCP service tool.",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "service_name": {"type": "string"},
+                        "tool_name": {"type": "string"},
+                        "arguments": {"type": "object", "additionalProperties": True},
+                    },
+                    "required": ["tool_name"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "openclaw_call",
+                "description": "Invoke OpenClaw for web/browser/cross-app tasks.",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "task_type": {"type": "string", "enum": ["message", "cron", "reminder"]},
+                        "message": {"type": "string"},
+                        "session_key": {"type": "string"},
+                        "schedule": {"type": "string"},
+                        "at": {"type": "string"},
+                    },
+                    "required": ["message"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "live2d_action",
+                "description": "Trigger Live2D UI action.",
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["normal", "happy", "enjoy", "sad", "surprise"],
+                        }
+                    },
+                    "required": ["action"],
+                },
+            },
+        },
+    ]
+
+
+def _convert_structured_tool_calls(
+    structured_calls: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+    actionable_calls: List[Dict[str, Any]] = []
+    live2d_calls: List[Dict[str, Any]] = []
+    validation_errors: List[str] = []
+
+    for idx, call in enumerate(structured_calls, 1):
+        call_id = str(call.get("id") or f"tool_call_{idx}")
+        tool_name = str(call.get("name") or "").strip()
+        parse_error = call.get("parse_error")
+        args = call.get("arguments")
+
+        if parse_error:
+            validation_errors.append(f"工具调用参数解析失败: id={call_id}, error={parse_error}")
+            continue
+
+        if not isinstance(args, dict):
+            validation_errors.append(f"工具调用参数非法: id={call_id}, name={tool_name}, arguments必须是对象")
+            continue
+
+        if tool_name == "native_call":
+            native_tool_name = str(args.get("tool_name") or "").strip()
+            if not native_tool_name:
+                validation_errors.append(f"native_call 缺少 tool_name: id={call_id}")
+                continue
+            native_call = {"agentType": "native", **args, "_tool_call_id": call_id}
+            actionable_calls.append(native_call)
+            continue
+
+        if tool_name == "mcp_call":
+            mcp_tool_name = str(args.get("tool_name") or "").strip()
+            if not mcp_tool_name:
+                validation_errors.append(f"mcp_call 缺少 tool_name: id={call_id}")
+                continue
+
+            merged_call: Dict[str, Any] = {
+                "agentType": "mcp",
+                "tool_name": mcp_tool_name,
+                "_tool_call_id": call_id,
+            }
+            service_name = str(args.get("service_name") or "").strip()
+            if service_name:
+                merged_call["service_name"] = service_name
+
+            arg_payload = args.get("arguments") or {}
+            if not isinstance(arg_payload, dict):
+                validation_errors.append(f"mcp_call.arguments 必须是对象: id={call_id}")
+                continue
+            merged_call.update(arg_payload)
+            actionable_calls.append(merged_call)
+            continue
+
+        if tool_name == "openclaw_call":
+            message = str(args.get("message") or "").strip()
+            if not message:
+                validation_errors.append(f"openclaw_call 缺少 message: id={call_id}")
+                continue
+            openclaw_call = {
+                "agentType": "openclaw",
+                "task_type": str(args.get("task_type") or "message"),
+                "message": message,
+                "_tool_call_id": call_id,
+            }
+            if args.get("session_key"):
+                openclaw_call["session_key"] = args["session_key"]
+            if args.get("schedule"):
+                openclaw_call["schedule"] = args["schedule"]
+            if args.get("at"):
+                openclaw_call["at"] = args["at"]
+            actionable_calls.append(openclaw_call)
+            continue
+
+        if tool_name == "live2d_action":
+            action = str(args.get("action") or "").strip()
+            if not action:
+                validation_errors.append(f"live2d_action 缺少 action: id={call_id}")
+                continue
+            live2d_calls.append({"agentType": "live2d", "action": action, "_tool_call_id": call_id})
+            continue
+
+        validation_errors.append(f"未知函数调用: id={call_id}, name={tool_name}")
+
+    return actionable_calls, live2d_calls, validation_errors
+
+
+def _build_validation_results(errors: List[str]) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    for msg in errors:
+        results.append(
+            {
+                "tool_call": {"agentType": "tool_protocol"},
+                "result": msg,
+                "status": "error",
+                "service_name": "tool_protocol",
+                "tool_name": "validation",
+            }
+        )
+    return results
+
+
 # ---------------------------------------------------------------------------
 # SSE 辅助
 # ---------------------------------------------------------------------------
@@ -388,45 +487,34 @@ def _format_sse_event(event_type: str, data: Any) -> str:
 async def run_agentic_loop(
     messages: List[Dict[str, Any]],
     session_id: str,
-    max_rounds: int = 5,
+    max_rounds: int = 500,
     model_override: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[str, None]:
-    """Agentic tool loop 核心。
-
-    流式输出SSE chunks，包含：
-    - content/reasoning chunks（透传自LLM）
-    - round_start/tool_calls/tool_results/round_end 事件
-
-    每一轮的content都会完整流式输出（供TTS使用），工具内容不混入content流。
-
-    Args:
-        messages: 完整的对话消息列表（含system prompt）
-        session_id: 会话ID
-        max_rounds: 最大循环轮数
-        model_override: 临时模型覆盖参数（用于视觉模型等场景）
-
-    Yields:
-        SSE格式的data chunks
-    """
+    """Agentic tool loop 核心（仅使用原生结构化 tool calling）。"""
     from .llm_service import get_llm_service
 
     llm_service = get_llm_service()
+    tool_definitions = get_agentic_tool_definitions()
 
     consecutive_failures = 0  # 连续全部失败的轮次计数
+    consecutive_validation_failures = 0  # 连续工具参数验证失败轮次
     needs_summary = False  # 是否需要进行最终总结轮
 
     for round_num in range(1, max_rounds + 1):
-        # 1. 通知前端开始新一轮
         if round_num > 1:
             yield _format_sse_event("round_start", {"round": round_num})
 
-        # 2. 流式调用LLM，累积完整输出
         complete_text = ""
         complete_reasoning = ""
+        structured_tool_calls: List[Dict[str, Any]] = []
 
-        async for chunk in llm_service.stream_chat_with_context(messages, get_config().api.temperature,
-                                                                 model_override=model_override):
-            # chunk 格式: "data: <base64_json>\n\n"
+        async for chunk in llm_service.stream_chat_with_context(
+            messages,
+            get_config().api.temperature,
+            model_override=model_override,
+            tools=tool_definitions,
+            tool_choice="auto",
+        ):
             if chunk.startswith("data: "):
                 try:
                     data_str = chunk[6:].strip()
@@ -440,41 +528,77 @@ async def run_agentic_loop(
                             complete_text += chunk_text
                         elif chunk_type == "reasoning":
                             complete_reasoning += chunk_text
-                except Exception:
-                    pass
+                        elif chunk_type == "tool_calls":
+                            parsed_calls = json.loads(chunk_text)
+                            if isinstance(parsed_calls, list):
+                                for item in parsed_calls:
+                                    if isinstance(item, dict):
+                                        structured_tool_calls.append(item)
+                            # 原生 tool_calls 事件不透传给前端，统一由 loop 生成 tool_calls/tool_results 事件
+                            continue
+                except Exception as e:
+                    logger.warning(f"[AgenticLoop] 解析流式工具调用失败: {e}")
 
-            # 透传所有SSE chunks给前端（content + reasoning）
             yield chunk
 
-        # 3. 从完整输出中解析工具调用
         logger.debug(
             f"[AgenticLoop] Round {round_num} complete_text ({len(complete_text)} chars): {complete_text[:300]!r}"
         )
-        clean_text, tool_calls = parse_tool_calls_from_text(complete_text)
 
-        # 4. 分离live2d和可执行调用
-        actionable_calls = [tc for tc in tool_calls if tc.get("agentType") != "live2d"]
-        live2d_calls = [tc for tc in tool_calls if tc.get("agentType") == "live2d"]
+        actionable_calls, live2d_calls, validation_errors = _convert_structured_tool_calls(structured_tool_calls)
+        validation_results = _build_validation_results(validation_errors)
 
-        # 4a. fire-and-forget Live2D
         if live2d_calls:
             asyncio.create_task(_send_live2d_actions(live2d_calls, session_id))
 
-        # 4b. 如果检测到了任何工具调用，发送 content_clean 让前端替换掉带有工具代码块的原文
-        if tool_calls and clean_text != complete_text:
-            # 保留工具调用前的简短说明文字（如"让我查一下"），仅移除 ```tool``` 代码块
-            yield _format_sse_event("content_clean", {"text": clean_text})
-
-        # 5. 如果没有可执行的工具调用，循环结束
         if not actionable_calls:
+            if validation_results and round_num < max_rounds:
+                consecutive_validation_failures += 1
+                logger.warning(
+                    f"[AgenticLoop] Round {round_num}: 工具参数验证失败 {len(validation_results)} 条 "
+                    f"(连续 {consecutive_validation_failures} 轮)"
+                )
+
+                # 通知前端并注入反馈，让模型下一轮纠正调用
+                validation_summaries = []
+                for r in validation_results:
+                    result_text = r.get("result", "")
+                    display_result = result_text[:500] + "..." if len(result_text) > 500 else result_text
+                    validation_summaries.append(
+                        {
+                            "service_name": r.get("service_name", "unknown"),
+                            "tool_name": r.get("tool_name", ""),
+                            "status": r.get("status", "unknown"),
+                            "result": display_result,
+                        }
+                    )
+                yield _format_sse_event("tool_results", {"results": validation_summaries})
+
+                assistant_content = complete_text if complete_text else "(工具调用参数错误)"
+                messages.append({"role": "assistant", "content": assistant_content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": format_tool_results_for_llm(validation_results),
+                    }
+                )
+
+                if consecutive_validation_failures >= 2:
+                    logger.warning("[AgenticLoop] 连续工具参数错误，提前进入总结轮")
+                    yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
+                    needs_summary = True
+                    break
+
+                yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
+                continue
+
             logger.info(f"[AgenticLoop] Round {round_num}: 无工具调用，循环结束")
-            # 发送本轮结束信号
             yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
             break
 
+        consecutive_validation_failures = 0
         logger.info(f"[AgenticLoop] Round {round_num}: 检测到 {len(actionable_calls)} 个工具调用")
 
-        # 6. 通知前端正在执行工具
         call_descriptions = []
         for tc in actionable_calls:
             desc = {"agentType": tc.get("agentType", "")}
@@ -483,26 +607,25 @@ async def run_agentic_loop(
             if tc.get("tool_name"):
                 desc["tool_name"] = tc["tool_name"]
             if tc.get("message"):
-                desc["message"] = tc["message"][:100]
+                desc["message"] = str(tc["message"])[:100]
             call_descriptions.append(desc)
         yield _format_sse_event("tool_calls", {"calls": call_descriptions})
 
-        # 7. 并行执行工具调用
-        results = await execute_tool_calls(actionable_calls, session_id)
+        executed_results = await execute_tool_calls(actionable_calls, session_id)
+        results = validation_results + executed_results
 
-        # 7a. 检测连续失败：本轮所有工具是否全部失败
-        all_failed = all(r.get("status") == "error" for r in results)
+        all_failed = bool(executed_results) and all(r.get("status") == "error" for r in executed_results)
         if all_failed:
             consecutive_failures += 1
-            logger.warning(f"[AgenticLoop] Round {round_num}: 本轮所有工具调用失败 (连续 {consecutive_failures} 轮)")
+            logger.warning(
+                f"[AgenticLoop] Round {round_num}: 本轮所有可执行工具调用失败 (连续 {consecutive_failures} 轮)"
+            )
         else:
             consecutive_failures = 0
 
-        # 8. 通知前端工具结果
         result_summaries = []
         for r in results:
             result_text = r.get("result", "")
-            # 截断过长的结果用于前端显示
             display_result = result_text[:500] + "..." if len(result_text) > 500 else result_text
             result_summaries.append(
                 {
@@ -514,49 +637,53 @@ async def run_agentic_loop(
             )
         yield _format_sse_event("tool_results", {"results": result_summaries})
 
-        # 9. 将本轮LLM输出 + 工具结果注入消息历史
-        #    保留工具调用前的简短说明文字，如果没有则用占位符
-        assistant_content = clean_text if clean_text else "(工具调用中)"
+        assistant_content = complete_text if complete_text else "(工具调用中)"
         messages.append({"role": "assistant", "content": assistant_content})
-        tool_result_text = format_tool_results_for_llm(results)
-        messages.append({"role": "user", "content": tool_result_text})
+        messages.append({"role": "user", "content": format_tool_results_for_llm(results)})
 
-        # 9a. 连续失败达到阈值时提前终止，进入总结轮
         if consecutive_failures >= 2:
             logger.warning(f"[AgenticLoop] 连续 {consecutive_failures} 轮工具全部失败，提前终止循环")
             yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
             needs_summary = True
             break
 
-        # 发送本轮结束信号
         yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
-
         logger.info(f"[AgenticLoop] Round {round_num}: 工具结果已注入，继续下一轮")
-
     else:
-        # max_rounds 用尽
         needs_summary = True
 
-    # 最终总结轮：强制 LLM 基于已有工具结果生成回复，不再允许工具调用
     if needs_summary:
-        logger.warning(f"[AgenticLoop] 执行最终总结轮")
-
-        # 通知前端开始总结轮（重要：触发 api_server 重置 is_tool_event 标记）
+        logger.warning("[AgenticLoop] 执行最终总结轮")
         yield _format_sse_event("round_start", {"round": max_rounds + 1, "summary": True})
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "[系统提示] 工具调用轮次已用尽。请根据以上所有工具返回结果，直接回答用户的问题。"
+                    "如果所有工具都失败了，请诚实告知用户当前无法完成该操作，并给出建议。"
+                    "不要再发起任何工具调用。"
+                ),
+            }
+        )
 
-        # 注入总结指令
-        messages.append({
-            "role": "user",
-            "content": (
-                "[系统提示] 工具调用轮次已用尽。请根据以上所有工具返回结果，直接回答用户的问题。"
-                "如果所有工具都失败了，请诚实告知用户当前无法完成该操作，并给出建议。"
-                "不要再发起任何工具调用。"
-            ),
-        })
-
-        # 最终总结轮：流式输出
-        async for chunk in llm_service.stream_chat_with_context(messages, config.api.temperature,
-                                                                 model_override=model_override):
+        async for chunk in llm_service.stream_chat_with_context(
+            messages,
+            get_config().api.temperature,
+            model_override=model_override,
+            tools=tool_definitions,
+            tool_choice="none",
+        ):
+            if chunk.startswith("data: "):
+                try:
+                    data_str = chunk[6:].strip()
+                    if data_str and data_str != "[DONE]":
+                        decoded = base64.b64decode(data_str).decode("utf-8")
+                        payload = json.loads(decoded)
+                        if payload.get("type") == "tool_calls":
+                            # 总结轮不接收工具调用事件
+                            continue
+                except Exception:
+                    pass
             yield chunk
 
         yield _format_sse_event("round_end", {"round": max_rounds + 1, "has_more": False})

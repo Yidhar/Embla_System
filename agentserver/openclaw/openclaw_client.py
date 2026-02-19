@@ -15,7 +15,7 @@ API 端点:
 import logging
 import json
 import uuid
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -23,6 +23,107 @@ from enum import Enum
 import httpx
 
 logger = logging.getLogger(__name__)
+
+
+def _preview_text(value: Any, limit: int = 300) -> str:
+    """Preview arbitrary values for logs without leaking full payloads."""
+    if value is None:
+        return ""
+    text = value if isinstance(value, str) else str(value)
+    # Keep logs single-line friendly.
+    text = text.replace("\r", "\\r").replace("\n", "\\n")
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...(len={len(text)})"
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    """Whether a dict key likely contains secrets (token/api key/password)."""
+    try:
+        k = str(key).strip().lower()
+    except Exception:
+        return False
+    if not k:
+        return False
+
+    # Exact matches first.
+    if k in {
+        "authorization",
+        "proxy-authorization",
+        "token",
+        "access_token",
+        "refresh_token",
+        "api_key",
+        "apikey",
+        "secret",
+        "client_secret",
+        "password",
+    }:
+        return True
+
+    # Common patterns.
+    if k.endswith("_token") or k.endswith("token"):
+        return True
+    if k.endswith("_api_key") or k.endswith("api_key") or k.endswith("_apikey") or k.endswith("apikey"):
+        return True
+    if "password" in k or "secret" in k:
+        return True
+
+    return False
+
+
+def _sanitize_for_log(value: Any, *, max_str: int = 300, max_items: int = 20) -> Any:
+    """Bound and sanitize nested objects for logs."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return _preview_text(value, max_str)
+    if isinstance(value, dict):
+        out: Dict[str, Any] = {}
+        items = list(value.items())
+        for k, v in items[:max_items]:
+            if _is_sensitive_key(k):
+                out[str(k)] = "***"
+            else:
+                out[str(k)] = _sanitize_for_log(v, max_str=max_str, max_items=max_items)
+        if len(items) > max_items:
+            out["..."] = f"+{len(items) - max_items} keys"
+        return out
+    if isinstance(value, list):
+        out_list = [_sanitize_for_log(v, max_str=max_str, max_items=max_items) for v in value[:max_items]]
+        if len(value) > max_items:
+            out_list.append(f"... +{len(value) - max_items} items")
+        return out_list
+    return value
+
+
+def _safe_json_preview(value: Any, limit: int = 1200) -> str:
+    try:
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        text = repr(value)
+    return _preview_text(text, limit)
+
+
+def _redact_url(url: str) -> str:
+    """Redact common secret-looking query params in URLs before logging."""
+    try:
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+        parts = urlsplit(url)
+        if not parts.query:
+            return url
+
+        redacted = []
+        for k, v in parse_qsl(parts.query, keep_blank_values=True):
+            lk = str(k).lower()
+            if lk in {"key", "token", "access_token", "api_key", "apikey"}:
+                redacted.append((k, "***"))
+            else:
+                redacted.append((k, v))
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(redacted), parts.fragment))
+    except Exception:
+        return url
 
 
 class TaskStatus(Enum):
@@ -116,6 +217,9 @@ class OpenClawConfig:
 
     # OpenClaw Gateway 默认端口是 18789
     gateway_url: str = "http://127.0.0.1:18789"
+    # OpenClaw 默认 Agent id（影响 sessions_history 的 sessionKey 前缀）
+    # OpenClaw 的完整 sessionKey 通常形如: agent:<agent_id>:<your_session_key>
+    agent_id: str = "main"
     # Gateway 认证 token (对应 gateway.auth.token)
     gateway_token: Optional[str] = None
     # Hooks 认证 token (对应 hooks.token)
@@ -125,6 +229,9 @@ class OpenClawConfig:
     # 默认参数
     default_model: Optional[str] = None
     default_channel: str = "last"
+    # 是否允许在 /hooks/agent 请求中发送 sessionKey
+    # None: 默认先发送；若网关拒绝则自动降级
+    allow_request_session_key: Optional[bool] = None
 
     # 兼容旧配置
     token: Optional[str] = None
@@ -205,6 +312,53 @@ class OpenClawClient:
             # 事件记录失败不影响主流程
             return
 
+    def _to_gateway_session_key(self, session_key: Optional[str]) -> str:
+        """
+        将调用方传入的 sessionKey 规范化为 OpenClaw Gateway 内部 sessionKey。
+
+        /hooks/agent 接受用户自定义 sessionKey（例如 "naga:test"），但 /tools/invoke 的
+        sessions_history 读取历史时通常需要完整 key: "agent:<agent_id>:<session_key>"。
+        """
+        raw = (session_key or "").strip()
+        if not raw:
+            return raw
+        if raw.startswith("agent:"):
+            return raw
+        agent_id = (self.config.agent_id or "main").strip() or "main"
+        return f"agent:{agent_id}:{raw}"
+
+    @staticmethod
+    def _is_session_key_disabled_error(status_code: int, response_text: str) -> bool:
+        """判断是否是 Gateway 禁用外部 sessionKey 的错误。"""
+        if status_code != 400 or not response_text:
+            return False
+        lowered = response_text.lower()
+        return "sessionkey is disabled" in lowered and "allowrequestsessionkey=true" in lowered
+
+    @staticmethod
+    def _extract_response_session_key(result: Dict[str, Any]) -> Optional[str]:
+        """从 /hooks/agent 返回体中尽力提取 sessionKey。"""
+        if not isinstance(result, dict):
+            return None
+
+        candidates: List[Any] = [
+            result.get("sessionKey"),
+            result.get("session_key"),
+        ]
+
+        data = result.get("data")
+        if isinstance(data, dict):
+            candidates.extend([data.get("sessionKey"), data.get("session_key")])
+
+        details = result.get("details")
+        if isinstance(details, dict):
+            candidates.extend([details.get("sessionKey"), details.get("session_key")])
+
+        for value in candidates:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
     # ============ 核心 API ============
 
     async def send_message(
@@ -253,6 +407,7 @@ class OpenClawClient:
 
         # 使用传入的 session_key 或默认的
         actual_session_key = session_key or self._default_session_key
+        session_key_enabled = self.config.allow_request_session_key is not False
 
         use_task_id = task_id or str(uuid.uuid4())
         task = OpenClawTask(task_id=use_task_id, message=message, session_key=actual_session_key)
@@ -272,7 +427,10 @@ class OpenClawClient:
         payload: Dict[str, Any] = {"message": message}
 
         # 可选参数
-        payload["sessionKey"] = actual_session_key
+        if session_key_enabled and actual_session_key:
+            payload["sessionKey"] = actual_session_key
+        else:
+            task.session_key = None
         if name:
             payload["name"] = name
         if channel:
@@ -299,10 +457,21 @@ class OpenClawClient:
         # HTTP 超时需要比 OpenClaw 的 timeoutSeconds 更长
         http_timeout = max(timeout_seconds + 30, self.config.timeout)
 
+        hooks_url = f"{self.config.gateway_url}/hooks/agent"
         last_error = None
         for attempt in range(1, max_retries + 1):
             try:
                 client = await self._get_client()
+
+                payload_preview = _sanitize_for_log(payload, max_str=200, max_items=30)
+                logger.debug(
+                    "[OpenClaw] POST /hooks/agent url=%s timeoutSeconds=%s http_timeout=%s auth=%s payload=%s",
+                    _redact_url(hooks_url),
+                    timeout_seconds,
+                    http_timeout,
+                    ("on" if self.config.hooks_token else "off"),
+                    _safe_json_preview(payload_preview),
+                )
 
                 logger.info(
                     f"[OpenClaw] 发送消息到 /hooks/agent (尝试 {attempt}/{max_retries}): {message[:50]}... (timeout={timeout_seconds}s)"
@@ -315,19 +484,30 @@ class OpenClawClient:
                     data={
                         "attempt": attempt,
                         "max_retries": max_retries,
-                        "url": f"{self.config.gateway_url}/hooks/agent",
-                        "session_key": actual_session_key,
+                        "url": hooks_url,
+                        "session_key": payload.get("sessionKey"),
+                        "session_key_enabled": session_key_enabled,
                         "deliver": deliver,
                         "wake_mode": wake_mode,
                         "timeout_seconds": timeout_seconds,
+                        "http_timeout": http_timeout,
+                        "auth_configured": bool(self.config.hooks_token),
+                        "payload_preview": payload_preview,
                     },
                 )
 
                 response = await client.post(
-                    f"{self.config.gateway_url}/hooks/agent",
+                    hooks_url,
                     json=payload,
                     headers=self.config.get_hooks_headers(),
                     timeout=http_timeout,
+                )
+
+                response_text_preview = _preview_text(response.text, 1200) if response.text else ""
+                logger.debug(
+                    "[OpenClaw] /hooks/agent response status=%s body=%s",
+                    response.status_code,
+                    response_text_preview,
                 )
 
                 self._emit_task_event(
@@ -336,6 +516,7 @@ class OpenClawClient:
                     message="hooks_agent_response",
                     data={
                         "status_code": response.status_code,
+                        "response_preview": response_text_preview,
                     },
                 )
 
@@ -346,6 +527,15 @@ class OpenClawClient:
                         result = response.json()
                         task.result = result if isinstance(result, dict) else {}
                         task.run_id = result.get("runId")
+
+                        response_session_key = self._extract_response_session_key(result)
+                        logger.debug(
+                            "[OpenClaw] /hooks/agent accepted status=%s runId=%s sessionKey=%s reply_preview=%s",
+                            result.get("status", "accepted"),
+                            task.run_id,
+                            (response_session_key or payload.get("sessionKey") or ""),
+                            _preview_text(result.get("reply"), 200),
+                        )
 
                         self._emit_task_event(
                             task,
@@ -384,36 +574,68 @@ class OpenClawClient:
                                 f"[OpenClaw] 任务已接受(202): {task.task_id}, runId: {task.run_id}, 开始轮询回复..."
                             )
 
-                            replies = await self._poll_for_reply(
-                                actual_session_key,
-                                timeout_seconds=timeout_seconds,
-                            )
-                            if replies:
-                                task.status = TaskStatus.COMPLETED
-                                task.completed_at = datetime.now().isoformat()
-                                if task.result is None:
-                                    task.result = {}
-                                task.result["replies"] = replies
-                                task.result["reply"] = replies[0] if len(replies) == 1 else "\n\n---\n\n".join(replies)
-                                logger.info(f"[OpenClaw] 轮询获取{len(replies)}条回复成功")
+                            poll_session_key = payload.get("sessionKey")
+                            if not poll_session_key:
+                                poll_session_key = self._extract_response_session_key(result)
 
-                                self._emit_task_event(
-                                    task,
-                                    kind="state",
-                                    message="task_completed",
-                                    data={
-                                        "run_id": task.run_id,
-                                        "replies_count": len(replies),
-                                        "reply_preview": (str(task.result.get("reply", ""))[:200]),
-                                    },
+                            if poll_session_key:
+                                replies, poll_error = await self._poll_for_reply(
+                                    poll_session_key,
+                                    timeout_seconds=timeout_seconds,
+                                    task=task,
                                 )
+                                if replies:
+                                    task.status = TaskStatus.COMPLETED
+                                    task.completed_at = datetime.now().isoformat()
+                                    if task.result is None:
+                                        task.result = {}
+                                    task.result["replies"] = replies
+                                    task.result["reply"] = replies[0] if len(replies) == 1 else "\n\n---\n\n".join(replies)
+                                    logger.info(f"[OpenClaw] 轮询获取{len(replies)}条回复成功")
+                                    logger.debug(
+                                        "[OpenClaw] replies_preview=%s",
+                                        _preview_text(task.result.get("reply", ""), 600),
+                                    )
+
+                                    self._emit_task_event(
+                                        task,
+                                        kind="state",
+                                        message="task_completed",
+                                        data={
+                                            "run_id": task.run_id,
+                                            "replies_count": len(replies),
+                                            "reply_preview": (str(task.result.get("reply", ""))[:200]),
+                                        },
+                                    )
+                                else:
+                                    # If the run terminated with an error, surface it as a failed task.
+                                    if poll_error:
+                                        task.status = TaskStatus.FAILED
+                                        task.error = poll_error
+                                        task.completed_at = datetime.now().isoformat()
+                                        logger.warning(f"[OpenClaw] 轮询获取回复失败（assistant error）: {poll_error}")
+                                    else:
+                                        task.status = TaskStatus.FAILED
+                                        task.error = "poll timeout: no assistant reply"
+                                        task.completed_at = datetime.now().isoformat()
+                                        logger.warning("[OpenClaw] 轮询超时，未获取到回复")
                             else:
                                 task.status = TaskStatus.COMPLETED
                                 task.completed_at = datetime.now().isoformat()
-                                logger.warning("[OpenClaw] 轮询超时，未获取到回复")
+                                logger.warning("[OpenClaw] 未提供 sessionKey 且响应未返回 sessionKey，跳过轮询")
+                                self._emit_task_event(
+                                    task,
+                                    kind="state",
+                                    message="hooks_agent_poll_skipped_no_session_key",
+                                    data={"run_id": task.run_id},
+                                )
                     except Exception:
                         task.result = {"raw": response.text}
                         task.status = TaskStatus.RUNNING
+                        logger.debug(
+                            "[OpenClaw] /hooks/agent response parse failed, raw_preview=%s",
+                            _preview_text(response.text or "", 800),
+                        )
 
                         self._emit_task_event(
                             task,
@@ -430,6 +652,20 @@ class OpenClawClient:
                     # 成功，跳出重试循环
                     break
                 else:
+                    if self._is_session_key_disabled_error(response.status_code, response.text) and payload.get("sessionKey"):
+                        session_key_enabled = False
+                        payload.pop("sessionKey", None)
+                        task.session_key = None
+                        logger.warning("[OpenClaw] Gateway 禁用了外部 sessionKey，后续重试将不再发送 sessionKey")
+                        self._emit_task_event(
+                            task,
+                            kind="state",
+                            message="hooks_agent_session_key_disabled",
+                            data={"attempt": attempt},
+                        )
+                        if attempt < max_retries:
+                            continue
+
                     last_error = f"HTTP {response.status_code}: {response.text}"
                     logger.warning(f"[OpenClaw] 消息发送失败 (尝试 {attempt}/{max_retries}): {last_error}")
 
@@ -526,9 +762,10 @@ class OpenClawClient:
         self,
         session_key: str,
         timeout_seconds: int = 1200,
-        poll_interval: float = 10.0,
-        initial_delay: float = 5.0,
-    ) -> List[str]:
+        poll_interval: float = 3.0,
+        initial_delay: float = 2.0,
+        task: Optional[OpenClawTask] = None,
+    ) -> Tuple[List[str], Optional[str]]:
         """
         轮询 sessions_history 获取 Agent 回复
 
@@ -542,87 +779,252 @@ class OpenClawClient:
             initial_delay: 首次轮询前等待时间（秒）
 
         Returns:
-            回复文本列表，超时返回收集到的所有消息
+            (回复文本列表, 错误信息)
+
+        Notes:
+            OpenClaw 的 sessions 可见性策略可能为 `tools.sessions.visibility=tree`。
+            在这种模式下，调用 `sessions_history` 时必须在 /tools/invoke 顶层也带上同一个 sessionKey，
+            否则会返回 forbidden（即使 args.sessionKey 正确）。
         """
         import asyncio
         import time
 
         await asyncio.sleep(initial_delay)
 
+        full_session_key = self._to_gateway_session_key(session_key)
+
+        logger.debug(
+            "[OpenClaw] poll_start: POST /tools/invoke tool=sessions_history sessionKey=%s timeout=%ss interval=%ss",
+            full_session_key,
+            timeout_seconds,
+            poll_interval,
+        )
+        if task:
+            self._emit_task_event(
+                task,
+                kind="state",
+                message="poll_start",
+                data={
+                    "session_key": session_key,
+                    "gateway_session_key": full_session_key,
+                    "timeout_seconds": timeout_seconds,
+                    "poll_interval": poll_interval,
+                    "initial_delay": initial_delay,
+                    "auth_configured": bool(self.config.gateway_token),
+                },
+            )
+
         start_time = time.time()
         all_replies: List[str] = []
         last_count = 0
         stable_count = 0
 
+        last_error: Optional[str] = None
+        poll_no = 0
+        last_http_error: Optional[str] = None
+
         while time.time() - start_time < timeout_seconds:
-            attempt = int(time.time() - start_time)
+            poll_no += 1
             try:
                 client = await self._get_client()
 
+                poll_payload = {
+                    "tool": "sessions_history",
+                    # sessions visibility=tree requires the top-level sessionKey to match.
+                    "sessionKey": full_session_key,
+                    "args": {
+                        "sessionKey": full_session_key,
+                        "limit": 50,
+                    },
+                }
+                if poll_no == 1:
+                    logger.debug(
+                        "[OpenClaw] sessions_history request payload=%s",
+                        _safe_json_preview(_sanitize_for_log(poll_payload, max_str=200, max_items=30)),
+                    )
+
                 response = await client.post(
                     f"{self.config.gateway_url}/tools/invoke",
-                    json={
-                        "tool": "sessions_history",
-                        "args": {
-                            "sessionKey": session_key,
-                            "limit": 50,
-                        },
-                    },
+                    json=poll_payload,
                     headers=self.config.get_gateway_headers(),
                     timeout=15,
                 )
 
                 if response.status_code == 200:
                     data = response.json()
-                    replies = self._extract_all_assistant_replies(data)
+                    replies, last_error = self._extract_assistant_outcome(data)
+                    assistant_meta = self._extract_latest_assistant_meta(data)
                     current_count = len(replies)
 
                     if current_count > last_count:
+                        prev_count = last_count
                         all_replies = replies
                         last_count = current_count
                         stable_count = 0
                         logger.info(
-                            f"[OpenClaw] 轮询第{attempt}次: 发现{current_count}条assistant消息 (新增{current_count - last_count})"
+                            f"[OpenClaw] 轮询第{poll_no}次: 发现{current_count}条assistant消息 (新增{current_count - prev_count})"
                         )
+                        logger.debug(
+                            "[OpenClaw] sessions_history assistant_meta=%s",
+                            _safe_json_preview(_sanitize_for_log(assistant_meta, max_str=200, max_items=30)),
+                        )
+                        if replies:
+                            logger.debug("[OpenClaw] sessions_history latest_reply=%s", _preview_text(replies[-1], 800))
+                        if task:
+                            self._emit_task_event(
+                                task,
+                                kind="state",
+                                message="poll_new_messages",
+                                data={
+                                    "poll_no": poll_no,
+                                    "replies_count": current_count,
+                                    "new_messages": current_count - prev_count,
+                                    "assistant_meta": _sanitize_for_log(assistant_meta, max_str=200, max_items=30),
+                                    "reply_preview": _preview_text(replies[-1], 300) if replies else "",
+                                },
+                            )
                     else:
                         stable_count += 1
                         if stable_count >= 3 and current_count > 0:
                             logger.info(f"[OpenClaw] 消息已稳定{stable_count}次，共{current_count}条，结束轮询")
-                            return replies
+                            if task:
+                                self._emit_task_event(
+                                    task,
+                                    kind="state",
+                                    message="poll_complete",
+                                    data={
+                                        "poll_no": poll_no,
+                                        "replies_count": current_count,
+                                        "assistant_meta": _sanitize_for_log(assistant_meta, max_str=200, max_items=30),
+                                    },
+                                )
+                            return replies, None
+
+                    # If the assistant terminated with an error (stopReason=error), stop polling early.
+                    if last_error and not replies:
+                        logger.warning(f"[OpenClaw] 轮询检测到 assistant error，结束轮询: {last_error}")
+                        if task:
+                            self._emit_task_event(
+                                task,
+                                kind="error",
+                                message="poll_assistant_error",
+                                data={
+                                    "poll_no": poll_no,
+                                    "error": _preview_text(last_error, 400),
+                                    "assistant_meta": _sanitize_for_log(assistant_meta, max_str=200, max_items=30),
+                                },
+                            )
+                        return [], last_error
+                else:
+                    http_error = f"HTTP {response.status_code}: {_preview_text(response.text or '', 400)}"
+                    # Avoid spamming the same HTTP error line for every poll.
+                    if http_error != last_http_error:
+                        logger.warning("[OpenClaw] sessions_history http_error=%s", http_error)
+                        last_http_error = http_error
+                        if task:
+                            self._emit_task_event(
+                                task,
+                                kind="error",
+                                message="poll_http_error",
+                                data={
+                                    "poll_no": poll_no,
+                                    "status_code": response.status_code,
+                                    "error_preview": _preview_text(response.text or "", 500),
+                                },
+                            )
 
             except Exception as e:
-                logger.warning(f"[OpenClaw] 轮询第{attempt}次异常: {e}")
+                logger.warning(f"[OpenClaw] 轮询第{poll_no}次异常: {e}")
+                if task:
+                    self._emit_task_event(
+                        task,
+                        kind="error",
+                        message="poll_exception",
+                        data={
+                            "poll_no": poll_no,
+                            "error": _preview_text(str(e), 400),
+                        },
+                    )
 
             await asyncio.sleep(poll_interval)
 
-        logger.warning(f"[OpenClaw] 轮询超时({timeout_seconds}s)，共收集{len(all_replies)}条消息")
-        return all_replies
+        if all_replies:
+            logger.info(f"[OpenClaw] 轮询达到超时({timeout_seconds}s)，返回已收集{len(all_replies)}条消息")
+            if task:
+                self._emit_task_event(
+                    task,
+                    kind="state",
+                    message="poll_timeout_return_partial",
+                    data={
+                        "poll_no": poll_no,
+                        "replies_count": len(all_replies),
+                    },
+                )
+        else:
+            logger.warning(f"[OpenClaw] 轮询超时({timeout_seconds}s)，未获取到回复")
+            if task:
+                self._emit_task_event(
+                    task,
+                    kind="state",
+                    message="poll_timeout_no_reply",
+                    data={
+                        "poll_no": poll_no,
+                        "last_error": _preview_text(last_error, 400) if last_error else None,
+                    },
+                )
+        return all_replies, last_error
 
     @staticmethod
-    def _extract_all_assistant_replies(data: Dict[str, Any]) -> List[str]:
-        """
-        从 sessions_history 返回值中提取所有 assistant 的文本回复
-        """
-        replies: List[str] = []
+    def _extract_sessions_history_messages(data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """Best-effort normalize sessions_history responses into (messages, last_error)."""
+        last_error: Optional[str] = None
+        messages: Any = []
         try:
             result = data.get("result", {})
-            details = result.get("details", {})
-            messages = details.get("messages", [])
+            details = result.get("details", {}) if isinstance(result, dict) else {}
+            messages = details.get("messages", []) if isinstance(details, dict) else []
 
-            if not messages:
+            if not messages and isinstance(result, dict):
                 content = result.get("content", [])
                 if content and isinstance(content, list) and len(content) > 0:
-                    text = content[0].get("text", "")
+                    text = content[0].get("text", "") if isinstance(content[0], dict) else ""
                     if isinstance(text, str) and text.strip():
                         try:
                             inner = json.loads(text)
                             messages = inner.get("messages", [])
+                            if not messages and isinstance(inner.get("details"), dict):
+                                messages = inner.get("details", {}).get("messages", [])
+                            # Some error payloads use {status, error} instead of messages.
+                            if not messages and inner.get("status") == "forbidden" and inner.get("error"):
+                                last_error = str(inner.get("error"))
                         except json.JSONDecodeError:
                             pass
+        except Exception:
+            return [], None
+
+        if not isinstance(messages, list):
+            return [], last_error
+        return [m for m in messages if isinstance(m, dict)], last_error
+
+    @staticmethod
+    def _extract_assistant_outcome(data: Dict[str, Any]) -> Tuple[List[str], Optional[str]]:
+        """
+        从 sessions_history 返回值中提取所有 assistant 的文本回复。
+
+        Returns:
+            (replies, last_error_message)
+        """
+        replies: List[str] = []
+        last_error: Optional[str] = None
+        try:
+            messages, last_error = OpenClawClient._extract_sessions_history_messages(data)
 
             for msg in messages:
                 if msg.get("role") != "assistant":
                     continue
+                # Capture terminal error messages even if no text content is present.
+                if msg.get("stopReason") == "error" and msg.get("errorMessage"):
+                    last_error = str(msg.get("errorMessage"))
                 content = msg.get("content", [])
                 if isinstance(content, str):
                     if content.strip():
@@ -638,7 +1040,36 @@ class OpenClawClient:
                         replies.append(text)
         except Exception:
             pass
-        return replies
+        return replies, last_error
+
+    @staticmethod
+    def _extract_latest_assistant_meta(data: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract metadata for the latest assistant message (api/provider/model/stopReason/errorMessage)."""
+        meta: Dict[str, Any] = {}
+        try:
+            messages, inner_error = OpenClawClient._extract_sessions_history_messages(data)
+            if inner_error:
+                meta["error"] = inner_error
+
+            for msg in reversed(messages):
+                if msg.get("role") != "assistant":
+                    continue
+                for k in ("api", "provider", "model", "stopReason", "errorMessage", "timestamp"):
+                    if k in msg and msg.get(k) is not None:
+                        meta[k] = msg.get(k)
+
+                content = msg.get("content")
+                if content is not None:
+                    if isinstance(content, str):
+                        meta["content_preview"] = _preview_text(content, 300)
+                    else:
+                        meta["content_preview"] = _safe_json_preview(
+                            _sanitize_for_log(content, max_str=120, max_items=10), limit=600
+                        )
+                break
+        except Exception:
+            return meta
+        return meta
 
     async def wake(self, text: str, mode: str = "now") -> Dict[str, Any]:
         """
@@ -708,8 +1139,23 @@ class OpenClawClient:
 
             payload: Dict[str, Any] = {"tool": tool}
 
-            if args:
-                payload["args"] = args
+            tool_args: Optional[Dict[str, Any]] = dict(args) if isinstance(args, dict) else None
+            if tool_args is not None:
+                # OpenClaw can enforce `tools.sessions.visibility=tree`. In that mode,
+                # calling `sessions_history` requires the top-level sessionKey to be present
+                # AND it must match args.sessionKey, which must be the full gateway sessionKey:
+                #   agent:<agent_id>:<your_session_key>
+                if tool == "sessions_history":
+                    inferred = tool_args.get("sessionKey") or tool_args.get("session_key")
+                    if isinstance(inferred, str) and inferred.strip():
+                        full = self._to_gateway_session_key(inferred)
+                        tool_args["sessionKey"] = full
+                        if not session_key:
+                            session_key = full
+                    if session_key:
+                        session_key = self._to_gateway_session_key(session_key)
+
+                payload["args"] = tool_args
             if action:
                 payload["action"] = action
             if session_key:
@@ -717,11 +1163,21 @@ class OpenClawClient:
             if dry_run:
                 payload["dryRun"] = dry_run
 
+            invoke_url = f"{self.config.gateway_url}/tools/invoke"
             logger.info(f"[OpenClaw] 调用工具: {tool}")
+            logger.debug(
+                "[OpenClaw] POST /tools/invoke url=%s auth=%s payload=%s",
+                _redact_url(invoke_url),
+                ("on" if self.config.gateway_token else "off"),
+                _safe_json_preview(_sanitize_for_log(payload, max_str=200, max_items=30)),
+            )
 
             response = await client.post(
-                f"{self.config.gateway_url}/tools/invoke", json=payload, headers=self.config.get_gateway_headers()
+                invoke_url, json=payload, headers=self.config.get_gateway_headers()
             )
+
+            body_preview = _preview_text(response.text or "", 1200) if response.text else ""
+            logger.debug("[OpenClaw] /tools/invoke response status=%s body=%s", response.status_code, body_preview)
 
             if response.status_code == 200:
                 logger.info(f"[OpenClaw] 工具调用成功: {tool}")
@@ -730,10 +1186,10 @@ class OpenClawClient:
                 except Exception:
                     return {"success": True, "result": response.text}
             elif response.status_code == 400:
-                logger.error(f"[OpenClaw] 工具调用错误: {response.text}")
+                logger.error(f"[OpenClaw] 工具调用错误: {body_preview}")
                 return {"success": False, "error": "invalid_request", "detail": response.text}
             elif response.status_code == 401:
-                logger.error("[OpenClaw] 认证失败")
+                logger.error("[OpenClaw] 认证失败 (gateway token missing/invalid)")
                 return {"success": False, "error": "unauthorized"}
             elif response.status_code == 404:
                 logger.error(f"[OpenClaw] 工具不可用: {tool}")
@@ -792,22 +1248,30 @@ class OpenClawClient:
         actual_session_key = session_key or self._default_session_key
         if not actual_session_key:
             return {"success": True, "messages": [], "note": "no_session_key_available"}
+        gateway_session_key = self._to_gateway_session_key(actual_session_key)
 
         try:
             result = await self.invoke_tool(
                 tool="sessions_history",
                 args={
-                    "sessionKey": actual_session_key,
+                    "sessionKey": gateway_session_key,
                     "limit": limit,
                     "includeTools": include_tools,
                 },
+                session_key=gateway_session_key,
             )
 
             if result.get("success"):
                 # 解析返回的消息
                 raw_result = result.get("result", {})
                 messages = self._parse_history_messages(raw_result)
-                return {"success": True, "session_key": actual_session_key, "messages": messages, "raw": raw_result}
+                return {
+                    "success": True,
+                    "session_key": actual_session_key,
+                    "gateway_session_key": gateway_session_key,
+                    "messages": messages,
+                    "raw": raw_result,
+                }
             else:
                 return {"success": False, "error": result.get("error", "unknown"), "messages": []}
 
@@ -841,13 +1305,16 @@ class OpenClawClient:
                 if msg_list and isinstance(msg_list, list):
                     for msg in msg_list:
                         if isinstance(msg, dict):
-                            messages.append(
-                                {
-                                    "role": msg.get("role", "unknown"),
-                                    "content": msg.get("content", ""),
-                                    "type": "message",
-                                }
-                            )
+                            entry: Dict[str, Any] = {
+                                "role": msg.get("role", "unknown"),
+                                "content": msg.get("content", ""),
+                                "type": "message",
+                            }
+                            # Preserve assistant metadata when available (api/provider/model/stopReason/etc.).
+                            for k in ("api", "provider", "model", "stopReason", "errorMessage", "timestamp"):
+                                if k in msg and msg.get(k) is not None:
+                                    entry[k] = msg.get(k)
+                            messages.append(entry)
                     return messages
 
                 # 备选：从 content[].text 解析 JSON
@@ -863,13 +1330,22 @@ class OpenClawClient:
                                     msg_list = parsed.get("messages", [])
                                     for msg in msg_list:
                                         if isinstance(msg, dict):
-                                            messages.append(
-                                                {
-                                                    "role": msg.get("role", "unknown"),
-                                                    "content": msg.get("content", ""),
-                                                    "type": "message",
-                                                }
-                                            )
+                                            entry = {
+                                                "role": msg.get("role", "unknown"),
+                                                "content": msg.get("content", ""),
+                                                "type": "message",
+                                            }
+                                            for k in (
+                                                "api",
+                                                "provider",
+                                                "model",
+                                                "stopReason",
+                                                "errorMessage",
+                                                "timestamp",
+                                            ):
+                                                if k in msg and msg.get(k) is not None:
+                                                    entry[k] = msg.get(k)
+                                            messages.append(entry)
                             except json.JSONDecodeError:
                                 # 不是 JSON，作为原始文本返回
                                 if text.strip():

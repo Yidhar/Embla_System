@@ -141,7 +141,7 @@ class SystemConfig(BaseModel):
     """系统基础配置"""
 
     version: str = Field(default="5.0.0", description="系统版本号")
-    ai_name: str = Field(default="娜迦日达", description="AI助手名称")
+    ai_name: str = Field(default="娜迦", description="AI助手名称")
     base_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent, description="项目根目录")
     log_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "logs", description="日志目录")
     voice_enabled: bool = Field(default=True, description="是否启用语音功能")
@@ -209,8 +209,8 @@ class GRAGConfig(BaseModel):
 class HandoffConfig(BaseModel):
     """工具调用循环配置"""
 
-    max_loop_stream: int = Field(default=5, ge=1, le=20, description="流式模式最大工具调用循环次数")
-    max_loop_non_stream: int = Field(default=5, ge=1, le=20, description="非流式模式最大工具调用循环次数")
+    max_loop_stream: int = Field(default=500, ge=1, le=2000, description="流式模式最大工具调用循环次数")
+    max_loop_non_stream: int = Field(default=500, ge=1, le=2000, description="非流式模式最大工具调用循环次数")
     show_output: bool = Field(default=False, description="是否显示工具调用输出")
 
 

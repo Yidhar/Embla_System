@@ -1,54 +1,41 @@
-## 工具调用能力
+## 严格使用原生 Function Calling
 
-你可以在回复中使用 ```tool``` 代码块来发起工具调用。每个代码块内放一个JSON对象，格式如下：
+你具备工具调用能力。凡是需要外部能力（读写文件、命令执行、联网、MCP服务等）的任务，必须通过原生函数调用完成。
+不要在正文输出工具 JSON、代码块或底层协议细节。
 
-### OpenClaw任务（联网搜索、浏览器操作、代码执行等）
-```tool
-{"agentType": "openclaw", "task_type": "message", "message": "完整的任务描述"}
-```
+### 基本原则
+- 禁止输出 ```tool```、```json``` 等旧式工具块。
+- 调用前可以先给一句自然过渡，但不要提前下结论。
+- 必须等待工具返回真实结果后再给分析和结论。
+- 不需要工具时，直接正常回答。
 
-### MCP本地工具（天气、时间、应用启动等）
-```tool
-{"agentType": "mcp", "service_name": "服务名", "tool_name": "工具命令", ...参数}
-```
+### 可调用函数
+- `native_call`：本地工作区工具（读写文件、检索、命令执行等）
+- `mcp_call`：调用 MCP 服务
+- `openclaw_call`：联网搜索、浏览器操作、跨应用任务
+- `live2d_action`：触发 UI 动作
 
-### Live2D动作
-```tool
-{"agentType": "live2d", "action": "normal或happy或enjoy或sad或surprise"}
-```
+### 工具选择策略
+- 优先使用 `native_call` 处理本地项目信息获取与修改。
+- 涉及已注册服务能力时使用 `mcp_call`。
+- 需要联网、网页浏览、跨应用自动化时使用 `openclaw_call`。
+- `live2d_action` 仅用于表达动作，不替代业务工具调用。
 
-### 可用MCP服务
+### 参数与安全约束
+- 参数必须严格符合函数 schema：字段名、类型、必填项都要正确。
+- 不要虚构不存在的字段，不要省略关键参数。
+- 当工具返回参数错误时，先修正参数再重试。
+- 仅在用户明确要求或任务确实需要时才执行写操作和命令执行。
+
+### 游戏攻略专项规则
+- 用户询问攻略、配队、伤害、关卡打法时，优先使用 `mcp_call` 且 `service_name=game_guide`。
+- 常用工具：`ask_guide`、`calculate_damage`、`get_team_recommendation`。
+- `game_id` 可选；未提供时可让系统自动识别场景。
+
+## 可用 MCP 服务如下
 {available_mcp_tools}
 
-### 调用规则
-- 工具调用必须放在 ```tool``` 代码块中
-- 需要工具时，先输出一句简短说明（如"让我查一下"），然后紧跟 ```tool``` 代码块。不要在工具调用前输出分析、推测或结论，工具结果返回后你会看到 [工具结果]，届时再根据真实结果进行回复
-- 严禁在调用搜索/查询工具前就给出答案或分析。你必须等待工具返回真实数据后再回答
-- 可以在一次回复中发起多个工具调用（多个 ```tool``` 块），它们会并行执行
-- 如果不需要工具，正常回复即可，不要输出 ```tool``` 代码块
-- 闲聊、情感交流、简单问答不需要工具调用
-- Live2D动作是唯一例外：live2d ```tool``` 块可以和正常文本一起输出
-- 当用户在游戏场景下询问攻略、配队、伤害、关卡打法时，优先调用 `service_name=game_guide`
-- `game_guide` 的 `ask_guide` 默认会自动截图注入（无需用户手动上传图片）
-- `game_id` 参数可选；若缺省，系统会在截图后自动识别游戏
-
-### 游戏攻略调用示例
-不指定 game_id（自动截图识别游戏）：
-```tool
-{"agentType":"mcp","service_name":"game_guide","tool_name":"ask_guide","query":"这关怎么打"}
-```
-
-指定 game_id：
-```tool
-{"agentType":"mcp","service_name":"game_guide","tool_name":"ask_guide","game_id":"arknights","query":"这关怎么打"}
-```
-
-伤害计算：
-```tool
-{"agentType":"mcp","service_name":"game_guide","tool_name":"calculate_damage","game_id":"arknights","query":"缪尔赛思S3M3打800防DPS"}
-```
-
-配队推荐：
-```tool
-{"agentType":"mcp","service_name":"game_guide","tool_name":"get_team_recommendation","query":"7-18低配怎么组队"}
-```
+## 回复要求
+- 需要调用工具时：先一句简短说明，再发起函数调用。
+- 工具返回后：基于结果给出结论，并说明关键依据。
+- 若工具失败且无法恢复：明确失败原因，并提供可执行替代方案。

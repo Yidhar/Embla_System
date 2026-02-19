@@ -31,6 +31,7 @@ class OpenClawStatus:
     # Hooks 配置
     hooks_enabled: bool = False
     hooks_token: Optional[str] = None
+    hooks_allow_request_session_key: bool = False
 
     # 连接状态
     gateway_reachable: bool = False
@@ -51,6 +52,7 @@ class OpenClawStatus:
             "gateway_enabled": self.gateway_enabled,
             "hooks_enabled": self.hooks_enabled,
             "hooks_token": self.hooks_token,
+            "hooks_allow_request_session_key": self.hooks_allow_request_session_key,
             "gateway_reachable": self.gateway_reachable,
             "version": self.version,
             "workspace": self.workspace,
@@ -112,7 +114,8 @@ class OpenClawDetector:
     def _read_config(self) -> Optional[Dict[str, Any]]:
         """读取 OpenClaw 配置文件"""
         try:
-            with open(self.OPENCLAW_CONFIG, 'r', encoding='utf-8') as f:
+            # Be tolerant to UTF-8 BOM written by some editors/PowerShell defaults.
+            with open(self.OPENCLAW_CONFIG, 'r', encoding='utf-8-sig') as f:
                 return json.load(f)
         except Exception as e:
             logger.error(f"读取 OpenClaw 配置文件失败: {e}")
@@ -144,6 +147,7 @@ class OpenClawDetector:
         hooks = config.get("hooks", {})
         status.hooks_enabled = hooks.get("enabled", False)
         status.hooks_token = hooks.get("token")
+        status.hooks_allow_request_session_key = bool(hooks.get("allowRequestSessionKey", False))
 
         # 版本信息
         meta = config.get("meta", {})

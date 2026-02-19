@@ -13,8 +13,73 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
 from dataclasses import dataclass
 from enum import Enum
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_google_openai_base_url(raw_base_url: str) -> str:
+    """
+    Normalize Gemini baseUrl for OpenClaw's OpenAI-compatible Chat Completions.
+
+    Expected shape:
+      https://generativelanguage.googleapis.com/v1beta/openai
+
+    Users sometimes configure the native endpoint (`.../models/<id>:generateContent`),
+    which will make OpenClaw append `/chat/completions` and get 404.
+    """
+    base = (raw_base_url or "").strip().rstrip("/")
+    if not base:
+        return base
+    models_idx = base.find("/models/")
+    if models_idx != -1:
+        base = base[:models_idx]
+    openai_idx = base.find("/openai")
+    if openai_idx != -1:
+        base = base[:openai_idx]
+    return f"{base}/openai"
+
+
+def _normalize_google_native_base_url(raw_base_url: str) -> str:
+    """
+    Normalize Gemini baseUrl for OpenClaw's native `google-generative-ai` API.
+
+    Expected shape:
+      https://generativelanguage.googleapis.com/v1beta
+
+    Users sometimes configure:
+      - the native endpoint (`.../models/<id>:generateContent`)
+      - the OpenAI compatibility endpoint (`.../openai`)
+    """
+    base = (raw_base_url or "").strip()
+    if not base:
+        return "https://generativelanguage.googleapis.com/v1beta"
+
+    base = base.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+
+    models_idx = base.find("/models/")
+    if models_idx != -1:
+        base = base[:models_idx]
+
+    openai_idx = base.find("/openai")
+    if openai_idx != -1:
+        base = base[:openai_idx]
+
+    parsed = urlparse(base if "://" in base else f"https://{base}")
+    scheme = parsed.scheme or "https"
+    host = parsed.netloc or "generativelanguage.googleapis.com"
+    path = (parsed.path or "").rstrip("/")
+    lowered = path.lower()
+
+    version_path = "/v1beta"
+    if "/v1alpha" in lowered:
+        version_path = "/v1alpha"
+    elif "/v1beta" in lowered:
+        version_path = "/v1beta"
+    elif "/v1/" in lowered or lowered.endswith("/v1"):
+        version_path = "/v1"
+
+    return f"{scheme}://{host}{version_path}"
 
 
 class InstallMethod(Enum):
@@ -93,6 +158,7 @@ class OpenClawInstaller:
         },
         "hooks": {
             "enabled": True,
+            "allowRequestSessionKey": True,
             "token": ""  # 将在初始化时生成
         },
         "gateway": {
@@ -115,7 +181,28 @@ class OpenClawInstaller:
 
         token = secrets.token_hex(24)
         api = config.api
+        api_provider = (getattr(api, "provider", "") or "").strip().lower()
+        base_url = (api.base_url or "").strip().rstrip("/")
+        model_api = "openai-completions"
+        if api_provider in ("google", "gemini") or "generativelanguage.googleapis.com" in base_url:
+            # Prefer native Gemini API for tool calling.
+            base_url = _normalize_google_native_base_url(base_url)
+            model_api = "google-generative-ai"
         workspace = str(Path.home() / ".openclaw" / "workspace")
+
+        model_def: Dict[str, Any] = {
+            "id": api.model,
+            "name": api.model,
+            "api": model_api,
+            "reasoning": False,
+            "input": ["text"],
+            "cost": {"input": 1, "output": 1, "cacheRead": 1, "cacheWrite": 1},
+            "contextWindow": 128000,
+            "maxTokens": api.max_tokens,
+        }
+        # Only relevant for OpenAI-compatible providers.
+        if model_api == "openai-completions":
+            model_def["compat"] = {"maxTokensField": "max_tokens"}
 
         return {
             "meta": {
@@ -129,23 +216,13 @@ class OpenClawInstaller:
             "models": {
                 "providers": {
                     "naga-provider": {
-                        "baseUrl": api.base_url,
+                        "baseUrl": base_url,
                         "apiKey": api.api_key,
                         "auth": "api-key",
-                        "api": "openai-completions",
+                        "api": model_api,
                         "headers": {},
                         "authHeader": False,
-                        "models": [{
-                            "id": api.model,
-                            "name": api.model,
-                            "api": "openai-completions",
-                            "reasoning": False,
-                            "input": ["text"],
-                            "cost": {"input": 1, "output": 1, "cacheRead": 1, "cacheWrite": 1},
-                            "contextWindow": 128000,
-                            "maxTokens": api.max_tokens,
-                            "compat": {"maxTokensField": "max_tokens"},
-                        }],
+                        "models": [model_def],
                     }
                 }
             },
@@ -159,7 +236,7 @@ class OpenClawInstaller:
                     "subagents": {"maxConcurrent": 8},
                 }
             },
-            "hooks": {"enabled": True, "path": "/hooks", "token": token},
+            "hooks": {"enabled": True, "path": "/hooks", "token": token, "allowRequestSessionKey": True},
             "gateway": {
                 "port": 18789,
                 "mode": "local",
@@ -471,7 +548,7 @@ class OpenClawInstaller:
 
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(),
-                timeout=120  # 2 分钟超时
+                timeout=1200  # 20 分钟超时
             )
 
             # 配置 hooks token

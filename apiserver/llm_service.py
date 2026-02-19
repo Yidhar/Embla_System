@@ -153,6 +153,35 @@ class LLMService:
             return f"openai/{model}"
         return model
 
+    def _normalize_openai_params_for_model(
+        self,
+        model_name: str,
+        temperature: Optional[float],
+    ) -> tuple[Optional[float], Dict[str, Any]]:
+        """
+        Normalize OpenAI-compatible params for model-specific constraints.
+
+        Notes:
+        - GPT-5 family (including gpt-5-codex) currently supports only temperature=1.
+        - Enable LiteLLM drop_params for this family to avoid hard failures on other
+          unsupported optional params forwarded by wrappers.
+        """
+        lowered = (model_name or "").lower()
+        compat: Dict[str, Any] = {}
+        normalized_temperature = temperature
+
+        if "gpt-5" in lowered:
+            if temperature is None or float(temperature) != 1.0:
+                logger.info(
+                    "[LLM] model=%s requires temperature=1, overriding from %s",
+                    model_name,
+                    temperature,
+                )
+            normalized_temperature = 1.0
+            compat["drop_params"] = True
+
+        return normalized_temperature, compat
+
     def _get_litellm_params(
         self,
         api_key: Optional[str],
@@ -849,11 +878,17 @@ class LLMService:
             else:
                 model_name = self._get_model_name(model_name, final_base)
 
+            normalized_temperature, compat_params = self._normalize_openai_params_for_model(
+                model_name=model_name,
+                temperature=temperature,
+            )
+
             response = await acompletion(
                 model=model_name,
                 messages=messages,
-                temperature=temperature,
+                temperature=normalized_temperature,
                 max_tokens=cfg.api.max_tokens if hasattr(cfg.api, "max_tokens") else None,
+                **compat_params,
                 **self._get_litellm_params(final_api_key, final_base, protocol),
             )
             message = response.choices[0].message
@@ -874,11 +909,94 @@ class LLMService:
             api_base_override=None,
         )
 
+    @staticmethod
+    def _obj_get(obj: Any, key: str, default: Any = None) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    def _merge_stream_tool_call_deltas(self, buffers: Dict[int, Dict[str, Any]], delta_tool_calls: Any) -> None:
+        if not delta_tool_calls:
+            return
+
+        for raw_call in delta_tool_calls:
+            index_raw = self._obj_get(raw_call, "index", None)
+            try:
+                index = int(index_raw) if index_raw is not None else len(buffers)
+            except Exception:
+                index = len(buffers)
+
+            buffer = buffers.setdefault(
+                index,
+                {
+                    "id": None,
+                    "name": None,
+                    "arguments_parts": [],
+                },
+            )
+
+            call_id = self._obj_get(raw_call, "id", None)
+            if call_id:
+                buffer["id"] = call_id
+
+            fn = self._obj_get(raw_call, "function", None)
+            if fn is not None:
+                fn_name = self._obj_get(fn, "name", None)
+                if fn_name:
+                    buffer["name"] = fn_name
+                fn_args = self._obj_get(fn, "arguments", None)
+                if fn_args is not None and fn_args != "":
+                    buffer["arguments_parts"].append(str(fn_args))
+                continue
+
+            # Some providers may flatten function fields.
+            fn_name = self._obj_get(raw_call, "name", None)
+            if fn_name:
+                buffer["name"] = fn_name
+            fn_args = self._obj_get(raw_call, "arguments", None)
+            if fn_args is not None and fn_args != "":
+                buffer["arguments_parts"].append(str(fn_args))
+
+    def _finalize_stream_tool_calls(self, buffers: Dict[int, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        finalized: List[Dict[str, Any]] = []
+
+        for index in sorted(buffers.keys()):
+            item = buffers[index]
+            raw_arguments = "".join(item.get("arguments_parts", [])).strip()
+            parsed_arguments: Any = {}
+            parse_error: Optional[str] = None
+
+            if raw_arguments:
+                try:
+                    parsed_arguments = json.loads(raw_arguments)
+                except Exception as e_json:
+                    try:
+                        import json5 as _json5
+
+                        parsed_arguments = _json5.loads(raw_arguments)
+                    except Exception:
+                        parse_error = str(e_json)
+                        parsed_arguments = {}
+
+            finalized.append(
+                {
+                    "id": item.get("id") or f"tool_call_{index}",
+                    "name": item.get("name") or "",
+                    "arguments": parsed_arguments,
+                    "arguments_raw": raw_arguments,
+                    "parse_error": parse_error,
+                }
+            )
+
+        return finalized
+
     async def stream_chat_with_context(
         self,
         messages: List[Dict],
         temperature: float = 0.7,
         model_override: Optional[Dict[str, str]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
     ):
         if not self._initialized:
             self._initialize_client()
@@ -901,6 +1019,8 @@ class LLMService:
 
         protocol = self._resolve_protocol(api_base=final_base)
         if protocol == self.PROTOCOL_GOOGLE_GENERATE:
+            if tools:
+                logger.warning("[LLM] Google protocol path currently ignores tool definitions")
             if self._is_google_live_enabled():
                 logger.info("[LLM] Google stream route: BidiGenerateContent (Live API)")
                 async for chunk in self._stream_google_bidi_generate_content(
@@ -928,6 +1048,10 @@ class LLMService:
                 model_name = self._get_model_name(model=final_model, base_url=final_base)
                 llm_params = self._get_litellm_params(final_api_key, final_base, protocol)
                 timeout_seconds = getattr(cfg.api, "request_timeout", 120)
+                normalized_temperature, compat_params = self._normalize_openai_params_for_model(
+                    model_name=model_name,
+                    temperature=temperature,
+                )
 
                 logger.debug(
                     "[LLM] attempt=%s is_auth=%s api_base=%s model=%s",
@@ -937,18 +1061,27 @@ class LLMService:
                     model_name,
                 )
 
+                request_kwargs: Dict[str, Any] = {}
+                if tools:
+                    request_kwargs["tools"] = tools
+                    if tool_choice is not None:
+                        request_kwargs["tool_choice"] = tool_choice
+
                 response = await acompletion(
                     model=model_name,
                     messages=messages,
-                    temperature=temperature,
+                    temperature=normalized_temperature,
                     max_tokens=cfg.api.max_tokens if hasattr(cfg.api, "max_tokens") else None,
                     stream=True,
                     timeout=timeout_seconds,
                     stream_timeout=timeout_seconds,
                     num_retries=0,
+                    **compat_params,
+                    **request_kwargs,
                     **llm_params,
                 )
 
+                tool_call_buffers: Dict[int, Dict[str, Any]] = {}
                 async for chunk in response:
                     if not chunk.choices:
                         continue
@@ -961,6 +1094,15 @@ class LLMService:
                     content = getattr(delta, "content", None)
                     if content:
                         yield self._format_sse_chunk("content", content)
+
+                    delta_tool_calls = getattr(delta, "tool_calls", None)
+                    if delta_tool_calls:
+                        self._merge_stream_tool_call_deltas(tool_call_buffers, delta_tool_calls)
+
+                if tool_call_buffers:
+                    finalized_calls = self._finalize_stream_tool_calls(tool_call_buffers)
+                    if finalized_calls:
+                        yield self._format_sse_chunk("tool_calls", json.dumps(finalized_calls, ensure_ascii=False))
                 return
 
             except litellm.AuthenticationError as e:

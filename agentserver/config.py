@@ -65,6 +65,7 @@ class OpenClawConfig:
     # 默认参数
     default_model: Optional[str] = None         # 默认模型
     default_channel: str = "last"               # 默认消息通道
+    allow_request_session_key: Optional[bool] = None  # 是否允许在 hooks payload 中发送 sessionKey
 
     # 功能开关
     enabled: bool = True                        # 是否启用 OpenClaw 集成

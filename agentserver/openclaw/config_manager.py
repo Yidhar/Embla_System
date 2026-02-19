@@ -59,6 +59,7 @@ class OpenClawConfigManager:
         # Hooks 配置
         "hooks.enabled",
         "hooks.token",
+        "hooks.allowRequestSessionKey",
 
         # Skills 配置
         "skills.entries",
@@ -99,7 +100,8 @@ class OpenClawConfigManager:
             return False
 
         try:
-            with open(self.OPENCLAW_CONFIG, 'r', encoding='utf-8') as f:
+            # Be tolerant to UTF-8 BOM written by some editors/PowerShell defaults.
+            with open(self.OPENCLAW_CONFIG, 'r', encoding='utf-8-sig') as f:
                 self._config = json.load(f)
             return True
         except Exception as e:
@@ -297,6 +299,10 @@ class OpenClawConfigManager:
         """设置 Hooks token"""
         return self.set("hooks.token", token)
 
+    def set_hooks_allow_request_session_key(self, enabled: bool) -> ConfigUpdateResult:
+        """设置是否允许外部 /hooks/agent 请求携带 sessionKey。"""
+        return self.set("hooks.allowRequestSessionKey", enabled)
+
     def generate_hooks_token(self) -> str:
         """生成随机 Hooks token"""
         return secrets.token_hex(24)
@@ -363,6 +369,7 @@ class OpenClawConfigManager:
         updates = {
             "hooks.enabled": True,
             "hooks.token": hooks_token,
+            "hooks.allowRequestSessionKey": True,
             # 搜索集成：设置 BRAVE_API_KEY 占位值，走本地代理
             "env.BRAVE_API_KEY": "naga-proxy",
         }
@@ -385,6 +392,7 @@ class OpenClawConfigManager:
             "primary_model": self._get_nested_value("agents.defaults.model.primary"),
             "hooks_enabled": self._get_nested_value("hooks.enabled"),
             "hooks_token_set": bool(self._get_nested_value("hooks.token")),
+            "hooks_allow_request_session_key": self._get_nested_value("hooks.allowRequestSessionKey"),
             "gateway_port": self._get_nested_value("gateway.port"),
             "workspace": self._get_nested_value("agents.defaults.workspace"),
             "max_concurrent": self._get_nested_value("agents.defaults.maxConcurrent"),

@@ -401,13 +401,18 @@ async def lifespan(app: FastAPI):
             if openclaw_available:
                 use_embedded_openclaw = _should_use_embedded_openclaw(embedded_runtime)
 
-                # 仅在内嵌 OpenClaw 场景下自动写 ~/.openclaw 配置并注入 Naga LLM 配置
-                if use_embedded_openclaw:
-                    ensure_openclaw_config()
-                    inject_naga_llm_config()
-                    logger.info("已自动注入内嵌 OpenClaw 的 Naga LLM 配置")
-                elif has_global_openclaw:
-                    logger.info("检测到全局 OpenClaw：跳过 ~/.openclaw 自动写入")
+                # 确保 ~/.openclaw/openclaw.json 可用，并注入/更新 Naga 的 provider 配置。
+                #
+                # 注意：在全局 OpenClaw 场景下，我们不强制覆盖用户自定义的默认模型；
+                # llm_config_bridge 会在默认模型未设置或已指向 naga provider 时才更新 primary。
+                ensure_openclaw_config()
+                if inject_naga_llm_config():
+                    if use_embedded_openclaw:
+                        logger.info("已自动注入内嵌 OpenClaw 的 Naga LLM 配置")
+                    else:
+                        logger.info("已注入/更新全局 OpenClaw 的 Naga LLM 配置（保留用户默认模型）")
+                else:
+                    logger.warning("OpenClaw 可用但注入 Naga LLM 配置失败：请检查 ~/.openclaw/openclaw.json")
 
                 if embedded_runtime.is_packaged:
                     if use_embedded_openclaw:
@@ -425,7 +430,8 @@ async def lifespan(app: FastAPI):
                     gateway_url=openclaw_status.gateway_url or "http://127.0.0.1:18789",
                     gateway_token=openclaw_status.gateway_token,
                     hooks_token=openclaw_status.hooks_token,
-                    timeout=120,
+                    allow_request_session_key=openclaw_status.hooks_allow_request_session_key,
+                    timeout=1200,
                 )
                 logger.info(f"OpenClaw 配置: {openclaw_config.gateway_url}")
                 logger.info(
@@ -443,7 +449,10 @@ async def lifespan(app: FastAPI):
                     if hasattr(config, "openclaw")
                     else None,
                     hooks_token=getattr(config.openclaw, "hooks_token", None) if hasattr(config, "openclaw") else None,
-                    timeout=120,
+                    allow_request_session_key=getattr(config.openclaw, "allow_request_session_key", None)
+                    if hasattr(config, "openclaw")
+                    else None,
+                    timeout=1200,
                 )
                 logger.info(f"OpenClaw 未检测到安装，使用配置文件: {openclaw_config.gateway_url}")
 
@@ -1032,6 +1041,7 @@ async def configure_openclaw(payload: Dict[str, Any]):
     - timeout: 超时时间
     - default_model: 默认模型
     - default_channel: 默认通道
+    - allow_request_session_key / allowRequestSessionKey: 是否在 /hooks/agent 请求中发送 sessionKey
     """
     try:
         from agentserver.openclaw import OpenClawConfig as ClientOpenClawConfig
@@ -1042,6 +1052,10 @@ async def configure_openclaw(payload: Dict[str, Any]):
             timeout=payload.get("timeout", 120),
             default_model=payload.get("default_model"),
             default_channel=payload.get("default_channel", "last"),
+            allow_request_session_key=payload.get(
+                "allow_request_session_key",
+                payload.get("allowRequestSessionKey"),
+            ),
         )
         set_openclaw_config(openclaw_config)
         Modules.openclaw_client = get_openclaw_client()
@@ -1072,7 +1086,7 @@ async def openclaw_send_message(payload: Dict[str, Any]):
     - model: 模型名称 (可选)
     - wake_mode: 唤醒模式 now/next-heartbeat (可选)
     - deliver: 是否投递 (可选)
-    - timeout_seconds: 等待结果超时时间，默认120秒 (可选)
+    - timeout_seconds: 等待结果超时时间，默认1200秒 (20分钟，可选)
     """
     if not Modules.openclaw_client:
         raise HTTPException(503, "OpenClaw 客户端未就绪")
@@ -1097,7 +1111,7 @@ async def openclaw_send_message(payload: Dict[str, Any]):
             model=payload.get("model"),
             wake_mode=payload.get("wake_mode", "now"),
             deliver=payload.get("deliver", False),
-            timeout_seconds=payload.get("timeout_seconds", 120),
+            timeout_seconds=payload.get("timeout_seconds", 1200),
             task_id=task_id,
         )
 
@@ -1623,6 +1637,7 @@ async def openclaw_configure_hooks(payload: Dict[str, Any]):
     请求体:
     - enabled: 是否启用（可选）
     - token: Hooks token（可选，不传则自动生成）
+    - allow_request_session_key / allowRequestSessionKey: 是否允许外部 /hooks/agent 传入 sessionKey（可选）
 
     Returns:
         更新结果
@@ -1636,6 +1651,16 @@ async def openclaw_configure_hooks(payload: Dict[str, Any]):
         # 启用/禁用
         if "enabled" in payload:
             result = config_manager.set_hooks_enabled(payload["enabled"])
+            results.append(result.to_dict())
+
+        # 是否允许外部请求传入 sessionKey（兼容 snake_case 与 camelCase）
+        allow_request_session_key = None
+        if "allow_request_session_key" in payload:
+            allow_request_session_key = payload["allow_request_session_key"]
+        elif "allowRequestSessionKey" in payload:
+            allow_request_session_key = payload["allowRequestSessionKey"]
+        if allow_request_session_key is not None:
+            result = config_manager.set_hooks_allow_request_session_key(bool(allow_request_session_key))
             results.append(result.to_dict())
 
         # 设置 token

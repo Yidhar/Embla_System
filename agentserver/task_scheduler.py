@@ -8,7 +8,7 @@ import json  # JSON处理 #
 import logging  # 日志 #
 import re  # 正则解析 #
 import time  # 时间处理 #
-from typing import Any, Dict, List, Optional  # 类型标注 #
+from typing import Any, Dict, List, Optional, Tuple  # 类型标注 #
 from dataclasses import dataclass, field  # 数据类 #
 
 import httpx
@@ -93,6 +93,56 @@ class _TaskScheduler:
             return False
 
         return False
+
+    @staticmethod
+    def _get_openai_model_name(model: str, api_base: str, provider: str = "") -> str:
+        """构建 LiteLLM 兼容模型名，避免 provider 识别失败。"""
+        normalized_model = (model or "").strip()
+        lowered_base = (api_base or "").strip().lower()
+        lowered_provider = (provider or "").strip().lower()
+
+        if not normalized_model:
+            return "openai/gpt-4o-mini"
+
+        if "/" in normalized_model:
+            return normalized_model
+
+        if lowered_provider in {"openrouter"} or "openrouter" in lowered_base:
+            return f"openrouter/{normalized_model}"
+        if lowered_provider in {"deepseek"} or "deepseek" in lowered_base:
+            return f"deepseek/{normalized_model}"
+        if lowered_provider in {"openai", "openai_compatible"}:
+            return f"openai/{normalized_model}"
+        if "openai.com" in lowered_base:
+            return normalized_model
+
+        # 对所有 OpenAI 兼容网关默认补全 openai/ 前缀
+        if lowered_provider in {"", "auto", "openai_compatible"}:
+            return f"openai/{normalized_model}"
+
+        return normalized_model
+
+    @staticmethod
+    def _normalize_openai_params_for_model(
+        model_name: str,
+        temperature: Optional[float],
+    ) -> Tuple[Optional[float], Dict[str, Any]]:
+        """按模型能力约束参数，避免 LiteLLM 因不支持参数报错。"""
+        lowered = (model_name or "").lower()
+        compat: Dict[str, Any] = {}
+        normalized_temperature = temperature
+
+        if "gpt-5" in lowered:
+            if temperature is None or float(temperature) != 1.0:
+                logger.info(
+                    "[TaskScheduler] model=%s requires temperature=1, overriding from %s",
+                    model_name,
+                    temperature,
+                )
+            normalized_temperature = 1.0
+            compat["drop_params"] = True
+
+        return normalized_temperature, compat
 
     @staticmethod
     def _extract_google_text(data: Any) -> str:
@@ -402,17 +452,44 @@ class _TaskScheduler:
 
             import litellm
             litellm.enable_json_schema_validation = True
-            
-            response = litellm.completion(
-                model=self.llm_config["model"],
-                api_key=self.llm_config["api_key"],
-                api_base=self.llm_config["api_base"],
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1024,
+
+            raw_model = str(self.llm_config.get("model", "") or "").strip()
+            api_key = str(self.llm_config.get("api_key", "") or "").strip()
+            api_base = str(self.llm_config.get("api_base", "") or "").strip()
+            provider = str(self.llm_config.get("provider", "") or "").strip().lower()
+            configured_temperature = self.llm_config.get("temperature")
+
+            model_name = self._get_openai_model_name(raw_model, api_base, provider)
+            normalized_temperature, compat_params = self._normalize_openai_params_for_model(
+                model_name=model_name,
+                temperature=configured_temperature,
             )
-            
+            if "gpt-5" in model_name.lower() and normalized_temperature is None:
+                normalized_temperature = 1.0
+
+            completion_kwargs: Dict[str, Any] = {
+                "model": model_name,
+                "api_key": api_key,
+                "api_base": api_base,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 1024,
+            }
+            if normalized_temperature is not None:
+                completion_kwargs["temperature"] = normalized_temperature
+            if model_name.startswith("openai/"):
+                completion_kwargs["custom_llm_provider"] = "openai"
+            completion_kwargs.update(compat_params)
+
+            logger.info(
+                "[TaskScheduler] Compression via LiteLLM model=%s api_base=%s provider=%s",
+                model_name,
+                api_base,
+                provider or "auto",
+            )
+            response = litellm.completion(**completion_kwargs)
+
             json_str = response.choices[0].message.content.strip()
-            return json.loads(json_str)
+            return self._parse_json_result_from_text(json_str)
             
         except Exception as e:
             logger.error(f"LLM压缩调用失败: {e}")
