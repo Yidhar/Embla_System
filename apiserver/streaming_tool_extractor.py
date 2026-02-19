@@ -148,8 +148,6 @@ class StreamingToolCallExtractor:
             except Exception as e:
                 logger.error(f"发送到语音集成失败: {e}")
     
-    # 工具调用相关方法已移除，功能已迁移到background_analyzer
-    
     async def finish_processing(self):
         """完成处理，清理剩余内容"""
         results = []

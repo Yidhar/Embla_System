@@ -246,12 +246,6 @@ Source: [`voice/`](voice/)
 
 ### Agent Server & Task Scheduling
 
-**Background Intent Analyzer** (`BackgroundAnalyzer`):
-
-- LangChain `ChatOpenAI` at `temperature=0`, extracts executable tool calls from conversation
-- Per-session deduplication (prevents concurrent analyses for the same session), 60s timeout
-- Extracted tool calls dispatched by `agentType` to MCP / OpenClaw / Live2D
-
 **OpenClaw Integration**:
 
 - Connects to OpenClaw Gateway (port 18789) to dispatch AI coding assistants for computer tasks via natural language

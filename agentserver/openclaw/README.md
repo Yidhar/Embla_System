@@ -99,9 +99,7 @@ curl -X POST http://localhost:8001/openclaw/tools/invoke \
 ```
 用户: "跟openclaw说帮我分析代码"
         ↓
-NagaAgent 意图分析器识别 agentType: "openclaw"
-        ↓
-BackgroundAnalyzer._send_to_openclaw()
+Agentic Tool Loop 识别 agentType: "openclaw"
         ↓
 POST http://localhost:8001/openclaw/send
         ↓

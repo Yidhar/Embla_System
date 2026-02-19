@@ -16,8 +16,7 @@ from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
 
 from system.config import config, add_config_listener
-from system.background_analyzer import get_background_analyzer
-from agentserver.task_scheduler import get_task_scheduler, TaskStep
+from system.config import config, loggerfrom agentserver.task_scheduler import get_task_scheduler, TaskStep
 from agentserver.openclaw import get_openclaw_client, set_openclaw_config
 from agentserver.openclaw.embedded_runtime import get_embedded_runtime, EmbeddedRuntime
 
@@ -125,8 +124,6 @@ async def lifespan(app: FastAPI):
     """FastAPI应用生命周期"""
     # startup
     try:
-        # 初始化意图分析器
-        Modules.analyzer = get_background_analyzer()
         # 初始化任务调度器
         Modules.task_scheduler = get_task_scheduler()
 
@@ -281,7 +278,6 @@ app = FastAPI(title="NagaAgent Server", version="1.0.0", lifespan=lifespan)
 class Modules:
     """全局模块管理器"""
 
-    analyzer = None
     task_scheduler = None
     openclaw_client = None
 
@@ -442,7 +438,7 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": _now_iso(),
-        "modules": {"analyzer": Modules.analyzer is not None, "openclaw": Modules.openclaw_client is not None},
+        "modules": {"openclaw": Modules.openclaw_client is not None},
     }
 
 
@@ -508,8 +504,8 @@ async def schedule_agent_tasks(payload: Dict[str, Any]):
 @app.post("/analyze_and_execute")
 async def analyze_and_execute(payload: Dict[str, Any]):
     """意图分析和任务执行 - 保持向后兼容"""
-    if not Modules.analyzer or not Modules.openclaw_client:
-        raise HTTPException(503, "分析器或OpenClaw客户端未就绪")
+    if not Modules.openclaw_client:
+        raise HTTPException(503, "OpenClaw客户端未就绪")
 
     messages = (payload or {}).get("messages", [])
     if not isinstance(messages, list):

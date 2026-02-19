@@ -246,12 +246,6 @@ easeOutCubic 缓动（`1 - (1 - t)^3`），160ms / 60FPS 过渡。智能定位�
 
 ### Agent Server 与任务调度
 
-**后台意图分析器**（`BackgroundAnalyzer`）：
-
-- 基于 LangChain `ChatOpenAI`，`temperature=0`，从对话中提取可执行的工具调用
-- 逐会话去重（防止同一会话并发分析）、60 秒超时
-- 提取的工具调用按 `agentType` 分发到 MCP / OpenClaw / Live2D
-
 **OpenClaw 集成**：
 
 - 对接 OpenClaw Gateway（端口 18789），通过自然语言调度 AI 编程助手执行电脑任务
