@@ -97,6 +97,13 @@ export function chatStream(content: string, options?: { skill?: string, images?:
         authExpired.value = true
         message.content += chunk.text || '登录已过期，请重新登录'
       }
+      else if (chunk.type === 'compress_start' || chunk.type === 'compress_progress' || chunk.type === 'compress_end') {
+        // 上下文压缩进度提示（覆盖式显示，compress_end 后非阻塞延迟清空）
+        message.content = `> ${chunk.text}\n\n`
+        if (chunk.type === 'compress_end') {
+          setTimeout(() => { message.content = '' }, 1200)
+        }
+      }
       // round_end 不需要特殊处理
       window.dispatchEvent(new CustomEvent('token', { detail: chunk.text || '' }))
     }

@@ -228,7 +228,8 @@ class MessageManager:
         session_messages = self.get_recent_messages(session_id) if include_history else []
 
         # 启用持久化上下文时，从上一个会话取最近消息作为背景注入
-        if self.persistent_context:
+        # 如果 system_prompt 中已包含 <compact> 压缩摘要，则跳过原始消息注入（避免重复）
+        if self.persistent_context and "<compact>" not in system_prompt:
             prev_messages = self._get_previous_session_messages(session_id)
             if prev_messages:
                 messages.extend(prev_messages)

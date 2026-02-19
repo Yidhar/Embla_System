@@ -896,17 +896,22 @@ async def chat_stream(request: ChatRequest):
             # 用户消息直接传 LLM，技能上下文完全由 system prompt 承载
             effective_message = request.message
 
+            # ====== 启动压缩：将上一个会话的历史压缩为摘要注入 system prompt ======
+            try:
+                from .context_compressor import compress_for_startup, build_compact_block
+                prev_messages = message_manager._get_previous_session_messages(session_id)
+                if prev_messages:
+                    summary = await compress_for_startup(prev_messages)
+                    if summary:
+                        system_prompt += build_compact_block(summary)
+                        logger.info(f"[启动压缩] 已将上一会话摘要注入 system prompt ({len(summary)} 字)")
+            except Exception as e:
+                logger.debug(f"[启动压缩] 跳过: {e}")
+
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(
                 session_id=session_id, system_prompt=system_prompt, current_message=effective_message
             )
-
-            # 上下文压缩：超过 100k token 时自动摘要早期消息
-            try:
-                from .context_compressor import compress_context
-                messages = await compress_context(messages)
-            except Exception as e:
-                logger.debug(f"上下文压缩跳过: {e}")
 
             # 如果携带截屏图片，将最后一条用户消息改为多模态格式（OpenAI vision 兼容）
             if request.images:
