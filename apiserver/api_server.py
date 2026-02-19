@@ -901,6 +901,13 @@ async def chat_stream(request: ChatRequest):
                 session_id=session_id, system_prompt=system_prompt, current_message=effective_message
             )
 
+            # 上下文压缩：超过 100k token 时自动摘要早期消息
+            try:
+                from .context_compressor import compress_context
+                messages = await compress_context(messages)
+            except Exception as e:
+                logger.debug(f"上下文压缩跳过: {e}")
+
             # 如果携带截屏图片，将最后一条用户消息改为多模态格式（OpenAI vision 兼容）
             if request.images:
                 last_msg = messages[-1]
