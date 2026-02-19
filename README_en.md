@@ -8,7 +8,7 @@
 
 ![NagaAgent](https://img.shields.io/badge/NagaAgent-5.0.0-blue?style=for-the-badge&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-green?style=for-the-badge)
-![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
+![License](https://img.shields.io/badge/License-AGPL%203.0%20%7C%20Proprietary-yellow?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)
 
 [![Stars](https://img.shields.io/github/stars/Xxiii8322766509/NagaAgent?style=social)](https://github.com/Xxiii8322766509/NagaAgent)
@@ -17,9 +17,12 @@
 
 **[QQ Bot Integration: Undefined QQbot](https://github.com/69gg/Undefined/)**
 
-![UI Preview](ui/img/README.jpg)
 
 </div>
+
+---
+
+**Dual licensed** · [AGPL-3.0](LICENSE) for open source | [Proprietary](LICENSE-CLOSED-SOURCE) for closed-source use (written consent required). Commercial: contact@nagaagent.com
 
 ---
 
@@ -566,12 +569,6 @@ python build.py  # Build Windows one-click runner package, output to dist/
 ## Contributing
 
 Issues and Pull Requests are welcome.
-
----
-
-## License
-
-[MIT License](LICENSE)
 
 ---
 

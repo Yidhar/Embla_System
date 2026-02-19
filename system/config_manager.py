@@ -17,7 +17,7 @@ from pathlib import Path
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from .config import hot_reload_config, add_config_listener
+from .config import hot_reload_config, add_config_listener, detect_file_encoding, get_config_path
 import json5  # 支持带注释的JSON解析
 
 class ConfigManager:
@@ -119,7 +119,7 @@ class ConfigManager:
             return
         
         if config_file is None:
-            config_file = str(Path(__file__).parent.parent / "config.json")
+            config_file = get_config_path()
         
         self._stop_watching = False
         self._config_watcher_thread = threading.Thread(
@@ -173,7 +173,7 @@ class ConfigManager:
             print(f"开始更新配置，共 {len(updates)} 项...")  # 去除Emoji #
             
             # 验证配置文件存在性
-            config_path = str(Path(__file__).parent.parent / "config.json")
+            config_path = get_config_path()
             if not os.path.exists(config_path):
                 print(f"❌ 配置文件不存在: {config_path}")
                 print(f"❌ 当前工作目录: {os.getcwd()}")
@@ -208,7 +208,8 @@ class ConfigManager:
     def _load_config_file(self, config_path: str) -> Optional[Dict[str, Any]]:
         """加载配置文件（json5 优先，标准 json 兜底，始终 UTF-8）"""
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
+            encoding = detect_file_encoding(config_path)
+            with open(config_path, 'r', encoding=encoding) as f:
                 content = f.read()
             # 优先 json5（支持注释）
             try:
@@ -254,7 +255,7 @@ class ConfigManager:
     
     def get_config_snapshot(self) -> Dict[str, Any]:
         """获取配置快照（复用 _load_config_file 避免重复逻辑）"""
-        config_path = str(Path(__file__).parent.parent / "config.json")
+        config_path = get_config_path()
         data = self._load_config_file(config_path)
         if data is not None:
             return data
@@ -277,7 +278,7 @@ class ConfigManager:
     def restore_config_snapshot(self, snapshot: Dict[str, Any]) -> bool:
         """恢复配置快照（复用 _save_config_file 原子写入）"""
         try:
-            config_path = str(Path(__file__).parent.parent / "config.json")
+            config_path = get_config_path()
             if not self._save_config_file(config_path, snapshot):
                 return False
             hot_reload_config()

@@ -5,10 +5,20 @@ NagaAgent 配置系统 - 基于Pydantic实现类型安全和验证
 """
 
 import os
+import sys
 import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime
+
+IS_PACKAGED: bool = getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
+
+
+def get_config_path() -> str:
+    """返回 config.json 的可写路径（打包后在 exe 同级目录，开发时在项目根目录）"""
+    if IS_PACKAGED:
+        return str(Path(sys.executable).parent / "config.json")
+    return str(Path(__file__).parent.parent / "config.json")
 
 from pydantic import BaseModel, Field, field_validator
 from charset_normalizer import from_path
@@ -119,7 +129,10 @@ def bootstrap_config_from_example(config_path: str) -> None:
     if os.path.exists(config_path):
         return
 
-    example_path = str(Path(config_path).with_name("config.json.example"))
+    if IS_PACKAGED:
+        example_path = str(Path(sys._MEIPASS) / "config.json.example")  # type: ignore[attr-defined]
+    else:
+        example_path = str(Path(config_path).with_name("config.json.example"))
     if not os.path.exists(example_path):
         return
 
@@ -758,7 +771,7 @@ class NagaConfig(BaseModel):
 
 def load_config():
     """加载配置"""
-    config_path = str(Path(__file__).parent.parent / "config.json")
+    config_path = get_config_path()
 
     bootstrap_config_from_example(config_path)
 

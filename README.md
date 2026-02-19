@@ -8,7 +8,7 @@
 
 ![NagaAgent](https://img.shields.io/badge/NagaAgent-5.0.0-blue?style=for-the-badge&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-green?style=for-the-badge)
-![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
+![License](https://img.shields.io/badge/License-AGPL%203.0%20%7C%20Proprietary-yellow?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)
 
 [![Stars](https://img.shields.io/github/stars/Xxiii8322766509/NagaAgent?style=social)](https://github.com/Xxiii8322766509/NagaAgent)
@@ -17,9 +17,12 @@
 
  **[QQ 机器人联动：Undefined QQbot](https://github.com/69gg/Undefined/)**
 
-![UI 预览](ui/img/README.jpg)
 
 </div>
+
+---
+
+**双许可证** · 开源采用 [AGPL-3.0](LICENSE)，闭源采用 [专属许可](LICENSE-CLOSED-SOURCE)（需书面授权）。商业合作：contact@nagaagent.com / bilibili【柏斯阔落】
 
 ---
 
@@ -568,12 +571,11 @@ python build.py  # 构建 Windows 一键运行整合包，输出到 dist/
 
 ---
 
-## 许可证
-
-参见 [LICENSE](LICENSE)。如需商业部署或合作，请联系 contact@nagaagent.com，或 bilibili 私信【柏斯阔落】。
-
+<<<<<<< HEAD
+=======
 ---
 
+>>>>>>> ab668726c1af0745149115e4e3057fc42cbf363f
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=RTGS2017/NagaAgent&type=date&legend=top-left)](https://www.star-history.com/#RTGS2017/NagaAgent&type=date&legend=top-left)

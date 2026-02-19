@@ -1,0 +1,150 @@
+PROPRIETARY LICENSE (Closed-Source Use)
+Dual-Licensed Software – Closed-Source Option
+
+================================================================================
+1. DEFINITIONS
+================================================================================
+
+"Software" means the software, code, documentation, and any derivatives
+thereof to which this license applies, including any modifications or
+derivative works.
+
+"Licensor" means the copyright holder: 柏斯阔落 (GitHub: RTGS2017).
+
+"Licensee" means any person or entity that uses, modifies, or distributes
+the Software under this Proprietary License after obtaining written
+permission from the Licensor.
+
+"Closed-Source Use" means use, modification, or distribution of the
+Software or derivative works without making corresponding source code
+available under the terms of the GNU AGPL v3 or similar open-source license.
+
+================================================================================
+2. CONDITIONAL GRANT; NO RIGHTS WITHOUT CONSENT
+================================================================================
+
+The Software is otherwise offered under the GNU Affero General Public
+License v3.0 (AGPL-3.0) for open-source use. This Proprietary License
+applies only to Closed-Source Use.
+
+No right to use, modify, distribute, sublicense, or make available the
+Software (or any derivative work) in a closed-source or proprietary
+manner is granted by this document or by the Licensor unless the
+Licensee has first obtained the Licensor's prior written consent.
+
+Any Closed-Source Use without such consent is a breach of the Software's
+license terms and may constitute copyright infringement.
+
+================================================================================
+3. GRANT OF RIGHTS (AFTER WRITTEN CONSENT)
+================================================================================
+
+Subject to the Licensor's prior written consent and to the terms of the
+written agreement or permission granted to the Licensee, the Licensor may
+grant the Licensee a non-exclusive, revocable, limited license to:
+
+(a) Use the Software and any permitted derivative works for any purpose,
+    including commercial and non-commercial use;
+
+(b) Modify the Software and create derivative works;
+
+(c) Distribute the Software or derivative works in object or source form
+    without an obligation to disclose source code to recipients or to
+    license such distribution under the AGPL-3.0 or any other open-source
+    license;
+
+(d) Sublicense or grant rights to third parties only to the extent
+    expressly permitted in the Licensor's written consent.
+
+The scope, duration, territory, and any other conditions of such grant
+shall be solely as set forth in the Licensor's written consent. No
+implied license is granted beyond what is expressly agreed in writing.
+
+================================================================================
+4. RESTRICTIONS
+================================================================================
+
+4.1 Licensee shall not engage in Closed-Source Use without the Licensor's
+    prior written consent.
+
+4.2 Licensee shall not remove, alter, or obscure any copyright, license,
+    or attribution notices in the Software or in any permitted derivative
+    work, except as may be expressly allowed in the written consent.
+
+4.3 Except as expressly permitted in the written consent, Licensee shall
+    not use the Licensor's name, trademarks, or branding to endorse or
+    promote products or services without the Licensor's prior written
+    approval.
+
+4.4 All rights not expressly granted under this license or in the
+    Licensor's written consent are reserved by the Licensor.
+
+================================================================================
+5. INTELLECTUAL PROPERTY
+================================================================================
+
+The Software and all copies and derivative works remain the intellectual
+property of the Licensor (or respective right holders). This license
+does not transfer ownership of the Software or any part thereof. The
+Licensor retains all right, title, and interest in and to the Software.
+
+================================================================================
+6. WARRANTY DISCLAIMER
+================================================================================
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE,
+ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+================================================================================
+7. LIMITATION OF LIABILITY
+================================================================================
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE
+LICENSOR BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, LOSS OF DATA,
+PROFITS, OR BUSINESS OPPORTUNITY) ARISING OUT OF OR IN CONNECTION WITH
+THE SOFTWARE OR THIS LICENSE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGES. IN NO EVENT SHALL THE LICENSOR'S AGGREGATE LIABILITY EXCEED THE
+AMOUNT, IF ANY, PAID BY THE LICENSEE TO THE LICENSOR FOR THE RIGHT TO USE
+THE SOFTWARE UNDER THIS PROPRIETARY LICENSE.
+
+================================================================================
+8. TERMINATION
+================================================================================
+
+Any grant under this Proprietary License may be revoked or terminated
+as set forth in the written consent. Upon termination, the Licensee
+shall cease all use and distribution of the Software and derivative
+works under the closed-source grant and, at the Licensor's option,
+destroy or return all copies. Sections 5, 6, 7, and 9 shall survive
+termination.
+
+================================================================================
+9. GENERAL
+================================================================================
+
+9.1 This license is governed by the laws applicable to the Licensor,
+    without regard to conflict-of-law principles.
+
+9.2 If any provision of this license is held invalid or unenforceable,
+    the remaining provisions remain in full force and effect.
+
+9.3 The Licensor may be contacted for permission to use the Software
+    under this Proprietary License via GitHub: https://github.com/RTGS2017
+
+9.4 This document describes the terms under which closed-source use may
+    be permitted. It does not by itself grant any rights; only the
+    Licensor's written consent can do so.
+
+================================================================================
+COPYRIGHT
+================================================================================
+
+Copyright (c) 柏斯阔落 (RTGS2017). All rights reserved.
+
+GitHub: https://github.com/RTGS2017
