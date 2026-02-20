@@ -4,7 +4,7 @@ import { ref } from 'vue'
 import API from '@/api/core'
 
 export interface Message {
-  role: 'system' | 'user' | 'assistant'
+  role: 'system' | 'user' | 'assistant' | 'info'
   content: string
   reasoning?: string
   generating?: boolean

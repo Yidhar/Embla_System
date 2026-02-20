@@ -992,6 +992,7 @@ async def chat_stream(request: ChatRequest):
             # 记录每轮的content，用于在每轮结束时完成TTS处理
             current_round_text = ""
             is_tool_event = False  # 标记当前是否在处理工具事件（不送TTS）
+            was_compressed = False  # 运行时是否执行过上下文压缩（用于保存 info 标记）
 
             async for chunk in run_agentic_loop(messages, session_id, model_override=model_override):
                 if chunk.startswith("data: "):
@@ -1049,6 +1050,9 @@ async def chat_stream(request: ChatRequest):
                             elif chunk_type == "round_start":
                                 # 新一轮开始，重置工具事件标记
                                 is_tool_event = False
+                            elif chunk_type == "compress_info":
+                                # 运行时压缩完成，标记后续需要保存 info 消息
+                                was_compressed = True
 
                             # 透传所有 chunk 给前端（content/reasoning/tool events）
                             yield chunk
@@ -1119,6 +1123,11 @@ async def chat_stream(request: ChatRequest):
 
             # 统一保存对话历史与日志
             _save_conversation_and_logs(session_id, user_message, complete_response)
+
+            # 运行时压缩成功时，在会话末尾追加 info 标记
+            # 该标记持久化到磁盘，下次启动用于判断上一个会话是否已被压缩
+            if was_compressed:
+                message_manager.add_message(session_id, "info", "【已压缩上下文】")
 
             # [DONE] 信号已由 llm_service.stream_chat_with_context 发送，无需重复
 

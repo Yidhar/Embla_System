@@ -104,6 +104,13 @@ export function chatStream(content: string, options?: { skill?: string, images?:
           setTimeout(() => { message.content = '' }, 1200)
         }
       }
+      else if (chunk.type === 'compress_info') {
+        // 运行时压缩完成，在当前 assistant 消息前插入 info 标记
+        const idx = MESSAGES.value.indexOf(message)
+        if (idx > 0) {
+          MESSAGES.value.splice(idx, 0, { role: 'info', content: chunk.text || '【已压缩上下文】' })
+        }
+      }
       // round_end 不需要特殊处理
       window.dispatchEvent(new CustomEvent('token', { detail: chunk.text || '' }))
     }

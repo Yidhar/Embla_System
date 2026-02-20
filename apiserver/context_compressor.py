@@ -289,6 +289,8 @@ async def compress_context(messages: List[Dict]) -> CompressResult:
 
     events.append(_sse("compress_end",
                        text=f"压缩完成：{total_tokens:,} → {compressed_tokens:,} tokens（节省 {saved:,}）"))
+    # 通知前端插入 info 标记（持久化到会话历史，但不计入 LLM 上下文）
+    events.append(_sse("compress_info", text="【已压缩上下文】"))
 
     logger.info(
         f"[压缩] {total_tokens} → {compressed_tokens} tokens "
@@ -349,7 +351,7 @@ async def _generate_summary(conversation_text: str) -> Optional[str]:
                 {"role": "user", "content": conversation_text},
             ],
             temperature=0.3,
-            max_tokens=5000,
+            max_tokens=5500,
             timeout=60,
             **_get_compress_llm_params(),
         )

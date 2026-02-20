@@ -251,14 +251,23 @@ class MessageManager:
         # 添加系统提示词（时间信息已由 build_system_prompt() 统一注入）
         messages.append({"role": "system", "content": system_prompt})
 
-        # 获取本会话的消息
+        # 获取本会话的消息（过滤 info 标记，不计入 LLM 上下文）
         session_messages = self.get_recent_messages(session_id) if include_history else []
+        session_messages = [m for m in session_messages if m.get("role") != "info"]
 
         # 启用持久化上下文时，从上一个会话取最近消息作为背景注入
-        # 如果 system_prompt 中已包含 <compact> 压缩摘要，则跳过原始消息注入（避免重复）
+        # 如果 system_prompt 中已包含 <compact> 压缩摘要，或上一个会话末尾
+        # 已有【已压缩上下文】标记（说明该会话曾经被压缩过），则跳过原始消息注入
         if self.persistent_context and "<compact>" not in system_prompt:
             prev_messages = self._get_previous_session_messages(session_id)
-            if prev_messages:
+            # 检查上一个会话的最后一条消息是否为压缩标记
+            prev_was_compressed = (
+                prev_messages and prev_messages[-1].get("role") == "info"
+                and "【已压缩上下文】" in prev_messages[-1].get("content", "")
+            )
+            if prev_messages and not prev_was_compressed:
+                # 过滤 info 标记
+                prev_messages = [m for m in prev_messages if m.get("role") != "info"]
                 messages.extend(prev_messages)
                 logger.debug(f"为会话 {session_id} 注入上一会话的 {len(prev_messages)} 条消息到 LLM 上下文")
 
