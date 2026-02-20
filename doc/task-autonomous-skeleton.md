@@ -127,6 +127,13 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
 45. Validation for this round:
     - `python -m py_compile apiserver/agentic_tool_loop.py` passed
     - `cd frontend && npm run build` still blocked by pre-existing type issue in `frontend/src/components/LoginDialog.vue` (`accessToken` mismatch), unrelated to this change
+46. Removed OpenClaw call guidance from prompt stack:
+    - `system/prompts/agentic_tool_prompt.txt` removed `openclaw_call` callable/function guidance
+    - `system/prompts/tool_dispatch_prompt.txt` removed OpenClaw coexistence/priority rules
+    - `system/prompts/conversation_analyzer_prompt.txt` removed OpenClaw output schema and all OpenClaw-specific dispatch rules
+    - prompt policy now routes external/network capabilities via `mcp` services or native tools only
+47. Prompt verification for this round:
+    - `rg -n "(?i)openclaw" system/prompts -S` returned no matches
 
 ## Not Yet Implemented (Known Gaps)
 
