@@ -216,4 +216,6 @@ tmp/
 
 # Cursor
 .cursorrules
-*.md
+
+# codex
+AGENTS.md
