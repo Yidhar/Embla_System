@@ -67,8 +67,12 @@ const electronAPI = {
 
   // 后端进程通信
   backend: {
-    onProgress: (callback: (payload: { percent: number, phase: string }) => void) => {
-      const handler = (_event: Electron.IpcRendererEvent, payload: { percent: number, phase: string }) => callback(payload)
+    getBootstrapInfo: () => ipcRenderer.invoke('backend:getBootstrapInfo') as Promise<{
+      apiPort: number
+      agentPort: number
+    }>,
+    onProgress: (callback: (payload: { percent: number, phase: string, apiPort?: number, agentPort?: number }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { percent: number, phase: string, apiPort?: number, agentPort?: number }) => callback(payload)
       ipcRenderer.on('backend:progress', handler)
       return () => ipcRenderer.removeListener('backend:progress', handler)
     },

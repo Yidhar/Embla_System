@@ -1,3 +1,4 @@
+import { ref } from 'vue'
 import { ApiClient } from './index'
 
 export class AgentApiClient extends ApiClient {
@@ -58,4 +59,12 @@ export class AgentApiClient extends ApiClient {
   }
 }
 
-export default new AgentApiClient(8001)
+export const agentApiPort = ref(8001)
+
+export function setAgentApiPort(port: number) {
+  if (Number.isInteger(port) && port >= 1 && port <= 65535) {
+    agentApiPort.value = port
+  }
+}
+
+export default new AgentApiClient(agentApiPort)

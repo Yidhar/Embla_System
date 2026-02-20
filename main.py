@@ -103,7 +103,24 @@ logging.getLogger("OpenGL.acceleratesupport").setLevel(logging.WARNING)
 
 def _emit_progress(percent: int, phase: str):
     """向 stdout 发送结构化进度信号，供 Electron 主进程解析"""
-    print(f"##PROGRESS##{_json.dumps({'percent': percent, 'phase': phase})}", flush=True)
+    payload = {'percent': percent, 'phase': phase}
+
+    try:
+        api_port = int(getattr(config.api_server, 'port', 0))
+        if 1 <= api_port <= 65535:
+            payload['apiPort'] = api_port
+    except Exception:
+        pass
+
+    try:
+        from system.config import get_server_port
+        agent_port = int(get_server_port('agent_server'))
+        if 1 <= agent_port <= 65535:
+            payload['agentPort'] = agent_port
+    except Exception:
+        pass
+
+    print(f"##PROGRESS##{_json.dumps(payload)}", flush=True)
 
 
 # 服务管理器类

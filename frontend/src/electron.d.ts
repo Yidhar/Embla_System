@@ -14,7 +14,13 @@ export interface CaptureAPI {
 }
 
 export interface BackendAPI {
-  onProgress: (callback: (payload: { percent: number, phase: string }) => void) => () => void
+  getBootstrapInfo: () => Promise<{ apiPort: number, agentPort: number }>
+  onProgress: (callback: (payload: {
+    percent: number
+    phase: string
+    apiPort?: number
+    agentPort?: number
+  }) => void) => () => void
   onError: (callback: (payload: { code: number, logs: string }) => void) => () => void
 }
 

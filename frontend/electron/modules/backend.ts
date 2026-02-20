@@ -19,6 +19,130 @@ interface AppPackageMetadata {
   nagaDebugConsole?: boolean
 }
 
+interface BackendBootstrapInfo {
+  apiPort: number
+  agentPort: number
+}
+
+interface BackendProgressPayload {
+  percent: number
+  phase: string
+  apiPort?: number
+  agentPort?: number
+}
+
+const DEFAULT_BOOTSTRAP_INFO: BackendBootstrapInfo = {
+  apiPort: 8000,
+  agentPort: 8001,
+}
+
+let backendBootstrapInfo: BackendBootstrapInfo = { ...DEFAULT_BOOTSTRAP_INFO }
+
+function isValidPort(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 65535
+}
+
+function stripJsonComments(raw: string): string {
+  let out = ''
+  let inString = false
+  let inLineComment = false
+  let inBlockComment = false
+  let escaped = false
+
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]
+    const next = raw[i + 1]
+
+    if (inLineComment) {
+      if (ch === '\n') {
+        inLineComment = false
+        out += ch
+      }
+      continue
+    }
+
+    if (inBlockComment) {
+      if (ch === '*' && next === '/') {
+        inBlockComment = false
+        i++
+      }
+      continue
+    }
+
+    if (inString) {
+      out += ch
+      if (escaped) {
+        escaped = false
+      }
+      else if (ch === '\\') {
+        escaped = true
+      }
+      else if (ch === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (ch === '"') {
+      inString = true
+      out += ch
+      continue
+    }
+
+    if (ch === '/' && next === '/') {
+      inLineComment = true
+      i++
+      continue
+    }
+
+    if (ch === '/' && next === '*') {
+      inBlockComment = true
+      i++
+      continue
+    }
+
+    out += ch
+  }
+
+  return out
+}
+
+function readConfiguredPorts(cwd: string): Partial<BackendBootstrapInfo> {
+  const configPath = join(cwd, 'config.json')
+  try {
+    const content = readFileSync(configPath, 'utf-8')
+    const config = JSON.parse(stripJsonComments(content)) as Record<string, any>
+
+    const apiPort = config?.api_server?.port
+    const agentPort = config?.agentserver?.port ?? config?.agent_server?.port
+
+    const ports: Partial<BackendBootstrapInfo> = {}
+    if (isValidPort(apiPort)) {
+      ports.apiPort = apiPort
+    }
+    if (isValidPort(agentPort)) {
+      ports.agentPort = agentPort
+    }
+    return ports
+  }
+  catch {
+    return {}
+  }
+}
+
+function applyBootstrapPortOverrides(payload: Partial<BackendProgressPayload>) {
+  if (isValidPort(payload.apiPort)) {
+    backendBootstrapInfo.apiPort = payload.apiPort
+  }
+  if (isValidPort(payload.agentPort)) {
+    backendBootstrapInfo.agentPort = payload.agentPort
+  }
+}
+
+export function getBackendBootstrapInfo(): BackendBootstrapInfo {
+  return { ...backendBootstrapInfo }
+}
+
 function shouldOpenDebugConsole(): boolean {
   // 方便本地联调：手动设置环境变量可强制开启
   if (process.env.NAGA_DEBUG_CONSOLE === '1') {
@@ -72,6 +196,11 @@ export function startBackend(): void {
       : join(cwd, '.venv', 'bin', 'python')
     cmd = venvPython
     args = ['main.py', '--headless']
+  }
+
+  backendBootstrapInfo = {
+    ...DEFAULT_BOOTSTRAP_INFO,
+    ...readConfiguredPorts(cwd),
   }
 
   console.log(`[Backend] Starting from ${cwd}`)
@@ -135,7 +264,8 @@ export function startBackend(): void {
       // Parse progress signals
       if (trimmed.startsWith(PROGRESS_PREFIX)) {
         try {
-          const payload = JSON.parse(trimmed.slice(PROGRESS_PREFIX.length))
+          const payload = JSON.parse(trimmed.slice(PROGRESS_PREFIX.length)) as BackendProgressPayload
+          applyBootstrapPortOverrides(payload)
           getMainWindow()?.webContents.send('backend:progress', payload)
         }
         catch {

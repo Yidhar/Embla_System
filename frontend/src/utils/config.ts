@@ -1,5 +1,6 @@
 import { ref, watch } from 'vue'
-import API from '@/api/core'
+import { setAgentApiPort } from '@/api/agent'
+import API, { setCoreApiPort } from '@/api/core'
 
 export interface Model {
   source: string
@@ -254,6 +255,11 @@ export type Config = typeof DEFAULT_CONFIG
 export const CONFIG = ref<Config>(JSON.parse(JSON.stringify(DEFAULT_CONFIG)))
 export const backendConnected = ref(false)
 
+interface BackendBootstrapInfo {
+  apiPort?: number
+  agentPort?: number
+}
+
 function deepMerge<T extends Record<string, any>>(target: T, source: Record<string, any>): T {
   const result = { ...target }
   for (const key of Object.keys(source)) {
@@ -292,9 +298,66 @@ function scheduleConfigSync(config: Config) {
 
 let connectRetryDelay = 300 // 指数退避起始值
 
+let progressPortListenerBound = false
+
+function isValidPort(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 65535
+}
+
+function applyBootstrapPorts(info?: BackendBootstrapInfo | null) {
+  if (!info) {
+    return
+  }
+
+  if (isValidPort(info.apiPort)) {
+    setCoreApiPort(info.apiPort)
+  }
+  if (isValidPort(info.agentPort)) {
+    setAgentApiPort(info.agentPort)
+  }
+}
+
+function bindProgressPortListener() {
+  if (progressPortListenerBound) {
+    return
+  }
+
+  const backend = window.electronAPI?.backend
+  if (!backend) {
+    return
+  }
+
+  progressPortListenerBound = true
+  backend.onProgress((payload) => {
+    applyBootstrapPorts(payload)
+  })
+}
+
+async function bootstrapPortsFromElectron() {
+  bindProgressPortListener()
+  const backend = window.electronAPI?.backend
+  if (!backend?.getBootstrapInfo) {
+    return
+  }
+
+  const timeoutMs = 1200
+  try {
+    const info = await Promise.race<BackendBootstrapInfo | null>([
+      backend.getBootstrapInfo(),
+      new Promise<null>(resolve => setTimeout(() => resolve(null), timeoutMs)),
+    ])
+    applyBootstrapPorts(info)
+  }
+  catch {
+    // fallback to default ports
+  }
+}
+
 function connectBackend() {
   API.systemConfig().then((res) => {
     CONFIG.value = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CONFIG)), res.config)
+    setCoreApiPort(CONFIG.value.api_server.port)
+    setAgentApiPort(CONFIG.value.agentserver.port)
     backendConnected.value = true
     connectRetryDelay = 300 // 重置
     loadSystemPrompt()
@@ -316,4 +379,6 @@ function connectBackend() {
   })
 }
 
-connectBackend()
+void bootstrapPortsFromElectron().finally(() => {
+  connectBackend()
+})

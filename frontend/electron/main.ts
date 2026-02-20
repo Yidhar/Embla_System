@@ -1,6 +1,6 @@
 import process from 'node:process'
 import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, nativeTheme, shell, systemPreferences } from 'electron'
-import { startBackend, stopBackend } from './modules/backend'
+import { getBackendBootstrapInfo, startBackend, stopBackend } from './modules/backend'
 import { registerHotkeys, unregisterHotkeys } from './modules/hotkeys'
 import { createMenu } from './modules/menu'
 import { createTray, destroyTray } from './modules/tray'
@@ -120,6 +120,8 @@ app.whenReady().then(() => {
   ipcMain.on('floating:fitHeight', (_event, height: number) => {
     setFloatingHeight(height)
   })
+
+  ipcMain.handle('backend:getBootstrapInfo', () => getBackendBootstrapInfo())
 
   // Update controls
   ipcMain.on('updater:download', () => downloadUpdate())

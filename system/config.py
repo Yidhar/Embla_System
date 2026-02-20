@@ -56,6 +56,55 @@ def get_all_server_ports() -> Dict[str, int]:
 
 
 # 配置变更监听器
+def _safe_int_port(value: Any) -> int | None:
+    """Best-effort parse and validate a TCP port value."""
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return None
+    if 1 <= port <= 65535:
+        return port
+    return None
+
+
+def _sync_server_ports_from_config_data(config_data: Dict[str, Any]) -> None:
+    """Synchronize global `server_ports` from raw config payload before model creation."""
+    if not isinstance(config_data, dict):
+        return
+
+    candidates = {
+        "api_server": (
+            config_data.get("api_server", {}).get("port"),
+            config_data.get("server_ports", {}).get("api_server"),
+        ),
+        "agent_server": (
+            config_data.get("agentserver", {}).get("port"),
+            config_data.get("agent_server", {}).get("port"),
+            config_data.get("server_ports", {}).get("agent_server"),
+        ),
+        "mcp_server": (
+            config_data.get("mcpserver", {}).get("port"),
+            config_data.get("mcp_server", {}).get("port"),
+            config_data.get("server_ports", {}).get("mcp_server"),
+        ),
+        "tts_server": (
+            config_data.get("tts", {}).get("port"),
+            config_data.get("server_ports", {}).get("tts_server"),
+        ),
+        "asr_server": (
+            config_data.get("asr", {}).get("port"),
+            config_data.get("server_ports", {}).get("asr_server"),
+        ),
+    }
+
+    for server_name, values in candidates.items():
+        for value in values:
+            port = _safe_int_port(value)
+            if port is not None:
+                setattr(server_ports, server_name, port)
+                break
+
+
 _config_listeners: List[Callable] = []
 
 
@@ -892,6 +941,7 @@ def load_config():
                                     cleaned_lines.append(line)
                             cleaned_content = "\n".join(cleaned_lines)
                             config_data = json.loads(cleaned_content)
+                    _sync_server_ports_from_config_data(config_data)
                     return NagaConfig(**config_data)
                 else:
                     print(f"警告：无法检测 {config_path} 的编码")
@@ -903,6 +953,7 @@ def load_config():
             with open(config_path, "r", encoding="utf-8") as f:
                 # 使用json5解析支持注释的JSON
                 config_data = json5.load(f)
+            _sync_server_ports_from_config_data(config_data)
             return NagaConfig(**config_data)
 
         except Exception as e:

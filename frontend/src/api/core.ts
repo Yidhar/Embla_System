@@ -2,6 +2,7 @@ import type { Config } from '@/utils/config'
 import type { StreamChunk } from '@/utils/encoding'
 import { aiter } from 'iterator-helper'
 import snakecaseKeys from 'snakecase-keys'
+import { ref } from 'vue'
 import { decodeStreamChunk, readerToMessageStream } from '@/utils/encoding'
 import { ACCESS_TOKEN, ApiClient } from './index'
 
@@ -445,4 +446,12 @@ export class CoreApiClient extends ApiClient {
   }
 }
 
-export default new CoreApiClient(8000)
+export const coreApiPort = ref(8000)
+
+export function setCoreApiPort(port: number) {
+  if (Number.isInteger(port) && port >= 1 && port <= 65535) {
+    coreApiPort.value = port
+  }
+}
+
+export default new CoreApiClient(coreApiPort)
