@@ -26,6 +26,7 @@ import subprocess
 import argparse
 import time
 import zipfile
+import json
 import urllib.request
 from pathlib import Path
 from typing import Optional
@@ -47,6 +48,7 @@ MIN_PYTHON = (3, 11)
 # OpenClaw 运行时版本
 NODE_VERSION = "22.13.1"
 NODE_DIST_URL = f"https://nodejs.org/dist/v{NODE_VERSION}/node-v{NODE_VERSION}-win-x64.zip"
+OPENCLAW_VERSION = "2026.2.17"
 CACHE_DIR = PROJECT_ROOT / ".cache"
 
 
@@ -219,9 +221,22 @@ def preinstall_openclaw(force: bool = False) -> None:
         raise FileNotFoundError(f"npm.cmd 不存在: {npm_cmd}")
 
     openclaw_cmd = OPENCLAW_RUNTIME_DIR / "node_modules" / ".bin" / "openclaw.cmd"
-    if not force and openclaw_cmd.exists():
-        log("OpenClaw 已预装，跳过安装（删除 openclaw-runtime/openclaw 可强制重装）")
+    openclaw_pkg = OPENCLAW_RUNTIME_DIR / "node_modules" / "openclaw" / "package.json"
+    installed_version: Optional[str] = None
+    if openclaw_pkg.exists():
+        try:
+            installed_version = json.loads(openclaw_pkg.read_text(encoding="utf-8")).get("version")
+        except Exception:
+            installed_version = None
+
+    if not force and openclaw_cmd.exists() and installed_version == OPENCLAW_VERSION:
+        log(f"OpenClaw 已预装且版本匹配: {installed_version}，跳过安装")
         return
+    if not force and openclaw_cmd.exists():
+        log(
+            f"检测到已安装 OpenClaw 版本 {installed_version or 'unknown'}，"
+            f"目标版本 {OPENCLAW_VERSION}，将执行重装"
+        )
 
     if OPENCLAW_RUNTIME_DIR.exists():
         log(f"清理旧 OpenClaw 运行时: {OPENCLAW_RUNTIME_DIR}")
@@ -235,12 +250,13 @@ def preinstall_openclaw(force: bool = False) -> None:
     # 强制 project 本地安装，避免用户 npmrc 中 global=true/prefix 干扰
     env["NPM_CONFIG_GLOBAL"] = "false"
 
-    log("预装 OpenClaw（npm install openclaw）...")
+    pkg_spec = f"openclaw@{OPENCLAW_VERSION}"
+    log(f"预装 OpenClaw（npm install {pkg_spec}）...")
     run(
         [
             str(npm_cmd),
             "install",
-            "openclaw",
+            pkg_spec,
             "--global=false",
             "--location=project",
             "--prefix",

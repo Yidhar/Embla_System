@@ -433,6 +433,43 @@ class OpenClawClient:
                     last_error = f"HTTP {response.status_code}: {response.text}"
                     logger.warning(f"[OpenClaw] 消息发送失败 (尝试 {attempt}/{max_retries}): {last_error}")
 
+                    # OpenClaw 2026.2.17+ 默认禁止外部 hooks 传入 sessionKey。
+                    # 命中该错误时不要做无意义重试，尝试补丁配置并给出明确提示。
+                    if (
+                        response.status_code == 400
+                        and "sessionKey is disabled for external /hooks/agent payloads" in (response.text or "")
+                    ):
+                        patched = False
+                        try:
+                            from .llm_config_bridge import ensure_hooks_allow_request_session_key
+
+                            patched = ensure_hooks_allow_request_session_key(auto_create=False)
+                        except Exception:
+                            patched = False
+
+                        if patched:
+                            last_error = (
+                                "OpenClaw 拒绝外部 sessionKey（已自动写入 hooks.allowRequestSessionKey=true），"
+                                "请重启 OpenClaw Gateway 后重试。"
+                            )
+                        else:
+                            last_error = (
+                                "OpenClaw 拒绝外部 sessionKey，请在 ~/.openclaw/openclaw.json 设置 "
+                                "hooks.allowRequestSessionKey=true 并重启 OpenClaw Gateway。"
+                            )
+
+                        task.status = TaskStatus.FAILED
+                        task.error = last_error
+                        self._update_session_info(actual_session_key, None, "error")
+                        self._emit_task_event(
+                            task,
+                            kind="state",
+                            message="task_failed",
+                            data={"error": last_error},
+                        )
+                        logger.error(f"[OpenClaw] {last_error}")
+                        break
+
                     self._emit_task_event(
                         task,
                         kind="error",
