@@ -14,13 +14,12 @@ dependencies = [
     "PyYAML>=6.0.2",
     "pydantic>=2.11.0",
     "requests>=2.32.0",
+    "python-multipart>=0.0.22",
     # ---------- Web 服务 ----------
     "fastapi>=0.115.0",
     "uvicorn>=0.34.0",
-    "starlette",
     "sse-starlette>=2.3.0",
     "httpx[socks]>=0.28.0",
-    "httpcore",
     "websockets>=15.0",
     # ---------- LLM / 对话 ----------
     "openai>=2.8.0",
@@ -31,7 +30,6 @@ dependencies = [
     # ---------- 异步 / 任务 ----------
     "aiohttp>=3.12.0",
     "aiofiles>=24.1.0",
-    "anyio",
     "APScheduler>=3.11.0",
     # ---------- 系统 / 工具 ----------
     "numpy>=2.2.0",
@@ -45,14 +43,13 @@ dependencies = [
     # ---------- 语音 / 音频 ----------
     "edge-tts>=7.0.0",
     "sounddevice>=0.5.0",
-    # ---------- Web 服务 / 兼容层 ----------
+    # ---------- 知识图谱 GRAG / 兼容层 ----------
     "Flask>=3.1.0",
     "gevent>=25.0.0",
     "py2neo>=2021.2.3",
     "neo4j>=5.0.0",
     "chromadb>=0.5.0",
     "mss>=10.1.0",
-    "python-multipart>=0.0.22",
 ]
 
 [build-system]
