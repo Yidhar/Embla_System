@@ -459,142 +459,45 @@ class DocumentProcessRequest(BaseModel):
     session_id: Optional[str] = None
 
 
-# ============ NagaCAS 认证端点 ============
+# ============ Local-only auth compatibility endpoints ============
+
+AUTH_DISABLED_DETAIL = "Remote authentication is disabled in local-only mode"
 
 
 @app.post("/auth/login")
 async def auth_login(body: dict):
-    """NagaCAS 登录"""
-    username = body.get("username", "")
-    password = body.get("password", "")
-    captcha_id = body.get("captcha_id", "")
-    captcha_answer = body.get("captcha_answer", "")
-    if not username or not password:
-        raise HTTPException(status_code=400, detail="用户名和密码不能为空")
-    try:
-        result = await naga_auth.login(username, password, captcha_id, captcha_answer)
-        return result
-    except Exception as e:
-        import httpx
-        status = 401
-        detail = str(e)
-        if isinstance(e, httpx.HTTPStatusError):
-            status = e.response.status_code
-            try:
-                err_data = e.response.json()
-                detail = err_data.get("message", e.response.text)
-            except Exception:
-                detail = e.response.text
-        logger.error(f"登录失败 [{status}]: {detail}")
-        raise HTTPException(status_code=status, detail=detail)
+    raise HTTPException(status_code=410, detail=AUTH_DISABLED_DETAIL)
 
 
 @app.get("/auth/me")
 async def auth_me(request: Request):
-    """获取当前用户信息（优先使用服务端 token，其次从请求头恢复）"""
-    token = naga_auth.get_access_token()
-    if not token:
-        # 尝试从 Authorization 头恢复会话
-        auth_header = request.headers.get("authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-    if not token:
-        raise HTTPException(status_code=401, detail="未登录")
-    user = await naga_auth.get_me(token)
-    if not user:
-        raise HTTPException(status_code=401, detail="token 已失效")
-    # 恢复服务端认证状态
-    naga_auth.restore_token(token)
-    return {"user": user, "memory_url": naga_auth.NAGA_MEMORY_URL}
+    return {"user": None, "memory_url": None, "local_mode": True}
 
 
 @app.post("/auth/logout")
 async def auth_logout():
-    """登出"""
     naga_auth.logout()
-    return {"success": True}
+    return {"success": True, "local_mode": True}
 
 
 @app.post("/auth/register")
 async def auth_register(body: dict):
-    """NagaBusiness 注册"""
-    username = body.get("username", "")
-    email = body.get("email", "")
-    password = body.get("password", "")
-    verification_code = body.get("verification_code", "")
-    if not username or not email or not password or not verification_code:
-        raise HTTPException(status_code=400, detail="用户名、邮箱、密码和验证码不能为空")
-    try:
-        result = await naga_auth.register(username, email, password, verification_code)
-        return {"success": True, **result}
-    except Exception as e:
-        import httpx
-        status = 500
-        detail = f"注册失败: {str(e)}"
-        if isinstance(e, httpx.HTTPStatusError):
-            status = e.response.status_code
-            try:
-                err_data = e.response.json()
-                detail = err_data.get("message", e.response.text)
-            except Exception:
-                detail = e.response.text
-        logger.error(f"注册失败 [{status}]: {detail}")
-        raise HTTPException(status_code=status, detail=detail)
+    raise HTTPException(status_code=410, detail=AUTH_DISABLED_DETAIL)
 
 
 @app.get("/auth/captcha")
 async def auth_captcha():
-    """获取验证码（数学计算题）"""
-    try:
-        result = await naga_auth.get_captcha()
-        return result
-    except Exception as e:
-        logger.error(f"获取验证码失败: {e}")
-        raise HTTPException(status_code=500, detail=f"获取验证码失败: {str(e)}")
+    raise HTTPException(status_code=410, detail=AUTH_DISABLED_DETAIL)
 
 
 @app.post("/auth/send-verification")
 async def auth_send_verification(body: dict):
-    """发送邮箱验证码"""
-    email = body.get("email", "")
-    username = body.get("username", "")
-    captcha_id = body.get("captcha_id", "")
-    captcha_answer = body.get("captcha_answer", "")
-    if not email or not username:
-        raise HTTPException(status_code=400, detail="邮箱和用户名不能为空")
-    try:
-        result = await naga_auth.send_verification(email, username, captcha_id, captcha_answer)
-        return {"success": True, "message": "验证码已发送"}
-    except Exception as e:
-        import httpx
-        status = 500
-        detail = str(e)
-        if isinstance(e, httpx.HTTPStatusError):
-            status = e.response.status_code
-            try:
-                err_data = e.response.json()
-                detail = err_data.get("message", e.response.text)
-            except Exception:
-                detail = e.response.text
-        logger.error(f"发送验证码失败 [{status}]: {detail}")
-        raise HTTPException(status_code=status, detail=detail)
+    raise HTTPException(status_code=410, detail=AUTH_DISABLED_DETAIL)
 
 
 @app.post("/auth/refresh")
 async def auth_refresh(request: Request):
-    """刷新 token（后端管理 refresh_token，兼容接受 body 中的 refresh_token 用于迁移/非浏览器客户端）"""
-    rt_override = None
-    try:
-        body = await request.json()
-        rt_override = body.get("refresh_token") if isinstance(body, dict) else None
-    except Exception:
-        pass
-    try:
-        result = await naga_auth.refresh(rt_override)
-        return result
-    except Exception as e:
-        logger.error(f"刷新 token 失败: {e}")
-        raise HTTPException(status_code=401, detail=f"刷新失败: {str(e)}")
+    raise HTTPException(status_code=410, detail=AUTH_DISABLED_DETAIL)
 
 
 # API路由
@@ -1168,24 +1071,8 @@ async def chat_stream(request: ChatRequest):
 
 @app.api_route("/tools/search", methods=["GET", "POST"])
 async def proxy_search(request: Request):
-    """Brave Search 兼容代理 → NagaModel /v1/tools/search"""
-    if not naga_auth.is_authenticated():
-        raise HTTPException(status_code=401, detail="未登录 NagaModel")
-
-    if request.method == "GET":
-        params = dict(request.query_params)
-    else:
-        params = await request.json()
-
-    import httpx
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            naga_auth.NAGA_MODEL_URL + "/tools/search",
-            json=params,
-            headers={"Authorization": f"Bearer {naga_auth.get_access_token()}"},
-            timeout=30,
-        )
-    return resp.json()
+    """Remote proxy disabled in local-only mode."""
+    raise HTTPException(status_code=410, detail="Remote tool search proxy is disabled in local-only mode")
 
 
 @app.get("/memory/stats")
@@ -1829,39 +1716,10 @@ async def upload_parse(file: UploadFile = File(...)):
 
 @app.get("/update/latest")
 async def proxy_update_check(platform: str = "windows"):
-    """代理更新检查请求，避免前端直接暴露服务器地址"""
-    import httpx
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                f"{naga_auth.BUSINESS_URL}/api/app/NagaAgent/latest",
-                params={"platform": platform},
-            )
-            if resp.status_code == 404:
-                return {"has_update": False}
-            resp.raise_for_status()
-            raw_text = (resp.text or "").strip()
-            if not raw_text:
-                logger.info("更新检查返回空响应，跳过更新")
-                return {"has_update": False}
-            try:
-                data = resp.json()
-            except ValueError:
-                logger.info("更新检查返回非JSON响应，跳过更新")
-                return {"has_update": False}
-            # 将相对下载路径拼成完整URL
-            if data.get("download_url"):
-                data["download_url"] = f"{naga_auth.BUSINESS_URL}{data['download_url']}"
-            return data
-    except httpx.HTTPError as e:
-        logger.warning(f"更新检查失败: {e}")
-        return {"has_update": False}
-    except Exception as e:
-        logger.error(f"更新检查处理异常: {e}")
-        return {"has_update": False}
+    """Update check is disabled in local-only mode."""
+    return {"has_update": False, "local_mode": True}
 
 
-# 挂载LLM服务路由以支持 /llm/chat
 from .llm_service import llm_app
 
 app.mount("/llm", llm_app)

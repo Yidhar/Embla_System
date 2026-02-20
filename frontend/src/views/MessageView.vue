@@ -2,7 +2,6 @@
 import { onKeyStroke, useEventListener } from '@vueuse/core'
 import { nextTick, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
 import API from '@/api/core'
-import { authExpired } from '@/api'
 import BoxContainer from '@/components/BoxContainer.vue'
 import MessageItem from '@/components/MessageItem.vue'
 import { startToolPolling, stopToolPolling, toolMessage } from '@/composables/useToolStatus'
@@ -99,6 +98,16 @@ export function chatStream(content: string, options?: { skill?: string, images?:
         message.content = chunk.text || ''
         spokenContent = chunk.text || ''
       }
+      else if (chunk.type === 'model_output') {
+        if (chunk.placeholder) {
+          const roundLabel = chunk.round ? `R${chunk.round}` : 'R?'
+          const text = (chunk.text || '').trim()
+          const label = '模型输出（无正文）'
+          if (text) {
+            message.content += `\n> [${roundLabel}] ${label}: ${text}\n`
+          }
+        }
+      }
       else if (chunk.type === 'tool_calls') {
         // 显示工具调用状态
         const calls = chunk.calls || []
@@ -134,9 +143,7 @@ export function chatStream(content: string, options?: { skill?: string, images?:
         message.content += '\n---\n\n'
       }
       else if (chunk.type === 'auth_expired') {
-        // LLM 认证失败，触发重新登录
-        authExpired.value = true
-        message.content += chunk.text || '登录已过期，请重新登录'
+        message.content += chunk.text || '认证失败，请检查本地模型配置'
       }
       // round_end 不需要特殊处理
       window.dispatchEvent(new CustomEvent('token', { detail: chunk.text || '' }))

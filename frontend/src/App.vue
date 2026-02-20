@@ -7,21 +7,17 @@ let _splashDismissed = false
 import type { FloatingState } from '@/electron.d'
 import { useWindowSize } from '@vueuse/core'
 import Toast from 'primevue/toast'
-import { useToast } from 'primevue/usetoast'
-import { computed, onMounted, onUnmounted, provide, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import Live2dModel from '@/components/Live2dModel.vue'
-import LoginDialog from '@/components/LoginDialog.vue'
 import BackendErrorDialog from '@/components/BackendErrorDialog.vue'
 import SplashScreen from '@/components/SplashScreen.vue'
 import TitleBar from '@/components/TitleBar.vue'
 import UpdateDialog from '@/components/UpdateDialog.vue'
 import FloatingView from '@/views/FloatingView.vue'
-import { isNagaLoggedIn, nagaUser, sessionRestored, useAuth } from '@/composables/useAuth'
 import { useParallax } from '@/composables/useParallax'
 import { useStartupProgress } from '@/composables/useStartupProgress'
 import { checkForUpdate, showUpdateDialog, updateInfo } from '@/composables/useVersionCheck'
 import { CONFIG, backendConnected } from '@/utils/config'
-import { ACCESS_TOKEN, authExpired, setAuthExpiredSuppressed } from '@/api'
 import { clearExpression, setExpression } from '@/utils/live2dController'
 import { initParallax, destroyParallax } from '@/utils/parallax'
 import { playBgm, playClickEffect, stopBgm } from '@/composables/useAudio'
@@ -30,8 +26,6 @@ const isElectron = !!window.electronAPI
 const isMac = window.electronAPI?.platform === 'darwin'
 // macOS hiddenInset title bar is 28px, Windows/Linux custom title bar is 32px
 const titleBarPadding = isElectron ? (isMac ? '28px' : '32px') : '0px'
-
-const toast = useToast()
 
 const { width, height } = useWindowSize()
 const scale = computed(() => height.value / (10000 - CONFIG.value.web_live2d.model.size))
@@ -46,7 +40,7 @@ let unsubStateChange: (() => void) | undefined
 const { tx: lightTx, ty: lightTy } = useParallax({ translateX: 40, translateY: 30, invert: true })
 
 // ─── 启动界面状态 ───────────────────────────
-const { progress, phase, isReady, stallHint, startProgress, notifyModelReady, cleanup } = useStartupProgress()
+const { progress, phase, stallHint, startProgress, notifyModelReady, cleanup } = useStartupProgress()
 const splashVisible = ref(!_splashDismissed)
 const showMainContent = ref(_splashDismissed)
 const modelReady = ref(false)
@@ -97,66 +91,11 @@ function onTitleDone() {
 }
 
 // ─── 登录弹窗状态 ───────────────────────────
-const showLoginDialog = ref(false)
-
-// ─── 后端错误弹窗状态 ──────────────────────────
 const backendErrorVisible = ref(false)
 const backendErrorLogs = ref('')
 
-// ─── CAS 会话失效弹窗 ──────────────────────────
-const authExpiredVisible = ref(false)
-const { logout: doLogout } = useAuth()
-
-watch(authExpired, (expired) => {
-  if (expired && !authExpiredVisible.value) {
-    authExpiredVisible.value = true
-  }
-})
-
-function onAuthExpiredRelogin() {
-  authExpiredVisible.value = false
-  authExpired.value = false
-  // 抑制在途请求的 401 再次触发弹窗，直到登录成功
-  setAuthExpiredSuppressed(true)
-  ACCESS_TOKEN.value = ''
-  doLogout()
-  showLoginDialog.value = true
-}
-
-function onAuthExpiredDismiss() {
-  authExpiredVisible.value = false
-  authExpired.value = false
-}
-
-function openLoginDialog() {
-  showLoginDialog.value = true
-}
-
-// 提供给子组件使用
-provide('openLoginDialog', openLoginDialog)
-
 function onSplashDismiss() {
   _splashDismissed = true
-  // 开机语音已在 SplashScreen 标题出现时播放，此处不再播放
-  // 已登录 → 直接进入主界面；未登录 → 显示登录弹窗
-  if (isNagaLoggedIn.value) {
-    enterMainContent()
-  }
-  else {
-    showLoginDialog.value = true
-  }
-}
-
-function onLoginSuccess() {
-  showLoginDialog.value = false
-  setAuthExpiredSuppressed(false)
-  toast.add({ severity: 'success', summary: '欢迎回来', detail: nagaUser.value?.username, life: 3000 })
-  enterMainContent()
-}
-
-function onLoginSkip() {
-  showLoginDialog.value = false
-  setAuthExpiredSuppressed(false)
   enterMainContent()
 }
 
@@ -184,12 +123,6 @@ function enterMainContent() {
 }
 
 // ─── 会话自动恢复提示 ─────────────────────────
-watch(sessionRestored, (restored) => {
-  if (restored) {
-    toast.add({ severity: 'info', summary: '已恢复登录状态', detail: nagaUser.value?.username, life: 3000 })
-  }
-})
-
 onMounted(() => {
   initParallax()
   startProgress()
@@ -309,12 +242,7 @@ onUnmounted(() => {
       </Transition>
 
       <!-- 登录弹窗（在 SplashScreen 之上） -->
-      <LoginDialog
-        :visible="showLoginDialog"
-        @success="onLoginSuccess"
-        @skip="onLoginSkip"
-      />
-
+      
       <!-- 版本更新弹窗 -->
       <UpdateDialog
         :visible="showUpdateDialog"
@@ -328,32 +256,6 @@ onUnmounted(() => {
         @update:visible="backendErrorVisible = $event"
       />
 
-      <!-- CAS 会话失效弹窗 -->
-      <Teleport to="body">
-        <Transition name="fade">
-          <div v-if="authExpiredVisible" class="auth-expired-overlay">
-            <div class="auth-expired-card">
-              <div class="auth-expired-icon">
-                &#x26A0;
-              </div>
-              <h3 class="auth-expired-title">
-                账号验证失效
-              </h3>
-              <p class="auth-expired-desc">
-                服务器账号资源验证失效，可能是网络波动或账号已在其他设备登录。是否重新登录？
-              </p>
-              <div class="auth-expired-actions">
-                <button class="auth-expired-btn primary" @click="onAuthExpiredRelogin">
-                  重新登录
-                </button>
-                <button class="auth-expired-btn secondary" @click="onAuthExpiredDismiss">
-                  暂时忽略
-                </button>
-              </div>
-            </div>
-          </div>
-        </Transition>
-      </Teleport>
     </div>
   </template>
 </template>
@@ -416,75 +318,5 @@ onUnmounted(() => {
 }
 .splash-fade-leave-to {
   opacity: 0;
-}
-</style>
-
-<style>
-/* Teleport 到 body 的弹窗样式（不能 scoped） */
-.auth-expired-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(6px);
-}
-
-.auth-expired-card {
-  background: rgba(30, 30, 30, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
-  padding: 32px;
-  max-width: 380px;
-  text-align: center;
-}
-
-.auth-expired-icon {
-  font-size: 36px;
-  margin-bottom: 8px;
-}
-
-.auth-expired-title {
-  color: #fff;
-  font-size: 18px;
-  margin: 0 0 12px;
-}
-
-.auth-expired-desc {
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 13px;
-  line-height: 1.6;
-  margin: 0 0 24px;
-}
-
-.auth-expired-actions {
-  display: flex;
-  gap: 12px;
-  justify-content: center;
-}
-
-.auth-expired-btn {
-  padding: 8px 24px;
-  border-radius: 6px;
-  border: none;
-  cursor: pointer;
-  font-size: 13px;
-  transition: opacity 0.2s;
-}
-
-.auth-expired-btn:hover {
-  opacity: 0.85;
-}
-
-.auth-expired-btn.primary {
-  background: rgba(212, 175, 55, 0.9);
-  color: #000;
-}
-
-.auth-expired-btn.secondary {
-  background: rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.7);
 }
 </style>

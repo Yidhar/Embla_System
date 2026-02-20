@@ -1,130 +1,70 @@
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { ACCESS_TOKEN } from '@/api'
-import coreApi from '@/api/core'
-import { CONFIG, backendConnected } from '@/utils/config'
+import { CONFIG } from '@/utils/config'
 
 export const nagaUser = ref<{ username: string, sub?: string } | null>(null)
-export const isNagaLoggedIn = computed(() => !!nagaUser.value)
+export const isNagaLoggedIn = computed(() => false)
 export const sessionRestored = ref(false)
 
-// 防止多个组件调用 useAuth() 时重复 fetchMe
-let _initFetched = false
-
-/**
- * 同步 memory_server 配置：登录时设置 token/url，登出时清除
- */
-function syncMemoryServer(loggedIn: boolean, memoryUrl?: string) {
-  CONFIG.value.memory_server.token = loggedIn ? ACCESS_TOKEN.value : null
-  if (loggedIn && memoryUrl) {
-    CONFIG.value.memory_server.url = memoryUrl
-  }
+function applyLocalOnlyDefaults() {
+  ACCESS_TOKEN.value = ''
+  CONFIG.value.memory_server.token = null
 }
 
-/**
- * 同步游戏攻略开关：仅登录态可用
- */
-function syncGameEnabled(loggedIn: boolean) {
-  CONFIG.value.game.enabled = loggedIn
-}
-
-// Token 刷新时自动同步到 memory_server.token
-watch(ACCESS_TOKEN, (newToken) => {
-  if (nagaUser.value) {
-    CONFIG.value.memory_server.token = newToken || null
-  }
-})
+applyLocalOnlyDefaults()
 
 export function useAuth() {
-  async function login(username: string, password: string, captchaId?: string, captchaAnswer?: string) {
-    const res = await coreApi.authLogin(username, password, captchaId, captchaAnswer)
-    if (res.success) {
-      ACCESS_TOKEN.value = res.accessToken
-      // refresh_token 由后端管理，前端不再存储
-      nagaUser.value = res.user
-      syncMemoryServer(true, res.memoryUrl)
-      syncGameEnabled(true)
+  async function login(_username: string, _password: string, _captchaId?: string, _captchaAnswer?: string) {
+    applyLocalOnlyDefaults()
+    return {
+      success: false,
+      user: null,
+      accessToken: '',
+      message: 'Remote authentication is disabled in local-only mode',
     }
-    return res
   }
 
-  async function register(username: string, email: string, password: string, verificationCode: string) {
-    const res = await coreApi.authRegister(username, email, password, verificationCode)
-    if (res.success && res.accessToken) {
-      ACCESS_TOKEN.value = res.accessToken
-      nagaUser.value = res.user || null
-      syncMemoryServer(true)
-      syncGameEnabled(true)
+  async function register(_username: string, _email: string, _password: string, _verificationCode: string) {
+    applyLocalOnlyDefaults()
+    return {
+      success: false,
+      accessToken: undefined as string | undefined,
+      user: undefined as { username: string, email: string, sub?: string } | undefined,
+      message: 'Remote registration is disabled in local-only mode',
     }
-    return res
   }
 
-  async function sendVerification(email: string, username: string, captchaId?: string, captchaAnswer?: string) {
-    return await coreApi.authSendVerification(email, username, captchaId, captchaAnswer)
+  async function sendVerification(_email: string, _username: string, _captchaId?: string, _captchaAnswer?: string) {
+    return {
+      success: false,
+      message: 'Remote verification is disabled in local-only mode',
+    }
   }
 
   async function getCaptcha() {
-    return await coreApi.authGetCaptcha()
+    return {
+      captchaId: '',
+      question: 'Remote captcha is disabled in local-only mode',
+    }
   }
 
   async function fetchMe() {
-    try {
-      const res = await coreApi.authMe()
-      if (res.user) {
-        nagaUser.value = res.user
-        sessionRestored.value = true
-        syncMemoryServer(true, res.memoryUrl)
-        syncGameEnabled(true)
-
-        // 防止 fetchMe 在 connectBackend 之前完成导致 CONFIG 被覆盖
-        if (!backendConnected.value) {
-          const stop = watch(backendConnected, (connected) => {
-            if (connected) {
-              syncMemoryServer(true, res.memoryUrl)
-              syncGameEnabled(true)
-              stop()
-            }
-          })
-        }
-      }
-    }
-    catch {
-      nagaUser.value = null
-    }
+    applyLocalOnlyDefaults()
+    nagaUser.value = null
+    sessionRestored.value = false
+    return { user: null as null, memoryUrl: undefined as string | undefined }
   }
 
   async function logout() {
-    try {
-      await coreApi.authLogout()
-    }
-    finally {
-      ACCESS_TOKEN.value = ''
-      nagaUser.value = null
-      syncMemoryServer(false)
-      syncGameEnabled(false)
-    }
+    applyLocalOnlyDefaults()
+    nagaUser.value = null
+    sessionRestored.value = false
   }
 
   function skipLogin() {
+    applyLocalOnlyDefaults()
     nagaUser.value = null
-  }
-
-  // 首次调用时自动恢复会话（仅在有 token 时才请求，避免无谓的 401）
-  // 等后端就绪后再请求，避免后端还没启动就 fetchMe 失败导致登录态丢失
-  if (!_initFetched) {
-    _initFetched = true
-    if (ACCESS_TOKEN.value) {
-      if (backendConnected.value) {
-        fetchMe()
-      }
-      else {
-        const stop = watch(backendConnected, (connected) => {
-          if (connected) {
-            fetchMe()
-            stop()
-          }
-        })
-      }
-    }
+    sessionRestored.value = false
   }
 
   return { login, register, sendVerification, getCaptcha, fetchMe, logout, skipLogin }

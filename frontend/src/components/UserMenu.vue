@@ -1,24 +1,14 @@
 <script setup lang="ts">
 import { useToast } from 'primevue/usetoast'
-import { computed, inject, ref } from 'vue'
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { isNagaLoggedIn, nagaUser, useAuth } from '@/composables/useAuth'
 
 const toast = useToast()
 const router = useRouter()
-const { logout } = useAuth()
 const menuOpen = ref(false)
-const openLoginDialog = inject<() => void>('openLoginDialog')
 
 function toggleMenu() {
-  if (!isNagaLoggedIn.value) {
-    // 未登录时点击打开登录弹窗
-    openLoginDialog?.()
-  }
-  else {
-    // 已登录时切换菜单
-    menuOpen.value = !menuOpen.value
-  }
+  menuOpen.value = !menuOpen.value
 }
 
 function closeMenu() {
@@ -34,37 +24,19 @@ function openModelPlaza() {
   closeMenu()
   toast.add({ severity: 'info', summary: '功能开发中', detail: '模型广场功能即将上线', life: 3000 })
 }
-
-async function handleLogout() {
-  closeMenu()
-  await logout()
-}
-
-const initial = computed(() => {
-  if (!isNagaLoggedIn.value) {
-    return '?'
-  }
-  const name = nagaUser.value?.username ?? ''
-  return name.charAt(0).toUpperCase()
-})
-
-const displayName = computed(() => {
-  return isNagaLoggedIn.value ? nagaUser.value?.username : '未登录'
-})
 </script>
 
 <template>
   <div class="user-menu" @mouseleave="closeMenu">
     <button class="avatar-btn" @click="toggleMenu">
-      <span class="avatar" :class="{ 'not-logged-in': !isNagaLoggedIn }">{{ initial }}</span>
-      <span class="username">{{ displayName }}</span>
+      <span class="avatar">L</span>
+      <span class="username">本地模式</span>
     </button>
     <Transition name="dropdown-fade">
-      <div v-if="menuOpen && isNagaLoggedIn" class="dropdown">
-        <!-- 用户信息头部 -->
+      <div v-if="menuOpen" class="dropdown">
         <div class="user-header">
-          <div class="user-header-name">{{ nagaUser?.username }}</div>
-          <div v-if="nagaUser?.sub" class="user-header-id">ID: {{ nagaUser.sub }}</div>
+          <div class="user-header-name">Local Mode</div>
+          <div class="user-header-id">已移除远端登录与云端会话</div>
         </div>
         <div class="dropdown-divider gold" />
         <button class="dropdown-item" @click="goConfig">
@@ -74,11 +46,6 @@ const displayName = computed(() => {
         <button class="dropdown-item" @click="openModelPlaza">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></svg>
           模型广场
-        </button>
-        <div class="dropdown-divider" />
-        <button class="dropdown-item logout" @click="handleLogout">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" /></svg>
-          登出
         </button>
       </div>
     </Transition>
@@ -116,19 +83,14 @@ const displayName = computed(() => {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.9), rgba(180, 140, 30, 0.9));
-  color: #1a1206;
+  background: linear-gradient(135deg, rgba(100, 160, 120, 0.9), rgba(70, 120, 90, 0.9));
+  color: #051108;
   font-size: 12px;
   font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-}
-
-.avatar.not-logged-in {
-  background: linear-gradient(135deg, rgba(150, 150, 150, 0.5), rgba(100, 100, 100, 0.5));
-  color: rgba(255, 255, 255, 0.6);
 }
 
 .username {
@@ -142,7 +104,7 @@ const displayName = computed(() => {
   position: absolute;
   top: 100%;
   right: 0;
-  min-width: 180px;
+  min-width: 210px;
   padding: 4px 0;
   background: rgba(30, 22, 10, 0.96);
   border: 1px solid rgba(212, 175, 55, 0.25);
@@ -184,11 +146,6 @@ const displayName = computed(() => {
 .dropdown-item:hover {
   background: rgba(212, 175, 55, 0.1);
   color: rgba(212, 175, 55, 0.9);
-}
-
-.dropdown-item.logout:hover {
-  background: rgba(232, 93, 93, 0.1);
-  color: #e85d5d;
 }
 
 .dropdown-divider {

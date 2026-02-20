@@ -1,21 +1,8 @@
 """
-NagaMemory 远程记忆微服务客户端
+Local-only memory client shim.
 
-轻量级 HTTP 客户端，将本地 summer_memory 的图谱/五元组操作
-代理到远程 NagaMemory 服务（NebulaGraph 后端）。
-
-已登录时自动启用（优先使用 naga_auth 动态 token），未登录时返回 None。
-
-用法::
-
-    from summer_memory.memory_client import get_remote_memory_client
-
-    client = get_remote_memory_client()
-    if client is None:
-        # 未登录，走本地 summer_memory 逻辑
-        ...
-    else:
-        stats = await client.get_stats()
+Remote NagaMemory microservice has been removed from runtime architecture.
+`get_remote_memory_client()` always returns None so callers use local GRAG flow.
 """
 
 from __future__ import annotations
@@ -31,7 +18,10 @@ QuintupleType = Tuple[str, str, str, str, str]
 
 
 class RemoteMemoryClient:
-    """异步 NagaMemory 远程客户端"""
+    """
+    Kept for backward compatibility only.
+    In local-only mode this client is never instantiated by project code.
+    """
 
     def __init__(self, base_url: str, token: Optional[str] = None, timeout: float = 30.0):
         self.base_url = base_url.rstrip("/")
@@ -48,26 +38,15 @@ class RemoteMemoryClient:
         try:
             resp = await self._client.request(method, url, **kwargs)
             resp.raise_for_status()
-            if not resp.content:
-                logger.warning(f"NagaMemory 返回空响应 [{method} {path}] status={resp.status_code}")
-                return {"success": False, "error": "服务返回空响应，请检查网络或代理设置"}
-            return resp.json()
-        except httpx.HTTPError as e:
-            logger.error(f"NagaMemory 请求失败 [{method} {path}]: {e}")
+            return resp.json() if resp.content else {"success": False, "error": "empty response"}
+        except Exception as e:
             return {"success": False, "error": str(e)}
-        except ValueError as e:
-            logger.error(f"NagaMemory 响应解析失败 [{method} {path}]: {e}")
-            return {"success": False, "error": f"服务返回非JSON响应: {e}"}
-
-    # ---- 健康 / 统计 ----
 
     async def health_check(self) -> Dict[str, Any]:
         return await self._request("GET", "/health")
 
     async def get_stats(self) -> Dict[str, Any]:
         return await self._request("GET", "/stats")
-
-    # ---- 五元组 ----
 
     async def add_quintuples(self, quintuples: List[QuintupleType]) -> Dict[str, Any]:
         return await self._request("POST", "/quintuples", json={"quintuples": quintuples})
@@ -81,23 +60,22 @@ class RemoteMemoryClient:
     async def query_by_entity(self, entity_name: str, direction: str = "both", limit: int = 20) -> Dict[str, Any]:
         return await self._request("GET", f"/quintuples/entity/{entity_name}?direction={direction}&limit={limit}")
 
-    # ---- 记忆（对话级） ----
-
-    async def add_memory(self, user_input: str = "", ai_response: str = "",
-                         quintuples: Optional[List[QuintupleType]] = None) -> Dict[str, Any]:
+    async def add_memory(
+        self,
+        user_input: str = "",
+        ai_response: str = "",
+        quintuples: Optional[List[QuintupleType]] = None,
+    ) -> Dict[str, Any]:
         data: Dict[str, Any] = {"user_input": user_input, "ai_response": ai_response}
         if quintuples:
             data["quintuples"] = quintuples
         return await self._request("POST", "/add", json=data)
 
-    async def query_memory(self, question: str = "", keywords: Optional[List[str]] = None,
-                           limit: int = 5) -> Dict[str, Any]:
+    async def query_memory(self, question: str = "", keywords: Optional[List[str]] = None, limit: int = 5) -> Dict[str, Any]:
         data: Dict[str, Any] = {"question": question, "limit": limit}
         if keywords:
             data["keywords"] = keywords
         return await self._request("POST", "/query", json=data)
-
-    # ---- 图查询 ----
 
     async def get_entities(self, entity_type: Optional[str] = None, limit: int = 100) -> Dict[str, Any]:
         params = f"?limit={limit}"
@@ -109,67 +87,15 @@ class RemoteMemoryClient:
         return await self._request("GET", "/graph/relationships")
 
 
-# ---- 全局单例 ----
-
 _client: Optional[RemoteMemoryClient] = None
-_client_token: Optional[str] = None
 
 
 def get_remote_memory_client() -> Optional[RemoteMemoryClient]:
     """
-    获取远程记忆客户端单例。
-
-    优先使用 naga_auth 的动态 access_token（登录/刷新后自动更新），
-    回退到 config.memory_server.token。无可用 token 时返回 None
-    （调用方应回退到本地 summer_memory）。
-    每次调用会重新检查 token，支持热更新和 token 刷新。
+    Local-only behavior: always disable remote memory microservice.
     """
-    global _client, _client_token
-
-    # 优先使用 naga_auth 动态 token（延迟 import 避免循环引用）
-    token: Optional[str] = None
-    try:
-        from apiserver.naga_auth import get_access_token
-        token = get_access_token()
-    except Exception:
-        pass
-
-    # 回退到 config 静态 token
-    if not token:
-        try:
-            from system.config import config
-            token = config.memory_server.token
-        except Exception:
-            pass
-
-    if not token:
-        # 无可用 token，清理已有客户端
-        if _client is not None:
-            logger.info("NagaMemory 远程客户端已释放（无可用 token）")
-            _client = None
-            _client_token = None
-        return None
-
-    # 获取服务地址
-    try:
-        from system.config import config
-        base_url = config.memory_server.url
-    except Exception:
-        base_url = "http://localhost:8004"
-
-    # Token 变更时重新创建客户端
-    if _client is not None and token != _client_token:
-        logger.info("NagaMemory token 已变更，重新创建客户端")
-        _client = None
-
+    global _client
     if _client is not None:
-        return _client
-
-    try:
-        _client = RemoteMemoryClient(base_url=base_url, token=token)
-        _client_token = token
-        logger.info(f"NagaMemory 远程客户端已创建: {base_url}")
-        return _client
-    except Exception as e:
-        logger.warning(f"创建 NagaMemory 客户端失败: {e}")
-        return None
+        logger.info("Remote memory client disabled in local-only mode; releasing stale client")
+        _client = None
+    return None

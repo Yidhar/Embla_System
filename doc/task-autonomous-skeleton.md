@@ -1,6 +1,6 @@
 # Autonomous Skeleton Task Tracker
 
-Last updated: 2026-02-19
+Last updated: 2026-02-20
 Owner: Codex
 Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal runtime entry points.
 
@@ -112,6 +112,21 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
     - runtime smoke passed: `_execute_mcp_call({"tool_name":"ask-codex","message":"..."})` auto-routed to `codex-cli` and returned model output
     - `uv run python -m pytest autonomous/tests/test_system_agent_config.py -q` passed
     - `scripts/dod_check.ps1` passed
+42. Fixed tools loop no-tool completion semantics in `apiserver/agentic_tool_loop.py`:
+    - added explicit completion marker detection (`不需要工具`) for immediate loop termination
+    - when explicit marker is present, stop loop directly without injecting no-tool correction feedback
+    - changed round content handling to buffered-per-round emission so no-tool correction retries can drop current-round text (effectively return n-1 round output)
+43. Added tools-loop model output observability:
+    - `apiserver/agentic_tool_loop.py` emits per-round `model_output` SSE event
+    - `frontend/src/utils/encoding.ts` adds `model_output` stream chunk type
+    - `frontend/src/views/MessageView.vue` renders loop model output info (focus on placeholder/no-content rounds)
+44. Added `{End}` loop-termination protocol with safe output truncation:
+    - loop now matches `{End}` (case-insensitive, supports inner spaces) and terminates immediately with `stop_reason=end_marker`
+    - buffered content replay supports `content_cutoff`, truncating marker and trailing text before forwarding to frontend
+    - ensures frontend正文不显示 `{End}` 结构
+45. Validation for this round:
+    - `python -m py_compile apiserver/agentic_tool_loop.py` passed
+    - `cd frontend && npm run build` still blocked by pre-existing type issue in `frontend/src/components/LoginDialog.vue` (`accessToken` mismatch), unrelated to this change
 
 ## Not Yet Implemented (Known Gaps)
 

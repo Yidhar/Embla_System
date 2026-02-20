@@ -1227,15 +1227,19 @@ class LLMService:
                     naga_auth.is_authenticated(),
                     naga_auth.has_refresh_token(),
                 )
-                if not auth_retried and naga_auth.is_authenticated():
-                    auth_retried = True
-                    try:
-                        await naga_auth.refresh()
-                        logger.info("Token refresh success, retrying LLM call")
-                        continue
-                    except Exception as refresh_err:
-                        logger.error("Token refresh failed: %s", refresh_err)
-                yield self._format_sse_chunk("auth_expired", "Login expired, please sign in again")
+                if naga_auth.is_authenticated():
+                    if not auth_retried:
+                        auth_retried = True
+                        try:
+                            await naga_auth.refresh()
+                            logger.info("Token refresh success, retrying LLM call")
+                            continue
+                        except Exception as refresh_err:
+                            logger.error("Token refresh failed: %s", refresh_err)
+                    yield self._format_sse_chunk("auth_expired", "Login expired, please sign in again")
+                else:
+                    safe_error = self._sanitize_litellm_error_text(e)
+                    yield self._format_sse_chunk("error", f"LLM authentication failed: {safe_error}")
                 return
 
             except Exception as e:
