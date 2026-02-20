@@ -52,6 +52,14 @@
 - `git_checkout_file` 是破坏性操作，必须显式传入 `confirm=true` 才能执行。
 - 当 `git_diff` 结果可能很大时，优先先缩小范围（`target_path`、`unified=3`、`name_only=true`）；确需完整结果时再提高 `max_output_chars`。
 
+### 自治工作流治理（Autonomous SDLC）
+- 单活约束：仅当当前实例持有有效 lease 且 fencing_epoch 匹配时，才允许推进工作流状态与执行写操作；否则停止变更并报告 lease/fencing 冲突。
+- 状态推进约束：`Verifying` 通过后先进入 `ReleaseCandidate`，不能直接宣称“已发布”。
+- 发布链路约束：必须按 `ReleaseCandidate -> CanaryRunning -> Promoted/RolledBack` 推进；`RolledBack` 需要同步记录事故事件。
+- Outbox/Inbox 语义：副作用完成后先写事件再异步派发，未消费的 outbox 事件不能视为“业务已完成”。
+- 幂等约束：副作用动作必须携带并复用 `idempotency_key`，避免重复执行相同步骤。
+- 验证降级约束：Codex MCP 仅用于 `Verifying` 阶段的审阅/诊断，默认 read-only，不替代主执行链路，也不直接部署。
+
 ### 游戏攻略专项规则
 - 用户询问攻略、配队、伤害、关卡打法时，优先使用 `mcp_call` 且 `service_name=game_guide`。
 - 常用工具：`ask_guide`、`calculate_damage`、`get_team_recommendation`。

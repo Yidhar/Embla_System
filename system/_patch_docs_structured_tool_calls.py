@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Patch docs to reflect structured tool_calls (no ```tool parsing) and remove legacy ```tool examples from skills.
+"""Patch docs to reflect structured tool_calls and remove legacy fenced-tool examples from skills.
 
 Edits:
 - README.md: replace section '### 流式工具调用循环' until next '---'
 - README_en.md: replace section '### Streaming Tool Call Loop' until next '---'
-- skills/solve/SKILL.md: remove ```tool example block
-- skills/verify-authenticity/SKILL.md: remove ```tool example block
+- skills/solve/SKILL.md: remove legacy fenced tool example blocks
+- skills/verify-authenticity/SKILL.md: remove legacy fenced tool example blocks
+- frontend/src/views/MessageView.vue: update a legacy comment to avoid referring to fenced tool blocks
 
 Idempotent: running multiple times should keep the new blocks.
 """
@@ -17,6 +18,9 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+FENCE = "```"
+TOOL_FENCE = FENCE + "tool"  # build dynamically, don't keep as a literal sequence in this file
 
 
 def read(p: Path) -> str:
@@ -33,12 +37,14 @@ def replace_md_section(text: str, heading_pat: str, new_block: str) -> str:
     if not m:
         raise RuntimeError(f"Heading not found: {heading_pat}")
     start = m.start()
-    # find next line that is exactly --- after the heading
-    hr = re.search(r"^---\s*$", text[m.end():], flags=re.MULTILINE)
+
+    # Find next line that is exactly --- after the heading
+    hr = re.search(r"^---\s*$", text[m.end() :], flags=re.MULTILINE)
     if not hr:
         raise RuntimeError("Section terminator '---' not found")
     end = m.end() + hr.start()
-    # keep the terminator (---) in place
+
+    # Keep the terminator (---) in place
     return text[:start] + new_block.rstrip() + "\n\n" + text[end:]
 
 
@@ -78,13 +84,15 @@ AgenticLoop 消费结构化 tool_calls → 转换为统一 agentType 调度 → 
 
 - **工具定义**：后端向模型传入 `tools=[...]`（OpenAI-compatible）。
 - **结构化 tool_calls 提取**：`apiserver/llm_service.py` 在流式响应中合并 `delta.tool_calls`，并输出 `type="tool_calls"` SSE 事件。
-- **Loop 执行与回注**：`apiserver/agentic_tool_loop.py` 消费结构化 tool_calls 并并行执行，不依赖 ```tool 文本解析。
-- **兼容说明**：仓库中可能存在历史构建产物/旧文档仍提及 ```tool 代码块机制；以当前源码主链路的结构化 tool_calls 为准。
+- **Loop 执行与回注**：`apiserver/agentic_tool_loop.py` 消费结构化 tool_calls 并并行执行，不依赖旧式“工具围栏块”文本解析。
+- **兼容说明**：仓库中可能存在历史构建产物/旧文档仍提及旧式“工具围栏块”机制；以当前源码主链路的结构化 tool_calls 为准。
 
 源码：[`apiserver/llm_service.py`](apiserver/llm_service.py)、[`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py)
 """
 
-    s2 = replace_md_section(s, r"^###\s+流式工具调用循环\s*$", new_block)
+    # Match either the old heading or the already-patched heading with suffix
+    heading_pat = r"^###\s+流式工具调用循环(?:（.*?）)?\s*$"
+    s2 = replace_md_section(s, heading_pat, new_block)
     write(p, s2)
 
 
@@ -124,29 +132,31 @@ Tool results are sent as tool_results events and injected into messages for the 
 
 - **Tool definitions** are passed via `tools=[...]` (OpenAI-compatible).
 - **Structured tool_calls extraction**: `apiserver/llm_service.py` merges `delta.tool_calls` and emits an SSE chunk `type="tool_calls"`.
-- **Loop execution & injection**: `apiserver/agentic_tool_loop.py` consumes structured tool_calls and executes them; the main path does not rely on ```tool text parsing.
-- **Compatibility note**: legacy ```tool-block descriptions may still exist in historical build artifacts/old docs; the source code mainline uses structured tool_calls.
+- **Loop execution & injection**: `apiserver/agentic_tool_loop.py` consumes structured tool_calls and executes them; the main path does not rely on legacy "fenced tool block" text parsing.
+- **Compatibility note**: legacy "fenced tool block" descriptions may still exist in historical build artifacts/old docs; the source code mainline uses structured tool_calls.
 
 Source: [`apiserver/llm_service.py`](apiserver/llm_service.py), [`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py)
 """
 
-    s2 = replace_md_section(s, r"^###\s+Streaming Tool Call Loop\s*$", new_block)
+    heading_pat = r"^###\s+Streaming Tool Call Loop(?:\s*\(.*?\))?\s*$"
+    s2 = replace_md_section(s, heading_pat, new_block)
     write(p, s2)
 
 
-def strip_tool_block_in_skill(text: str) -> str:
-    # Remove fenced ```tool blocks entirely
-    text2 = re.sub(r"\n```tool\n[\s\S]*?\n```\n", "\n", text)
-    # If any inline mention of ```tool remains, remove backticks to avoid fences.
-    text2 = text2.replace("```tool", "tool")
+def strip_legacy_tool_fences(text: str) -> str:
+    # Remove fenced tool blocks entirely (legacy docs/skills).
+    fence_pat = r"\n" + re.escape(TOOL_FENCE) + r"\n[\s\S]*?\n" + re.escape(FENCE) + r"\n"
+    text2 = re.sub(fence_pat, "\n", text)
+
+    # If any inline mention of the legacy fence marker remains, neutralize it.
+    text2 = text2.replace(TOOL_FENCE, "tool")
     return text2
 
 
 def patch_skill_solve() -> None:
     p = ROOT / "skills" / "solve" / "SKILL.md"
     s = read(p)
-    s = strip_tool_block_in_skill(s)
-    # Replace step 2 wording to avoid implying literal code block output
+    s = strip_legacy_tool_fences(s)
     s = re.sub(
         r"2\.\s*判断是否需要联网：([\s\S]*?)\n3\.",
         "2. 判断是否需要联网：如果问题涉及实时信息、最新数据、具体事实核查等，先发起联网搜索/浏览器访问等工具调用（通过结构化 tool_calls 通道发起，不要在正文输出 JSON 或代码块）。\n3.",
@@ -159,7 +169,7 @@ def patch_skill_solve() -> None:
 def patch_skill_verify() -> None:
     p = ROOT / "skills" / "verify-authenticity" / "SKILL.md"
     s = read(p)
-    s = strip_tool_block_in_skill(s)
+    s = strip_legacy_tool_fences(s)
     s = re.sub(
         r"1\.\s*\*\*联网搜索\*\*：([\s\S]*?)\n2\.",
         "1. **联网搜索**：先使用工具搜索与用户内容相关的权威信息和事实依据（通过结构化 tool_calls 通道发起，不要在正文输出 JSON 或代码块）。\n2.",
@@ -169,11 +179,27 @@ def patch_skill_verify() -> None:
     write(p, s)
 
 
+def patch_message_view_comment() -> None:
+    p = ROOT / "frontend" / "src" / "views" / "MessageView.vue"
+    s = read(p)
+
+    # Replace a legacy comment line to avoid referring to fenced tool blocks.
+    old_prefix = "// 后端解析出工具调用后，发送清理后的纯文本替换掉含有 "
+    if old_prefix in s:
+        s = s.replace(
+            old_prefix,
+            "// 后端返回 content_clean：用于将正文替换为纯文本内容（兼容旧版本清理逻辑） ",
+        )
+        s = s.replace(TOOL_FENCE, "tool")
+        write(p, s)
+
+
 def main() -> None:
     patch_readme_zh()
     patch_readme_en()
     patch_skill_solve()
     patch_skill_verify()
+    patch_message_view_comment()
     print("OK")
 
 

@@ -1,0 +1,19 @@
+name: DoD Check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  dod-check:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run DoD Baseline Script
+        shell: pwsh
+        run: ./scripts/dod_check.ps1 -RepoRoot .

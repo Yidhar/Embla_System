@@ -92,8 +92,8 @@ AgenticLoop 消费结构化 tool_calls → 转换为统一 agentType 调度 → 
 
 - **工具定义**：后端向模型传入 `tools=[...]`（OpenAI-compatible）。
 - **结构化 tool_calls 提取**：`apiserver/llm_service.py` 在流式响应中合并 `delta.tool_calls`，并输出 `type="tool_calls"` SSE 事件。
-- **Loop 执行与回注**：`apiserver/agentic_tool_loop.py` 消费结构化 tool_calls 并并行执行，不依赖 ```tool 文本解析。
-- **兼容说明**：仓库中可能存在历史构建产物/旧文档仍提及 ```tool 代码块机制；以当前源码主链路的结构化 tool_calls 为准。
+- **Loop 执行与回注**：`apiserver/agentic_tool_loop.py` 消费结构化 tool_calls 并并行执行，不依赖旧式“工具围栏块”文本解析。
+- **兼容说明**：仓库中可能存在历史构建产物/旧文档仍提及旧式“工具围栏块”机制；以当前源码主链路的结构化 tool_calls 为准。
 
 源码：[`apiserver/llm_service.py`](apiserver/llm_service.py)、[`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py)
 

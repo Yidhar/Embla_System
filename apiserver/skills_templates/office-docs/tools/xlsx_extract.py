@@ -150,7 +150,8 @@ def _write_sheets(
         for name, path in sheets:
             rows = _parse_sheet(archive, path, shared_strings, max_rows)
             content = _format_sheet_csv(rows, delimiter)
-            filename = f"{_sanitize_filename(name)}.{'tsv' if delimiter == '\t' else 'csv'}"
+            ext = "tsv" if delimiter == "\t" else "csv"
+            filename = f"{_sanitize_filename(name)}.{ext}"
             (output_path / filename).write_text(content, encoding="utf-8")
         return
 

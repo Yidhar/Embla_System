@@ -73,6 +73,11 @@ class LLMService:
         try:
             cfg = get_config()
             litellm.api_key = cfg.api.api_key
+            # Reduce noisy provider/debug hints in production logs.
+            if hasattr(litellm, "set_verbose"):
+                litellm.set_verbose = False
+            if hasattr(litellm, "suppress_debug_info"):
+                litellm.suppress_debug_info = True
 
             protocol = self._resolve_protocol(api_base=cfg.api.base_url)
             if protocol != self.PROTOCOL_GOOGLE_GENERATE and cfg.api.base_url:
@@ -867,14 +872,16 @@ class LLMService:
                     api_base=final_base,
                 )
             except Exception as e:
-                logger.error("Google chat call failed: %s", e)
-                return LLMResponse(content=f"Google API call error: {e}")
+                safe_error = self._sanitize_litellm_error_text(e)
+                logger.error("Google chat call failed: %s", safe_error)
+                return LLMResponse(content=f"Google API call error: {safe_error}")
 
         try:
             model_name = final_model
-            if provider_hint and provider_hint != "openai":
-                if not model_name.startswith(f"{provider_hint}/"):
-                    model_name = f"{provider_hint}/{model_name}"
+            normalized_provider_hint = (provider_hint or "").strip().lower()
+            if normalized_provider_hint and normalized_provider_hint not in {"openai", "openai_compatible"}:
+                if not model_name.startswith(f"{normalized_provider_hint}/"):
+                    model_name = f"{normalized_provider_hint}/{model_name}"
             else:
                 model_name = self._get_model_name(model_name, final_base)
 
@@ -897,8 +904,9 @@ class LLMService:
                 reasoning_content=getattr(message, "reasoning_content", None),
             )
         except Exception as e:
-            logger.error("Context chat call failed: %s", e)
-            return LLMResponse(content=f"Chat call error: {e}")
+            safe_error = self._sanitize_litellm_error_text(e)
+            logger.error("Context chat call failed: %s", safe_error)
+            return LLMResponse(content=f"Chat call error: {safe_error}")
 
     async def chat_with_context_and_reasoning(self, messages: List[Dict], temperature: float = 0.7) -> LLMResponse:
         return await self.chat_with_context_and_reasoning_with_overrides(
@@ -989,6 +997,69 @@ class LLMService:
             )
 
         return finalized
+
+    @staticmethod
+    def _is_retryable_stream_exception(error: Exception) -> bool:
+        """Best-effort classification for transient streaming failures."""
+        retryable_types = tuple(
+            t
+            for t in (
+                getattr(litellm, "APIConnectionError", None),
+                getattr(litellm, "ServiceUnavailableError", None),
+                getattr(litellm, "Timeout", None),
+                getattr(litellm, "InternalServerError", None),
+            )
+            if isinstance(t, type)
+        )
+        if retryable_types and isinstance(error, retryable_types):
+            return True
+
+        text = str(error).lower()
+        transient_markers = (
+            "connection error",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "network error",
+            "timed out",
+            "timeout",
+            "service unavailable",
+            "temporarily unavailable",
+        )
+        return any(marker in text for marker in transient_markers)
+
+    @staticmethod
+    def _sanitize_litellm_error_text(error: Any) -> str:
+        """Trim noisy LiteLLM hint/provider lines from surfaced error text."""
+        raw = str(error or "").strip()
+        if not raw:
+            return "unknown error"
+
+        skip_markers = (
+            "provider list:",
+            "docs.litellm.ai/docs/providers",
+            "litellm.info:",
+            "if you need to debug this error",
+        )
+
+        cleaned: List[str] = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            lowered = stripped.lower()
+            if any(marker in lowered for marker in skip_markers):
+                continue
+            cleaned.append(stripped)
+
+        if not cleaned:
+            return raw.splitlines()[0].strip() if raw.splitlines() else raw
+
+        deduped: List[str] = []
+        for line in cleaned:
+            if not deduped or deduped[-1] != line:
+                deduped.append(line)
+        return " | ".join(deduped)
 
     async def stream_chat_with_context(
         self,
@@ -1143,20 +1214,26 @@ class LLMService:
                 yield self._format_sse_chunk("auth_expired", "Login expired, please sign in again")
                 return
 
-            except (litellm.APIConnectionError, litellm.ServiceUnavailableError, litellm.Timeout) as e:
-                if attempt < max_attempts - 1:
-                    logger.warning("Streaming call connection issue (attempt %s/%s): %s", attempt + 1, max_attempts, e)
-                    await asyncio.sleep(1)
-                    continue
-                yield self._format_sse_chunk(
-                    "content",
-                    f"Streaming call error (connection issue after {max_attempts} retries): {e}",
-                )
-                return
-
             except Exception as e:
-                logger.error("Streaming chat failed: %s", e)
-                yield self._format_sse_chunk("content", f"Streaming call error: {e}")
+                if self._is_retryable_stream_exception(e):
+                    safe_error = self._sanitize_litellm_error_text(e)
+                    if attempt < max_attempts - 1:
+                        logger.warning(
+                            "Streaming call connection issue (attempt %s/%s): %s",
+                            attempt + 1,
+                            max_attempts,
+                            safe_error,
+                        )
+                        await asyncio.sleep(1 + attempt)
+                        continue
+                    yield self._format_sse_chunk(
+                        "content",
+                        f"Streaming call error (connection issue after {max_attempts} retries): {safe_error}",
+                    )
+                    return
+                safe_error = self._sanitize_litellm_error_text(e)
+                logger.error("Streaming chat failed: %s", safe_error)
+                yield self._format_sse_chunk("content", f"Streaming call error: {safe_error}")
                 return
 
     def _format_sse_chunk(self, chunk_type: str, text: str) -> str:

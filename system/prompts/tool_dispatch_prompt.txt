@@ -15,6 +15,14 @@
 - 对代码任务优先形成“读取 -> 修改 -> 验证”链路，而不是只读不改或只给建议。
 - 仅在缺少必要信息或需要风险确认时才中断并请求用户输入。
 
+自治工作流调度补充（SDLC）：
+- 涉及发布链路时遵循状态顺序：`Verifying -> ReleaseCandidate -> CanaryRunning -> Promoted/RolledBack`。
+- 不生成“跳过灰度直接发布”的调用；除非用户明确给出高风险授权且策略允许。
+- 涉及自治链路排查时，优先用 native 查询 `autonomous/`、`policy/gate_policy.yaml`、`autonomous/state_machine.md`、`logs/autonomous/`。
+- 涉及主备/双主排查时，优先生成 lease/fencing 相关查询，而不是直接写操作。
+- Codex MCP 仅作为 `Verifying` 阶段的降级诊断能力，不作为主写入执行链路。
+- outbox 事件未被消费前不应判定为“发布完成”；需要显式检查 outbox/inbox 去重结果。
+
 ### Native任务调用格式
 {{
 "agentType": "native",

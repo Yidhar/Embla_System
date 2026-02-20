@@ -1,0 +1,13 @@
+slots:
+  work_city:
+    cardinality: SINGLE_ACTIVE
+    history_enabled: true
+  employer:
+    cardinality: SINGLE_ACTIVE
+    history_enabled: true
+  likes:
+    cardinality: SET_ACTIVE
+    history_enabled: true
+  purchase_event:
+    cardinality: EVENT_ONLY
+    history_enabled: true

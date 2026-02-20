@@ -92,8 +92,8 @@ Tool results are sent as tool_results events and injected into messages for the 
 
 - **Tool definitions** are passed via `tools=[...]` (OpenAI-compatible).
 - **Structured tool_calls extraction**: `apiserver/llm_service.py` merges `delta.tool_calls` and emits an SSE chunk `type="tool_calls"`.
-- **Loop execution & injection**: `apiserver/agentic_tool_loop.py` consumes structured tool_calls and executes them; the main path does not rely on ```tool text parsing.
-- **Compatibility note**: legacy ```tool-block descriptions may still exist in historical build artifacts/old docs; the source code mainline uses structured tool_calls.
+- **Loop execution & injection**: `apiserver/agentic_tool_loop.py` consumes structured tool_calls and executes them; the main path does not rely on legacy "fenced tool block" text parsing.
+- **Compatibility note**: legacy "fenced tool block" descriptions may still exist in historical build artifacts/old docs; the source code mainline uses structured tool_calls.
 
 Source: [`apiserver/llm_service.py`](apiserver/llm_service.py), [`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py)
 

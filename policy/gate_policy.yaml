@@ -1,0 +1,25 @@
+gates:
+  read_only:
+    auto_allow: true
+
+  write_repo:
+    required_checks: [unit_test, lint, static_scan]
+
+  deploy:
+    required_checks: [integration_test, perf_smoke, canary_plan]
+    canary_window_min: 15
+    min_sample_count: 200
+    burn_rate_windows: [5m, 30m]
+    healthy_windows_for_promotion: 3
+    bad_windows_for_rollback: 2
+
+  secrets:
+    require_short_lived_token: true
+    require_audit_log: true
+
+  verification_fallback:
+    codex_mcp:
+      enabled: true
+      service_name: codex-cli
+      tool_name: ask-codex
+      sandbox_mode: read-only

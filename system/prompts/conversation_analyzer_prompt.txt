@@ -40,6 +40,14 @@ JSON花括号必须使用半角ASCII字符 `{{` 和 `}}`，不要使用全角。
 "sandbox": "restricted | docker（python_repl，可选）"
 }}
 
+### MCP本地工具调用（服务型能力）
+{{
+"agentType": "mcp",
+"service_name": "服务名称",
+"tool_name": "工具命令",
+"arguments": "按MCP服务schema提供参数（可选）"
+}}
+
 ### Live2D表情动作调用
 {{
 "agentType": "live2d",
@@ -70,6 +78,10 @@ JSON花括号必须使用半角ASCII字符 `{{` 和 `}}`，不要使用全角。
 - 对“代码修复/功能实现/问题定位/自动审阅”类请求，默认生成能落地执行的调用，不要退化为“请用户自行查看”。
 - Live2D动作使用 `agentType: "live2d"` 格式，可以和openclaw任务同时存在于JSON数组中
 - MCP本地工具使用 `agentType: "mcp"` 格式（天气、时间、应用启动等），当匹配MCP工具能力时优先使用MCP
+- 涉及自治工作流（lease/fencing/outbox/canary/rollback/DoD）优先使用 `native` 或 `mcp`，不要退化为 openclaw
+- 涉及发布语义时，不直接生成“已发布/已晋升”结论型任务，优先生成 gate/canary 判定与状态核验任务
+- 查询自治状态时，优先围绕 `autonomous/`、`policy/gate_policy.yaml`、`autonomous/state_machine.md`、`logs/autonomous/` 生成调用
+- 涉及 Codex MCP 降级时，仅定位为 `Verifying` 阶段诊断，不生成直接写仓库或部署的调用
 - message字段必须包含完整的任务描述，让OpenClaw能独立理解并执行
 - 复合操作可以合并为一条message（如果逻辑连贯），也可以拆分为JSON数组
 - 没有可执行任务时输出 `{{}}`

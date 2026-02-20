@@ -79,6 +79,47 @@
     "max_tool_retries": 1, // 失败工具最大重试次数
     "retry_backoff_seconds": 0.8 // 重试退避时间（秒）
   },
+  "autonomous": {
+    "enabled": false, // 是否启用 System Agent 自治循环
+    "cycle_interval_seconds": 3600, // 自治循环周期（秒）
+    "cli_tools": {
+      "preferred": "claude", // 首选 CLI
+      "fallback_order": ["codex", "gemini"], // 降级顺序
+      "max_retries": 2 // CLI 重试次数
+    },
+    "run_quality_checks": false, // 评估阶段是否运行 lint/test
+    "fixed_timeout_seconds": 3600, // CLI 执行超时（秒）
+    "verification_fallback": {
+      "enable_codex_mcp": true, // 验证阶段启用 Codex MCP 降级
+      "mcp_server_name": "codex-cli", // MCP 服务名
+      "tool_name": "ask-codex", // MCP 工具名
+      "sandbox_mode": "read-only", // MCP 沙箱模式
+      "approval_policy": "on-failure" // MCP 审批策略
+    },
+    "lease": {
+      "enabled": true, // 是否启用 Single Active lease/fencing
+      "lease_name": "global_orchestrator", // 单活 lease 名称
+      "owner_id": "", // 可选固定 owner_id，留空则自动生成进程 ID
+      "renew_interval_seconds": 2, // lease 续租间隔（秒）
+      "ttl_seconds": 10, // lease 有效期（秒）
+      "standby_poll_interval_seconds": 2 // standby 抢占轮询间隔（秒）
+    },
+    "outbox_dispatch": {
+      "enabled": true, // 是否启用 outbox 异步消费
+      "consumer_name": "release-controller", // inbox 去重 consumer 名称
+      "poll_interval_seconds": 2, // outbox 轮询间隔（秒）
+      "batch_size": 50 // 每批次最大消费条数
+    },
+    "release": {
+      "enabled": true, // 是否启用 canary/rollback 自动化
+      "gate_policy_path": "policy/gate_policy.yaml", // gate 策略文件
+      "max_error_rate": 0.02, // canary 最大允许错误率
+      "max_latency_p95_ms": 1500.0, // canary p95 延迟阈值（ms）
+      "min_kpi_ratio": 0.95, // canary KPI 最低比例
+      "auto_rollback_enabled": true, // 达到回滚条件时自动回滚
+      "rollback_command": "" // 可选回滚命令
+    }
+  },
   "browser": {
     "playwright_headless": false // Playwright是否无头模式
   },

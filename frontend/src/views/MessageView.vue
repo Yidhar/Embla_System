@@ -95,7 +95,7 @@ export function chatStream(content: string, options?: { skill?: string, images?:
         }
       }
       else if (chunk.type === 'content_clean') {
-        // 后端解析出工具调用后，发送清理后的纯文本替换掉含有 ```tool``` 块的原文
+        // 后端返回 content_clean：用于将正文替换为纯文本内容（兼容旧版本清理逻辑） tool``` 块的原文
         message.content = chunk.text || ''
         spokenContent = chunk.text || ''
       }

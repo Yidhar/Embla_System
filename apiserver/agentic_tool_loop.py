@@ -180,6 +180,24 @@ def _looks_like_pending_tool_intent(text: str) -> bool:
     return any(m in lowered for m in markers)
 
 
+def _extract_terminal_stream_error_text(text: str) -> str:
+    """Detect fatal upstream stream errors that should stop the loop immediately."""
+    if not text:
+        return ""
+    normalized = " ".join(str(text).strip().split())
+    lowered = normalized.lower()
+    markers = (
+        "streaming call error",
+        "google streaming error",
+        "google live streaming error",
+        "llm service unavailable",
+        "chat call error",
+        "google api call error",
+        "login expired",
+    )
+    return normalized if any(marker in lowered for marker in markers) else ""
+
+
 _WORKFLOW_PHASES = {"plan", "execute", "verify", "repair"}
 _WORKFLOW_PHASE_STATUS = {"start", "success", "error", "skip"}
 
@@ -889,6 +907,8 @@ async def run_agentic_loop(
         complete_text = ""
         complete_reasoning = ""
         structured_tool_calls: List[Dict[str, Any]] = []
+        stream_terminal_error = ""
+        stream_terminal_error_reason = ""
 
         async for chunk in llm_service.stream_chat_with_context(
             messages,
@@ -909,6 +929,11 @@ async def run_agentic_loop(
                         if chunk_type == "content":
                             if isinstance(chunk_payload, str):
                                 complete_text += chunk_payload
+                                if not stream_terminal_error:
+                                    detected = _extract_terminal_stream_error_text(complete_text)
+                                    if detected:
+                                        stream_terminal_error = detected
+                                        stream_terminal_error_reason = "llm_stream_error"
                         elif chunk_type == "reasoning":
                             if isinstance(chunk_payload, str):
                                 complete_reasoning += chunk_payload
@@ -917,6 +942,16 @@ async def run_agentic_loop(
                             structured_tool_calls.extend(parsed_calls)
                             # 原生 tool_calls 事件不透传给前端，统一由 loop 生成 tool_calls/tool_results 事件
                             continue
+                        elif chunk_type == "auth_expired":
+                            stream_terminal_error = (
+                                str(chunk_payload).strip() if isinstance(chunk_payload, str) and chunk_payload else "Login expired"
+                            )
+                            stream_terminal_error_reason = "auth_expired"
+                        elif chunk_type == "error":
+                            stream_terminal_error = (
+                                str(chunk_payload).strip() if isinstance(chunk_payload, str) and chunk_payload else "LLM stream error"
+                            )
+                            stream_terminal_error_reason = "llm_stream_error"
                 except Exception as e:
                     logger.warning(f"[AgenticLoop] 解析流式工具调用失败: {e}")
 
@@ -925,6 +960,52 @@ async def run_agentic_loop(
         logger.debug(
             f"[AgenticLoop] Round {round_num} complete_text ({len(complete_text)} chars): {complete_text[:300]!r}"
         )
+
+        if not stream_terminal_error:
+            detected = _extract_terminal_stream_error_text(complete_text)
+            if detected:
+                stream_terminal_error = detected
+                stream_terminal_error_reason = "llm_stream_error"
+
+        if stream_terminal_error:
+            runtime.stop_reason = stream_terminal_error_reason or "llm_stream_error"
+            logger.error(
+                "[AgenticLoop] Round %s: 检测到上游流式错误，终止循环: %s",
+                round_num,
+                stream_terminal_error,
+            )
+            plan_error_event = _format_workflow_stage_event(
+                round_num,
+                "plan",
+                "error",
+                policy=policy,
+                reason=runtime.stop_reason,
+                details={"error": stream_terminal_error[:500]},
+            )
+            if plan_error_event:
+                yield plan_error_event
+            execute_skip_event = _format_workflow_stage_event(
+                round_num,
+                "execute",
+                "skip",
+                policy=policy,
+                reason=runtime.stop_reason,
+            )
+            if execute_skip_event:
+                yield execute_skip_event
+            verify_error_event = _format_workflow_stage_event(
+                round_num,
+                "verify",
+                "error",
+                policy=policy,
+                reason=runtime.stop_reason,
+                decision="stop",
+                details={"error": stream_terminal_error[:500]},
+            )
+            if verify_error_event:
+                yield verify_error_event
+            yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+            break
 
         actionable_calls, live2d_calls, validation_errors = _convert_structured_tool_calls(structured_tool_calls)
         legacy_protocol_error = _detect_legacy_tool_protocol_violation(complete_text, structured_tool_calls)

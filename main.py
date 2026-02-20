@@ -116,6 +116,8 @@ class ServiceManager:
         self.api_thread = None
         self.agent_thread = None
         self.tts_thread = None
+        self.system_agent = None
+        self._autonomous_task = None
         self._services_ready = False  # 服务就绪状态
     
     def start_background_services(self):
@@ -144,12 +146,30 @@ class ServiceManager:
             # 标记服务就绪
             self._services_ready = True
             logger.info(f"任务管理器状态: running={task_manager.is_running}")
+            await self._try_start_autonomous_agent()
             
             # 保持事件循环活跃
             while True:
                 await asyncio.sleep(3600)  # 每小时检查一次
         except Exception as e:
             logger.error(f"后台服务异常: {e}")
+
+    async def _try_start_autonomous_agent(self):
+        """Start the autonomous system agent on the background event loop."""
+        try:
+            auto_cfg = getattr(config, "autonomous", None)
+            if auto_cfg is None or not getattr(auto_cfg, "enabled", False):
+                logger.info("[Autonomous] disabled by config")
+                return
+
+            from autonomous.system_agent import SystemAgent
+
+            cfg_payload = auto_cfg.model_dump() if hasattr(auto_cfg, "model_dump") else auto_cfg
+            self.system_agent = SystemAgent(cfg_payload, repo_dir=os.getcwd())
+            self._autonomous_task = asyncio.create_task(self.system_agent.start())
+            logger.info("[Autonomous] system agent started")
+        except Exception as exc:
+            logger.error(f"[Autonomous] failed to start: {exc}")
     
     def check_port_available(self, host, port):
         """检查端口是否可用"""

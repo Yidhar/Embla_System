@@ -237,6 +237,72 @@ class AgenticLoopConfig(BaseModel):
     retry_backoff_seconds: float = Field(default=0.8, ge=0.0, le=10.0, description="重试退避秒数")
 
 
+class AutonomousCliToolsConfig(BaseModel):
+    """CLI tool preferences for system agent."""
+
+    preferred: str = Field(default="claude", description="首选CLI")
+    fallback_order: List[str] = Field(default_factory=lambda: ["codex", "gemini"], description="CLI降级顺序")
+    max_retries: int = Field(default=2, ge=0, le=10, description="CLI重试次数")
+
+
+class AutonomousVerificationFallbackConfig(BaseModel):
+    """Verification-stage fallback policy."""
+
+    enable_codex_mcp: bool = Field(default=True, description="是否启用Codex MCP降级")
+    mcp_server_name: str = Field(default="codex-cli", description="Codex MCP服务名")
+    tool_name: str = Field(default="ask-codex", description="Codex MCP工具名")
+    sandbox_mode: str = Field(default="read-only", description="MCP执行沙箱模式")
+    approval_policy: str = Field(default="on-failure", description="MCP审批策略")
+
+
+class AutonomousLeaseConfig(BaseModel):
+    """Single-active lease and fencing policy."""
+
+    enabled: bool = Field(default=True, description="是否启用lease/fencing单活抢占")
+    lease_name: str = Field(default="global_orchestrator", description="单活lease名称")
+    owner_id: str = Field(default="", description="可选固定owner_id，留空则自动生成")
+    renew_interval_seconds: int = Field(default=2, ge=1, le=60, description="lease续租间隔（秒）")
+    ttl_seconds: int = Field(default=10, ge=2, le=300, description="lease有效期（秒）")
+    standby_poll_interval_seconds: int = Field(default=2, ge=1, le=60, description="standby轮询间隔（秒）")
+
+
+class AutonomousOutboxDispatchConfig(BaseModel):
+    """Outbox async dispatcher settings."""
+
+    enabled: bool = Field(default=True, description="是否启用outbox异步消费")
+    consumer_name: str = Field(default="release-controller", description="inbox_dedup消费者名称")
+    poll_interval_seconds: int = Field(default=2, ge=1, le=60, description="outbox轮询间隔（秒）")
+    batch_size: int = Field(default=50, ge=1, le=1000, description="每批次最大出站事件数")
+
+
+class AutonomousReleaseConfig(BaseModel):
+    """Canary evaluation and rollback automation config."""
+
+    enabled: bool = Field(default=True, description="是否启用canary/rollback自动化")
+    gate_policy_path: str = Field(default="policy/gate_policy.yaml", description="gate策略文件路径")
+    max_error_rate: float = Field(default=0.02, ge=0.0, le=1.0, description="canary最大允许错误率")
+    max_latency_p95_ms: float = Field(default=1500.0, ge=1.0, le=60000.0, description="canary p95延迟阈值(ms)")
+    min_kpi_ratio: float = Field(default=0.95, ge=0.0, le=1.0, description="canary KPI最低比例")
+    auto_rollback_enabled: bool = Field(default=True, description="达到回滚条件时自动执行回滚命令")
+    rollback_command: str = Field(default="", description="可选回滚命令")
+
+
+class AutonomousConfig(BaseModel):
+    """System Agent autonomous configuration."""
+
+    enabled: bool = Field(default=False, description="是否启用自治循环")
+    cycle_interval_seconds: int = Field(default=3600, ge=60, le=86400, description="自治循环间隔（秒）")
+    cli_tools: AutonomousCliToolsConfig = Field(default_factory=AutonomousCliToolsConfig)
+    run_quality_checks: bool = Field(default=False, description="是否在评估阶段运行lint/test")
+    fixed_timeout_seconds: int = Field(default=3600, ge=60, le=14400, description="CLI执行超时（秒）")
+    verification_fallback: AutonomousVerificationFallbackConfig = Field(
+        default_factory=AutonomousVerificationFallbackConfig
+    )
+    lease: AutonomousLeaseConfig = Field(default_factory=AutonomousLeaseConfig)
+    outbox_dispatch: AutonomousOutboxDispatchConfig = Field(default_factory=AutonomousOutboxDispatchConfig)
+    release: AutonomousReleaseConfig = Field(default_factory=AutonomousReleaseConfig)
+
+
 class BrowserConfig(BaseModel):
     """浏览器配置"""
 
@@ -747,6 +813,7 @@ class NagaConfig(BaseModel):
     grag: GRAGConfig = Field(default_factory=GRAGConfig)
     handoff: HandoffConfig = Field(default_factory=HandoffConfig)
     agentic_loop: AgenticLoopConfig = Field(default_factory=AgenticLoopConfig)
+    autonomous: AutonomousConfig = Field(default_factory=AutonomousConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
     asr: ASRConfig = Field(default_factory=ASRConfig)  # ASR输入服务配置 #
