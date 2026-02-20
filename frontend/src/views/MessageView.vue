@@ -97,6 +97,20 @@ export function chatStream(content: string, options?: { skill?: string, images?:
         authExpired.value = true
         message.content += chunk.text || '登录已过期，请重新登录'
       }
+      else if (chunk.type === 'compress_start' || chunk.type === 'compress_progress' || chunk.type === 'compress_end') {
+        // 上下文压缩进度提示（覆盖式显示，compress_end 后非阻塞延迟清空）
+        message.content = `> ${chunk.text}\n\n`
+        if (chunk.type === 'compress_end') {
+          setTimeout(() => { message.content = '' }, 1200)
+        }
+      }
+      else if (chunk.type === 'compress_info') {
+        // 运行时压缩完成，在当前 assistant 消息前插入 info 标记
+        const idx = MESSAGES.value.indexOf(message)
+        if (idx > 0) {
+          MESSAGES.value.splice(idx, 0, { role: 'info', content: chunk.text || '【已压缩上下文】' })
+        }
+      }
       // round_end 不需要特殊处理
       window.dispatchEvent(new CustomEvent('token', { detail: chunk.text || '' }))
     }

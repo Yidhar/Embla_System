@@ -45,18 +45,13 @@ NagaAgent 由四个独立微服务组成：
 
 | 日期 | 内容 |
 |------|------|
-| **2026-02-14** | 5.0.0 发布：远程记忆微服务（NagaMemory 云端 + 本地 GRAG 回退）、意识海 3D 重写、启动标题动画与粒子效果、进度条停滞检测与健康轮询、版本更新检查弹窗、用户使用协议 |
-| **2026-02-14** | Captcha 验证码集成、注册流程（用户名 + 邮箱 + 验证码）、CAS 会话失效弹窗、语音输入按钮、文件解析按钮、IME 中文输入法回车误发修复 |
-| **2026-02-14** | 移除 ChromaDB 本地依赖（-1119 行），游戏攻略全云端化，攻略功能增加登录态门控 |
-| **2026-02-13** | 悬浮球模式（4 状态动画：classic / ball / compact / full）、截屏多模态视觉模型自动切换 |
-| **2026-02-13** | 技能工坊重构 + Live2D 表情通道独立 + naga-config 技能 |
-| **2026-02-12** | NagaCAS 认证 + NagaModel 网关路由 + 登录弹窗 + 用户菜单 |
-| **2026-02-12** | Live2D 4 通道正交动画架构（体态/动作/表情/追踪），窗口级视觉追踪与校准 |
-| **2026-02-12** | Agentic Tool Loop：流式工具提取 + 多轮自动执行 + 并行 MCP/OpenClaw/Live2D 调度 |
-| **2026-02-12** | 明日方舟风格启动界面 + 进度跟踪 + 视图预加载 + 鼠标视差浮动效果 |
-| **2026-02-12** | 游戏攻略 MCP 接通（自动截图 + 视觉模型 + Neo4j 导入 + 6 款游戏 RAG 处理器） |
+| **2026-02-16** | 5.0.0 发布：NagaModel 网关统一接入（TTS/Embeddings/WebSearch）、DeepSeek 推理思考过程实时展示、记忆云海 UI 自适应修复、BoxContainer noScroll 模式 |
+| **2026-02-15** | 统一附加知识块 + 消除历史污染、LLM 流式重试、配置热更新修复、技能工坊加载优化、config.json 写入截断修复、七天自动登录 + 开机自启动 |
+| **2026-02-14** | 远程记忆微服务（NagaMemory 云端 + 本地 GRAG 回退）、意识海 3D 重写、启动标题动画与粒子效果、进度条停滞检测与健康轮询、版本更新检查弹窗、用户使用协议 |
+| **2026-02-13** | 悬浮球模式（4 状态动画）、截屏多模态视觉模型自动切换、技能工坊重构 + Live2D 表情通道独立、登录注册流程完善 |
+| **2026-02-12** | NagaCAS 认证 + NagaModel 网关路由、Live2D 4 通道正交动画架构、Agentic Tool Loop、明日方舟风格启动界面、游戏攻略 MCP 接通 |
 | **2026-02-11** | 嵌入式 OpenClaw 打包、启动时自动从模板生成配置文件 |
-| **2026-02-10** | 后端打包优化、技能工坊 MCP 状态修复、前端 bug 修复 |
+| **2026-02-10** | 后端打包优化、技能工坊 MCP 状态修复、终端设置页面空白修复、去除冗余 Agent/MCP 仅保留 OpenClaw 调度 |
 | **2026-02-09** | 前端重构、Live2D 禁用眼睛追踪、OpenClaw 更名为 AgentServer |
 
 ---
@@ -97,7 +92,7 @@ parse_tool_calls_from_text()
 
 - **文本解析**：正则 `r"```tool\s*\n([\s\S]*?)(?:```|\Z)"` 提取代码块，`json5` 容错解析（兜底 `json`），全角字符（`｛｝：`）自动标准化
 - **循环控制**：最大 5 轮（`max_loop_stream` 可配），每轮 LLM 输出无 `agentType` JSON 则终止
-- **SSE 编码**：每个 chunk 为 `data: base64(json({"type":"content"|"reasoning","text":"..."}))\n\n`，前端 `ReadableStream` + `TextDecoder` 实时拆分
+- **SSE 编码**：每个 chunk 为 `data: {"type":"content"|"reasoning","text":"..."}\n\n`，前端 `ReadableStream` + `TextDecoder` 实时拆分
 - **工具结果回注**：格式化为 `[工具结果 1/N - service: tool (status)]` 追加到 messages 中
 
 源码：[`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py)、[`apiserver/streaming_tool_extractor.py`](apiserver/streaming_tool_extractor.py)
@@ -253,12 +248,6 @@ easeOutCubic 缓动（`1 - (1 - t)^3`），160ms / 60FPS 过渡。智能定位�
 ---
 
 ### Agent Server 与任务调度
-
-**后台意图分析器**（`BackgroundAnalyzer`）：
-
-- 基于 LangChain `ChatOpenAI`，`temperature=0`，从对话中提取可执行的工具调用
-- 逐会话去重（防止同一会话并发分析）、60 秒超时
-- 提取的工具调用按 `agentType` 分发到 MCP / OpenClaw / Live2D
 
 **OpenClaw 集成**：
 
@@ -582,11 +571,8 @@ python build.py  # 构建 Windows 一键运行整合包，输出到 dist/
 
 ---
 
-<<<<<<< HEAD
-=======
 ---
 
->>>>>>> ab668726c1af0745149115e4e3057fc42cbf363f
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=RTGS2017/NagaAgent&type=date&legend=top-left)](https://www.star-history.com/#RTGS2017/NagaAgent&type=date&legend=top-left)

@@ -4,9 +4,8 @@
 
 ## 启动时初始化（lifespan）
 
-1. **Modules.analyzer** = `get_background_analyzer()` — 意图/博弈论分析器  
-2. **Modules.task_scheduler** = `get_task_scheduler()` — 任务与步骤记忆调度  
-3. **Modules.openclaw_client** = `get_openclaw_client(...)` — OpenClaw Gateway 客户端（从 `~/.openclaw` 或 config 读取）
+1. **Modules.task_scheduler** = `get_task_scheduler()` — 任务与步骤记忆调度
+2. **Modules.openclaw_client** = `get_openclaw_client(...)` — OpenClaw Gateway 客户端（从 `~/.openclaw` 或 config 读取）
 
 ## 流程一：统一调度（/schedule）
 
@@ -30,16 +29,14 @@ _execute_agent_tasks_async:
   若有 callback_url → _send_callback_notification(...)
 ```
 
-**核心执行**：`_process_openclaw_task(instruction, session_id)`  
+**核心执行**：`_process_openclaw_task(instruction, session_id)`
 → `Modules.openclaw_client.send_message(instruction, session_id)`，等待 OpenClaw 执行并返回结果。
 
 ## 流程二：直接发送 OpenClaw（/openclaw/send）
 
-博弈论分析器产生 OpenClaw 任务后，直接发到 Agent Server 的发送接口（不经过 /schedule）。
+直接发到 Agent Server 的发送接口（不经过 /schedule）。
 
 ```
-background_analyzer（或其它调用方）
-  ↓
 POST http://localhost:{agent_server_port}/openclaw/send
   body: { message, session_key?, name?, wake_mode?, timeout_seconds? }
   ↓
@@ -50,7 +47,7 @@ agent_server.openclaw_send_message
 
 ## 流程三：兼容入口（/analyze_and_execute）
 
-旧版“意图分析+执行”的兼容接口，从 messages 里提取「执行Agent任务: xxx」后逐个执行。
+旧版"意图分析+执行"的兼容接口，从 messages 里提取「执行Agent任务: xxx」后逐个执行。
 
 ```
 POST /analyze_and_execute
@@ -67,8 +64,7 @@ POST /analyze_and_execute
 
 | 组件 | 用途 |
 |------|------|
-| **analyzer** (background_analyzer) | 意图/博弈论分析，产生 agent_calls 或直接调 /openclaw/send |
 | **task_scheduler** | 仅被 /schedule 使用：创建任务、记录步骤、压缩记忆、会话关联 |
-| **openclaw_client** | 所有“执行 OpenClaw 任务”的统一出口：send_message、健康检查、安装/配置等 |
+| **openclaw_client** | 所有"执行 OpenClaw 任务"的统一出口：send_message、健康检查、安装/配置等 |
 
-**已废弃、不再使用**：`agent_manager`（AgentManager）。任务规划与执行已由 `task_scheduler` + `openclaw_client` 直接完成。
+**已废弃、不再使用**：`agent_manager`（AgentManager）、`background_analyzer`（BackgroundAnalyzer）。工具调用由前端 Agentic Tool Loop 直接处理，任务执行由 `task_scheduler` + `openclaw_client` 完成。

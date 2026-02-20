@@ -5,7 +5,6 @@ Agentic Tool Loop 核心引擎
 """
 
 import asyncio
-import base64
 import json
 import logging
 import re
@@ -370,14 +369,13 @@ def format_tool_results_for_llm(results: List[Dict[str, Any]]) -> str:
 
 
 def _format_sse_event(event_type: str, data: Any) -> str:
-    """格式化扩展SSE事件（使用与llm_service相同的base64编码格式）"""
+    """格式化扩展SSE事件"""
     payload = {"type": event_type}
     if isinstance(data, dict):
         payload.update(data)
     else:
         payload["data"] = data
-    b64 = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode("utf-8")).decode("ascii")
-    return f"data: {b64}\n\n"
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +414,18 @@ async def run_agentic_loop(
     needs_summary = False  # 是否需要进行最终总结轮
 
     for round_num in range(1, max_rounds + 1):
+        # 0. 上下文压缩：每轮开始前检查 token 是否超限
+        #    round 1 压缩历史对话，round 2+ 压缩上一轮工具结果膨胀的上下文
+        try:
+            from .context_compressor import compress_context
+            compress_result = await compress_context(messages)
+            if compress_result.compressed:
+                messages[:] = compress_result.messages
+            for sse_event in compress_result.sse_events:
+                yield sse_event
+        except Exception as e:
+            logger.debug(f"[AgenticLoop] 上下文压缩跳过: {e}")
+
         # 1. 通知前端开始新一轮
         if round_num > 1:
             yield _format_sse_event("round_start", {"round": round_num})
@@ -426,13 +436,11 @@ async def run_agentic_loop(
 
         async for chunk in llm_service.stream_chat_with_context(messages, get_config().api.temperature,
                                                                  model_override=model_override):
-            # chunk 格式: "data: <base64_json>\n\n"
             if chunk.startswith("data: "):
                 try:
                     data_str = chunk[6:].strip()
                     if data_str and data_str != "[DONE]":
-                        decoded = base64.b64decode(data_str).decode("utf-8")
-                        chunk_data = json.loads(decoded)
+                        chunk_data = json.loads(data_str)
                         chunk_type = chunk_data.get("type", "content")
                         chunk_text = chunk_data.get("text", "")
 
@@ -541,6 +549,17 @@ async def run_agentic_loop(
     if needs_summary:
         logger.warning(f"[AgenticLoop] 执行最终总结轮")
 
+        # 总结轮前也检查压缩（多轮工具调用后 context 可能已经很大）
+        try:
+            from .context_compressor import compress_context
+            compress_result = await compress_context(messages)
+            if compress_result.compressed:
+                messages[:] = compress_result.messages
+            for sse_event in compress_result.sse_events:
+                yield sse_event
+        except Exception as e:
+            logger.debug(f"[AgenticLoop] 总结轮压缩跳过: {e}")
+
         # 通知前端开始总结轮（重要：触发 api_server 重置 is_tool_event 标记）
         yield _format_sse_event("round_start", {"round": max_rounds + 1, "summary": True})
 
@@ -555,7 +574,7 @@ async def run_agentic_loop(
         })
 
         # 最终总结轮：流式输出
-        async for chunk in llm_service.stream_chat_with_context(messages, config.api.temperature,
+        async for chunk in llm_service.stream_chat_with_context(messages, get_config().api.temperature,
                                                                  model_override=model_override):
             yield chunk
 

@@ -50,7 +50,7 @@ const isGenerating = computed(() => MESSAGES.value[MESSAGES.value.length - 1]?.g
 
 // 序列帧动画（球态）
 const frameIndex = ref(1) // 默认显示帧1（睁眼）
-const framePath = (i: number) => `/assets/悬浮球序列帧/${i}.png`
+const framePath = (i: number) => `./assets/悬浮球序列帧/${i}.png`
 let blinkTimer: ReturnType<typeof setTimeout> | null = null
 let blinkStopped = false // 用于终止正在进行的眨眼序列
 

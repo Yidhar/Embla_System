@@ -1,7 +1,7 @@
 export const decoder = new TextDecoder('utf-8')
 
 export interface StreamChunk {
-  type: 'content' | 'reasoning' | 'content_clean' | 'round_start' | 'tool_calls' | 'tool_results' | 'round_end' | 'auth_expired'
+  type: 'content' | 'reasoning' | 'content_clean' | 'round_start' | 'tool_calls' | 'tool_results' | 'round_end' | 'auth_expired' | 'compress_start' | 'compress_progress' | 'compress_end'
   text?: string
   round?: number
   calls?: Array<{ agentType: string, service_name?: string, tool_name?: string, message?: string }>
@@ -9,29 +9,17 @@ export interface StreamChunk {
   has_more?: boolean
 }
 
-export function decodeBase64(base64: string) {
-  const binaryString = atob(base64)
-  const bytes = new Uint8Array(binaryString.length)
-
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i)
-  }
-
-  return decoder.decode(bytes)
-}
-
-export function decodeStreamChunk(base64: string): StreamChunk {
-  const decoded = decodeBase64(base64)
+export function decodeStreamChunk(data: string): StreamChunk {
   try {
-    const parsed = JSON.parse(decoded)
+    const parsed = JSON.parse(data)
     if (parsed && typeof parsed === 'object' && 'type' in parsed) {
       return parsed as StreamChunk
     }
   }
   catch {
-    // Fallback for old format (plain text)
+    // Fallback for plain text
   }
-  return { type: 'content', text: decoded }
+  return { type: 'content', text: data }
 }
 
 export async function* readerToEventStream(reader: ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<string, void, void> {

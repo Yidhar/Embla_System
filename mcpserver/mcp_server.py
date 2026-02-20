@@ -1,7 +1,6 @@
 """MCP Server - 独立FastAPI服务，提供统一的MCP工具调度HTTP API
 
 外部用户/服务可通过 POST /schedule 调用已注册的MCP工具。
-内部 background_analyzer 走 in-process 直调，不经过此HTTP层。
 """
 
 import asyncio

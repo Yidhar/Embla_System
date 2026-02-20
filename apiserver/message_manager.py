@@ -48,8 +48,6 @@ class MessageManager:
 
     def __init__(self):
         self.sessions: Dict[str, Dict] = {}
-        # 分析状态跟踪，防止重复执行
-        self.analysis_in_progress: Dict[str, bool] = {}
         # 从配置文件读取最大历史轮数，默认为10轮
         try:
             from system.config import config
@@ -93,6 +91,7 @@ class MessageManager:
                 "agent_type": session.get("agent_type", "default"),
                 "temporary": session.get("temporary", False),
                 "messages": session["messages"],
+                "compact": session.get("compact", ""),
             }
             self._get_session_file(session_id).write_text(
                 json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -114,6 +113,7 @@ class MessageManager:
                     "agent_type": data.get("agent_type", "default"),
                     "temporary": data.get("temporary", False),
                     "messages": data.get("messages", []),
+                    "compact": data.get("compact", ""),
                 }
                 loaded += 1
             except Exception as e:
@@ -213,6 +213,31 @@ class MessageManager:
         prev_messages = candidates[0][1]["messages"]
         return prev_messages[-max_messages:]
 
+    def _get_previous_session_id(self, current_session_id: str) -> Optional[str]:
+        """获取上一个会话的 ID（按最后活动时间排序，排除当前会话）"""
+        candidates = [
+            (sid, s) for sid, s in self.sessions.items()
+            if sid != current_session_id and s.get("messages")
+        ]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: x[1].get("last_activity", ""), reverse=True)
+        return candidates[0][0]
+
+    def get_session_compact(self, session_id: str) -> str:
+        """获取会话的压缩摘要"""
+        session = self.sessions.get(session_id)
+        return (session.get("compact", "") if session else "") or ""
+
+    def set_session_compact(self, session_id: str, compact: str):
+        """设置会话的压缩摘要并持久化"""
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        session["compact"] = compact
+        if not session.get("temporary"):
+            self._save_session_to_disk(session_id)
+
     def build_conversation_messages(self, session_id: str, system_prompt: str,
                                   current_message: str, include_history: bool = True) -> List[Dict]:
         """构建完整的对话消息列表
@@ -226,13 +251,23 @@ class MessageManager:
         # 添加系统提示词（时间信息已由 build_system_prompt() 统一注入）
         messages.append({"role": "system", "content": system_prompt})
 
-        # 获取本会话的消息
+        # 获取本会话的消息（过滤 info 标记，不计入 LLM 上下文）
         session_messages = self.get_recent_messages(session_id) if include_history else []
+        session_messages = [m for m in session_messages if m.get("role") != "info"]
 
         # 启用持久化上下文时，从上一个会话取最近消息作为背景注入
-        if self.persistent_context:
+        # 如果 system_prompt 中已包含 <compact> 压缩摘要，或上一个会话末尾
+        # 已有【已压缩上下文】标记（说明该会话曾经被压缩过），则跳过原始消息注入
+        if self.persistent_context and "<compact>" not in system_prompt:
             prev_messages = self._get_previous_session_messages(session_id)
-            if prev_messages:
+            # 检查上一个会话的最后一条消息是否为压缩标记
+            prev_was_compressed = (
+                prev_messages and prev_messages[-1].get("role") == "info"
+                and "【已压缩上下文】" in prev_messages[-1].get("content", "")
+            )
+            if prev_messages and not prev_was_compressed:
+                # 过滤 info 标记
+                prev_messages = [m for m in prev_messages if m.get("role") != "info"]
                 messages.extend(prev_messages)
                 logger.debug(f"为会话 {session_id} 注入上一会话的 {len(prev_messages)} 条消息到 LLM 上下文")
 
@@ -670,44 +705,7 @@ class MessageManager:
         except Exception as e:
             logger.error(f"保存对话与日志失败: {e}")
     
-    def trigger_background_analysis(self, session_id: str):
-        """统一触发后台意图分析 - 整合重复逻辑"""
-        try:
-            # 检查是否已经有分析在进行中
-            if self.analysis_in_progress.get(session_id):
-                logger.info(f"[博弈论] 会话 {session_id} 已有意图分析在进行中，跳过重复触发")
-                return
 
-            # 标记分析开始
-            self.analysis_in_progress[session_id] = True
-
-            import asyncio
-            from system.background_analyzer import get_background_analyzer
-            from system.config import config
-            background_analyzer = get_background_analyzer()
-
-            # 根据配置获取意图分析轮数，默认3轮
-            intent_rounds = getattr(config.api, 'intent_analysis_rounds', 3)
-            max_messages = intent_rounds * 2  # 每轮包含用户和助手各一条消息
-
-            recent_messages = self.get_recent_messages(session_id, count=max_messages)
-            logger.info(f"[博弈论] 分析最近 {intent_rounds} 轮对话，共 {len(recent_messages)} 条消息")
-
-            # 异步执行分析任务
-            async def _execute_analysis():
-                try:
-                    await background_analyzer.analyze_intent_async(recent_messages, session_id)
-                finally:
-                    # 无论成功与否，都清除分析状态
-                    self.analysis_in_progress[session_id] = False
-                    logger.info(f"[博弈论] 会话 {session_id} 意图分析完成，状态已清除")
-
-            asyncio.create_task(_execute_analysis())
-        except Exception as e:
-            # 发生异常时也要清除分析状态
-            self.analysis_in_progress[session_id] = False
-            logger.error(f"后台意图分析触发失败: {e}")
-    
     def get_all_sessions_api(self):
         """获取所有会话信息 - API接口"""
         try:

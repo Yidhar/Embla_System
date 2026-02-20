@@ -10,19 +10,26 @@ const COLOR_MAP = {
   system: 'bg-gray-500',
   user: 'bg-blue-500',
   assistant: 'bg-green-500',
+  info: 'bg-yellow-600',
 }
 
 const ROLE_MAP = {
   system: '系统',
   user: CONFIG.value.ui.user_name,
   assistant: CONFIG.value.system.ai_name,
+  info: '提示',
 }
 
 const reasoningExpanded = ref(true)
 </script>
 
 <template>
-  <div>
+  <!-- info 标记：居中分隔线样式 -->
+  <div v-if="role === 'info'" class="info-divider">
+    <span class="info-text">{{ content }}</span>
+  </div>
+  <!-- 普通消息 -->
+  <div v-else>
     <div class="flex flex-row gap-2 items-center">
       <div class="w-4 h-4 rounded-full" :class="sender ? 'bg-orange-500' : COLOR_MAP[role]" />
       <div class="font-bold text-white">{{ sender ?? ROLE_MAP[role] }}</div>
@@ -130,5 +137,28 @@ const reasoningExpanded = ref(true)
   max-width: 100%;
   overflow-wrap: break-word;
   word-break: break-word;
+}
+
+/* info 标记分隔线 */
+.info-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem 0;
+}
+
+.info-divider::before,
+.info-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.info-text {
+  padding: 0 0.75rem;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.35);
+  white-space: nowrap;
 }
 </style>

@@ -63,12 +63,6 @@ from apiserver.response_util import extract_message  # 导入消息提取工具
 # 对话核心功能已集成到apiserver
 
 
-# 统一后台意图分析触发函数 - 已整合到message_manager
-def _trigger_background_analysis(session_id: str):
-    """统一触发后台意图分析 - 委托给message_manager"""
-    message_manager.trigger_background_analysis(session_id)
-
-
 # 统一保存对话与日志函数 - 已整合到message_manager
 def _save_conversation_and_logs(session_id: str, user_message: str, assistant_response: str):
     """统一保存对话历史与日志 - 委托给message_manager"""
@@ -414,7 +408,6 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     disable_tts: bool = False  # V17: 支持禁用服务器端TTS
     return_audio: bool = False  # V19: 支持返回音频URL供客户端播放
-    skip_intent_analysis: bool = False  # 新增：跳过意图分析
     skill: Optional[str] = None  # 用户主动选择的技能名称，注入完整指令到系统提示词
     images: Optional[List[str]] = None  # 截屏图片 base64 数据列表（data:image/png;base64,...）
     temporary: bool = False  # 临时会话标记，临时会话不持久化到磁盘
@@ -837,10 +830,6 @@ async def chat(request: ChatRequest):
         # 统一保存对话历史与日志
         _save_conversation_and_logs(session_id, user_message, llm_response.content)
 
-        # 在用户消息保存到历史后触发后台意图分析（除非明确跳过）
-        if not request.skip_intent_analysis:
-            _trigger_background_analysis(session_id=session_id)
-
         return ChatResponse(
             response=extract_message(llm_response.content) if llm_response.content else llm_response.content,
             reasoning_content=llm_response.reasoning_content,
@@ -906,6 +895,21 @@ async def chat_stream(request: ChatRequest):
 
             # 用户消息直接传 LLM，技能上下文完全由 system prompt 承载
             effective_message = request.message
+
+            # ====== 启动压缩：将上一个会话的历史 + 更早的压缩记录合并压缩，注入 system prompt ======
+            try:
+                from .context_compressor import compress_for_startup, build_compact_block
+                prev_session_id = message_manager._get_previous_session_id(session_id)
+                previous_compact = message_manager.get_session_compact(prev_session_id) if prev_session_id else ""
+                prev_messages = message_manager._get_previous_session_messages(session_id)
+                if prev_messages or previous_compact:
+                    summary = await compress_for_startup(prev_messages, previous_compact=previous_compact)
+                    if summary:
+                        system_prompt += build_compact_block(summary)
+                        message_manager.set_session_compact(session_id, summary)
+                        logger.info(f"[启动压缩] 已将上一会话摘要注入 system prompt ({len(summary)} 字)")
+            except Exception as e:
+                logger.debug(f"[启动压缩] 跳过: {e}")
 
             # 使用消息管理器构建完整的对话消息
             messages = message_manager.build_conversation_messages(
@@ -988,18 +992,16 @@ async def chat_stream(request: ChatRequest):
             # 记录每轮的content，用于在每轮结束时完成TTS处理
             current_round_text = ""
             is_tool_event = False  # 标记当前是否在处理工具事件（不送TTS）
+            was_compressed = False  # 运行时是否执行过上下文压缩（用于保存 info 标记）
 
             async for chunk in run_agentic_loop(messages, session_id, model_override=model_override):
-                # chunk 格式: "data: <base64_json>\n\n"
                 if chunk.startswith("data: "):
                     try:
-                        import base64
                         import json as json_module
 
                         data_str = chunk[6:].strip()
                         if data_str and data_str != "[DONE]":
-                            decoded = base64.b64decode(data_str).decode("utf-8")
-                            chunk_data = json_module.loads(decoded)
+                            chunk_data = json_module.loads(data_str)
                             chunk_type = chunk_data.get("type", "content")
                             chunk_text = chunk_data.get("text", "")
 
@@ -1048,6 +1050,9 @@ async def chat_stream(request: ChatRequest):
                             elif chunk_type == "round_start":
                                 # 新一轮开始，重置工具事件标记
                                 is_tool_event = False
+                            elif chunk_type == "compress_info":
+                                # 运行时压缩完成，标记后续需要保存 info 消息
+                                was_compressed = True
 
                             # 透传所有 chunk 给前端（content/reasoning/tool events）
                             yield chunk
@@ -1119,11 +1124,10 @@ async def chat_stream(request: ChatRequest):
             # 统一保存对话历史与日志
             _save_conversation_and_logs(session_id, user_message, complete_response)
 
-            # Agentic loop 模式下跳过后台意图分析（工具调用已在loop中处理）
-            # 仅在非 agentic 模式或明确需要时触发后台分析
-            if not request.skip_intent_analysis:
-                # 后台分析仍可用于 Live2D 检测等辅助功能
-                pass
+            # 运行时压缩成功时，在会话末尾追加 info 标记
+            # 该标记持久化到磁盘，下次启动用于判断上一个会话是否已被压缩
+            if was_compressed:
+                message_manager.add_message(session_id, "info", "【已压缩上下文】")
 
             # [DONE] 信号已由 llm_service.stream_chat_with_context 发送，无需重复
 
@@ -1931,7 +1935,7 @@ async def _trigger_chat_stream_no_intent(session_id: str, response_text: str):
             "session_id": session_id,
             "disable_tts": False,
             "return_audio": False,
-            "skip_intent_analysis": True,  # 关键：跳过意图分析
+
         }
 
         # 调用现有的流式对话接口
@@ -2007,7 +2011,7 @@ async def _send_ai_response_directly(session_id: str, response_text: str):
             "session_id": session_id,
             "disable_tts": False,
             "return_audio": False,
-            "skip_intent_analysis": True,
+
         }
 
         from system.config import get_server_port
