@@ -1033,6 +1033,16 @@ class LLMService:
         if retryable_types and isinstance(error, retryable_types):
             return True
 
+        exc_name = type(error).__name__.lower()
+        exc_module = type(error).__module__.lower()
+        # Some provider/client stacks raise timeout/connection errors with empty str(error).
+        if any(marker in exc_name for marker in ("timeout", "connectionerror", "connecterror", "readerror")):
+            return True
+        if exc_module.startswith(("httpx", "httpcore")) and any(
+            marker in exc_name for marker in ("connect", "read", "write", "network", "protocol")
+        ):
+            return True
+
         text = str(error).lower()
         transient_markers = (
             "connection error",
@@ -1052,7 +1062,10 @@ class LLMService:
         """Trim noisy LiteLLM hint/provider lines from surfaced error text."""
         raw = str(error or "").strip()
         if not raw:
-            return "unknown error"
+            error_type = type(error).__name__ if error is not None else "UnknownError"
+            args = getattr(error, "args", ())
+            arg_text = " | ".join(str(item).strip() for item in args if str(item).strip())
+            return f"{error_type}: {arg_text}" if arg_text else f"{error_type}: empty error message"
 
         skip_markers = (
             "provider list:",
@@ -1079,6 +1092,22 @@ class LLMService:
             if not deduped or deduped[-1] != line:
                 deduped.append(line)
         return " | ".join(deduped)
+
+    @staticmethod
+    def _describe_exception(error: Any) -> str:
+        """Build a structured exception summary for internal logs."""
+        if error is None:
+            return "UnknownError"
+        exc_type = type(error)
+        name = f"{exc_type.__module__}.{exc_type.__name__}"
+        raw = str(error).strip()
+        if raw:
+            return f"{name}: {raw}"
+        args = getattr(error, "args", ())
+        arg_text = " | ".join(str(item).strip() for item in args if str(item).strip())
+        if arg_text:
+            return f"{name}: {arg_text}"
+        return f"{name}: <empty message>"
 
     async def stream_chat_with_context(
         self,
@@ -1243,25 +1272,46 @@ class LLMService:
                 return
 
             except Exception as e:
-                if self._is_retryable_stream_exception(e):
-                    safe_error = self._sanitize_litellm_error_text(e)
-                    if attempt < max_attempts - 1:
-                        logger.warning(
-                            "Streaming call connection issue (attempt %s/%s): %s",
-                            attempt + 1,
-                            max_attempts,
-                            safe_error,
-                        )
-                        await asyncio.sleep(1 + attempt)
-                        continue
+                is_retryable = self._is_retryable_stream_exception(e)
+                safe_error = self._sanitize_litellm_error_text(e)
+                detailed_error = self._describe_exception(e)
+
+                if attempt < max_attempts - 1:
+                    issue_kind = "connection issue" if is_retryable else "unexpected error"
+                    logger.warning(
+                        "Streaming call %s (attempt %s/%s), retrying: %s (%s)",
+                        issue_kind,
+                        attempt + 1,
+                        max_attempts,
+                        safe_error,
+                        detailed_error,
+                    )
+                    await asyncio.sleep(1 + attempt)
+                    continue
+
+                if is_retryable:
+                    logger.error(
+                        "Streaming connection issue exhausted after %s attempts: %s (%s)",
+                        max_attempts,
+                        safe_error,
+                        detailed_error,
+                    )
                     yield self._format_sse_chunk(
                         "content",
                         f"Streaming call error (connection issue after {max_attempts} retries): {safe_error}",
                     )
                     return
-                safe_error = self._sanitize_litellm_error_text(e)
-                logger.error("Streaming chat failed: %s", safe_error)
-                yield self._format_sse_chunk("content", f"Streaming call error: {safe_error}")
+
+                logger.exception(
+                    "Streaming chat failed after %s attempts: %s (%s)",
+                    max_attempts,
+                    safe_error,
+                    detailed_error,
+                )
+                yield self._format_sse_chunk(
+                    "content",
+                    f"Streaming call error (unexpected issue after {max_attempts} retries): {safe_error}",
+                )
                 return
 
     def _format_sse_chunk(self, chunk_type: str, text: str) -> str:

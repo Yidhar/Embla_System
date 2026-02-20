@@ -10,7 +10,7 @@ const MAX_PLAYBACK_DURATION = 30000 // 30秒最大播放时长
 export function speak(text: string): Promise<void> {
   stop()
   const tts = CONFIG.value.tts
-  const url = `http://localhost:${tts.port}/v1/audio/speech`
+  const url = '/tts/speech'
 
   return fetch(url, {
     method: 'POST',

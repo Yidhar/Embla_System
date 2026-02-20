@@ -20,11 +20,27 @@ export function setAuthExpiredSuppressed(value: boolean) {
 let isRefreshing = false
 let refreshSubscribers: Array<(newToken: string) => void> = []
 
+function normalizeApiBaseUrl(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+  if (trimmed === '/') {
+    return ''
+  }
+  return trimmed.replace(/\/+$/, '')
+}
+
+const ENV_API_BASE_URL = normalizeApiBaseUrl(import.meta.env.VITE_API_BASE_URL)
+
 export class ApiClient {
   instance: AxiosInstance
 
   get endpoint() {
-    return `http://localhost:${unref(this.port)}`
+    return ENV_API_BASE_URL ?? `http://localhost:${unref(this.port)}`
   }
 
   constructor(readonly port: MaybeRef<number>) {

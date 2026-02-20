@@ -9,10 +9,12 @@ import base64
 import json
 import logging
 import re
+import uuid
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from system.config import get_config, get_server_port
+from system.coding_intent import contains_direct_coding_signal, extract_latest_user_message, requires_codex_for_messages
 from .native_tools import get_native_tool_executor
 
 logger = logging.getLogger(__name__)
@@ -237,6 +239,103 @@ def _extract_terminal_stream_error_text(text: str) -> str:
     return normalized if any(marker in lowered for marker in markers) else ""
 
 
+_CODING_KEYWORDS = (
+    "修复",
+    "实现",
+    "重构",
+    "改造",
+    "写代码",
+    "代码",
+    "开发",
+    "bug",
+    "fix",
+    "implement",
+    "refactor",
+    "coding",
+    "unit test",
+    "integration test",
+    "lint",
+    "compile",
+    "build",
+    "repo",
+    "repository",
+)
+_CODEX_SERVICE_ALIASES = {"codex-cli", "codex-mcp"}
+_CODEX_TOOL_NAMES = {"ask-codex", "brainstorm", "help", "ping"}
+_MUTATING_NATIVE_TOOL_NAMES = {"write_file", "git_checkout_file"}
+
+
+def _extract_latest_user_message(messages: List[Dict[str, Any]]) -> str:
+    return extract_latest_user_message(messages)
+
+
+def _looks_like_coding_request(text: str) -> bool:
+    if contains_direct_coding_signal(text):
+        return True
+    lowered = (text or "").lower()
+    return any(keyword in lowered for keyword in _CODING_KEYWORDS)
+
+
+def _is_codex_mcp_call(call: Dict[str, Any]) -> bool:
+    if str(call.get("agentType", "")).strip().lower() != "mcp":
+        return False
+    service = str(call.get("service_name", "")).strip().lower()
+    tool = str(call.get("tool_name", "")).strip().lower()
+    if tool in _CODEX_TOOL_NAMES and (not service or service in _CODEX_SERVICE_ALIASES):
+        return True
+    return service in _CODEX_SERVICE_ALIASES
+
+
+def _is_mutating_native_call(call: Dict[str, Any]) -> bool:
+    if str(call.get("agentType", "")).strip().lower() != "native":
+        return False
+    tool_name = str(call.get("tool_name", "")).strip().lower()
+    return tool_name in _MUTATING_NATIVE_TOOL_NAMES
+
+
+def _build_forced_codex_call(user_request: str, round_num: int) -> Dict[str, Any]:
+    prompt = user_request.strip() if user_request else ""
+    if not prompt:
+        prompt = "Complete the pending coding task in current repository."
+
+    return {
+        "agentType": "mcp",
+        "service_name": "codex-cli",
+        "tool_name": "ask-codex",
+        "message": prompt,
+        "sandboxMode": "workspace-write",
+        "approvalPolicy": "on-failure",
+        "_tool_call_id": f"forced_codex_round_{round_num}",
+    }
+
+
+def _apply_codex_first_guard(
+    actionable_calls: List[Dict[str, Any]],
+    *,
+    requires_codex: bool,
+    codex_engaged: bool,
+    latest_user_request: str,
+    round_num: int,
+) -> Tuple[List[Dict[str, Any]], bool, int]:
+    """Ensure coding tasks route through codex before mutating local native tools."""
+    if not requires_codex or codex_engaged:
+        return actionable_calls, codex_engaged, 0
+
+    if any(_is_codex_mcp_call(call) for call in actionable_calls):
+        return actionable_calls, True, 0
+
+    blocked_mutating = 0
+    passthrough_calls: List[Dict[str, Any]] = []
+    for call in actionable_calls:
+        if _is_mutating_native_call(call):
+            blocked_mutating += 1
+            continue
+        passthrough_calls.append(call)
+
+    forced_calls = [_build_forced_codex_call(latest_user_request, round_num), *passthrough_calls]
+    return forced_calls, True, blocked_mutating
+
+
 _WORKFLOW_PHASES = {"plan", "execute", "verify", "repair"}
 _WORKFLOW_PHASE_STATUS = {"start", "success", "error", "skip"}
 
@@ -325,6 +424,62 @@ def _detect_legacy_tool_protocol_violation(
     return None
 
 
+def _shorten_for_log(value: Any, limit: int = 300) -> str:
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."
+
+
+def _normalize_codex_mcp_call_payload(call: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(call or {})
+    tool_name = str(normalized.get("tool_name", "")).strip()
+    if tool_name != "ask-codex":
+        return normalized
+
+    nested_args = normalized.get("arguments")
+    prompt = normalized.get("prompt")
+    message = normalized.get("message")
+
+    if (prompt is None or prompt == "") and isinstance(message, str) and message.strip():
+        normalized["prompt"] = message
+        prompt = message
+
+    if (prompt is None or prompt == "") and isinstance(nested_args, dict):
+        nested_prompt = nested_args.get("prompt")
+        nested_message = nested_args.get("message")
+        if isinstance(nested_prompt, str) and nested_prompt.strip():
+            normalized["prompt"] = nested_prompt
+        elif isinstance(nested_message, str) and nested_message.strip():
+            normalized["prompt"] = nested_message
+
+    normalized.pop("message", None)
+    normalized.setdefault("sandboxMode", "workspace-write")
+    normalized.setdefault("approvalPolicy", "on-failure")
+    return normalized
+
+
+def _extract_mcp_call_status(raw_result: Any) -> Tuple[str, str]:
+    if not isinstance(raw_result, str):
+        return "ok", _shorten_for_log(raw_result)
+    try:
+        parsed = json.loads(raw_result)
+    except Exception:
+        return "ok", _shorten_for_log(raw_result)
+
+    if not isinstance(parsed, dict):
+        return "ok", _shorten_for_log(raw_result)
+
+    status = str(parsed.get("status", "ok"))
+    if "message" in parsed:
+        detail = parsed.get("message", "")
+    elif "result" in parsed:
+        detail = parsed.get("result", "")
+    else:
+        detail = raw_result
+    return status, _shorten_for_log(detail)
+
+
 # ---------------------------------------------------------------------------
 # 工具执行
 # ---------------------------------------------------------------------------
@@ -332,8 +487,10 @@ def _detect_legacy_tool_protocol_violation(
 
 async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
     """执行单个MCP调用"""
+    call = _normalize_codex_mcp_call_payload(call)
     service_name = call.get("service_name", "")
     tool_name = call.get("tool_name", "")
+    call_id = str(call.get("_tool_call_id") or f"mcp_call_{tool_name or 'unknown'}")
 
     if not service_name and tool_name in {
         "ask_guide",
@@ -353,6 +510,16 @@ async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
         call.setdefault("sandboxMode", "workspace-write")
         call.setdefault("approvalPolicy", "on-failure")
 
+    prompt_len = len(str(call.get("prompt") or "")) if tool_name == "ask-codex" else 0
+    logger.info(
+        "[AgenticLoop] MCP tool start id=%s service=%s tool=%s prompt_len=%s payload_keys=%s",
+        call_id,
+        service_name or "<missing>",
+        tool_name or "<missing>",
+        prompt_len,
+        sorted(call.keys()),
+    )
+
     # 游戏攻略功能仅登录用户可用
     if service_name == "game_guide":
         from apiserver import naga_auth
@@ -371,6 +538,29 @@ async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
 
         manager = get_mcp_manager()
         result = await manager.unified_call(service_name, call)
+        mcp_status, mcp_detail = _extract_mcp_call_status(result)
+        if mcp_status == "error":
+            logger.warning(
+                "[AgenticLoop] MCP tool failed id=%s service=%s tool=%s detail=%s",
+                call_id,
+                service_name,
+                tool_name,
+                mcp_detail,
+            )
+            return {
+                "tool_call": call,
+                "result": result,
+                "status": "error",
+                "service_name": service_name,
+                "tool_name": tool_name,
+            }
+        logger.info(
+            "[AgenticLoop] MCP tool success id=%s service=%s tool=%s detail=%s",
+            call_id,
+            service_name,
+            tool_name,
+            mcp_detail,
+        )
         return {
             "tool_call": call,
             "result": result,
@@ -379,7 +569,7 @@ async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
             "tool_name": tool_name,
         }
     except Exception as e:
-        logger.error(f"[AgenticLoop] MCP调用失败: service={service_name}, error={e}")
+        logger.error("[AgenticLoop] MCP调用异常 id=%s service=%s tool=%s error=%s", call_id, service_name, tool_name, e)
         return {
             "tool_call": call,
             "result": f"调用失败: {e}",
@@ -545,7 +735,20 @@ async def _execute_tool_call_with_retry(
     retry_backoff_seconds: float,
 ) -> Dict[str, Any]:
     max_attempts = max(1, int(max_retries) + 1)
+    call_id = str(call.get("_tool_call_id") or f"tool_{uuid.uuid4().hex[:8]}")
+    agent_type = str(call.get("agentType", ""))
+    service_name = str(call.get("service_name", ""))
+    tool_name = str(call.get("tool_name", call.get("task_type", "")))
     for attempt in range(1, max_attempts + 1):
+        logger.info(
+            "[AgenticLoop] tool attempt start id=%s agent=%s service=%s tool=%s attempt=%s/%s",
+            call_id,
+            agent_type,
+            service_name or "<n/a>",
+            tool_name or "<n/a>",
+            attempt,
+            max_attempts,
+        )
         try:
             async with semaphore:
                 result = await _execute_single_tool_call(call, session_id)
@@ -557,6 +760,15 @@ async def _execute_tool_call_with_retry(
                 "service_name": "unknown",
                 "tool_name": "unknown",
             }
+
+        logger.info(
+            "[AgenticLoop] tool attempt done id=%s status=%s service=%s tool=%s result=%s",
+            call_id,
+            result.get("status", "unknown"),
+            result.get("service_name", service_name or "unknown"),
+            result.get("tool_name", tool_name or "unknown"),
+            _shorten_for_log(result.get("result", "")),
+        )
 
         if result.get("status") != "error":
             if attempt > 1:
@@ -846,6 +1058,28 @@ def _convert_structured_tool_calls(
                 validation_errors.append(f"mcp_call.arguments 必须是对象: id={call_id}")
                 continue
             if mcp_tool_name == "ask-codex":
+                prompt = arg_payload.get("prompt")
+                if (
+                    (prompt is None or prompt == "")
+                    and isinstance(args.get("prompt"), str)
+                    and args.get("prompt", "").strip()
+                ):
+                    arg_payload["prompt"] = args.get("prompt", "")
+                    prompt = arg_payload["prompt"]
+                if (prompt is None or prompt == "") and isinstance(arg_payload.get("message"), str):
+                    msg = arg_payload.get("message", "").strip()
+                    if msg:
+                        arg_payload["prompt"] = msg
+                        prompt = msg
+                if (prompt is None or prompt == "") and isinstance(args.get("message"), str):
+                    top_msg = args.get("message", "").strip()
+                    if top_msg:
+                        arg_payload["prompt"] = top_msg
+                        prompt = top_msg
+                arg_payload.pop("message", None)
+                if prompt is None or str(prompt).strip() == "":
+                    validation_errors.append(f"mcp_call ask-codex 缺少 prompt/message: id={call_id}")
+                    continue
                 arg_payload.setdefault("sandboxMode", "workspace-write")
                 arg_payload.setdefault("approvalPolicy", "on-failure")
             merged_call.update(arg_payload)
@@ -948,6 +1182,12 @@ async def run_agentic_loop(
     policy = _resolve_agentic_loop_policy(max_rounds)
     runtime = AgenticLoopRuntimeState()
     needs_summary = False
+    latest_user_request = _extract_latest_user_message(messages)
+    requires_codex = _looks_like_coding_request(latest_user_request) or requires_codex_for_messages(messages)
+    codex_engaged = False
+
+    if requires_codex:
+        logger.info("[AgenticLoop] coding request detected, enabling codex-first guard")
 
     for round_num in range(1, policy.max_rounds + 1):
         runtime.round_num = round_num
@@ -1025,12 +1265,14 @@ async def run_agentic_loop(
 
             return drained_sanitized
 
+        round_tool_choice = "required" if requires_codex and not codex_engaged else "auto"
+
         async for chunk in llm_service.stream_chat_with_context(
             messages,
             get_config().api.temperature,
             model_override=model_override,
             tools=tool_definitions,
-            tool_choice="auto",
+            tool_choice=round_tool_choice,
         ):
             should_passthrough_chunk = True
             if chunk.startswith("data: "):
@@ -1139,12 +1381,31 @@ async def run_agentic_loop(
         legacy_protocol_error = _detect_legacy_tool_protocol_violation(complete_text, structured_tool_calls)
         if legacy_protocol_error:
             validation_errors.append(legacy_protocol_error)
+
+        actionable_calls, codex_engaged, blocked_mutating_calls = _apply_codex_first_guard(
+            actionable_calls,
+            requires_codex=requires_codex,
+            codex_engaged=codex_engaged,
+            latest_user_request=latest_user_request,
+            round_num=round_num,
+        )
+        if requires_codex and blocked_mutating_calls > 0:
+            logger.info(
+                "[AgenticLoop] round %s blocked %s mutating native call(s) before codex handoff",
+                round_num,
+                blocked_mutating_calls,
+            )
+
         validation_results = _build_validation_results(validation_errors)
         pending_tool_intent = False
         explicit_no_tool_completion = False
         if not actionable_calls and not validation_results:
             pending_tool_intent = _looks_like_pending_tool_intent(complete_text)
             explicit_no_tool_completion = _is_explicit_no_tool_completion(complete_text)
+
+            if requires_codex and not codex_engaged:
+                pending_tool_intent = True
+                explicit_no_tool_completion = False
 
         def _build_round_model_output_event(*, fallback_text: str) -> str:
             output_text = complete_text if isinstance(complete_text, str) else str(complete_text)
@@ -1399,8 +1660,9 @@ async def run_agentic_loop(
                 yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
                 break
 
+            codex_retry_required = requires_codex and not codex_engaged
             should_retry_no_tool = (
-                (pending_tool_intent or policy.inject_no_tool_feedback)
+                (codex_retry_required or pending_tool_intent or policy.inject_no_tool_feedback)
                 and runtime.consecutive_no_tool_rounds < policy.max_consecutive_no_tool_rounds
                 and round_num < policy.max_rounds
             )
@@ -1423,7 +1685,15 @@ async def run_agentic_loop(
                 )
                 if repair_start_event:
                     yield repair_start_event
-                if pending_tool_intent:
+                if codex_retry_required:
+                    feedback_text = (
+                        "[系统反馈] 当前请求属于代码开发任务，必须先调用 Codex MCP 工具。"
+                        "请直接发起 mcp_call，参数示例："
+                        "service_name='codex-cli', tool_name='ask-codex', "
+                        "arguments={'prompt':'<实现任务>', 'sandboxMode':'workspace-write', 'approvalPolicy':'on-failure'}。"
+                        "不要直接输出最终答案。"
+                    )
+                elif pending_tool_intent:
                     feedback_text = (
                         "[系统反馈] 你上一轮表示将使用工具，但没有实际发起函数调用。"
                         "请立即调用合适函数继续执行；只有在无需任何工具且任务已完成时才直接给最终答案，"

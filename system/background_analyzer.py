@@ -6,15 +6,128 @@
 """
 
 import asyncio
+import json
 import time
 import httpx
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
 from system.config import config, logger
+from system.coding_intent import extract_latest_user_message as extract_latest_user_message_shared
+from system.coding_intent import requires_codex_for_messages
 
 from system.config import get_prompt
 
 if TYPE_CHECKING:
     from langchain_openai import ChatOpenAI
+
+
+_CODING_KEYWORDS = (
+    "修复",
+    "实现",
+    "重构",
+    "改造",
+    "写代码",
+    "代码",
+    "开发",
+    "bug",
+    "fix",
+    "implement",
+    "refactor",
+    "coding",
+    "unit test",
+    "integration test",
+    "lint",
+    "compile",
+    "build",
+    "repo",
+    "repository",
+)
+_CODEX_SERVICE_ALIASES = {"codex-cli", "codex-mcp"}
+_CODEX_TOOL_ALIASES = {"ask-codex", "brainstorm", "help", "ping"}
+_MUTATING_NATIVE_TOOL_NAMES = {"write_file", "git_checkout_file"}
+
+
+def _extract_latest_user_message(messages: List[Dict[str, str]]) -> str:
+    return extract_latest_user_message_shared(messages)
+
+
+def _looks_like_coding_request(text: str) -> bool:
+    lowered = (text or "").lower()
+    if any(keyword in lowered for keyword in _CODING_KEYWORDS):
+        return True
+    return requires_codex_for_messages([{"role": "user", "content": text or ""}])
+
+
+def _is_codex_mcp_call(call: Dict[str, Any]) -> bool:
+    if str(call.get("agentType", "")).strip().lower() != "mcp":
+        return False
+    service = str(call.get("service_name", "")).strip().lower()
+    tool = str(call.get("tool_name", "")).strip().lower()
+    if tool in _CODEX_TOOL_ALIASES and (not service or service in _CODEX_SERVICE_ALIASES):
+        return True
+    return service in _CODEX_SERVICE_ALIASES
+
+
+def _is_mutating_native_call(call: Dict[str, Any]) -> bool:
+    if str(call.get("agentType", "")).strip().lower() != "native":
+        return False
+    tool_name = str(call.get("tool_name", "")).strip().lower()
+    return tool_name in _MUTATING_NATIVE_TOOL_NAMES
+
+
+def _shorten_for_log(value: Any, limit: int = 300) -> str:
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "..."
+
+
+def _normalize_codex_mcp_call_payload(call: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(call or {})
+    tool_name = str(normalized.get("tool_name", "")).strip()
+    if tool_name != "ask-codex":
+        return normalized
+
+    nested_args = normalized.get("arguments")
+    prompt = normalized.get("prompt")
+    message = normalized.get("message")
+
+    if (prompt is None or prompt == "") and isinstance(message, str) and message.strip():
+        normalized["prompt"] = message
+        prompt = message
+
+    if (prompt is None or prompt == "") and isinstance(nested_args, dict):
+        nested_prompt = nested_args.get("prompt")
+        nested_message = nested_args.get("message")
+        if isinstance(nested_prompt, str) and nested_prompt.strip():
+            normalized["prompt"] = nested_prompt
+        elif isinstance(nested_message, str) and nested_message.strip():
+            normalized["prompt"] = nested_message
+
+    normalized.pop("message", None)
+    normalized.setdefault("sandboxMode", "workspace-write")
+    normalized.setdefault("approvalPolicy", "on-failure")
+    return normalized
+
+
+def _extract_mcp_result_status(raw_result: Any) -> Tuple[str, str]:
+    if not isinstance(raw_result, str):
+        return "ok", _shorten_for_log(raw_result)
+    try:
+        parsed = json.loads(raw_result)
+    except Exception:
+        return "ok", _shorten_for_log(raw_result)
+
+    if not isinstance(parsed, dict):
+        return "ok", _shorten_for_log(raw_result)
+
+    status = str(parsed.get("status", "ok"))
+    if "message" in parsed:
+        detail = parsed.get("message", "")
+    elif "result" in parsed:
+        detail = parsed.get("result", "")
+    else:
+        detail = raw_result
+    return status, _shorten_for_log(detail)
 
 
 class ConversationAnalyzer:
@@ -380,6 +493,43 @@ class BackgroundAnalyzer:
             self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(timeout=150.0, connect=10.0))
         return self._http_client
 
+    def _enforce_coding_codex_route(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        messages: List[Dict[str, str]],
+    ) -> List[Dict[str, Any]]:
+        latest_user_request = _extract_latest_user_message(messages)
+        if not (_looks_like_coding_request(latest_user_request) or requires_codex_for_messages(messages)):
+            return tool_calls
+
+        normalized_calls = list(tool_calls)
+        has_codex = any(_is_codex_mcp_call(call) for call in normalized_calls)
+        if has_codex:
+            return normalized_calls
+
+        dropped_mutating = 0
+        passthrough_calls: List[Dict[str, Any]] = []
+        for call in normalized_calls:
+            if _is_mutating_native_call(call):
+                dropped_mutating += 1
+                continue
+            passthrough_calls.append(call)
+
+        codex_call = {
+            "agentType": "mcp",
+            "service_name": "codex-cli",
+            "tool_name": "ask-codex",
+            "message": latest_user_request or "Complete the pending coding task in current repository.",
+            "sandboxMode": "workspace-write",
+            "approvalPolicy": "on-failure",
+        }
+        rewritten = [codex_call, *passthrough_calls]
+        logger.info(
+            "[BackgroundAnalyzer] coding request routed to codex first; inserted ask-codex call, dropped_mutating=%s",
+            dropped_mutating,
+        )
+        return rewritten
+
     async def analyze_intent_async(self, messages: List[Dict[str, str]], session_id: str):
         """异步意图分析 - 基于博弈论的背景分析机制"""
         # 检查是否已经有分析在进行中
@@ -428,6 +578,8 @@ class BackgroundAnalyzer:
         try:
             tasks = analysis.get("tasks", []) if isinstance(analysis, dict) else []
             tool_calls = analysis.get("tool_calls", []) if isinstance(analysis, dict) else []
+            if isinstance(tool_calls, list):
+                tool_calls = self._enforce_coding_codex_route(tool_calls, messages)
 
             if not tasks and not tool_calls:
                 await self._notify_ui_tool_status(
@@ -664,8 +816,10 @@ class BackgroundAnalyzer:
             manager = get_mcp_manager()
 
             async def _execute_one(call: Dict[str, Any]):
+                call = _normalize_codex_mcp_call_payload(call)
                 service_name = call.get("service_name", "")
                 tool_name = call.get("tool_name", "")
+                call_id = str(call.get("_tool_call_id") or f"bg_mcp_{tool_name or 'unknown'}")
 
                 if not service_name and tool_name in {
                     "ask_guide",
@@ -685,14 +839,39 @@ class BackgroundAnalyzer:
                     call.setdefault("approvalPolicy", "on-failure")
 
                 if not service_name and not tool_name:
-                    logger.warning(f"[MCP] 工具调用缺少service_name和tool_name，跳过: {call}")
+                    logger.warning("[MCP] 工具调用缺少service_name和tool_name，跳过: %s", call)
                     return
                 try:
+                    prompt_len = len(str(call.get("prompt") or "")) if tool_name == "ask-codex" else 0
+                    logger.info(
+                        "[MCP] 调用开始 id=%s service=%s tool=%s prompt_len=%s payload_keys=%s",
+                        call_id,
+                        service_name or "<missing>",
+                        tool_name or "<missing>",
+                        prompt_len,
+                        sorted(call.keys()),
+                    )
                     result = await manager.unified_call(service_name, call)
-                    logger.info(f"[MCP] 工具调用完成: service={service_name}, result={result[:200] if result else ''}")
+                    mcp_status, detail = _extract_mcp_result_status(result)
+                    if mcp_status == "error":
+                        logger.warning(
+                            "[MCP] 调用失败 id=%s service=%s tool=%s detail=%s",
+                            call_id,
+                            service_name,
+                            tool_name,
+                            detail,
+                        )
+                    else:
+                        logger.info(
+                            "[MCP] 调用成功 id=%s service=%s tool=%s detail=%s",
+                            call_id,
+                            service_name,
+                            tool_name,
+                            detail,
+                        )
                     await self._notify_ui_mcp_result(session_id, service_name, tool_name, result)
                 except Exception as e:
-                    logger.error(f"[MCP] 工具调用失败: service={service_name}, error={e}")
+                    logger.error("[MCP] 调用异常 id=%s service=%s tool=%s error=%s", call_id, service_name, tool_name, e)
                     await self._notify_ui_mcp_result(
                         session_id, service_name, tool_name, f'{{"status": "error", "message": "{e}"}}'
                     )
@@ -720,7 +899,14 @@ class BackgroundAnalyzer:
                 f"http://localhost:{get_server_port('api_server')}/ui_notification",
                 json=payload,
             )
-            logger.info(f"[MCP] 结果已推送到 UI: service={service_name}")
+            status, detail = _extract_mcp_result_status(result)
+            logger.info(
+                "[MCP] 结果已推送到 UI: service=%s tool=%s status=%s detail=%s",
+                service_name,
+                tool_name,
+                status,
+                detail,
+            )
         except Exception as e:
             logger.error(f"[MCP] 推送结果到 UI 失败: {e}")
 

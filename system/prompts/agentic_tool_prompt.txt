@@ -66,6 +66,24 @@
 - 常用工具：`ask_guide`、`calculate_damage`、`get_team_recommendation`。
 - `game_id` 可选；未提供时可让系统自动识别场景。
 
+## 工具文档索引（本地速查）
+
+为减少多轮探测与重复查询，调用工具前优先参考以下文档：
+
+### A. 总览与策略
+- `doc/09-工具调用与任务执行规范.md`：任务发布、Codex 主链路、Native 审阅验证、降级策略。
+- `doc/06-structured-tool-calls-and-local-first-native.md`：结构化工具调用链路与 Local-first 策略。
+- `doc/07-autonomous-agent-sdlc-architecture.md`：自治发布状态机、灰度/回滚语义、治理约束。
+
+### B. 开发与调试
+- `doc/05-dev-startup-and-index.md`：前端启动流程、目录索引与排障清单。
+- `doc/04-api-protocol-proxy-guide.md`：模型 API 协议路由、代理配置与连通性排查。
+
+### C. 代码任务执行约定
+- 代码实现/修复任务：优先 `codex-cli / ask-codex`。
+- 事实核验与证据收集：优先 native（`read_file`、`search_keyword`、`git_*`、`run_cmd`）。
+- 仅诊断审阅不改仓库：`ask-codex` 使用 `read-only`。
+
 ## 可用 MCP 服务如下
 {available_mcp_tools}
 

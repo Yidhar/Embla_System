@@ -134,6 +134,21 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
     - prompt policy now routes external/network capabilities via `mcp` services or native tools only
 47. Prompt verification for this round:
     - `rg -n "(?i)openclaw" system/prompts -S` returned no matches
+48. Added codex-first runtime routing guard for coding tasks:
+    - `apiserver/agentic_tool_loop.py` now detects coding requests and uses `tool_choice=required` until codex tool is engaged.
+    - mutating native calls (`write_file`, `git_checkout_file`) are blocked before first codex call and replaced with forced `codex-cli/ask-codex`.
+    - no-tool retry feedback now explicitly requires `mcp_call` to `codex-cli/ask-codex` for coding tasks.
+49. Aligned background analyzer with codex-first coding policy:
+    - `system/background_analyzer.py` adds coding-intent route enforcement (`_enforce_coding_codex_route`).
+    - when coding intent is detected and codex call is missing, analyzer auto-injects `ask-codex` with `workspace-write + on-failure`.
+    - mutating native calls are removed from analyzer output before codex engagement.
+50. Hardened Codex MCP routing/reliability and observability:
+    - `mcpserver/mcp_manager.py` now performs local-first route with codex-specific local-fail -> mcporter degrade path.
+    - `ask-codex` payload is normalized before dispatch (`message/arguments.message -> prompt`) to avoid `prompt: Required`.
+    - codex external route prefers registered `codex-cli` service, then alias fallback (`codex-mcp`).
+    - added per-call route/status/result logging (start, route selection, fallback, completion/error, preview details).
+    - `apiserver/agentic_tool_loop.py` now marks MCP JSON `status=error` as tool failure (instead of false success), and logs per attempt.
+    - `system/background_analyzer.py` now logs MCP call start/finish/status details and normalizes `ask-codex` prompt payload.
 
 ## Not Yet Implemented (Known Gaps)
 

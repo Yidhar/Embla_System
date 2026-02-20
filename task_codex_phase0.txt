@@ -1,0 +1,16 @@
+请阅读 doc/08-frontend-backend-separation-plan.md 并完成前后端分离改造。
+仅修改以下文件：
+- frontend/src/api/index.ts
+- frontend/src/utils/config.ts
+- frontend/src/utils/tts.ts
+- apiserver/api_server.py
+
+目标：
+1) 前端 API 基址支持环境变量 VITE_API_BASE_URL，保留本地端口回退。
+2) 删除前端 agentPort 透传链路与 setAgentApiPort 调用。
+3) 前端 TTS 请求改为同源 BFF 路由 /tts/speech。
+4) 在 apiserver 新增 POST /tts/speech，调用 voice.tts_wrapper.generate_speech_safe 并返回音频。
+5) 完成后执行最小验证：
+   - 前端构建命令
+   - Python 语法检查 apiserver/api_server.py
+6) 输出修改摘要、验证结果与剩余风险。

@@ -29,8 +29,9 @@ logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 import shutil
 from pathlib import Path
 
@@ -459,6 +460,38 @@ class DocumentProcessRequest(BaseModel):
     session_id: Optional[str] = None
 
 
+class TTSSpeechRequest(BaseModel):
+    model: str = "tts-1"
+    input: str
+    voice: Optional[str] = None
+    speed: float = 1.0
+    response_format: str = "mp3"
+
+
+AUDIO_MEDIA_TYPES = {
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+    "ogg": "audio/ogg",
+    "webm": "audio/webm",
+    "aac": "audio/aac",
+    "flac": "audio/flac",
+    "m4a": "audio/mp4",
+}
+
+
+def _resolve_audio_media_type(response_format: str) -> str:
+    return AUDIO_MEDIA_TYPES.get(response_format.lower(), "application/octet-stream")
+
+
+def _cleanup_temp_file(path: str) -> None:
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.warning(f"[API Server] Failed to remove temp TTS file {path}: {e}")
+
+
 # ============ Local-only auth compatibility endpoints ============
 
 AUTH_DISABLED_DETAIL = "Remote authentication is disabled in local-only mode"
@@ -520,6 +553,41 @@ async def health_check():
 
 # ============ OpenClaw 任务状态查询（对外暴露在 API Server） ============
 
+
+@app.post("/tts/speech")
+async def tts_speech(request: TTSSpeechRequest):
+    text = request.input.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="input is required")
+
+    response_format = (request.response_format or "mp3").strip().lower() or "mp3"
+    tts_config = get_config().tts
+    voice = request.voice or tts_config.default_voice or "zh-CN-XiaoxiaoNeural"
+    speed = request.speed if request.speed is not None else tts_config.default_speed
+
+    try:
+        from voice.tts_wrapper import generate_speech_safe
+
+        audio_file = await asyncio.to_thread(
+            generate_speech_safe,
+            text,
+            voice,
+            response_format,
+            speed,
+        )
+    except Exception as e:
+        logger.error(f"[API Server] TTS generation failed: {e}")
+        raise HTTPException(status_code=500, detail="TTS generation failed") from e
+
+    if not audio_file or not os.path.exists(audio_file):
+        raise HTTPException(status_code=500, detail="TTS generation returned no audio file")
+
+    return FileResponse(
+        path=audio_file,
+        media_type=_resolve_audio_media_type(response_format),
+        filename=f"speech.{response_format}",
+        background=BackgroundTask(_cleanup_temp_file, audio_file),
+    )
 
 @app.get("/openclaw/tasks")
 async def api_openclaw_list_tasks():

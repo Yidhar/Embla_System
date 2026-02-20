@@ -1,5 +1,4 @@
 import { ref, watch } from 'vue'
-import { setAgentApiPort } from '@/api/agent'
 import API, { setCoreApiPort } from '@/api/core'
 
 export interface Model {
@@ -257,7 +256,6 @@ export const backendConnected = ref(false)
 
 interface BackendBootstrapInfo {
   apiPort?: number
-  agentPort?: number
 }
 
 function deepMerge<T extends Record<string, any>>(target: T, source: Record<string, any>): T {
@@ -312,9 +310,6 @@ function applyBootstrapPorts(info?: BackendBootstrapInfo | null) {
   if (isValidPort(info.apiPort)) {
     setCoreApiPort(info.apiPort)
   }
-  if (isValidPort(info.agentPort)) {
-    setAgentApiPort(info.agentPort)
-  }
 }
 
 function bindProgressPortListener() {
@@ -357,7 +352,6 @@ function connectBackend() {
   API.systemConfig().then((res) => {
     CONFIG.value = deepMerge(JSON.parse(JSON.stringify(DEFAULT_CONFIG)), res.config)
     setCoreApiPort(CONFIG.value.api_server.port)
-    setAgentApiPort(CONFIG.value.agentserver.port)
     backendConnected.value = true
     connectRetryDelay = 300 // 重置
     loadSystemPrompt()
