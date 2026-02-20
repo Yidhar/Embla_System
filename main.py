@@ -181,7 +181,7 @@ class ServiceManager:
             return False
 
     def start_all_servers(self):
-        """并行启动所有服务：API(可选)、MCP、Agent、TTS"""
+        """并行启动所有服务：API(可选)、MCP、TTS（不自动启动 OpenClaw/Agent）"""
         print("🚀 正在并行启动所有服务...")
         print("=" * 50)
         threads = []
@@ -195,7 +195,6 @@ class ServiceManager:
                 'api': config.api_server.enabled and config.api_server.auto_start and
                       self.check_port_available(config.api_server.host, config.api_server.port),
                 'mcp': self.check_port_available("0.0.0.0", get_server_port("mcp_server")),
-                'agent': self.check_port_available("127.0.0.1", get_server_port("agent_server")),
                 'tts': self.check_port_available("0.0.0.0", config.tts.port)
             }
 
@@ -217,14 +216,8 @@ class ServiceManager:
                 print(f"⚠️  MCP服务器: 端口 {get_server_port('mcp_server')} 已被占用，跳过启动")
                 service_status['MCP'] = "端口占用"
 
-            # Agent服务器
-            if port_checks['agent']:
-                agent_thread = threading.Thread(target=self._start_agent_server, daemon=True)
-                threads.append(("Agent", agent_thread))
-                service_status['Agent'] = "准备启动"
-            else:
-                print(f"⚠️  Agent服务器: 端口 {get_server_port('agent_server')} 已被占用，跳过启动")
-                service_status['Agent'] = "端口占用"
+            # OpenClaw/Agent 服务不再随主进程自动启动
+            service_status['Agent(OpenClaw)'] = "已禁用自动启动"
 
             # TTS服务器
             if port_checks['tts']:
@@ -258,8 +251,6 @@ class ServiceManager:
                 expected_ports.append(config.api_server.port)
             if port_checks.get('mcp'):
                 expected_ports.append(get_server_port("mcp_server"))
-            if port_checks.get('agent'):
-                expected_ports.append(get_server_port("agent_server"))
             if port_checks.get('tts'):
                 expected_ports.append(config.tts.port)
 
@@ -627,7 +618,6 @@ def kill_port_occupiers():
     all_ports = get_all_server_ports()
     ports = [
         all_ports["api_server"],
-        all_ports["agent_server"],
         all_ports["mcp_server"],
         all_ports["tts_server"],
     ]

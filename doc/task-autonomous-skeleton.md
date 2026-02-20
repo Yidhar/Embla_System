@@ -73,11 +73,23 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
     - explicit `custom_llm_provider` inference in `apiserver/llm_service.py` and `agentserver/task_scheduler.py`
     - openai-compatible model name normalization defaults to `openai/` prefix
     - global logging/environment suppression for LiteLLM noisy provider hints (`system/logging_setup.py`, `system/config.py`)
+32. Wired external MCP dispatch fallback into `mcpserver/mcp_manager.py`:
+    - unresolved services now fallback to `~/.mcporter/config.json` via `mcporter call`
+    - supports `codex-cli <-> codex-mcp` alias resolution for `@cexll/codex-mcp-server`
+    - normalizes `ask-codex` payload (`message -> prompt`) and returns structured JSON result envelope
+33. Verified external Codex MCP execution in runtime environment (`uv run`):
+    - `unified_call("codex-cli", {"tool_name":"ping"})` returns resolved `codex-mcp` + `Pong!`
+    - `unified_call("codex-cli", {"tool_name":"ask-codex", ...})` returns expected model response
+    - `scripts/dod_check.ps1` still passes after integration
+34. Removed OpenClaw/Agent auto-start from backend bootstrap path (`main.py`):
+    - `ServiceManager.start_all_servers()` now starts API/MCP/TTS only
+    - startup plan marks `Agent(OpenClaw)` as disabled instead of spawning thread
+    - `kill_port_occupiers()` no longer force-kills `agent_server` port owners
 
 ## Not Yet Implemented (Known Gaps)
 
 1. Real-time monitor with stall detection extensions (`poll_interval`, `stall_threshold`, adaptive patience) is only skeleton-level.
-2. Codex MCP fallback currently assumes service registration (`codex-cli`) in local MCP manager; no automatic installer/registration flow implemented.
+2. External MCP installation/bootstrap is still manual (e.g., populate `~/.mcporter/config.json` with `codex-cli`/`codex-mcp`); no one-click installer flow in backend yet.
 3. Canary decision currently uses policy + supplied/synthetic windows; no live metrics adapter yet.
 4. Rollback command execution is optional and currently shell-command based.
 5. No security scanner for tool output injection yet.
