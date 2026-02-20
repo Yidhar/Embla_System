@@ -249,8 +249,12 @@ MARKET_ITEMS: List[Dict[str, Any]] = [
 
 
 def _run_command(command: List[str], timeout: int = 30) -> Tuple[int, str, str]:
-    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, shell=(sys.platform == "win32"))
-    return result.returncode, result.stdout.strip(), result.stderr.strip()
+    import locale
+    enc = locale.getpreferredencoding() or "utf-8"
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, shell=(sys.platform == "win32"), encoding=enc, errors="replace")
+    out = (result.stdout or "").strip()
+    err = (result.stderr or "").strip()
+    return result.returncode, out, err
 
 
 def _get_openclaw_version() -> Optional[str]:
