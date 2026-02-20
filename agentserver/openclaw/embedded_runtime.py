@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any
 
 logger = logging.getLogger(__name__)
+OPENCLAW_NPM_VERSION = "2026.2.17"
 
 # 是否为 PyInstaller 打包环境
 IS_PACKAGED: bool = getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
@@ -250,7 +251,7 @@ class EmbeddedRuntime:
             proc = await asyncio.create_subprocess_exec(
                 npm,
                 "install",
-                "openclaw",
+                f"openclaw@{OPENCLAW_NPM_VERSION}",
                 cwd=str(install_dir),
                 env=self.env,
                 stdout=asyncio.subprocess.PIPE,
@@ -553,16 +554,27 @@ class EmbeddedRuntime:
         """
         config_file = Path.home() / ".openclaw" / "openclaw.json"
         if config_file.exists():
+            try:
+                from .llm_config_bridge import ensure_hooks_allow_request_session_key
+
+                ensure_hooks_allow_request_session_key(auto_create=False)
+            except Exception as e:
+                logger.warning(f"配置兼容补丁执行失败（可忽略）: {e}")
             self._onboarded = True
             return True
 
         # 打包环境：自动生成配置
         if self.is_packaged:
-            from .llm_config_bridge import ensure_openclaw_config, inject_naga_llm_config
+            from .llm_config_bridge import (
+                ensure_openclaw_config,
+                inject_naga_llm_config,
+                ensure_hooks_allow_request_session_key,
+            )
 
             try:
                 ensure_openclaw_config()
                 inject_naga_llm_config()
+                ensure_hooks_allow_request_session_key(auto_create=False)
                 self._onboarded = True
                 logger.info("已自动生成 OpenClaw 配置")
                 return True

@@ -135,7 +135,11 @@ async def lifespan(app: FastAPI):
         # 初始化 OpenClaw 客户端 - 三层回退策略
         try:
             from agentserver.openclaw import detect_openclaw, OpenClawConfig as ClientOpenClawConfig
-            from agentserver.openclaw.llm_config_bridge import ensure_openclaw_config, inject_naga_llm_config
+            from agentserver.openclaw.llm_config_bridge import (
+                ensure_openclaw_config,
+                inject_naga_llm_config,
+                ensure_hooks_allow_request_session_key,
+            )
 
             embedded_runtime = get_embedded_runtime()
             mode = embedded_runtime.runtime_mode
@@ -144,28 +148,31 @@ async def lifespan(app: FastAPI):
             has_embedded_openclaw: bool = False
 
             if embedded_runtime.is_packaged:
-                logger.info("打包环境：准备启动内嵌 OpenClaw Gateway")
-
-                # 首次运行时自动执行 onboard 初始化（含 fallback 配置生成）
-                onboard_ok = await embedded_runtime.ensure_onboarded()
-                if not onboard_ok:
-                    logger.error("OpenClaw 初始化失败（onboard + fallback 均失败）")
-
-                # 检测端口是否已被占用
-                if _is_port_in_use(18789):
-                    logger.info("端口 18789 已被占用，跳过内嵌 Gateway 启动")
-                else:
-                    gw_ok = await embedded_runtime.start_gateway()
-                    if gw_ok:
-                        logger.info("内嵌 OpenClaw Gateway 启动成功")
-                    else:
-                        logger.error("内嵌 OpenClaw Gateway 启动失败")
-
-            # === 打包环境 ===
-            if embedded_runtime.is_packaged:
                 has_global_openclaw = shutil.which("openclaw") is not None
                 has_embedded_openclaw = embedded_runtime.openclaw_installed
 
+                if has_global_openclaw:
+                    logger.info("打包环境：检测到全局安装 OpenClaw，跳过内嵌 OpenClaw 初始化/启动")
+                else:
+                    logger.info("打包环境：准备启动内嵌 OpenClaw Gateway")
+
+                    # 首次运行时自动执行 onboard 初始化（含 fallback 配置生成）
+                    onboard_ok = await embedded_runtime.ensure_onboarded()
+                    if not onboard_ok:
+                        logger.error("OpenClaw 初始化失败（onboard + fallback 均失败）")
+
+                    # 检测端口是否已被占用
+                    if _is_port_in_use(18789):
+                        logger.info("端口 18789 已被占用，跳过内嵌 Gateway 启动")
+                    else:
+                        gw_ok = await embedded_runtime.start_gateway()
+                        if gw_ok:
+                            logger.info("内嵌 OpenClaw Gateway 启动成功")
+                        else:
+                            logger.error("内嵌 OpenClaw Gateway 启动失败")
+
+            # === 打包环境 ===
+            if embedded_runtime.is_packaged:
                 if has_global_openclaw:
                     logger.info("打包环境：检测到全局安装的 OpenClaw，优先使用")
                     # 记录使用系统已有，避免卸载时误清理用户目录
@@ -194,6 +201,8 @@ async def lifespan(app: FastAPI):
             # === 统一：按运行时来源处理配置与 Gateway ===
             openclaw_available = has_global_openclaw or has_embedded_openclaw
             if openclaw_available:
+                # 兼容 OpenClaw 2026.2.17+：确保 hooks 允许外部 sessionKey（必须在 Gateway 启动前/初始化前补齐）
+                ensure_hooks_allow_request_session_key(auto_create=False)
                 use_embedded_openclaw = _should_use_embedded_openclaw(embedded_runtime)
 
                 # 仅在内嵌 OpenClaw 场景下自动写 ~/.openclaw 配置并注入 Naga LLM 配置

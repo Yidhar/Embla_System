@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+OPENCLAW_NPM_VERSION = "2026.2.17"
 
 
 class InstallMethod(Enum):
@@ -93,7 +94,8 @@ class OpenClawInstaller:
         },
         "hooks": {
             "enabled": True,
-            "token": ""  # 将在初始化时生成
+            "token": "",  # 将在初始化时生成
+            "allowRequestSessionKey": True,
         },
         "gateway": {
             "port": 18789,
@@ -159,7 +161,12 @@ class OpenClawInstaller:
                     "subagents": {"maxConcurrent": 8},
                 }
             },
-            "hooks": {"enabled": True, "path": "/hooks", "token": token},
+            "hooks": {
+                "enabled": True,
+                "path": "/hooks",
+                "token": token,
+                "allowRequestSessionKey": True,
+            },
             "gateway": {
                 "port": 18789,
                 "mode": "local",
@@ -245,6 +252,13 @@ class OpenClawInstaller:
                 message=f"OpenClaw 已安装 (v{version})",
                 version=version
             )
+        if status == InstallStatus.NEEDS_SETUP:
+            return InstallResult(
+                success=True,
+                status=InstallStatus.NEEDS_SETUP,
+                message=f"OpenClaw 已检测到 (v{version})，仅需初始化配置，无需重装",
+                version=version,
+            )
 
         # 2. 检查 Node.js
         node_ok, node_version = self.check_node_version()
@@ -305,7 +319,7 @@ class OpenClawInstaller:
             npm_exe = runtime.npm_path or "npm"
 
             process = await asyncio.create_subprocess_exec(
-                npm_exe, "install", "-g", "openclaw@latest",
+                npm_exe, "install", "-g", f"openclaw@{OPENCLAW_NPM_VERSION}",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
@@ -452,11 +466,13 @@ class OpenClawInstaller:
             )
 
             # 配置 hooks token
-            if hooks_token and self.OPENCLAW_CONFIG.exists():
+            if self.OPENCLAW_CONFIG.exists():
                 from .config_manager import OpenClawConfigManager
                 config_manager = OpenClawConfigManager()
-                config_manager.set_hooks_token(hooks_token)
                 config_manager.set_hooks_enabled(True)
+                config_manager.set_hooks_allow_request_session_key(True)
+                if hooks_token:
+                    config_manager.set_hooks_token(hooks_token)
 
             # 检查最终状态
             final_status, final_version = self.check_installation()

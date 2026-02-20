@@ -12,12 +12,60 @@ import json
 import logging
 import secrets
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
 OPENCLAW_CONFIG_DIR = Path.home() / ".openclaw"
 OPENCLAW_CONFIG_FILE = OPENCLAW_CONFIG_DIR / "openclaw.json"
+
+
+def _apply_hooks_compat_patch(config_data: Dict[str, Any]) -> bool:
+    """兼容 OpenClaw 新版 hooks 约束，确保允许外部请求携带 sessionKey。"""
+    hooks = config_data.setdefault("hooks", {})
+    if hooks.get("allowRequestSessionKey") is True:
+        return False
+    hooks["allowRequestSessionKey"] = True
+    return True
+
+
+def ensure_hooks_allow_request_session_key(auto_create: bool = False) -> bool:
+    """
+    确保 openclaw.json 中启用 hooks.allowRequestSessionKey=true。
+
+    Args:
+        auto_create: 当配置不存在时是否自动创建最小配置
+
+    Returns:
+        True 表示已满足条件（已存在或已修复），False 表示修复失败
+    """
+    if not OPENCLAW_CONFIG_FILE.exists():
+        if not auto_create:
+            logger.debug("openclaw.json 不存在，跳过 hooks.allowRequestSessionKey 兼容补丁")
+            return False
+        if not ensure_openclaw_config():
+            return False
+
+    try:
+        config_data = json.loads(OPENCLAW_CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.error(f"读取 openclaw.json 失败，无法应用 hooks 兼容补丁: {e}")
+        return False
+
+    changed = _apply_hooks_compat_patch(config_data)
+    if not changed:
+        return True
+
+    try:
+        OPENCLAW_CONFIG_FILE.write_text(
+            json.dumps(config_data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        logger.info("已启用 OpenClaw hooks.allowRequestSessionKey=true（兼容外部 sessionKey）")
+        return True
+    except Exception as e:
+        logger.error(f"写入 openclaw.json 失败，hooks 兼容补丁未生效: {e}")
+        return False
 
 
 def ensure_openclaw_config() -> bool:
@@ -47,6 +95,7 @@ def ensure_openclaw_config() -> bool:
             "hooks": {
                 "enabled": True,
                 "token": hooks_token,
+                "allowRequestSessionKey": True,
             },
             "tools": {"allow": ["*"]},
             "agents": {
@@ -87,6 +136,7 @@ def inject_naga_llm_config() -> bool:
         from system.config import config as naga_config
 
         config_data = json.loads(OPENCLAW_CONFIG_FILE.read_text(encoding="utf-8"))
+        _apply_hooks_compat_patch(config_data)
 
         # 构建 naga provider
         provider_name = "naga"

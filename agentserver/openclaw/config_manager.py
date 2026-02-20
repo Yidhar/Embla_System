@@ -59,6 +59,7 @@ class OpenClawConfigManager:
         # Hooks 配置
         "hooks.enabled",
         "hooks.token",
+        "hooks.allowRequestSessionKey",
 
         # Skills 配置
         "skills.entries",
@@ -297,6 +298,10 @@ class OpenClawConfigManager:
         """设置 Hooks token"""
         return self.set("hooks.token", token)
 
+    def set_hooks_allow_request_session_key(self, enabled: bool) -> ConfigUpdateResult:
+        """允许/禁止外部 hooks 请求传入 sessionKey"""
+        return self.set("hooks.allowRequestSessionKey", enabled)
+
     def generate_hooks_token(self) -> str:
         """生成随机 Hooks token"""
         return secrets.token_hex(24)
@@ -363,6 +368,7 @@ class OpenClawConfigManager:
         updates = {
             "hooks.enabled": True,
             "hooks.token": hooks_token,
+            "hooks.allowRequestSessionKey": True,
             # 搜索集成：设置 BRAVE_API_KEY 占位值，走本地代理
             "env.BRAVE_API_KEY": "naga-proxy",
         }
