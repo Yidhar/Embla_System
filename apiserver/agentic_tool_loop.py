@@ -1409,10 +1409,6 @@ async def run_agentic_loop(
                     f"[AgenticLoop] Round {round_num}: 无工具调用，注入纠偏反馈后继续下一轮 "
                     f"(连续无工具 {runtime.consecutive_no_tool_rounds}/{policy.max_consecutive_no_tool_rounds})"
                 )
-                # Even if we retry due to missing tool calls, emit this round's model text first.
-                # Otherwise valid model output is dropped from frontend chat history.
-                for buffered_chunk in _drain_buffered_round_chunks():
-                    yield buffered_chunk
                 assistant_content = complete_text if complete_text else "(本轮未发起工具调用)"
                 repair_start_event = _format_workflow_stage_event(
                     round_num,
