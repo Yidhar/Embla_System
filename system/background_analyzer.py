@@ -676,6 +676,14 @@ class BackgroundAnalyzer:
                     service_name = "game_guide"
                     call["service_name"] = service_name
 
+                if not service_name and tool_name in {"ask-codex", "brainstorm", "help", "ping"}:
+                    service_name = "codex-cli"
+                    call["service_name"] = service_name
+
+                if tool_name == "ask-codex":
+                    call.setdefault("sandboxMode", "workspace-write")
+                    call.setdefault("approvalPolicy", "on-failure")
+
                 if not service_name and not tool_name:
                     logger.warning(f"[MCP] 工具调用缺少service_name和tool_name，跳过: {call}")
                     return

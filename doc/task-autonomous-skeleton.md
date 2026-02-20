@@ -85,17 +85,43 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
     - `ServiceManager.start_all_servers()` now starts API/MCP/TTS only
     - startup plan marks `Agent(OpenClaw)` as disabled instead of spawning thread
     - `kill_port_occupiers()` no longer force-kills `agent_server` port owners
+35. Added one-click backend API for Codex MCP bootstrap in `apiserver/api_server.py`:
+    - new endpoint `POST /mcp/codex/setup` auto-writes `codex-cli` (and optional aliases) to `~/.mcporter/config.json`
+    - supports optional global install mode (`npm install -g @cexll/codex-mcp-server`) or default `npx` mode
+    - includes built-in connectivity validation (`ping`, optional `ask-codex`) and structured diagnostics for frontend display
+36. Verified new setup endpoint flow with runtime call:
+    - request `install_mode=npx, write_compat_aliases=true, validate_connection=true` returned `status=success`
+    - wrote both `codex-cli` and `codex-mcp`, and `ping` validation passed
+    - `scripts/dod_check.ps1` still passes after API integration
+37. Completed frontend UI closure for Codex MCP one-click setup:
+    - added `setupCodexMcp()` API method/types in `frontend/src/api/core.ts`
+    - wired `SkillView` MCP panel with one-click button, in-place progress/status, ping result and warnings display
+    - verified frontend build (`cd frontend && npm run build`) passes
+38. Switched coding-task routing policy to Codex-first (prompt + runtime chain):
+    - updated prompt stack (`agentic_tool_prompt` / `tool_dispatch_prompt` / `conversation_analyzer_prompt` / `conversation_style_prompt`) to treat `codex-cli/ask-codex` as primary coding execution path
+    - removed previous "Codex only verifying fallback" wording and replaced with "coding mainline + read-only for diagnosis-only cases"
+39. Hardened coding tool call chain for Codex dispatch:
+    - `apiserver/agentic_tool_loop.py`: auto-resolve missing `service_name` to `codex-cli` for codex tool names and inject default `workspace-write + on-failure` for `ask-codex`
+    - `system/background_analyzer.py`: same codex default routing when planner emits MCP calls without `service_name`
+    - `mcpserver/mcp_manager.py`: support nested `arguments` merge + default codex execution params for external mcporter calls
+40. Changed autonomous CLI default execution target to Codex:
+    - `system/config.py`, `autonomous/system_agent.py`, `autonomous/dispatcher.py`, `autonomous/tools/cli_selector.py`, `autonomous/config/autonomous_config.yaml`, `config.json.example`
+    - defaults now `preferred=codex`, fallback `claude -> gemini`
+41. Verification for Codex-first chain:
+    - py_compile passed on updated routing/config modules
+    - runtime smoke passed: `_execute_mcp_call({"tool_name":"ask-codex","message":"..."})` auto-routed to `codex-cli` and returned model output
+    - `uv run python -m pytest autonomous/tests/test_system_agent_config.py -q` passed
+    - `scripts/dod_check.ps1` passed
 
 ## Not Yet Implemented (Known Gaps)
 
 1. Real-time monitor with stall detection extensions (`poll_interval`, `stall_threshold`, adaptive patience) is only skeleton-level.
-2. External MCP installation/bootstrap is still manual (e.g., populate `~/.mcporter/config.json` with `codex-cli`/`codex-mcp`); no one-click installer flow in backend yet.
+2. One-click Codex MCP bootstrap is available end-to-end; remaining work is optional UX polish (richer diagnostics/advanced options in UI).
 3. Canary decision currently uses policy + supplied/synthetic windows; no live metrics adapter yet.
 4. Rollback command execution is optional and currently shell-command based.
 5. No security scanner for tool output injection yet.
-6. Local verification command gaps:
-   - `python -m pytest autonomous/tests -q` failed because `pytest` is not installed in current environment.
-   - `ruff check autonomous` failed because `ruff` is not installed in current environment.
+6. Verification coverage gaps:
+   - only focused tests/smokes were run; no full repository regression test suite execution yet.
 7. Repository `.gitignore` currently ignores `*.md`, so new markdown artifacts (including this tracker and runbooks) are local-only unless ignore rules are adjusted.
 
 ## Next Suggested Steps

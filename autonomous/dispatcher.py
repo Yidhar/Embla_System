@@ -28,12 +28,12 @@ class Dispatcher:
     def __init__(
         self,
         repo_dir: str,
-        preferred_cli: str = "claude",
+        preferred_cli: str = "codex",
         fallback_order: List[str] | None = None,
         default_timeout_seconds: int = 3600,
     ) -> None:
         self.repo_dir = Path(repo_dir)
-        self.selector = CliSelectionStrategy(preferred=preferred_cli, fallback_order=fallback_order or ["codex", "gemini"])
+        self.selector = CliSelectionStrategy(preferred=preferred_cli, fallback_order=fallback_order or ["claude", "gemini"])
         self.adapters: Dict[str, AgentCliAdapter] = {
             "codex": CodexAdapter(default_timeout_seconds=default_timeout_seconds),
             "claude": ClaudeAdapter(default_timeout_seconds=default_timeout_seconds),

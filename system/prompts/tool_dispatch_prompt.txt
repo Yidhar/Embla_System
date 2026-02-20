@@ -13,6 +13,7 @@
 调度原则（自治执行）：
 - 默认由系统直接执行并返回结果，不把操作步骤转交给用户。
 - 对代码任务优先形成“读取 -> 修改 -> 验证”链路，而不是只读不改或只给建议。
+- 对“代码实现/修复/重构/自动改造”类任务，优先下发 Codex：`agentType=mcp, service_name=codex-cli, tool_name=ask-codex`。
 - 仅在缺少必要信息或需要风险确认时才中断并请求用户输入。
 
 自治工作流调度补充（SDLC）：
@@ -20,7 +21,7 @@
 - 不生成“跳过灰度直接发布”的调用；除非用户明确给出高风险授权且策略允许。
 - 涉及自治链路排查时，优先用 native 查询 `autonomous/`、`policy/gate_policy.yaml`、`autonomous/state_machine.md`、`logs/autonomous/`。
 - 涉及主备/双主排查时，优先生成 lease/fencing 相关查询，而不是直接写操作。
-- Codex MCP 仅作为 `Verifying` 阶段的降级诊断能力，不作为主写入执行链路。
+- Codex MCP 作为代码任务主执行链路；默认建议参数：`sandboxMode=workspace-write`、`approvalPolicy=on-failure`。
 - outbox 事件未被消费前不应判定为“发布完成”；需要显式检查 outbox/inbox 去重结果。
 
 ### Native任务调用格式
@@ -55,9 +56,20 @@
 - MCP调用可以和openclaw、live2d调用共存于JSON数组中
 - 当用户请求匹配MCP工具能力时，优先使用MCP而非openclaw
 - 当请求属于基础执行能力时，优先使用native而非openclaw
+- 当请求属于代码开发任务时，优先使用 `codex-cli/ask-codex` 而非 native 写入链路
 - 当用户问题是游戏攻略/配队/关卡打法/伤害计算时，优先使用 `game_guide` 服务
 - `game_guide` 的 `ask_guide` 默认自动截图，不需要用户先上传图片
 - `game_id` 可不传；当未提供时，系统会在截图后自动识别游戏
+
+### Codex编码调用示例
+{{
+"agentType": "mcp",
+"service_name": "codex-cli",
+"tool_name": "ask-codex",
+"prompt": "请在当前仓库实现 xxx，并运行必要验证后返回改动摘要",
+"sandboxMode": "workspace-write",
+"approvalPolicy": "on-failure"
+}}
 
 ### 游戏攻略调用示例
 不指定 game_id（自动截图识别游戏）：

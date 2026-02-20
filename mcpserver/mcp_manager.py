@@ -192,12 +192,23 @@ class MCPManager:
 
     def _build_external_args(self, tool_call: Dict[str, Any], *, tool_name: str) -> Dict[str, Any]:
         payload = {k: v for k, v in tool_call.items() if k not in _TOOL_CALL_INTERNAL_KEYS}
+
+        # Support both flattened args and MCP-style nested `arguments`.
+        nested_args = payload.get("arguments")
+        if isinstance(nested_args, dict):
+            payload.pop("arguments", None)
+            for key, value in nested_args.items():
+                if key not in payload:
+                    payload[key] = value
+
         if tool_name == "ask-codex":
             prompt = payload.get("prompt")
             message = payload.get("message")
             if (prompt is None or prompt == "") and isinstance(message, str) and message.strip():
                 payload["prompt"] = message
             payload.pop("message", None)
+            payload.setdefault("sandboxMode", "workspace-write")
+            payload.setdefault("approvalPolicy", "on-failure")
         return payload
 
     def _resolve_external_service_name(self, service_name: str, services: Dict[str, Any]) -> str | None:

@@ -241,8 +241,8 @@ class AgenticLoopConfig(BaseModel):
 class AutonomousCliToolsConfig(BaseModel):
     """CLI tool preferences for system agent."""
 
-    preferred: str = Field(default="claude", description="首选CLI")
-    fallback_order: List[str] = Field(default_factory=lambda: ["codex", "gemini"], description="CLI降级顺序")
+    preferred: str = Field(default="codex", description="首选CLI")
+    fallback_order: List[str] = Field(default_factory=lambda: ["claude", "gemini"], description="CLI降级顺序")
     max_retries: int = Field(default=2, ge=0, le=10, description="CLI重试次数")
 
 

@@ -28,6 +28,54 @@ export interface MarketItem {
   install_type: string
 }
 
+export interface CodexMcpSetupRequest {
+  serverName?: string
+  packageName?: string
+  installMode?: 'npx' | 'global'
+  writeCompatAliases?: boolean
+  forceOverwrite?: boolean
+  validateConnection?: boolean
+  validateWithAskCodex?: boolean
+  askCodexPrompt?: string
+  timeoutSeconds?: number
+}
+
+export interface CodexMcpSetupResponse {
+  status: 'success' | 'partial_success' | 'error'
+  serverName: string
+  writtenServers: string[]
+  skippedServers: string[]
+  entry: Record<string, any>
+  configPath: string
+  checks: Record<string, any>
+  install: {
+    mode: 'npx' | 'global'
+    ran: boolean
+    exitCode?: number
+    stdout?: string
+    stderr?: string
+  }
+  validation: {
+    checked: boolean
+    ping?: {
+      ok: boolean
+      exitCode?: number
+      stdout?: string
+      stderr?: string
+      command?: string[]
+    }
+    askCodex?: {
+      checked: boolean
+      ok?: boolean
+      exitCode?: number
+      stdout?: string
+      stderr?: string
+      command?: string[]
+    }
+  }
+  warnings: string[]
+}
+
 export interface MemoryStats {
   totalQuintuples: number
   contextLength: number
@@ -309,6 +357,10 @@ export class CoreApiClient extends ApiClient {
     message: string
   }> {
     return this.instance.post('/mcp/import', { name, config })
+  }
+
+  setupCodexMcp(payload: CodexMcpSetupRequest = {}): Promise<CodexMcpSetupResponse> {
+    return this.instance.post('/mcp/codex/setup', payload)
   }
 
   importCustomSkill(name: string, content: string): Promise<{

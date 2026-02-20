@@ -6,7 +6,7 @@
 2. **只分析最新一条用户消息**，忽略历史中已执行过的相同操作
 3. **是复合操作吗？** 包含"并"、"然后"或连续动词（"打开B站搜索AI"）→ 输出JSON数组（每个元素都是openclaw调用）
 4. **有可执行任务吗？** 有 → 输出工具调用；无 → 输出 `{{}}`
-5. **技术任务默认可执行**：包含“排查/修复/改造/实现/优化/重构/审阅/写代码/跑测试”等语义时，优先输出可直接执行的 native/mcp/openclaw 调用，不要输出建议性空结果
+5. **技术任务默认可执行**：包含“排查/修复/改造/实现/优化/重构/审阅/写代码/跑测试”等语义时，优先输出可直接执行的工具调用，不要输出建议性空结果；其中代码开发任务优先输出 `mcp(codex-cli/ask-codex)`。
 
 ## 输出格式
 
@@ -48,6 +48,16 @@ JSON花括号必须使用半角ASCII字符 `{{` 和 `}}`，不要使用全角。
 "arguments": "按MCP服务schema提供参数（可选）"
 }}
 
+### Codex编码任务调用（优先）
+{{
+"agentType": "mcp",
+"service_name": "codex-cli",
+"tool_name": "ask-codex",
+"prompt": "完整编码任务描述（包含目标、约束、验证要求）",
+"sandboxMode": "workspace-write",
+"approvalPolicy": "on-failure"
+}}
+
 ### Live2D表情动作调用
 {{
 "agentType": "live2d",
@@ -76,12 +86,13 @@ JSON花括号必须使用半角ASCII字符 `{{` 和 `}}`，不要使用全角。
 - 涉及 `git_checkout_file` 时必须附带 `confirm: true`
 - 复杂跨应用或需要浏览器/联网自动化时使用 `agentType: "openclaw"`
 - 对“代码修复/功能实现/问题定位/自动审阅”类请求，默认生成能落地执行的调用，不要退化为“请用户自行查看”。
+- 对代码开发任务，优先生成 `agentType: "mcp"` 且 `service_name="codex-cli"`、`tool_name="ask-codex"` 的调用。
 - Live2D动作使用 `agentType: "live2d"` 格式，可以和openclaw任务同时存在于JSON数组中
 - MCP本地工具使用 `agentType: "mcp"` 格式（天气、时间、应用启动等），当匹配MCP工具能力时优先使用MCP
 - 涉及自治工作流（lease/fencing/outbox/canary/rollback/DoD）优先使用 `native` 或 `mcp`，不要退化为 openclaw
 - 涉及发布语义时，不直接生成“已发布/已晋升”结论型任务，优先生成 gate/canary 判定与状态核验任务
 - 查询自治状态时，优先围绕 `autonomous/`、`policy/gate_policy.yaml`、`autonomous/state_machine.md`、`logs/autonomous/` 生成调用
-- 涉及 Codex MCP 降级时，仅定位为 `Verifying` 阶段诊断，不生成直接写仓库或部署的调用
+- 涉及 Codex 时，不再限定为 `Verifying` 降级；代码开发任务默认走 Codex 主执行链路
 - message字段必须包含完整的任务描述，让OpenClaw能独立理解并执行
 - 复合操作可以合并为一条message（如果逻辑连贯），也可以拆分为JSON数组
 - 没有可执行任务时输出 `{{}}`

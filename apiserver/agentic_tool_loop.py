@@ -305,6 +305,15 @@ async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
         service_name = "game_guide"
         call["service_name"] = service_name
 
+    # Coding tasks via Codex MCP: allow omission of service_name in call payload.
+    if not service_name and tool_name in {"ask-codex", "brainstorm", "help", "ping"}:
+        service_name = "codex-cli"
+        call["service_name"] = service_name
+
+    if tool_name == "ask-codex":
+        call.setdefault("sandboxMode", "workspace-write")
+        call.setdefault("approvalPolicy", "on-failure")
+
     # 游戏攻略功能仅登录用户可用
     if service_name == "game_guide":
         from apiserver import naga_auth
@@ -788,6 +797,8 @@ def _convert_structured_tool_calls(
                 "_tool_call_id": call_id,
             }
             service_name = str(args.get("service_name") or "").strip()
+            if not service_name and mcp_tool_name in {"ask-codex", "brainstorm", "help", "ping"}:
+                service_name = "codex-cli"
             if service_name:
                 merged_call["service_name"] = service_name
 
@@ -795,6 +806,9 @@ def _convert_structured_tool_calls(
             if not isinstance(arg_payload, dict):
                 validation_errors.append(f"mcp_call.arguments 必须是对象: id={call_id}")
                 continue
+            if mcp_tool_name == "ask-codex":
+                arg_payload.setdefault("sandboxMode", "workspace-write")
+                arg_payload.setdefault("approvalPolicy", "on-failure")
             merged_call.update(arg_payload)
             actionable_calls.append(merged_call)
             continue

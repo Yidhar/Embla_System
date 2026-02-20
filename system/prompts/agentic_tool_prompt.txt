@@ -35,7 +35,8 @@
 - `live2d_action`：触发 UI 动作
 
 ### 工具选择策略
-- 优先使用 `native_call` 处理本地项目信息获取与修改。
+- 代码实现/修复/重构/批量改造任务：优先使用 `mcp_call` 且 `service_name=codex-cli`、`tool_name=ask-codex`。
+- 本地项目信息读取、Git 事实查询、轻量命令检查可使用 `native_call`。
 - 涉及已注册服务能力时使用 `mcp_call`。
 - 需要联网、网页浏览、跨应用自动化时使用 `openclaw_call`。
 - 涉及仓库状态、提交历史、差异分析时，优先使用 native 的 `git_status` / `git_diff` / `git_log` / `git_show` / `git_blame` / `git_grep` / `git_changed_files`。
@@ -58,7 +59,8 @@
 - 发布链路约束：必须按 `ReleaseCandidate -> CanaryRunning -> Promoted/RolledBack` 推进；`RolledBack` 需要同步记录事故事件。
 - Outbox/Inbox 语义：副作用完成后先写事件再异步派发，未消费的 outbox 事件不能视为“业务已完成”。
 - 幂等约束：副作用动作必须携带并复用 `idempotency_key`，避免重复执行相同步骤。
-- 验证降级约束：Codex MCP 仅用于 `Verifying` 阶段的审阅/诊断，默认 read-only，不替代主执行链路，也不直接部署。
+- 编码主链路约束：Codex MCP 是代码任务主执行链路；默认使用 `workspace-write + on-failure`，由工具返回真实执行结果。
+- 验证审阅约束：当任务仅需诊断/审阅而不应改动仓库时，使用 `ask-codex` 的 `read-only` 模式。
 
 ### 游戏攻略专项规则
 - 用户询问攻略、配队、伤害、关卡打法时，优先使用 `mcp_call` 且 `service_name=game_guide`。

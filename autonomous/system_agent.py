@@ -69,8 +69,8 @@ class ReleaseAutomationConfig:
 class SystemAgentConfig:
     enabled: bool = False
     cycle_interval_seconds: int = 3600
-    preferred_cli: str = "claude"
-    fallback_order: tuple[str, ...] = ("codex", "gemini")
+    preferred_cli: str = "codex"
+    fallback_order: tuple[str, ...] = ("claude", "gemini")
     max_retries: int = 2
     run_quality_checks: bool = False
     default_timeout_seconds: int = 3600
@@ -129,8 +129,8 @@ class SystemAgentConfig:
         return cls(
             enabled=pick(source, "enabled", False),
             cycle_interval_seconds=max(60, int(pick(source, "cycle_interval_seconds", 3600))),
-            preferred_cli=pick(cli_tools, "preferred", "claude"),
-            fallback_order=tuple(pick(cli_tools, "fallback_order", ["codex", "gemini"])),
+            preferred_cli=pick(cli_tools, "preferred", "codex"),
+            fallback_order=tuple(pick(cli_tools, "fallback_order", ["claude", "gemini"])),
             max_retries=max(0, int(pick(cli_tools, "max_retries", 2))),
             run_quality_checks=bool(pick(source, "run_quality_checks", False)),
             default_timeout_seconds=max(60, int(pick(source, "fixed_timeout_seconds", 3600))),

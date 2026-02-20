@@ -4,6 +4,8 @@ from autonomous.system_agent import SystemAgentConfig
 def test_system_agent_config_from_source_defaults():
     cfg = SystemAgentConfig.from_source(None)
     assert cfg.enabled is False
+    assert cfg.preferred_cli == "codex"
+    assert cfg.fallback_order == ("claude", "gemini")
     assert cfg.verification_fallback.enable_codex_mcp is True
     assert cfg.verification_fallback.mcp_service_name == "codex-cli"
     assert cfg.lease.enabled is True
