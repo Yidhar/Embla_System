@@ -113,14 +113,55 @@ class _TaskScheduler:
             return f"deepseek/{normalized_model}"
         if lowered_provider in {"openai", "openai_compatible"}:
             return f"openai/{normalized_model}"
-        if "openai.com" in lowered_base:
-            return normalized_model
-
         # 对所有 OpenAI 兼容网关默认补全 openai/ 前缀
-        if lowered_provider in {"", "auto", "openai_compatible"}:
+        if "openai.com" in lowered_base or lowered_provider in {"", "auto", "openai_compatible"}:
             return f"openai/{normalized_model}"
 
-        return normalized_model
+        # 保守回退：未知 provider 也默认走 OpenAI 兼容前缀，避免 LiteLLM provider 识别失败。
+        return f"openai/{normalized_model}"
+
+    @staticmethod
+    def _infer_custom_provider_from_model(model_name: str) -> Optional[str]:
+        lowered = (model_name or "").strip().lower()
+        if lowered.startswith("openai/"):
+            return "openai"
+        if lowered.startswith("openrouter/"):
+            return "openrouter"
+        if lowered.startswith("deepseek/"):
+            return "deepseek"
+        if lowered.startswith("gemini/") or lowered.startswith("google/"):
+            return "google"
+        return None
+
+    @staticmethod
+    def _sanitize_litellm_error_text(error: Any) -> str:
+        raw = str(error or "").strip()
+        if not raw:
+            return "unknown error"
+
+        skip_markers = (
+            "provider list:",
+            "docs.litellm.ai/docs/providers",
+            "litellm.info:",
+            "if you need to debug this error",
+        )
+        cleaned: List[str] = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            lowered = stripped.lower()
+            if any(marker in lowered for marker in skip_markers):
+                continue
+            cleaned.append(stripped)
+
+        if not cleaned:
+            return raw.splitlines()[0].strip() if raw.splitlines() else raw
+        deduped: List[str] = []
+        for line in cleaned:
+            if not deduped or deduped[-1] != line:
+                deduped.append(line)
+        return " | ".join(deduped)
 
     @staticmethod
     def _normalize_openai_params_for_model(
@@ -476,8 +517,9 @@ class _TaskScheduler:
             }
             if normalized_temperature is not None:
                 completion_kwargs["temperature"] = normalized_temperature
-            if model_name.startswith("openai/"):
-                completion_kwargs["custom_llm_provider"] = "openai"
+            inferred_provider = self._infer_custom_provider_from_model(model_name)
+            if inferred_provider:
+                completion_kwargs["custom_llm_provider"] = inferred_provider
             completion_kwargs.update(compat_params)
 
             logger.info(
@@ -492,9 +534,10 @@ class _TaskScheduler:
             return self._parse_json_result_from_text(json_str)
             
         except Exception as e:
-            logger.error(f"LLM压缩调用失败: {e}")
+            safe_error = self._sanitize_litellm_error_text(e)
+            logger.error("LLM压缩调用失败: %s", safe_error)
             return {
-                "key_findings": [f"压缩失败: {str(e)}"],
+                "key_findings": [f"压缩失败: {safe_error}"],
                 "failed_attempts": [],
                 "current_status": "压缩失败",
                 "next_steps": ["检查LLM配置"]

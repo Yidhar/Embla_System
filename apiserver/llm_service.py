@@ -148,15 +148,29 @@ class LLMService:
         if naga_auth.is_authenticated():
             return "openai/default"
 
+        if "/" in model:
+            return model
+
         if "deepseek" in base_url and not model.startswith("deepseek/"):
             return f"deepseek/{model}"
         if "openrouter" in base_url and not model.startswith("openrouter/"):
             return f"openrouter/{model}"
-        if "openai.com" in base_url:
-            return model
         if not model.startswith("openai/"):
             return f"openai/{model}"
         return model
+
+    @staticmethod
+    def _infer_custom_provider_from_model(model_name: str) -> Optional[str]:
+        lowered = (model_name or "").strip().lower()
+        if lowered.startswith("openai/"):
+            return "openai"
+        if lowered.startswith("openrouter/"):
+            return "openrouter"
+        if lowered.startswith("deepseek/"):
+            return "deepseek"
+        if lowered.startswith("gemini/") or lowered.startswith("google/"):
+            return "google"
+        return None
 
     def _normalize_openai_params_for_model(
         self,
@@ -889,6 +903,10 @@ class LLMService:
                 model_name=model_name,
                 temperature=temperature,
             )
+            provider_override = self._infer_custom_provider_from_model(model_name)
+            provider_params: Dict[str, Any] = {}
+            if provider_override:
+                provider_params["custom_llm_provider"] = provider_override
 
             response = await acompletion(
                 model=model_name,
@@ -896,6 +914,7 @@ class LLMService:
                 temperature=normalized_temperature,
                 max_tokens=cfg.api.max_tokens if hasattr(cfg.api, "max_tokens") else None,
                 **compat_params,
+                **provider_params,
                 **self._get_litellm_params(final_api_key, final_base, protocol),
             )
             message = response.choices[0].message
@@ -1143,6 +1162,10 @@ class LLMService:
                     model_name=model_name,
                     temperature=temperature,
                 )
+                provider_override = self._infer_custom_provider_from_model(model_name)
+                provider_params: Dict[str, Any] = {}
+                if provider_override:
+                    provider_params["custom_llm_provider"] = provider_override
 
                 logger.debug(
                     "[LLM] attempt=%s is_auth=%s api_base=%s model=%s",
@@ -1169,6 +1192,7 @@ class LLMService:
                     num_retries=0,
                     **compat_params,
                     **request_kwargs,
+                    **provider_params,
                     **llm_params,
                 )
 

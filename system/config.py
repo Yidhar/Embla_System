@@ -96,6 +96,7 @@ def setup_environment():
         "TOKENIZERS_PARALLELISM": "false",
         "PYTORCH_MPS_HIGH_WATERMARK_RATIO": "0.0",
         "PYTORCH_ENABLE_MPS_FALLBACK": "1",
+        "LITELLM_LOG": "ERROR",
     }
     for key, value in env_vars.items():
         os.environ.setdefault(key, value)

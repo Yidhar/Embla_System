@@ -74,8 +74,6 @@ def setup_logging() -> None:
         "httpx",
         "urllib3",
         "asyncio",
-        "LiteLLM",
-        "litellm",
         "openai",
         "openai._base_client",
         "py2neo",
@@ -83,3 +81,12 @@ def setup_logging() -> None:
         "py2neo.client.bolt",
     ]:
         logging.getLogger(name).setLevel(logging.WARNING)
+
+    # LiteLLM 在 provider 推断失败时会输出额外提示（如 Provider List 链接），
+    # 这里强制降噪，避免污染后端控制台。
+    for name in ["LiteLLM", "litellm"]:
+        ll_logger = logging.getLogger(name)
+        ll_logger.setLevel(logging.CRITICAL)
+        ll_logger.propagate = False
+        if ll_logger.handlers:
+            ll_logger.handlers.clear()

@@ -42,10 +42,11 @@ NagaAgent consists of four independent microservices:
 
 | Date | Changes |
 |------|---------|
-| **2026-02-14** | 5.0.0 release: Remote memory service (NagaMemory cloud + local GRAG fallback), Mind Sea 3D rewrite, splash title animation with particles, progress bar stall detection & health polling, version update dialog, user agreement |
-| **2026-02-14** | Captcha integration, registration flow (username + email + verification code), CAS session expiry dialog, voice input button, file parsing button, IME composition enter fix |
-| **2026-02-14** | Remove ChromaDB local dependency (-1119 lines), game guide fully cloud-based, guide feature gated by login |
-| **2026-02-13** | Floating ball mode (4-state animation: classic / ball / compact / full), screenshot multimodal vision model auto-switch |
+| **2026-02-19** | Core Architecture Refactoring: Introduced Autonomous SDLC framework (with Lease/Fencing); Native structured tool_calls fully take over the execution layer; OpenClaw enters standby/degraded mode |
+| **2026-02-14** | 5.0.0 Release: Remote memory microservice (NagaMemory Cloud + Local GRAG fallback), MindView 3D rewrite, startup title animation |
+| **2026-02-14** | Captcha integration, registration flow (username + email + captcha), CAS session expiration dialog, voice input button, file parsing button |
+| **2026-02-14** | Removed local ChromaDB dependency (-1119 lines), complete cloud migration of game guide, added login gating to guide function |
+| **2026-02-13** | Floating ball mode (4 state animations: classic / ball / compact / full), automatic switching of multimodal visual model for screenshots |
 | **2026-02-13** | Skill workshop refactor + Live2D emotion channel independent + naga-config skill |
 | **2026-02-12** | NagaCAS authentication + NagaModel gateway routing + login dialog + user menu |
 | **2026-02-12** | Live2D 4-channel orthogonal animation (body state / actions / emotions / tracking), window-level gaze tracking with calibration |
@@ -60,42 +61,32 @@ NagaAgent consists of four independent microservices:
 
 ## Core Modules
 
-### Streaming Tool Call Loop (Structured tool_calls)
+### Streaming Tool Call Loop (Structured tool_calls & Local-first Native)
 
-NagaAgent uses an **OpenAI-compatible tools schema** and a **structured streaming tool_calls channel**.
-Tool calls are not embedded in assistant text content anymore. Instead, the backend receives and executes them as standalone `tool_calls` events, then injects tool results back into the conversation.
+The primary pipeline of NagaAgent is now completely driven by **structured `tool_calls` channels**:
+The LLM no longer triggers tools by emitting ` ```tool ` code blocks. Instead, it natively outputs a list of structured tool intent objects. AgenticLoop consumes these independently of standard conversation text, severely reducing formatting drift and parser failures.
 
-**Single-round flow**:
+**Core Mechanism:**
 
-```
-LLM streams content/reasoning ──SSE──▶ Frontend renders & TTS
-         │
-         ├─ (optional) delta.tool_calls arrive
-         ▼
-  LLMService merges tool_calls deltas
-         │
-         ├─ SSE type=content/reasoning → forwarded to frontend
-         └─ SSE type=tool_calls        → consumed by AgenticLoop only (not mixed into text)
-                            │
-                            ▼
-AgenticLoop consumes structured tool_calls → unified agentType dispatch → parallel execution
-   ├─ mcp      → MCPManager.unified_call() (in-process)
-   ├─ native   → NativeToolExecutor.execute() (sandboxed local tools)
-   ├─ openclaw → Agent Server /openclaw/send (with local-first interception to native)
-   └─ live2d   → UI notifications (fire-and-forget)
-         │
-         ▼
-Tool results are sent as tool_results events and injected into messages for the next round
+```text
+LLM Stream Output (content/reasoning) ──SSE──▶ Real-time Frontend Display
+            │
+            ├─ delta.tool_calls increments
+            ▼
+      LLMService merges tool_calls, emitting type=tool_calls stream into Loop
+            │
+            ▼
+AgenticLoop converts calls into actionable execution arrays (with concurrency limits)
+    ├─ mcp      → MCPManager.unified_call()
+    ├─ native   → Local-first NativeToolExecutor (Intercepts e.g., 'cd' to 'get_cwd', enforcing Sandbox rules)
+    ├─ openclaw → Degraded to standby/fallback state
+    └─ live2d   → UI Fire-and-forget signal
+            │
+            ▼
+ Tool results inject into the message list, triggering the next inference round
 ```
 
-**Key points**:
-
-- **Tool definitions** are passed via `tools=[...]` (OpenAI-compatible).
-- **Structured tool_calls extraction**: `apiserver/llm_service.py` merges `delta.tool_calls` and emits an SSE chunk `type="tool_calls"`.
-- **Loop execution & injection**: `apiserver/agentic_tool_loop.py` consumes structured tool_calls and executes them; the main path does not rely on legacy "fenced tool block" text parsing.
-- **Compatibility note**: legacy "fenced tool block" descriptions may still exist in historical build artifacts/old docs; the source code mainline uses structured tool_calls.
-
-Source: [`apiserver/llm_service.py`](apiserver/llm_service.py), [`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py)
+Source: [`apiserver/llm_service.py`](apiserver/llm_service.py), [`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py), [`apiserver/native_tools.py`](apiserver/native_tools.py)
 
 ---
 
@@ -247,28 +238,22 @@ Source: [`voice/`](voice/)
 
 ---
 
-### Agent Server & Task Scheduling
+### Agent Server & Autonomous (The Rise of the SDLC Agent)
 
-**Background Intent Analyzer** (`BackgroundAnalyzer`):
+**Background Context**:
+The traditional Agent Server (`BackgroundAnalyzer`) was dedicated to extracting and scheduling `openclaw` instructions for tasks. However, in the latest architecture, OpenClaw has **entered a degraded/standby state** due to heavy coupling and inefficiency in its Node.js Runtime. The core execution is now actively intercepted by the built-in `native` tools.
 
-- LangChain `ChatOpenAI` at `temperature=0`, extracts executable tool calls from conversation
-- Per-session deduplication (prevents concurrent analyses for the same session), 60s timeout
-- Extracted tool calls dispatched by `agentType` to MCP / OpenClaw / Live2D
+**Brand-New Autonomous Module** (Located in `autonomous/`):
+This supersedes legacy routing with a robust, highly-automated SDLC (Software Development Life Cycle) architecture tailored for complex software engineering:
 
-**OpenClaw Integration**:
+- **Single Active Lease**: Utilizes a highly consistent DB lock (`workflow.db`) and Fencing epochs, guaranteeing exactly one Active Orchestrator modifies the codebase at a time.
+- **State Machine Engine**: Robust idempotency mechanisms that drive modification tasks through a flawless loop: `GoalAccepted` -> `PlanDrafted` -> `Implementing` (utilizing Claude/Codex adapters) -> `Verifying`.
+- **Evaluator & Reworker**: Fails verification? If CLI Native tests fail, the system proactively uses Codex MCP (`ask-codex`) to formulate structured code remediation instead of blind retries.
+- **Release Controller (Gray Release)**: Updates aren't directly applied to prod. They enter a Canary execution pool. AI dictates if a release is Promoted or trigger Auto-Rollback based strictly on P95 latency and runtime Error Rate.
 
-- Connects to OpenClaw Gateway (port 18789) to dispatch AI coding assistants for computer tasks via natural language
-- Three-tier fallback: packaged binary → global `openclaw` command → auto `npm install -g openclaw`
-- `POST /openclaw/send` sends instructions, waits up to 120 seconds
+This transforms Naga from an assistant into a smart development server capable of unsupervised marathon execution.
 
-**Task Scheduler** (`TaskScheduler`):
-
-- Task step recording (purpose / content / output / analysis / success status)
-- Auto-extraction of key facts and "key findings" / "important" markers
-- Memory compression: when steps exceed threshold, LLM generates `CompressedMemory` (key_findings / failed_attempts / current_status / next_steps), keeping only the last N steps
-- `schedule_parallel_execution()` via `asyncio.gather()` for parallel task execution
-
-Source: [`agentserver/`](agentserver/)
+Source: [`autonomous/`](autonomous/)
 
 ---
 
@@ -282,30 +267,30 @@ Source: [`agentserver/`](agentserver/)
              │            │            │
      ┌───────▼──────┐ ┌──▼──────┐ ┌──▼──────┐
      │  API Server  │ │ Agent   │ │  Voice  │
-     │   :8000      │ │ Server  │ │ Service │
-     │              │ │  :8001  │ │  :5048  │
-     │ - Chat/SSE   │ │         │ │         │
-     │ - Tool calls │ │ - Intent│ │ - TTS   │
-     │ - Documents  │ │   analysis│ │ - ASR │
-     │ - Auth proxy │ │ - Task  │ │ - Real  │
-     │ - Memory API │ │   sched │ │   time  │
-     │ - Skill Mkt  │ │ - Open  │ │         │
-     │ - Config     │ │   Claw  │ │         │
+     │   :8000      │ │ Server  │ │  :5048  │
+     │              │ │  :8001  │ │         │
+     │ - Dialog/SSE │ │ - Task  │ │ - TTS   │
+     │ - Native Dpt │ │   Auton │ │ - ASR   │
+     │ - Doc Upload │ │   Agent │ │ - Real- │
+     │ - Auth Proxy │ │ - Git   │ │   time  │
+     │ - Memory API │ │   CntrL │ │   Voice │
+     │ - Skill Mrkt │ │ - Open  │ │         │
+     │ - Config Mgr │ │   Claw  │ │         │
      └──────┬───────┘ └────┬────┘ └─────────┘
             │              │
      ┌──────▼──────┐  ┌───▼──────────┐
-     │ MCP Server  │  │   OpenClaw   │
-     │   :8003     │  │   Gateway    │
-     │             │  │   :18789     │
-     │ - Registry  │  └──────────────┘
-     │ - Discovery │
+     │ MCP Server  │  │  Autonomous  │
+     │   :8003     │  │  Subsystem   │
+     │             │  │   (SDLC)     │
+     │ - Tool Reg  │  └──────────────┘
+     │ - Agent Dsc │
      │ - Parallel  │
      └──────┬──────┘
             │
     ┌───────┴──────────────────────┐
-    │   MCP Agents (pluggable)     │
-    │ Weather | Search | Crawl     │
-    │ Launcher | Guide | MQTT ...  │
+    │  MCP Agents (Pluggable)      │
+    │ Weather | Search | Scrape    │
+    │ Launcher| Guide  | Doc |MQTT │
     └──────────────────────────────┘
             │
      ┌──────▼──────┐
@@ -320,15 +305,22 @@ Source: [`agentserver/`](agentserver/)
 
 ```
 NagaAgent/
-├── apiserver/            # API Server — chat, streaming tool calls, auth, config
-│   ├── api_server.py     #   FastAPI main app
-│   ├── agentic_tool_loop.py  #   Multi-round tool call loop
-│   ├── llm_service.py    #   LiteLLM unified LLM interface
-│   └── streaming_tool_extractor.py  #   Streaming sentence split + TTS dispatch
-├── agentserver/          # Agent Server — intent analysis, task scheduling, OpenClaw
-│   ├── agent_server.py   #   FastAPI main app
-│   └── task_scheduler.py #   Task orchestration + compressed memory
-├── mcpserver/            # MCP Server — tool registration & dispatch
+├── apiserver/            # API Server — Dialogue, Native tools, Auth, Config
+│   ├── api_server.py     #   FastAPI Main App
+│   ├── agentic_tool_loop.py  #   Multi-round native tool call loop
+│   ├── native_tools.py   #   Local-First interception tools
+│   ├── llm_service.py    #   LiteLLM Unified Caller & tool_calls stream
+│   └── streaming_tool_extractor.py  #   Stream segmentation + TTS dispatch
+├── agentserver/          # Agent Server — Legacy Compatibility layer
+│   ├── agent_server.py   #   FastAPI Main App
+│   └── task_scheduler.py #   Task orchestration + Compression memory
+├── autonomous/           # All-new Autonomous SDLC Agent
+│   ├── system_agent.py   #   Single Active Orchestrator
+│   ├── planner.py        #   Strategy decomposition
+│   ├── dispatcher.py     #   CLI Exec Wrapper
+│   ├── evaluator.py      #   Scoring Verification System
+│   └── release/          #   Fallback and Canary Releases
+├── mcpserver/            # MCP Server — Tool reg & dispatchration & dispatch
 │   ├── mcp_server.py     #   FastAPI main app
 │   ├── mcp_registry.py   #   Manifest scanning + dynamic registration
 │   ├── mcp_manager.py    #   unified_call() routing

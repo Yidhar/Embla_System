@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Fix duplicate pytest ini options keys in pyproject.toml.
+
+- Ensures only one `addopts = ...` entry exists under [tool.pytest.ini_options].
+- Keeps the *combined* addopts: -q plus ignore for openclaw integration script.
+
+Idempotent.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+import re
+
+ROOT = Path(__file__).resolve().parent.parent
+PYPROJECT = ROOT / "pyproject.toml"
+
+
+def main() -> int:
+    text = PYPROJECT.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines(keepends=False)
+
+    header = "[tool.pytest.ini_options]"
+    try:
+        start = next(i for i, l in enumerate(lines) if l.strip() == header)
+    except StopIteration:
+        raise SystemExit("pytest ini section not found")
+
+    # Find end (next top-level table header)
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if lines[i].startswith("[") and lines[i].strip() != header:
+            end = i
+            break
+
+    before = lines[: start + 1]
+    section = lines[start + 1 : end]
+    after = lines[end:]
+
+    # Remove all existing addopts lines
+    section_wo_addopts = [l for l in section if not re.match(r"^\s*addopts\s*=", l)]
+
+    desired_addopts = 'addopts = "-q --ignore=agentserver/openclaw/test_connection.py"'
+
+    # Insert addopts as the first non-empty, non-comment line (right after header)
+    inserted = False
+    new_section: list[str] = []
+    for l in section_wo_addopts:
+        if not inserted and l.strip() and not l.lstrip().startswith("#"):
+            new_section.append(desired_addopts)
+            inserted = True
+        new_section.append(l)
+
+    if not inserted:
+        # section was empty or only comments
+        new_section = [desired_addopts] + section_wo_addopts
+
+    new_text = "\n".join(before + new_section + after) + "\n"
+    PYPROJECT.write_text(new_text, encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
