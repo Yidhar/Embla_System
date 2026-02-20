@@ -252,9 +252,7 @@ def _run_command(command: List[str], timeout: int = 30) -> Tuple[int, str, str]:
     import locale
     enc = locale.getpreferredencoding() or "utf-8"
     result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, shell=(sys.platform == "win32"), encoding=enc, errors="replace")
-    out = (result.stdout or "").strip()
-    err = (result.stderr or "").strip()
-    return result.returncode, out, err
+    return result.returncode, (result.stdout or "").strip(), (result.stderr or "").strip()
 
 
 def _get_openclaw_version() -> Optional[str]:
