@@ -27,7 +27,7 @@ const showMcpDialog = ref(false)
 function loadMcpServices() {
   mcpLoading.value = true
   API.getMcpServices().then((res) => {
-    mcpServices.value = (res.services ?? []).filter(s => s.available)
+    mcpServices.value = (res.services ?? [])
   }).catch(() => {
     mcpServices.value = []
   }).finally(() => {
@@ -90,17 +90,24 @@ async function onSkillConfirm(data: { name: string, content: string }) {
     <Accordion :value="accordionValue" class="pb-8" multiple>
       <!-- MCP 工具服务 -->
       <ConfigGroup value="mcp" header="MCP 工具服务">
-        <div class="grid gap-3">
+        <div class="grid gap-3 min-w-0 overflow-hidden">
           <div v-if="mcpLoading" class="text-white/40 text-xs py-2">
             检查可用性...
           </div>
           <template v-else>
-            <div v-for="svc in mcpServices" :key="svc.name" class="skill-item">
-              <div class="flex-1 min-w-0">
-                <div class="font-bold text-sm text-white">{{ svc.displayName }}</div>
+            <div v-for="svc in mcpServices" :key="svc.name" class="skill-item min-w-0">
+              <div class="flex-1 min-w-0 overflow-hidden">
+                <div class="font-bold text-sm text-white truncate">{{ svc.displayName }}</div>
                 <div class="text-xs op-50 truncate">{{ svc.description }}</div>
               </div>
-              <div class="ml-3 shrink-0">
+              <div class="ml-3 shrink-0 flex items-center gap-1">
+                <span
+                  v-if="!svc.available"
+                  class="text-xs text-amber-400"
+                  title="模块导入失败，请检查后端日志"
+                >
+                  不可用
+                </span>
                 <span
                   class="text-xs font-bold"
                   :class="svc.source === 'builtin' ? 'text-green-400' : 'text-blue-400'"
@@ -121,10 +128,10 @@ async function onSkillConfirm(data: { name: string, content: string }) {
 
       <!-- 技能仓库 -->
       <ConfigGroup value="skills" header="技能仓库">
-        <div class="grid gap-3">
-          <div v-for="item in skills" :key="item.id" class="skill-item">
-            <div class="flex-1 min-w-0">
-              <div class="font-bold text-sm text-white">{{ item.title }}</div>
+        <div class="grid gap-3 min-w-0 overflow-hidden">
+          <div v-for="item in skills" :key="item.id" class="skill-item min-w-0">
+            <div class="flex-1 min-w-0 overflow-hidden">
+              <div class="font-bold text-sm text-white truncate">{{ item.title }}</div>
               <div class="text-xs op-50 truncate">{{ item.description }}</div>
             </div>
             <div class="ml-3 shrink-0">

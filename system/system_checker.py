@@ -73,7 +73,6 @@ class SystemChecker:
             ("pystray", "系统托盘"),
             ("live2d", "Live2D虚拟形象"),
             #("paho_mqtt", "MQTT通信"),
-            ("jmcomic", "漫画下载"),
             ("bilibili_api", "B站视频"),
             ("python_docx", "Word文档处理")
         ]

@@ -85,8 +85,6 @@ excludes = [
     'sqlalchemy', 'alembic',
     # 国际化
     'babel',
-    # 漫画（MCP可选）
-    'jmcomic',
     # 其他大型库
     'lxml', 'wandb', 'mlflow',
     'faiss', 'milvus_lite',

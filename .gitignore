@@ -216,3 +216,6 @@ tmp/
 
 # Cursor
 .cursorrules
+
+# MAA 游戏脚本代理 MCP（用户私有配置，不提交）
+mcpserver/agent_auto_game/

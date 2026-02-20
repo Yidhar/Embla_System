@@ -1256,7 +1256,8 @@ def _check_agent_available(manifest: Dict[str, Any]) -> bool:
     try:
         __import__(module_path)
         return True
-    except Exception:
+    except Exception as e:
+        logger.warning(f"MCP 模块导入失败 {module_path}: {e}")
         return False
 
 
@@ -1265,9 +1266,11 @@ def get_mcp_services():
     """列出所有 MCP 服务并检查可用性（同步端点，由 FastAPI 在线程池中执行）"""
     services: List[Dict[str, Any]] = []
 
-    # 1. 内置 agent（扫描 mcpserver/**/agent-manifest.json）
+    # 1. 内置 agent（扫描 mcpserver 下所有 agent-manifest.json，与 mcp_registry 一致）
     mcpserver_dir = Path(__file__).resolve().parent.parent / "mcpserver"
-    for manifest_path in mcpserver_dir.glob("*/agent-manifest.json"):
+    if not mcpserver_dir.exists():
+        logger.warning(f"MCP 目录不存在: {mcpserver_dir}")
+    for manifest_path in sorted(mcpserver_dir.glob("**/agent-manifest.json")):
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):

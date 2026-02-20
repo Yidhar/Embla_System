@@ -15,8 +15,8 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from contextlib import asynccontextmanager
 
-from system.config import config, add_config_listener
-from system.config import config, loggerfrom agentserver.task_scheduler import get_task_scheduler, TaskStep
+from system.config import config, add_config_listener, logger
+from agentserver.task_scheduler import get_task_scheduler, TaskStep
 from agentserver.openclaw import get_openclaw_client, set_openclaw_config
 from agentserver.openclaw.embedded_runtime import get_embedded_runtime, EmbeddedRuntime
 

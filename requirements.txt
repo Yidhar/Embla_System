@@ -1,5 +1,5 @@
-# NagaAgent 依赖（一键打包 build.py 与 PyInstaller 均使用此文件）
-# Python 建议 3.11
+# NagaAgent 依赖（与 pyproject.toml 同步，pip/uv 均可使用）
+# Python 建议 3.11；打包使用 uv sync，见 pyproject.toml
 
 # ---------- 核心 / 配置 ----------
 charset-normalizer>=3.4.0
@@ -7,7 +7,7 @@ json5>=0.9.0
 PyYAML>=6.0.2
 pydantic>=2.11.0
 requests>=2.32.0
-python-multipart
+python-multipart>=0.0.22
 
 # ---------- Web 服务 ----------
 fastapi>=0.115.0
@@ -27,6 +27,7 @@ langchain-community>=0.3.30
 
 # ---------- 异步 / 任务 ----------
 aiohttp>=3.12.0
+aiofiles>=24.1.0
 anyio
 APScheduler>=3.11.0
 
@@ -44,32 +45,10 @@ watchfiles>=1.0.0
 edge-tts>=7.0.0
 sounddevice>=0.5.0
 
-# ---------- 知识图谱 GRAG / Neo4j（可选，启用 grag 时需要） ----------
+# ---------- 知识图谱 GRAG / 兼容层 ----------
+Flask>=3.1.0
+gevent>=25.0.0
 py2neo>=2021.2.3
 neo4j>=5.0.0
 chromadb>=0.5.0
 mss>=10.1.0
-
-# ---------- 兼容层 ----------
-Flask>=3.1.0
-gevent>=25.0.0
-
-# ---------- MCP 核心（已禁用：main 不再启动 mcpserver） ----------
-# mcp>=1.15.0
-# redis>=5.2.0
-
-# ---------- MCP 技能 / 可选（已禁用） ----------
-# datasets>=3.6.0
-# pdfminer.six>=20250506
-# polars>=1.37.0
-# pyarrow>=19.0.0
-# pypdfium2>=4.30.0
-# tokenizers>=0.21.0
-# python-docx>=1.2.0
-# fastmcp>=2.12.0
-
-# ---------- MQTT（已禁用：main 不再启动 mqtt_tool） ----------
-# paho-mqtt>=2.1.0
-
-# ---------- 打包用（执行 python build.py 或 pyinstaller 时需安装） ----------
-# pyinstaller>=6.0.0

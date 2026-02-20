@@ -27,7 +27,7 @@ defineExpose({
     <div class="flex items-center">
       <img :src="back" class="w-[var(--nav-back-width)]" alt="" @click="$router.back">
     </div>
-    <div class="box flex min-h-0 overflow-hidden" :class="boxClass">
+    <div class="box flex min-h-0 min-w-0 overflow-hidden" :class="boxClass">
       <template v-if="noScroll">
         <div class="p-4 w-full flex flex-col min-h-0">
           <slot />
@@ -43,7 +43,7 @@ defineExpose({
           },
         }"
       >
-        <div class="p-4 w-full">
+        <div class="p-4 w-full min-w-0 overflow-hidden">
           <slot />
         </div>
       </ScrollPanel>
