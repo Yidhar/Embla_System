@@ -15,9 +15,9 @@
 1. ✅ `00-文档冲突修复计划.md` - 新增
 2. ✅ `01-module-overview.md` - 更新 AgentServer 状态
 3. ✅ `07-autonomous-agent-sdlc-architecture.md` - 统一 autonomous/ 定位 + 执行模型演进
-4. ✅ `09-工具调用与任务执行规范.md` - 增加 Codex-first 路由策略
-5. ✅ `架构与时序设计.md` - 修复 Codex 定位 + 增加状态标注
-6. ✅ `gemin-结构图.md` - 增加目标态标注 + 实施路径映射
+4. ✅ `09-tool-execution-specification.md` - 增加 Codex-first 路由策略
+5. ✅ `00-mvp-architecture-design.md` - 修复 Codex 定位 + 增加状态标注
+6. ✅ `00-omni-operator-architecture.md` - 增加目标态标注 + 实施路径映射
 7. ✅ `10-brainstem-layer-modules.md` - 增加实施状态标注
 8. ✅ `11-brain-layer-modules.md` - 增加实施状态标注
 9. ✅ `12-limbs-layer-modules.md` - 增加实施状态标注
@@ -33,14 +33,14 @@
 - 新实现：Codex 已升级为主执行路径
 
 **修复措施**：
-1. **更新 `架构与时序设计.md`**：
+1. **更新 `00-mvp-architecture-design.md`**：
    - 删除 §3.4 "验证阶段降级" 的旧描述
    - 新增 §3.2 "Codex-first 策略 v2" 章节
    - 增加优先级表格：Codex (P0) > Claude (P1) > Gemini (P2)
    - 新增 §3.3 CLI 选择策略（Codex-first 实现）
    - 新增 §3.4 Codex 执行模式详解（CLI 模式 + MCP 模式 + 降级场景）
 
-2. **更新 `09-工具调用与任务执行规范.md`**：
+2. **更新 `09-tool-execution-specification.md`**：
    - 增加 Codex 策略版本标注：v2 (2026-02-22)
    - 新增 §3.1 Codex-first 路由策略
    - 明确触发条件、路由规则、自动参数注入、降级场景
@@ -59,33 +59,33 @@
 ### 2.2 执行模型冲突 ✅ 已解决
 
 **冲突描述**：
-- `架构与时序设计.md`：描述 CLI Tools
-- `gemin-结构图.md`：描述 Sub-Agent Runtime
+- `00-mvp-architecture-design.md`：描述 CLI Tools
+- `00-omni-operator-architecture.md`：描述 Sub-Agent Runtime
 - 实际代码：使用 CLI Adapter
 
 **修复措施**：
-1. **在 `架构与时序设计.md` 顶部增加醒目标注**：
+1. **在 `00-mvp-architecture-design.md` 顶部增加醒目标注**：
    ```markdown
    ---
    **文档类型**：As-Is 实施文档（Phase 0 MVP）
    **实施状态**：✅ 已实现（autonomous/ 模块）
    **最后验证**：2026-02-22
    **Codex 策略版本**：v2 (Codex-first 主执行路径)
-   **目标态参考**：gemin-结构图.md (Sub-Agent Runtime, Phase 3)
+   **目标态参考**：00-omni-operator-architecture.md (Sub-Agent Runtime, Phase 3)
    ---
    ```
 
-2. **在 `gemin-结构图.md` 顶部增加目标态标注**：
+2. **在 `00-omni-operator-architecture.md` 顶部增加目标态标注**：
    ```markdown
    ---
    **文档类型**：🎯 目标态架构设计（Target Architecture）
    **实施状态**：Phase 3 规划（当前 Phase 0 已实现 CLI Adapter 过渡方案）
-   **当前替代方案**：见 `架构与时序设计.md` (CLI Tools + Codex-first)
+   **当前替代方案**：见 `00-mvp-architecture-design.md` (CLI Tools + Codex-first)
    **实施路径**：Phase 0 (CLI) → Phase 1-2 (增强) → Phase 3 (本文档)
    ---
    ```
 
-3. **在 `gemin-结构图.md` 增加实施路径映射表**：
+3. **在 `00-omni-operator-architecture.md` 增加实施路径映射表**：
    - 对比目标态组件与当前实现
    - 使用图例标注：🟢 已实现 / 🟡 部分实现 / 🔴 未实现
 
@@ -127,7 +127,7 @@
      - Sub-Agent Runtime → CLI Adapter
      - Scaffold Engine → 无（目标态）
 
-3. **在 `gemin-结构图.md` 增加实施路径映射表**：
+3. **在 `00-omni-operator-architecture.md` 增加实施路径映射表**：
    - 完整对比 Phase 3 目标态与 Phase 0 当前实现
    - 明确标注每个组件的实施阶段和状态
 
@@ -167,7 +167,7 @@
    - Phase 3：完整 Event Bus 驱动
    ```
 
-2. **在 `gemin-结构图.md` 的目录树中明确标注**：
+2. **在 `00-omni-operator-architecture.md` 的目录树中明确标注**：
    - 增加 🟢 已实现标记
    - 详细列出 autonomous/ 子模块及其状态
 
@@ -207,8 +207,8 @@
    ```
 
 2. **从架构图中移除 AgentServer**：
-   - `gemin-结构图.md`：未提及 AgentServer（正确）
-   - `架构与时序设计.md`：未提及 AgentServer（正确）
+   - `00-omni-operator-architecture.md`：未提及 AgentServer（正确）
+   - `00-mvp-architecture-design.md`：未提及 AgentServer（正确）
 
 **验证结果**：
 - ✅ AgentServer 状态在所有文档中一致
@@ -417,7 +417,7 @@
 ### 8.1 修复前后对比
 
 **Codex 定位**：
-- 修复前：`架构与时序设计.md` 描述"验证降级"，与实际代码冲突
+- 修复前：`00-mvp-architecture-design.md` 描述"验证降级"，与实际代码冲突
 - 修复后：统一为 "Codex-first 主执行路径 v2"，增加详细策略说明
 
 **执行模型**：
@@ -442,9 +442,9 @@
 - 修复总结：`00-文档冲突修复总结.md`（本文档）
 - 模块总览：`01-module-overview.md`
 - SDLC 架构：`07-autonomous-agent-sdlc-architecture.md`
-- 工具规范：`09-工具调用与任务执行规范.md`
-- MVP 实施：`架构与时序设计.md`
-- 目标态蓝图：`gemin-结构图.md`
+- 工具规范：`09-tool-execution-specification.md`
+- MVP 实施：`00-mvp-architecture-design.md`
+- 目标态蓝图：`00-omni-operator-architecture.md`
 - 脑干层：`10-brainstem-layer-modules.md`
 - 大脑层：`11-brain-layer-modules.md`
 - 手脚层：`12-limbs-layer-modules.md`

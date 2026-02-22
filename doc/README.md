@@ -18,7 +18,7 @@
    - 结构化 `tool_calls` 主链路说明（LLM -> Loop）、Local-first（AgentServer -> Native）拦截策略，以及 `cwd/pwd -> get_cwd` 修复记录。
 7. `doc/07-autonomous-agent-sdlc-architecture.md`
    - 无人值守自治迭代架构文档（借鉴多 Agent 框架思想但不依赖其库），包含状态机、时序图、记忆治理与自动发布回滚策略。
-8. `doc/09-工具调用与任务执行规范.md`
+8. `doc/09-tool-execution-specification.md`
    - 工具调用与任务执行规范：Codex 主链路下发、Native 审阅验证、失败降级与回执模板。
 
 ## 使用建议

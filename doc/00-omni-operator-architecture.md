@@ -2,7 +2,7 @@
 **文档类型**：🎯 目标态架构设计（Target Architecture）
 **实施状态**：Phase 3 规划（当前 Phase 0 已实现 CLI Adapter 过渡方案）
 **最后更新**：2026-02-22
-**当前替代方案**：见 `架构与时序设计.md` (CLI Tools + Codex-first)
+**当前替代方案**：见 `00-mvp-architecture-design.md` (CLI Tools + Codex-first)
 **实施路径**：Phase 0 (CLI) → Phase 1-2 (增强) → Phase 3 (本文档)
 ---
 
@@ -22,7 +22,7 @@
 > - Phase 3 (🔴 本文档)：Sub-Agent Runtime + Scaffold Engine + Event Bus
 >
 > **参考文档**：
-> - 当前实现：`架构与时序设计.md`
+> - 当前实现：`00-mvp-architecture-design.md`
 > - SDLC 对齐：`07-autonomous-agent-sdlc-architecture.md`
 
 ---
@@ -911,7 +911,7 @@ gantt
 
 ### 8.3 必要交付物
 
-1. `doc/gemin-结构图.md` (本文档)
+1. `doc/00-omni-operator-architecture.md` (本文档)
 2. `doc/07-autonomous-agent-sdlc-architecture.md`
 3. `autonomous/state_machine.md`
 4. `memory/schema.sql`

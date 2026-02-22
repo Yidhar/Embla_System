@@ -4,7 +4,7 @@
 **最后更新**：2026-02-22
 **Codex 策略版本**：v2 (Codex-first 主执行路径)
 **当前实现**：agentic_tool_loop + native_executor + mcp_manager
-**目标态参考**：gemin-结构图.md (Tool Contract 全字段强校验)
+**目标态参考**：00-omni-operator-architecture.md (Tool Contract 全字段强校验)
 ---
 
 # 09 工具调用与任务执行规范（Omni-Operator 对齐版）
@@ -248,4 +248,4 @@ Block 3（动态窗口）：
 - 总览：`./01-module-overview.md`
 - 工具执行管线：`./06-structured-tool-calls-and-local-first-native.md`
 - 自治 SDLC：`./07-autonomous-agent-sdlc-architecture.md`
-- 目标契约参考：`./gemin-结构图.md`
+- 目标契约参考：`./00-omni-operator-architecture.md`

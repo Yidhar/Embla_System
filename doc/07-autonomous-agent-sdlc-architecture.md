@@ -3,7 +3,7 @@
 **实施状态**：Phase 0 已实现 + Phase 1-3 规划
 **最后更新**：2026-02-22
 **当前实现**：autonomous/ 模块（System Agent + Workflow Store + Lease/Fencing）
-**目标态参考**：gemin-结构图.md (Phase 3)
+**目标态参考**：00-omni-operator-architecture.md (Phase 3)
 ---
 
 # 07 Autonomous Agent SDLC 架构（开发预备对齐版）
@@ -16,7 +16,7 @@
 本文不再把目标态与现状混写。
 
 - `As-Is`：当前 `autonomous/` 已落地能力（可运行）。
-- `Target`：Omni-Operator 目标架构（`gemin-结构图.md` + 10/11/12）。
+- `Target`：Omni-Operator 目标架构（`00-omni-operator-architecture.md` + 10/11/12）。
 - `Gap`：从当前到目标态的实施差距。
 
 ## 1.1 autonomous/ 模块统一定位
@@ -51,7 +51,7 @@
   - 独立子代理进程（Frontend/Backend/Ops）
   - 脚手架模板生成
   - 执行桥接层
-  - 参考：`gemin-结构图.md` §2 工程目录树
+  - 参考：`00-omni-operator-architecture.md` §2 工程目录树
 
 ## 2. 当前已实现能力（As-Is）
 
@@ -126,7 +126,7 @@
 
 以下文档是目标蓝图，不等价于当前实现：
 
-- `./gemin-结构图.md`
+- `./00-omni-operator-architecture.md`
 - `./10-brainstem-layer-modules.md`
 - `./11-brain-layer-modules.md`
 - `./12-limbs-layer-modules.md`
@@ -216,4 +216,4 @@
 - 总览：`./01-module-overview.md`
 - 工具执行管线：`./06-structured-tool-calls-and-local-first-native.md`
 - 前后端入口边界：`./08-frontend-backend-separation-plan.md`
-- 工具治理规范：`./09-工具调用与任务执行规范.md`
+- 工具治理规范：`./09-tool-execution-specification.md`

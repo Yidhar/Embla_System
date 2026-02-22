@@ -77,7 +77,7 @@ SSE 关键事件：
 
 ## 5. 与 Tool Contract 的关系
 
-目标态（见 `gemin-结构图.md`）要求 Tool Contract 包含：
+目标态（见 `00-omni-operator-architecture.md`）要求 Tool Contract 包含：
 
 - `tool_name`
 - `input_schema_version`
@@ -137,4 +137,4 @@ function executeWithTruncation(cmd: string): string {
 - 总览：`./01-module-overview.md`
 - 启动与调试：`./05-dev-startup-and-index.md`
 - 自治 SDLC：`./07-autonomous-agent-sdlc-architecture.md`
-- 工具治理规范：`./09-工具调用与任务执行规范.md`
+- 工具治理规范：`./09-tool-execution-specification.md`

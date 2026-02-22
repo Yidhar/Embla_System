@@ -135,7 +135,7 @@
 
 - Tool Contract 仍以运行时约定为主，尚未在所有调用面强制结构化字段（如 `risk_level`、`trace_id`、`input_schema_version`）。
 - BFF 内仍存在部分 MCP 状态占位接口，需统一真实状态语义。
-- 多租户、完整治理策略（详见 10/11/12 与 `gemin-结构图.md`）尚未完整落地。
+- 多租户、完整治理策略（详见 10/11/12 与 `00-omni-operator-architecture.md`）尚未完整落地。
 - Token 经济学控制仍偏“策略约束”，尚未在网关层形成 4 重硬门禁（缓存分层、模型分流、I/O 熔断、事件驱动休眠）。
 - 多 Agent 并发安全墙（文件乐观锁、全局状态互斥锁、仲裁熔断、令牌桶流控）尚未完整落地。
 
@@ -160,5 +160,5 @@
 - 工具调用管线：`./06-structured-tool-calls-and-local-first-native.md`
 - 自治 SDLC 对齐：`./07-autonomous-agent-sdlc-architecture.md`
 - 前后端分离：`./08-frontend-backend-separation-plan.md`
-- 工具治理规范：`./09-工具调用与任务执行规范.md`
-- 目标架构蓝图（仅目标态参考）：`./gemin-结构图.md`、`./10-brainstem-layer-modules.md`、`./11-brain-layer-modules.md`、`./12-limbs-layer-modules.md`
+- 工具治理规范：`./09-tool-execution-specification.md`
+- 目标架构蓝图（仅目标态参考）：`./00-omni-operator-architecture.md`、`./10-brainstem-layer-modules.md`、`./11-brain-layer-modules.md`、`./12-limbs-layer-modules.md`

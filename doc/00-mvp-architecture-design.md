@@ -5,7 +5,7 @@
 **实施状态**：✅ 已实现（autonomous/ 模块）
 **最后验证**：2026-02-22
 **Codex 策略版本**：v2 (Codex-first 主执行路径)
-**目标态参考**：`gemin-结构图.md` (Sub-Agent Runtime, Phase 3)
+**目标态参考**：`00-omni-operator-architecture.md` (Sub-Agent Runtime, Phase 3)
 ---
 
 > **核心变更**：MVP 阶段采用 **单 System Agent + 外部 Agent CLI 工具** 模型。
@@ -663,7 +663,7 @@ NagaAgent/
 │       └── event_store.py            # SQLite/JSON事件存储
 ├── doc/
 │   ├── 07-autonomous-agent-sdlc-architecture.md
-│   └── 架构与时序设计.md  # [NEW] 本文档
+│   └── 00-mvp-architecture-design.md  # [NEW] 本文档
 └── ...
 ```
 
