@@ -1,164 +1,164 @@
-# 01 模块总览
+﻿# 01 模块总览（Omni-Operator 开发预备版）
+
+文档状态：开发预备（As-Is + Target-Aligned）
+最后更新：2026-02-22
 
 ## 1. 目标
 
-本文件描述 NagaAgent 的运行时架构与模块边界，覆盖：
+本文用于统一 NagaAgent 当前可运行架构与 Omni-Operator 目标架构之间的语义。
 
-- 服务启动链路
-- 模块间调用关系
-- 端口分配与通信方式
-- 打包与发布路径
+本文件只描述 **当前代码已实现** 与 **已确认的过渡态**，并将目标态映射到三层模型：
 
-## 2. 顶层结构
+- Brainstem（控制与接入层）
+- Brain（策略与推理层）
+- Limbs（工具与执行层）
 
-核心目录（按职责分层）：
+## 2. 顶层模块（当前状态）
 
-- `main.py`
-  - 后端总入口，统一启动 API/Agent/MCP/TTS 等服务线程。
-- `system/`
-  - 配置、日志、环境检查、背景意图分析、技能管理。
-- `apiserver/`
-  - 面向前端的主 API，包含聊天流、会话、上传、记忆、技能市场等接口。
-- `agentserver/`
-  - AgentServer 与任务调度服务，承接需要执行工具/自动化的任务。
-- `mcpserver/`
-  - MCP 工具注册与统一调度服务，支持独立 HTTP 调用与进程内调用。
-- `summer_memory/`
-  - GRAG 记忆体系、五元组抽取、Neo4j/文件存储与检索。
-- `guide_engine/`
-  - 游戏攻略问答、RAG 上下文、计算服务、截图注入能力。
-- `voice/`
-  - 语音输入输出（TTS/ASR/实时语音）相关实现。
-- `frontend/`
-  - Electron + Vue 桌面端。
-- `scripts/`
-  - 构建与工具脚本（如 Windows 打包脚本）。
+- `main.py`：后端总入口，负责服务编排与生命周期管理。
+- `system/`：配置、日志、系统检查、提示词、基础策略工具。
+- `apiserver/`：统一 BFF（前后端唯一入口），提供 REST/SSE。
+- `autonomous/`：System Agent 自治闭环（已实现，可配置启停）。
+- `mcpserver/`：MCP Host + Tool Registry + 外部 mcporter 接入。
+- `agentserver/`：兼容保留层（OpenClaw/Legacy Agent 执行链已弃用）。
+- `summer_memory/`：GRAG 记忆、五元组抽取、Neo4j 检索。
+- `guide_engine/`：游戏攻略 RAG 与计算服务。
+- `voice/`：TTS/ASR/实时语音能力。
+- `frontend/`：Electron + Vue 客户端。
+- `scripts/`：构建与发布脚本。
 
-## 3. 运行时调用链
+状态标签约定：
 
-### 3.1 服务启动链路
+- `已实现`：代码路径可直接运行。
+- `过渡态`：功能存在但与目标态有语义漂移。
+- `兼容保留`：为历史接口保留，不建议新增依赖。
 
-1. `main.py` 创建 `ServiceManager` 并执行 `start_all_servers`。
-2. 按配置与端口可用性启动：
-   - API 服务（`apiserver`）
-   - MCP 服务（`mcpserver`）
-   - Agent 服务（`agentserver`）
-   - TTS 服务（`voice`）
-3. 后台异步循环维持记忆/任务等服务状态。
+## 3. 服务启动链路（As-Is）
 
-关键入口：
+当前 `main.py` 的 `start_all_servers` 行为：
 
-- `main.py:91` `class ServiceManager`
-- `main.py:144` `def start_all_servers`
-- `main.py:278` `def _start_api_server`
-- `main.py:302` `def _start_mcp_server`
-- `main.py:324` `def _start_agent_server`
-- `main.py:346` `def _start_tts_server`
+1. 启动 API 服务（`apiserver`，默认端口 `8000`）。
+2. 启动 MCP 服务（`mcpserver`，默认端口 `8003`）。
+3. 启动 TTS 服务（`voice`，默认端口 `5048`）。
+4. **不自动启动** AgentServer（状态标记为“已禁用自动启动”）。
+5. 后台事件循环按 `config.autonomous.enabled` 条件启动 `autonomous/system_agent.py`。
 
-### 3.2 前端到后端链路
+端口默认值来源：`system/config.py`（`ServerPortsConfig`）。
 
-1. Electron 主进程启动后端子进程（开发态 Python、打包态 `naga-backend.exe`）。
-2. 渲染进程通过本地 HTTP（默认 `http://localhost:8000`）访问 API。
-3. API 根据任务类型转发到 Agent/MCP 或内存模块。
+- API: `8000`
+- Agent: `8001`
+- MCP: `8003`
+- TTS: `5048`
+- ASR: `5060`
 
-关键入口：
+## 4. 运行时调用链路（As-Is）
 
-- `frontend/electron/main.ts:45` `startBackend()`
-- `frontend/electron/modules/backend.ts:60` 打包态从 `process.resourcesPath/backend` 拉起后端
-- `frontend/src/api/index.ts:27` 前端 API 基址 `http://localhost:${port}`
-- `frontend/src/api/core.ts:396` 默认端口 `8000`
+### 4.1 聊天主链路
 
-### 3.3 聊天与工具调用链路
+1. 前端请求 `POST /chat/stream`（`apiserver`）。
+2. `apiserver/api_server.py` 进入 `run_agentic_loop`。
+3. `apiserver/agentic_tool_loop.py` 只接受结构化函数调用：
+   - `native_call`
+   - `mcp_call`
+   - `live2d_action`
+4. 工具执行分发：
+   - Native -> `apiserver/native_tools.py` -> `system/native_executor.py`
+   - MCP -> `mcpserver/mcp_manager.py`（本地注册优先，外部 mcporter 兜底）
+5. SSE 回推事件到前端（`tool_calls` / `tool_results` / `tool_stage` / `round_start` / `round_end` 等）。
 
-1. 前端请求 `POST /chat/stream`。
-2. `apiserver` 进行上下文拼装、记忆注入、模型调用。
-3. 通过 `agentic_tool_loop` 执行多轮工具调用。
-4. 工具调用可走：
-   - `mcpserver`（MCP 工具）
-   - `agentserver`（AgentServer 执行）
-5. 结果回流到 API 流式输出给前端。
+### 4.2 MCP 过渡态说明
 
-关键入口：
+当前存在文档与行为漂移，需要明确标注：
 
-- `apiserver/api_server.py:856` `@app.post("/chat/stream")`
-- `apiserver/api_server.py:969` `run_agentic_loop`
-- `mcpserver/mcp_server.py:65` `@app.post("/schedule")`
-- `agentserver/agent_server.py:449` `@app.post("/schedule")`
-- `agentserver/agent_server.py:855` `@app.post("/AgentServer/send")`
+- `main.py` 仍会启动独立 `mcpserver`。
+- `apiserver` 的 `/mcp/status`、`/mcp/tasks` 返回离线占位响应（兼容 UI，非真实 MCP 运行状态）。
+- `apiserver` 的 `/mcp/services`、`/mcp/import` 仍提供可用的服务管理能力。
 
-## 4. 端口与通信
+## 5. Omni-Operator 三层映射（开发预备语义）
 
-默认端口定义来自 `system/config.py`：
+### 5.1 Brainstem（控制与接入层）
 
-- API Server: `8000`
-- Agent Server: `8001`
-- MCP Server: `8003`
-- TTS Server: `5048`
-- ASR Server: `5060`
+当前落点：
 
-关键位置：
+- `main.py`（服务编排）
+- `system/config.py`（统一配置）
+- `apiserver/`（BFF 入口）
+- `autonomous/system_agent.py`（单活自治控制）
 
-- `system/config.py:23`
-- `system/config.py:26`
-- `system/config.py:29`
-- `system/config.py:32`
-- `system/config.py:35`
+说明：`agentserver/` 不再是主控制路径，仅作为兼容保留。
 
-## 5. 前端结构摘要
+### 5.2 Brain（策略与推理层）
 
-前端技术栈：Vue 3 + TypeScript + PrimeVue + Electron。
+当前落点：
 
-核心路由：
+- `apiserver/llm_service.py`（LLM client 与路由）
+- `apiserver/agentic_tool_loop.py`（工具循环编排）
+- `summer_memory/`（记忆检索）
+- `guide_engine/`（领域策略/计算）
 
-- `/` 面板页
-- `/chat` 对话页
-- `/model` 模型配置页
-- `/memory` 记忆配置页
-- `/mind` 可视化页
-- `/skill` 技能工坊页
-- `/config` 终端配置页
+### 5.3 Limbs（工具与执行层）
 
-关键位置：
+当前落点：
 
-- `frontend/src/main.ts:13` `createWebHashHistory`
-- `frontend/src/main.ts:16`
-- `frontend/src/main.ts:17`
-- `frontend/src/main.ts:18`
-- `frontend/src/main.ts:19`
-- `frontend/src/main.ts:20`
-- `frontend/src/main.ts:21`
+- `apiserver/native_tools.py` + `system/native_executor.py`
+- `mcpserver/mcp_registry.py` + `mcpserver/mcp_manager.py`
+- `voice/` 与前端交互执行动作
 
-## 6. 打包与发布链路
+## 6. AgentServer 状态（已弃用）
 
-1. `scripts/build-win.py` 先构建后端（PyInstaller）。
-2. 再构建前端（`npm run dist:win`）。
-3. Electron 打包时将 `dist` 和 `dist-electron` 打入安装包。
+**当前状态**：
+- 代码保留但已禁用自动启动（2026-02-20）
+- `main.py` 不再自动启动 AgentServer
+- Legacy 执行接口（`/schedule`、`/analyze_and_execute`）返回 `deprecated`
 
-关键位置：
+**弃用原因**：
+- OpenClaw 旧执行链路已被 `apiserver + agentic_tool_loop + native/mcp` 主链替代
+- 架构简化：减少服务依赖，统一执行入口
 
-- `scripts/build-win.py:290` `build_backend`
-- `scripts/build-win.py:324` `build_frontend`
-- `frontend/package.json:15` `dist:win`
-- `frontend/electron-builder.yml:10` `dist/**/*`
-- `frontend/electron-builder.yml:11` `dist-electron/**/*`
+**替代方案**：
+- 工具调用：`apiserver/agentic_tool_loop.py` + `native_tools.py` / `mcp_manager.py`
+- 自治执行：`autonomous/system_agent.py` + CLI Adapter
 
-## 7. 当前规模（快速量化）
+**保留原因**：
+- 兼容性考虑，避免破坏性删除
+- 部分历史接口可能被外部依赖
 
-- API 路由数（`apiserver/api_server.py`）：约 `48`
-- Agent 路由数（`agentserver/agent_server.py`）：约 `45`
-- MCP 路由数（`mcpserver/mcp_server.py`）：`4`
+**清理计划**：
+- Phase 1：标记所有接口为 deprecated（✅ 已完成）
+- Phase 2：完全移除代码与配置（🟡 规划中）
 
-说明：该规模意味着前端改造时无需重写业务后端，优先做 UI 与通信层替换更稳妥。
+**注意**：
+- 新增能力应走 `apiserver + agentic_tool_loop + native/mcp` 主链
+- 不建议新增对 `agentserver/` 的依赖
 
-## 8. 协议与代理（新增）
+## 7. 与目标态差距（简版）
 
-- 模型协议支持 OpenAI 兼容与 Google 原生双栈：
-  - OpenAI 兼容：`openai_chat_completions`
-  - Google 原生：`google_generate_content`
-- Google 原生流式支持两种模式：
-  - SSE：`streamGenerateContent`
-  - Live API：`BidiGenerateContent`
-- 系统代理支持“按配置启用 + Windows 注册表代理同步到进程环境”的组合策略，避免仅靠 `HTTP(S)_PROXY` 导致误判。
+- Tool Contract 仍以运行时约定为主，尚未在所有调用面强制结构化字段（如 `risk_level`、`trace_id`、`input_schema_version`）。
+- BFF 内仍存在部分 MCP 状态占位接口，需统一真实状态语义。
+- 多租户、完整治理策略（详见 10/11/12 与 `gemin-结构图.md`）尚未完整落地。
+- Token 经济学控制仍偏“策略约束”，尚未在网关层形成 4 重硬门禁（缓存分层、模型分流、I/O 熔断、事件驱动休眠）。
+- 多 Agent 并发安全墙（文件乐观锁、全局状态互斥锁、仲裁熔断、令牌桶流控）尚未完整落地。
 
-详细配置、日志解释与排障步骤参见：`doc/04-api-protocol-proxy-guide.md`。
+## 8. 系统落地最高原则（新增）
 
+在 Omni-Operator 开发生命周期中，统一采用以下反直觉原则：
+
+- `逻辑并发，执行串行（Logical Concurrency, Serial Execution）`
+
+解释：
+
+- 允许多个 Agent 并发“思考、读文档、只读分析”。
+- 所有会改变物理宿主机状态的动作（写文件、装依赖、启停服务、Git 变更）必须经 Event Bus 串行排队执行。
+- 该规则同时服务于稳定性与成本目标：避免主机状态雪崩与无效重试导致的 Token 放大。
+
+## 9. 交叉引用
+
+- 模块归档：`./02-module-archive.md`
+- Qt 改造评估：`./03-qt-migration-assessment.md`
+- 模型协议与代理：`./04-api-protocol-proxy-guide.md`
+- 启动与开发环境：`./05-dev-startup-and-index.md`
+- 工具调用管线：`./06-structured-tool-calls-and-local-first-native.md`
+- 自治 SDLC 对齐：`./07-autonomous-agent-sdlc-architecture.md`
+- 前后端分离：`./08-frontend-backend-separation-plan.md`
+- 工具治理规范：`./09-工具调用与任务执行规范.md`
+- 目标架构蓝图（仅目标态参考）：`./gemin-结构图.md`、`./10-brainstem-layer-modules.md`、`./11-brain-layer-modules.md`、`./12-limbs-layer-modules.md`

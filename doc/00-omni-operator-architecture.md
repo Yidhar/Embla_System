@@ -1,11 +1,33 @@
+---
+**文档类型**：🎯 目标态架构设计（Target Architecture）
+**实施状态**：Phase 3 规划（当前 Phase 0 已实现 CLI Adapter 过渡方案）
+**最后更新**：2026-02-22
+**当前替代方案**：见 `架构与时序设计.md` (CLI Tools + Codex-first)
+**实施路径**：Phase 0 (CLI) → Phase 1-2 (增强) → Phase 3 (本文档)
+---
+
 本文档是 **Omni-Operator v2.0** 的全景架构设计蓝图，面向研发落地交付。包含完整架构拓扑图、交互时序图、系统树节点结构、数据模型、模块化原子规范与开发 Gantt 排期。可直接作为技术评审（TR）与敏捷开发的基线文档。
 
 > [!IMPORTANT]
-> 本文档承接 `doc/07-autonomous-agent-sdlc-architecture.md`（目标态合同）与 `doc/架构与时序设计.md`（MVP 实施稿），将系统目标从"智能代码助手"升级为 **"自治系统操作员与进化体（Autonomous System Operator & Evolving Agent）"**。
+> **文档定位**：本文档描述 **Phase 3 目标态架构**，非当前实现。
+>
+> **当前实现**（Phase 0）：
+> - 执行模型：CLI Adapter (Codex/Claude/Gemini CLI)
+> - 子代理：无独立 Sub-Agent，通过 CLI 工具调用
+> - 脚手架：无 Scaffold Engine
+>
+> **演进路径**：
+> - Phase 0 (✅ 已实现)：CLI Tools + System Agent
+> - Phase 1-2 (🟡 规划中)：增强监控、降级、Token 经济学
+> - Phase 3 (🔴 本文档)：Sub-Agent Runtime + Scaffold Engine + Event Bus
+>
+> **参考文档**：
+> - 当前实现：`架构与时序设计.md`
+> - SDLC 对齐：`07-autonomous-agent-sdlc-architecture.md`
 
 ---
 
-# Omni-Operator v2.0 全景架构设计蓝图
+# Omni-Operator v2.0 全景架构设计蓝图（Phase 3 目标态）
 
 ## 1. 核心系统架构：三层"脑干-大脑-手脚"拓扑
 
@@ -71,11 +93,12 @@ graph TB
             REGTOOL["🔌 register_new_tool<br/>动态注册新工具"]
         end
 
-        subgraph CliTools["Agent CLI 工具层"]
-            ADAPTER["🔗 CLI Adapter<br/>统一适配器接口"]
-            CODEX["Codex CLI"]
-            CLAUDE["Claude Code"]
-            GEMINI["Gemini CLI"]
+        subgraph SubAgentFabric["子代理与脚手架层"]
+            SA_RUNTIME["🤝 Sub-Agent Runtime<br/>子代理编排·状态同步"]
+            SCAFFOLD["🏗️ Scaffold Engine<br/>模板生成·补丁骨架"]
+            SA_FRONT["Frontend Sub-Agent"]
+            SA_BACK["Backend Sub-Agent"]
+            SA_OPS["Ops Sub-Agent"]
         end
     end
 
@@ -83,10 +106,10 @@ graph TB
     EB -->|"系统事件<br/>CPU过载·日志报错·定时器"| META
     META -->|"目标拆解·任务派发"| ROUTER
     ROUTER -->|"加载角色规范"| LLM
-    LLM -->|"ToolUse解析"| ADAPTER
-
-    ADAPTER --> CODEX & CLAUDE & GEMINI
-    ADAPTER --> BASH & AST & SEARCH & BROWSER
+    LLM -->|"任务下发"| SA_RUNTIME
+    SA_RUNTIME --> SA_FRONT & SA_BACK & SA_OPS
+    SA_RUNTIME -->|"生成脚手架补丁"| SCAFFOLD
+    SA_RUNTIME --> BASH & AST & SEARCH & BROWSER
 
     %% 安全控制流
     BASH & AST -->|"执行前校验"| RF
@@ -191,19 +214,47 @@ omni-operator-v2/
 │       └── daily_logs/                 # 日结归档日志
 │
 └── NagaAgent/                          # ═══ 现有项目集成层 ═══
-    ├── autonomous/                     # 现有自治Agent骨架 (Python)
-    │   ├── system_agent.py             # System Agent 主循环
+    ├── autonomous/                     # 🟢 System Agent 自治闭环 (Phase 0 已实现)
+    │   ├── system_agent.py             # 主循环：感知 → 规划 → 执行 → 评估
     │   ├── sensor.py / planner.py      # 感知器 / 规划器
     │   ├── evaluator.py / dispatcher.py # 评估器 / 派发器
-    │   ├── monitor.py                  # CLI执行监控器
+    │   ├── monitor.py                  # 子代理执行监控器
     │   ├── release/controller.py       # 发布灰度控制器
-    │   ├── state/workflow_store.py     # 工作流持久化
-    │   └── tools/cli_adapter.py        # CLI 适配器基类
+    │   ├── state/workflow_store.py     # 工作流持久化 + Lease/Fencing
+    │   ├── tools/
+    │   │   ├── cli_adapter.py          # 🟢 CLI 统一适配器 (Phase 0 当前实现)
+    │   │   ├── codex_adapter.py        # 🟢 Codex CLI/MCP 主执行器 (Codex-first v2)
+    │   │   ├── claude_adapter.py       # 🟢 Claude Code 降级备选
+    │   │   └── gemini_adapter.py       # 🟢 Gemini CLI 降级备选
+    │   └── tools/subagent_runtime.py   # 🔴 Sub-Agent Runtime (Phase 3 目标态，当前未实现)
     ├── apiserver/                      # API 服务层 (FastAPI)
     ├── mcpserver/                      # MCP 工具注册与调度
     ├── memory/                         # 记忆 schema 与投影
     └── policy/                         # 策略引擎配置
 ```
+
+**图例说明**：
+- 🟢 **已实现** (Phase 0)：当前代码可运行
+- 🟡 **部分实现** (Phase 1-2)：骨架存在，功能待增强
+- 🔴 **未实现** (Phase 3)：本文档目标态设计
+- ⚪ **已弃用**：保留兼容但不推荐使用
+
+**Phase 0 → Phase 3 实施路径映射**：
+
+| 目标态组件 (Phase 3) | 当前实现 (Phase 0) | 实施阶段 | 状态 |
+|---------------------|-------------------|---------|------|
+| **Sub-Agent Runtime** | CLI Adapter | Phase 0 | 🟢 CLI 过渡方案已实现 |
+| Frontend Sub-Agent | Codex CLI | Phase 0 | 🟢 通过 CLI 调用实现 |
+| Backend Sub-Agent | Codex CLI | Phase 0 | 🟢 通过 CLI 调用实现 |
+| Ops Sub-Agent | Codex CLI | Phase 0 | 🟢 通过 CLI 调用实现 |
+| **Scaffold Engine** | 无 | Phase 3 | 🔴 未实现 |
+| **Execution Bridge** | CLI Adapter | Phase 0 | 🟢 CLI 适配器实现 |
+| **Event Bus** | 轻量 Event Log | Phase 0 | 🟡 SQLite 事件存储 |
+| **Meta-Agent** | System Agent | Phase 0 | 🟡 单实例主循环 |
+| **Router** | CLI Selector | Phase 0 | 🟡 CLI 选择策略 |
+| **Watchdog** | 无 | Phase 2 | 🔴 未实现 |
+| **Immutable DNA** | Prompt 文件 | Phase 0 | 🟡 静态 Prompt |
+| **Security Kernel** | Native Executor | Phase 0 | 🟡 基础沙箱 |
 
 ---
 
@@ -392,43 +443,65 @@ sequenceDiagram
     META->>META: 注入"昨日摘要" → 进入新一天
 ```
 
-### 3.5 多Agent协作与Token经济调度
+### 3.5 多Agent协作与Token经济调度（Tokenomics v2）
 
-长程运行中的多模型调度策略，常规巡检使用小模型，致命Bug时自主升级大模型。
+为防止长程运行中的“Token 破产”和上下文爆炸，系统必须启用四重拦截：
+
+1. 网关层：Prompt 分层组装 + 缓存标记 + 预算校验。
+2. 大模型调度层：任务分流到主模型/次模型/本地零成本模型。
+3. 工具层：I/O 截断、结构化读取、Patch 写入约束。
+4. 事件层：休眠监听替代轮询，空闲期间 Token 消耗归零。
+
+Prompt 分层规范：
+
+- Block 1（静态头部）：系统角色 + `CLAUDE.md` + MCP Tools Schema，约 10k tokens，`cache_control={"type":"ephemeral"}`。
+- Block 2（长期记忆）：过去 24h 精简摘要，第二个 `ephemeral`。
+- Block 3（动态窗口）：最近 3~5 轮对话，禁止缓存；超过 10k tokens 软阈值强制 GC。
+
+异构模型分流规范：
+
+| 任务类型 | 绑定模型 | 成本评级 | 典型场景 |
+|---|---|---|---|
+| 主控路由/代码生成 | `{用户设置主要模型}` | 极高 | Router 拆解、核心代码修改 |
+| 后台清理/记忆压缩 | `{次要模型}` | 低 | 对话树压缩、乱码清洗 |
+| 重度日志解析 | 本地开源模型 | 零 | 几万行日志关键栈提取 |
 
 ```mermaid
 sequenceDiagram
     participant META as Meta-Agent
     participant ROUTER as Router
+    participant GW as LLM Gateway
     participant BUDGET as Token Budget
-    participant HAIKU as Claude 3.5 Haiku<br/>(¢)
-    participant SONNET as Claude 3.7 Sonnet<br/>($$$)
+    participant PRIMARY as Primary Model
+    participant SECONDARY as Secondary Model
+    participant LOCAL as Local OSS Model
+    participant GC as GC Engine
     participant EL as Event Log
 
-    META->>ROUTER: 新任务(type, severity)
+    META->>ROUTER: 新任务(type, severity, io_cost_hint)
+    ROUTER->>GW: route(task_spec)
+    GW->>BUDGET: 预算检查 + 并发配额检查
 
-    ROUTER->>BUDGET: 查询剩余预算
-
-    alt severity == "routine_patrol"
-        BUDGET-->>ROUTER: 使用小模型 (省钱)
-        ROUTER->>HAIKU: 执行常规巡检
-        HAIKU-->>ROUTER: 结果
-        BUDGET->>BUDGET: 扣减 ~$0.002
-    else severity == "critical_bug"
-        BUDGET-->>ROUTER: 申请大模型额度
-        BUDGET->>BUDGET: 检查: 日预算剩余>20%?
-
-        alt 预算充足
-            ROUTER->>SONNET: 执行深度诊断
-            SONNET-->>ROUTER: 详细分析 + 修复方案
-            BUDGET->>BUDGET: 扣减 ~$0.15
-        else 预算耗尽
-            ROUTER->>HAIKU: 降级执行 + 标记待人工
-            EL->>EL: emit(BudgetExhausted)
-        end
+    alt task == "code_generation"
+        GW->>PRIMARY: 发送 Block1+Block2+Block3
+        PRIMARY-->>GW: tool_calls / patch plan
+    else task == "memory_cleanup"
+        GW->>SECONDARY: 压缩历史上下文
+        SECONDARY-->>GW: 24h 精简摘要
+    else task == "heavy_log_parse"
+        GW->>LOCAL: 本地日志解析
+        LOCAL-->>GW: 关键错误栈
     end
 
-    ROUTER-->>META: 任务结果 + 消耗报告
+    GW->>GW: 动态窗口 > 10k?
+    alt 超阈值
+        GW->>GC: 强制触发上下文 GC
+        GC-->>GW: 回注摘要 + 裁剪窗口
+    end
+
+    GW-->>ROUTER: 结果 + 成本报告
+    ROUTER-->>META: 执行结果
+    GW->>EL: emit(TokenBudgetUpdated)
 ```
 
 ### 3.6 安全控制全链路 — KillSwitch 与人类核准
@@ -467,6 +540,37 @@ sequenceDiagram
         KS->>KS: ⚡ 立即杀掉所有Agent进程
         KS->>KS: 冻结网络出口
     end
+```
+
+### 3.7 多Agent并发灾难防护（Daemon Layer）
+
+横向扩展子 Agent 时，守护进程层必须启用四道隔离墙：
+
+1. 文件指纹乐观锁：`read_file` 返回 `file_hash`，`edit_file` 必传 `original_file_hash`，冲突即硬错误。
+2. 全局状态互斥锁：`npm install`、`apt-get`、`git branch`、`systemctl restart` 等动作必须串行。
+3. Router 仲裁熔断：`MAX_DELEGATE_TURNS = 3`，超限后冻结并进入人工裁决。
+4. API 令牌桶流控：`MAX_CONCURRENT_API_CALLS` 限流，超额请求排队，防 429 雪崩。
+
+```mermaid
+flowchart TB
+    subgraph DaemonLayer["Daemon Layer 并发防护"]
+        LOCK["Optimistic File Lock<br/>read_hash / write_hash_check"]
+        MUTEX["Global State Mutex<br/>MUTEX_GLOBAL_STATE"]
+        ARBITER["Router Arbiter<br/>MAX_DELEGATE_TURNS=3"]
+        BUCKET["Token Bucket Gateway<br/>MAX_CONCURRENT_API_CALLS"]
+        QUEUE["Serial Execution Queue"]
+        HITL["Human-in-the-Loop"]
+    end
+
+    AGENTS["Parallel Agents"] --> LOCK
+    LOCK -->|local writes| QUEUE
+    AGENTS --> MUTEX
+    MUTEX -->|global actions| QUEUE
+    AGENTS --> ARBITER
+    ARBITER -->|conflict>3| HITL
+    AGENTS --> BUCKET
+    BUCKET -->|rate-limited calls| LLMAPI["LLM Providers"]
+    QUEUE --> HOST["Physical Host Mutations"]
 ```
 
 ---
@@ -661,10 +765,19 @@ interface ToolCallEnvelope {
   validated_args: Record<string, unknown>;
   timeout_ms: number;
   input_schema_version: string;
+  execution_scope: "local" | "global"; // local=文件级变更, global=环境级变更
+  requires_global_mutex?: boolean;      // global 动作必须为 true
+  original_file_hash?: string;          // 写文件时必填，用于乐观锁
+  queue_ticket?: string;                // 进入串行队列后的票据编号
 
   // === 预算控制 ===
   estimated_token_cost: number;
   budget_remaining: number;
+  io_truncation_policy?: {
+    max_chars: number;      // 如 8000
+    head_chars: number;     // 如 3000
+    tail_chars: number;     // 如 3000
+  };
 }
 ```
 
@@ -688,6 +801,33 @@ flowchart LR
     style G fill:#4a2a2a,stroke:#aa6666
     style L fill:#2a2a4a,stroke:#6666aa
 ```
+
+### 6.4 Prompt Envelope 规范 (Caching + GC)
+
+```typescript
+interface PromptEnvelope {
+  block_static_header: {
+    content: string;
+    cache_control: { type: "ephemeral" }; // Block 1
+    token_budget_hint: 10000;
+  };
+  block_long_term_memory: {
+    content: string;
+    cache_control: { type: "ephemeral" }; // Block 2
+  };
+  block_dynamic_window: {
+    messages: Array<{ role: string; content: string }>; // Block 3
+    cache_control?: never; // 禁止缓存标记
+    soft_token_limit: 10000;
+  };
+}
+```
+
+执行规则：
+
+1. Block 3 超过 `soft_token_limit` 时，必须先执行 GC，再进入主模型调用。
+2. `sleep_and_watch(log_file, regex)` 进入休眠时，释放动态窗口内存，仅保留可恢复摘要。
+3. 恢复唤醒后重新组装 `PromptEnvelope`，禁止直接恢复旧长上下文。
 
 ---
 

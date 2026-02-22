@@ -1,6 +1,27 @@
+---
+**文档类型**：🎯 目标态架构设计（Target Architecture - Phase 3）
+**实施状态**：Phase 3 规划（当前 Phase 0 部分实现）
+**最后更新**：2026-02-22
+**当前替代方案**：MCP Manager (mcpserver/) + Native Executor (system/)
+**实施路径**：Phase 0 (基础 MCP) → Phase 1-2 (增强) → Phase 3 (本文档)
+---
+
 # 12 - 手脚层模块详细架构 (Limbs Layer Modules)
 
 > **定位**：手脚层是 Omni-Operator 的执行末端，所有能力以 MCP (Model Context Protocol) 形式挂载，支持热插拔和动态注册。
+>
+> **实施状态**：
+> - 🟢 **Phase 0 已实现**：MCP Manager、Native Executor、基础工具集
+> - 🟡 **Phase 1-2 规划**：工具热加载、健康检查、降级标记
+> - 🔴 **Phase 3 目标态**：完整 MCP Host、动态插件、Sub-Agent Runtime（本文档）
+>
+> **当前实现映射**：
+> - MCP Host → MCP Manager (mcpserver/mcp_manager.py)
+> - Tool Registry → MCP Registry (mcpserver/mcp_registry.py)
+> - os_bash → Native Executor (system/native_executor.py)
+> - file_ast → 无（目标态）
+> - Sub-Agent Runtime → CLI Adapter (autonomous/tools/cli_adapter.py)
+> - Scaffold Engine → 无（目标态）
 
 ---
 
@@ -138,6 +159,10 @@ interface ToolContext {
   timeout_ms: number;
   budget_remaining: number;
   caller_role: string;
+  execution_scope: "local" | "global";
+  requires_global_mutex?: boolean;
+  queue_ticket?: string;
+  global_lock_id?: string;
 }
 
 interface ToolResult {
@@ -148,6 +173,21 @@ interface ToolResult {
   duration_ms: number;
   truncated: boolean;
   raw_length?: number;
+  file_hash?: string;         // 读取类工具返回文件指纹
+}
+```
+
+并发写保护扩展契约：
+
+```typescript
+interface EditFileArgs {
+  path: string;
+  patch: string;
+  original_file_hash: string; // 必填：乐观锁校验
+}
+
+interface ReadFileResult extends ToolResult {
+  file_hash: string; // MD5 或 Last-Modified 指纹
 }
 ```
 
@@ -169,7 +209,7 @@ flowchart TB
         SECURITY["安全预检<br/>调用 Regex Firewall"]
         SPAWN["进程管理<br/>child_process.spawn<br/>设定 timeout / cwd / env"]
         STREAM["输出采集<br/>stdout + stderr 实时读取<br/>内存上限 10MB"]
-        TRUNCATE["智能截断<br/>Head 200行 + Tail 200行<br/>中间标注 [TRUNCATED N lines]"]
+        TRUNCATE["字符级熔断<br/>max=8000 chars<br/>head=3000 + tail=3000"]
         FORMAT["结果封装<br/>exit_code + truncated_output"]
     end
 
@@ -195,7 +235,7 @@ sequenceDiagram
     participant PROC as child_process
     participant TRUNC as Truncator
 
-    LLM->>BASH: tool_use("os_bash", {<br/>  cmd: "find / -name '*.log' -exec cat {} +",<br/>  timeout: 30000,<br/>  cwd: "/var/log"<br/>})
+    LLM->>BASH: tool_use("os_bash", {<br/>  cmd: "grep -R \"ERROR\" /var/log/nginx --line-number",<br/>  timeout: 30000,<br/>  cwd: "/var/log"<br/>})
 
     BASH->>SEC: validate(cmd)
     SEC-->>BASH: ✅ PASS
@@ -218,12 +258,26 @@ sequenceDiagram
     end
     deactivate PROC
 
-    BASH->>TRUNC: truncate(stdout, {head: 200, tail: 200})
-    Note right of TRUNC: 原始: 50,000 行<br/>截断后: 400 行 +<br/>[... TRUNCATED 49,600 lines ...]
+    BASH->>TRUNC: truncate(stdout, {max: 8000, head: 3000, tail: 3000})
+    Note right of TRUNC: 原始输出超长<br/>截断后保留头尾并注入系统标记
 
     TRUNC-->>BASH: truncated_output
 
-    BASH-->>LLM: tool_result({<br/>  success: true,<br/>  output: truncated_output,<br/>  exit_code: 0,<br/>  truncated: true,<br/>  raw_length: 50000,<br/>  duration_ms: 8500<br/>})
+    BASH-->>LLM: tool_result({<br/>  success: true,<br/>  output: truncated_output,<br/>  exit_code: 0,<br/>  truncated: true,<br/>  raw_length: 125000,<br/>  duration_ms: 8500<br/>})
+```
+
+标准熔断器实现规范：
+
+```typescript
+function executeWithTruncation(cmd: string): string {
+  const result = execSync(cmd, { timeout: 30000 }).toString();
+  if (result.length > 8000) {
+    return result.slice(0, 3000)
+      + "\\n...[SYSTEM TRUNCATED: OUTPUT TOO LONG]...\\n"
+      + result.slice(-3000);
+  }
+  return result;
+}
 ```
 
 ---
@@ -242,6 +296,7 @@ flowchart TB
         direction TB
         PARSE["AST 解析器<br/>TypeScript: ts-morph<br/>Python: ast / LibCST<br/>Markdown: mdast"]
         LOCATE["定位器<br/>按函数名 · 类名 · 行号<br/>精确定位修改目标"]
+        HASHCHK["乐观锁校验<br/>对比 original_file_hash"]
         PATCH["补丁引擎<br/>AST 级别精确替换<br/>保持格式化"]
         VALIDATE["变更校验<br/>语法检查 · 类型检查<br/>diff 生成"]
         WRITE["原子写入<br/>tmp写入 → rename<br/>防止部分写入"]
@@ -249,7 +304,9 @@ flowchart TB
 
     LLM["LLM tool_use"] -->|"file, target, patch"| PARSE
     PARSE --> LOCATE
-    LOCATE --> PATCH
+    LOCATE --> HASHCHK
+    HASHCHK -->|"✅ hash一致"| PATCH
+    HASHCHK -->|"❌ hash冲突"| ERROR["返回并发冲突错误"]
     PATCH --> VALIDATE
     VALIDATE -->|"✅ 语法正确"| WRITE
     VALIDATE -->|"❌ 语法错误"| ERROR["返回错误详情"]
@@ -267,11 +324,16 @@ sequenceDiagram
     participant PARSER as AST Parser
     participant FS as File System
 
-    LLM->>AST: tool_use("file_ast", {<br/>  path: "src/server.ts",<br/>  target: {type: "function", name: "handleRequest"},<br/>  patch: "function handleRequest(req) {\n  // 新实现\n}"<br/>})
+    LLM->>AST: tool_use("file_ast", {<br/>  path: "src/server.ts",<br/>  target: {type: "function", name: "handleRequest"},<br/>  patch: "function handleRequest(req) {\n  // 新实现\n}",<br/>  original_file_hash: "md5:9f0ab..."<br/>})
 
     AST->>FS: readFile("src/server.ts")
     FS-->>AST: source_code
 
+    AST->>AST: 计算 current_file_hash
+    AST->>AST: 对比 current_file_hash vs original_file_hash
+    alt hash 不一致
+        AST-->>LLM: tool_result({<br/>  success: false,<br/>  error: "File modified by another process. Refresh your context."<br/>})
+    else hash 一致
     AST->>PARSER: parse(source_code, "typescript")
     PARSER-->>AST: AST tree
 
@@ -287,6 +349,7 @@ sequenceDiagram
         AST->>FS: writeFileAtomic("src/server.ts", patched_code)
         AST->>AST: generate_diff(original, patched)
         AST-->>LLM: tool_result({<br/>  success: true,<br/>  diff: "- old line\n+ new line",<br/>  lines_changed: 28<br/>})
+    end
     end
 ```
 
@@ -361,11 +424,17 @@ sequenceDiagram
 
 ---
 
-## 6. sleep_until / schedule_cron 时空控制工具
+## 6. sleep_and_watch / sleep_until / schedule_cron 时空控制工具
 
 ### 6.1 模块职责
 
-让 Agent 能够挂起自身等待特定条件或时间，以及设定定期巡检任务。这是长程自主运行的关键能力。
+让 Agent 能够挂起自身等待特定条件或时间，以及设定定期巡检任务。这是长程自主运行与零 Token 空转的关键能力。
+
+硬约束：
+
+1. 严禁轮询式监控（如每分钟唤醒一次询问状态）。
+2. 监控类场景优先使用 `sleep_and_watch(log_file, regex)`。
+3. 休眠期间由宿主接管 `tail -f` 与事件监听，模型会话内存释放。
 
 ### 6.2 条件休眠架构
 
@@ -378,6 +447,7 @@ flowchart TB
             S_EVENT["事件条件<br/>sleep_until('log.error出现')"]
             S_METRIC["指标条件<br/>sleep_until('CPU > 90%')"]
             S_COMBO["组合条件<br/>sleep_until('Error OR 30min')"]
+            S_WATCH["日志监听条件<br/>sleep_and_watch('/var/log/nginx/error.log', 'upstream timed out')"]
         end
 
         subgraph Cron["schedule_cron"]
@@ -386,11 +456,12 @@ flowchart TB
             C_HEALTH["健康检查<br/>'*/5 * * * *' 每5min"]
         end
 
-        WATCHER["条件监控器<br/>EventBus 订阅 + 轮询"]
+        WATCHER["条件监控器<br/>EventBus 订阅 + log tail 监听"]
     end
 
     S_EVENT -->|"订阅"| EB["Event Bus"]
-    S_METRIC -->|"轮询"| WD["Watchdog Metrics"]
+    S_METRIC -->|"订阅"| WD["Watchdog Metrics Stream"]
+    S_WATCH -->|"tail -f + regex"| LOGD["Log Watch Daemon"]
     WATCHER -->|"条件满足"| WAKE["唤醒 Agent"]
     C_PATROL & C_BACKUP & C_HEALTH -->|"定时触发"| EB
 
@@ -402,19 +473,19 @@ flowchart TB
 ```mermaid
 sequenceDiagram
     participant LLM as LLM Client
-    participant SLEEP as sleep_until
+    participant SLEEP as sleep_and_watch
     participant EB as Event Bus
-    participant LOG_MON as 日志监控器
+    participant LOG_MON as Log Watch Daemon
     participant META as Meta-Agent
 
-    LLM->>SLEEP: tool_use("sleep_until", {<br/>  condition: {type: "event", pattern: "log.error.*nginx"},<br/>  timeout: "24h",<br/>  on_wake: "诊断 nginx 错误"<br/>})
+    LLM->>SLEEP: tool_use("sleep_and_watch", {<br/>  log_file: "/var/log/nginx/error.log",<br/>  regex: "upstream timed out",<br/>  timeout: "24h",<br/>  on_wake: "诊断 nginx 错误"<br/>})
 
-    SLEEP->>EB: subscribe("log.error.*nginx")
-    SLEEP->>SLEEP: 挂起 Agent 会话<br/>🔇 零 Token 消耗
+    SLEEP->>LOG_MON: start tail -f + regex monitor
+    SLEEP->>SLEEP: 挂起 Agent 会话并释放上下文<br/>🔇 零 Token 消耗
 
     Note over SLEEP,META: Agent 完全休眠中...<br/>可能持续数小时<br/>Event Bus 持续监控
 
-    LOG_MON->>EB: publish("log.error.nginx", {<br/>  message: "upstream timed out"<br/>})
+    LOG_MON->>EB: publish("wake.log_match", {<br/>  message: "upstream timed out",<br/>  file: "/var/log/nginx/error.log"<br/>})
 
     EB->>SLEEP: 条件匹配! 触发唤醒
 
@@ -527,95 +598,83 @@ sequenceDiagram
 
 ---
 
-## 8. CLI Adapter 外部 Agent CLI 适配层
+## 8. Sub-Agent Runtime 与 Scaffold Engine
 
 ### 8.1 模块职责
 
-统一封装 Codex CLI / Claude Code / Gemini CLI 的调用接口，包含选择策略、实时监控、停滞检测。承接现有 `autonomous/tools/cli_adapter.py` 架构。
+在当前设计中，开发任务执行由“子代理 + 脚手架”双组件完成：
 
-### 8.2 CLI 适配层架构
+1. `Sub-Agent Runtime`：并发调度 Frontend/Backend/Ops 子代理，汇聚结果。
+2. `Scaffold Engine`：根据任务规格生成补丁骨架（路由、中间件、页面、测试模板）。
+3. `Execution Bridge`：将子代理输出转换为 `file_ast/os_bash/git_operator` 可执行动作。
+
+### 8.2 运行时架构
 
 ```mermaid
 flowchart TB
-    subgraph CLILayer["🔗 CLI Adapter Layer"]
+    subgraph SARuntime["🤝 Sub-Agent Runtime"]
         direction TB
-        SELECTOR["CLI Selector<br/>选择最优 CLI<br/>可用性·任务匹配·负载"]
-        ADAPTER["Unified Adapter<br/>统一接口封装<br/>subprocess 管理"]
-        MONITOR["Execution Monitor<br/>实时监控 stdout<br/>停滞检测 · 进度估算"]
-
-        subgraph CLIs["支持的 CLI"]
-            CODEX["Codex CLI<br/>codex --full-auto"]
-            CLAUDE["Claude Code<br/>claude -p --dangerously-skip-permissions"]
-            GEMINI["Gemini CLI<br/>gemini -p"]
-        end
-
-        subgraph Monitoring["监控维度"]
-            M_STDOUT["stdout 输出流<br/>10s 采样"]
-            M_GIT["git status<br/>文件变更检测"]
-            M_STALL["停滞检测<br/>5min 无输出告警"]
-            M_PROGRESS["进度估算<br/>基于输出模式"]
-        end
+        PLANNER["Task Planner<br/>任务切片·依赖图"]
+        SPAWNER["Agent Spawner<br/>Frontend / Backend / Ops"]
+        MERGER["Result Merger<br/>冲突检测·统一补丁"]
+        MONITOR["Execution Monitor<br/>进度跟踪·停滞告警"]
     end
 
-    DISPATCHER["Dispatcher"] -->|"任务规格"| SELECTOR
-    SELECTOR -->|"选择 CLI"| ADAPTER
-    ADAPTER -->|"启动进程"| CODEX & CLAUDE & GEMINI
-    ADAPTER -->|"启动监控"| MONITOR
-    MONITOR --> M_STDOUT & M_GIT & M_STALL & M_PROGRESS
+    subgraph Scaffold["🏗️ Scaffold Engine"]
+        TEMPLATES["Template Registry<br/>RBAC / API / UI / Test"]
+        GENERATOR["Scaffold Generator<br/>生成补丁骨架"]
+        PATCH_BUILDER["Patch Builder<br/>最小差异补丁"]
+    end
 
-    style CLILayer fill:#2e1a3e,stroke:#8855cc
+    DISPATCHER["Dispatcher"] -->|"任务规格"| PLANNER
+    PLANNER --> SPAWNER
+    SPAWNER -->|"子任务结果"| MERGER
+    MERGER -->|"结构化变更意图"| GENERATOR
+    GENERATOR --> PATCH_BUILDER
+    PATCH_BUILDER -->|"patch plan"| EXEC_BRIDGE["Execution Bridge"]
+    EXEC_BRIDGE -->|"调用"| FILE_AST["file_ast"] & BASH["os_bash"] & GIT_OP["git_operator"]
+    MONITOR --> MERGER
+
+    style SARuntime fill:#2e1a3e,stroke:#8855cc
+    style Scaffold fill:#1e2a3e,stroke:#5577cc
 ```
 
-### 8.3 CLI 选择与执行时序
+### 8.3 子代理协作与脚手架执行时序
 
 ```mermaid
 sequenceDiagram
     participant DISP as Dispatcher
-    participant SEL as CLI Selector
-    participant ADAPT as CLI Adapter
-    participant MON as Monitor
-    participant PROC as subprocess
-    participant GIT as Git
+    participant RUNTIME as Sub-Agent Runtime
+    participant FE as Frontend Agent
+    participant BE as Backend Agent
+    participant OPS as Ops Agent
+    participant SCF as Scaffold Engine
+    participant EXEC as Execution Bridge
+    participant TOOLS as file_ast/os_bash/git_operator
 
-    DISP->>SEL: select(spec, available_clis)
+    DISP->>RUNTIME: dispatch(spec)
+    RUNTIME->>RUNTIME: 拆分任务 + 依赖排序
 
-    SEL->>SEL: check_available("codex")
-    Note right of SEL: which codex → found ✅
-    SEL->>SEL: check_available("claude")
-    Note right of SEL: which claude → found ✅
-    SEL->>SEL: check_available("gemini")
-    Note right of SEL: which gemini → not found ❌
-
-    SEL->>SEL: 选择策略:<br/>1. 用户首选: codex<br/>2. 任务匹配: 大规模重构→codex<br/>3. 可用: [codex, claude]<br/>结果: codex
-    SEL-->>DISP: selected="codex"
-
-    DISP->>ADAPT: execute(spec, cli="codex")
-    ADAPT->>PROC: Popen(["codex", "--full-auto", "-q", instruction])
-    ADAPT->>MON: startMonitoring(proc, interval=10s)
-
-    loop 每 10 秒
-        MON->>PROC: readline(stdout) 非阻塞
-        MON->>GIT: git status --short
-        GIT-->>MON: files_touched[]
-
-        MON->>MON: 计算:<br/>· elapsed: 45s<br/>· last_output: 3s ago<br/>· files_touched: 2<br/>· is_stalled: false<br/>· progress: 0.4
-
-        MON->>DISP: on_status(CliExecutionStatus)
+    par 并行子代理分析
+        RUNTIME->>FE: analyze(frontend_scope)
+        FE-->>RUNTIME: ui_patch_intent
+    and
+        RUNTIME->>BE: analyze(backend_scope)
+        BE-->>RUNTIME: api_patch_intent
+    and
+        RUNTIME->>OPS: analyze(runtime_scope)
+        OPS-->>RUNTIME: verify_plan
     end
 
-    alt 检测到停滞 (5min 无输出)
-        MON->>GIT: git status --short
-        alt 有新文件变更
-            MON->>MON: extend_patience(+5min)
-            Note right of MON: "慢但在工作"
-        else 无任何变更
-            MON->>PROC: terminate()
-            MON->>DISP: stall_killed
-        end
-    end
+    RUNTIME->>SCF: build_scaffold(intents)
+    SCF->>SCF: 选择模板 + 生成补丁骨架
+    SCF-->>RUNTIME: patch_blueprint
 
-    PROC-->>ADAPT: exit_code=0, stdout
-    ADAPT-->>DISP: CliTaskResult{success, snapshots[]}
+    RUNTIME->>EXEC: compile_action_plan(patch_blueprint)
+    EXEC->>TOOLS: apply patch / run verify commands
+    TOOLS-->>EXEC: tool_results
+    EXEC-->>RUNTIME: merged_results
+    RUNTIME-->>DISP: final_task_result
 ```
 
 ---
@@ -685,7 +744,7 @@ flowchart TB
         end
 
         subgraph TimeMCP["时空工具"]
-            SLEEP_["💤 sleep_until"]
+            SLEEP_["💤 sleep_and_watch / sleep_until"]
             CRON_["⏰ schedule_cron"]
         end
 
@@ -695,11 +754,10 @@ flowchart TB
             REG_TOOL_["🔌 register_tool"]
         end
 
-        subgraph CLI_MCP["CLI 工具"]
-            ADAPTER_["🔗 CLI Adapter"]
-            CODEX_["Codex"]
-            CLAUDE_["Claude"]
-            GEMINI_["Gemini"]
+        subgraph SubAgentFabric["子代理与脚手架"]
+            SA_RUNTIME_["🤝 sub_agent_runtime"]
+            SCAFFOLD_["🏗️ scaffold_engine"]
+            EXEC_BRIDGE_["🔧 execution_bridge"]
         end
     end
 
@@ -709,8 +767,9 @@ flowchart TB
     REG --> SEARCH_ & BROWSER_
     REG --> SLEEP_ & CRON_
     REG --> READ_P_ & UPDATE_P_ & REG_TOOL_
-    REG --> ADAPTER_
-    ADAPTER_ --> CODEX_ & CLAUDE_ & GEMINI_
+    REG --> SA_RUNTIME_ & SCAFFOLD_
+    SA_RUNTIME_ --> EXEC_BRIDGE_
+    EXEC_BRIDGE_ --> AST_ & BASH & GIT_
 
     %% 安全连线
     BASH & AST_ & SYS -->|"执行前"| SEC["🛡️ Security Kernel"]
@@ -718,3 +777,13 @@ flowchart TB
 
     style Limbs fill:#0a2e1a,stroke:#44ff88,color:#ccffee
 ```
+
+---
+
+## 11. 手脚层硬约束摘要（新增）
+
+1. 读取类工具必须返回文件指纹（`file_hash`）。
+2. 写入类工具必须携带 `original_file_hash`，冲突时硬错误返回。
+3. 全局环境动作必须标记 `execution_scope="global"` 并申请全局互斥锁。
+4. 命令输出必须经过字符级熔断（`max=8000`，头尾保留，注入截断标记）。
+5. 监控类任务必须优先 `sleep_and_watch`，禁止轮询空转消耗。

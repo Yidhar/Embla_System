@@ -1,8 +1,17 @@
 ﻿# NagaAgent 多Agent自治架构设计文档（修订版）
 
+---
+**文档类型**：As-Is 实施文档（Phase 0 MVP）
+**实施状态**：✅ 已实现（autonomous/ 模块）
+**最后验证**：2026-02-22
+**Codex 策略版本**：v2 (Codex-first 主执行路径)
+**目标态参考**：`gemin-结构图.md` (Sub-Agent Runtime, Phase 3)
+---
+
 > **核心变更**：MVP 阶段采用 **单 System Agent + 外部 Agent CLI 工具** 模型。
-> 编码工作由 System Agent 通过 Codex CLI / Claude Code / Gemini CLI 以工具调用形式完成，不引入独立的 Coding Agent。
+> 编码工作由 System Agent 通过 **Codex CLI / Codex MCP（主路径）** + Claude Code / Gemini CLI（降级备选）以工具调用形式完成。
 > **文档定位**：本文是 `doc/07-autonomous-agent-sdlc-architecture.md` 的 Phase 0（MVP）实施稿，目标态约束以 07 文档为准。
+> **演进路径**：Phase 0 (CLI Tools) → Phase 1-2 (增强监控) → Phase 3 (Sub-Agent Runtime)
 
 ---
 
@@ -158,46 +167,135 @@ class AgentCliAdapter(ABC):
         """检测该 CLI 是否已安装可用"""
 ```
 
-### 3.2 三大 CLI 调用方式
+### 3.2 CLI 调用方式与优先级（Codex-first 策略 v2）
 
-| CLI | 非交互命令 | 关键参数 |
-|-----|-----------|---------|
-| **Codex CLI** | `codex --approval-mode full-auto -q "instruction"` | `--full-auto` 无需确认 |
-| **Claude Code** | `claude -p "instruction" --dangerously-skip-permissions` | `-p` 非交互管道模式 |
-| **Gemini CLI** | `gemini -p "instruction"` | `-p` 非交互管道模式 |
-| **Codex MCP**（验证降级） | `ask-codex`（MCP Tool） | 建议 `sandboxMode=read-only`，仅用于 Verifying 阶段 |
+> [!IMPORTANT]
+> **策略更新**（2026-02-22）：Codex 已从"验证降级"升级为**主执行路径**。
+
+| CLI | 非交互命令 | 关键参数 | 优先级 | 用途 |
+|-----|-----------|---------|--------|------|
+| **Codex CLI** | `codex --approval-mode full-auto -q "instruction"` | `--full-auto` 无需确认 | **P0 主路径** | 所有编码任务 |
+| **Codex MCP** | `ask-codex`（MCP Tool） | `workspace-write + on-failure` | **P0 主路径** | 编码任务（MCP 模式） |
+| **Claude Code** | `claude -p "instruction" --dangerously-skip-permissions` | `-p` 非交互管道模式 | P1 降级 | Codex 不可用时 |
+| **Gemini CLI** | `gemini -p "instruction"` | `-p` 非交互管道模式 | P2 降级 | Claude 不可用时 |
+
+**执行策略**：
+- **编码任务**：优先 Codex CLI/MCP → 降级 Claude → 降级 Gemini
+- **诊断任务**：Codex MCP (read-only) → Claude
+- **审阅任务**：Codex MCP (read-only) → Claude
 
 > [!NOTE]
 > 所有 CLI 调用都在 `auto/<task_id>` Git 分支上执行，变更隔离在分支内。
 
-### 3.3 CLI 选择策略
+### 3.3 CLI 选择策略（Codex-first 实现）
 
 ```python
 # autonomous/tools/cli_selector.py
 
 class CliSelectionStrategy:
-    """根据任务特性和可用性选择最优 CLI"""
+    """根据任务特性和可用性选择最优 CLI（Codex-first）"""
 
     def select(self, spec: CliTaskSpec, available: list[str]) -> str:
-        # 优先级（可配置）：
-        # 1. 用户配置的首选 CLI
-        # 2. 任务类型匹配（大规模重构 → Codex, 精细修改 → Claude）
-        # 3. 轮询负载均衡
-        # 4. Fallback 到任意可用 CLI
-        ...
+        # 优先级（v2 策略，2026-02-22）：
+        # 1. 编码任务强制 Codex（codex > codex-mcp）
+        # 2. Codex 不可用时降级到 Claude
+        # 3. Claude 不可用时降级到 Gemini
+        # 4. 所有不可用时返回错误
+
+        if spec.task_type == "coding":
+            if "codex" in available:
+                return "codex"
+            elif "codex-mcp" in available:
+                return "codex-mcp"
+            elif "claude" in available:
+                return "claude"
+            elif "gemini" in available:
+                return "gemini"
+            else:
+                raise RuntimeError("No coding CLI available")
+
+        # 诊断/审阅任务优先 read-only 模式
+        if spec.task_type in ["diagnosis", "review"]:
+            if "codex-mcp" in available:
+                return "codex-mcp"  # read-only mode
+            elif "claude" in available:
+                return "claude"
+
+        # 默认降级链
+        return available[0] if available else None
 ```
 
-### 3.4 验证阶段降级：Codex MCP
+### 3.4 Codex 执行模式详解
 
-当主 CLI 不可用或验证阶段重试耗尽时，Verifier 进入降级路径，调用已安装的 `codex-mcp-server`。
+#### 3.4.1 Codex CLI 模式（主路径）
 
-触发条件：
-1. `check_available()` 失败（CLI 未安装、不可执行或鉴权失败）。
-2. 验证阶段任务达到 `cli_tools.max_retries` 仍失败。
-3. 当前任务是“审阅/诊断/修复建议”，不要求直接写仓库。
+**适用场景**：
+- 完整代码生成/重构任务
+- 需要多文件协同修改
+- 需要自动测试验证
 
-降级执行：
-1. 连接 MCP 服务：`codex-cli`（本地已安装）。
+**调用示例**：
+```bash
+codex --approval-mode full-auto \
+      --working-dir /path/to/repo \
+      -q "重构 user_service.py，将同步调用改为异步"
+```
+
+**优势**：
+- 完整的沙箱环境
+- 自动 Git 分支管理
+- 内置测试验证
+
+#### 3.4.2 Codex MCP 模式（主路径）
+
+**适用场景**：
+- 需要与其他 MCP 工具协同
+- 需要精细控制执行参数
+- 需要结构化输出
+
+**调用示例**：
+```python
+result = await mcp_manager.unified_call(
+    service_name="codex-cli",
+    tool_call={
+        "tool_name": "ask-codex",
+        "arguments": {
+            "prompt": "重构 user_service.py",
+            "sandboxMode": "workspace-write",
+            "approvalPolicy": "on-failure"
+        }
+    }
+)
+```
+
+**优势**：
+- 统一的 MCP 工具链
+- 结构化错误处理
+- 支持 read-only 诊断模式
+
+#### 3.4.3 降级场景处理
+
+**触发条件**：
+1. Codex CLI/MCP 不可用（未安装、鉴权失败）
+2. Codex 执行超时或崩溃
+3. Codex 返回不可恢复错误
+
+**降级流程**：
+```python
+async def execute_with_fallback(spec: CliTaskSpec):
+    try:
+        return await codex_adapter.execute(spec)
+    except CodexUnavailableError:
+        logger.warning("Codex unavailable, falling back to Claude")
+        return await claude_adapter.execute(spec)
+    except ClaudeUnavailableError:
+        logger.warning("Claude unavailable, falling back to Gemini")
+        return await gemini_adapter.execute(spec)
+```
+
+**历史变更记录**：
+- **v1 (2026-02-20 之前)**：Codex MCP 仅用于验证阶段降级
+- **v2 (2026-02-22 当前)**：Codex CLI/MCP 升级为主执行路径
 2. 调用工具：`ask-codex`，输入包含 `git diff`、失败测试日志、目标文件列表。
 3. 推荐参数：`sandboxMode=read-only`、`approvalPolicy=on-failure`。
 4. 输出结构化为：`issue`、`evidence`、`suggested_fix`、`risk`。

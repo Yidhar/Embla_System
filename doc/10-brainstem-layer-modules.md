@@ -1,6 +1,26 @@
+---
+**文档类型**：🎯 目标态架构设计（Target Architecture - Phase 2-3）
+**实施状态**：Phase 2-3 规划（当前 Phase 0 轻量实现）
+**最后更新**：2026-02-22
+**当前替代方案**：Event Store (autonomous/event_log/) + Native Executor (system/)
+**实施路径**：Phase 0 (轻量事件) → Phase 1-2 (本文档) → Phase 3 (完整守护)
+---
+
 # 10 - 脑干层模块详细架构 (Brainstem Layer Modules)
 
 > **定位**：脑干层是 Omni-Operator 的不可变守护进程区。Agent 无法修改该层的任何代码。所有模块编译后打包为二进制运行，由人类工程师维护。
+>
+> **实施状态**：
+> - 🟢 **Phase 0 已实现**：Event Store (SQLite)、Native Executor、基础安全沙箱
+> - 🟡 **Phase 1-2 规划**：Event Bus、Watchdog、Security Kernel（本文档）
+> - 🔴 **Phase 3 目标态**：Immutable DNA、KillSwitch、完整守护进程
+>
+> **当前实现映射**：
+> - Event Bus → Event Store (autonomous/event_log/event_store.py)
+> - Watchdog → 无（目标态）
+> - Immutable DNA → Prompt 文件 (system/prompts/)
+> - Security Kernel → Native Executor (system/native_executor.py)
+> - KillSwitch → 无（目标态）
 
 ---
 
@@ -27,6 +47,9 @@ flowchart TB
             CH_AGENT["agent.*<br/>Agent间通信·状态变更"]
             CH_TOOL["tool.*<br/>工具执行事件"]
             CH_EVO["evolution.*<br/>自我进化事件"]
+            CH_MUTEX["mutex.*<br/>全局锁申请·释放"]
+            CH_BUDGET["budget.*<br/>配额告警·令牌桶状态"]
+            CH_WAKE["wake.*<br/>休眠唤醒·条件触发"]
         end
 
         DLQ["Dead Letter Queue<br/>失败事件暂存"]
@@ -50,8 +73,8 @@ flowchart TB
 
     P_WD & P_CRON & P_TOOL & P_AGENT & P_OS -->|publish| PUB
     PUB --> BROKER
-    BROKER --> CH_SYS & CH_LOG & CH_CRON & CH_AGENT & CH_TOOL & CH_EVO
-    CH_SYS & CH_LOG & CH_CRON & CH_AGENT & CH_TOOL & CH_EVO --> SUB
+    BROKER --> CH_SYS & CH_LOG & CH_CRON & CH_AGENT & CH_TOOL & CH_EVO & CH_MUTEX & CH_BUDGET & CH_WAKE
+    CH_SYS & CH_LOG & CH_CRON & CH_AGENT & CH_TOOL & CH_EVO & CH_MUTEX & CH_BUDGET & CH_WAKE --> SUB
     SUB --> C_META & C_GC & C_DAILY & C_ALERT
 
     BROKER -->|投递失败| DLQ
@@ -108,6 +131,8 @@ interface EventBus {
   replay(fromSeq: number, toSeq?: number): AsyncIterable<Event>;    // 事件回放
   getDeadLetters(limit?: number): Promise<Event[]>;
   retryDeadLetter(eventId: string): Promise<boolean>;
+  enqueueSerialAction(action: SerialAction): Promise<QueueTicket>;   // 串行执行入口
+  waitForQueueTicket(ticketId: string): Promise<QueueState>;
 }
 
 interface EventPayload {
@@ -124,6 +149,26 @@ interface SubscribeOpts {
   maxConcurrency: number;     // 最大并发处理数
   timeout_ms: number;         // 单次处理超时
   retryPolicy: RetryPolicy;   // 失败重试策略
+}
+
+interface SerialAction {
+  action_id: string;
+  actor: string;
+  scope: "local" | "global";
+  action_type: "write_file" | "install_dep" | "git_branch" | "restart_service" | "other";
+  requires_global_mutex: boolean;
+  payload: Record<string, unknown>;
+}
+
+interface QueueTicket {
+  ticket_id: string;
+  position: number;
+  eta_ms: number;
+}
+
+interface QueueState {
+  ticket_id: string;
+  status: "queued" | "running" | "done" | "failed";
 }
 ```
 
@@ -522,7 +567,7 @@ flowchart TB
             T_NET["出站 > 100MB/min<br/>到非白名单域名"]
             T_CRYPT["检测到大规模文件<br/>扩展名批量变更"]
             T_FORK["Agent 进程 fork<br/>> 50 子进程"]
-            T_MANUAL["人工触发<br/>API/CLI/硬件按钮"]
+            T_MANUAL["人工触发<br/>API/控制台/硬件按钮"]
         end
 
         subgraph Response["熔断响应"]
@@ -660,3 +705,83 @@ flowchart TB
 
     style Brainstem fill:#1a0a0a,stroke:#ff4444,color:#ffcccc
 ```
+
+---
+
+## 7. 成本与并发守门模块（新增）
+
+> 本节承接 Tokenomics 与多 Agent 并发硬约束，属于 Brainstem 的 Daemon 常驻能力。
+
+### 7.1 模块职责
+
+1. `Global State Mutex`：全局环境变更动作串行化（安装依赖、分支切换、服务启停）。
+2. `Rate Limit Gateway`：LLM API 令牌桶限流，防止并发洪峰触发 429。
+3. `Sleep Watch Daemon`：接管 `sleep_and_watch(log_file, regex)`，实现零 Token 休眠。
+
+### 7.2 守门架构
+
+```mermaid
+flowchart TB
+    subgraph Guard["Brainstem Guard Layer"]
+        MUTEX["🔒 Global State Mutex<br/>MUTEX_GLOBAL_STATE"]
+        QUEUE["📬 Serial Queue<br/>物理执行串行化"]
+        BUCKET["🪣 Token Bucket<br/>MAX_CONCURRENT_API_CALLS"]
+        SLEEPD["💤 Sleep Watch Daemon<br/>tail -f + regex match"]
+        EB["Event Bus"]
+    end
+
+    AGENTS["Logical Parallel Agents"] --> MUTEX
+    MUTEX -->|global action| QUEUE
+    QUEUE --> HOST["Physical Host Mutation"]
+
+    AGENTS --> BUCKET
+    BUCKET --> LLM["LLM Providers"]
+
+    AGENTS --> SLEEPD
+    SLEEPD -->|wake.*| EB
+    EB --> AGENTS
+```
+
+### 7.3 核心接口
+
+```typescript
+// src/core/global_state_mutex.ts
+interface GlobalStateMutex {
+  acquire(actor: string, actionType: string, timeoutMs?: number): Promise<string>; // lock_id
+  release(lockId: string): Promise<void>;
+  currentOwner(): Promise<{ actor: string; actionType: string; acquiredAt: number } | null>;
+  enqueueIfBusy(request: GlobalActionRequest): Promise<QueueTicket>;
+}
+
+interface GlobalActionRequest {
+  request_id: string;
+  actor: string;
+  action_type: "install_dep" | "git_branch" | "restart_service" | "system_update" | "other";
+  payload: Record<string, unknown>;
+}
+
+// src/core/llm_rate_gate.ts
+interface TokenBucketGate {
+  configure(maxConcurrentApiCalls: number, refillPerSecond: number): void;
+  acquirePermit(requestId: string): Promise<{ permit_id: string; wait_ms: number }>;
+  releasePermit(permitId: string): void;
+  getQueueDepth(): number;
+}
+
+// src/core/sleep_watch_daemon.ts
+interface SleepWatchDaemon {
+  sleepAndWatch(params: {
+    log_file: string;
+    regex: string;
+    timeout_ms?: number;
+    wake_event: string;
+  }): Promise<{ watch_id: string; suspended: true }>;
+  cancelWatch(watchId: string): Promise<boolean>;
+}
+```
+
+### 7.4 执行原则
+
+1. 逻辑并发允许并行“思考/只读分析”。
+2. 物理写操作必须通过 `Serial Queue` 串行落地。
+3. 休眠阶段模型会话内存释放，Token 消耗归零。

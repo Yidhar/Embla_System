@@ -1,6 +1,26 @@
+---
+**文档类型**：🎯 目标态架构设计（Target Architecture - Phase 3）
+**实施状态**：Phase 3 规划（当前 Phase 0 部分实现）
+**最后更新**：2026-02-22
+**当前替代方案**：System Agent (autonomous/system_agent.py) + CLI Selector
+**实施路径**：Phase 0 (System Agent) → Phase 1-2 (增强) → Phase 3 (本文档)
+---
+
 # 11 - 大脑层模块详细架构 (Brain Layer Modules)
 
 > **定位**：大脑层是 Omni-Operator 的认知中枢，负责推理、记忆、路由和状态管理。属于工作空间层中的高级逻辑区域。
+>
+> **实施状态**：
+> - 🟢 **Phase 0 已实现**：System Agent 主循环、CLI Selector、Workflow Store
+> - 🟡 **Phase 1-2 规划**：增强记忆系统、Token 经济学、GC Engine
+> - 🔴 **Phase 3 目标态**：Meta-Agent、Router、完整三维记忆（本文档）
+>
+> **当前实现映射**：
+> - Meta-Agent → System Agent (autonomous/system_agent.py)
+> - Router → CLI Selector (autonomous/tools/cli_selector.py)
+> - Working Memory → 对话上下文（apiserver/llm_service.py）
+> - Episodic Memory → 无（目标态）
+> - Semantic Graph → 无（目标态）
 
 ---
 
@@ -135,7 +155,13 @@ interface SubTask {
 
 ### 2.1 模块职责
 
-接收 Meta-Agent 派发的子任务，选择合适的 Agent 角色（sys_admin / developer / researcher）、LLM 模型（Haiku / Sonnet）和工具集。
+接收 Meta-Agent 派发的子任务，选择合适的 Agent 角色（sys_admin / developer / researcher）、LLM 模型层级和工具集，并承担并发仲裁职责。
+
+新增硬约束：
+
+1. 平级子 Agent 禁止直接对话，必须通过 Router 中转。
+2. 针对同一任务设置 `MAX_DELEGATE_TURNS = 3`。
+3. 超过上限后冻结任务并输出冲突摘要，进入 Human-in-the-Loop。
 
 ### 2.2 内部架构
 
@@ -204,14 +230,36 @@ sequenceDiagram
 
 ### 2.4 路由规则矩阵
 
-| 任务类型 | 默认角色 | 默认模型 | 工具集 |
+| 任务类型 | 默认角色 | 模型层级 | 工具集 |
 |----------|----------|----------|--------|
-| 运维诊断 | sys_admin | Sonnet | os_bash, systemd, search |
-| 代码修复 | developer | Sonnet | file_ast, os_bash, git, CLI Adapter |
-| 信息搜索 | researcher | Haiku | search_engine, headless_browser |
-| 日常巡检 | sys_admin | Haiku | os_bash, systemd |
-| 安全审计 | sys_admin | Sonnet | os_bash, search, file_ast |
-| 自我优化 | developer | Sonnet | file_ast, register_tool, update_prompt |
+| 运维诊断 | sys_admin | 主模型 | os_bash, systemd, search |
+| 代码修复 | developer | 主模型 | file_ast, os_bash, git, scaffold_engine |
+| 信息搜索 | researcher | 次模型 | search_engine, headless_browser |
+| 日常巡检 | sys_admin | 次模型 | os_bash, systemd |
+| 安全审计 | sys_admin | 主模型 | os_bash, search, file_ast |
+| 重度日志解析 | researcher | 本地模型 | os_bash, search_engine, log_parser |
+| 自我优化 | developer | 主模型 | file_ast, register_tool, update_prompt |
+
+### 2.5 仲裁与熔断机制（新增）
+
+```typescript
+interface RouterArbiter {
+  maxDelegateTurns: number; // 固定为 3
+  registerDelegateTurn(taskId: string, fromAgent: string, toAgent: string, reason: string): number;
+  shouldFreezeTask(taskId: string): boolean;
+  buildConflictSummary(taskId: string): {
+    task_id: string;
+    conflict_points: string[];
+    candidate_decisions: string[];
+  };
+}
+```
+
+执行规则：
+
+1. 同一任务代理互相驳回次数超过 3 次即冻结。
+2. 冻结后禁止继续消耗主模型预算。
+3. Router 必须向人工通道推送冲突摘要。
 
 ---
 
@@ -219,7 +267,13 @@ sequenceDiagram
 
 ### 3.1 模块职责
 
-封装所有 LLM API 调用，支持 Anthropic / OpenAI / Google 多模型路由，实现 Prompt Caching、自动重试、流式输出解析。
+封装所有 LLM API 调用，支持 Anthropic / OpenAI / Google 多模型路由，并通过统一 `LLM_Gateway` 执行成本分流、Prompt Caching、自动重试、流式输出解析。
+
+新增职责：
+
+1. 根据任务类型将请求分流到主模型 / 次模型 / 本地模型。
+2. 执行 Prompt 三分层组装（Block1/2/3）和缓存标记。
+3. 将动态窗口超限（>10k tokens）作为主模型调用前硬门禁。
 
 ### 3.2 内部架构
 
@@ -298,13 +352,51 @@ sequenceDiagram
     STREAM-->>RT: final_response
 ```
 
+### 3.4 LLM_Gateway 分层策略（新增）
+
+```typescript
+interface LLMGateway {
+  route(request: {
+    task_type: "code_generation" | "memory_cleanup" | "heavy_log_parse" | "qa";
+    severity: "low" | "medium" | "high" | "critical";
+    budget_remaining: number;
+  }): {
+    model_tier: "primary" | "secondary" | "local";
+    model_id: string;
+  };
+
+  buildPromptEnvelope(input: {
+    static_header: string;    // Block 1
+    long_term_summary: string; // Block 2
+    dynamic_messages: Array<{ role: string; content: string }>; // Block 3
+  }): PromptEnvelope;
+}
+
+interface PromptEnvelope {
+  block1_cache: "ephemeral";   // 约10k
+  block2_cache: "ephemeral";   // 24h摘要
+  block3_cache: "none";        // 最近3~5轮
+  block3_soft_limit_tokens: 10000;
+}
+```
+
+执行规则：
+
+1. 主模型禁止处理低信息密度脏活（记忆压缩、超长日志清洗）。
+2. Block 3 超过 10k tokens 时必须先触发 GC，再允许主模型调用。
+3. 本地日志模型输出必须再次经过截断器后才能回注上下文。
+
 ---
 
 ## 4. 三维记忆系统
 
 ### 4.1 Working Memory 短期记忆
 
-当前任务的对话上下文，采用滑动窗口 + 自动截断机制。
+当前任务的对话上下文，采用滑动窗口 + 自动截断机制。  
+目标态采用双阈值：
+
+1. 软阈值：动态窗口 > 10k tokens 时强制 GC。
+2. 硬阈值：全会话 > 80k tokens 时进入紧急压缩模式。
 
 ```mermaid
 flowchart TB
@@ -312,12 +404,12 @@ flowchart TB
         direction TB
         WINDOW["滑动窗口<br/>最新 N 轮对话保留"]
         TOKEN_CTR["Token 计数器<br/>实时统计上下文长度"]
-        THRESHOLD["阈值检测器<br/>80K Token → 触发 GC"]
+        THRESHOLD["阈值检测器<br/>10K(软) / 80K(硬)"]
     end
 
     LLM["LLM Client"] -->|"每轮对话"| WINDOW
     WINDOW --> TOKEN_CTR
-    TOKEN_CTR -->|"> 80K"| GC["GC Engine"]
+    TOKEN_CTR -->|"> 10K(动态窗口)"| GC["GC Engine"]
     GC -->|"压缩后回注"| WINDOW
 
     style WM fill:#1a2a3e,stroke:#5588cc
@@ -448,16 +540,16 @@ sequenceDiagram
 flowchart TB
     subgraph GCEngine["♻️ GC Engine"]
         direction TB
-        DETECTOR["阈值检测器<br/>Token > 80K → 触发"]
+        DETECTOR["阈值检测器<br/>动态窗口 > 10K → 触发"]
         SELECTOR["GC 目标选择器<br/>选择哪些对话轮次回收"]
         COMPRESSOR["压缩器<br/>调用 Haiku 生成摘要"]
         ARCHIVER["归档器<br/>写入 ChromaDB + SQLite"]
         INJECTOR["摘要注入器<br/>压缩后注入上下文头部"]
     end
 
-    WM["Working Memory"] -->|"Token > 80K"| DETECTOR
+    WM["Working Memory"] -->|"动态窗口 > 10K"| DETECTOR
     DETECTOR --> SELECTOR
-    SELECTOR -->|"选中前50轮"| COMPRESSOR
+    SELECTOR -->|"选中超窗历史轮次"| COMPRESSOR
     COMPRESSOR -->|"300字摘要"| ARCHIVER
     ARCHIVER --> INJECTOR
     INJECTOR -->|"splice + unshift"| WM
@@ -479,16 +571,16 @@ sequenceDiagram
     participant INJ as Injector
 
     WM->>DET: checkTokenCount()
-    DET->>DET: current = 95,000 tokens<br/>threshold = 80,000<br/>🔴 超限!
+    DET->>DET: current_dynamic = 12,800 tokens<br/>threshold = 10,000<br/>🔴 超限!
 
     DET->>WM: pause_session()
     Note right of WM: 挂起所有 LLM 请求
 
     DET->>SEL: selectGCTargets(messages)
-    SEL->>SEL: 策略: 保留最新20轮<br/>回收前50轮 (含工具调用)
-    SEL-->>COMP: gc_targets[0..49]
+    SEL->>SEL: 策略: 保留最新3~5轮<br/>回收超窗历史轮次
+    SEL-->>COMP: gc_targets[old_window]
 
-    COMP->>COMP: 调用 Haiku:<br/>"将以下50轮试错过程<br/>压缩为300字结构化摘要:<br/>· 已尝试的方案<br/>· 失败原因<br/>· 当前进展<br/>· 关键发现"
+    COMP->>COMP: 调用次模型:<br/>"将超窗历史对话压缩为结构化摘要:<br/>· 已尝试方案<br/>· 失败原因<br/>· 当前进展<br/>· 关键发现"
     COMP-->>ARCH: compressed_summary (markdown)
 
     par 并行归档
@@ -498,12 +590,12 @@ sequenceDiagram
         ARCH->>SQL: log_gc_event({<br/>  session_id,<br/>  rounds_removed: 50,<br/>  tokens_freed: 60000,<br/>  compression_ratio: 0.85<br/>})
     end
 
-    INJ->>WM: messages.splice(0, 50)
-    Note right of WM: 释放 ~60K tokens
+    INJ->>WM: messages.splice(old_window_start, old_window_end)
+    Note right of WM: 释放超窗 token
     INJ->>WM: messages.unshift({<br/>  role: "system",<br/>  content: "[记忆摘要]\n" + summary<br/>})
 
     WM->>WM: resume_session()
-    Note right of WM: 当前 Token: ~35,000 ✅
+    Note right of WM: 当前动态窗口 Token: ~7,000 ✅
 ```
 
 ---
@@ -664,3 +756,13 @@ flowchart TB
 
     style Brain fill:#0a1a2e,stroke:#4488ff,color:#cce0ff
 ```
+
+---
+
+## 9. 大脑层硬约束摘要（新增）
+
+1. 主模型只处理高信息密度任务，低密度任务必须下沉到次模型或本地模型。
+2. Prompt 必须按 Block1/2/3 分层组装，Block3 超 10k 必触发 GC。
+3. Router 必须执行仲裁熔断：`MAX_DELEGATE_TURNS = 3`。
+4. 平级 Agent 禁止直接对话，跨 Agent 冲突只能经 Router 传递。
+5. 任何触发物理宿主机变更的动作，必须交由 Brainstem 串行落地。

@@ -1,251 +1,144 @@
-# 02 模块归档明细
+﻿# 02 模块归档明细（Omni-Operator 开发预备版）
 
-## 1. 归档原则
+文档状态：开发预备（As-Is + Target-Aligned）
+最后更新：2026-02-22
 
-本文件按“职责 -> 关键文件 -> 输入输出 -> 依赖/风险”方式归档，便于：
+## 1. 归档规则
 
-- 新成员快速上手
-- 改造前做影响面评估
-- 排障时快速定位入口
+本归档按“模块职责 + 当前状态 + Omni 对齐”统一表达。
 
-## 2. 模块清单
+状态标签：
 
-### 2.1 启动与运行控制
+- `已实现`：当前代码可直接运行。
+- `过渡态`：行为可用但接口语义尚未收敛。
+- `兼容保留`：仅为历史兼容存在，不建议新功能依赖。
+- `目标态`：来自 Omni-Operator 蓝图，当前未完全落地。
 
-模块：`main.py`
+## 2. Omni 集成层（新增）
 
-- 职责
-  - 服务编排与启动（API、Agent、MCP、TTS）。
-  - 环境检查与端口占用处理。
-  - 后台异步服务生命周期管理。
-- 关键文件
-  - `main.py`
-- 输入
-  - CLI 参数（如 `--headless`）。
-  - `system/config.py` 配置与端口映射。
-- 输出
-  - 多个服务线程与监听端口。
-- 风险点
-  - 多服务并发启动时的端口竞争与依赖顺序问题。
+Omni-Operator 在当前项目的集成层由三块组成：
 
-### 2.2 系统基础层
+1. BFF 入口：`apiserver/`
+2. MCP Host + Tool Registry：`mcpserver/`
+3. 自治控制代理：`autonomous/`
 
-模块：`system/`
+该集成层负责把前端请求、模型调用、工具执行与自治闭环收敛到统一控制面。
 
-- 职责
-  - 配置模型、热更新、提示词管理、日志配置、环境检测、技能目录管理、背景分析分发。
-- 关键文件
-  - `system/config.py`
-  - `system/config_manager.py`
-  - `system/logging_setup.py`
-  - `system/system_checker.py`
-  - `system/background_analyzer.py`
-  - `system/skill_manager.py`
-- 输入
-  - `config.json` / `config.json.example`
-  - 对话上下文（用于 background analyzer）
-- 输出
-  - 全局配置对象与监听器回调
-  - 任务分发到 API/Agent/MCP
-- 风险点
-  - 配置热更新与运行时对象一致性
-  - 后台分析失败后的降级路径
+## 3. 模块归档清单
 
-### 2.3 API 服务层
+### 3.1 启动编排
 
-模块：`apiserver/`
+模块：`main.py`（`已实现`）
 
-- 职责
-  - 对外统一 REST/SSE 接口。
-  - 聊天流、会话管理、文档上传解析、记忆查询、技能安装与系统配置接口。
-- 关键文件
-  - `apiserver/api_server.py`
-  - `apiserver/agentic_tool_loop.py`
-  - `apiserver/streaming_tool_extractor.py`
-  - `apiserver/message_manager.py`
-  - `apiserver/llm_service.py`
-- 输入
-  - 前端 HTTP 请求（默认 `localhost:8000`）
-  - LLM 配置、技能与记忆上下文
-- 输出
-  - 同步 JSON 响应或 SSE 流
-  - 工具事件、会话持久化结果
-- 风险点
-  - 路由面较大，改动时易引发回归
-  - 流式链路中工具事件与文本事件交错复杂
+- 职责：统一启动 API/MCP/TTS、后台循环、代理环境、可选自治循环。
+- 关键事实：AgentServer 已标记“禁用自动启动”。
+- Omni 对齐：承担 Brainstem 的运行时编排职责。
 
-### 2.4 Agent 调度层
+### 3.2 系统基础能力
 
-模块：`agentserver/`
+模块：`system/`（`已实现`）
 
-- 职责
-  - AgentServer 客户端治理与任务调度。
-  - 管理任务步骤、压缩记忆、会话维度任务状态。
-  - 提供 AgentServer 健康检查、安装、配置、历史查询等接口。
-- 关键文件
-  - `agentserver/agent_server.py`
-  - `agentserver/task_scheduler.py`
-  - `agentserver/AgentServer/AgentServer_client.py`
-  - `agentserver/AgentServer/embedded_runtime.py`
-  - `agentserver/AgentServer/installer.py`
-- 输入
-  - 来自 API/后台分析器的调度请求
-- 输出
-  - AgentServer 执行结果与任务状态
-- 风险点
-  - AgentServer 运行时来源（全局/内嵌）切换复杂
-  - 外部网关不可用时的恢复逻辑复杂
+- 职责：配置模型、日志、提示词、系统检测、Native 执行安全边界。
+- 关键文件：`system/config.py`、`system/native_executor.py`。
+- Omni 对齐：作为 Brainstem 的配置与安全基座。
 
-### 2.5 MCP 工具层
+### 3.3 BFF 与对话编排
 
-模块：`mcpserver/`
+模块：`apiserver/`（`已实现`，部分 `过渡态`）
 
-- 职责
-  - 扫描 `agent-manifest.json` 自动注册 MCP 工具。
-  - 统一 `unified_call` 调度入口。
-  - 暴露 MCP HTTP 服务（`/schedule`、`/call`、`/services`、`/status`）。
-- 关键文件
-  - `mcpserver/mcp_registry.py`
-  - `mcpserver/mcp_manager.py`
-  - `mcpserver/mcp_server.py`
-- 当前已注册目录
-  - `mcpserver/agent_weather_time/`
-  - `mcpserver/agent_open_launcher/`
-  - `mcpserver/agent_game_guide/`
-- 风险点
-  - 动态加载 manifest 对结构规范较敏感
-  - 工具入参和输出标准化约束偏弱
+- 职责：对外 REST/SSE 入口，`/chat/stream` 工具循环编排。
+- 关键文件：`apiserver/api_server.py`、`apiserver/agentic_tool_loop.py`、`apiserver/llm_service.py`。
+- 过渡点：`/mcp/status`、`/mcp/tasks` 仍是离线占位语义。
+- Omni 对齐：Brainstem 入口 + Brain 编排核心。
 
-### 2.6 记忆与知识图谱层
+### 3.4 自治系统代理（新增归档）
 
-模块：`summer_memory/`
+模块：`autonomous/`（`已实现`，持续增强中）
 
-- 职责
-  - 对话到五元组抽取、去重、存储（文件/Neo4j）与检索。
-  - 任务队列化抽取（并发 worker）与统计。
-- 关键文件
-  - `summer_memory/memory_manager.py`
-  - `summer_memory/task_manager.py`
-  - `summer_memory/quintuple_extractor.py`
-  - `summer_memory/quintuple_graph.py`
-  - `summer_memory/memory_client.py`
-- 输入
-  - 对话内容或检索 query
-- 输出
-  - 五元组数据、检索结果、统计信息
-- 风险点
-  - Neo4j 可用性对在线能力影响显著
-  - 抽取质量和召回质量受模型/Prompt 影响较大
+- 职责：System Agent 循环、任务编排、事件日志、命令幂等、发布治理。
+- 已有能力：
+  - lease/fencing 单活控制
+  - outbox/inbox 去重分发
+  - canary 判定与自动回滚
+  - Verifying 阶段 Codex MCP 降级
+- 关键文件：
+  - `autonomous/system_agent.py`
+  - `autonomous/state/workflow_store.py`
+  - `autonomous/event_log/event_store.py`
+  - `autonomous/release/controller.py`
+- Omni 对齐：Brainstem 控制器与治理执行枢纽。
 
-### 2.7 游戏攻略引擎层
+### 3.5 MCP 主机与注册中心
 
-模块：`guide_engine/`
+模块：`mcpserver/`（`已实现`）
 
-- 职责
-  - 游戏问答路由、RAG 检索、图数据库上下文、特定游戏计算服务、自动截图注入。
-- 关键文件
-  - `guide_engine/guide_service.py`
-  - `guide_engine/query_router.py`
-  - `guide_engine/neo4j_service.py`
-  - `guide_engine/calculation_service.py`
-  - `guide_engine/kantai_calculation_service.py`
-  - `guide_engine/screenshot_provider.py`
-- 输入
-  - 游戏问答文本、可选图片
-- 输出
-  - 攻略回答、引用来源、计算结果
-- 风险点
-  - 多游戏数据源一致性与更新策略
-  - 依赖截图能力时的跨平台差异
+- 职责：manifest 扫描注册、统一调用入口、本地优先/外部兜底。
+- 关键文件：`mcpserver/mcp_registry.py`、`mcpserver/mcp_manager.py`、`mcpserver/mcp_server.py`。
+- Omni 对齐：Limbs 侧工具网关（Tool Registry）。
 
-### 2.8 语音能力层
+### 3.6 AgentServer（降级）
 
-模块：`voice/`
+模块：`agentserver/`（`兼容保留`）
 
-- 职责
-  - TTS 合成、流式/文件式音频输出、实时语音输入适配。
-- 关键文件
-  - `voice/tts_wrapper.py`
-  - `voice/output/server.py`
-  - `voice/output/tts_handler.py`
-  - `voice/input/*`
-- 输入
-  - 文本片段或音频输入
-- 输出
-  - 语音数据流、音频文件、实时识别文本
-- 风险点
-  - 语音链路依赖项较多（音频设备、格式、网络）
-  - 不同平台音频驱动行为不一致
+- 现状：
+  - `/schedule` 与 `/analyze_and_execute` 已返回 `deprecated`。
+  - 主要剩余价值是任务/会话内存查询与管理。
+- 结论：OpenClaw 旧执行路径视为弃用，不再作为主执行链路。
+- Omni 对齐：仅保留兼容接口，不纳入新架构主链。
 
-### 2.9 前端桌面层
+### 3.7 记忆与图谱
 
-模块：`frontend/`
+模块：`summer_memory/`（`已实现`）
 
-- 职责
-  - Electron 壳层（窗口/托盘/快捷键/更新）
-  - Vue UI（聊天、设置、技能、记忆、可视化、悬浮球）
-- 关键文件
-  - `frontend/electron/main.ts`
-  - `frontend/electron/modules/window.ts`
-  - `frontend/electron/modules/backend.ts`
-  - `frontend/src/main.ts`
-  - `frontend/src/App.vue`
-  - `frontend/src/views/*.vue`
-- 路由页
-  - `PanelView`、`MessageView`、`ModelView`、`MemoryView`、`MindView`、`SkillView`、`ConfigView`、`FloatingView`
-- 风险点
-  - 悬浮球和无边框窗口行为高度依赖 Electron API
-  - UI 与后端耦合在本地 HTTP 接口协议上
+- 职责：五元组抽取、记忆检索、Neo4j 与文件存储。
+- Omni 对齐：Brain 的知识与检索支撑层。
 
-### 2.10 构建与发布层
+### 3.8 领域引擎
 
-模块：`scripts/` + `frontend/electron-builder.yml`
+模块：`guide_engine/`（`已实现`）
 
-- 职责
-  - Windows 一键构建，集成 PyInstaller 与 Electron Builder。
-  - 内嵌 AgentServer 运行时资源准备。
-- 关键文件
-  - `scripts/build-win.py`
-  - `frontend/electron-builder.yml`
-  - `naga-backend.spec`
-- 风险点
-  - 打包体积大，构建链条长，失败定位成本高
-  - 内嵌依赖版本（Node/AgentServer）更新需要联动验证
+- 职责：游戏问答路由、RAG、计算服务。
+- Omni 对齐：Brain 的领域技能子系统。
 
-### 2.11 模型协议与代理治理
+### 3.9 语音能力
 
-模块：`apiserver/` + `system/` + `main.py`
+模块：`voice/`（`已实现`）
 
-- 职责
-  - 根据 `protocol/provider/base_url` 进行模型协议路由（OpenAI 兼容 / Google 原生）。
-  - 规范化 Google 请求 URL（自动纠正误填的 `chat/completions` 或完整 endpoint）。
-  - 管理系统代理开关，保障 HTTP 与 WebSocket 链路行为一致。
-- 关键文件
-  - `apiserver/llm_service.py`
-  - `system/background_analyzer.py`
-  - `agentserver/task_scheduler.py`
-  - `main.py`
-  - `frontend/src/views/ModelView.vue`
-- 输入
-  - `config.json.api` 中的 `protocol`、`provider`、`google_live_api`、`applied_proxy`、`request_timeout`
-- 输出
-  - 规范化后的请求 URL 与路由方式
-  - 带脱敏 URL 的排障日志（含代理启用状态）
-- 风险点
-  - 代理策略若与系统设置不一致，可能出现“请求格式正确但连接失败”
-  - WebSocket（Live API）与 HTTP（SSE）对代理的连通性表现可能不同
+- 职责：TTS/ASR/实时语音输入输出。
+- Omni 对齐：Limbs 侧多模态执行通道。
 
-## 3. 模块关系简图（文本）
+### 3.10 前端桌面层
 
-1. `frontend` -> 调用 -> `apiserver`
-2. `apiserver` -> 调用 -> `agentserver` / `mcpserver` / `summer_memory` / `guide_engine`
-3. `agentserver` -> 调用 -> `AgentServer gateway`
-4. `apiserver` 与 `agentserver` 均依赖 `system` 配置与工具能力
-5. `voice` 既可被 API 层调用，也可独立作为语音服务
+模块：`frontend/`（`已实现`，持续解耦中）
 
-## 4. 归档更新建议
+- 职责：Electron 壳层 + Vue UI。
+- 关键事实：聊天流已消费结构化 SSE 事件；API 基址支持 `VITE_API_BASE_URL`。
+- Omni 对齐：作为 BFF 的事件消费者，逐步向事件总线语义靠拢。
 
-1. 新增一级目录时，同步补充本文件对应章节。
-2. 新增对外路由时，在模块章节里补充入口文件与接口族。
-3. 对重构项（特别是前端替换）在 `doc/03-qt-migration-assessment.md` 追加影响评估。
+### 3.11 构建与发布
 
+模块：`scripts/`（`已实现`）
+
+- 职责：Windows 构建与打包链路。
+- Omni 对齐：工程交付层，不参与运行时编排。
+
+## 4. 模块关系（统一语义）
+
+1. `frontend` 仅面向 `apiserver`（BFF）进行调用。
+2. `apiserver` 负责编排 `native tools`、`mcpserver`、`summer_memory`、`guide_engine`。
+3. `autonomous` 在后台循环中执行自治任务与发布治理。
+4. `mcpserver` 提供工具注册和统一分发能力。
+5. `agentserver` 仅提供兼容查询接口，不承担主执行。
+
+## 5. 开发预备差距
+
+- 需将 Tool Contract 字段从“约定”升级为“强制校验”。
+- 需收敛 MCP 相关占位接口与真实运行状态描述。
+- 需持续将目标态模块（见 10/11/12）拆解为可交付增量。
+
+## 6. 交叉引用
+
+- 总览：`./01-module-overview.md`
+- 启动与环境：`./05-dev-startup-and-index.md`
+- 工具调用管线：`./06-structured-tool-calls-and-local-first-native.md`
+- 自治 SDLC：`./07-autonomous-agent-sdlc-architecture.md`

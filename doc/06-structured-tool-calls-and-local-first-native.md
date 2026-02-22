@@ -1,60 +1,140 @@
-# 06 - Structured tool_calls And Native Execution
+﻿# 06 结构化工具调用与本地优先执行（Omni-Operator 对齐版）
 
-This document records the current tool execution pipeline after legacy routes were removed.
+文档状态：开发预备（As-Is + Target-Aligned）
+最后更新：2026-02-22
 
-## 1. Core Principle
+## 1. 核心原则
 
-Tool execution is driven by structured `tool_calls` only.
+当前工具执行链只接受结构化函数调用，不再接受 legacy 文本协议。
 
-- No markdown fenced `tool` blocks.
-- No free-form `agentType` JSON in plain text.
+允许的调用类型：
 
-## 2. Execution Flow
+- `native_call`
+- `mcp_call`
+- `live2d_action`
 
-1. `apiserver/llm_service.py` streams LLM output.
-2. Tool call deltas are merged into normalized `tool_calls` entries.
-3. `apiserver/agentic_tool_loop.py` validates each call.
-4. Calls are dispatched by type:
-   - `native` -> `apiserver/native_tools.py`
-   - `mcp` -> MCP manager path
-   - `live2d` -> UI notification path
+不允许：
 
-## 3. Native Tool Scope
+- Markdown fenced `tool` 代码块
+- 文本内自由格式 `agentType` JSON
 
-`NativeToolExecutor` handles local project operations inside sandbox boundaries.
+## 2. 当前执行管线（As-Is）
 
-Key tools include:
+1. `apiserver/llm_service.py` 输出结构化工具调用数据。
+2. `apiserver/agentic_tool_loop.py` 聚合并校验 `tool_calls`。
+3. 按调用类型分发：
+   - Native：`apiserver/native_tools.py`
+   - MCP：`mcpserver/mcp_manager.py`
+   - Live2D：UI action 通知
+4. 将结果通过 SSE 事件回推到前端。
 
-- `read_file`, `write_file`, `list_files`
-- `search_keyword`, `query_docs`
-- `run_cmd`
-- `git_status`, `git_diff`, `git_log`, `git_show`, `git_blame`, `git_grep`
-- `python_repl`
-- `get_cwd`
+SSE 关键事件：
 
-## 4. Security Boundary
+- `tool_calls`
+- `tool_results`
+- `tool_stage`
+- `round_start`
+- `round_end`
 
-Native execution is constrained by `system/native_executor.py`:
+## 3. MCP Host + Tool Registry 映射
 
-- project-root confinement
-- unsafe token blocking for shell operations
-- bounded output and timeout controls
+与 Omni-Operator 对齐关系：
 
-## 5. Debug Notes
+- MCP Host：`mcpserver/mcp_server.py`（`/schedule`、`/call`、`/services`、`/status`）
+- Tool Registry：`mcpserver/mcp_registry.py`（manifest 扫描、实例化注册）
+- Tool Router：`mcpserver/mcp_manager.py`（本地优先 + mcporter 外部兜底）
 
-If a tool call appears in output but is not executed:
+执行策略：
 
-1. Check validation warnings in `apiserver/agentic_tool_loop.py` logs.
-2. Ensure `tool_name` and required arguments are present.
-3. Verify model/tool schema alignment in request payload.
+1. 先查本地已注册 MCP 服务。
+2. 本地失败后可按策略回退到 mcporter 外部服务。
+3. 针对 codex 服务有专门规范化与降级逻辑。
 
-If the model emits non-structured tool syntax:
+## 4. Omni-Operator 安全层管线（当前落地）
 
-- the loop should reject it and request structured function-calling format.
+### 4.1 调用前校验
 
-## 6. Relevant Source Files
+`agentic_tool_loop` 当前已实现：
 
-- `apiserver/llm_service.py`
-- `apiserver/agentic_tool_loop.py`
-- `apiserver/native_tools.py`
-- `system/native_executor.py`
+- 工具名必填校验
+- 参数类型校验
+- legacy 协议违规检测
+- coding intent 的 codex-first 约束
+
+### 4.2 Native 执行边界
+
+`system/native_executor.py` 当前已实现：
+
+- 项目根目录约束（禁止越界）
+- 高风险 token 拦截（如 `del/rm/rmdir/format/diskpart/remove-item`）
+- 路径穿越与 UNC 路径拦截
+- 超时与输出边界控制
+
+### 4.3 执行后反馈
+
+- 工具执行状态统一写回 `tool_results` 事件。
+- 阶段状态写回 `tool_stage`，可用于前端可视化与审计。
+
+## 5. 与 Tool Contract 的关系
+
+目标态（见 `gemin-结构图.md`）要求 Tool Contract 包含：
+
+- `tool_name`
+- `input_schema_version`
+- `validated_args`
+- `risk_level`
+- `timeout_ms`
+- `idempotency_key`
+- `caller_role`
+- `trace_id`
+
+当前状态：
+
+- 已具备结构化调用与参数校验基础。
+- 仍需把上述字段提升为“统一强制契约”，并在 native/mcp 两条链路中一致执行。
+
+## 6. I/O 截断与防爆工具链（目标态细化）
+
+状态标记：`目标态规范`，当前实现部分具备（超时与路径边界），以下规则需继续补齐。
+
+### 6.1 读取策略
+
+1. 禁止全局大文件直读（禁止用 `cat` 直接读取大型文件）。
+2. 强制优先使用结构化读取工具（`grep/awk/file_ast_skeleton`）。
+3. `file_ast_skeleton` 仅返回代码骨架、函数签名与关键结构，不返回完整正文。
+
+### 6.2 修改策略
+
+1. 强制 diff/patch 路径提交修改。
+2. 禁止“整文件重写输出”作为默认修改方式。
+3. 写入前必须经过 Tool Contract 校验与风险门禁。
+
+### 6.3 输出熔断器规范
+
+所有 Shell/Bash 执行结果必须经过截断器包裹，示例：
+
+```ts
+function executeWithTruncation(cmd: string): string {
+  const result = execSync(cmd, { timeout: 30000 });
+  if (result.length > 8000) {
+    return result.slice(0, 3000) +
+      "\\n...[SYSTEM TRUNCATED: OUTPUT TOO LONG]...\\n" +
+      result.slice(-3000);
+  }
+  return result;
+}
+```
+
+## 7. 开发预备建议
+
+1. 在 `agentic_tool_loop` 增加统一 Tool Contract 组装层。
+2. 将风险等级（`read_only/write_repo/deploy/secrets`）纳入调用前门禁。
+3. 在 `native_tools` 路径补齐“读取策略 + 修改策略 + 输出熔断器”三项硬约束。
+4. 为关键工具调用补齐 `trace_id` 与审计落盘。
+
+## 8. 交叉引用
+
+- 总览：`./01-module-overview.md`
+- 启动与调试：`./05-dev-startup-and-index.md`
+- 自治 SDLC：`./07-autonomous-agent-sdlc-architecture.md`
+- 工具治理规范：`./09-工具调用与任务执行规范.md`
