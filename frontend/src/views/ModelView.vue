@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useStorage } from '@vueuse/core'
-import { Accordion, Divider, InputNumber, InputText, Select, Textarea, ToggleSwitch } from 'primevue'
-import { ref, watch } from 'vue'
+import { Accordion, Divider, InputNumber, InputText, Select, ToggleSwitch } from 'primevue'
+import { computed, ref, watch } from 'vue'
 import BoxContainer from '@/components/BoxContainer.vue'
 import ConfigGroup from '@/components/ConfigGroup.vue'
 import ConfigItem from '@/components/ConfigItem.vue'
@@ -11,97 +11,137 @@ import { CONFIG } from '@/utils/config'
 const accordionValue = useStorage('accordion-model', ['asr'])
 
 const ASR_PROVIDERS = {
-  qwen: '通义千问',
+  qwen: 'Qwen',
   openai: 'OpenAI',
   local: 'FunASR',
 }
 
 const TTS_VOICES = {
-  Cherry: '默认',
+  Cherry: 'Default',
 }
 
 const API_PROVIDERS = {
-  auto: '自动识别',
-  openai_compatible: 'OpenAI 兼容',
+  auto: 'Auto',
+  openai_compatible: 'OpenAI Compatible',
   google: 'Google Gemini',
 }
 
 const API_PROTOCOLS = {
-  auto: '自动识别',
+  auto: 'Auto',
   openai_chat_completions: 'OpenAI Chat Completions',
-  google_generate_content: 'Google Generate Content',
 }
 
-const apiExtraHeadersText = ref('{}')
-const apiExtraBodyText = ref('{}')
-const apiExtraHeadersError = ref('')
-const apiExtraBodyError = ref('')
+type CodexThinkLevel = 'none' | 'xhigh' | 'high' | 'medium'
+type ClaudeThinkLevel = 'placeholder'
+type ResolvedApiProtocol = 'openai_chat_completions'
 
-function prettyJson(value: unknown): string {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return '{}'
-  }
-  try {
-    return JSON.stringify(value, null, 2)
-  }
-  catch {
-    return '{}'
-  }
+const CODEX_THINK_LEVEL_OPTIONS = {
+  none: 'Unset',
+  xhigh: 'xhigh',
+  high: 'high',
+  medium: 'medium',
+} as const
+
+const CLAUDE_THINK_OPTIONS = {
+  placeholder: 'Placeholder (Not Implemented)',
+} as const
+
+const codexThinkLevel = ref<CodexThinkLevel>('none')
+const claudeThinkLevel = ref<ClaudeThinkLevel>('placeholder')
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
+
+function deepCloneRecord(value: unknown): Record<string, any> {
+  if (!isRecord(value)) {
+    return {}
+  }
+
+  return JSON.parse(JSON.stringify(value))
+}
+
+function normalizeCodexThinkLevel(value: unknown): CodexThinkLevel {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (normalized === 'xhigh' || normalized === 'high' || normalized === 'medium') {
+    return normalized
+  }
+  return 'none'
+}
+
+function resolveCurrentApiProtocol(): ResolvedApiProtocol {
+  return 'openai_chat_completions'
+}
+
+const currentApiProtocol = computed<ResolvedApiProtocol>(() => resolveCurrentApiProtocol())
+const isOpenaiApiProtocol = computed(() => currentApiProtocol.value === 'openai_chat_completions')
+const currentApiProtocolLabel = computed(() => 'OpenAI compatible (openai_chat_completions)')
+
+function applyCodexThinkLevel(level: CodexThinkLevel) {
+  const nextHeaders = deepCloneRecord(CONFIG.value.api.extra_headers)
+  if (level === 'none') {
+    delete nextHeaders.reasoning_effort
+  }
+  else {
+    nextHeaders.reasoning_effort = level
+  }
+  CONFIG.value.api.extra_headers = nextHeaders
+}
+
+function removeLegacyGeminiNativeConfig() {
+  const protocol = String(CONFIG.value.api.protocol ?? '').trim().toLowerCase()
+  if (protocol === 'google_generate_content' || protocol === 'google' || protocol === 'gemini') {
+    CONFIG.value.api.protocol = 'openai_chat_completions'
+  }
+
+  CONFIG.value.api.google_live_api = false
+
+  const nextBody = deepCloneRecord(CONFIG.value.api.extra_body)
+  const generationConfig = isRecord(nextBody.generationConfig) ? { ...nextBody.generationConfig } : {}
+
+  if (isRecord(generationConfig.thinkingConfig)) {
+    delete generationConfig.thinkingConfig
+  }
+
+  if (Object.keys(generationConfig).length > 0) {
+    nextBody.generationConfig = generationConfig
+  }
+  else {
+    delete nextBody.generationConfig
+  }
+
+  delete nextBody.mediaResolution
+  CONFIG.value.api.extra_body = nextBody
+}
+
+function onCodexThinkLevelChange(value: unknown) {
+  codexThinkLevel.value = normalizeCodexThinkLevel(value)
+  applyCodexThinkLevel(codexThinkLevel.value)
+}
+
+removeLegacyGeminiNativeConfig()
+
+watch(
+  () => CONFIG.value.api.protocol,
+  (value) => {
+    const protocol = String(value ?? '').trim().toLowerCase()
+    if (protocol === 'google_generate_content' || protocol === 'google' || protocol === 'gemini') {
+      CONFIG.value.api.protocol = 'openai_chat_completions'
+    }
+  },
+)
 
 watch(
   () => CONFIG.value.api.extra_headers,
   (value) => {
-    apiExtraHeadersText.value = prettyJson(value)
-  },
-  { immediate: true, deep: true },
-)
-
-watch(
-  () => CONFIG.value.api.extra_body,
-  (value) => {
-    apiExtraBodyText.value = prettyJson(value)
-  },
-  { immediate: true, deep: true },
-)
-
-function applyApiJson(field: 'extra_headers' | 'extra_body', rawText: string) {
-  const text = (rawText || '').trim()
-  const errorRef = field === 'extra_headers' ? apiExtraHeadersError : apiExtraBodyError
-
-  if (!text) {
-    CONFIG.value.api[field] = {}
-    errorRef.value = ''
-    if (field === 'extra_headers') {
-      apiExtraHeadersText.value = '{}'
-    }
-    else {
-      apiExtraBodyText.value = '{}'
-    }
-    return
-  }
-
-  try {
-    const parsed = JSON.parse(text)
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      errorRef.value = '请输入 JSON 对象，例如 {"x-foo":"bar"}'
+    if (!isRecord(value)) {
+      codexThinkLevel.value = 'none'
       return
     }
-
-    CONFIG.value.api[field] = parsed
-    errorRef.value = ''
-    const pretty = JSON.stringify(parsed, null, 2)
-    if (field === 'extra_headers') {
-      apiExtraHeadersText.value = pretty
-    }
-    else {
-      apiExtraBodyText.value = pretty
-    }
-  }
-  catch {
-    errorRef.value = 'JSON 格式无效，请检查引号和逗号'
-  }
-}
+    codexThinkLevel.value = normalizeCodexThinkLevel(value.reasoning_effort)
+  },
+  { immediate: true, deep: true },
+)
 </script>
 
 <template>
@@ -144,16 +184,6 @@ function applyApiJson(field: 'extra_headers' | 'extra_body', rawText: string) {
             </Select>
           </ConfigItem>
           <ConfigItem
-            name="Google Live API"
-            description="启用后 Google 流式对话使用 BidiGenerateContent（WebSocket）"
-          >
-            <span v-if="isNagaLoggedIn" class="naga-authed">&#10003; 已登陆，使用 NagaModel 网关</span>
-            <label v-else class="inline-flex items-center gap-3">
-              启用
-              <ToggleSwitch v-model="CONFIG.api.google_live_api" />
-            </label>
-          </ConfigItem>
-          <ConfigItem
             name="系统代理"
             description="启用后按系统环境变量（HTTP_PROXY/HTTPS_PROXY）发起模型请求"
           >
@@ -165,23 +195,40 @@ function applyApiJson(field: 'extra_headers' | 'extra_body', rawText: string) {
           <ConfigItem name="请求超时（秒）" description="模型请求超时时间">
             <InputNumber v-model="CONFIG.api.request_timeout" :min="1" :max="600" show-buttons />
           </ConfigItem>
-          <ConfigItem name="附加请求头（JSON）" description="例如 {&quot;x-trace-id&quot;:&quot;demo&quot;}">
-            <Textarea
-              v-model="apiExtraHeadersText"
-              rows="4"
-              class="w-full font-mono text-xs"
-              @blur="applyApiJson('extra_headers', apiExtraHeadersText)"
-            />
-            <small v-if="apiExtraHeadersError" class="config-error">{{ apiExtraHeadersError }}</small>
+          <ConfigItem name="当前请求协议" description="按 protocol/base_url/provider 动态判定，思考参数会自动适配">
+            <span>{{ currentApiProtocolLabel }}</span>
           </ConfigItem>
-          <ConfigItem name="附加请求体（JSON）" description="例如 {&quot;candidateCount&quot;:1}">
-            <Textarea
-              v-model="apiExtraBodyText"
-              rows="4"
-              class="w-full font-mono text-xs"
-              @blur="applyApiJson('extra_body', apiExtraBodyText)"
-            />
-            <small v-if="apiExtraBodyError" class="config-error">{{ apiExtraBodyError }}</small>
+          <ConfigItem
+            v-if="isOpenaiApiProtocol"
+            name="Codex ThinkLevel"
+            description="仅 OpenAI 兼容协议生效；写入附加请求头 reasoning_effort（xhigh/high/medium）"
+          >
+            <Select
+              :model-value="codexThinkLevel"
+              :options="Object.keys(CODEX_THINK_LEVEL_OPTIONS)"
+              @update:model-value="onCodexThinkLevelChange"
+            >
+              <template #option="{ option }">
+                {{ CODEX_THINK_LEVEL_OPTIONS[option as keyof typeof CODEX_THINK_LEVEL_OPTIONS] }}
+              </template>
+              <template #value="{ value }">
+                {{ CODEX_THINK_LEVEL_OPTIONS[value as keyof typeof CODEX_THINK_LEVEL_OPTIONS] }}
+              </template>
+            </Select>
+          </ConfigItem>
+          <ConfigItem v-if="isOpenaiApiProtocol" name="Claude Think" description="占位配置，后续接入">
+            <Select
+              :model-value="claudeThinkLevel"
+              :options="Object.keys(CLAUDE_THINK_OPTIONS)"
+              disabled
+            >
+              <template #option="{ option }">
+                {{ CLAUDE_THINK_OPTIONS[option as keyof typeof CLAUDE_THINK_OPTIONS] }}
+              </template>
+              <template #value="{ value }">
+                {{ CLAUDE_THINK_OPTIONS[value as keyof typeof CLAUDE_THINK_OPTIONS] }}
+              </template>
+            </Select>
           </ConfigItem>
           <Divider class="m-1!" />
           <ConfigItem name="最大令牌数" description="单次对话的最大长度限制">
@@ -331,10 +378,5 @@ function applyApiJson(field: 'extra_headers' | 'extra_body', rawText: string) {
   color: #4ade80;
   font-size: 0.875rem;
   font-weight: 500;
-}
-
-.config-error {
-  color: #f87171;
-  font-size: 0.75rem;
 }
 </style>

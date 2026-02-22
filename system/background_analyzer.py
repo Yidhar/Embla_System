@@ -8,8 +8,8 @@
 import asyncio
 import json
 import time
-import httpx
 from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
+from urllib.parse import urlparse
 from system.config import config, logger
 from system.coding_intent import extract_latest_user_message as extract_latest_user_message_shared
 from system.coding_intent import requires_codex_for_messages
@@ -138,133 +138,57 @@ class ConversationAnalyzer:
 
     def __init__(self):
         self.llm: Optional["ChatOpenAI"] = None
-        self._use_google_native = self._should_use_google_native_protocol()
 
-        if self._use_google_native:
-            logger.info("[ConversationAnalyzer] 使用 Google 原生 generateContent 协议")
-            return
-
-        # 延迟导入 langchain_openai，避免多线程并行启动时 pydantic 导入竞争
+        # Delayed import to avoid startup import races across multi-threaded boot.
         from langchain_openai import ChatOpenAI
 
         self.llm = ChatOpenAI(
             model=config.api.model,
-            base_url=config.api.base_url,
+            base_url=self._normalize_google_openai_compat_base_url(config.api.base_url or ""),
             api_key=config.api.api_key,  # type: ignore[arg-type]
             temperature=0,
         )
 
     @staticmethod
-    def _should_use_google_native_protocol() -> bool:
-        protocol = str(getattr(config.api, "protocol", "") or "").strip().lower()
-        if protocol in {"google_generate_content", "google", "gemini"}:
-            return True
-        if protocol in {"openai_chat_completions", "openai", "openai_compatible"}:
-            return False
+    def _normalize_google_openai_compat_base_url(raw_base_url: str) -> str:
+        base = (raw_base_url or "").strip().rstrip("/")
+        if not base:
+            return base
 
-        base = (config.api.base_url or "").strip().lower()
-        if "generativelanguage.googleapis.com" in base:
-            return True
+        parsed = urlparse(base if "://" in base else f"https://{base}")
+        host = (parsed.netloc or "").strip().lower()
+        if "generativelanguage.googleapis.com" not in host:
+            return base
 
-        provider = str(getattr(config.api, "provider", "") or "").strip().lower()
-        if provider in {"google", "gemini", "google_ai_studio", "google_genai"}:
-            return True
-        if provider in {"openai", "openai_compatible"}:
-            return False
+        path = (parsed.path or "").rstrip("/")
+        lowered_path = path.lower()
 
-        return False
+        models_idx = lowered_path.find("/models/")
+        if models_idx != -1:
+            path = path[:models_idx]
+            lowered_path = path.lower()
 
-    @staticmethod
-    def _extract_google_text(data: Any) -> str:
-        if not isinstance(data, dict):
-            return ""
-
-        candidates = data.get("candidates") or []
-        if not isinstance(candidates, list):
-            return ""
-
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
-                continue
-            content = candidate.get("content") or {}
-            if not isinstance(content, dict):
-                continue
-            parts = content.get("parts") or []
-            if not isinstance(parts, list):
-                continue
-            texts: List[str] = []
-            for part in parts:
-                if isinstance(part, dict):
-                    text = part.get("text")
-                    if isinstance(text, str) and text:
-                        texts.append(text)
-            if texts:
-                return "".join(texts)
-        return ""
-
-    def _invoke_google_native(self, prompt: str) -> str:
-        base = (config.api.base_url or "https://generativelanguage.googleapis.com/v1beta").strip().rstrip("/")
-        lowered_base = base.lower()
-        for suffix in ("/openai/chat/completions", "/chat/completions", "/completions", "/openai"):
-            if lowered_base.endswith(suffix):
-                base = base[: -len(suffix)]
-                lowered_base = base.lower()
+        for suffix in ("/openai/chat/completions", "/chat/completions", "/completions"):
+            if lowered_path.endswith(suffix):
+                path = path[: -len(suffix)]
+                lowered_path = path.lower()
                 break
-        if "/models/" in lowered_base and ":" in lowered_base:
-            base = base.split("/models/", 1)[0]
-            lowered_base = base.lower()
-        if "/v1alpha" not in lowered_base and "/v1beta" not in lowered_base and "/v1/" not in lowered_base and not lowered_base.endswith("/v1"):
-            base = f"{base.rstrip('/')}/v1beta"
 
-        model = (config.api.model or "").strip()
-        if ":" in model:
-            maybe_model, maybe_method = model.rsplit(":", 1)
-            if maybe_method in {"generateContent", "streamGenerateContent", "BidiGenerateContent"}:
-                model = maybe_model
-        if model.startswith("models/"):
-            model = model[len("models/") :]
-        if "/" in model:
-            prefix = model.split("/", 1)[0].lower()
-            if prefix in {"openai", "openrouter", "deepseek", "google", "gemini"}:
-                model = model.split("/")[-1]
-        if not model:
-            model = "gemini-2.0-flash"
+        if lowered_path.endswith("/openai"):
+            path = path[: -len("/openai")]
+            lowered_path = path.lower()
 
-        url = f"{base}/models/{model}:generateContent"
-        timeout_seconds = int(getattr(config.api, "request_timeout", 120))
-        max_tokens = getattr(config.api, "max_tokens", None)
+        if "/v1alpha" in lowered_path:
+            version_path = "/v1alpha"
+        elif "/v1beta" in lowered_path:
+            version_path = "/v1beta"
+        elif "/v1/" in lowered_path or lowered_path.endswith("/v1"):
+            version_path = "/v1"
+        else:
+            version_path = "/v1beta"
 
-        payload: Dict[str, Any] = {
-            "systemInstruction": {"parts": [{"text": "你是精确的任务意图提取器与MCP调用规划器。"}]},
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0,
-                "maxOutputTokens": max_tokens,
-            },
-        }
-
-        if isinstance(getattr(config.api, "extra_body", None), dict) and config.api.extra_body:
-            payload.update(config.api.extra_body)
-
-        headers: Dict[str, str] = {"Content-Type": "application/json"}
-        if isinstance(getattr(config.api, "extra_headers", None), dict):
-            headers.update({str(k): str(v) for k, v in config.api.extra_headers.items()})
-
-        params: Dict[str, str] = {}
-        if config.api.api_key:
-            params["key"] = config.api.api_key
-        logger.info("[ConversationAnalyzer] Google request mode=generateContent url=%s", f"{url}?key=***" if params else url)
-        use_system_proxy = bool(getattr(config.api, "applied_proxy", False))
-        logger.info("[ConversationAnalyzer] Google request proxy=%s", use_system_proxy)
-
-        with httpx.Client(timeout=timeout_seconds, trust_env=use_system_proxy) as client:
-            response = client.post(url, params=params, headers=headers, json=payload)
-
-        if response.status_code >= 400:
-            raise RuntimeError(f"Google API error ({response.status_code}): {response.text}")
-
-        data = response.json()
-        return self._extract_google_text(data).strip()
+        scheme = parsed.scheme or "https"
+        return f"{scheme}://{parsed.netloc}{version_path}/openai"
 
     def _build_prompt(self, messages: List[Dict[str, str]]) -> str:
         lines = []
@@ -331,26 +255,22 @@ class ConversationAnalyzer:
         """非标准JSON格式解析 - 直接调用LLM，避免嵌套线程池"""
         logger.info("[ConversationAnalyzer] 尝试非标准JSON格式解析")
         try:
-            if self._use_google_native:
-                text = self._invoke_google_native(prompt)
+            if self.llm is None:
+                raise RuntimeError("ConversationAnalyzer LLM is not initialized")
+
+            # Call LLM directly and avoid nested threadpool invocations.
+            resp = self.llm.invoke(
+                [
+                    {"role": "system", "content": "You are a precise intent extractor and MCP tool planning assistant."},
+                    {"role": "user", "content": prompt},
+                ]
+            )
+
+            raw_content: Any = getattr(resp, "content", "")
+            if isinstance(raw_content, str):
+                text = raw_content.strip()
             else:
-                if self.llm is None:
-                    raise RuntimeError("ConversationAnalyzer LLM is not initialized")
-
-                # 直接调用LLM，避免嵌套线程池
-                resp = self.llm.invoke(
-                    [
-                        {"role": "system", "content": "你是精确的任务意图提取器与MCP调用规划器。"},
-                        {"role": "user", "content": prompt},
-                    ]
-                )
-
-                raw_content: Any = getattr(resp, "content", "")
-                if isinstance(raw_content, str):
-                    text = raw_content.strip()
-                else:
-                    # 兼容LangChain对多模态/分段内容的返回类型
-                    text = str(raw_content).strip()
+                text = str(raw_content).strip()
 
             logger.info(f"[ConversationAnalyzer] LLM响应完成，响应长度: {len(text)}")
             logger.info(f"[ConversationAnalyzer] LLM原始响应内容: {text}")
@@ -678,12 +598,8 @@ class BackgroundAnalyzer:
     ):
         """将工具调用分发到不同服务"""
         try:
-            openclaw_calls = [tc for tc in tool_calls if tc.get("agentType") == "openclaw"]
             live2d_calls = [tc for tc in tool_calls if tc.get("agentType") == "live2d"]
             mcp_calls = [tc for tc in tool_calls if tc.get("agentType") == "mcp"]
-
-            if openclaw_calls:
-                await self._send_to_openclaw(openclaw_calls, session_id, analysis_session_id)
 
             if live2d_calls:
                 await self._send_live2d_actions(live2d_calls, session_id)
@@ -693,91 +609,6 @@ class BackgroundAnalyzer:
 
         except Exception as e:
             logger.error(f"工具调用分发失败: {e}")
-
-    async def _send_to_openclaw(
-        self, openclaw_calls: List[Dict[str, Any]], session_id: str, analysis_session_id: Optional[str] = None
-    ):
-        """发送OpenClaw任务到agentserver的OpenClaw端点
-
-        使用 POST /hooks/agent 端点
-        文档: https://docs.openclaw.ai/automation/webhook
-        """
-        try:
-            from system.config import get_server_port
-
-            client = self._get_http_client()
-
-            for call in openclaw_calls:
-                task_type = call.get("task_type", "message")
-                message = call.get("message", "")
-
-                if not message:
-                    logger.warning(f"[博弈论] OpenClaw任务缺少message字段，跳过: {call}")
-                    continue
-
-                # 所有任务类型都通过 /openclaw/send 发送
-                # OpenClaw Agent 会自行处理消息内容
-                payload = {
-                    "message": message,
-                    "session_key": call.get("session_key", f"naga_{session_id}"),
-                    "name": "Naga",  # hook 名称标识
-                    "wake_mode": "now",
-                    "timeout_seconds": 120,  # 同步等待结果
-                }
-
-                # 如果是定时任务或提醒，在消息中包含调度信息
-                if task_type == "cron" and call.get("schedule"):
-                    payload["message"] = f"[定时任务 cron: {call.get('schedule')}] {message}"
-                elif task_type == "reminder" and call.get("at"):
-                    payload["message"] = f"[提醒 在 {call.get('at')} 后] {message}"
-
-                response = await client.post(
-                    f"http://localhost:{get_server_port('agent_server')}/openclaw/send", json=payload
-                )
-
-                if response.status_code == 200:
-                    result = response.json()
-                    replies = result.get("replies", [])
-                    task_status = result.get("task", {}).get("status", "unknown")
-                    logger.info(
-                        f"[博弈论] OpenClaw {task_type} 任务完成: status={task_status}, replies={len(replies)}条"
-                    )
-
-                    if replies:
-                        for i, r in enumerate(replies):
-                            logger.info(
-                                f"[博弈论] 发送第{i + 1}/{len(replies)}条回复到UI: {r[:50] if r else 'empty'}..."
-                            )
-                            await self._notify_ui_clawdbot_reply(session_id, r)
-                else:
-                    logger.error(f"[博弈论] OpenClaw任务发送失败: {response.status_code} - {response.text}")
-
-        except Exception as e:
-            logger.error(f"[博弈论] 发送OpenClaw任务失败: {e}")
-
-    async def _notify_ui_clawdbot_reply(self, session_id: str, reply: str):
-        """将 ClawdBot 回复发送到 UI 显示"""
-        try:
-            from system.config import get_server_port
-
-            payload = {
-                "session_id": session_id,
-                "action": "show_clawdbot_response",
-                "ai_response": reply,
-            }
-
-            response = await self._get_http_client().post(
-                f"http://localhost:{get_server_port('api_server')}/ui_notification",
-                json=payload,
-            )
-            if response.status_code == 200:
-                logger.info(f"[博弈论] ClawdBot 回复已发送到 UI: {reply[:80]}...")
-            else:
-                logger.error(f"[博弈论] ClawdBot 回复发送失败: {response.status_code}")
-
-        except Exception as e:
-            logger.error(f"[博弈论] 发送 ClawdBot 回复到 UI 失败: {e}")
-
     async def _send_live2d_actions(self, live2d_calls: List[Dict[str, Any]], session_id: str):
         """将 Live2D 动作发送到 UI"""
         try:
@@ -920,3 +751,4 @@ def get_background_analyzer() -> BackgroundAnalyzer:
     if _background_analyzer is None:
         _background_analyzer = BackgroundAnalyzer()
     return _background_analyzer
+

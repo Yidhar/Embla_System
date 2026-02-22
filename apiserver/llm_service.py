@@ -2,13 +2,12 @@
 """
 LLM service module.
 
-This module keeps backward compatibility for the existing OpenAI-compatible flow,
-and adds native Google Generative Language API protocol support.
+This module unifies routing around OpenAI-compatible chat completions.
+Gemini endpoints are normalized to Gemini's OpenAI-compatible base URL.
 """
 
 import asyncio
 import base64
-import inspect
 import json
 import logging
 import os
@@ -16,11 +15,9 @@ import re
 import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import urlparse
 
-import httpx
 import litellm
-import websockets
 from fastapi import FastAPI, HTTPException
 from litellm import acompletion
 
@@ -48,21 +45,13 @@ class LLMResponse:
 
 
 class LLMService:
-    """Unified LLM service (OpenAI-compatible + Google native protocol)."""
+    """Unified LLM service with OpenAI-compatible routing."""
 
     PROTOCOL_OPENAI_CHAT = "openai_chat_completions"
-    PROTOCOL_GOOGLE_GENERATE = "google_generate_content"
 
-    GOOGLE_DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta"
-    GOOGLE_LIVE_WS_PATH_TEMPLATE = "/ws/google.ai.generativelanguage.{version}.GenerativeService.BidiGenerateContent"
     OPENAI_HINTS = {"openai", "openai_compatible"}
     GOOGLE_HINTS = {"google", "gemini", "google_ai_studio", "google_genai"}
-    DATA_URL_PATTERN = re.compile(r"^data:(?P<mime>[^;]+);base64,(?P<data>.+)$", re.IGNORECASE)
-    GOOGLE_METHOD_PATTERN = re.compile(
-        r"/models/(?P<model>[^:]+):(?P<method>generateContent|streamGenerateContent|BidiGenerateContent)$",
-        re.IGNORECASE,
-    )
-    GOOGLE_URL_KEY_PATTERN = re.compile(r"([?&](?:key|api_key|x-goog-api-key)=)([^&]+)", re.IGNORECASE)
+    LEGACY_GOOGLE_ONLY_EXTRA_BODY_KEYS = {"generationconfig", "mediaresolution"}
 
     def __init__(self):
         self._initialized = False
@@ -80,10 +69,14 @@ class LLMService:
                 litellm.suppress_debug_info = True
 
             protocol = self._resolve_protocol(api_base=cfg.api.base_url)
-            if protocol != self.PROTOCOL_GOOGLE_GENERATE and cfg.api.base_url:
+            if protocol == self.PROTOCOL_OPENAI_CHAT and cfg.api.base_url:
                 # Keep existing behavior for OpenAI-compatible providers.
-                if "openai.com" not in cfg.api.base_url:
-                    litellm.api_base = cfg.api.base_url.rstrip("/") + "/"
+                effective_base = cfg.api.base_url
+                normalized_google_base = self._normalize_google_openai_compat_base(effective_base)
+                if normalized_google_base:
+                    effective_base = normalized_google_base
+                if "openai.com" not in (effective_base or ""):
+                    litellm.api_base = effective_base.rstrip("/") + "/"
 
             self._initialized = True
             logger.info("LLM service initialized")
@@ -95,8 +88,9 @@ class LLMService:
         value = (protocol or "").strip().lower()
         if value in {"openai_chat_completions", "openai", "openai_compatible"}:
             return self.PROTOCOL_OPENAI_CHAT
-        if value in {"google", "gemini", "google_generate_content", "generativeai"}:
-            return self.PROTOCOL_GOOGLE_GENERATE
+        if value in {"google", "gemini"}:
+            # Gemini now uses OpenAI-compatible endpoints by default.
+            return self.PROTOCOL_OPENAI_CHAT
         return self.PROTOCOL_OPENAI_CHAT
 
     def _is_auto_protocol(self, protocol: Optional[str]) -> bool:
@@ -117,26 +111,98 @@ class LLMService:
         if hint in self.OPENAI_HINTS:
             return self.PROTOCOL_OPENAI_CHAT
         if hint in self.GOOGLE_HINTS:
-            return self.PROTOCOL_GOOGLE_GENERATE
+            return self.PROTOCOL_OPENAI_CHAT
 
         cfg = get_config()
         configured_protocol = getattr(cfg.api, "protocol", "")
         if configured_protocol and not self._is_auto_protocol(configured_protocol):
             return self._normalize_protocol(configured_protocol)
 
-        # In auto mode, base URL detection has higher priority than configured provider.
-        # This avoids stale provider config (e.g. openai_compatible) forcing a wrong route.
+        # In auto mode, Gemini endpoints are treated as OpenAI-compatible.
+        # This keeps function-calling behavior consistent across providers.
         base = (api_base or cfg.api.base_url or "").strip().lower()
         if "generativelanguage.googleapis.com" in base:
-            return self.PROTOCOL_GOOGLE_GENERATE
+            return self.PROTOCOL_OPENAI_CHAT
 
         configured_provider = getattr(cfg.api, "provider", "").strip().lower()
         if configured_provider in self.OPENAI_HINTS:
             return self.PROTOCOL_OPENAI_CHAT
         if configured_provider in self.GOOGLE_HINTS:
-            return self.PROTOCOL_GOOGLE_GENERATE
+            return self.PROTOCOL_OPENAI_CHAT
 
         return self.PROTOCOL_OPENAI_CHAT
+
+    def _get_config_extra_headers(self) -> Dict[str, Any]:
+        cfg = get_config()
+        raw_headers = getattr(cfg.api, "extra_headers", None)
+        if isinstance(raw_headers, dict):
+            return {str(k): v for k, v in raw_headers.items()}
+        return {}
+
+    def _get_config_extra_body(self) -> Dict[str, Any]:
+        cfg = get_config()
+        raw_body = getattr(cfg.api, "extra_body", None)
+        if isinstance(raw_body, dict):
+            return {str(k): v for k, v in raw_body.items()}
+        return {}
+
+    def _filter_extra_headers_for_protocol(self, protocol: str, extra_headers: Dict[str, Any]) -> Dict[str, Any]:
+        if not extra_headers:
+            return {}
+        return dict(extra_headers)
+
+    def _filter_extra_body_for_protocol(self, protocol: str, extra_body: Dict[str, Any]) -> Dict[str, Any]:
+        if not extra_body:
+            return {}
+
+        filtered: Dict[str, Any] = {}
+        for key, value in extra_body.items():
+            key_str = str(key)
+            key_lower = key_str.strip().lower()
+            if key_lower in self.LEGACY_GOOGLE_ONLY_EXTRA_BODY_KEYS:
+                continue
+            filtered[key_str] = value
+        return filtered
+
+    def _normalize_google_openai_compat_base(self, raw_base_url: Optional[str]) -> Optional[str]:
+        base_input = (raw_base_url or "").strip()
+        if not base_input:
+            return None
+
+        parsed = urlparse(base_input if "://" in base_input else f"https://{base_input}")
+        host = (parsed.netloc or "").strip()
+        if "generativelanguage.googleapis.com" not in host.lower():
+            return base_input.rstrip("/")
+
+        scheme = parsed.scheme or "https"
+        path = (parsed.path or "").strip().rstrip("/")
+        lowered_path = path.lower()
+
+        models_idx = lowered_path.find("/models/")
+        if models_idx != -1:
+            path = path[:models_idx]
+            lowered_path = path.lower()
+
+        for suffix in ("/openai/chat/completions", "/chat/completions", "/completions"):
+            if lowered_path.endswith(suffix):
+                path = path[: -len(suffix)]
+                lowered_path = path.lower()
+                break
+
+        if lowered_path.endswith("/openai"):
+            path = path[: -len("/openai")]
+            lowered_path = path.lower()
+
+        if "/v1alpha" in lowered_path:
+            version_path = "/v1alpha"
+        elif "/v1beta" in lowered_path:
+            version_path = "/v1beta"
+        elif lowered_path.endswith("/v1") or "/v1/" in lowered_path:
+            version_path = "/v1"
+        else:
+            version_path = "/v1beta"
+
+        return f"{scheme}://{host}{version_path}/openai"
 
     def _get_model_name(self, model: Optional[str] = None, base_url: Optional[str] = None) -> str:
         """Get LiteLLM-style model identifier for OpenAI-compatible flow."""
@@ -205,18 +271,14 @@ class LLMService:
         self,
         api_key: Optional[str],
         api_base: Optional[str],
-        protocol: str,
     ) -> Dict[str, Any]:
         """Build LiteLLM params for OpenAI-compatible flow."""
         cfg = get_config()
-
-        extra_body: Dict[str, Any] = {}
-        if isinstance(getattr(cfg.api, "extra_body", None), dict):
-            extra_body.update(cfg.api.extra_body)
+        extra_body = self._filter_extra_body_for_protocol(self.PROTOCOL_OPENAI_CHAT, self._get_config_extra_body())
 
         params: Dict[str, Any] = {}
 
-        if naga_auth.is_authenticated() and protocol != self.PROTOCOL_GOOGLE_GENERATE:
+        if naga_auth.is_authenticated():
             token = naga_auth.get_access_token()
             params["api_key"] = token
             params["api_base"] = naga_auth.NAGA_MODEL_URL + "/"
@@ -224,616 +286,19 @@ class LLMService:
         else:
             params["api_key"] = api_key or cfg.api.api_key
             base = api_base or cfg.api.base_url
+            normalized_google_base = self._normalize_google_openai_compat_base(base)
+            if normalized_google_base:
+                base = normalized_google_base
             params["api_base"] = base.rstrip("/") + "/" if base else None
 
         if extra_body:
             params["extra_body"] = extra_body
 
-        if isinstance(getattr(cfg.api, "extra_headers", None), dict) and cfg.api.extra_headers:
-            params["extra_headers"] = cfg.api.extra_headers
+        extra_headers = self._filter_extra_headers_for_protocol(self.PROTOCOL_OPENAI_CHAT, self._get_config_extra_headers())
+        if extra_headers:
+            params["extra_headers"] = extra_headers
 
         return params
-
-    def _build_google_headers(self) -> Dict[str, str]:
-        headers = {"Content-Type": "application/json"}
-        cfg = get_config()
-        if isinstance(getattr(cfg.api, "extra_headers", None), dict):
-            headers.update(cfg.api.extra_headers)
-        return headers
-
-    def _build_google_ws_headers(self, api_key: Optional[str]) -> Dict[str, str]:
-        headers: Dict[str, str] = {}
-        if api_key:
-            headers["x-goog-api-key"] = api_key
-
-        cfg = get_config()
-        if isinstance(getattr(cfg.api, "extra_headers", None), dict):
-            for key, value in cfg.api.extra_headers.items():
-                if isinstance(key, str):
-                    headers[key] = str(value)
-        return headers
-
-    def _is_google_live_enabled(self) -> bool:
-        cfg = get_config()
-        return bool(getattr(cfg.api, "google_live_api", False))
-
-    def _use_system_proxy(self) -> bool:
-        cfg = get_config()
-        return bool(getattr(cfg.api, "applied_proxy", False))
-
-    def _normalize_google_model_name(self, model: Optional[str]) -> str:
-        model_name = (model or "").strip()
-        if model_name.startswith("models/"):
-            model_name = model_name[len("models/") :]
-
-        # Allow accidental model input like "gemini-2.5-flash:generateContent".
-        if ":" in model_name:
-            maybe_model, maybe_method = model_name.rsplit(":", 1)
-            if maybe_method in {"generateContent", "streamGenerateContent", "BidiGenerateContent"}:
-                model_name = maybe_model
-
-        # Convert OpenAI-style prefixed model ids into raw Gemini model id.
-        if "/" in model_name and not model_name.startswith(("publishers/", "tunedModels/")):
-            prefix = model_name.split("/", 1)[0].lower()
-            if prefix in {"openai", "openrouter", "deepseek", "google", "gemini"}:
-                model_name = model_name.split("/")[-1]
-
-        model_name = model_name.strip().strip("/")
-        return model_name or "gemini-2.0-flash"
-
-    def _normalize_google_base_and_model(self, api_base: Optional[str], model: Optional[str]) -> tuple[str, str]:
-        base_input = (api_base or self.GOOGLE_DEFAULT_BASE).strip()
-        if not base_input:
-            base_input = self.GOOGLE_DEFAULT_BASE
-
-        parsed = urlparse(base_input if "://" in base_input else f"https://{base_input}")
-        scheme = parsed.scheme or "https"
-        if scheme in {"ws", "wss"}:
-            scheme = "https"
-
-        host = parsed.netloc or "generativelanguage.googleapis.com"
-        raw_path = (parsed.path or "").strip()
-        lowered_path = raw_path.lower()
-
-        extracted_model: Optional[str] = None
-        method_match = self.GOOGLE_METHOD_PATTERN.search(raw_path)
-        if method_match:
-            extracted_model = method_match.group("model")
-            raw_path = raw_path[: method_match.start()]
-            lowered_path = raw_path.lower()
-
-        for suffix in (
-            "/openai/chat/completions",
-            "/chat/completions",
-            "/completions",
-            "/openai",
-        ):
-            if lowered_path.endswith(suffix):
-                raw_path = raw_path[: -len(suffix)]
-                lowered_path = raw_path.lower()
-                break
-
-        if "/v1alpha" in lowered_path:
-            version_path = "/v1alpha"
-        elif "/v1beta" in lowered_path:
-            version_path = "/v1beta"
-        elif lowered_path.endswith("/v1") or "/v1/" in lowered_path:
-            version_path = "/v1"
-        else:
-            version_path = "/v1beta"
-
-        normalized_base = f"{scheme}://{host}{version_path}"
-        normalized_model = self._normalize_google_model_name(model or extracted_model)
-        return normalized_base.rstrip("/"), normalized_model
-
-    def _mask_google_url(self, url: str, params: Optional[Dict[str, str]] = None) -> str:
-        final_url = url
-        if params:
-            query = urlencode(params)
-            if query:
-                final_url = f"{final_url}{'&' if '?' in final_url else '?'}{query}"
-        return self.GOOGLE_URL_KEY_PATTERN.sub(r"\1***", final_url)
-
-    def _build_google_url(self, model: str, api_base: Optional[str], method: str) -> tuple[str, str, str]:
-        base, model_name = self._normalize_google_base_and_model(api_base, model)
-        method_name = method.strip()
-        if method_name not in {"generateContent", "streamGenerateContent"}:
-            method_name = "generateContent"
-        return f"{base}/models/{model_name}:{method_name}", base, model_name
-
-    def _build_google_live_ws_url(self, api_base: Optional[str]) -> str:
-        base_input = (api_base or "").strip()
-        lowered_input = base_input.lower()
-        if lowered_input.startswith(("ws://", "wss://")) and "bidigeneratecontent" in lowered_input:
-            return base_input
-
-        normalized_base, _ = self._normalize_google_base_and_model(api_base, None)
-        lowered = normalized_base.lower()
-        if lowered.startswith(("ws://", "wss://")) and "bidigeneratecontent" in lowered:
-            return normalized_base
-
-        parsed = urlparse(normalized_base if "://" in normalized_base else f"https://{normalized_base}")
-        host = parsed.netloc or "generativelanguage.googleapis.com"
-        path = (parsed.path or "").lower()
-
-        version = "v1beta"
-        if "/v1alpha" in path:
-            version = "v1alpha"
-        elif "/v1beta" in path:
-            version = "v1beta"
-        elif "/v1/" in path or path.endswith("/v1"):
-            version = "v1"
-
-        return f"wss://{host}{self.GOOGLE_LIVE_WS_PATH_TEMPLATE.format(version=version)}"
-
-    def _convert_image_url_to_google_part(self, image_url: str) -> Optional[Dict[str, Any]]:
-        if not image_url:
-            return None
-
-        match = self.DATA_URL_PATTERN.match(image_url)
-        if match:
-            return {
-                "inlineData": {
-                    "mimeType": match.group("mime"),
-                    "data": match.group("data"),
-                }
-            }
-
-        # For non data-url image, avoid hard failure. Keep minimal textual hint.
-        if image_url.startswith("http://") or image_url.startswith("https://"):
-            return {"text": f"Image URL: {image_url}"}
-        return None
-
-    def _convert_content_to_google_parts(self, content: Any) -> List[Dict[str, Any]]:
-        parts: List[Dict[str, Any]] = []
-
-        if isinstance(content, str):
-            if content:
-                parts.append({"text": content})
-            return parts
-
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, str):
-                    if block:
-                        parts.append({"text": block})
-                    continue
-                if not isinstance(block, dict):
-                    continue
-
-                block_type = str(block.get("type", "")).lower()
-                if block_type in {"text", "input_text"}:
-                    text = block.get("text")
-                    if isinstance(text, str) and text:
-                        parts.append({"text": text})
-                    continue
-
-                if block_type == "image_url":
-                    image_url_obj = block.get("image_url")
-                    if isinstance(image_url_obj, dict):
-                        image_url = str(image_url_obj.get("url", "") or "")
-                    else:
-                        image_url = str(image_url_obj or "")
-                    image_part = self._convert_image_url_to_google_part(image_url)
-                    if image_part:
-                        parts.append(image_part)
-                    continue
-
-                # Fallback: if a block still has text, preserve it.
-                text = block.get("text")
-                if isinstance(text, str) and text:
-                    parts.append({"text": text})
-
-        return parts
-
-    def _convert_messages_to_google_payload(
-        self,
-        messages: List[Dict[str, Any]],
-        temperature: float,
-        max_tokens: Optional[int],
-    ) -> Dict[str, Any]:
-        contents: List[Dict[str, Any]] = []
-        system_texts: List[str] = []
-
-        for message in messages:
-            role = str(message.get("role", "user")).lower()
-            content = message.get("content", "")
-
-            if role == "system":
-                for part in self._convert_content_to_google_parts(content):
-                    text = part.get("text")
-                    if isinstance(text, str) and text:
-                        system_texts.append(text)
-                continue
-
-            parts = self._convert_content_to_google_parts(content)
-            if not parts:
-                continue
-
-            google_role = "model" if role == "assistant" else "user"
-            if contents and contents[-1]["role"] == google_role:
-                contents[-1]["parts"].extend(parts)
-            else:
-                contents.append({"role": google_role, "parts": parts})
-
-        if not contents:
-            contents = [{"role": "user", "parts": [{"text": ""}]}]
-
-        payload: Dict[str, Any] = {
-            "contents": contents,
-            "generationConfig": {
-                "temperature": temperature,
-                "maxOutputTokens": max_tokens,
-            },
-        }
-
-        if system_texts:
-            payload["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_texts)}]}
-
-        cfg = get_config()
-        if isinstance(getattr(cfg.api, "extra_body", None), dict) and cfg.api.extra_body:
-            payload.update(cfg.api.extra_body)
-
-        return payload
-
-    def _build_google_live_setup_and_turns(
-        self,
-        messages: List[Dict[str, Any]],
-        temperature: float,
-        max_tokens: Optional[int],
-        model: str,
-    ) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
-        payload = self._convert_messages_to_google_payload(messages, temperature, max_tokens)
-        model_name = self._normalize_google_model_name(model)
-
-        setup: Dict[str, Any] = {"model": f"models/{model_name}"}
-        generation_config = payload.get("generationConfig")
-        if isinstance(generation_config, dict):
-            setup["generationConfig"] = generation_config
-
-        system_instruction = payload.get("systemInstruction")
-        if isinstance(system_instruction, dict):
-            setup["systemInstruction"] = system_instruction
-
-        for key, value in payload.items():
-            if key not in {"contents", "generationConfig", "systemInstruction"}:
-                setup[key] = value
-
-        turns = payload.get("contents")
-        if not isinstance(turns, list) or not turns:
-            turns = [{"role": "user", "parts": [{"text": ""}]}]
-
-        return setup, turns
-
-    def _extract_google_text(self, data: Any) -> str:
-        if isinstance(data, list):
-            for item in data:
-                text = self._extract_google_text(item)
-                if text:
-                    return text
-            return ""
-
-        if not isinstance(data, dict):
-            return ""
-
-        candidates = data.get("candidates") or []
-        if not isinstance(candidates, list):
-            return ""
-
-        for candidate in candidates:
-            if not isinstance(candidate, dict):
-                continue
-            content = candidate.get("content") or {}
-            if not isinstance(content, dict):
-                continue
-            parts = content.get("parts") or []
-            if not isinstance(parts, list):
-                continue
-            texts: List[str] = []
-            for part in parts:
-                if isinstance(part, dict):
-                    text = part.get("text")
-                    if isinstance(text, str) and text:
-                        texts.append(text)
-            if texts:
-                return "".join(texts)
-
-        return ""
-
-    def _extract_google_error(self, data: Any) -> str:
-        if isinstance(data, dict):
-            err = data.get("error")
-            if isinstance(err, dict):
-                message = err.get("message")
-                if isinstance(message, str) and message:
-                    return message
-            message = data.get("message")
-            if isinstance(message, str) and message:
-                return message
-        if isinstance(data, str):
-            return data
-        return "Unknown Google API error"
-
-    def _extract_google_live_text(self, server_content: Dict[str, Any]) -> str:
-        model_turn = server_content.get("modelTurn") or {}
-        if not isinstance(model_turn, dict):
-            return ""
-
-        parts = model_turn.get("parts") or []
-        if not isinstance(parts, list):
-            return ""
-
-        texts: List[str] = []
-        for part in parts:
-            if isinstance(part, dict):
-                text = part.get("text")
-                if isinstance(text, str) and text:
-                    texts.append(text)
-        return "".join(texts)
-
-    async def _connect_google_live_ws(
-        self,
-        ws_url: str,
-        headers: Dict[str, str],
-        api_key: Optional[str],
-        timeout_seconds: int,
-    ):
-        use_system_proxy = self._use_system_proxy()
-        connect_kwargs = {
-            "open_timeout": timeout_seconds,
-            "close_timeout": timeout_seconds,
-            "ping_timeout": timeout_seconds,
-        }
-        try:
-            if "proxy" in inspect.signature(websockets.connect).parameters:
-                connect_kwargs["proxy"] = True if use_system_proxy else None
-        except Exception:
-            pass
-
-        candidates: List[tuple[str, Dict[str, str]]] = [(ws_url, headers)]
-        if api_key and "key=" not in ws_url:
-            sep = "&" if "?" in ws_url else "?"
-            ws_with_query_key = f"{ws_url}{sep}key={quote(api_key)}"
-            query_headers = {k: v for k, v in headers.items() if k.lower() != "x-goog-api-key"}
-            candidates.append((ws_with_query_key, query_headers))
-
-        last_error: Optional[Exception] = None
-        attempted_urls: List[str] = []
-        for url, ws_headers in candidates:
-            safe_url = self._mask_google_url(url)
-            try:
-                try:
-                    return await websockets.connect(url, additional_headers=ws_headers, **connect_kwargs)
-                except TypeError:
-                    return await websockets.connect(url, extra_headers=ws_headers, **connect_kwargs)
-            except Exception as e:  # pragma: no cover - network/runtime branch
-                attempted_urls.append(safe_url)
-                logger.warning("[LLM] Google Live connect failed url=%s error=%s", safe_url, e)
-                last_error = e
-
-        raise RuntimeError(
-            f"Failed to connect Google Live API websocket, attempted={attempted_urls}, last_error={last_error}"
-        )
-
-    async def _call_google_generate_content(
-        self,
-        messages: List[Dict[str, Any]],
-        temperature: float,
-        model: str,
-        api_key: Optional[str],
-        api_base: Optional[str],
-    ) -> LLMResponse:
-        cfg = get_config()
-        timeout_seconds = getattr(cfg.api, "request_timeout", 120)
-        max_tokens = getattr(cfg.api, "max_tokens", None)
-        use_system_proxy = self._use_system_proxy()
-
-        payload = self._convert_messages_to_google_payload(messages, temperature, max_tokens)
-        url, normalized_base, normalized_model = self._build_google_url(
-            model=model,
-            api_base=api_base,
-            method="generateContent",
-        )
-        params: Dict[str, str] = {}
-        if api_key:
-            params["key"] = api_key
-
-        headers = self._build_google_headers()
-        logger.info(
-            "[LLM] Google request mode=generateContent base=%s model=%s url=%s timeout=%ss proxy=%s",
-            normalized_base,
-            normalized_model,
-            self._mask_google_url(url, params),
-            timeout_seconds,
-            use_system_proxy,
-        )
-
-        async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=use_system_proxy) as client:
-            response = await client.post(url, params=params, headers=headers, json=payload)
-
-        if response.status_code >= 400:
-            detail = response.text
-            try:
-                detail_json = response.json()
-                detail = self._extract_google_error(detail_json)
-            except Exception:
-                pass
-            raise RuntimeError(
-                f"Google API error ({response.status_code}) url={self._mask_google_url(url, params)}: {detail}"
-            )
-
-        data = response.json()
-        text = self._extract_google_text(data)
-        return LLMResponse(content=text or "", reasoning_content=None)
-
-    async def _stream_google_generate_content(
-        self,
-        messages: List[Dict[str, Any]],
-        temperature: float,
-        model: str,
-        api_key: Optional[str],
-        api_base: Optional[str],
-    ):
-        cfg = get_config()
-        timeout_seconds = getattr(cfg.api, "request_timeout", 120)
-        max_tokens = getattr(cfg.api, "max_tokens", None)
-        use_system_proxy = self._use_system_proxy()
-
-        payload = self._convert_messages_to_google_payload(messages, temperature, max_tokens)
-        url, normalized_base, normalized_model = self._build_google_url(
-            model=model,
-            api_base=api_base,
-            method="streamGenerateContent",
-        )
-        params: Dict[str, str] = {"alt": "sse"}
-        if api_key:
-            params["key"] = api_key
-
-        headers = self._build_google_headers()
-        accumulated_text = ""
-        log_url = self._mask_google_url(url, params)
-        logger.info(
-            "[LLM] Google request mode=streamGenerateContent base=%s model=%s url=%s timeout=%ss proxy=%s",
-            normalized_base,
-            normalized_model,
-            log_url,
-            timeout_seconds,
-            use_system_proxy,
-        )
-
-        try:
-            async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=use_system_proxy) as client:
-                async with client.stream("POST", url, params=params, headers=headers, json=payload) as response:
-                    if response.status_code >= 400:
-                        raw = await response.aread()
-                        detail = raw.decode("utf-8", errors="ignore")
-                        try:
-                            detail_json = json.loads(detail)
-                            detail = self._extract_google_error(detail_json)
-                        except Exception:
-                            pass
-                        yield self._format_sse_chunk(
-                            "content",
-                            f"Google API error ({response.status_code}) url={log_url}: {detail}",
-                        )
-                        return
-
-                    async for line in response.aiter_lines():
-                        if not line or not line.startswith("data:"):
-                            continue
-                        data_str = line[5:].strip()
-                        if not data_str or data_str == "[DONE]":
-                            continue
-
-                        try:
-                            chunk_obj = json.loads(data_str)
-                        except json.JSONDecodeError:
-                            continue
-
-                        chunk_text = self._extract_google_text(chunk_obj)
-                        if not chunk_text:
-                            continue
-
-                        if chunk_text.startswith(accumulated_text):
-                            delta = chunk_text[len(accumulated_text) :]
-                            accumulated_text = chunk_text
-                        elif accumulated_text and chunk_text in accumulated_text:
-                            delta = ""
-                        else:
-                            delta = chunk_text
-                            accumulated_text += chunk_text
-
-                        if delta:
-                            yield self._format_sse_chunk("content", delta)
-        except Exception as e:
-            logger.error("Google streaming failed (url=%s): %s", log_url, e)
-            yield self._format_sse_chunk("content", f"Google streaming error (url={log_url}): {e}")
-
-    async def _stream_google_bidi_generate_content(
-        self,
-        messages: List[Dict[str, Any]],
-        temperature: float,
-        model: str,
-        api_key: Optional[str],
-        api_base: Optional[str],
-    ):
-        cfg = get_config()
-        timeout_seconds = getattr(cfg.api, "request_timeout", 120)
-        max_tokens = getattr(cfg.api, "max_tokens", None)
-        ws_url = self._build_google_live_ws_url(api_base)
-        ws_headers = self._build_google_ws_headers(api_key)
-        setup_payload, turns = self._build_google_live_setup_and_turns(
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            model=model,
-        )
-        logger.info(
-            "[LLM] Google request mode=BidiGenerateContent url=%s timeout=%ss proxy=%s",
-            self._mask_google_url(ws_url),
-            timeout_seconds,
-            self._use_system_proxy(),
-        )
-
-        try:
-            websocket = await self._connect_google_live_ws(
-                ws_url=ws_url,
-                headers=ws_headers,
-                api_key=api_key,
-                timeout_seconds=timeout_seconds,
-            )
-            async with websocket:
-                await websocket.send(json.dumps({"setup": setup_payload}, ensure_ascii=False))
-
-                pending_messages: List[Dict[str, Any]] = []
-                try:
-                    first_raw = await asyncio.wait_for(websocket.recv(), timeout=timeout_seconds)
-                    first_obj = json.loads(first_raw)
-                    if not first_obj.get("setupComplete"):
-                        pending_messages.append(first_obj)
-                except asyncio.TimeoutError:
-                    raise RuntimeError("Google Live API setup timeout")
-                except json.JSONDecodeError:
-                    pass
-
-                await websocket.send(
-                    json.dumps(
-                        {
-                            "clientContent": {
-                                "turns": turns,
-                                "turnComplete": True,
-                            }
-                        },
-                        ensure_ascii=False,
-                    )
-                )
-
-                while True:
-                    if pending_messages:
-                        message_obj = pending_messages.pop(0)
-                    else:
-                        raw = await asyncio.wait_for(websocket.recv(), timeout=timeout_seconds)
-                        message_obj = json.loads(raw)
-
-                    go_away = message_obj.get("goAway")
-                    if isinstance(go_away, dict):
-                        reason = go_away.get("reason") or "server sent goAway"
-                        raise RuntimeError(str(reason))
-
-                    server_content = message_obj.get("serverContent")
-                    if not isinstance(server_content, dict):
-                        continue
-
-                    chunk_text = self._extract_google_live_text(server_content)
-                    if chunk_text:
-                        yield self._format_sse_chunk("content", chunk_text)
-
-                    if server_content.get("turnComplete"):
-                        break
-        except Exception as e:
-            safe_ws_url = self._mask_google_url(ws_url)
-            logger.error("Google Live streaming failed (url=%s): %s", safe_ws_url, e)
-            yield self._format_sse_chunk("content", f"Google Live streaming error (url={safe_ws_url}): {e}")
 
     async def get_response(self, prompt: str, temperature: float = 0.7) -> str:
         response = await self.get_response_with_reasoning(prompt, temperature)
@@ -874,21 +339,6 @@ class LLMService:
         final_model = model_override or cfg.api.model
         final_base = api_base_override or cfg.api.base_url
         final_api_key = api_key_override or cfg.api.api_key
-        protocol = self._resolve_protocol(provider_hint=provider_hint, api_base=final_base)
-
-        if protocol == self.PROTOCOL_GOOGLE_GENERATE:
-            try:
-                return await self._call_google_generate_content(
-                    messages=messages,
-                    temperature=temperature,
-                    model=final_model,
-                    api_key=final_api_key,
-                    api_base=final_base,
-                )
-            except Exception as e:
-                safe_error = self._sanitize_litellm_error_text(e)
-                logger.error("Google chat call failed: %s", safe_error)
-                return LLMResponse(content=f"Google API call error: {safe_error}")
 
         try:
             model_name = final_model
@@ -915,7 +365,7 @@ class LLMService:
                 max_tokens=cfg.api.max_tokens if hasattr(cfg.api, "max_tokens") else None,
                 **compat_params,
                 **provider_params,
-                **self._get_litellm_params(final_api_key, final_base, protocol),
+                **self._get_litellm_params(final_api_key, final_base),
             )
             message = response.choices[0].message
             return LLMResponse(
@@ -1136,56 +586,10 @@ class LLMService:
             final_base = cfg.api.base_url
             final_api_key = cfg.api.api_key
 
-        protocol = self._resolve_protocol(api_base=final_base)
-        if protocol == self.PROTOCOL_GOOGLE_GENERATE:
-            if tools:
-                msg = (
-                    "当前模型路由不支持原生 function calling（Google protocol path）。"
-                    "请切换到支持 tools/function-calling 的 OpenAI-compatible 模型。"
-                )
-                logger.error("[LLM] %s", msg)
-                yield self._format_sse_chunk(
-                    "tool_calls",
-                    json.dumps(
-                        [
-                            {
-                                "id": "tool_protocol_not_supported",
-                                "name": "",
-                                "arguments": {},
-                                "arguments_raw": "",
-                                "parse_error": msg,
-                            }
-                        ],
-                        ensure_ascii=False,
-                    ),
-                )
-                return
-            if self._is_google_live_enabled():
-                logger.info("[LLM] Google stream route: BidiGenerateContent (Live API)")
-                async for chunk in self._stream_google_bidi_generate_content(
-                    messages=messages,
-                    temperature=temperature,
-                    model=final_model,
-                    api_key=final_api_key,
-                    api_base=final_base,
-                ):
-                    yield chunk
-            else:
-                logger.info("[LLM] Google stream route: streamGenerateContent (SSE)")
-                async for chunk in self._stream_google_generate_content(
-                    messages=messages,
-                    temperature=temperature,
-                    model=final_model,
-                    api_key=final_api_key,
-                    api_base=final_base,
-                ):
-                    yield chunk
-            return
-
         for attempt in range(max_attempts):
             try:
                 model_name = self._get_model_name(model=final_model, base_url=final_base)
-                llm_params = self._get_litellm_params(final_api_key, final_base, protocol)
+                llm_params = self._get_litellm_params(final_api_key, final_base)
                 timeout_seconds = getattr(cfg.api, "request_timeout", 120)
                 normalized_temperature, compat_params = self._normalize_openai_params_for_model(
                     model_name=model_name,
@@ -1349,3 +753,5 @@ async def llm_chat(request: Dict[str, Any]):
     except Exception as e:
         logger.error("LLM chat endpoint error: %s", e)
         raise HTTPException(status_code=500, detail=f"LLM service error: {e}")
+
+

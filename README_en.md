@@ -30,7 +30,7 @@ NagaAgent consists of four independent microservices:
 | Service | Port | Responsibilities |
 |---------|------|-----------------|
 | **API Server** | 8000 | Chat, streaming tool calls, document upload, auth proxy, memory API, config management |
-| **Agent Server** | 8001 | Background intent analysis, OpenClaw integration, task scheduling with compressed memory |
+| **Agent Server** | 8001 | Background intent analysis, task scheduling with compressed memory |
 | **MCP Server** | 8003 | MCP tool registration / discovery / parallel dispatch |
 | **Voice Service** | 5048 | TTS (Edge-TTS) + ASR (FunASR) + Realtime voice (Qwen Omni) |
 
@@ -42,7 +42,7 @@ NagaAgent consists of four independent microservices:
 
 | Date | Changes |
 |------|---------|
-| **2026-02-19** | Core Architecture Refactoring: Introduced Autonomous SDLC framework (with Lease/Fencing); Native structured tool_calls fully take over the execution layer; OpenClaw enters standby/degraded mode |
+| **2026-02-19** | Core Architecture Refactoring: Introduced Autonomous SDLC framework (with Lease/Fencing); Native structured tool_calls fully take over the execution layer |
 | **2026-02-14** | 5.0.0 Release: Remote memory microservice (NagaMemory Cloud + Local GRAG fallback), MindView 3D rewrite, startup title animation |
 | **2026-02-14** | Captcha integration, registration flow (username + email + captcha), CAS session expiration dialog, voice input button, file parsing button |
 | **2026-02-14** | Removed local ChromaDB dependency (-1119 lines), complete cloud migration of game guide, added login gating to guide function |
@@ -50,12 +50,12 @@ NagaAgent consists of four independent microservices:
 | **2026-02-13** | Skill workshop refactor + Live2D emotion channel independent + naga-config skill |
 | **2026-02-12** | NagaCAS authentication + NagaModel gateway routing + login dialog + user menu |
 | **2026-02-12** | Live2D 4-channel orthogonal animation (body state / actions / emotions / tracking), window-level gaze tracking with calibration |
-| **2026-02-12** | Agentic Tool Loop: streaming tool extraction + multi-round auto-execution + parallel MCP/OpenClaw/Live2D dispatch |
+| **2026-02-12** | Agentic Tool Loop: streaming tool extraction + multi-round auto-execution + parallel MCP/Native/Live2D dispatch |
 | **2026-02-12** | Arknights-style splash screen + progress tracking + view preloading + mouse parallax effect |
 | **2026-02-12** | Game guide MCP integration (auto-screenshot + vision model + Neo4j import + 6 game RAG processors) |
-| **2026-02-11** | Embedded OpenClaw packaging, auto-generate config from template on startup |
+| **2026-02-11** | Backend packaging optimization, auto-generate config from template on startup |
 | **2026-02-10** | Backend packaging optimization, skill workshop MCP status fix, frontend bug fixes |
-| **2026-02-09** | Frontend refactor, Live2D eye tracking disable, OpenClaw renamed to AgentServer |
+| **2026-02-09** | Frontend refactor, Live2D eye tracking disable, AgentServer naming alignment |
 
 ---
 
@@ -79,7 +79,6 @@ LLM Stream Output (content/reasoning) ──SSE──▶ Real-time Frontend Disp
 AgenticLoop converts calls into actionable execution arrays (with concurrency limits)
     ├─ mcp      → MCPManager.unified_call()
     ├─ native   → Local-first NativeToolExecutor (Intercepts e.g., 'cd' to 'get_cwd', enforcing Sandbox rules)
-    ├─ openclaw → Degraded to standby/fallback state
     └─ live2d   → UI Fire-and-forget signal
             │
             ▼
@@ -163,7 +162,7 @@ mcpserver/
 
 - `MCPManager.unified_call(service_name, tool_call)` routes to the agent's `handle_handoff()`
 - MCP Server `POST /schedule` supports batch calls via `asyncio.gather()` for parallel execution
-- **Skill Market**: Frontend skill workshop supports one-click installation of community skills (Agent Browser, Brainstorming, Context7, Firecrawl Search, etc.), backend `GET /openclaw/market/items` + `POST /openclaw/market/items/{id}/install`
+- **Skill Market**: Frontend skill workshop supports one-click installation of community skills (Agent Browser, Brainstorming, Context7, Firecrawl Search, etc.), backend uses `/skills/import` for custom skill import
 
 Source: [`mcpserver/`](mcpserver/)
 
@@ -241,7 +240,7 @@ Source: [`voice/`](voice/)
 ### Agent Server & Autonomous (The Rise of the SDLC Agent)
 
 **Background Context**:
-The traditional Agent Server (`BackgroundAnalyzer`) was dedicated to extracting and scheduling `openclaw` instructions for tasks. However, in the latest architecture, OpenClaw has **entered a degraded/standby state** due to heavy coupling and inefficiency in its Node.js Runtime. The core execution is now actively intercepted by the built-in `native` tools.
+The Agent Server (`BackgroundAnalyzer`) now focuses on background intent analysis and task scheduling. Execution is unified through structured `tool_calls` with native/MCP dispatch.
 
 **Brand-New Autonomous Module** (Located in `autonomous/`):
 This supersedes legacy routing with a robust, highly-automated SDLC (Software Development Life Cycle) architecture tailored for complex software engineering:
@@ -524,11 +523,10 @@ Electron frontend Live2D config:
 | Service | Port | Description |
 |---------|------|-------------|
 | API Server | 8000 | Main interface: chat, config, auth, Skill Market |
-| Agent Server | 8001 | Intent analysis, task scheduling, OpenClaw |
+| Agent Server | 8001 | Intent analysis, task scheduling |
 | MCP Server | 8003 | MCP tool registration & dispatch |
 | Voice Service | 5048 | TTS / ASR |
 | Neo4j | 7687 | Knowledge graph (optional) |
-| OpenClaw Gateway | 18789 | AI coding assistant (optional) |
 
 ---
 

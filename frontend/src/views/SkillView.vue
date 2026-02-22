@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { CodexMcpSetupResponse, MarketItem } from '@/api/core'
+import type { CodexMcpSetupResponse } from '@/api/core'
 import { useStorage } from '@vueuse/core'
 import { Accordion } from 'primevue'
 import { computed, ref } from 'vue'
@@ -87,37 +87,13 @@ async function onMcpConfirm(data: { name: string, config: Record<string, any> })
   }
 }
 
-// ── 技能仓库 ──
-const skills = ref<MarketItem[]>([])
-const installing = ref<string | null>(null)
+// ── 技能管理 ──
 const showSkillDialog = ref(false)
-
-API.getMarketItems().then((res) => {
-  skills.value = res.items ?? []
-}).catch(() => {})
-
-async function installItem(item: MarketItem) {
-  installing.value = item.id
-  try {
-    await API.installMarketItem(item.id)
-    item.installed = true
-  }
-  catch (e: any) {
-    alert(`安装失败: ${e.message}`)
-  }
-  finally {
-    installing.value = null
-  }
-}
 
 async function onSkillConfirm(data: { name: string, content: string }) {
   try {
     await API.importCustomSkill(data.name, data.content)
     showSkillDialog.value = false
-    // Refresh skills list
-    API.getMarketItems().then((res) => {
-      skills.value = res.items ?? []
-    }).catch(() => {})
   }
   catch (e: any) {
     alert(`导入失败: ${e.message}`)
@@ -197,30 +173,15 @@ async function onSkillConfirm(data: { name: string, content: string }) {
         </div>
       </ConfigGroup>
 
-      <!-- 技能仓库 -->
-      <ConfigGroup value="skills" header="技能仓库">
+      <!-- 技能管理 -->
+      <ConfigGroup value="skills" header="技能管理">
         <div class="grid gap-3">
-          <div v-for="item in skills" :key="item.id" class="skill-item">
+          <div class="skill-item">
             <div class="flex-1 min-w-0">
-              <div class="font-bold text-sm text-white">{{ item.title }}</div>
-              <div class="text-xs op-50 truncate">{{ item.description }}</div>
-            </div>
-            <div class="ml-3 shrink-0">
-              <span v-if="item.installed" class="text-green-400 text-xs font-bold">已安装</span>
-              <button
-                v-else-if="installing === item.id"
-                class="px-2 py-1 bg-white/10 rounded text-xs op-50 cursor-wait"
-                disabled
-              >
-                安装中...
-              </button>
-              <button
-                v-else
-                class="px-2 py-1 bg-white/10 hover:bg-white/20 rounded text-xs transition"
-                @click="installItem(item)"
-              >
-                安装
-              </button>
+              <div class="font-bold text-sm text-white">本地自定义技能</div>
+              <div class="text-xs op-50">
+                通过右下角按钮导入自定义 `SKILL.md` 内容，写入本地 skills 目录。
+              </div>
             </div>
           </div>
           <button class="add-btn" @click="showSkillDialog = true">

@@ -21,7 +21,7 @@
 - TTS 直接打本地语音服务端口，绕过 API 层，见 `frontend/src/utils/tts.ts:13`。
 
 3. 边界耦合（BFF 与业务编排混在 `apiserver`）
-- `apiserver` 同时承载聊天、配置、上传、MCP 接入、OpenClaw 转发等职责，路由规模较大（46 个）。
+- `apiserver` 同时承载聊天、配置、上传、MCP 接入、AgentServer 转发等职责，路由规模较大（46 个）。
 - 对 `agentserver` 采用本地 HTTP 转发，见 `apiserver/api_server.py:128`、`apiserver/api_server.py:140`。
 - 存在 API 内部对自身 `localhost` 回环调用，见 `apiserver/api_server.py:2080`、`apiserver/api_server.py:2115`、`apiserver/api_server.py:2155`。
 
@@ -30,7 +30,7 @@
 - `apiserver` 中 MCP 代理注释标注为“已移除”，并返回离线占位结果，见 `apiserver/api_server.py:1134`、`apiserver/api_server.py:1147`、`apiserver/api_server.py:1159`。
 
 5. Agent 侧半解耦状态
-- `main.py` 将 Agent(OpenClaw) 标记为“已禁用自动启动”，见 `main.py:237`。
+- `main.py` 将 Agent(AgentServer) 标记为“已禁用自动启动”，见 `main.py:237`。
 - 但前端仍保留 `agent.ts` 客户端与端口配置逻辑，见 `frontend/src/api/agent.ts:62`、`frontend/src/utils/config.ts:2`、`frontend/src/utils/config.ts:360`。
 - `agent.ts` 里声明了 `/tools`、`/toolkits` 等接口，见 `frontend/src/api/agent.ts:15`、`frontend/src/api/agent.ts:23`；当前前端业务并未实际引用该客户端（仅 `config.ts` 调端口 setter）。
 
@@ -53,7 +53,7 @@
 - 领域层：
   - 对话与编排：`apiserver` + `agentic_tool_loop`
   - 工具执行：`mcpserver`（内部调用）
-  - 任务调度与 OpenClaw：`agentserver`（内部调用）
+  - 任务调度与 AgentServer：`agentserver`（内部调用）
   - 记忆：`summer_memory`
   - 语音：`voice`
 - 运维层：统一日志、指标、追踪、鉴权
@@ -99,7 +99,7 @@
 
 - 给外部接口统一前缀（建议 `/api/v1`），保留兼容别名一段时间。
 - 统一响应结构与错误码（至少覆盖 chat/stream、session、config、skill/mcp）。
-- 将 OpenClaw / MCP 的前端查询接口固定为 BFF 聚合接口，前端不感知后端细分服务。
+- 将 AgentServer / MCP 的前端查询接口固定为 BFF 聚合接口，前端不感知后端细分服务。
 - 梳理并删除“离线占位”与“已移除但仍在运行”的冲突逻辑（MCP 相关）。
 
 验收标准：
@@ -160,7 +160,7 @@
 主要风险：
 - 聊天流（SSE）在反向代理链路被缓冲。
 - 现有本地化假设较多（localhost、自启动、local-only auth）。
-- OpenClaw/MCP 当前处于过渡态，接口语义不完全稳定。
+- AgentServer/MCP 当前处于过渡态，接口语义不完全稳定。
 
 回滚策略：
 - 路由级开关：新旧前缀并行一段时间。
@@ -175,4 +175,5 @@
 4. 统一 MCP 真实运行策略（去掉“注释说移除、实际仍启动”的漂移）。
 5. 让 `config` 模型与 `config.json` 字段同构，消除隐式端口同步黑箱。
 6. 收敛 CORS 与认证策略，准备跨域部署。
+
 

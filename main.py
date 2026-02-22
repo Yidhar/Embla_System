@@ -198,7 +198,7 @@ class ServiceManager:
             return False
 
     def start_all_servers(self):
-        """并行启动所有服务：API(可选)、MCP、TTS（不自动启动 OpenClaw/Agent）"""
+        """并行启动所有服务：API(可选)、MCP、TTS（不自动启动 Agent Server）"""
         print("🚀 正在并行启动所有服务...")
         print("=" * 50)
         threads = []
@@ -233,8 +233,8 @@ class ServiceManager:
                 print(f"⚠️  MCP服务器: 端口 {get_server_port('mcp_server')} 已被占用，跳过启动")
                 service_status['MCP'] = "端口占用"
 
-            # OpenClaw/Agent 服务不再随主进程自动启动
-            service_status['Agent(OpenClaw)'] = "已禁用自动启动"
+            # Agent Server 服务不再随主进程自动启动
+            service_status['AgentServer'] = "已禁用自动启动"
 
             # TTS服务器
             if port_checks['tts']:

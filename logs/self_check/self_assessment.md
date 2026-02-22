@@ -38,7 +38,7 @@
 - Python 执行链：smoke + compileall ✅
 - MCP：至少 2 个服务调用 ✅
 - Lint/Test：在当前 venv 未安装依赖，无法验证 ⚠️
-- OpenClaw（联网/浏览器自动化）：本轮未测（可按需补测）
+- AgentServer（联网/浏览器自动化）：本轮未测（可按需补测）
 - Live2D 动作：本轮未测（可按需补测）
 
 ## 7. 建议的下一步（可选，我可以继续自动跑）
@@ -68,7 +68,7 @@
 ### 8.3 Pytest（测试）
 - 运行：`pytest -q`
 - 结果：**测试收集阶段失败**（import file mismatch）❌
-- 原因：仓库内包含打包产物目录（如 `frontend/backend-dist/.../_internal/...` 与 `frontend/release/win-unpacked/.../_internal/...`），其中存在与源码同名模块 `agentserver.openclaw.test_connection`，导致 pytest 发现同名模块路径不一致。
+- 原因：仓库内包含打包产物目录（如 `frontend/backend-dist/.../_internal/...` 与 `frontend/release/win-unpacked/.../_internal/...`），其中存在与源码同名模块 `agentserver.AgentServer.test_connection`，导致 pytest 发现同名模块路径不一致。
 - 建议：在 `pytest.ini` / `pyproject.toml [tool.pytest.ini_options]` 中加入 `norecursedirs` 或 `--ignore`，排除 `frontend/backend-dist`、`frontend/release`、`build` 等构建产物目录；或将这些产物移出仓库/改名。
 
 ## 9. 更新后的结论
@@ -79,11 +79,11 @@
   - Pytest：❌ 因构建产物导致收集失败（需先修 pytest 收集配置）
 
 ## 8. Pytest 门禁修复（追加：pytest 收集范围治理）
-- 问题：pytest 默认收集到了打包产物目录与 node_modules 内第三方测试，以及 OpenClaw 联调脚本，导致 collection/fixture/外部依赖失败。
+- 问题：pytest 默认收集到了打包产物目录与 node_modules 内第三方测试，以及 AgentServer 联调脚本，导致 collection/fixture/外部依赖失败。
 - 修复：在 `pyproject.toml` 添加/修正 `[tool.pytest.ini_options]`：
   - `testpaths = ["autonomous/tests"]`
   - `norecursedirs` 排除 `frontend/backend-dist`、`frontend/release`、`frontend/node_modules`、`node_modules` 等
-  - `addopts = "-q --ignore=agentserver/openclaw/test_connection.py"`
+  - `addopts = "-q --ignore=agentserver/AgentServer/test_connection.py"`
 - 验证：`pytest -q` 输出 `........ [100%]` 且 exit_code=0 ✅
 
 ## Codex CLI + MCP(cexll) 工具自检（2026-02-20）
@@ -103,3 +103,4 @@
 ### 结论
 - MCP server 可启动、可连接、可调用、返回体可解析：**通过**
 - Auth=Unsupported：该 server 不走 codex login/logout 授权流，属于预期现象或需另行通过环境变量/外部配置鉴权（视后续工具而定）。
+

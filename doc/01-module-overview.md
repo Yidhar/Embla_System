@@ -20,7 +20,7 @@
 - `apiserver/`
   - 面向前端的主 API，包含聊天流、会话、上传、记忆、技能市场等接口。
 - `agentserver/`
-  - OpenClaw 与任务调度服务，承接需要执行工具/自动化的任务。
+  - AgentServer 与任务调度服务，承接需要执行工具/自动化的任务。
 - `mcpserver/`
   - MCP 工具注册与统一调度服务，支持独立 HTTP 调用与进程内调用。
 - `summer_memory/`
@@ -75,7 +75,7 @@
 3. 通过 `agentic_tool_loop` 执行多轮工具调用。
 4. 工具调用可走：
    - `mcpserver`（MCP 工具）
-   - `agentserver`（OpenClaw 执行）
+   - `agentserver`（AgentServer 执行）
 5. 结果回流到 API 流式输出给前端。
 
 关键入口：
@@ -84,7 +84,7 @@
 - `apiserver/api_server.py:969` `run_agentic_loop`
 - `mcpserver/mcp_server.py:65` `@app.post("/schedule")`
 - `agentserver/agent_server.py:449` `@app.post("/schedule")`
-- `agentserver/agent_server.py:855` `@app.post("/openclaw/send")`
+- `agentserver/agent_server.py:855` `@app.post("/AgentServer/send")`
 
 ## 4. 端口与通信
 
@@ -161,3 +161,4 @@
 - 系统代理支持“按配置启用 + Windows 注册表代理同步到进程环境”的组合策略，避免仅靠 `HTTP(S)_PROXY` 导致误判。
 
 详细配置、日志解释与排障步骤参见：`doc/04-api-protocol-proxy-guide.md`。
+

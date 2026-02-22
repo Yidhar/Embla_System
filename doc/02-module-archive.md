@@ -79,21 +79,21 @@
 模块：`agentserver/`
 
 - 职责
-  - OpenClaw 客户端治理与任务调度。
+  - AgentServer 客户端治理与任务调度。
   - 管理任务步骤、压缩记忆、会话维度任务状态。
-  - 提供 OpenClaw 健康检查、安装、配置、历史查询等接口。
+  - 提供 AgentServer 健康检查、安装、配置、历史查询等接口。
 - 关键文件
   - `agentserver/agent_server.py`
   - `agentserver/task_scheduler.py`
-  - `agentserver/openclaw/openclaw_client.py`
-  - `agentserver/openclaw/embedded_runtime.py`
-  - `agentserver/openclaw/installer.py`
+  - `agentserver/AgentServer/AgentServer_client.py`
+  - `agentserver/AgentServer/embedded_runtime.py`
+  - `agentserver/AgentServer/installer.py`
 - 输入
   - 来自 API/后台分析器的调度请求
 - 输出
-  - OpenClaw 执行结果与任务状态
+  - AgentServer 执行结果与任务状态
 - 风险点
-  - OpenClaw 运行时来源（全局/内嵌）切换复杂
+  - AgentServer 运行时来源（全局/内嵌）切换复杂
   - 外部网关不可用时的恢复逻辑复杂
 
 ### 2.5 MCP 工具层
@@ -203,14 +203,14 @@
 
 - 职责
   - Windows 一键构建，集成 PyInstaller 与 Electron Builder。
-  - 内嵌 OpenClaw 运行时资源准备。
+  - 内嵌 AgentServer 运行时资源准备。
 - 关键文件
   - `scripts/build-win.py`
   - `frontend/electron-builder.yml`
   - `naga-backend.spec`
 - 风险点
   - 打包体积大，构建链条长，失败定位成本高
-  - 内嵌依赖版本（Node/OpenClaw）更新需要联动验证
+  - 内嵌依赖版本（Node/AgentServer）更新需要联动验证
 
 ### 2.11 模型协议与代理治理
 
@@ -239,7 +239,7 @@
 
 1. `frontend` -> 调用 -> `apiserver`
 2. `apiserver` -> 调用 -> `agentserver` / `mcpserver` / `summer_memory` / `guide_engine`
-3. `agentserver` -> 调用 -> `openclaw gateway`
+3. `agentserver` -> 调用 -> `AgentServer gateway`
 4. `apiserver` 与 `agentserver` 均依赖 `system` 配置与工具能力
 5. `voice` 既可被 API 层调用，也可独立作为语音服务
 
@@ -248,3 +248,4 @@
 1. 新增一级目录时，同步补充本文件对应章节。
 2. 新增对外路由时，在模块章节里补充入口文件与接口族。
 3. 对重构项（特别是前端替换）在 `doc/03-qt-migration-assessment.md` 追加影响评估。
+

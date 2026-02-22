@@ -15,7 +15,7 @@
 5. `doc/05-dev-startup-and-index.md`
    - `frontend` `npm run dev` 启动流程、模块目录索引、排障清单。
 6. `doc/06-structured-tool-calls-and-local-first-native.md`
-   - 结构化 `tool_calls` 主链路说明（LLM -> Loop）、Local-first（OpenClaw -> Native）拦截策略，以及 `cwd/pwd -> get_cwd` 修复记录。
+   - 结构化 `tool_calls` 主链路说明（LLM -> Loop）、Local-first（AgentServer -> Native）拦截策略，以及 `cwd/pwd -> get_cwd` 修复记录。
 7. `doc/07-autonomous-agent-sdlc-architecture.md`
    - 无人值守自治迭代架构文档（借鉴多 Agent 框架思想但不依赖其库），包含状态机、时序图、记忆治理与自动发布回滚策略。
 8. `doc/09-工具调用与任务执行规范.md`
@@ -31,3 +31,4 @@
 
 ## Additional Runbook
 - `doc/05-dev-startup-and-index.md`: `frontend` `npm run dev` startup flow, module directory index, and troubleshooting checklist.
+

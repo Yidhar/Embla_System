@@ -98,16 +98,6 @@ export function chatStream(content: string, options?: { skill?: string, images?:
         message.content = chunk.text || ''
         spokenContent = chunk.text || ''
       }
-      else if (chunk.type === 'model_output') {
-        if (chunk.placeholder) {
-          const roundLabel = chunk.round ? `R${chunk.round}` : 'R?'
-          const text = (chunk.text || '').trim()
-          const label = '模型输出（无正文）'
-          if (text) {
-            message.content += `\n> [${roundLabel}] ${label}: ${text}\n`
-          }
-        }
-      }
       else if (chunk.type === 'tool_calls') {
         // 显示工具调用状态
         const calls = chunk.calls || []
@@ -116,14 +106,6 @@ export function chatStream(content: string, options?: { skill?: string, images?:
           return `🔧 ${name}`
         }).join(', ')
         message.content += `\n\n> 正在执行工具: ${callDesc}...\n`
-        // OpenClaw 工具可能耗时较长，添加提示
-        const hasOpenclaw = calls.some((c: any) => {
-          const name = (c.service_name || c.agentType || '').toLowerCase()
-          return name.includes('openclaw') || name.includes('agent')
-        })
-        if (hasOpenclaw) {
-          message.content += '> ⏳ OpenClaw 工具处理可能会比较久，预计需要两分钟\n'
-        }
       }
       else if (chunk.type === 'tool_results') {
         // 显示工具结果摘要
@@ -544,3 +526,4 @@ function stopVoiceInput() {
   50% { opacity: 0.5; }
 }
 </style>
+

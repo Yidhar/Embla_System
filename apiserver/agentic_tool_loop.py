@@ -126,10 +126,6 @@ def _is_retryable_tool_failure(call: Dict[str, Any], result: Dict[str, Any]) -> 
     if bool(call.get("no_retry", False)):
         return False
 
-    agent_type = str(call.get("agentType") or "").strip()
-    if agent_type == "openclaw" and str(call.get("task_type") or "message") != "message":
-        return False
-
     err_text = str(result.get("result", "") or "")
     non_retry_markers = [
         "需要登录",
@@ -577,102 +573,6 @@ async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
             "service_name": service_name,
             "tool_name": tool_name,
         }
-
-
-async def _execute_openclaw_call(call: Dict[str, Any], session_id: str) -> Dict[str, Any]:
-    """执行单个OpenClaw调用"""
-    import httpx
-
-    native_executor = get_native_tool_executor()
-    intercepted_call = native_executor.maybe_intercept_openclaw_call(call, session_id=session_id)
-    if intercepted_call:
-        logger.info(
-            "[AgenticLoop] local-first拦截OpenClaw调用，改为native执行: %s",
-            intercepted_call.get("tool_name", "unknown"),
-        )
-        result = await native_executor.execute(intercepted_call, session_id=session_id)
-        # 保留原始调用，便于诊断
-        result["tool_call"] = call
-        result["service_name"] = "native"
-        return result
-
-    message = call.get("message", "")
-    task_type = call.get("task_type", "message")
-
-    if not message:
-        return {
-            "tool_call": call,
-            "result": "缺少message字段",
-            "status": "error",
-            "service_name": "openclaw",
-            "tool_name": task_type,
-        }
-
-    payload = {
-        "message": message,
-        "session_key": call.get("session_key", f"naga_{session_id}"),
-        "name": "Naga",
-        "wake_mode": "now",
-        "timeout_seconds": 1200,
-    }
-
-    if task_type == "cron" and call.get("schedule"):
-        payload["message"] = f"[定时任务 cron: {call.get('schedule')}] {message}"
-    elif task_type == "reminder" and call.get("at"):
-        payload["message"] = f"[提醒 在 {call.get('at')} 后] {message}"
-
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout=150.0, connect=10.0)) as client:
-            response = await client.post(
-                f"http://localhost:{get_server_port('agent_server')}/openclaw/send",
-                json=payload,
-            )
-            if response.status_code == 200:
-                result_data = response.json()
-                # 先检查 agent_server 返回的 success 标记
-                if not result_data.get("success", True):
-                    error_msg = result_data.get("error") or "OpenClaw任务执行失败"
-                    return {
-                        "tool_call": call,
-                        "result": f"联网搜索失败: {error_msg}",
-                        "status": "error",
-                        "service_name": "openclaw",
-                        "tool_name": task_type,
-                    }
-                # agent_server 返回两个字段：replies(列表，异步轮询时填充) 和 reply(字符串，同步完成时填充)
-                replies = result_data.get("replies") or []
-                if replies:
-                    combined = "\n".join(replies)
-                elif result_data.get("reply"):
-                    combined = result_data["reply"]
-                else:
-                    combined = "任务已提交，暂无返回结果"
-                return {
-                    "tool_call": call,
-                    "result": combined,
-                    "status": "success",
-                    "service_name": "openclaw",
-                    "tool_name": task_type,
-                }
-            else:
-                return {
-                    "tool_call": call,
-                    "result": f"HTTP {response.status_code}: {response.text[:200]}",
-                    "status": "error",
-                    "service_name": "openclaw",
-                    "tool_name": task_type,
-                }
-    except Exception as e:
-        logger.error(f"[AgenticLoop] OpenClaw调用失败: {e}")
-        return {
-            "tool_call": call,
-            "result": f"调用失败: {e}",
-            "status": "error",
-            "service_name": "openclaw",
-            "tool_name": task_type,
-        }
-
-
 async def _execute_native_call(call: Dict[str, Any], session_id: str) -> Dict[str, Any]:
     """执行单个本地native调用"""
     executor = get_native_tool_executor()
@@ -712,8 +612,6 @@ async def _execute_single_tool_call(call: Dict[str, Any], session_id: str) -> Di
         return await _execute_mcp_call(call)
     if agent_type == "native":
         return await _execute_native_call(call, session_id)
-    if agent_type == "openclaw":
-        return await _execute_openclaw_call(call, session_id)
 
     logger.warning(f"[AgenticLoop] 未知agentType: {agent_type}, 跳过: {call}")
     return {
@@ -969,25 +867,6 @@ def get_agentic_tool_definitions() -> List[Dict[str, Any]]:
         {
             "type": "function",
             "function": {
-                "name": "openclaw_call",
-                "description": "Invoke OpenClaw for web/browser/cross-app tasks.",
-                "parameters": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "task_type": {"type": "string", "enum": ["message", "cron", "reminder"]},
-                        "message": {"type": "string"},
-                        "session_key": {"type": "string"},
-                        "schedule": {"type": "string"},
-                        "at": {"type": "string"},
-                    },
-                    "required": ["message"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
                 "name": "live2d_action",
                 "description": "Trigger Live2D UI action.",
                 "parameters": {
@@ -1084,26 +963,6 @@ def _convert_structured_tool_calls(
                 arg_payload.setdefault("approvalPolicy", "on-failure")
             merged_call.update(arg_payload)
             actionable_calls.append(merged_call)
-            continue
-
-        if tool_name == "openclaw_call":
-            message = str(args.get("message") or "").strip()
-            if not message:
-                validation_errors.append(f"openclaw_call 缺少 message: id={call_id}")
-                continue
-            openclaw_call = {
-                "agentType": "openclaw",
-                "task_type": str(args.get("task_type") or "message"),
-                "message": message,
-                "_tool_call_id": call_id,
-            }
-            if args.get("session_key"):
-                openclaw_call["session_key"] = args["session_key"]
-            if args.get("schedule"):
-                openclaw_call["schedule"] = args["schedule"]
-            if args.get("at"):
-                openclaw_call["at"] = args["at"]
-            actionable_calls.append(openclaw_call)
             continue
 
         if tool_name == "live2d_action":
@@ -1956,3 +1815,4 @@ async def run_agentic_loop(
         if verify_success_event:
             yield verify_success_event
         yield _format_sse_event("round_end", {"round": summary_round, "has_more": False})
+

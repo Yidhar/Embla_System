@@ -5,7 +5,7 @@ Native local tools for agentic loop.
 
 Goal:
 - Handle basic local tasks inside NagaAgent directly.
-- Keep OpenClaw for heavier cross-app/browser/cloud workflows.
+- Execute native local tools only.
 """
 
 from __future__ import annotations
@@ -233,7 +233,7 @@ BLOCKED_NAMES = set({_BLOCKED_PY_NAMES!r})
 def _validate(tree):
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
-            raise ValueError("import 语句不允许，使用预置模块")
+            raise ValueError("import 语句不允许，请使用预置模块")
         if isinstance(node, (ast.Global, ast.Nonlocal)):
             raise ValueError("global/nonlocal 不允许")
         if isinstance(node, ast.Attribute):
@@ -304,159 +304,7 @@ class NativeToolExecutor:
             "docs",
             "README.md",
             "README_en.md",
-            "agentserver/openclaw/README.md",
         ]
-
-    def maybe_intercept_openclaw_call(self, call: Dict[str, Any], session_id: str) -> Optional[Dict[str, Any]]:
-        """Map simple openclaw message tasks to local native tools."""
-        if (call.get("agentType") or "").strip() != "openclaw":
-            return None
-
-        message = str(call.get("message") or "").strip()
-        if not message:
-            return None
-
-        lowered = message.lower()
-
-        remote_markers = [
-            "http://",
-            "https://",
-            "网页",
-            "浏览器",
-            "联网",
-            "internet",
-            "google",
-            "bing",
-            "bilibili",
-            "open website",
-            "web search",
-        ]
-        if any(marker in lowered for marker in remote_markers):
-            return None
-
-        cwd_markers = ["cwd", "当前工作目录", "工作目录", "pwd"]
-        if any(marker in lowered for marker in cwd_markers):
-            return {
-                "agentType": "native",
-                "tool_name": "get_cwd",
-                "_intercepted_from": "openclaw",
-            }
-
-        if "git status" in lowered:
-            return {
-                "agentType": "native",
-                "tool_name": "git_status",
-                "_intercepted_from": "openclaw",
-            }
-        if "git diff" in lowered:
-            return {
-                "agentType": "native",
-                "tool_name": "git_diff",
-                "_intercepted_from": "openclaw",
-            }
-        if "git log" in lowered:
-            return {
-                "agentType": "native",
-                "tool_name": "git_log",
-                "_intercepted_from": "openclaw",
-            }
-        if "git blame" in lowered:
-            return {
-                "agentType": "native",
-                "tool_name": "git_blame",
-                "_intercepted_from": "openclaw",
-            }
-        if "git grep" in lowered:
-            return {
-                "agentType": "native",
-                "tool_name": "git_grep",
-                "_intercepted_from": "openclaw",
-            }
-
-        cmd_markers = [
-            "执行命令",
-            "运行命令",
-            "终端执行",
-            "运行指令",
-            "run command",
-            "execute command",
-            "shell",
-            "powershell",
-            "cmd",
-        ]
-        if any(marker in lowered for marker in cmd_markers):
-            command = _extract_command_candidate(message)
-            if command and self.executor.is_safe_command(command):
-                return {
-                    "agentType": "native",
-                    "tool_name": "run_cmd",
-                    "command": command,
-                    "_intercepted_from": "openclaw",
-                }
-
-        read_markers = ["读取文件", "查看文件", "打开文件", "read file", "cat "]
-        if any(marker in lowered for marker in read_markers):
-            paths = _extract_path_candidates(message)
-            if paths:
-                return {
-                    "agentType": "native",
-                    "tool_name": "read_file",
-                    "path": paths[0],
-                    "_intercepted_from": "openclaw",
-                }
-
-        write_markers = ["写入文件", "保存到", "创建文件", "覆盖文件", "append to", "write file"]
-        if any(marker in lowered for marker in write_markers):
-            paths = _extract_path_candidates(message)
-            quoted = _extract_quoted_segments(message)
-            content = None
-            for seg in quoted:
-                if not _looks_like_path(seg):
-                    content = seg
-                    break
-            if paths and content is not None:
-                return {
-                    "agentType": "native",
-                    "tool_name": "write_file",
-                    "path": paths[0],
-                    "content": content,
-                    "mode": "overwrite",
-                    "_intercepted_from": "openclaw",
-                }
-
-        search_markers = [
-            "关键词",
-            "关键字",
-            "搜索",
-            "查找",
-            "grep",
-            "rg ",
-            "search keyword",
-            "keyword search",
-            "find keyword",
-        ]
-        if any(marker in lowered for marker in search_markers):
-            keyword = _extract_first_keyword(message)
-            if keyword:
-                return {
-                    "agentType": "native",
-                    "tool_name": "search_keyword",
-                    "keyword": keyword,
-                    "search_path": ".",
-                    "_intercepted_from": "openclaw",
-                }
-
-        doc_markers = ["文档查询", "查阅文档", "在文档中", "readme", "docs", "doc/"]
-        if any(marker in lowered for marker in doc_markers):
-            query = _extract_first_keyword(message) or message
-            return {
-                "agentType": "native",
-                "tool_name": "query_docs",
-                "query": query,
-                "_intercepted_from": "openclaw",
-            }
-
-        return None
 
     async def execute(self, call: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         tool_name = (call.get("tool_name") or call.get("tool") or "").strip().lower()
@@ -927,9 +775,9 @@ class NativeToolExecutor:
 
         result = await self._run_git(args, call, default_timeout=120)
 
-        # git grep 未匹配时通常返回 1，此场景不算执行错误。
+        # `git grep` typically returns code 1 when there are no matches.
         if result.returncode == 1 and not (result.stdout or "").strip():
-            return f"未匹配到关键词: {pattern}"
+            return f"No matches for: {pattern}"
         if result.returncode != 0:
             return self._format_process_result(result, stdout_limit=18000, stderr_limit=stderr_limit)
 
@@ -1001,7 +849,7 @@ class NativeToolExecutor:
         if not code:
             raise ValueError("python_repl 缺少 code 或 expression")
         if len(code) > 20000:
-            raise ValueError("python_repl code 过长，最大 20000 字符")
+            raise ValueError("python_repl code 过长，最多 20000 字符")
 
         sandbox = str(call.get("sandbox") or "restricted").strip().lower()
         if sandbox not in {"restricted", "docker"}:

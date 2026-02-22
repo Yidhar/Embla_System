@@ -6,29 +6,6 @@ import { ref } from 'vue'
 import { decodeStreamChunk, readerToMessageStream } from '@/utils/encoding'
 import { ACCESS_TOKEN, ApiClient } from './index'
 
-export interface OpenClawStatus {
-  found: boolean
-  version?: string
-  skills_dir: string
-  config_path: string
-  skills_error?: string
-}
-
-export interface MarketItem {
-  id: string
-  title: string
-  description: string
-  skill_name?: string
-  enabled: boolean
-  installed: boolean
-  eligible?: boolean
-  disabled?: boolean
-  missing?: boolean
-  skill_path: string
-  openclaw_visible: boolean
-  install_type: string
-}
-
 export interface CodexMcpSetupRequest {
   serverName?: string
   packageName?: string
@@ -312,25 +289,6 @@ export class CoreApiClient extends ApiClient {
     return this.instance.get(`/memory/quintuples/search?keywords=${encodeURIComponent(keywords)}`)
   }
 
-  getMarketItems(): Promise<{
-    status: 'success'
-    openclaw: OpenClawStatus
-    items: MarketItem[]
-  }> {
-    return this.instance.get('/openclaw/market/items')
-  }
-
-  installMarketItem(itemId: string): Promise<{
-    status: 'success'
-    message: string
-    item: MarketItem
-    openclaw: OpenClawStatus
-  }> {
-    return this.instance.post(`/openclaw/market/items/${itemId}/install`, {}, {
-      timeout: 5 * 60 * 1000,
-    })
-  }
-
   getMcpStatus(): Promise<{
     server: string
     timestamp: string
@@ -382,17 +340,6 @@ export class CoreApiClient extends ApiClient {
     days: number
   }> {
     return this.instance.get(`/logs/context/load?days=${days}`)
-  }
-
-  getOpenclawTasks(): Promise<{
-    status: string
-    tasks: Array<Record<string, any>>
-  }> {
-    return this.instance.get('/openclaw/tasks')
-  }
-
-  getOpenclawTaskDetail(taskId: string): Promise<Record<string, any>> {
-    return this.instance.get(`/openclaw/tasks/${taskId}`)
   }
 
   getMcpTasks(status?: string): Promise<Record<string, any>> {

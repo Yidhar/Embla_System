@@ -112,19 +112,7 @@ Content-Type: application/json
 - 也可以在 GitHub 搜索：`modelcontextprotocol site:github.com`
 - 找到后，用 `POST /mcp/import` 添加对应的 JSON 配置
 
-## 4. 查看技能仓库
-
-```
-GET /openclaw/market/items
-```
-返回所有可安装的技能列表。
-
-### 安装技能市场中的技能
-```
-POST /openclaw/market/items/{item_id}/install
-```
-
-## 5. 导入自定义技能
+## 4. 导入自定义技能
 
 ```
 POST /skills/import
@@ -155,7 +143,7 @@ Content-Type: application/json
 描述期望的输出格式。
 ```
 
-## 6. 查看和修改系统提示词
+## 5. 查看和修改系统提示词
 
 ### 获取当前系统提示词
 ```

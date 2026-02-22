@@ -1,206 +1,97 @@
 # NagaAgent Dev Startup And Directory Index
 
-This document is a practical runbook for local development.
-It focuses on two goals:
+This runbook is a practical, up-to-date guide for local development.
 
-1. Start the full local toolchain quickly.
-2. Find the right module directory fast when debugging.
+## 1. Goals
 
-## 1. Quick Start (Frontend path, all-in-one)
+- Start backend and frontend quickly in dev mode.
+- Know where core modules live and how to troubleshoot common failures.
 
-Run from `frontend`:
+## 2. Quick Start
 
-```powershell
-cd E:\Programs\NagaAgent\frontend
-Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
-npm run dev
-```
-
-Notes:
-
-- `npm run dev` uses `frontend/scripts/dev.mjs`.
-- It starts Vite and Electron-side dev build/watch.
-- It also starts backend headless from project root (`main.py --headless`) via Electron main process.
-- If `5173` is occupied, Vite will auto-switch to another port (for example `5174`).
-
-Why clear `ELECTRON_RUN_AS_NODE`:
-
-- If this env var is `1`, Electron may run as plain Node and fail with errors like:
-  - `The requested module 'electron' does not provide an export named 'BrowserWindow'`
-
-## 2. Alternative Start Modes
-
-### 2.1 Backend only (root)
+### 2.1 Backend (recommended)
 
 ```powershell
 cd E:\Programs\NagaAgent
+uv sync
 uv run main.py
 ```
 
-### 2.2 Backend headless only (root)
+### 2.2 Backend (headless mode for frontend work)
 
 ```powershell
 cd E:\Programs\NagaAgent
 python main.py --headless
 ```
 
-### 2.3 API server only (root)
-
-```powershell
-cd E:\Programs\NagaAgent
-uvicorn apiserver.api_server:app --host 127.0.0.1 --port 8000 --reload
-```
-
-### 2.4 Frontend web-only (no Electron)
+### 2.3 Frontend
 
 ```powershell
 cd E:\Programs\NagaAgent\frontend
-npm run dev:web
+npm install
+npm run dev
 ```
 
-## 3. Directory Index (Top Level)
+## 3. Service Ports
 
-- `main.py`: backend orchestration entry.
-- `apiserver/`: chat API, streaming, tool dispatch.
-- `agentserver/`: intent analysis, task scheduling, OpenClaw integration.
-- `mcpserver/`: MCP registry/manager and built-in MCP agents.
-- `summer_memory/`: GRAG memory and Neo4j integration.
-- `voice/`: TTS/ASR/realtime voice.
-- `guide_engine/`: game-guide RAG and calculators.
+- `API Server`: `8000`
+- `Agent Server`: `8001`
+- `MCP Server`: `8003`
+- `Voice Service`: `5048`
+
+## 4. Module Index
+
+- `main.py`: backend bootstrap and orchestration.
+- `apiserver/`: chat API, streaming responses, tool-loop integration, config APIs.
+- `agentserver/`: background intent analysis, scheduling, session/task state.
+- `mcpserver/`: MCP registry, tool dispatch, service integration.
+- `summer_memory/`: memory graph and persistence integration.
+- `voice/`: TTS/ASR/realtime voice components.
 - `frontend/`: Electron + Vue app.
-- `system/`: config, prompts, logging, environment checks.
-- `scripts/`: build and utility scripts.
-- `logs/`: runtime logs.
-- `sessions/`: session snapshots and conversation state files.
+- `system/`: config, logging, prompt loading, parsing utilities.
 
-## 4. Frontend Directory Index
+## 5. LLM Routing Notes
 
-- `frontend/package.json`: scripts (`dev`, `dev:web`, `build`, `dist`).
-- `frontend/scripts/dev.mjs`: dev launcher for Vite.
-- `frontend/electron/`: Electron main/preload code.
-- `frontend/src/`: Vue renderer code.
-- `frontend/public/`: static assets.
-- `frontend/release/`: packaged output.
-- `frontend/backend-dist/`: backend bundle used by packaged app.
+Current architecture uses OpenAI-compatible chat completions as the unified path.
 
-## 5. OpenClaw Auth/Troubleshooting (401/400)
+For Gemini models, configure OpenAI-compatible base URL (example):
 
-### 5.1 Validate local OpenClaw config
+- `https://generativelanguage.googleapis.com/v1beta/openai/`
 
-Config path:
+Recommended checks:
 
-- `C:\Users\<your-user>\.openclaw\openclaw.json`
+- `config.json` has valid `api.base_url`, `api.api_key`, `api.model`.
+- selected model supports tool/function calling if your workflow depends on tools.
 
-Required fields:
-
-- `hooks.enabled = true`
-- `hooks.token` is present
-- `hooks.allowRequestSessionKey = true`
-- `gateway.auth.token` is present
-
-Important:
-
-- `/hooks/*` endpoints use `hooks.token`
-- `/tools/invoke` uses `gateway.auth.token`
-- These two tokens are usually different. Mixing them will cause `401 Unauthorized`.
-
-### 5.2 Gemini Provider Mode (Fix "400 status code (no body)")
-
-If your Naga model is Gemini, OpenClaw should use the native Gemini API:
-
-- `models.providers.naga.api = "google-generative-ai"`
-- `models.providers.naga.baseUrl = "https://generativelanguage.googleapis.com/v1beta"`
-
-If you configure Gemini via OpenAI-compat (`openai-completions` + `/openai`), OpenClaw may fail during tool calls with:
-
-- `400 status code (no body)`
-
-### 5.3 Quick checks
-
-Check frontend dev env var:
+## 6. Health Checks
 
 ```powershell
-echo $env:ELECTRON_RUN_AS_NODE
-```
-
-Check backend health:
-
-```powershell
+curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8001/health
-curl http://127.0.0.1:8001/openclaw/health
 ```
 
-Run OpenClaw connectivity test (no hardcoded secrets):
+If either endpoint fails:
+
+- verify process is running
+- verify port is not occupied
+- check logs under `logs/details/`
+
+## 7. Tooling Execution Chain (Current)
+
+- LLM emits structured `tool_calls`.
+- `apiserver/agentic_tool_loop.py` parses and validates calls.
+- Native local tools are handled by `apiserver/native_tools.py`.
+- MCP tools are dispatched through `mcpserver/`.
+
+## 8. Troubleshooting Checklist
+
+1. Confirm Python and Node dependencies are installed (`uv sync`, `npm install`).
+2. Confirm backend starts without import/config errors.
+3. Confirm health endpoints return `200`.
+4. Reproduce with minimal prompt and inspect `logs/details/naga-backend.log`.
+5. Run static checks when making large edits:
 
 ```powershell
-cd E:\Programs\NagaAgent
-python agentserver/openclaw/test_connection.py
+python -m py_compile apiserver\llm_service.py apiserver\api_server.py apiserver\native_tools.py
+cd frontend; npx vue-tsc -b --pretty false
 ```
-
-Expected:
-
-- `GET /` returns `200` (HTML is fine).
-- `/hooks/agent` returns `200/202`.
-- The poll step prints a real assistant reply (not `400 status code (no body)`).
-
-### 5.4 sessions_history Visibility (forbidden / empty history)
-
-OpenClaw can enforce `tools.sessions.visibility=tree`.
-
-In that mode, when calling `sessions_history`:
-
-- `POST /tools/invoke` must include a **top-level** `sessionKey`
-- and it must match `args.sessionKey`
-- and it must be the full gateway session key: `agent:<agent_id>:<your_session_key>` (usually `agent:main:...`)
-
-### 5.5 Where To Read OpenClaw Logs (API + Output)
-
-Primary logs:
-
-- `logs/details/openclaw.log`: OpenClaw dedicated file (recommended).
-- `logs/details/naga-backend.log`: full backend debug log (noisier).
-
-What you should see (after `agentserver/openclaw/openclaw_client.py` changes):
-
-- Outbound API call: `POST /hooks/agent` (send message)
-- Outbound API call: `POST /tools/invoke` with `tool=sessions_history` (poll)
-- Response preview: `/hooks/agent response status=... body=...`
-- Response preview: `/tools/invoke response status=... body=...`
-- Parsed assistant meta: `sessions_history assistant_meta=...`
-- Output preview: `sessions_history latest_reply=...`
-
-Structured inspection (no log scraping):
-
-- Agent Server: `GET /openclaw/tasks/{task_id}/detail?include_history=true`
-- Returns local `events` (request/response summaries) and optionally the raw `sessions_history` result.
-- Add `include_tools=true` if you need tool messages / command outputs in history.
-
-## 6. Recommended Daily Workflow
-
-1. Start from `frontend` with:
-   - `Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue`
-   - `npm run dev`
-2. Confirm backend health endpoint returns `200`.
-3. Reproduce and inspect logs in `logs/details/naga-backend.log`.
-4. Stop and restart dev stack after config changes affecting OpenClaw tokens or hooks.
-
-## 7. Local-First Tooling (Native Infrastructure)
-
-`AgenticLoop` now supports a local-first execution path for basic tasks:
-
-- `agentType: "native"` tools:
-  - `read_file`
-  - `write_file`
-  - `run_cmd`
-  - `search_keyword`
-  - `query_docs`
-  - `list_files`
-- Compatibility mode:
-  - If model still outputs `agentType: "openclaw"` for simple local tasks, dispatcher tries to intercept and reroute to native first.
-  - Complex cross-app/web tasks still go to OpenClaw.
-
-Key files:
-
-- `apiserver/native_tools.py`: native tool router/executor and openclaw interception rules.
-- `apiserver/agentic_tool_loop.py`: tool dispatch integration (`native` + local-first interception).
-- `system/native_executor.py`: hardened local command/file executor with project-root sandbox.

@@ -39,7 +39,7 @@ norecursedirs = [
 ]
 
 # Exclude integration / manual scripts that are not pytest-ready.
-addopts = "-q --ignore=agentserver/openclaw/test_connection.py"
+addopts = "-q"
 """.strip("\n")
 
     # Replace existing table if present, else append.

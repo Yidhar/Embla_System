@@ -2,7 +2,7 @@
 """Fix duplicate pytest ini options keys in pyproject.toml.
 
 - Ensures only one `addopts = ...` entry exists under [tool.pytest.ini_options].
-- Keeps the *combined* addopts: -q plus ignore for openclaw integration script.
+- Keeps `addopts = "-q"` as the canonical value.
 
 Idempotent.
 """
@@ -40,7 +40,7 @@ def main() -> int:
     # Remove all existing addopts lines
     section_wo_addopts = [l for l in section if not re.match(r"^\s*addopts\s*=", l)]
 
-    desired_addopts = 'addopts = "-q --ignore=agentserver/openclaw/test_connection.py"'
+    desired_addopts = 'addopts = "-q"'
 
     # Insert addopts as the first non-empty, non-comment line (right after header)
     inserted = False

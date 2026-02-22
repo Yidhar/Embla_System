@@ -21,6 +21,13 @@ import {
 
 let isQuitting = false
 
+// Work around certain Windows GPU drivers failing MediaFoundation encoder
+// probing with E_INVALIDARG (0x80070057), which can spam logs:
+// mf_video_encoder_util.cc "Set output type failed".
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('disable-features', 'ExpandMediaFoundationEncodingResolutions')
+}
+
 // Prevent multiple instances
 const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {

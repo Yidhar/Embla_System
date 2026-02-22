@@ -1,11 +1,8 @@
-"""
-NagaAgent独立服务 - 通过OpenClaw执行任务
-提供意图识别和OpenClaw任务调度功能
-"""
+﻿"""NagaAgent standalone service exports."""
 
-from .agent_server import app, Modules
+from .agent_server import Modules, app
 
 __all__ = [
-    'app',
-    'Modules',
+    "app",
+    "Modules",
 ]

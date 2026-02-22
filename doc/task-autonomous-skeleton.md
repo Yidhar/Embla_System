@@ -81,9 +81,9 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
     - `unified_call("codex-cli", {"tool_name":"ping"})` returns resolved `codex-mcp` + `Pong!`
     - `unified_call("codex-cli", {"tool_name":"ask-codex", ...})` returns expected model response
     - `scripts/dod_check.ps1` still passes after integration
-34. Removed OpenClaw/Agent auto-start from backend bootstrap path (`main.py`):
+34. Removed AgentServer/Agent auto-start from backend bootstrap path (`main.py`):
     - `ServiceManager.start_all_servers()` now starts API/MCP/TTS only
-    - startup plan marks `Agent(OpenClaw)` as disabled instead of spawning thread
+    - startup plan marks `Agent(AgentServer)` as disabled instead of spawning thread
     - `kill_port_occupiers()` no longer force-kills `agent_server` port owners
 35. Added one-click backend API for Codex MCP bootstrap in `apiserver/api_server.py`:
     - new endpoint `POST /mcp/codex/setup` auto-writes `codex-cli` (and optional aliases) to `~/.mcporter/config.json`
@@ -127,13 +127,13 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
 45. Validation for this round:
     - `python -m py_compile apiserver/agentic_tool_loop.py` passed
     - `cd frontend && npm run build` still blocked by pre-existing type issue in `frontend/src/components/LoginDialog.vue` (`accessToken` mismatch), unrelated to this change
-46. Removed OpenClaw call guidance from prompt stack:
-    - `system/prompts/agentic_tool_prompt.txt` removed `openclaw_call` callable/function guidance
-    - `system/prompts/tool_dispatch_prompt.txt` removed OpenClaw coexistence/priority rules
-    - `system/prompts/conversation_analyzer_prompt.txt` removed OpenClaw output schema and all OpenClaw-specific dispatch rules
+46. Removed AgentServer call guidance from prompt stack:
+    - `system/prompts/agentic_tool_prompt.txt` removed `AgentServer_call` callable/function guidance
+    - `system/prompts/tool_dispatch_prompt.txt` removed AgentServer coexistence/priority rules
+    - `system/prompts/conversation_analyzer_prompt.txt` removed AgentServer output schema and all AgentServer-specific dispatch rules
     - prompt policy now routes external/network capabilities via `mcp` services or native tools only
 47. Prompt verification for this round:
-    - `rg -n "(?i)openclaw" system/prompts -S` returned no matches
+    - `rg -n "(?i)AgentServer" system/prompts -S` returned no matches
 48. Added codex-first runtime routing guard for coding tasks:
     - `apiserver/agentic_tool_loop.py` now detects coding requests and uses `tool_choice=required` until codex tool is engaged.
     - mutating native calls (`write_file`, `git_checkout_file`) are blocked before first codex call and replaced with forced `codex-cli/ask-codex`.
@@ -167,3 +167,4 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
 2. Add explicit gate enforcement for `write_repo/deploy/secrets` against `policy/gate_policy.yaml`.
 3. Add MCP availability probe + fallback error taxonomy.
 4. Add observability counters for lease ownership churn, outbox lag, and rollback rate.
+
