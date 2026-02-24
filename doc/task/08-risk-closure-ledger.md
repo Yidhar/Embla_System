@@ -4,12 +4,12 @@
 
 | risk_id | topic | severity | implementation_tasks | verification_tasks | evidence_required | gate | status |
 |---|---|---|---|---|---|---|---|
-| R1 | 命令混淆绕过 | Critical | NGA-WS14-001,NGA-WS14-002 | NGA-WS17-005 | 负向测试报告 + 运行日志 + 回滚/恢复记录 | M1/M2/M5 | review |
+| R1 | 命令混淆绕过 | Critical | NGA-WS14-001,NGA-WS14-002 | NGA-WS17-005 | 负向测试报告 + 运行日志 + 回滚/恢复记录 | M1/M2/M5 | done |
 | R2 | 插件宿主劫持 | Critical | NGA-WS10-003,NGA-WS13-001 | NGA-WS17-003 | 负向测试报告 + 运行日志 + 回滚/恢复记录 | M1/M2/M5 | review |
 | R3 | 锁泄漏与物理层失控 | Critical | NGA-WS14-003,NGA-WS14-004 | NGA-WS17-004 | 负向测试报告 + 运行日志 + 回滚/恢复记录 | M1/M2/M5 | review |
 | R4 | 结构化数据破损 | High | NGA-WS10-001,NGA-WS11-003 | NGA-WS17-003 | 负向测试报告 + 运行日志 + 回滚/恢复记录 | M2/M3/M5 | review |
 | R5 | Test Poisoning | Critical | NGA-WS17-001,NGA-WS17-002 | NGA-WS17-003 | 负向测试报告 + 运行日志 + 回滚/恢复记录 | M1/M2/M5 | review |
-| R6 | ReDoS + 日志轮转假死 | Critical | NGA-WS14-007,NGA-WS14-008 | NGA-WS17-005 | 负向测试报告 + 运行日志 + 回滚/恢复记录 | M1/M2/M5 | review |
+| R6 | ReDoS + 日志轮转假死 | Critical | NGA-WS14-007,NGA-WS14-008 | NGA-WS17-005 | 负向测试报告 + 运行日志 + 回滚/恢复记录 | M1/M2/M5 | done |
 | R7 | ZFS/Btrfs 单依赖 | High | NGA-WS16-001,NGA-WS16-004 | NGA-WS17-006 | 负向测试报告 + 运行日志 + 回滚/恢复记录 | M2/M3/M5 | review |
 | R8 | GC 丢失关键证据 | High | NGA-WS15-001,NGA-WS15-002 | NGA-WS15-006 | 负向测试报告 + 运行日志 + 回滚/恢复记录 | M2/M3/M5 | review |
 | R9 | raw_result_ref 读后即盲 | High | NGA-WS11-002,NGA-WS11-003 | NGA-WS17-003 | 负向测试报告 + 运行日志 + 回滚/恢复记录 | M2/M3/M5 | review |
