@@ -25,6 +25,9 @@
 发布链串接入口（Windows 打包前置门禁）：
 `.\.venv\Scripts\python.exe scripts/build-win.py --phase3-closure`
 
+全量总入口（M0-M7）：
+`.\.venv\Scripts\python.exe scripts/release_closure_chain_full_m0_m7.py`
+
 1. T0 执行 Phase3 回归
 `.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_subagent_runtime_ws21_002.py autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py autonomous/tests/test_subagent_runtime_chaos_ws21_006.py autonomous/tests/test_scaffold_engine_ws21_001.py autonomous/tests/test_contract_negotiation_ws21_004.py autonomous/tests/test_scaffold_verify_pipeline_ws21_005.py autonomous/tests/test_system_agent_subagent_bridge_ws22_001.py autonomous/tests/test_system_agent_lease_guard_ws22_004.py autonomous/tests/test_system_agent_longrun_baseline_ws22_004.py`
 

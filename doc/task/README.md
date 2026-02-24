@@ -83,6 +83,8 @@
     - Phase 3 发布脚本链统一入口（串行执行 T0-T3：回归、长稳、门禁、文档一致性）。
 31. `scripts/release_closure_chain_m0_m5.py`
     - M0-M5 发布收口脚本链统一入口（串行执行 T0-T5：基线、回归、工单产物）。
+32. `scripts/release_closure_chain_full_m0_m7.py`
+    - M0-M7 全量发布收口统一入口（串行执行 M0-M5 + M6-M7 两段门禁链）。
 
 ## 4. 任务状态约定
 

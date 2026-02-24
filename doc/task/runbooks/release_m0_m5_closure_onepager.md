@@ -26,6 +26,9 @@
 统一入口（推荐）：
 `.\.venv\Scripts\python.exe scripts/release_closure_chain_m0_m5.py`
 
+全量总入口（含 Phase3 M6-M7）：
+`.\.venv\Scripts\python.exe scripts/release_closure_chain_full_m0_m7.py`
+
 1. T0 基线校验  
    `python scripts/validate_doc_consistency_ws16_006.py --strict`
 2. T1 安全与运行时回归  
