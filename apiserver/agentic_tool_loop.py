@@ -847,10 +847,18 @@ def _validate_native_call_schema(call_id: str, args: Dict[str, Any]) -> Tuple[st
         errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "run_cmd 缺少 command/cmd"))
 
     if normalized_tool == "artifact_reader":
-        has_ref = bool(_as_nonempty_text(args.get("artifact_id")) or _as_nonempty_text(args.get("raw_result_ref")))
+        has_ref = bool(
+            _as_nonempty_text(args.get("artifact_id"))
+            or _as_nonempty_text(args.get("forensic_artifact_ref"))
+            or _as_nonempty_text(args.get("raw_result_ref"))
+        )
         if not has_ref:
             errors.append(
-                _schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "artifact_reader 缺少 artifact_id/raw_result_ref")
+                _schema_error(
+                    _SCHEMA_ERR_INPUT_INVALID,
+                    call_id,
+                    "artifact_reader 缺少 artifact_id/forensic_artifact_ref/raw_result_ref",
+                )
             )
 
     if normalized_tool == "workspace_txn_apply":

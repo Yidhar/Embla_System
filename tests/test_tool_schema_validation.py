@@ -48,6 +48,32 @@ def test_native_input_schema_normalizes_alias_tool_name() -> None:
     assert actionable_calls[0]["tool_name"] == "run_cmd"
 
 
+def test_native_input_schema_accepts_artifact_reader_forensic_ref() -> None:
+    calls = [
+        {
+            "id": "schema_call_3",
+            "name": "native_call",
+            "arguments": {
+                "tool_name": "artifact_reader",
+                "forensic_artifact_ref": "artifact_abc123",
+                "mode": "jsonpath",
+                "query": "$..trace_id",
+            },
+        }
+    ]
+
+    actionable_calls, _, validation_errors = _convert_structured_tool_calls(
+        calls,
+        session_id="schema_sess_3",
+        trace_id="schema_trace_3",
+    )
+
+    assert validation_errors == []
+    assert len(actionable_calls) == 1
+    assert actionable_calls[0]["tool_name"] == "artifact_reader"
+    assert actionable_calls[0]["forensic_artifact_ref"] == "artifact_abc123"
+
+
 def test_output_schema_rejects_result_without_status(monkeypatch) -> None:
     async def _invalid_result(_: dict, __: str) -> dict:
         return {
@@ -108,4 +134,3 @@ def test_output_schema_rejects_non_dict_result(monkeypatch) -> None:
     assert result["status"] == "error"
     assert result["error_code"] == "E_SCHEMA_OUTPUT_INVALID"
     assert "payload must be object" in result["result"]
-
