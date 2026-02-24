@@ -289,6 +289,63 @@ class AgenticLoopConfig(BaseModel):
     retry_backoff_seconds: float = Field(default=0.8, ge=0.0, le=10.0, description="重试退避秒数")
 
 
+class ToolContractRolloutConfig(BaseModel):
+    """工具契约双栈灰度与下线门禁配置。"""
+
+    mode: str = Field(
+        default="dual_stack",
+        description="工具契约模式：legacy_only/dual_stack/new_stack_only",
+    )
+    decommission_legacy_gate: bool = Field(
+        default=False,
+        description="旧契约下线门禁；开启后将阻断 legacy-only 输出",
+    )
+    emit_observability_metadata: bool = Field(
+        default=True,
+        description="是否输出 rollout snapshot/metadata 便于灰度观测与回退判断",
+    )
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        aliases = {
+            "legacy": "legacy_only",
+            "legacy_stack": "legacy_only",
+            "old_stack": "legacy_only",
+            "dual": "dual_stack",
+            "compat": "dual_stack",
+            "both": "dual_stack",
+            "new": "new_stack_only",
+            "new_stack": "new_stack_only",
+            "v2_only": "new_stack_only",
+        }
+        normalized = aliases.get(normalized, normalized)
+        valid_modes = {"legacy_only", "dual_stack", "new_stack_only"}
+        if normalized not in valid_modes:
+            raise ValueError(f"mode 必须是以下之一: {sorted(valid_modes)}")
+        return normalized
+
+    @property
+    def legacy_contract_enabled(self) -> bool:
+        if self.decommission_legacy_gate:
+            return False
+        return self.mode in {"legacy_only", "dual_stack"}
+
+    @property
+    def new_contract_enabled(self) -> bool:
+        return self.mode in {"dual_stack", "new_stack_only"}
+
+    def snapshot(self) -> Dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "legacy_contract_enabled": self.legacy_contract_enabled,
+            "new_contract_enabled": self.new_contract_enabled,
+            "decommission_legacy_gate": bool(self.decommission_legacy_gate),
+            "emit_observability_metadata": bool(self.emit_observability_metadata),
+        }
+
+
 class AutonomousCliToolsConfig(BaseModel):
     """CLI tool preferences for system agent."""
 
@@ -851,6 +908,7 @@ class NagaConfig(BaseModel):
     grag: GRAGConfig = Field(default_factory=GRAGConfig)
     handoff: HandoffConfig = Field(default_factory=HandoffConfig)
     agentic_loop: AgenticLoopConfig = Field(default_factory=AgenticLoopConfig)
+    tool_contract_rollout: ToolContractRolloutConfig = Field(default_factory=ToolContractRolloutConfig)
     autonomous: AutonomousConfig = Field(default_factory=AutonomousConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)

@@ -19,6 +19,8 @@ from charset_normalizer import from_path
 
 
 DEFAULT_SCHEMA_VERSION = 1
+DEFAULT_TOOL_CONTRACT_MODE = "dual_stack"
+_VALID_TOOL_CONTRACT_MODES = {"legacy_only", "dual_stack", "new_stack_only"}
 
 
 @dataclass(frozen=True)
@@ -204,6 +206,47 @@ def _map_handoff_round_limits(payload: Dict[str, Any]) -> None:
         agentic_loop["max_rounds_non_stream"] = non_stream_rounds
 
 
+def _normalize_tool_contract_mode(value: Any) -> str | None:
+    normalized = str(value or "").strip().lower()
+    aliases = {
+        "legacy": "legacy_only",
+        "legacy_stack": "legacy_only",
+        "old_stack": "legacy_only",
+        "dual": "dual_stack",
+        "compat": "dual_stack",
+        "both": "dual_stack",
+        "new": "new_stack_only",
+        "new_stack": "new_stack_only",
+        "v2_only": "new_stack_only",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized in _VALID_TOOL_CONTRACT_MODES:
+        return normalized
+    return None
+
+
+def _ensure_tool_contract_rollout(payload: Dict[str, Any]) -> None:
+    rollout = payload.get("tool_contract_rollout")
+    if rollout is None:
+        rollout = {}
+        payload["tool_contract_rollout"] = rollout
+    if not isinstance(rollout, dict):
+        return
+
+    normalized_mode = _normalize_tool_contract_mode(rollout.get("mode"))
+    rollout["mode"] = normalized_mode or DEFAULT_TOOL_CONTRACT_MODE
+
+    if "decommission_legacy_gate" not in rollout:
+        rollout["decommission_legacy_gate"] = False
+    else:
+        rollout["decommission_legacy_gate"] = bool(rollout.get("decommission_legacy_gate"))
+
+    if "emit_observability_metadata" not in rollout:
+        rollout["emit_observability_metadata"] = True
+    else:
+        rollout["emit_observability_metadata"] = bool(rollout.get("emit_observability_metadata"))
+
+
 def _iter_port_candidates(payload: Dict[str, Any]) -> Iterable[tuple[str, Any]]:
     candidates: dict[str, list[tuple[str, str]]] = {
         "api_server": [("api_server", "port")],
@@ -262,6 +305,7 @@ def migrate_payload(
     migrated = copy.deepcopy(payload)
     _ensure_system_schema_marker(migrated, target_schema_version=target_schema_version)
     _map_handoff_round_limits(migrated)
+    _ensure_tool_contract_rollout(migrated)
     if project_server_ports_flag:
         project_server_ports(migrated)
     return migrated

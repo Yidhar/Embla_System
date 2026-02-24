@@ -71,6 +71,48 @@ class AgenticLoopRuntimeState:
     stop_reason: str = ""
 
 
+@dataclass(frozen=True)
+class ToolContractRolloutRuntime:
+    """工具契约灰度运行态（由配置解析得到）。"""
+
+    mode: str = "dual_stack"
+    decommission_legacy_gate: bool = False
+    emit_observability_metadata: bool = True
+
+    @property
+    def legacy_contract_enabled(self) -> bool:
+        if self.decommission_legacy_gate:
+            return False
+        return self.mode in {"legacy_only", "dual_stack"}
+
+    @property
+    def new_contract_enabled(self) -> bool:
+        return self.mode in {"dual_stack", "new_stack_only"}
+
+    def snapshot(self) -> Dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "legacy_contract_enabled": self.legacy_contract_enabled,
+            "new_contract_enabled": self.new_contract_enabled,
+            "decommission_legacy_gate": bool(self.decommission_legacy_gate),
+            "emit_observability_metadata": bool(self.emit_observability_metadata),
+        }
+
+
+_TOOL_CONTRACT_ROLLOUT_MODES = {"legacy_only", "dual_stack", "new_stack_only"}
+_TOOL_CONTRACT_MODE_ALIASES = {
+    "legacy": "legacy_only",
+    "legacy_stack": "legacy_only",
+    "old_stack": "legacy_only",
+    "dual": "dual_stack",
+    "compat": "dual_stack",
+    "both": "dual_stack",
+    "new": "new_stack_only",
+    "new_stack": "new_stack_only",
+    "v2_only": "new_stack_only",
+}
+
+
 def _clamp_int(value: Any, default: int, min_value: int, max_value: int) -> int:
     try:
         num = int(value)
@@ -143,11 +185,97 @@ def _resolve_agentic_loop_policy(max_rounds_override: Optional[int]) -> AgenticL
     )
 
 
+def _normalize_tool_contract_rollout_mode(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    normalized = _TOOL_CONTRACT_MODE_ALIASES.get(normalized, normalized)
+    if normalized in _TOOL_CONTRACT_ROLLOUT_MODES:
+        return normalized
+    return "dual_stack"
+
+
+def _resolve_tool_contract_rollout_runtime() -> ToolContractRolloutRuntime:
+    cfg = get_config()
+    rollout_cfg = getattr(cfg, "tool_contract_rollout", None)
+    if rollout_cfg is None:
+        return ToolContractRolloutRuntime()
+
+    mode = _normalize_tool_contract_rollout_mode(getattr(rollout_cfg, "mode", "dual_stack"))
+    decommission_gate = bool(getattr(rollout_cfg, "decommission_legacy_gate", False))
+    emit_metadata = bool(getattr(rollout_cfg, "emit_observability_metadata", True))
+    return ToolContractRolloutRuntime(
+        mode=mode,
+        decommission_legacy_gate=decommission_gate,
+        emit_observability_metadata=emit_metadata,
+    )
+
+
+def _coalesce_result_text(result: Dict[str, Any]) -> str:
+    candidates = [
+        result.get("result"),
+        result.get("narrative_summary"),
+        result.get("display_preview"),
+    ]
+    for value in candidates:
+        if value is None:
+            continue
+        text = str(value)
+        if text:
+            return text
+    return ""
+
+
+def _has_new_contract_payload(result: Dict[str, Any]) -> bool:
+    return any(
+        bool(str(result.get(key) or "").strip())
+        for key in ("narrative_summary", "display_preview", "forensic_artifact_ref", "raw_result_ref")
+    )
+
+
+def _truncate_preview_text(text: Any, *, limit: int) -> str:
+    normalized = str(text if text is not None else "")
+    return normalized[:limit] + "..." if len(normalized) > limit else normalized
+
+
+def _build_contract_observability_metadata(
+    results: List[Dict[str, Any]],
+    *,
+    rollout: ToolContractRolloutRuntime,
+) -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {"snapshot": rollout.snapshot()}
+    if not rollout.emit_observability_metadata:
+        return metadata
+
+    stats = {
+        "result_count": len(results),
+        "legacy_payload_count": 0,
+        "new_payload_count": 0,
+        "legacy_blocked_count": 0,
+    }
+    for result in results:
+        meta = result.get("_contract_rollout")
+        if isinstance(meta, dict):
+            if bool(meta.get("used_legacy")):
+                stats["legacy_payload_count"] += 1
+            if bool(meta.get("used_new")):
+                stats["new_payload_count"] += 1
+            if bool(meta.get("legacy_blocked")):
+                stats["legacy_blocked_count"] += 1
+            continue
+
+        if "result" in result:
+            stats["legacy_payload_count"] += 1
+        if _has_new_contract_payload(result):
+            stats["new_payload_count"] += 1
+
+    metadata["stats"] = stats
+    return metadata
+
+
 def _is_retryable_tool_failure(call: Dict[str, Any], result: Dict[str, Any]) -> bool:
     if bool(call.get("no_retry", False)):
         return False
 
-    err_text = str(result.get("result", "") or "")
+    err_text = _coalesce_result_text(result)
     non_retry_markers = [
         "需要登录",
         "缺少",
@@ -162,20 +290,37 @@ def _is_retryable_tool_failure(call: Dict[str, Any], result: Dict[str, Any]) -> 
     return not any(marker in err_text for marker in non_retry_markers)
 
 
-def _summarize_results_for_frontend(results: List[Dict[str, Any]], preview_chars: int) -> List[Dict[str, Any]]:
+def _summarize_results_for_frontend(
+    results: List[Dict[str, Any]],
+    preview_chars: int,
+    *,
+    rollout: Optional[ToolContractRolloutRuntime] = None,
+) -> List[Dict[str, Any]]:
+    rollout_runtime = rollout or _resolve_tool_contract_rollout_runtime()
     summaries: List[Dict[str, Any]] = []
     limit = _clamp_int(preview_chars, 500, 120, 20000)
     for r in results:
-        result_text = str(r.get("result", ""))
-        display_result = result_text[:limit] + "..." if len(result_text) > limit else result_text
-        summaries.append(
-            {
-                "service_name": r.get("service_name", "unknown"),
-                "tool_name": r.get("tool_name", ""),
-                "status": r.get("status", "unknown"),
-                "result": display_result,
-            }
-        )
+        summary = {
+            "service_name": r.get("service_name", "unknown"),
+            "tool_name": r.get("tool_name", ""),
+            "status": r.get("status", "unknown"),
+        }
+        result_text = _coalesce_result_text(r)
+        if rollout_runtime.legacy_contract_enabled:
+            summary["result"] = _truncate_preview_text(result_text, limit=limit)
+        if rollout_runtime.new_contract_enabled:
+            narrative_text = r.get("narrative_summary", r.get("display_preview", result_text))
+            summary["narrative_summary"] = _truncate_preview_text(narrative_text, limit=limit)
+            artifact_ref = str(r.get("forensic_artifact_ref") or r.get("raw_result_ref") or "").strip()
+            if artifact_ref:
+                summary["forensic_artifact_ref"] = artifact_ref
+
+        if rollout_runtime.emit_observability_metadata:
+            meta = r.get("_contract_rollout")
+            if isinstance(meta, dict):
+                summary["contract_rollout"] = meta
+
+        summaries.append(summary)
         if r.get("conflict_ticket"):
             summaries[-1]["conflict_ticket"] = str(r.get("conflict_ticket"))
         if r.get("delegate_turns") is not None:
@@ -300,6 +445,7 @@ _CODEX_TOOL_NAMES = {"ask-codex", "brainstorm", "help", "ping"}
 _MUTATING_NATIVE_TOOL_NAMES = {"write_file", "git_checkout_file", "workspace_txn_apply"}
 _SCHEMA_ERR_INPUT_INVALID = "E_SCHEMA_INPUT_INVALID"
 _SCHEMA_ERR_OUTPUT_INVALID = "E_SCHEMA_OUTPUT_INVALID"
+_SCHEMA_ERR_LEGACY_DECOMMISSIONED = "E_LEGACY_CONTRACT_DECOMMISSIONED"
 _LIVE2D_ACTIONS = {"normal", "happy", "enjoy", "sad", "surprise"}
 _NATIVE_TOOL_ALIASES = {
     "read": "read_file",
@@ -453,6 +599,7 @@ def _enforce_tool_result_schema(
     default_service_name: str,
     default_tool_name: str,
 ) -> Dict[str, Any]:
+    rollout = _resolve_tool_contract_rollout_runtime()
     if not isinstance(result, dict):
         detail = f"result payload must be object, got {type(result).__name__}"
         return {
@@ -462,33 +609,71 @@ def _enforce_tool_result_schema(
             "service_name": "tool_protocol",
             "tool_name": "validation",
             "error_code": _SCHEMA_ERR_OUTPUT_INVALID,
+            "_contract_rollout": {
+                **rollout.snapshot(),
+                "used_legacy": False,
+                "used_new": False,
+                "legacy_blocked": False,
+            },
         }
 
+    normalized_result: Dict[str, Any] = dict(result)
     errors: List[str] = []
-    status = _as_nonempty_text(result.get("status")).lower()
+    status = _as_nonempty_text(normalized_result.get("status")).lower()
     if not status:
         errors.append("missing status")
     elif status not in _VALID_RESULT_STATUS:
         errors.append(f"unsupported status={status}")
-    if not _as_nonempty_text(result.get("service_name")):
+    if not _as_nonempty_text(normalized_result.get("service_name")):
         errors.append("missing service_name")
-    if not _as_nonempty_text(result.get("tool_name")):
+    if not _as_nonempty_text(normalized_result.get("tool_name")):
         errors.append("missing tool_name")
-    if "result" not in result:
-        errors.append("missing result field")
 
-    if not errors:
-        return result
+    has_legacy_payload = "result" in normalized_result
+    has_new_payload = _has_new_contract_payload(normalized_result)
+    if not has_legacy_payload and not has_new_payload:
+        errors.append("missing result payload")
 
-    detail = "; ".join(errors)
-    return {
-        "tool_call": call,
-        "result": _schema_error(_SCHEMA_ERR_OUTPUT_INVALID, call_id, detail),
-        "status": "error",
-        "service_name": default_service_name or "tool_protocol",
-        "tool_name": default_tool_name or "validation",
-        "error_code": _SCHEMA_ERR_OUTPUT_INVALID,
+    legacy_blocked = bool(has_legacy_payload and not has_new_payload and not rollout.legacy_contract_enabled)
+    if legacy_blocked:
+        errors.append("legacy-only result blocked by decommission gate")
+
+    if errors:
+        detail = "; ".join(errors)
+        error_code = _SCHEMA_ERR_LEGACY_DECOMMISSIONED if legacy_blocked else _SCHEMA_ERR_OUTPUT_INVALID
+        return {
+            "tool_call": call,
+            "result": _schema_error(error_code, call_id, detail),
+            "status": "error",
+            "service_name": default_service_name or "tool_protocol",
+            "tool_name": default_tool_name or "validation",
+            "error_code": error_code,
+            "_contract_rollout": {
+                **rollout.snapshot(),
+                "used_legacy": has_legacy_payload,
+                "used_new": has_new_payload,
+                "legacy_blocked": legacy_blocked,
+            },
+        }
+
+    if rollout.new_contract_enabled and not has_new_payload and has_legacy_payload:
+        legacy_text = str(normalized_result.get("result", ""))
+        normalized_result.setdefault("narrative_summary", legacy_text)
+        normalized_result.setdefault("display_preview", legacy_text)
+        has_new_payload = True
+
+    if rollout.legacy_contract_enabled and not has_legacy_payload:
+        fallback_text = str(normalized_result.get("narrative_summary") or normalized_result.get("display_preview") or "")
+        normalized_result["result"] = fallback_text
+        has_legacy_payload = True
+
+    normalized_result["_contract_rollout"] = {
+        **rollout.snapshot(),
+        "used_legacy": has_legacy_payload,
+        "used_new": has_new_payload,
+        "legacy_blocked": False,
     }
+    return normalized_result
 
 
 def _extract_latest_user_message(messages: List[Dict[str, Any]]) -> str:
@@ -1061,7 +1246,7 @@ async def _execute_tool_call_with_retry(
             logger.warning(
                 "[AgenticLoop] output schema rejected id=%s detail=%s",
                 call_id,
-                _shorten_for_log(result.get("result", "")),
+                _shorten_for_log(_coalesce_result_text(result)),
             )
 
         logger.info(
@@ -1070,7 +1255,7 @@ async def _execute_tool_call_with_retry(
             result.get("status", "unknown"),
             result.get("service_name", service_name or "unknown"),
             result.get("tool_name", tool_name or "unknown"),
-            _shorten_for_log(result.get("result", "")),
+            _shorten_for_log(_coalesce_result_text(result)),
         )
 
         if result.get("status") != "error":
@@ -1259,7 +1444,7 @@ def format_tool_results_for_llm(results: List[Dict[str, Any]]) -> str:
         svc = r.get("service_name", "unknown")
         tool = r.get("tool_name", "")
         status = r.get("status", "unknown")
-        result_text = r.get("result", "")
+        result_text = _coalesce_result_text(r)
         label = f"{svc}"
         if tool:
             label += f": {tool}"
@@ -1659,6 +1844,7 @@ async def run_agentic_loop(
     llm_service = get_llm_service()
     tool_definitions = get_agentic_tool_definitions()
     policy = _resolve_agentic_loop_policy(max_rounds)
+    contract_rollout = _resolve_tool_contract_rollout_runtime()
     runtime = AgenticLoopRuntimeState()
     needs_summary = False
     gc_budget_guard: Optional[GCBudgetGuard] = None
@@ -1675,6 +1861,9 @@ async def run_agentic_loop(
 
     if requires_codex:
         logger.info("[AgenticLoop] coding request detected, enabling codex-first guard")
+
+    if contract_rollout.emit_observability_metadata:
+        yield _format_sse_event("contract_rollout_snapshot", {"snapshot": contract_rollout.snapshot()})
 
     if latest_user_request:
         try:
@@ -2071,9 +2260,19 @@ async def run_agentic_loop(
                 )
 
                 validation_summaries = _summarize_results_for_frontend(
-                    validation_results, policy.tool_result_preview_chars
+                    validation_results,
+                    policy.tool_result_preview_chars,
+                    rollout=contract_rollout,
                 )
-                yield _format_sse_event("tool_results", {"results": validation_summaries})
+                tool_results_payload: Dict[str, Any] = {"results": validation_summaries}
+                if contract_rollout.emit_observability_metadata:
+                    tool_results_payload["metadata"] = {
+                        "contract_rollout": _build_contract_observability_metadata(
+                            validation_results,
+                            rollout=contract_rollout,
+                        )
+                    }
+                yield _format_sse_event("tool_results", tool_results_payload)
 
                 assistant_content = complete_text if complete_text else "(工具调用参数错误)"
                 repair_start_event = _format_workflow_stage_event(
@@ -2382,8 +2581,31 @@ async def run_agentic_loop(
                 },
             )
 
-        result_summaries = _summarize_results_for_frontend(results, policy.tool_result_preview_chars)
-        yield _format_sse_event("tool_results", {"results": result_summaries})
+        result_summaries = _summarize_results_for_frontend(
+            results,
+            policy.tool_result_preview_chars,
+            rollout=contract_rollout,
+        )
+        tool_results_payload = {"results": result_summaries}
+        rollout_metadata = _build_contract_observability_metadata(results, rollout=contract_rollout)
+        if contract_rollout.emit_observability_metadata:
+            tool_results_payload["metadata"] = {"contract_rollout": rollout_metadata}
+        yield _format_sse_event("tool_results", tool_results_payload)
+
+        if (
+            contract_rollout.emit_observability_metadata
+            and isinstance(rollout_metadata.get("stats"), dict)
+            and int(rollout_metadata["stats"].get("legacy_blocked_count", 0)) > 0
+        ):
+            yield _format_sse_event(
+                "guardrail",
+                {
+                    "round": round_num,
+                    "type": "legacy_contract_decommission_gate",
+                    "snapshot": rollout_metadata.get("snapshot", {}),
+                    "stats": rollout_metadata.get("stats", {}),
+                },
+            )
 
         assistant_content = complete_text if complete_text else "(工具调用中)"
         messages.append({"role": "assistant", "content": assistant_content})

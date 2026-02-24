@@ -80,6 +80,11 @@
     "max_tool_retries": 1, // 失败工具最大重试次数
     "retry_backoff_seconds": 0.8 // 重试退避时间（秒）
   },
+  "tool_contract_rollout": {
+    "mode": "dual_stack", // 契约模式：legacy_only / dual_stack / new_stack_only
+    "decommission_legacy_gate": false, // 是否阻断 legacy-only 工具结果
+    "emit_observability_metadata": true // 是否输出 rollout snapshot/metadata
+  },
   "autonomous": {
     "enabled": false, // 是否启用 System Agent 自治循环
     "cycle_interval_seconds": 3600, // 自治循环周期（秒）
