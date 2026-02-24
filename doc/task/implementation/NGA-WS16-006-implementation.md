@@ -45,13 +45,24 @@
 - 新增 `tests/test_sync_risk_verify_mapping_ws16_006.py`
   - 覆盖映射回填与 CSV 结构保持
 
+6. 风险台账状态自动对齐（本轮新增）
+- 新增 `scripts/sync_risk_closure_ledger_ws16_006.py`
+  - 按执行板任务状态自动计算 `08-risk-closure-ledger.md` 的 `status`
+  - 规则：`todo/in_progress/review/done`
+  - 支持 `--apply` 回写与 `--output-json` 审计落盘
+- 新增 `tests/test_sync_risk_closure_ledger_ws16_006.py`
+  - 覆盖风险状态计算与台账文本保留
+
 ## 验证命令
 - `.\.venv\Scripts\python.exe -m ruff check system/doc_consistency.py scripts/validate_doc_consistency_ws16_006.py scripts/sync_risk_verify_mapping_ws16_006.py tests/test_doc_consistency_ws16_006.py tests/test_sync_risk_verify_mapping_ws16_006.py doc/task/README.md`
+- `.\.venv\Scripts\python.exe -m ruff check system/doc_consistency.py scripts/validate_doc_consistency_ws16_006.py scripts/sync_risk_verify_mapping_ws16_006.py scripts/sync_risk_closure_ledger_ws16_006.py tests/test_doc_consistency_ws16_006.py tests/test_sync_risk_verify_mapping_ws16_006.py tests/test_sync_risk_closure_ledger_ws16_006.py doc/task/README.md`
   - 结果: `All checks passed!`
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_doc_consistency_ws16_006.py tests/test_sync_risk_verify_mapping_ws16_006.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_doc_consistency_ws16_006.py tests/test_sync_risk_verify_mapping_ws16_006.py tests/test_sync_risk_closure_ledger_ws16_006.py`
   - 结果: `passed`
 - `.\.venv\Scripts\python.exe scripts/sync_risk_verify_mapping_ws16_006.py`
   - 结果: `verify_for_risks` 自动回填/清理完成
+- `.\.venv\Scripts\python.exe scripts/sync_risk_closure_ledger_ws16_006.py --apply --output-json logs/autonomous/risk_closure_status_ws16_006.json`
+  - 结果: `08-risk-closure-ledger.md` 状态按执行板自动对齐
 - `.\.venv\Scripts\python.exe scripts/validate_doc_consistency_ws16_006.py --strict`
   - 结果: `error_count=0`（当前执行板证据路径有效）
 
