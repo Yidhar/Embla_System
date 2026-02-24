@@ -5,7 +5,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$baseTemp = "scratch/pytest_tmp_runtime"
+$runId = [guid]::NewGuid().ToString("N").Substring(0, 8)
+$baseTemp = "scratch/pytest_tmp_run_$runId"
 $pytestArgs = @(
   "-q",
   "-p", "no:cacheprovider",
