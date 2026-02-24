@@ -23,6 +23,7 @@ PHASE3_TEST_TARGETS: Sequence[str] = (
     "autonomous/tests/test_scaffold_verify_pipeline_ws21_005.py",
     "autonomous/tests/test_system_agent_subagent_bridge_ws22_001.py",
     "autonomous/tests/test_system_agent_lease_guard_ws22_004.py",
+    "autonomous/tests/test_system_agent_subagent_rollout_ws22_006.py",
     "autonomous/tests/test_system_agent_longrun_baseline_ws22_004.py",
     "autonomous/tests/test_subagent_runtime_spec_validation_ws22_005.py",
     "autonomous/tests/test_ws22_release_gate.py",

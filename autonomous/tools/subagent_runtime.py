@@ -19,6 +19,7 @@ from system.subagent_contract import build_contract_checksum
 class SubAgentRuntimeConfig:
     enabled: bool = False
     max_subtasks: int = 16
+    rollout_percent: int = 100
     fail_open: bool = True
     require_contract_negotiation: bool = True
     require_scaffold_patch: bool = True

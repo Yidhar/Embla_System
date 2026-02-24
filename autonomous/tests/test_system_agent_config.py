@@ -14,6 +14,7 @@ def test_system_agent_config_from_source_defaults():
     assert cfg.subagent_runtime.enabled is False
     assert cfg.subagent_runtime.fail_open is True
     assert cfg.subagent_runtime.max_subtasks == 16
+    assert cfg.subagent_runtime.rollout_percent == 100
 
 
 def test_system_agent_config_from_dict():
@@ -58,6 +59,7 @@ def test_system_agent_config_from_dict():
         "subagent_runtime": {
             "enabled": True,
             "max_subtasks": 9,
+            "rollout_percent": 25,
             "fail_open": False,
             "require_contract_negotiation": False,
             "require_scaffold_patch": False,
@@ -75,5 +77,6 @@ def test_system_agent_config_from_dict():
     assert cfg.release.max_error_rate == 0.03
     assert cfg.subagent_runtime.enabled is True
     assert cfg.subagent_runtime.max_subtasks == 9
+    assert cfg.subagent_runtime.rollout_percent == 25
     assert cfg.subagent_runtime.fail_open is False
     assert cfg.subagent_runtime.require_contract_negotiation is False

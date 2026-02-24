@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+import asyncio
+import shutil
+import uuid
+from pathlib import Path
+
+from autonomous.dispatcher import DispatchResult
+from autonomous.system_agent import SystemAgent
+from autonomous.tools.cli_adapter import CliTaskResult
+from autonomous.types import EvaluationReport, OptimizationTask
+
+
+def _write_policy(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        """
+gates:
+  deploy:
+    canary_window_min: 15
+    min_sample_count: 200
+    healthy_windows_for_promotion: 3
+    bad_windows_for_rollback: 2
+""".strip(),
+        encoding="utf-8",
+    )
+
+
+def _make_case_root(prefix: str) -> Path:
+    root = Path("scratch") / prefix / uuid.uuid4().hex[:12]
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _cleanup_case_root(root: Path) -> None:
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_system_agent_rollout_zero_uses_legacy_path_even_when_subagent_enabled() -> None:
+    case_root = _make_case_root("test_system_agent_subagent_rollout")
+    try:
+        repo = case_root / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        _write_policy(repo / "policy" / "gate_policy.yaml")
+
+        agent = SystemAgent(
+            config={
+                "enabled": False,
+                "cli_tools": {"max_retries": 0},
+                "subagent_runtime": {
+                    "enabled": True,
+                    "rollout_percent": 0,
+                    "fail_open": True,
+                },
+                "release": {"enabled": True, "gate_policy_path": "policy/gate_policy.yaml"},
+            },
+            repo_dir=str(repo),
+        )
+
+        events: list[tuple[str, dict, dict]] = []
+        agent._emit = lambda event_type, payload, **kwargs: events.append((event_type, dict(payload), dict(kwargs)))  # type: ignore[method-assign]
+
+        runtime_called = {"count": 0}
+
+        async def _runtime_stub(**kwargs):
+            runtime_called["count"] += 1
+            raise AssertionError("subagent runtime should not run when rollout_percent=0")
+
+        async def _dispatch_ok(task: OptimizationTask) -> DispatchResult:
+            return DispatchResult(
+                selected_cli="codex",
+                result=CliTaskResult(
+                    task_id=task.task_id,
+                    cli_name="codex",
+                    exit_code=0,
+                    stdout="ok",
+                    stderr="",
+                    files_changed=[],
+                    duration_seconds=0.1,
+                    success=True,
+                    execution_snapshots=[],
+                ),
+            )
+
+        agent.subagent_runtime.run = _runtime_stub  # type: ignore[method-assign]
+        agent.dispatcher.dispatch = _dispatch_ok  # type: ignore[method-assign]
+        agent.evaluator.evaluate = lambda task, result: EvaluationReport(approved=True)  # type: ignore[method-assign]
+
+        task = OptimizationTask(task_id="task-ws22-rollout-zero", instruction="legacy path")
+        asyncio.run(agent._run_task(task, fencing_epoch=1))
+
+        assert runtime_called["count"] == 0
+        approved = [payload for event_type, payload, _ in events if event_type == "TaskApproved"]
+        assert len(approved) == 1
+        assert approved[0]["runtime_mode"] == "legacy"
+        decisions = [payload for event_type, payload, _ in events if event_type == "SubAgentRuntimeRolloutDecision"]
+        assert decisions
+        assert decisions[-1]["decision_reason"] == "rollout_zero"
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_system_agent_task_forced_subagent_overrides_rollout_zero() -> None:
+    case_root = _make_case_root("test_system_agent_subagent_rollout")
+    try:
+        repo = case_root / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        _write_policy(repo / "policy" / "gate_policy.yaml")
+        target = repo / "service.txt"
+        target.write_text("BASE", encoding="utf-8")
+
+        agent = SystemAgent(
+            config={
+                "enabled": False,
+                "cli_tools": {"max_retries": 0},
+                "subagent_runtime": {
+                    "enabled": True,
+                    "rollout_percent": 0,
+                    "fail_open": False,
+                    "require_contract_negotiation": True,
+                },
+                "release": {"enabled": True, "gate_policy_path": "policy/gate_policy.yaml"},
+            },
+            repo_dir=str(repo),
+        )
+
+        events: list[tuple[str, dict, dict]] = []
+        agent._emit = lambda event_type, payload, **kwargs: events.append((event_type, dict(payload), dict(kwargs)))  # type: ignore[method-assign]
+
+        task = OptimizationTask(
+            task_id="task-ws22-rollout-forced-subagent",
+            instruction="force subagent path",
+            metadata={
+                "runtime_mode": "subagent",
+                "subtasks": [
+                    {
+                        "subtask_id": "backend",
+                        "role": "backend",
+                        "instruction": "apply patch",
+                        "contract_schema": {"request": {"id": "string"}},
+                        "patches": [{"path": "service.txt", "content": "PATCHED"}],
+                    }
+                ],
+            },
+        )
+
+        asyncio.run(agent._run_task(task, fencing_epoch=1))
+
+        assert target.read_text(encoding="utf-8") == "PATCHED"
+        approved = [payload for event_type, payload, _ in events if event_type == "TaskApproved"]
+        assert len(approved) == 1
+        assert approved[0]["runtime_mode"] == "subagent"
+        decisions = [payload for event_type, payload, _ in events if event_type == "SubAgentRuntimeRolloutDecision"]
+        assert decisions
+        assert decisions[-1]["decision_reason"] == "task_forced_mode"
+    finally:
+        _cleanup_case_root(case_root)

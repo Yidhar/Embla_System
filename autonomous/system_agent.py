@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -137,6 +138,7 @@ class SystemAgentConfig:
         subagent_cfg = SubAgentRuntimeConfig(
             enabled=bool(pick(subagent_runtime, "enabled", False)),
             max_subtasks=max(1, int(pick(subagent_runtime, "max_subtasks", 16))),
+            rollout_percent=max(0, min(100, int(pick(subagent_runtime, "rollout_percent", 100)))),
             fail_open=bool(pick(subagent_runtime, "fail_open", True)),
             require_contract_negotiation=bool(pick(subagent_runtime, "require_contract_negotiation", True)),
             require_scaffold_patch=bool(pick(subagent_runtime, "require_scaffold_patch", True)),
@@ -348,7 +350,22 @@ class SystemAgent:
 
         for attempt in range(1, max_attempt + 1):
             self._ensure_active_epoch(fencing_epoch)
-            using_subagent = bool(self.config.subagent_runtime.enabled)
+            runtime_mode, rollout_context = self._resolve_runtime_mode(task=task)
+            using_subagent = runtime_mode == "subagent"
+            self._emit(
+                "SubAgentRuntimeRolloutDecision",
+                {
+                    "workflow_id": workflow_id,
+                    "task_id": task.task_id,
+                    "attempt": attempt,
+                    "runtime_mode": runtime_mode,
+                    "rollout_percent": rollout_context.get("rollout_percent", 100),
+                    "rollout_bucket": rollout_context.get("rollout_bucket"),
+                    "decision_reason": rollout_context.get("reason", "unknown"),
+                },
+                workflow_id=workflow_id,
+                fencing_epoch=fencing_epoch,
+            )
             command_type = "subagent_execute" if using_subagent else "cli_execute"
             idempotency_key = f"{task.task_id}:{command_type}:{attempt}"
             command_id = self.workflow_store.create_command(
@@ -660,6 +677,33 @@ class SystemAgent:
     @staticmethod
     def _build_runtime_trace_id(task_id: str, attempt: int) -> str:
         return f"trace_{task_id}_{attempt}_{uuid.uuid4().hex[:8]}"
+
+    def _resolve_runtime_mode(self, *, task: OptimizationTask) -> tuple[str, Dict[str, Any]]:
+        metadata = task.metadata if isinstance(task.metadata, dict) else {}
+        forced_mode = str(
+            metadata.get("runtime_mode")
+            or metadata.get("force_runtime_mode")
+            or metadata.get("execution_mode")
+            or ""
+        ).strip().lower()
+
+        if forced_mode in {"subagent", "legacy"}:
+            return forced_mode, {"reason": "task_forced_mode", "rollout_percent": self.config.subagent_runtime.rollout_percent}
+
+        if not bool(self.config.subagent_runtime.enabled):
+            return "legacy", {"reason": "subagent_disabled", "rollout_percent": 0}
+
+        rollout_percent = max(0, min(100, int(self.config.subagent_runtime.rollout_percent)))
+        if rollout_percent <= 0:
+            return "legacy", {"reason": "rollout_zero", "rollout_percent": rollout_percent}
+        if rollout_percent >= 100:
+            return "subagent", {"reason": "rollout_full", "rollout_percent": rollout_percent}
+
+        token = f"{task.task_id}:{str(task.instruction or '').strip()}"
+        bucket = int(hashlib.sha256(token.encode("utf-8")).hexdigest()[:8], 16) % 100
+        if bucket < rollout_percent:
+            return "subagent", {"reason": "rollout_bucket_hit", "rollout_percent": rollout_percent, "rollout_bucket": bucket}
+        return "legacy", {"reason": "rollout_bucket_miss", "rollout_percent": rollout_percent, "rollout_bucket": bucket}
 
     async def _attempt_verification_fallback(
         self,
