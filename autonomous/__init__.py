@@ -1,5 +1,6 @@
 """Autonomous SDLC skeleton package."""
 
+from autonomous.daily_checkpoint import DailyCheckpointConfig, DailyCheckpointEngine, DailyCheckpointReport
 from autonomous.llm_gateway import (
     GatewayPlan,
     GatewayPlanMetrics,
@@ -31,6 +32,9 @@ __all__ = [
     "RouterDecision",
     "RouterArbiterGuard",
     "RouterArbiterDecision",
+    "DailyCheckpointConfig",
+    "DailyCheckpointEngine",
+    "DailyCheckpointReport",
     "LLMGateway",
     "GatewayRouteRequest",
     "GatewayRouteDecision",
