@@ -1,154 +1,13 @@
 <script lang="ts">
 import { onKeyStroke, useEventListener } from '@vueuse/core'
 import { nextTick, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
-import API from '@/api/core'
 import BoxContainer from '@/components/BoxContainer.vue'
 import MessageItem from '@/components/MessageItem.vue'
 import { startToolPolling, stopToolPolling, toolMessage } from '@/composables/useToolStatus'
-import { CONFIG } from '@/utils/config'
-import { live2dState, setEmotion } from '@/utils/live2dController'
-import { CURRENT_SESSION_ID, IS_TEMPORARY_SESSION, formatRelativeTime, loadCurrentSession, MESSAGES, newSession, switchSession } from '@/utils/session'
-import { isPlaying, speak } from '@/utils/tts'
-
-export function chatStream(content: string, options?: { skill?: string, images?: string[] }) {
-  MESSAGES.value.push({ role: 'user', content: options?.images?.length ? `[截图x${options.images.length}] ${content}` : content })
-
-  API.chatStream(content, {
-    sessionId: CURRENT_SESSION_ID.value ?? undefined,
-    disableTTS: true,
-    skill: options?.skill,
-    images: options?.images,
-    temporary: IS_TEMPORARY_SESSION.value || undefined,
-  }).then(async ({ sessionId, response }) => {
-    if (sessionId) {
-      CURRENT_SESSION_ID.value = sessionId
-    }
-    MESSAGES.value.push({ role: 'assistant', content: '', reasoning: '', generating: true })
-    const message = MESSAGES.value[MESSAGES.value.length - 1]!
-    // 追踪纯LLM内容（不含工具状态标记），用于TTS朗读
-    let spokenContent = ''
-
-    live2dState.value = 'thinking'
-
-    // 情感解析函数
-    function parseEmotionFromText(text: string): 'normal' | 'positive' | 'negative' | 'surprise' {
-      if (text.includes('【正面情感】')) {
-        return 'positive'
-      } else if (text.includes('【负面情感】')) {
-        return 'negative'
-      } else if (text.includes('【惊讶情感】')) {
-        return 'surprise'
-      }
-      return 'normal'
-    }
-
-    function formatToolStageLine(chunk: any): string {
-      const phaseMap: Record<string, string> = {
-        plan: 'PLAN',
-        execute: 'EXECUTE',
-        verify: 'VERIFY',
-        repair: 'REPAIR',
-      }
-      const statusMap: Record<string, string> = {
-        start: 'START',
-        success: 'OK',
-        error: 'ERROR',
-        skip: 'SKIP',
-      }
-      const round = chunk.round ?? '?'
-      const phase = phaseMap[chunk.phase || ''] || String(chunk.phase || 'UNKNOWN').toUpperCase()
-      const status = statusMap[chunk.status || ''] || String(chunk.status || 'UNKNOWN').toUpperCase()
-      const parts: string[] = []
-      if (typeof chunk.actionable_calls === 'number') {
-        parts.push(`calls=${chunk.actionable_calls}`)
-      }
-      if (typeof chunk.success_count === 'number' || typeof chunk.error_count === 'number') {
-        const success = typeof chunk.success_count === 'number' ? chunk.success_count : 0
-        const error = typeof chunk.error_count === 'number' ? chunk.error_count : 0
-        parts.push(`ok=${success}, err=${error}`)
-      }
-      if (typeof chunk.threshold === 'number') {
-        parts.push(`threshold=${chunk.threshold}`)
-      }
-      if (chunk.reason) {
-        parts.push(`reason=${chunk.reason}`)
-      }
-      if (chunk.decision) {
-        parts.push(`decision=${chunk.decision}`)
-      }
-      const detail = parts.length ? ` (${parts.join(', ')})` : ''
-      return `> [R${round}] [${phase}] ${status}${detail}\n`
-    }
-
-    for await (const chunk of response) {
-      if (chunk.type === 'reasoning') {
-        message.reasoning = (message.reasoning || '') + chunk.text
-      }
-      else if (chunk.type === 'content') {
-        message.content += chunk.text
-        spokenContent += chunk.text
-        // 检测情感标记并设置表情
-        const emotion = parseEmotionFromText(chunk.text || '')
-        if (emotion !== 'normal') {
-          void setEmotion(emotion)
-        }
-      }
-      else if (chunk.type === 'content_clean') {
-        // 后端返回 content_clean：用于将正文替换为纯文本内容（兼容旧版本清理逻辑） tool``` 块的原文
-        message.content = chunk.text || ''
-        spokenContent = chunk.text || ''
-      }
-      else if (chunk.type === 'tool_calls') {
-        // 显示工具调用状态
-        const calls = chunk.calls || []
-        const callDesc = calls.map((c: any) => {
-          const name = c.service_name || c.agentType || 'tool'
-          return `🔧 ${name}`
-        }).join(', ')
-        message.content += `\n\n> 正在执行工具: ${callDesc}...\n`
-      }
-      else if (chunk.type === 'tool_results') {
-        // 显示工具结果摘要
-        const results = chunk.results || []
-        for (const r of results) {
-          const status = r.status === 'success' ? '✅' : '❌'
-          const label = r.tool_name ? `${r.service_name}: ${r.tool_name}` : r.service_name
-          message.content += `\n> ${status} ${label}\n`
-        }
-        message.content += '\n'
-      }
-      else if (chunk.type === 'tool_stage') {
-        message.content += `${formatToolStageLine(chunk)}`
-      }
-      else if (chunk.type === 'round_start' && (chunk.round ?? 0) > 1) {
-        // 多轮分隔
-        message.content += '\n---\n\n'
-      }
-      else if (chunk.type === 'auth_expired') {
-        message.content += chunk.text || '认证失败，请检查本地模型配置'
-      }
-      // round_end 不需要特殊处理
-      window.dispatchEvent(new CustomEvent('token', { detail: chunk.text || '' }))
-    }
-
-    delete message.generating
-    if (!message.reasoning) {
-      delete message.reasoning
-    }
-
-    if (CONFIG.value.system.voice_enabled && spokenContent) {
-      speak(spokenContent).catch(() => {
-        live2dState.value = 'idle'
-      })
-    }
-    else {
-      live2dState.value = 'idle'
-    }
-  }).catch((err) => {
-    live2dState.value = 'idle'
-    MESSAGES.value.push({ role: 'system', content: `Error: ${err.message}` })
-  })
-}
+import { chatStream, deleteSession, getSessions, parseDocument, uploadDocument } from '@/domains/chat'
+import { live2dState } from '@/utils/live2dController'
+import { CURRENT_SESSION_ID, formatRelativeTime, loadCurrentSession, MESSAGES, newSession, switchSession } from '@/utils/session'
+import { isPlaying } from '@/utils/tts'
 </script>
 
 <script setup lang="ts">
@@ -201,8 +60,7 @@ const loadingSessions = ref(false)
 async function fetchSessions() {
   loadingSessions.value = true
   try {
-    const res = await API.getSessions()
-    sessions.value = res.sessions ?? []
+    sessions.value = await getSessions()
   }
   catch {
     sessions.value = []
@@ -225,7 +83,7 @@ async function handleSwitchSession(id: string) {
 
 async function handleDeleteSession(id: string) {
   try {
-    await API.deleteSession(id)
+    await deleteSession(id)
     sessions.value = sessions.value.filter(s => s.sessionId !== id)
     if (CURRENT_SESSION_ID.value === id) {
       newSession()
@@ -256,7 +114,7 @@ async function handleFileUpload(event: Event) {
     // 解析文档内容后发送给文本模型
     MESSAGES.value.push({ role: 'system', content: `正在解析文件: ${file.name}...` })
     try {
-      const result = await API.parseDocument(file)
+      const result = await parseDocument(file)
       const msg = MESSAGES.value[MESSAGES.value.length - 1]!
       const truncNote = result.truncated ? '（内容过长，已截断）' : ''
       msg.content = `文件解析完成: ${file.name}${truncNote}`
@@ -272,7 +130,7 @@ async function handleFileUpload(event: Event) {
     // 其他格式走原有上传逻辑
     MESSAGES.value.push({ role: 'system', content: `正在上传文件: ${file.name}...` })
     try {
-      const result = await API.uploadDocument(file)
+      const result = await uploadDocument(file)
       const msg = MESSAGES.value[MESSAGES.value.length - 1]!
       msg.content = `文件上传成功: ${file.name}`
       if (result.filePath) {

@@ -5,10 +5,9 @@ import ScrollPanel from 'primevue/scrollpanel'
 import { computed, nextTick, onMounted, onUnmounted, ref, useTemplateRef, watch } from 'vue'
 import MessageItem from '@/components/MessageItem.vue'
 import { startToolPolling, stopToolPolling, toolMessage } from '@/composables/useToolStatus'
+import { chatStream, deleteSession, getSessions, parseDocument, uploadDocument } from '@/domains/chat'
 import { CONFIG } from '@/utils/config'
 import { CURRENT_SESSION_ID, IS_TEMPORARY_SESSION, formatRelativeTime, loadCurrentSession, MESSAGES, newSession, newTemporarySession, switchSession } from '@/utils/session'
-import API from '@/api/core'
-import { chatStream } from '@/views/MessageView.vue'
 
 // 悬浮球状态
 const floatingState = ref<FloatingState>('ball')
@@ -458,7 +457,7 @@ async function handleFileUpload(event: Event) {
     // 可解析文件：解析后发送内容到对话
     MESSAGES.value.push({ role: 'system', content: `正在解析文件: ${file.name}...` })
     try {
-      const result = await API.parseDocument(file)
+      const result = await parseDocument(file)
       const msg = MESSAGES.value[MESSAGES.value.length - 1]!
       const truncNote = result.truncated ? '（内容过长，已截断）' : ''
       msg.content = `文件解析完成: ${file.name}${truncNote}`
@@ -474,7 +473,7 @@ async function handleFileUpload(event: Event) {
     // 其他格式：二进制上传
     MESSAGES.value.push({ role: 'system', content: `正在上传文件: ${file.name}...` })
     try {
-      const result = await API.uploadDocument(file)
+      const result = await uploadDocument(file)
       const msg = MESSAGES.value[MESSAGES.value.length - 1]!
       msg.content = `文件上传成功: ${file.name}`
       if (result.filePath) {
@@ -517,8 +516,7 @@ const loadingSessions = ref(false)
 async function fetchSessions() {
   loadingSessions.value = true
   try {
-    const res = await API.getSessions()
-    sessions.value = res.sessions ?? []
+    sessions.value = await getSessions()
   }
   catch {
     sessions.value = []
@@ -569,7 +567,7 @@ async function handleSwitchSession(id: string) {
 
 async function handleDeleteSession(id: string) {
   try {
-    await API.deleteSession(id)
+    await deleteSession(id)
     sessions.value = sessions.value.filter(s => s.sessionId !== id)
     if (CURRENT_SESSION_ID.value === id) {
       newSession()
