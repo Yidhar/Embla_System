@@ -11,10 +11,28 @@ export interface StreamChunk {
     | 'round_end'
     | 'tool_stage'
     | 'auth_expired'
+  schema_version?: string
+  event_ts?: number
   text?: string
   round?: number
-  calls?: Array<{ agentType: string, service_name?: string, tool_name?: string, message?: string }>
-  results?: Array<{ service_name: string, tool_name?: string, result: string, status: string }>
+  calls?: Array<{
+    agentType: string
+    service_name: string
+    tool_name: string
+    message: string
+    call_id: string
+    risk_level: string
+    execution_scope: string
+    requires_global_mutex: boolean
+  }>
+  results?: Array<{
+    service_name: string
+    tool_name?: string
+    result?: string
+    narrative_summary?: string
+    preview?: string
+    status: string
+  }>
   phase?: 'plan' | 'execute' | 'verify' | 'repair'
   status?: 'start' | 'success' | 'error' | 'skip'
   reason?: string

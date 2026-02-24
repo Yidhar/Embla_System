@@ -9,6 +9,7 @@ import base64
 import json
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
@@ -562,6 +563,8 @@ def _summarize_results_for_frontend(
             "status": r.get("status", "unknown"),
         }
         result_text = _coalesce_result_text(r)
+        preview_text = r.get("display_preview", r.get("narrative_summary", result_text))
+        summary["preview"] = _truncate_preview_text(preview_text, limit=limit)
         if rollout_runtime.legacy_contract_enabled:
             summary["result"] = _truncate_preview_text(result_text, limit=limit)
         if rollout_runtime.new_contract_enabled:
@@ -603,6 +606,24 @@ def _summarize_results_for_frontend(
         if r.get("guard_stop_reason"):
             summaries[-1]["guard_stop_reason"] = str(r.get("guard_stop_reason"))
     return summaries
+
+
+def _build_tool_call_descriptions(actionable_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    descriptions: List[Dict[str, Any]] = []
+    for tc in actionable_calls:
+        descriptions.append(
+            {
+                "agentType": str(tc.get("agentType", "")),
+                "service_name": str(tc.get("service_name", "")),
+                "tool_name": str(tc.get("tool_name", "")),
+                "message": str(tc.get("message", ""))[:100],
+                "call_id": str(tc.get("_tool_call_id", "")),
+                "risk_level": str(tc.get("_risk_level", "read_only")),
+                "execution_scope": str(tc.get("_execution_scope", "local")),
+                "requires_global_mutex": bool(tc.get("_requires_global_mutex", False)),
+            }
+        )
+    return descriptions
 
 
 def _looks_like_pending_tool_intent(text: str) -> bool:
@@ -766,6 +787,7 @@ _SUPPORTED_NATIVE_TOOL_NAMES = {
     "killswitch_plan",
 }
 _VALID_RESULT_STATUS = {"success", "ok", "error", "timeout", "blocked"}
+_SSE_PROTOCOL_VERSION = "ws20-002-v1"
 _HIGH_RISK_LEVELS = {"write_repo", "deploy", "secrets", "self_modify"}
 _RISK_DEFAULT_APPROVAL_POLICY = {
     "write_repo": "on-request",
@@ -2158,7 +2180,11 @@ def _build_validation_results(errors: List[str]) -> List[Dict[str, Any]]:
 
 def _format_sse_event(event_type: str, data: Any) -> str:
     """格式化扩展SSE事件（使用与llm_service相同的base64编码格式）"""
-    payload = {"type": event_type}
+    payload = {
+        "type": event_type,
+        "schema_version": _SSE_PROTOCOL_VERSION,
+        "event_ts": int(time.time() * 1000),
+    }
     if isinstance(data, dict):
         payload.update(data)
     else:
@@ -2841,16 +2867,7 @@ async def run_agentic_loop(
         if execute_start_event:
             yield execute_start_event
 
-        call_descriptions = []
-        for tc in actionable_calls:
-            desc = {"agentType": tc.get("agentType", "")}
-            if tc.get("service_name"):
-                desc["service_name"] = tc["service_name"]
-            if tc.get("tool_name"):
-                desc["tool_name"] = tc["tool_name"]
-            if tc.get("message"):
-                desc["message"] = str(tc["message"])[:100]
-            call_descriptions.append(desc)
+        call_descriptions = _build_tool_call_descriptions(actionable_calls)
         yield _format_sse_event("tool_calls", {"calls": call_descriptions})
 
         primary_results = await execute_tool_calls(
