@@ -17,6 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 BACKEND_DIST_DIR = FRONTEND_DIR / "backend-dist"
 SPEC_FILE = PROJECT_ROOT / "naga-backend.spec"
+PHASE3_CLOSURE_SCRIPT = PROJECT_ROOT / "scripts" / "release_phase3_closure_chain_ws22_004.py"
 
 MIN_NODE_MAJOR = 22
 MIN_PYTHON = (3, 11)
@@ -170,6 +171,27 @@ def build_frontend(debug: bool = False) -> None:
     log("Electron package build complete")
 
 
+def run_phase3_closure_chain(
+    *,
+    output_file: Optional[Path],
+    timeout_seconds: int,
+) -> None:
+    if not PHASE3_CLOSURE_SCRIPT.exists():
+        raise FileNotFoundError(f"phase3 closure script missing: {PHASE3_CLOSURE_SCRIPT}")
+
+    cmd = [
+        sys.executable,
+        str(PHASE3_CLOSURE_SCRIPT),
+        "--timeout-seconds",
+        str(max(30, int(timeout_seconds))),
+    ]
+    if output_file:
+        cmd.extend(["--output", str(output_file)])
+
+    run(cmd, cwd=PROJECT_ROOT)
+    log("Phase3 closure chain gate passed")
+
+
 def print_summary() -> None:
     print()
     print("=" * 50)
@@ -195,6 +217,23 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Build installer with backend debug console metadata",
     )
+    parser.add_argument(
+        "--phase3-closure",
+        action="store_true",
+        help="Run WS22 Phase3 closure chain as release gate before build",
+    )
+    parser.add_argument(
+        "--phase3-closure-output",
+        type=Path,
+        default=Path("scratch/reports/ws22_phase3_release_chain_result.json"),
+        help="Output path for Phase3 closure chain report",
+    )
+    parser.add_argument(
+        "--phase3-closure-timeout-seconds",
+        type=int,
+        default=2400,
+        help="Per-step timeout for Phase3 closure chain",
+    )
     return parser.parse_args()
 
 
@@ -204,6 +243,8 @@ def main() -> None:
 
     total_steps = 3
     if not args.backend_only:
+        total_steps += 1
+    if args.phase3_closure:
         total_steps += 1
 
     step = 0
@@ -217,6 +258,14 @@ def main() -> None:
     step += 1
     log_step(step, total_steps, "Sync Python dependencies")
     sync_dependencies()
+
+    if args.phase3_closure:
+        step += 1
+        log_step(step, total_steps, "Run Phase3 closure chain gate")
+        run_phase3_closure_chain(
+            output_file=args.phase3_closure_output,
+            timeout_seconds=max(30, int(args.phase3_closure_timeout_seconds)),
+        )
 
     step += 1
     log_step(step, total_steps, "Build backend via PyInstaller")
