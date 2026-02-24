@@ -5,7 +5,7 @@
 - 标题: Artifact 元数据模型、artifact_reader、os_bash(fetch_hints)
 - 优先级: P0
 - 阶段: M1
-- 状态: ✅ 001/002 已完成；🟡 003 已进入可用态（review）
+- 状态: ✅ 001/002/003 已完成
 
 ## 代码改动
 
@@ -39,13 +39,15 @@
 - 新增测试:
   - `tests/test_native_tools_artifact_and_guard.py::test_artifact_reader_jsonpath_roundtrip`
   - `tests/test_tool_contract.py::test_large_json_artifact_roundtrip`
+  - `tests/test_native_tools_ws11_003.py::test_run_cmd_structured_stdout_packs_artifact_envelope`
 - 定向测试命令:
   - `uv run python -m pytest -q tests/test_tool_contract.py tests/test_native_tools_artifact_and_guard.py`
-- 结果: ✅ 17 passed
+  - `python -m pytest -q tests/test_native_tools_ws11_003.py -p no:tmpdir`
+- 结果: ✅ 历史套件 17 passed + WS11-003 focused integration 1 passed
 
 ## 已知边界
 1. `jsonpath` 为简化实现，不覆盖完整 JSONPath 语法。
-2. `WS11-003` 当前为 native 执行链路可用态，后续可继续扩展到更多执行器。
+2. `WS11-003` 当前覆盖 native 执行链路，后续可继续扩展到更多执行器。
 
 ## 完成时间
 2026-02-24
