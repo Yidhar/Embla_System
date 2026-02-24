@@ -9,6 +9,8 @@ from typing import Any, Callable, Dict, List, Optional, Protocol
 
 import psutil
 
+from system.loop_cost_guard import LoopCostGuard
+
 
 def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -67,11 +69,13 @@ class WatchdogDaemon:
         metrics_provider: Optional[MetricsProvider] = None,
         event_emitter: Optional[EventEmitter] = None,
         warn_only: bool = True,
+        loop_cost_guard: Optional[LoopCostGuard] = None,
     ) -> None:
         self.thresholds = thresholds or WatchdogThresholds()
         self.metrics_provider = metrics_provider or self._default_metrics_provider
         self.event_emitter = event_emitter
         self.warn_only = bool(warn_only)
+        self.loop_cost_guard = loop_cost_guard
         self._last_io = psutil.disk_io_counters()
         self._last_ts = time.time()
 
@@ -147,6 +151,28 @@ class WatchdogDaemon:
             },
         )
         return action
+
+    def observe_tool_call(
+        self,
+        *,
+        task_id: str,
+        tool_name: str,
+        success: bool,
+        call_cost: float = 0.0,
+    ) -> Optional[Dict[str, Any]]:
+        if self.loop_cost_guard is None:
+            return None
+        action = self.loop_cost_guard.observe_tool_call(
+            task_id=task_id,
+            tool_name=tool_name,
+            success=success,
+            call_cost=call_cost,
+        )
+        if action is None:
+            return None
+        payload = action.to_dict()
+        self._emit("WatchdogLoopCostAction", payload)
+        return payload
 
     def _emit(self, event_type: str, payload: Dict[str, Any]) -> None:
         if self.event_emitter is None:
