@@ -25,7 +25,7 @@ from system.sleep_watch import wait_for_log_pattern
 from system.subagent_contract import validate_parallel_contract
 from system.test_baseline_guard import TestBaselineGuard, TestPoisoningDetector
 from system.tool_contract import ToolResultEnvelope, build_tool_result_with_artifact
-from system.workspace_transaction import WorkspaceChange, WorkspaceTransactionManager
+from system.workspace_transaction import ConflictBackoffConfig, WorkspaceChange, WorkspaceTransactionManager
 
 
 _DEFAULT_PREVIEW_CHARS = 6000
@@ -967,6 +967,64 @@ class NativeToolExecutor:
         changes: List[WorkspaceChange] = []
         changed_paths: List[str] = []
         semantic_rebase_default = _parse_bool(call.get("semantic_rebase"), True)
+        backoff_raw = call.get("conflict_backoff")
+        backoff_cfg = backoff_raw if isinstance(backoff_raw, dict) else {}
+
+        def _pick_backoff_value(*keys: str) -> Any:
+            for key in keys:
+                if key in backoff_cfg and backoff_cfg.get(key) is not None:
+                    return backoff_cfg.get(key)
+                if call.get(key) is not None:
+                    return call.get(key)
+            return None
+
+        def _safe_float(value: Any, default: float, min_value: float, max_value: float) -> float:
+            try:
+                num = float(value)
+            except Exception:
+                return default
+            return max(min_value, min(max_value, num))
+
+        def _optional_int(value: Any, min_value: int, max_value: int) -> Optional[int]:
+            if value is None:
+                return None
+            try:
+                num = int(value)
+            except Exception:
+                return None
+            return max(min_value, min(max_value, num))
+
+        def _optional_float(value: Any, min_value: float, max_value: float) -> Optional[float]:
+            if value is None:
+                return None
+            try:
+                num = float(value)
+            except Exception:
+                return None
+            return max(min_value, min(max_value, num))
+
+        backoff_base_ms = _safe_int(
+            _pick_backoff_value("base_ms", "conflict_backoff_base_ms", "backoff_base_ms"), 200, 1, 600000
+        )
+        backoff_max_ms = _safe_int(
+            _pick_backoff_value("max_ms", "conflict_backoff_max_ms", "backoff_max_ms"), 5000, 1, 600000
+        )
+        backoff_attempt = _safe_int(
+            _pick_backoff_value("attempt", "conflict_backoff_attempt", "backoff_attempt"), 1, 1, 32
+        )
+        backoff_jitter_ratio = _safe_float(
+            _pick_backoff_value("jitter_ratio", "conflict_backoff_jitter_ratio", "backoff_jitter_ratio"),
+            0.25,
+            0.0,
+            1.0,
+        )
+        conflict_backoff = ConflictBackoffConfig(
+            base_ms=backoff_base_ms,
+            max_ms=max(backoff_base_ms, backoff_max_ms),
+            attempt=backoff_attempt,
+            jitter_ratio=backoff_jitter_ratio,
+        )
+
         requester = (
             str(call.get("requester") or call.get("_session_id") or call.get("session_id") or "").strip() or None
         )
@@ -986,6 +1044,31 @@ class NativeToolExecutor:
             original_content_raw = item.get("original_content")
             original_content = str(original_content_raw) if original_content_raw is not None else None
             semantic_rebase = _parse_bool(item.get("semantic_rebase"), semantic_rebase_default)
+            item_backoff_raw = item.get("conflict_backoff")
+            item_backoff_cfg = item_backoff_raw if isinstance(item_backoff_raw, dict) else {}
+
+            def _pick_item_backoff_value(*keys: str) -> Any:
+                for key in keys:
+                    if key in item_backoff_cfg and item_backoff_cfg.get(key) is not None:
+                        return item_backoff_cfg.get(key)
+                    if item.get(key) is not None:
+                        return item.get(key)
+                return None
+
+            item_backoff_base_ms = _optional_int(
+                _pick_item_backoff_value("base_ms", "conflict_backoff_base_ms", "backoff_base_ms"), 1, 600000
+            )
+            item_backoff_max_ms = _optional_int(
+                _pick_item_backoff_value("max_ms", "conflict_backoff_max_ms", "backoff_max_ms"), 1, 600000
+            )
+            item_backoff_attempt = _optional_int(
+                _pick_item_backoff_value("attempt", "conflict_backoff_attempt", "backoff_attempt"), 1, 32
+            )
+            item_backoff_jitter_ratio = _optional_float(
+                _pick_item_backoff_value("jitter_ratio", "conflict_backoff_jitter_ratio", "backoff_jitter_ratio"),
+                0.0,
+                1.0,
+            )
 
             safe_path = self.executor._resolve_safe_path(path, kind="file")
             allowed, reason = guard.check_modification_allowed(safe_path, requester=requester)
@@ -1005,6 +1088,10 @@ class NativeToolExecutor:
                     expected_file_hash=expected_hash,
                     original_content=original_content,
                     semantic_rebase=semantic_rebase,
+                    conflict_backoff_base_ms=item_backoff_base_ms,
+                    conflict_backoff_max_ms=item_backoff_max_ms,
+                    conflict_backoff_attempt=item_backoff_attempt,
+                    conflict_backoff_jitter_ratio=item_backoff_jitter_ratio,
                 )
             )
 
@@ -1029,11 +1116,23 @@ class NativeToolExecutor:
                     return False, f"missing file after apply: {rel_path}"
             return True, "verify ok"
 
-        receipt = self.workspace_txn.apply_all(changes, verify_fn=_verify)
+        receipt = self.workspace_txn.apply_all(changes, verify_fn=_verify, conflict_backoff=conflict_backoff)
         if not receipt.committed:
+            failed_meta = [
+                f"clean_state={receipt.clean_state}",
+                f"recovery_ticket={receipt.recovery_ticket}",
+            ]
+            if receipt.conflict_ticket:
+                failed_meta.append(f"conflict_ticket={receipt.conflict_ticket}")
+            if receipt.conflict_signature:
+                failed_meta.append(f"conflict_signature={receipt.conflict_signature}")
+            if receipt.backoff_ms > 0:
+                failed_meta.append(f"backoff_ms={receipt.backoff_ms}")
+            if receipt.conflict_path:
+                failed_meta.append(f"conflict_path={receipt.conflict_path}")
             raise NativeSecurityError(
                 "workspace transaction failed"
-                f" (clean_state={receipt.clean_state}, recovery_ticket={receipt.recovery_ticket}): {receipt.error}"
+                f" ({', '.join(failed_meta)}): {receipt.error}"
             )
 
         lines = [

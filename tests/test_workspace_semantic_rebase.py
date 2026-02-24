@@ -47,7 +47,10 @@ def test_workspace_txn_apply_semantic_rebase_merges_non_overlapping_conflict():
     )
 
     assert result["status"] == "success"
-    assert "[semantic_rebased_files] 1" in str(result["result"])
+    result_text = str(result["result"])
+    assert "[semantic_rebased_files] 1" in result_text
+    assert "conflict_ticket" not in result_text
+    assert "backoff_ms" not in result_text
     assert target.read_text(encoding="utf-8") == "alpha-agent\nbeta\ngamma-concurrent\n"
 
 
@@ -101,6 +104,9 @@ def test_workspace_txn_apply_semantic_rebase_fails_on_overlapping_conflict_witho
     )
 
     assert result["status"] == "error"
-    assert "semantic rebase failed" in str(result["result"]).lower()
+    result_text = str(result["result"]).lower()
+    assert "semantic rebase failed" in result_text
+    assert "conflict_ticket=" in result_text
+    assert "backoff_ms=" in result_text
     assert stable.read_text(encoding="utf-8") == "stable-original\n"
     assert target.read_text(encoding="utf-8") == current_content

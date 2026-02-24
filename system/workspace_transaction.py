@@ -35,6 +35,19 @@ class WorkspaceChange:
     original_content: Optional[str] = None
     # conservative default: allow semantic rebase path only when safe.
     semantic_rebase: bool = True
+    # Optional per-change conflict backoff overrides.
+    conflict_backoff_base_ms: Optional[int] = None
+    conflict_backoff_max_ms: Optional[int] = None
+    conflict_backoff_attempt: Optional[int] = None
+    conflict_backoff_jitter_ratio: Optional[float] = None
+
+
+@dataclass
+class ConflictBackoffConfig:
+    base_ms: int = 200
+    max_ms: int = 5000
+    attempt: int = 1
+    jitter_ratio: float = 0.25
 
 
 @dataclass
@@ -48,8 +61,29 @@ class WorkspaceTransactionReceipt:
     recovery_ticket: str = ""
     verify_message: str = ""
     error: str = ""
+    conflict_ticket: str = ""
+    conflict_signature: str = ""
+    backoff_ms: int = 0
+    conflict_path: str = ""
     started_at: float = field(default_factory=time.time)
     finished_at: float = 0.0
+
+
+class WorkspaceConflictError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        conflict_ticket: str,
+        conflict_signature: str,
+        backoff_ms: int,
+        conflict_path: str,
+    ) -> None:
+        super().__init__(message)
+        self.conflict_ticket = conflict_ticket
+        self.conflict_signature = conflict_signature
+        self.backoff_ms = backoff_ms
+        self.conflict_path = conflict_path
 
 
 class WorkspaceTransactionManager:
@@ -81,6 +115,117 @@ class WorkspaceTransactionManager:
     @staticmethod
     def _normalize_hash(value: str) -> str:
         return str(value or "").strip().lower()
+
+    @staticmethod
+    def _normalize_backoff_config(config: Optional[ConflictBackoffConfig]) -> ConflictBackoffConfig:
+        cfg = config or ConflictBackoffConfig()
+
+        base_ms = max(1, min(600000, int(getattr(cfg, "base_ms", 200) or 200)))
+        max_ms_raw = int(getattr(cfg, "max_ms", 5000) or 5000)
+        max_ms = max(base_ms, min(600000, max_ms_raw))
+        attempt = max(1, min(32, int(getattr(cfg, "attempt", 1) or 1)))
+
+        jitter_raw = float(getattr(cfg, "jitter_ratio", 0.25) or 0.0)
+        jitter_ratio = max(0.0, min(1.0, jitter_raw))
+        return ConflictBackoffConfig(base_ms=base_ms, max_ms=max_ms, attempt=attempt, jitter_ratio=jitter_ratio)
+
+    @staticmethod
+    def _calc_conflict_backoff_ms(config: ConflictBackoffConfig, *, conflict_signature: str) -> int:
+        exponent = max(0, config.attempt - 1)
+        exponential_ms = config.base_ms * (2 ** exponent)
+        capped_ms = min(config.max_ms, exponential_ms)
+        if capped_ms >= config.max_ms:
+            return config.max_ms
+
+        jitter_span = int(capped_ms * config.jitter_ratio)
+        if jitter_span <= 0:
+            return capped_ms
+
+        # Deterministic jitter keeps ticket/backoff reproducible for the same conflict signature.
+        jitter_seed = f"{conflict_signature}:{config.attempt}"
+        jitter_hash = hashlib.sha256(jitter_seed.encode("utf-8")).hexdigest()
+        fraction = int(jitter_hash[:8], 16) / 0xFFFFFFFF
+        jitter = int(jitter_span * fraction)
+        return min(config.max_ms, capped_ms + jitter)
+
+    @staticmethod
+    def _build_conflict_signature(
+        *,
+        rel_path: str,
+        expected_hash: str,
+        current_hash: str,
+        mode: str,
+        reason: str,
+        incoming_content: str,
+    ) -> str:
+        payload = "|".join(
+            [
+                rel_path.strip().lower(),
+                mode.strip().lower(),
+                expected_hash.strip().lower(),
+                current_hash.strip().lower(),
+                _sha256_text(incoming_content or ""),
+                reason.strip().lower(),
+            ]
+        )
+        return _sha256_text(payload)
+
+    def _build_conflict_error(
+        self,
+        *,
+        rel_path: str,
+        expected_hash: str,
+        current_hash: str,
+        mode: str,
+        reason: str,
+        incoming_content: str,
+        backoff_config: ConflictBackoffConfig,
+    ) -> WorkspaceConflictError:
+        signature = self._build_conflict_signature(
+            rel_path=rel_path,
+            expected_hash=expected_hash,
+            current_hash=current_hash,
+            mode=mode,
+            reason=reason,
+            incoming_content=incoming_content,
+        )
+        ticket = f"conflict_{signature[:20]}"
+        backoff_ms = self._calc_conflict_backoff_ms(backoff_config, conflict_signature=signature)
+        return WorkspaceConflictError(
+            "semantic rebase failed: "
+            f"path={rel_path}, expected_hash={expected_hash}, current_hash={current_hash}, reason={reason}",
+            conflict_ticket=ticket,
+            conflict_signature=signature,
+            backoff_ms=backoff_ms,
+            conflict_path=rel_path,
+        )
+
+    def _resolve_change_backoff_config(
+        self,
+        default_config: ConflictBackoffConfig,
+        change: WorkspaceChange,
+    ) -> ConflictBackoffConfig:
+        merged = ConflictBackoffConfig(
+            base_ms=(
+                change.conflict_backoff_base_ms
+                if change.conflict_backoff_base_ms is not None
+                else default_config.base_ms
+            ),
+            max_ms=(
+                change.conflict_backoff_max_ms if change.conflict_backoff_max_ms is not None else default_config.max_ms
+            ),
+            attempt=(
+                change.conflict_backoff_attempt
+                if change.conflict_backoff_attempt is not None
+                else default_config.attempt
+            ),
+            jitter_ratio=(
+                change.conflict_backoff_jitter_ratio
+                if change.conflict_backoff_jitter_ratio is not None
+                else default_config.jitter_ratio
+            ),
+        )
+        return self._normalize_backoff_config(merged)
 
     @staticmethod
     def _diff_non_equal_ops(base_lines: List[str], target_lines: List[str]) -> List[Tuple[str, int, int, int, int]]:
@@ -193,11 +338,13 @@ class WorkspaceTransactionManager:
         changes: List[WorkspaceChange],
         *,
         verify_fn: Optional[Callable[[WorkspaceTransactionReceipt], Tuple[bool, str]]] = None,
+        conflict_backoff: Optional[ConflictBackoffConfig] = None,
     ) -> WorkspaceTransactionReceipt:
         if not changes:
             raise ValueError("changes must not be empty")
 
         receipt = self.begin()
+        default_backoff_config = self._normalize_backoff_config(conflict_backoff)
         backups: Dict[Path, Tuple[bool, str, str]] = {}
         touched: List[Path] = []
 
@@ -223,10 +370,16 @@ class WorkspaceTransactionManager:
                 current_hash = _sha256_text(current_text) if safe_path.exists() else ""
 
                 if expected_hash and current_hash != expected_hash:
+                    change_backoff_config = self._resolve_change_backoff_config(default_backoff_config, change)
                     if not change.semantic_rebase:
-                        raise RuntimeError(
-                            "semantic rebase disabled: "
-                            f"path={rel}, expected_hash={expected_hash}, current_hash={current_hash}"
+                        raise self._build_conflict_error(
+                            rel_path=rel,
+                            expected_hash=expected_hash,
+                            current_hash=current_hash,
+                            mode=mode,
+                            reason="semantic rebase disabled",
+                            incoming_content=change.content,
+                            backoff_config=change_backoff_config,
                         )
 
                     if mode == "append":
@@ -237,9 +390,14 @@ class WorkspaceTransactionManager:
                     else:
                         base_content = change.original_content
                         if base_content is None:
-                            raise RuntimeError(
-                                "semantic rebase requires original_content when overwrite hash mismatches: "
-                                f"path={rel}, expected_hash={expected_hash}, current_hash={current_hash}"
+                            raise self._build_conflict_error(
+                                rel_path=rel,
+                                expected_hash=expected_hash,
+                                current_hash=current_hash,
+                                mode=mode,
+                                reason="original_content missing",
+                                incoming_content=change.content,
+                                backoff_config=change_backoff_config,
                             )
                         base_hash = self._normalize_hash(_sha256_text(base_content))
                         if base_hash != expected_hash:
@@ -253,10 +411,14 @@ class WorkspaceTransactionManager:
                             current_content=current_text,
                         )
                         if not rebase_ok:
-                            raise RuntimeError(
-                                "semantic rebase failed: "
-                                f"path={rel}, expected_hash={expected_hash}, "
-                                f"current_hash={current_hash}, reason={rebase_reason}"
+                            raise self._build_conflict_error(
+                                rel_path=rel,
+                                expected_hash=expected_hash,
+                                current_hash=current_hash,
+                                mode=mode,
+                                reason=rebase_reason,
+                                incoming_content=change.content,
+                                backoff_config=change_backoff_config,
                             )
                         self._write_text(safe_path, rebased_text, encoding)
                         if rel not in receipt.semantic_rebased_files:
@@ -304,6 +466,11 @@ class WorkspaceTransactionManager:
             receipt.clean_state = rollback_ok
             receipt.rolled_back_files = rolled_back
             receipt.error = str(exc)
+            if isinstance(exc, WorkspaceConflictError):
+                receipt.conflict_ticket = exc.conflict_ticket
+                receipt.conflict_signature = exc.conflict_signature
+                receipt.backoff_ms = exc.backoff_ms
+                receipt.conflict_path = exc.conflict_path
             return receipt
 
         finally:
@@ -312,7 +479,9 @@ class WorkspaceTransactionManager:
 
 
 __all__ = [
+    "ConflictBackoffConfig",
     "WorkspaceChange",
+    "WorkspaceConflictError",
     "WorkspaceTransactionReceipt",
     "WorkspaceTransactionManager",
 ]
