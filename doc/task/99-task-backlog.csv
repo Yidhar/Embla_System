@@ -1,0 +1,77 @@
+﻿task_id,workstream,phase,priority,type,title,depends_on,related_docs,target_modules,dod_summary,status
+NGA-WS10-001,WS10,M0,P0,refactor,统一 Tool Contract 字段模型,,09|12,apiserver|mcpserver,native/mcp 回执字段一致,todo
+NGA-WS10-002,WS10,M0,P0,feature,注入调用上下文元数据,NGA-WS10-001,09|12,agentic_tool_loop|dispatcher,trace/risk/scope 全链路可追溯,todo
+NGA-WS10-003,WS10,M1,P0,hardening,建立输入输出 schema 强校验,NGA-WS10-001,09|10,validator|gateway,非法调用网关拦截并审计,todo
+NGA-WS10-004,WS10,M1,P1,feature,统一工具回执模板与审计记录,NGA-WS10-002,09,event_log|receipt,关键工具回执模板全覆盖,todo
+NGA-WS10-005,WS10,M1,P1,hardening,风险门禁与审批钩子收敛,NGA-WS10-003,10|13,policy_gate|approval,高风险动作按策略阻断/审批,todo
+NGA-WS10-006,WS10,M2,P1,migration,兼容开关与灰度发布策略,NGA-WS10-001;NGA-WS10-003,07|09,feature_flags,新旧 contract 双栈灰度可回退,todo
+NGA-WS11-001,WS11,M1,P0,feature,建立 Artifact 元数据模型,NGA-WS10-001,12|13,artifact_store,每个 ref 可查询元数据,todo
+NGA-WS11-002,WS11,M1,P0,feature,实现 artifact_reader 工具,NGA-WS11-001,06|12,tool_registry|artifact_reader,ref 可按模式二次读取,todo
+NGA-WS11-003,WS11,M1,P0,feature,os_bash 接入 fetch_hints,NGA-WS11-002,12,os_bash,超大结构化输出带检索提示,todo
+NGA-WS11-004,WS11,M1,P0,hardening,实现 Artifact 配额与生命周期策略,NGA-WS11-001,09|12|13,artifact_store,72h 压测无 ENOSPC 雪崩,todo
+NGA-WS11-005,WS11,M2,P1,hardening,高水位背压与关键路径保护,NGA-WS11-004,12|13,backpressure|storage_guard,高水位下核心数据库可写,todo
+NGA-WS11-006,WS11,M2,P1,ops,证据链可观测性,NGA-WS11-002;NGA-WS11-004,11|13,metrics|logging,ref 命中率与回收统计可视化,todo
+NGA-WS12-001,WS12,M1,P0,feature,实现 file_ast_skeleton 分层读取,NGA-WS10-001,09|12,file_ast,大文件默认不全量回读,todo
+NGA-WS12-002,WS12,M1,P0,feature,实现定向 chunk 读取,NGA-WS12-001,12,file_ast_chunk_api,编辑只拉目标区域,todo
+NGA-WS12-003,WS12,M2,P1,hardening,语义重基 semantic_rebase,NGA-WS12-002,12|13,file_ast_conflict,轻度冲突可自动重基,todo
+NGA-WS12-004,WS12,M2,P1,hardening,冲突票据与退避机制,NGA-WS12-003,09|12,conflict_coordinator,无无界重试活锁,todo
+NGA-WS12-005,WS12,M2,P1,feature,Router 仲裁升级路径,NGA-WS12-004,09|11,router_arbiter,冲突超限自动升级仲裁,todo
+NGA-WS12-006,WS12,M2,P1,qa,大文件与并发压测基线,NGA-WS12-001;NGA-WS12-004,13,benchmark_suite,30k 行与并发冲突指标达标,todo
+NGA-WS13-001,WS13,M2,P0,feature,设计 Contract Gate 契约模型,NGA-WS10-001,12|13,subagent_runtime,contract_id+checksum 生效,todo
+NGA-WS13-002,WS13,M2,P0,hardening,并行前契约协商门禁,NGA-WS13-001,12,subagent_runtime,契约不一致 fail-fast,todo
+NGA-WS13-003,WS13,M2,P1,feature,Scaffold contract-aware 生成,NGA-WS13-002,12,scaffold_engine,补丁绑定 contract_id,todo
+NGA-WS13-004,WS13,M2,P0,hardening,Workspace Transaction 管理器,NGA-WS13-003,12|13,execution_bridge,多文件提交原子化,todo
+NGA-WS13-005,WS13,M2,P1,hardening,clean_state 保证与恢复票据,NGA-WS13-004,12,rollback_manager,失败后 clean_state=true,todo
+NGA-WS13-006,WS13,M3,P1,qa,跨文件事务回归与联调,NGA-WS13-004;NGA-WS13-005,13,e2e_suite,事务失败自动回滚通过,todo
+NGA-WS14-001,WS14,M1,P0,hardening,Policy Firewall 能力白名单校验,NGA-WS10-003,10|13,policy_firewall,混淆命令被拦截,todo
+NGA-WS14-002,WS14,M1,P0,hardening,解释器入口硬门禁,NGA-WS14-001,10|13,interpreter_gate,python/sh encoded 入口阻断,todo
+NGA-WS14-003,WS14,M2,P0,hardening,Global Mutex TTL Heartbeat Fencing,NGA-WS10-002,09|10|13,global_mutex,kill-9 注入后锁自动回收,todo
+NGA-WS14-004,WS14,M2,P1,hardening,Orphan Lock 清道夫,NGA-WS14-003,13,lock_scavenger,无永久悬挂锁,todo
+NGA-WS14-005,WS14,M2,P0,hardening,Process Lineage 绑定与回收,NGA-WS14-003,09|13,executor_runtime,按 lineage 递归清理,todo
+NGA-WS14-006,WS14,M2,P0,hardening,Double-Fork 幽灵进程清理,NGA-WS14-005,13,detached_reaper,切主后无幽灵写入,todo
+NGA-WS14-007,WS14,M1,P0,hardening,Sleep Watch ReDoS 防护,NGA-WS10-003,10|13,sleep_watch_daemon,灾难正则不拖垮宿主,todo
+NGA-WS14-008,WS14,M1,P1,hardening,Logrotate 容错,NGA-WS14-007,12|13,watcher_reopen,rotate 后可唤醒,todo
+NGA-WS14-009,WS14,M1,P0,hardening,KillSwitch OOB 出口策略,NGA-WS14-001,10|13,kill_switch,熔断时 OOB 通道可用,todo
+NGA-WS14-010,WS14,M1,P1,ops,OOB 健康探测与恢复 runbook,NGA-WS14-009,10|13,oob_probe|runbook,OOB 可完成 disarm/recover,todo
+NGA-WS15-001,WS15,M3,P1,feature,关键证据字段抽取器,NGA-WS11-001,11|13,gc_extractor,关键字段召回可测,todo
+NGA-WS15-002,WS15,M3,P1,feature,叙事摘要与证据引用分离,NGA-WS15-001,11|13,summarizer|archiver,摘要不改写原证据,todo
+NGA-WS15-003,WS15,M3,P1,refactor,GC 注入策略改造,NGA-WS15-002,11,memory_injector,注入索引卡片+ref,todo
+NGA-WS15-004,WS15,M3,P1,hardening,GC 预算守门与回路防抖,NGA-WS15-003,09|11,token_guard,避免误判重试循环,todo
+NGA-WS15-005,WS15,M3,P1,feature,证据回读自动化链路,NGA-WS11-002;NGA-WS15-003,11|12,gc_reader_bridge,中段根因可自动定位,todo
+NGA-WS15-006,WS15,M3,P2,qa,GC 质量评测与回归基线,NGA-WS15-001;NGA-WS15-005,13,eval_suite,召回误删时延指标达标,todo
+NGA-WS16-001,WS16,M0,P0,migration,迁移资产清单与依赖盘点,,01|07,migration_inventory,核心调用链覆盖盘点,todo
+NGA-WS16-002,WS16,M4,P1,migration,AgentServer 弃用路径设计,NGA-WS16-001,01,agentserver_deprecation,不新增 agentserver 依赖,todo
+NGA-WS16-003,WS16,M4,P1,migration,MCP 状态占位接口收敛,NGA-WS10-001,01,mcp_status_api,前端状态与真实状态一致,todo
+NGA-WS16-004,WS16,M4,P1,migration,配置迁移脚本与版本化,NGA-WS16-001,05|07,config_migration,旧配置可无损升级,todo
+NGA-WS16-005,WS16,M4,P1,ops,兼容双栈灰度与下线开关,NGA-WS16-003;NGA-WS16-004,07|09,feature_flags,灰度可回退,todo
+NGA-WS16-006,WS16,M4,P2,migration,文档与 runbook 同步收口,NGA-WS16-005,README|all_docs,docs_runbook,迁移后口径一致,todo
+NGA-WS17-001,WS17,M1,P0,qa,测试基线只读隔离,,13,test_governance,golden suite 只读可执行,todo
+NGA-WS17-002,WS17,M1,P0,hardening,Anti-Test-Poisoning 检查器,NGA-WS17-001,13,ci_guard,毒化样例可拦截,todo
+NGA-WS17-003,WS17,M2,P1,qa,Clean Checkout 双轨验证,NGA-WS17-001,13,ci_pipeline,双轨一致才可合并,todo
+NGA-WS17-004,WS17,M5,P1,qa,混沌演练 锁泄漏与切主,NGA-WS14-003;NGA-WS14-004,13,chaos_lock,TTL 回收验证通过,todo
+NGA-WS17-005,WS17,M5,P1,qa,混沌演练 ReDoS 与 logrotate,NGA-WS14-007;NGA-WS14-008,13,chaos_sleepwatch,不假死不打爆 CPU,todo
+NGA-WS17-006,WS17,M5,P1,qa,混沌演练 double-fork 与磁盘压力,NGA-WS14-006;NGA-WS11-004,13,chaos_runtime_storage,幽灵回收且数据库不损坏,todo
+NGA-WS17-007,WS17,M5,P1,ops,Canary 与自动回滚收敛,NGA-WS17-003,07,release_controller,canary 异常自动回滚,todo
+NGA-WS17-008,WS17,M5,P2,ops,SLO 告警看板上线,NGA-WS11-006;NGA-WS14-010,10|11|12,observability,值班告警链路完整,todo
+NGA-WS18-001,WS18,M2,P1,feature,Event Bus 事件模型收敛,NGA-WS10-001,10,event_schema,关键事件可统一消费重放,todo
+NGA-WS18-002,WS18,M2,P1,hardening,Outbox Inbox 可靠投递整合,NGA-WS18-001,07|10,workflow_store|event_bus,事件不丢不重,todo
+NGA-WS18-003,WS18,M2,P1,ops,Event Replay 与恢复路径,NGA-WS18-002,10,replay_tool,可按 trace 重放恢复,todo
+NGA-WS18-004,WS18,M2,P1,feature,Watchdog 资源监控器落地,NGA-WS10-002,10,watchdog_daemon,超阈值可告警干预,todo
+NGA-WS18-005,WS18,M2,P1,hardening,Loop Detector 与成本熔断联动,NGA-WS18-004,09|10,loop_cost_guard,死循环场景自动中断,todo
+NGA-WS18-006,WS18,M2,P1,hardening,Immutable DNA 注入与校验,NGA-WS10-003,10,dna_loader,非授权变更被拒绝,todo
+NGA-WS18-007,WS18,M3,P2,ops,DNA 变更审计与审批流程,NGA-WS18-006,10,dna_audit,变更责任可追溯,todo
+NGA-WS18-008,WS18,M4,P2,ops,Brainstem 守护进程打包与托管,NGA-WS18-004;NGA-WS18-006,10|05,service_supervision,异常退出可自恢复,todo
+NGA-WS19-001,WS19,M3,P1,feature,Meta-Agent 服务骨架落地,NGA-WS18-001,11,meta_agent_runtime,任务可拆解分发,todo
+NGA-WS19-002,WS19,M3,P1,feature,Router 规则引擎与角色路由,NGA-WS19-001,11,router_engine,路由决策可解释可回放,todo
+NGA-WS19-003,WS19,M3,P1,refactor,LLM Gateway 分层路由与缓存,NGA-WS10-003,11|09,llm_gateway,成本与时延指标达标,todo
+NGA-WS19-004,WS19,M3,P1,feature,Working Memory 窗口管理器,NGA-WS19-003,11,memory_manager,token 峰值受控,todo
+NGA-WS19-005,WS19,M3,P1,feature,Episodic Memory 写入与检索链路,NGA-WS15-002,11,long_term_memory,历史经验稳定召回,todo
+NGA-WS19-006,WS19,M3,P2,feature,Semantic Graph 拓扑扫描与更新,NGA-WS19-005,11,semantic_graph,依赖链查询准确,todo
+NGA-WS19-007,WS19,M4,P2,ops,Daily Checkpoint 日结归档,NGA-WS19-004;NGA-WS19-005,11,checkpoint_cron,日结稳定可审计,todo
+NGA-WS19-008,WS19,M3,P1,hardening,Router 仲裁熔断联动,NGA-WS19-002;NGA-WS12-005,11|09,router_arbiter,超限冲突不无限循环,todo
+NGA-WS20-001,WS20,M1,P1,migration,API 契约冻结与版本策略,NGA-WS10-001,04|08,apiserver_contract,兼容窗口明确,todo
+NGA-WS20-002,WS20,M2,P1,feature,SSE 事件协议统一,NGA-WS10-004,01|04,sse_protocol,前端消费无需多分支,todo
+NGA-WS20-003,WS20,M3,P2,refactor,前端模块按域解耦,NGA-WS20-001,08,frontend_modules,模块边界清晰可测,todo
+NGA-WS20-004,WS20,M4,P1,migration,MCP 状态展示与真实后端对齐,NGA-WS16-003,01|08,mcp_status_ui,UI 与后台状态一致,todo
+NGA-WS20-005,WS20,M4,P1,qa,前后端联调回归套件,NGA-WS20-002;NGA-WS20-004,05|08,e2e_front_back,核心链路回归全通过,todo
+NGA-WS20-006,WS20,M5,P2,qa,桌面端发布兼容性验证,NGA-WS20-005,05|08,electron_release_checks,关键平台稳定运行,todo
