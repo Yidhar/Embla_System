@@ -23,6 +23,9 @@
 
 ## 3. 发布前执行顺序（T0-T5）
 
+统一入口（推荐）：
+`.\.venv\Scripts\python.exe scripts/release_closure_chain_m0_m5.py`
+
 1. T0 基线校验  
    `python scripts/validate_doc_consistency_ws16_006.py --strict`
 2. T1 安全与运行时回归  
@@ -46,6 +49,7 @@
 ## 5. 放行判定
 
 - 放行条件：`T0-T5` 全通过，且 `M0-M5` 结论全部为“通过”。
+- 链路脚本放行条件：`scripts/release_closure_chain_m0_m5.py` 返回码为 `0`，且报告 `scratch/reports/release_closure_chain_m0_m5_result.json` 中 `passed=true`。
 - 当前判定：`Go`（满足放行条件）。
 
 补充：Phase3（`M6-M7`）收口请执行 `doc/task/runbooks/release_m6_m7_phase3_closure_onepager.md`。
