@@ -71,6 +71,8 @@
     - 各任务波次实施记录与验证证据归档（按任务 ID 命名）。
 25. `doc/task/runbooks/`
     - 运行手册与故障恢复步骤（按任务场景维护）。
+26. `doc/task/runbooks/release_m0_m5_closure_onepager.md`
+    - 发布收口一页清单（M0-M5 门禁、执行顺序、放行判定）。
 
 ## 4. 任务状态约定
 
