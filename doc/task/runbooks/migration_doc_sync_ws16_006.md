@@ -6,13 +6,20 @@
 
 ## 2. 校验入口
 - 校验脚本：`scripts/validate_doc_consistency_ws16_006.py`
+- 风险映射同步脚本：`scripts/sync_risk_verify_mapping_ws16_006.py`
 - 核心校验模块：`system/doc_consistency.py`
 
 ## 3. 标准执行步骤
 1. 更新 `doc/task/09-execution-board.csv`（任务状态/证据链接/notes）。
 2. 落地实现记录：`doc/task/implementation/NGA-XXX-implementation.md`。
 3. 如涉及运维动作，补充 `doc/task/runbooks/*.md`。
-4. 执行一致性校验：
+4. 同步风险验证映射（回填/清理 `verify_for_risks`）：
+
+```bash
+python scripts/sync_risk_verify_mapping_ws16_006.py
+```
+
+5. 执行一致性校验：
 
 ```bash
 python scripts/validate_doc_consistency_ws16_006.py --strict
@@ -32,6 +39,10 @@ python scripts/validate_doc_consistency_ws16_006.py --strict
    - 修复路径，或补充缺失文件并更新 evidence。
 3. `unable to parse evidence item path`
    - 调整 evidence 为标准 `path` 或 `path::selector` 格式。
+4. `review/done task with risk_ids requires verify_for_risks`
+   - 先执行 `sync_risk_verify_mapping_ws16_006.py` 回填，再复跑 `--strict`。
+5. `missing mapped verification task(s)`
+   - 检查 `08-risk-closure-ledger.md` 的 `verification_tasks` 映射与执行板任务状态。
 
 ## 6. 值班门禁建议
 1. 提交前本地执行 `--strict`。

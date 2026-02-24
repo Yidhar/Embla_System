@@ -34,11 +34,24 @@
 - 新增 runbook：
   - `doc/task/runbooks/migration_doc_sync_ws16_006.md`
 
+5. 风险闭环映射增量收口（本轮补充）
+- `system/doc_consistency.py`
+  - 新增 `risk_ledger_file` 支持，校验 `risk_ids -> verify_for_risks` 映射完整性
+  - 校验 `verify_for_risks` 中 task_id 必须存在于执行板
+- 新增 `scripts/sync_risk_verify_mapping_ws16_006.py`
+  - 自动回填/清理执行板 `verify_for_risks`
+- 扩展 `tests/test_doc_consistency_ws16_006.py`
+  - 增加风险映射缺失/缺项/完整场景覆盖
+- 新增 `tests/test_sync_risk_verify_mapping_ws16_006.py`
+  - 覆盖映射回填与 CSV 结构保持
+
 ## 验证命令
-- `.\.venv\Scripts\python.exe -m ruff check system/doc_consistency.py scripts/validate_doc_consistency_ws16_006.py tests/test_doc_consistency_ws16_006.py doc/task/README.md`
+- `.\.venv\Scripts\python.exe -m ruff check system/doc_consistency.py scripts/validate_doc_consistency_ws16_006.py scripts/sync_risk_verify_mapping_ws16_006.py tests/test_doc_consistency_ws16_006.py tests/test_sync_risk_verify_mapping_ws16_006.py doc/task/README.md`
   - 结果: `All checks passed!`
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_doc_consistency_ws16_006.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_doc_consistency_ws16_006.py tests/test_sync_risk_verify_mapping_ws16_006.py`
   - 结果: `passed`
+- `.\.venv\Scripts\python.exe scripts/sync_risk_verify_mapping_ws16_006.py`
+  - 结果: `verify_for_risks` 自动回填/清理完成
 - `.\.venv\Scripts\python.exe scripts/validate_doc_consistency_ws16_006.py --strict`
   - 结果: `error_count=0`（当前执行板证据路径有效）
 

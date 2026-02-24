@@ -31,11 +31,17 @@ def main() -> int:
         default="",
         help="Optional report output json path",
     )
+    parser.add_argument(
+        "--risk-ledger",
+        default="doc/task/08-risk-closure-ledger.md",
+        help="Optional risk closure ledger markdown path; empty string disables risk verify checks",
+    )
     args = parser.parse_args()
 
     report = validate_execution_board_consistency(
         board_file=Path(args.board),
         repo_root=Path(args.repo_root),
+        risk_ledger_file=Path(args.risk_ledger) if args.risk_ledger else None,
     )
     payload = report.to_dict()
     print(json.dumps(payload, ensure_ascii=False, indent=2))
