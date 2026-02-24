@@ -47,3 +47,5 @@
 
 - 放行条件：`T0-T5` 全通过，且 `M0-M5` 结论全部为“通过”。
 - 当前判定：`Go`（满足放行条件）。
+
+补充：Phase3（`M6-M7`）收口请执行 `doc/task/runbooks/release_m6_m7_phase3_closure_onepager.md`。

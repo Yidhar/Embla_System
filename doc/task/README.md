@@ -77,6 +77,8 @@
     - Phase 3 新增工作流：Sub-Agent Runtime + Scaffold Engine 增量落地（WS21）。
 28. `doc/task/22-ws-phase3-scheduler-bridge-and-rollout.md`
     - Phase 3 调度接管工作流：SystemAgent 桥接、事件同步、灰度接管（WS22）。
+29. `doc/task/runbooks/release_m6_m7_phase3_closure_onepager.md`
+    - Phase 3（M6-M7）发布收口一页清单（WS21/WS22 门禁、长稳基线、闭环放行）。
 
 ## 4. 任务状态约定
 
