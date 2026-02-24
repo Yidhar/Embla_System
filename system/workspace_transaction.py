@@ -58,6 +58,7 @@ class WorkspaceTransactionReceipt:
     changed_files: List[str] = field(default_factory=list)
     semantic_rebased_files: List[str] = field(default_factory=list)
     rolled_back_files: List[str] = field(default_factory=list)
+    rollback_failed_files: List[str] = field(default_factory=list)
     recovery_ticket: str = ""
     verify_message: str = ""
     error: str = ""
@@ -345,8 +346,7 @@ class WorkspaceTransactionManager:
 
         receipt = self.begin()
         default_backoff_config = self._normalize_backoff_config(conflict_backoff)
-        backups: Dict[Path, Tuple[bool, str, str]] = {}
-        touched: List[Path] = []
+        backups: Dict[Path, Tuple[bool, str, str, str]] = {}
 
         try:
             # begin -> apply_all
@@ -361,7 +361,7 @@ class WorkspaceTransactionManager:
                     existed = safe_path.exists()
                     original = self._read_text(safe_path, encoding) if existed else ""
                     original_hash = _sha256_text(original) if existed else ""
-                    backups[safe_path] = (existed, original, original_hash)
+                    backups[safe_path] = (existed, original, original_hash, encoding)
 
                 rel = str(safe_path.relative_to(self.project_root)).replace("\\", "/")
 
@@ -430,7 +430,6 @@ class WorkspaceTransactionManager:
                     else:
                         self._write_text(safe_path, change.content, encoding)
 
-                touched.append(safe_path)
                 if rel not in receipt.changed_files:
                     receipt.changed_files.append(rel)
 
@@ -449,23 +448,37 @@ class WorkspaceTransactionManager:
         except Exception as exc:
             # rollback all touched files
             rolled_back: List[str] = []
+            rollback_failed: List[str] = []
             rollback_ok = True
-            for safe_path, (existed, original, _) in backups.items():
+            for safe_path, (existed, original, original_hash, backup_encoding) in backups.items():
+                rel = str(safe_path.relative_to(self.project_root)).replace("\\", "/")
                 try:
                     if existed:
-                        self._write_text(safe_path, original, "utf-8")
+                        self._write_text(safe_path, original, backup_encoding)
+                        restored = self._read_text(safe_path, backup_encoding)
+                        restored_hash = _sha256_text(restored)
+                        if restored_hash != original_hash:
+                            raise RuntimeError(
+                                "rollback verification hash mismatch: "
+                                f"path={rel}, expected={original_hash}, actual={restored_hash}"
+                            )
                     else:
                         if safe_path.exists():
                             safe_path.unlink()
-                    rel = str(safe_path.relative_to(self.project_root)).replace("\\", "/")
+                        if safe_path.exists():
+                            raise RuntimeError(f"rollback deletion failed: path={rel}")
                     rolled_back.append(rel)
                 except Exception:
                     rollback_ok = False
+                    rollback_failed.append(rel)
 
             receipt.committed = False
             receipt.clean_state = rollback_ok
             receipt.rolled_back_files = rolled_back
+            receipt.rollback_failed_files = rollback_failed
             receipt.error = str(exc)
+            if not receipt.recovery_ticket:
+                receipt.recovery_ticket = f"recover_{uuid.uuid4().hex[:12]}"
             if isinstance(exc, WorkspaceConflictError):
                 receipt.conflict_ticket = exc.conflict_ticket
                 receipt.conflict_signature = exc.conflict_signature

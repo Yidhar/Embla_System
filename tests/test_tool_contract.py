@@ -145,6 +145,9 @@ class TestToolResultEnvelope:
         assert result.tool_name == "test_tool"
         assert result.status == "ok"
         assert result.display_preview == "Small result"
+        assert result.narrative_summary == "Small result"
+        assert result.raw_result_ref is None
+        assert result.forensic_artifact_ref is None
         assert result.truncated is False
         assert result.total_chars == 12
         assert result.duration_ms == 100.5
@@ -163,6 +166,8 @@ class TestToolResultEnvelope:
         assert result.total_chars == 10000
         assert len(result.display_preview) == 8000 + len("\n...[TRUNCATED]")
         assert result.display_preview.endswith("[TRUNCATED]")
+        assert result.narrative_summary == result.display_preview
+        assert result.forensic_artifact_ref is None
 
     def test_to_dict_serialization(self):
         """测试序列化为字典"""
@@ -182,6 +187,9 @@ class TestToolResultEnvelope:
         assert data["tool_name"] == "test_tool"
         assert data["status"] == "ok"
         assert data["display_preview"] == "Test result"
+        assert data["narrative_summary"] == "Test result"
+        assert data["raw_result_ref"] is None
+        assert data["forensic_artifact_ref"] is None
 
 
 class TestBuildToolResultWithArtifact:
@@ -207,7 +215,14 @@ class TestBuildToolResultWithArtifact:
 
         assert result.truncated is False
         assert result.raw_result_ref is None
+        assert result.forensic_artifact_ref is None
         assert result.display_preview == "Small output"
+        assert result.narrative_summary == "Small output"
+        payload = result.to_dict()
+        assert payload["display_preview"] == "Small output"
+        assert payload["narrative_summary"] == "Small output"
+        assert payload["raw_result_ref"] is None
+        assert payload["forensic_artifact_ref"] is None
 
     def test_large_text_truncated(self):
         """测试大文本截断"""
@@ -248,6 +263,10 @@ class TestBuildToolResultWithArtifact:
 
         assert result.truncated is True
         assert result.raw_result_ref is not None
+        assert result.forensic_artifact_ref == result.raw_result_ref
+        assert result.narrative_summary == result.display_preview
+        assert result.narrative_summary is not None
+        assert "JSON object with keys:" in result.narrative_summary
         assert result.raw_result_ref.startswith("artifact_")
         assert result.fetch_hints is not None
         assert "jsonpath:$..error_code" in result.fetch_hints
@@ -276,15 +295,50 @@ class TestBuildToolResultWithArtifact:
         )
 
         assert result.raw_result_ref is not None
-        ok, _, content = temp_store.retrieve(result.raw_result_ref)
+        assert result.forensic_artifact_ref == result.raw_result_ref
+        ok, _, content = temp_store.retrieve(result.forensic_artifact_ref)
         assert ok is True
         assert content == large_json
 
-        meta = temp_store.get_metadata(result.raw_result_ref)
+        meta = temp_store.get_metadata(result.forensic_artifact_ref)
         assert meta is not None
         assert meta.source_tool == "test_tool"
         assert meta.source_call_id == "call_123"
         assert meta.source_trace_id == "trace_456"
+
+    def test_forensic_artifact_ref_stable_when_summary_changes(self, monkeypatch):
+        """测试摘要变化不影响证据引用（NGA-WS15-002）"""
+        temp_root = self._make_workspace_tempdir("artifacts_case3_")
+        temp_store = ArtifactStore(
+            ArtifactStoreConfig(
+                artifact_root=temp_root / "artifacts",
+                max_total_size_mb=64,
+                max_single_artifact_mb=16,
+                max_artifact_count=1000,
+            )
+        )
+        monkeypatch.setattr(artifact_store_module, "_artifact_store", temp_store)
+
+        raw_payload = '{"events": [' + ",".join(['{"trace_id":"trace_fix","error_code":"E42"}'] * 600) + "]}"
+        result = build_tool_result_with_artifact(
+            call_id="call_123",
+            trace_id="trace_456",
+            tool_name="test_tool",
+            raw_output=raw_payload,
+            content_type="application/json",
+        )
+        original_ref = result.forensic_artifact_ref
+
+        assert original_ref is not None
+        result.narrative_summary = "Narrative rewritten for readability."
+        result.display_preview = "Another summary view."
+
+        payload = result.to_dict()
+        assert payload["forensic_artifact_ref"] == original_ref
+        assert payload["raw_result_ref"] == original_ref
+        ok, _, roundtrip = temp_store.retrieve(original_ref)
+        assert ok is True
+        assert roundtrip == raw_payload
 
 
 class TestFieldConsistency:

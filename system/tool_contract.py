@@ -247,8 +247,10 @@ class ToolResultEnvelope:
     exit_code: Optional[int] = None
 
     # === 结果数据 ===
-    display_preview: str = ""  # 前端展示预览
-    raw_result_ref: Optional[str] = None  # 大对象引用（artifact ID）
+    display_preview: str = ""  # 前端展示预览（兼容字段）
+    raw_result_ref: Optional[str] = None  # 大对象引用（artifact ID，兼容字段）
+    narrative_summary: Optional[str] = None  # 叙事摘要（与证据引用解耦）
+    forensic_artifact_ref: Optional[str] = None  # 证据 artifact 引用（独立可回读）
     fetch_hints: Optional[list[str]] = None  # 二次读取提示（jsonpath/line_range）
 
     # === 元数据 ===
@@ -268,6 +270,22 @@ class ToolResultEnvelope:
     # === 时间戳 ===
     completed_at: float = field(default_factory=time.time)
 
+    def __post_init__(self) -> None:
+        """
+        向后兼容映射：
+        - narrative_summary <-> display_preview
+        - forensic_artifact_ref <-> raw_result_ref
+        """
+        if self.narrative_summary is None:
+            self.narrative_summary = self.display_preview
+        elif not self.display_preview:
+            self.display_preview = self.narrative_summary
+
+        if self.forensic_artifact_ref is None:
+            self.forensic_artifact_ref = self.raw_result_ref
+        elif self.raw_result_ref is None:
+            self.raw_result_ref = self.forensic_artifact_ref
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -278,6 +296,8 @@ class ToolResultEnvelope:
             "exit_code": self.exit_code,
             "display_preview": self.display_preview,
             "raw_result_ref": self.raw_result_ref,
+            "narrative_summary": self.narrative_summary,
+            "forensic_artifact_ref": self.forensic_artifact_ref,
             "fetch_hints": self.fetch_hints,
             "truncated": self.truncated,
             "total_chars": self.total_chars,
@@ -316,6 +336,7 @@ class ToolResultEnvelope:
             tool_name=tool_name,
             status=status,
             display_preview=display_preview,
+            narrative_summary=display_preview,
             truncated=truncated,
             total_chars=total_chars,
             total_lines=total_lines,
@@ -358,7 +379,7 @@ def build_tool_result_with_artifact(
             source_trace_id=trace_id,
             priority=priority,
         )
-        preview = _summarize_structured(raw_output, content_type)
+        narrative_summary = _summarize_structured(raw_output, content_type)
         fetch_hints = _generate_fetch_hints(content_type, raw_output)
 
         if not artifact_id:
@@ -368,7 +389,8 @@ def build_tool_result_with_artifact(
                 trace_id=trace_id,
                 tool_name=tool_name,
                 status="ok",
-                display_preview=preview + "\n[artifact_persist_failed=true]",
+                display_preview=narrative_summary + "\n[artifact_persist_failed=true]",
+                narrative_summary=narrative_summary + "\n[artifact_persist_failed=true]",
                 truncated=True,
                 total_chars=total_chars,
                 total_lines=total_lines,
@@ -381,8 +403,10 @@ def build_tool_result_with_artifact(
             trace_id=trace_id,
             tool_name=tool_name,
             status="ok",
-            display_preview=preview,
+            display_preview=narrative_summary,
             raw_result_ref=artifact_id,
+            narrative_summary=narrative_summary,
+            forensic_artifact_ref=artifact_id,
             fetch_hints=fetch_hints,
             truncated=True,
             total_chars=total_chars,
@@ -399,6 +423,7 @@ def build_tool_result_with_artifact(
             tool_name=tool_name,
             status="ok",
             display_preview=preview,
+            narrative_summary=preview,
             truncated=True,
             total_chars=total_chars,
             total_lines=total_lines,
@@ -413,6 +438,7 @@ def build_tool_result_with_artifact(
             tool_name=tool_name,
             status="ok",
             display_preview=raw_output,
+            narrative_summary=raw_output,
             truncated=False,
             total_chars=total_chars,
             total_lines=total_lines,

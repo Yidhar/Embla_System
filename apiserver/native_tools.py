@@ -326,6 +326,8 @@ def _render_tool_result_envelope(
     stderr_limit: int,
 ) -> str:
     stderr_preview = _preview_text(stderr_text or "", stderr_limit)
+    forensic_ref = envelope.forensic_artifact_ref or envelope.raw_result_ref
+    narrative_summary = envelope.narrative_summary if envelope.narrative_summary is not None else envelope.display_preview
     hints = ", ".join(envelope.fetch_hints or [])
     lines = [
         f"[exit_code] {exit_code}",
@@ -333,10 +335,13 @@ def _render_tool_result_envelope(
         f"[total_chars] {envelope.total_chars}",
         f"[total_lines] {envelope.total_lines}",
         f"[truncated] {envelope.truncated}",
-        f"[raw_result_ref] {envelope.raw_result_ref or '(none)'}",
+        f"[forensic_artifact_ref] {forensic_ref or '(none)'}",
+        f"[raw_result_ref] {envelope.raw_result_ref or forensic_ref or '(none)'}",
         f"[fetch_hints] {hints if hints else '(none)'}",
+        "[narrative_summary]",
+        narrative_summary if narrative_summary else "(empty)",
         "[display_preview]",
-        envelope.display_preview if envelope.display_preview else "(empty)",
+        envelope.display_preview if envelope.display_preview else (narrative_summary if narrative_summary else "(empty)"),
         "[stderr]",
         stderr_preview if stderr_preview else "(empty)",
     ]
@@ -769,9 +774,11 @@ class NativeToolExecutor:
         return raw
 
     async def _artifact_reader(self, call: Dict[str, Any]) -> str:
-        artifact_id = str(call.get("raw_result_ref") or call.get("artifact_id") or "").strip()
+        artifact_id = str(
+            call.get("forensic_artifact_ref") or call.get("raw_result_ref") or call.get("artifact_id") or ""
+        ).strip()
         if not artifact_id:
-            raise ValueError("artifact_reader 缺少 raw_result_ref/artifact_id")
+            raise ValueError("artifact_reader 缺少 forensic_artifact_ref/raw_result_ref/artifact_id")
 
         store = get_artifact_store()
         ok, message, content = store.retrieve(artifact_id)
@@ -1121,7 +1128,10 @@ class NativeToolExecutor:
             failed_meta = [
                 f"clean_state={receipt.clean_state}",
                 f"recovery_ticket={receipt.recovery_ticket}",
+                f"rolled_back_files={len(receipt.rolled_back_files)}",
             ]
+            if receipt.rollback_failed_files:
+                failed_meta.append(f"rollback_failed_files={len(receipt.rollback_failed_files)}")
             if receipt.conflict_ticket:
                 failed_meta.append(f"conflict_ticket={receipt.conflict_ticket}")
             if receipt.conflict_signature:

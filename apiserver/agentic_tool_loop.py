@@ -962,6 +962,7 @@ def get_agentic_tool_definitions() -> List[Dict[str, Any]]:
                         "path": {"type": "string"},
                         "file_path": {"type": "string"},
                         "artifact_id": {"type": "string"},
+                        "forensic_artifact_ref": {"type": "string"},
                         "raw_result_ref": {"type": "string"},
                         "content": {"type": "string"},
                         "changes": {
