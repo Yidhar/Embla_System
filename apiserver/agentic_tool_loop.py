@@ -15,6 +15,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from system.config import get_config, get_server_port
 from system.coding_intent import contains_direct_coding_signal, extract_latest_user_message, requires_codex_for_messages
+from system.global_mutex import LeaseHandle, get_global_mutex_manager
+from system.tool_contract import ToolCallEnvelope
 from .native_tools import get_native_tool_executor
 
 logger = logging.getLogger(__name__)
@@ -258,7 +260,7 @@ _CODING_KEYWORDS = (
 )
 _CODEX_SERVICE_ALIASES = {"codex-cli", "codex-mcp"}
 _CODEX_TOOL_NAMES = {"ask-codex", "brainstorm", "help", "ping"}
-_MUTATING_NATIVE_TOOL_NAMES = {"write_file", "git_checkout_file"}
+_MUTATING_NATIVE_TOOL_NAMES = {"write_file", "git_checkout_file", "workspace_txn_apply"}
 
 
 def _extract_latest_user_message(messages: List[Dict[str, Any]]) -> str:
@@ -287,6 +289,68 @@ def _is_mutating_native_call(call: Dict[str, Any]) -> bool:
         return False
     tool_name = str(call.get("tool_name", "")).strip().lower()
     return tool_name in _MUTATING_NATIVE_TOOL_NAMES
+
+
+def _build_tool_envelope_from_call(call: Dict[str, Any]) -> ToolCallEnvelope:
+    tool_name = str(call.get("tool_name", "") or "unknown")
+    legacy_call = {
+        "tool_name": tool_name,
+        "_tool_call_id": call.get("_tool_call_id"),
+        "arguments": {k: v for k, v in call.items() if not str(k).startswith("_")},
+    }
+    return ToolCallEnvelope.from_legacy_call(
+        legacy_call,
+        session_id=str(call.get("_session_id") or "") or None,
+        trace_id=str(call.get("_trace_id") or "") or None,
+    )
+
+
+def _requires_global_mutex(call: Dict[str, Any]) -> bool:
+    try:
+        envelope = _build_tool_envelope_from_call(call)
+        return bool(envelope.requires_global_mutex)
+    except Exception:
+        return False
+
+
+def _apply_parallel_contract_gate(actionable_calls: List[Dict[str, Any]]) -> Tuple[List[str], bool]:
+    """
+    WS13-002:
+    - Parallel mutating calls must share the same non-empty contract_id.
+    - On mismatch, downgrade this round to serial mode instead of blind parallel writes.
+    """
+    mutating_native_calls = [call for call in actionable_calls if _is_mutating_native_call(call)]
+    if len(mutating_native_calls) <= 1:
+        return [], False
+
+    contract_ids = {
+        str(call.get("contract_id") or "").strip()
+        for call in mutating_native_calls
+    }
+    checksum_values = {
+        str(call.get("contract_checksum") or "").strip()
+        for call in mutating_native_calls
+        if str(call.get("contract_checksum") or "").strip()
+    }
+
+    gate_messages: List[str] = []
+    force_serial = False
+    if "" in contract_ids or len(contract_ids) != 1:
+        force_serial = True
+        gate_messages.append(
+            "Contract gate: parallel mutating calls missing/mismatched contract_id; downgraded to serial execution."
+        )
+    if len(checksum_values) > 1:
+        force_serial = True
+        gate_messages.append(
+            "Contract gate: parallel mutating calls mismatched contract_checksum; downgraded to serial execution."
+        )
+
+    if force_serial:
+        for call in mutating_native_calls:
+            call["_force_serial"] = True
+
+    return gate_messages, force_serial
 
 
 def _build_forced_codex_call(user_request: str, round_num: int) -> Dict[str, Any]:
@@ -647,9 +711,51 @@ async def _execute_tool_call_with_retry(
             attempt,
             max_attempts,
         )
+        lease: Optional[LeaseHandle] = None
+        heartbeat_task: Optional[asyncio.Task[None]] = None
+        stop_heartbeat = asyncio.Event()
+        heartbeat_errors: List[str] = []
+        mutex_manager = None
         try:
+            if _requires_global_mutex(call):
+                mutex_manager = get_global_mutex_manager()
+                lease = await mutex_manager.acquire(
+                    owner_id=str(session_id or call.get("_session_id") or "unknown_session"),
+                    job_id=call_id,
+                    ttl_seconds=10.0,
+                    wait_timeout_seconds=30.0,
+                    poll_interval_seconds=0.2,
+                )
+                call["_fencing_epoch"] = lease.fencing_epoch
+
+                async def _heartbeat_loop() -> None:
+                    nonlocal lease
+                    if lease is None:
+                        return
+                    interval = max(1.0, min(5.0, lease.ttl_seconds / 2.0))
+                    while not stop_heartbeat.is_set():
+                        await asyncio.sleep(interval)
+                        if stop_heartbeat.is_set():
+                            return
+                        try:
+                            lease = await mutex_manager.renew(lease)  # type: ignore[union-attr]
+                        except Exception as hb_exc:
+                            heartbeat_errors.append(str(hb_exc))
+                            return
+
+                heartbeat_task = asyncio.create_task(_heartbeat_loop())
+
             async with semaphore:
                 result = await _execute_single_tool_call(call, session_id)
+
+            if heartbeat_errors:
+                result = {
+                    "tool_call": call,
+                    "result": f"lease heartbeat failed: {'; '.join(heartbeat_errors)}",
+                    "status": "error",
+                    "service_name": "runtime",
+                    "tool_name": tool_name or "unknown",
+                }
         except Exception as e:
             result = {
                 "tool_call": call,
@@ -658,6 +764,18 @@ async def _execute_tool_call_with_retry(
                 "service_name": "unknown",
                 "tool_name": "unknown",
             }
+        finally:
+            stop_heartbeat.set()
+            if heartbeat_task is not None:
+                try:
+                    await heartbeat_task
+                except Exception:
+                    pass
+            if lease is not None and mutex_manager is not None:
+                try:
+                    await mutex_manager.release(lease)
+                except Exception:
+                    pass
 
         logger.info(
             "[AgenticLoop] tool attempt done id=%s status=%s service=%s tool=%s result=%s",
@@ -705,7 +823,8 @@ async def execute_tool_calls(
     if not tool_calls:
         return []
 
-    parallel_limit = _clamp_int(max_parallel_calls, 8, 1, 64)
+    force_serial = any(bool(call.get("_force_serial", False)) for call in tool_calls)
+    parallel_limit = 1 if force_serial else _clamp_int(max_parallel_calls, 8, 1, 64)
     semaphore = asyncio.Semaphore(parallel_limit)
 
     tasks = [
@@ -790,19 +909,50 @@ def get_agentic_tool_definitions() -> List[Dict[str, Any]]:
                                 "git_changed_files",
                                 "git_checkout_file",
                                 "python_repl",
+                                "artifact_reader",
+                                "file_ast_skeleton",
+                                "file_ast_chunk_read",
+                                "workspace_txn_apply",
+                                "sleep_and_watch",
+                                "killswitch_plan",
+                                "os_bash",
                             ],
                         },
                         "path": {"type": "string"},
                         "file_path": {"type": "string"},
+                        "artifact_id": {"type": "string"},
+                        "raw_result_ref": {"type": "string"},
                         "content": {"type": "string"},
-                        "mode": {"type": "string", "enum": ["overwrite", "append"]},
+                        "changes": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "path": {"type": "string"},
+                                    "file_path": {"type": "string"},
+                                    "content": {"type": "string"},
+                                    "mode": {"type": "string", "enum": ["overwrite", "append"]},
+                                    "encoding": {"type": "string"},
+                                },
+                                "required": ["content"],
+                            },
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["overwrite", "append", "preview", "line_range", "grep", "jsonpath", "freeze"],
+                        },
                         "encoding": {"type": "string"},
                         "command": {"type": "string"},
                         "cmd": {"type": "string"},
                         "cwd": {"type": "string"},
+                        "artifact_priority": {"type": "string", "enum": ["low", "normal", "high", "critical"]},
                         "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 1200},
                         "keyword": {"type": "string"},
                         "query": {"type": "string"},
+                        "jsonpath": {"type": "string"},
+                        "log_file": {"type": "string"},
+                        "regex": {"type": "string"},
                         "search_path": {"type": "string"},
                         "repo_path": {"type": "string"},
                         "target_path": {"type": "string"},
@@ -839,8 +989,18 @@ def get_agentic_tool_definitions() -> List[Dict[str, Any]]:
                         "unified": {"type": "integer", "minimum": 0, "maximum": 30},
                         "start_line": {"type": "integer", "minimum": 1},
                         "end_line": {"type": "integer", "minimum": 1},
+                        "context_before": {"type": "integer", "minimum": 0, "maximum": 200},
+                        "context_after": {"type": "integer", "minimum": 0, "maximum": 200},
                         "max_chars": {"type": "integer", "minimum": 200, "maximum": 100000},
                         "max_output_chars": {"type": "integer", "minimum": 200, "maximum": 500000},
+                        "poll_interval_seconds": {"type": "number", "minimum": 0.05, "maximum": 10.0},
+                        "from_end": {"type": "boolean"},
+                        "max_line_chars": {"type": "integer", "minimum": 64, "maximum": 20000},
+                        "contract_id": {"type": "string"},
+                        "contract_checksum": {"type": "string"},
+                        "verify_after_apply": {"type": "boolean"},
+                        "oob_allowlist": {"type": "array", "items": {"type": "string"}},
+                        "dns_allow": {"type": "boolean"},
                         "recursive": {"type": "boolean"},
                     },
                     "required": ["tool_name"],
@@ -887,16 +1047,33 @@ def get_agentic_tool_definitions() -> List[Dict[str, Any]]:
 
 def _convert_structured_tool_calls(
     structured_calls: List[Dict[str, Any]],
+    session_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+    """
+    转换结构化工具调用，注入上下文元数据
+
+    NGA-WS10-002: 注入 call_id/trace_id/session_id 等上下文元数据
+    """
     actionable_calls: List[Dict[str, Any]] = []
     live2d_calls: List[Dict[str, Any]] = []
     validation_errors: List[str] = []
+
+    # 生成 trace_id（如果未提供）
+    if not trace_id:
+        trace_id = f"trace_{uuid.uuid4().hex[:16]}"
 
     for idx, call in enumerate(structured_calls, 1):
         call_id = str(call.get("id") or f"tool_call_{idx}")
         tool_name = str(call.get("name") or "").strip()
         parse_error = call.get("parse_error")
         args = call.get("arguments")
+
+        # 注入上下文元数据（NGA-WS10-002）
+        call["_tool_call_id"] = call_id
+        call["_trace_id"] = trace_id
+        if session_id:
+            call["_session_id"] = session_id
 
         if parse_error:
             validation_errors.append(f"工具调用参数解析失败: id={call_id}, error={parse_error}")
@@ -911,7 +1088,14 @@ def _convert_structured_tool_calls(
             if not native_tool_name:
                 validation_errors.append(f"native_call 缺少 tool_name: id={call_id}")
                 continue
-            native_call = {"agentType": "native", **args, "_tool_call_id": call_id}
+            native_call = {
+                "agentType": "native",
+                **args,
+                "_tool_call_id": call_id,
+                "_trace_id": trace_id,
+            }
+            if session_id:
+                native_call["_session_id"] = session_id
             actionable_calls.append(native_call)
             continue
 
@@ -925,7 +1109,10 @@ def _convert_structured_tool_calls(
                 "agentType": "mcp",
                 "tool_name": mcp_tool_name,
                 "_tool_call_id": call_id,
+                "_trace_id": trace_id,
             }
+            if session_id:
+                merged_call["_session_id"] = session_id
             service_name = str(args.get("service_name") or "").strip()
             if not service_name and mcp_tool_name in {"ask-codex", "brainstorm", "help", "ping"}:
                 service_name = "codex-cli"
@@ -970,7 +1157,12 @@ def _convert_structured_tool_calls(
             if not action:
                 validation_errors.append(f"live2d_action 缺少 action: id={call_id}")
                 continue
-            live2d_calls.append({"agentType": "live2d", "action": action, "_tool_call_id": call_id})
+            live2d_calls.append({
+                "agentType": "live2d",
+                "action": action,
+                "_tool_call_id": call_id,
+                "_trace_id": trace_id,
+            })
             continue
 
         validation_errors.append(f"未知函数调用: id={call_id}, name={tool_name}")
@@ -1236,7 +1428,11 @@ async def run_agentic_loop(
             yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
             break
 
-        actionable_calls, live2d_calls, validation_errors = _convert_structured_tool_calls(structured_tool_calls)
+        actionable_calls, live2d_calls, validation_errors = _convert_structured_tool_calls(
+            structured_tool_calls,
+            session_id=session_id,
+            trace_id=None,  # 自动生成
+        )
         legacy_protocol_error = _detect_legacy_tool_protocol_violation(complete_text, structured_tool_calls)
         if legacy_protocol_error:
             validation_errors.append(legacy_protocol_error)
@@ -1253,6 +1449,20 @@ async def run_agentic_loop(
                 "[AgenticLoop] round %s blocked %s mutating native call(s) before codex handoff",
                 round_num,
                 blocked_mutating_calls,
+            )
+
+        contract_gate_messages, contract_force_serial = _apply_parallel_contract_gate(actionable_calls)
+        if contract_gate_messages:
+            for msg in contract_gate_messages:
+                logger.warning("[AgenticLoop] round %s %s", round_num, msg)
+            yield _format_sse_event(
+                "guardrail",
+                {
+                    "round": round_num,
+                    "type": "contract_gate",
+                    "force_serial": contract_force_serial,
+                    "messages": contract_gate_messages,
+                },
             )
 
         validation_results = _build_validation_results(validation_errors)
@@ -1815,4 +2025,3 @@ async def run_agentic_loop(
         if verify_success_event:
             yield verify_success_event
         yield _format_sse_event("round_end", {"round": summary_round, "has_more": False})
-

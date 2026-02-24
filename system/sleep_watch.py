@@ -1,0 +1,156 @@
+"""
+Sleep/watch helpers with safe-regex and rotate-safe reopen semantics.
+
+WS14-007/008:
+- regex complexity gate + match timeout budget
+- tail -F style reopen when inode/size changes
+"""
+
+from __future__ import annotations
+
+import asyncio
+import re
+import time
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional, Tuple
+
+
+@dataclass(frozen=True)
+class SleepWatchResult:
+    watch_id: str
+    matched: bool
+    reason: str
+    matched_line: str = ""
+    elapsed_seconds: float = 0.0
+
+
+_UNSAFE_REGEX_PATTERNS = (
+    # Nested quantifiers like (a+)+ / (.*)+
+    re.compile(r"\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)\s*[+*{]"),
+    # Repeated wildcard groups like (.+)+
+    re.compile(r"\((?:\.\*|\.\+)\)\s*[+*{]"),
+    # Backreferences are expensive and often unnecessary in log watch.
+    re.compile(r"\\[1-9]"),
+)
+
+
+def validate_safe_regex(pattern: str, *, max_len: int = 256) -> Tuple[bool, str]:
+    text = (pattern or "").strip()
+    if not text:
+        return False, "pattern is empty"
+    if len(text) > max_len:
+        return False, f"pattern too long: {len(text)} > {max_len}"
+
+    for unsafe_re in _UNSAFE_REGEX_PATTERNS:
+        if unsafe_re.search(text):
+            return False, "unsafe regex pattern blocked (potential catastrophic backtracking)"
+
+    try:
+        re.compile(text)
+    except re.error as exc:
+        return False, f"regex compile error: {exc}"
+
+    return True, "ok"
+
+
+async def wait_for_log_pattern(
+    *,
+    log_file: Path,
+    pattern: str,
+    timeout_seconds: int = 3600,
+    poll_interval_seconds: float = 0.5,
+    from_end: bool = True,
+    max_line_chars: int = 4000,
+    regex_match_timeout_seconds: float = 0.05,
+) -> SleepWatchResult:
+    ok, reason = validate_safe_regex(pattern)
+    if not ok:
+        return SleepWatchResult(
+            watch_id=f"watch_{uuid.uuid4().hex[:12]}",
+            matched=False,
+            reason=reason,
+        )
+
+    compiled = re.compile(pattern)
+    watch_id = f"watch_{uuid.uuid4().hex[:12]}"
+    started_at = time.time()
+    deadline = started_at + max(1, int(timeout_seconds))
+    current_inode: Optional[int] = None
+    current_position = 0
+    initialized = False
+
+    async def _safe_match(line: str) -> bool:
+        try:
+            found = await asyncio.wait_for(
+                asyncio.to_thread(lambda: bool(compiled.search(line))),
+                timeout=max(0.01, float(regex_match_timeout_seconds)),
+            )
+            return bool(found)
+        except asyncio.TimeoutError:
+            return False
+
+    while True:
+        now_ts = time.time()
+        if now_ts >= deadline:
+            return SleepWatchResult(
+                watch_id=watch_id,
+                matched=False,
+                reason="timeout",
+                elapsed_seconds=now_ts - started_at,
+            )
+
+        if not log_file.exists():
+            await asyncio.sleep(max(0.05, poll_interval_seconds))
+            continue
+
+        try:
+            stat = log_file.stat()
+        except Exception:
+            await asyncio.sleep(max(0.05, poll_interval_seconds))
+            continue
+
+        inode = int(getattr(stat, "st_ino", 0))
+        size = int(getattr(stat, "st_size", 0))
+        rotated = current_inode is not None and inode and inode != current_inode
+        truncated = size < current_position
+        if rotated or truncated:
+            current_position = 0
+        current_inode = inode if inode else current_inode
+
+        got_new_data = False
+        try:
+            with log_file.open("r", encoding="utf-8", errors="ignore") as fh:
+                if not initialized and from_end and current_position == 0:
+                    fh.seek(0, 2)
+                    current_position = int(fh.tell())
+                else:
+                    fh.seek(max(0, min(current_position, size)), 0)
+
+                while True:
+                    line = fh.readline()
+                    if not line:
+                        break
+                    got_new_data = True
+                    current_position = int(fh.tell())
+                    candidate = line.rstrip("\n")[:max(64, int(max_line_chars))]
+                    if await _safe_match(candidate):
+                        return SleepWatchResult(
+                            watch_id=watch_id,
+                            matched=True,
+                            reason="matched",
+                            matched_line=candidate,
+                            elapsed_seconds=time.time() - started_at,
+                        )
+        except Exception:
+            await asyncio.sleep(max(0.05, poll_interval_seconds))
+            continue
+        finally:
+            initialized = True
+
+        if not got_new_data:
+            await asyncio.sleep(max(0.05, poll_interval_seconds))
+
+
+__all__ = ["SleepWatchResult", "validate_safe_regex", "wait_for_log_pattern"]

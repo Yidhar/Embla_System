@@ -17,7 +17,15 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from system.artifact_store import get_artifact_store
+from system.killswitch_guard import build_oob_killswitch_plan
 from system.native_executor import CommandResult, NativeExecutor, NativeSecurityError
+from system.policy_firewall import get_policy_firewall
+from system.sleep_watch import wait_for_log_pattern
+from system.subagent_contract import validate_parallel_contract
+from system.test_baseline_guard import TestBaselineGuard, TestPoisoningDetector
+from system.tool_contract import ToolResultEnvelope, build_tool_result_with_artifact
+from system.workspace_transaction import WorkspaceChange, WorkspaceTransactionManager
 
 
 _DEFAULT_PREVIEW_CHARS = 6000
@@ -208,6 +216,133 @@ def _extract_command_candidate(text: str) -> Optional[str]:
     return None
 
 
+def _detect_structured_content_type(text: str) -> str:
+    stripped = (text or "").strip()
+    if not stripped:
+        return "text/plain"
+
+    if (stripped.startswith("{") and stripped.endswith("}")) or (
+        stripped.startswith("[") and stripped.endswith("]")
+    ):
+        try:
+            json.loads(stripped)
+            return "application/json"
+        except Exception:
+            pass
+
+    if stripped.startswith("<?xml") or (stripped.startswith("<") and stripped.endswith(">")):
+        return "application/xml"
+
+    lines = stripped.splitlines()
+    if len(lines) >= 2 and "," in lines[0]:
+        header_cols = len(lines[0].split(","))
+        if header_cols >= 2 and any(len(row.split(",")) == header_cols for row in lines[1: min(len(lines), 20)]):
+            return "text/csv"
+
+    return "text/plain"
+
+
+def _jsonpath_deep_find(node: Any, key: str, out: List[Any], max_items: int) -> None:
+    if len(out) >= max_items:
+        return
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == key:
+                out.append(v)
+                if len(out) >= max_items:
+                    return
+            _jsonpath_deep_find(v, key, out, max_items)
+            if len(out) >= max_items:
+                return
+    elif isinstance(node, list):
+        for item in node:
+            _jsonpath_deep_find(item, key, out, max_items)
+            if len(out) >= max_items:
+                return
+
+
+def _jsonpath_extract(content: str, query: str, max_items: int = 50) -> List[Any]:
+    data = json.loads(content)
+    query = (query or "").strip()
+    if not query:
+        raise ValueError("jsonpath query 不能为空")
+
+    if query.startswith("$.."):
+        key = query[3:].strip()
+        if not key:
+            raise ValueError("jsonpath 深度查询缺少 key，例如 $..trace_id")
+        out: List[Any] = []
+        _jsonpath_deep_find(data, key, out, max_items=max_items)
+        return out
+
+    if not query.startswith("$."):
+        raise ValueError("仅支持 '$..key' 或 '$.a.b[0]' 形式的简化 jsonpath")
+
+    cursor: Any = data
+    expr = query[1:]  # 保留 ".a.b[0]"
+    while expr:
+        if expr.startswith("."):
+            expr = expr[1:]
+            m = re.match(r"([A-Za-z0-9_\-]+)", expr)
+            if not m:
+                raise ValueError(f"jsonpath 字段解析失败: {query}")
+            key = m.group(1)
+            if not isinstance(cursor, dict) or key not in cursor:
+                return []
+            cursor = cursor[key]
+            expr = expr[m.end():]
+            continue
+
+        if expr.startswith("["):
+            m = re.match(r"\[(\d+)\]", expr)
+            if not m:
+                raise ValueError(f"jsonpath 索引解析失败: {query}")
+            index = int(m.group(1))
+            if not isinstance(cursor, list) or index >= len(cursor):
+                return []
+            cursor = cursor[index]
+            expr = expr[m.end():]
+            continue
+
+        raise ValueError(f"不支持的 jsonpath 片段: {expr}")
+
+    return [cursor]
+
+
+def _format_artifact_reader_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return repr(value)
+
+
+def _render_tool_result_envelope(
+    envelope: ToolResultEnvelope,
+    *,
+    exit_code: int,
+    stderr_text: str,
+    stderr_limit: int,
+) -> str:
+    stderr_preview = _preview_text(stderr_text or "", stderr_limit)
+    hints = ", ".join(envelope.fetch_hints or [])
+    lines = [
+        f"[exit_code] {exit_code}",
+        f"[content_type] {envelope.content_type}",
+        f"[total_chars] {envelope.total_chars}",
+        f"[total_lines] {envelope.total_lines}",
+        f"[truncated] {envelope.truncated}",
+        f"[raw_result_ref] {envelope.raw_result_ref or '(none)'}",
+        f"[fetch_hints] {hints if hints else '(none)'}",
+        "[display_preview]",
+        envelope.display_preview if envelope.display_preview else "(empty)",
+        "[stderr]",
+        stderr_preview if stderr_preview else "(empty)",
+    ]
+    return "\n".join(lines)
+
+
 def _build_safe_python_payload(user_code: str) -> str:
     """Build restricted python runner payload executed by a separate interpreter process."""
     return f"""
@@ -299,6 +434,8 @@ class NativeToolExecutor:
     def __init__(self) -> None:
         self.executor = NativeExecutor()
         self.project_root = self.executor.base_dir
+        self.policy_firewall = get_policy_firewall()
+        self.workspace_txn = WorkspaceTransactionManager(project_root=self.project_root)
         self._doc_roots = [
             "doc",
             "docs",
@@ -316,6 +453,7 @@ class NativeToolExecutor:
             "readfile": "read_file",
             "write": "write_file",
             "writefile": "write_file",
+            "os_bash": "run_cmd",
             "pwd": "get_cwd",
             "cwd": "get_cwd",
             "cmd": "run_cmd",
@@ -337,9 +475,23 @@ class NativeToolExecutor:
             "py": "python_repl",
             "python": "python_repl",
             "python_exec": "python_repl",
+            "artifact": "artifact_reader",
+            "read_artifact": "artifact_reader",
+            "file_ast_chunk": "file_ast_chunk_read",
+            "readchunkbyrange": "file_ast_chunk_read",
+            "sleep_watch": "sleep_and_watch",
+            "watch_log": "sleep_and_watch",
+            "txn_apply": "workspace_txn_apply",
+            "scaffold_apply": "workspace_txn_apply",
+            "killswitch": "killswitch_plan",
             "repl": "python_repl",
         }
         tool_name = aliases.get(tool_name, tool_name)
+
+        decision = self.policy_firewall.validate_native_call(tool_name, call)
+        if not decision.allowed:
+            audit_suffix = f" (audit_id={decision.audit_id})" if decision.audit_id else ""
+            return self._error(call, f"瀹夊叏闄愬埗: {decision.reason}{audit_suffix}", tool_name=tool_name)
 
         try:
             if tool_name == "read_file":
@@ -374,6 +526,18 @@ class NativeToolExecutor:
                 result = await self._git_checkout_file(call)
             elif tool_name == "python_repl":
                 result = await self._python_repl(call)
+            elif tool_name == "artifact_reader":
+                result = await self._artifact_reader(call)
+            elif tool_name == "file_ast_skeleton":
+                result = await self._file_ast_skeleton(call)
+            elif tool_name == "file_ast_chunk_read":
+                result = await self._file_ast_chunk_read(call)
+            elif tool_name == "workspace_txn_apply":
+                result = await self._workspace_txn_apply(call)
+            elif tool_name == "sleep_and_watch":
+                result = await self._sleep_and_watch(call)
+            elif tool_name == "killswitch_plan":
+                result = await self._killswitch_plan(call)
             else:
                 return self._error(call, f"不支持的native工具: {tool_name}", tool_name=tool_name)
 
@@ -414,6 +578,17 @@ class NativeToolExecutor:
         if not path:
             raise ValueError("write_file 缺少 path")
 
+        safe_path = self.executor._resolve_safe_path(path, kind="file")
+        requester = (
+            str(call.get("requester") or call.get("_session_id") or call.get("session_id") or "").strip() or None
+        )
+
+        # NGA-WS17-002: 写入前执行 Anti-Test-Poisoning 门禁
+        guard = TestBaselineGuard()
+        allowed, reason = guard.check_modification_allowed(safe_path, requester=requester)
+        if not allowed:
+            raise NativeSecurityError(reason)
+
         content = call.get("content")
         if content is None:
             raise ValueError("write_file 缺少 content")
@@ -431,8 +606,10 @@ class NativeToolExecutor:
             if existing and not existing.endswith("\n"):
                 existing += "\n"
             merged = existing + content
+            self._validate_test_poisoning(safe_path, merged)
             await self.executor.write_file(path, merged, encoding=encoding)
         else:
+            self._validate_test_poisoning(safe_path, content)
             await self.executor.write_file(path, content, encoding=encoding)
 
         return f"已写入文件: {path} (mode={mode}, chars={len(content)})"
@@ -451,8 +628,63 @@ class NativeToolExecutor:
         timeout_s = _safe_int(call.get("timeout_seconds"), 120, 1, 1200)
         stdout_limit, stderr_limit = self._resolve_output_limits(call, default_stdout=6000, default_stderr=3000)
 
-        result: CommandResult = await self.executor.execute_shell(command, cwd=cwd, timeout_s=timeout_s)
+        call_id = str(call.get("_tool_call_id") or f"call_{abs(hash(command)) % 10_000_000}")
+        fencing_epoch_raw = call.get("_fencing_epoch")
+        try:
+            fencing_epoch = int(fencing_epoch_raw) if fencing_epoch_raw is not None else None
+        except Exception:
+            fencing_epoch = None
+        result: CommandResult = await self.executor.execute_shell(
+            command,
+            cwd=cwd,
+            timeout_s=timeout_s,
+            call_id=call_id,
+            fencing_epoch=fencing_epoch,
+        )
+        stdout_text = result.stdout or ""
+        content_type = _detect_structured_content_type(stdout_text)
+        if content_type in {"application/json", "text/csv", "application/xml"}:
+            trace_id = str(call.get("_trace_id") or "trace_native")
+            envelope = build_tool_result_with_artifact(
+                call_id=call_id,
+                trace_id=trace_id,
+                tool_name="os_bash",
+                raw_output=stdout_text,
+                content_type=content_type,
+                priority=str(call.get("artifact_priority") or "normal"),
+            )
+            return _render_tool_result_envelope(
+                envelope,
+                exit_code=result.returncode,
+                stderr_text=result.stderr,
+                stderr_limit=stderr_limit,
+            )
+
         return self._format_process_result(result, stdout_limit=stdout_limit, stderr_limit=stderr_limit)
+
+    @staticmethod
+    def _validate_test_poisoning(path: Path, content: str) -> None:
+        guard = TestBaselineGuard()
+        if not guard.is_test_file(path):
+            return
+
+        detector = TestPoisoningDetector()
+        analysis = {
+            "weakened_assertions": detector.detect_weakened_assertions(content),
+            "test_skipping": detector.detect_test_skipping(content),
+            "exception_swallowing": detector.detect_exception_swallowing(content),
+        }
+        if not detector.has_poisoning_patterns(analysis):
+            return
+
+        lines: List[str] = [f"Anti-Test-Poisoning blocked write: {path}"]
+        for category, issues in analysis.items():
+            if not issues:
+                continue
+            lines.append(f"  {category}:")
+            for line_num, desc in issues[:10]:
+                lines.append(f"    Line {line_num}: {desc}")
+        raise NativeSecurityError("\n".join(lines))
 
     async def _search_keyword(self, call: Dict[str, Any]) -> str:
         keyword = str(call.get("keyword") or call.get("query") or "").strip()
@@ -536,6 +768,323 @@ class NativeToolExecutor:
             return "\n".join(filtered)
         return raw
 
+    async def _artifact_reader(self, call: Dict[str, Any]) -> str:
+        artifact_id = str(call.get("raw_result_ref") or call.get("artifact_id") or "").strip()
+        if not artifact_id:
+            raise ValueError("artifact_reader 缺少 raw_result_ref/artifact_id")
+
+        store = get_artifact_store()
+        ok, message, content = store.retrieve(artifact_id)
+        if not ok or content is None:
+            raise FileNotFoundError(message)
+
+        metadata = store.get_metadata(artifact_id)
+        mode = str(call.get("mode") or "preview").strip().lower()
+        max_results = _safe_int(call.get("max_results"), 50, 1, 5000)
+
+        content_out = ""
+        if mode == "line_range":
+            lines = content.splitlines()
+            if not lines:
+                content_out = "(empty)"
+            else:
+                start = _safe_int(call.get("start_line"), 1, 1, len(lines))
+                end_default = min(len(lines), start + 200)
+                end = _safe_int(call.get("end_line"), end_default, start, len(lines))
+                selected = lines[start - 1: end]
+                content_out = "\n".join(f"{idx + start:4}: {line}" for idx, line in enumerate(selected))
+        elif mode == "grep":
+            pattern_text = str(call.get("pattern") or call.get("keyword") or call.get("query") or "").strip()
+            if not pattern_text:
+                raise ValueError("artifact_reader(mode=grep) 缺少 pattern/keyword/query")
+            use_regex = bool(call.get("use_regex", False))
+            case_sensitive = bool(call.get("case_sensitive", False))
+            flags = 0 if case_sensitive else re.IGNORECASE
+            pattern = re.compile(pattern_text if use_regex else re.escape(pattern_text), flags=flags)
+            matched: List[str] = []
+            for idx, line in enumerate(content.splitlines(), 1):
+                if pattern.search(line):
+                    matched.append(f"{idx:4}: {line}")
+                    if len(matched) >= max_results:
+                        break
+            content_out = "\n".join(matched) if matched else "(no matches)"
+        elif mode == "jsonpath":
+            query = str(call.get("query") or call.get("jsonpath") or "").strip()
+            if not query:
+                raise ValueError("artifact_reader(mode=jsonpath) 缺少 query/jsonpath")
+            try:
+                values = _jsonpath_extract(content, query, max_items=max_results)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"artifact 不是合法 JSON，无法执行 jsonpath: {exc}") from exc
+            rendered = [_format_artifact_reader_value(v) for v in values]
+            content_out = "\n".join(f"[{idx}] {item}" for idx, item in enumerate(rendered, 1))
+            if not content_out:
+                content_out = "(no matches)"
+        else:
+            max_chars = _safe_int(call.get("max_chars"), 3000, 200, 200000)
+            content_out = _preview_text(content, max_chars)
+
+        meta_lines = [
+            f"[artifact_id] {artifact_id}",
+            f"[mode] {mode}",
+        ]
+        if metadata:
+            meta_lines.extend(
+                [
+                    f"[content_type] {metadata.content_type.value}",
+                    f"[total_chars] {metadata.total_chars}",
+                    f"[total_lines] {metadata.total_lines}",
+                    f"[file_size_bytes] {metadata.file_size_bytes}",
+                    f"[created_at] {metadata.created_at}",
+                    f"[expires_at] {metadata.expires_at}",
+                    f"[access_count] {metadata.access_count}",
+                    f"[fetch_hints] {', '.join(metadata.fetch_hints) if metadata.fetch_hints else '(none)'}",
+                ]
+            )
+        meta_lines.append("[content]")
+        meta_lines.append(content_out)
+        return "\n".join(meta_lines)
+
+    async def _file_ast_skeleton(self, call: Dict[str, Any]) -> str:
+        path = str(call.get("path") or call.get("file_path") or "").strip()
+        if not path:
+            raise ValueError("file_ast_skeleton 缺少 path")
+
+        text = await self.executor.read_file(path)
+        lines = text.splitlines()
+        ext = Path(path).suffix.lower()
+        max_symbols = _safe_int(call.get("max_results"), 300, 20, 5000)
+
+        import_patterns = [
+            re.compile(r"^\s*import\s+.+"),
+            re.compile(r"^\s*from\s+.+\s+import\s+.+"),
+            re.compile(r"^\s*using\s+.+;"),
+        ]
+        symbol_patterns: List[re.Pattern[str]] = []
+        if ext in {".py"}:
+            symbol_patterns = [re.compile(r"^\s*(class|def)\s+([A-Za-z_][A-Za-z0-9_]*)")]
+        elif ext in {".ts", ".tsx", ".js", ".jsx"}:
+            symbol_patterns = [
+                re.compile(r"^\s*(?:export\s+)?(?:async\s+)?(function|class|interface|type|enum)\s+([A-Za-z_][A-Za-z0-9_]*)"),
+                re.compile(r"^\s*(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\("),
+            ]
+        elif ext in {".cs"}:
+            symbol_patterns = [
+                re.compile(
+                    r"^\s*(?:public|private|protected|internal)?\s*(?:static\s+)?(class|interface|record|enum)\s+([A-Za-z_][A-Za-z0-9_]*)"
+                ),
+                re.compile(
+                    r"^\s*(?:public|private|protected|internal)\s+(?:static\s+)?(?:async\s+)?[A-Za-z_<>\[\],?]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*\("
+                ),
+            ]
+        else:
+            symbol_patterns = [re.compile(r"^\s*(class|def|function)\s+([A-Za-z_][A-Za-z0-9_]*)")]
+
+        imports: List[str] = []
+        symbols: List[str] = []
+        for idx, line in enumerate(lines, 1):
+            if len(imports) < 200 and any(p.search(line) for p in import_patterns):
+                imports.append(f"{idx:4}: {line.strip()}")
+
+            if len(symbols) >= max_symbols:
+                continue
+            for pattern in symbol_patterns:
+                m = pattern.search(line)
+                if not m:
+                    continue
+                if len(m.groups()) >= 2:
+                    kind = m.group(1)
+                    name = m.group(2)
+                else:
+                    kind = "symbol"
+                    name = m.group(1)
+                symbols.append(f"{idx:4}: {kind} {name}")
+                break
+
+        sections = [
+            f"[path] {path}",
+            f"[language] {ext or '(unknown)'}",
+            f"[total_lines] {len(lines)}",
+            f"[total_chars] {len(text)}",
+        ]
+        if len(lines) > 5000:
+            sections.append("[note] Monolith file detected; this is skeleton-only output.")
+        sections.extend(["[imports]"])
+        sections.append("\n".join(imports) if imports else "(none)")
+        sections.extend(["[symbols]"])
+        sections.append("\n".join(symbols) if symbols else "(none)")
+        return "\n".join(sections)
+
+    async def _file_ast_chunk_read(self, call: Dict[str, Any]) -> str:
+        path = str(call.get("path") or call.get("file_path") or "").strip()
+        if not path:
+            raise ValueError("file_ast_chunk_read 缺少 path")
+
+        text = await self.executor.read_file(path)
+        lines = text.splitlines()
+        if not lines:
+            return f"[path] {path}\n(content is empty)"
+
+        start_line = _safe_int(call.get("start_line"), 1, 1, len(lines))
+        end_default = min(len(lines), start_line + 120)
+        end_line = _safe_int(call.get("end_line"), end_default, start_line, len(lines))
+        context_before = _safe_int(call.get("context_before"), 3, 0, 200)
+        context_after = _safe_int(call.get("context_after"), 3, 0, 200)
+
+        from_line = max(1, start_line - context_before)
+        to_line = min(len(lines), end_line + context_after)
+        selected = lines[from_line - 1: to_line]
+
+        rendered: List[str] = [
+            f"[path] {path}",
+            f"[requested_range] {start_line}-{end_line}",
+            f"[returned_range] {from_line}-{to_line}",
+            "[content]",
+        ]
+        for idx, line in enumerate(selected, from_line):
+            marker = ">>" if start_line <= idx <= end_line else "  "
+            rendered.append(f"{marker} {idx:4}: {line}")
+        return "\n".join(rendered)
+
+    async def _workspace_txn_apply(self, call: Dict[str, Any]) -> str:
+        changes_raw = call.get("changes")
+        if not isinstance(changes_raw, list) or not changes_raw:
+            raise ValueError("workspace_txn_apply 缺少 changes[]")
+
+        changes: List[WorkspaceChange] = []
+        changed_paths: List[str] = []
+        requester = (
+            str(call.get("requester") or call.get("_session_id") or call.get("session_id") or "").strip() or None
+        )
+        guard = TestBaselineGuard()
+        for idx, item in enumerate(changes_raw, 1):
+            if not isinstance(item, dict):
+                raise ValueError(f"changes[{idx}] must be object")
+            path = str(item.get("path") or item.get("file_path") or "").strip()
+            content = item.get("content")
+            if not path or content is None:
+                raise ValueError(f"changes[{idx}] missing path/content")
+            mode = str(item.get("mode") or "overwrite").strip().lower()
+            encoding = str(item.get("encoding") or "utf-8").strip()
+
+            safe_path = self.executor._resolve_safe_path(path, kind="file")
+            allowed, reason = guard.check_modification_allowed(safe_path, requester=requester)
+            if not allowed:
+                raise NativeSecurityError(reason)
+            self._validate_test_poisoning(safe_path, str(content))
+
+            rel = str(safe_path.relative_to(self.project_root)).replace("\\", "/")
+            changed_paths.append(rel)
+            changes.append(
+                WorkspaceChange(
+                    path=rel,
+                    content=str(content),
+                    mode=mode,
+                    encoding=encoding,
+                )
+            )
+
+        contract_id = str(call.get("contract_id") or "").strip()
+        contract_checksum = str(call.get("contract_checksum") or "").strip()
+        contract_result = validate_parallel_contract(
+            contract_id=contract_id,
+            contract_checksum=contract_checksum,
+            changed_paths=changed_paths,
+        )
+        if not contract_result.ok:
+            raise NativeSecurityError(contract_result.message)
+
+        verify_after_apply = bool(call.get("verify_after_apply", True))
+
+        def _verify(receipt) -> tuple[bool, str]:
+            if not verify_after_apply:
+                return True, "verify skipped"
+            for rel_path in receipt.changed_files:
+                safe_path = self.executor._resolve_safe_path(rel_path, kind="file")
+                if not safe_path.exists():
+                    return False, f"missing file after apply: {rel_path}"
+            return True, "verify ok"
+
+        receipt = self.workspace_txn.apply_all(changes, verify_fn=_verify)
+        if not receipt.committed:
+            raise NativeSecurityError(
+                "workspace transaction failed"
+                f" (clean_state={receipt.clean_state}, recovery_ticket={receipt.recovery_ticket}): {receipt.error}"
+            )
+
+        lines = [
+            f"[transaction_id] {receipt.transaction_id}",
+            f"[committed] {receipt.committed}",
+            f"[clean_state] {receipt.clean_state}",
+            f"[recovery_ticket] {receipt.recovery_ticket}",
+            f"[changed_files] {len(receipt.changed_files)}",
+            f"[verify] {receipt.verify_message or 'verify ok'}",
+        ]
+        if contract_result.normalized_contract_id:
+            lines.append(f"[contract_id] {contract_result.normalized_contract_id}")
+            lines.append(f"[contract_checksum] {contract_result.expected_checksum}")
+            lines.append(f"[scaffold_fingerprint] {contract_result.scaffold_fingerprint}")
+        lines.append("[files]")
+        lines.extend(receipt.changed_files)
+        return "\n".join(lines)
+
+    async def _sleep_and_watch(self, call: Dict[str, Any]) -> str:
+        log_file = str(call.get("log_file") or call.get("path") or "").strip()
+        if not log_file:
+            raise ValueError("sleep_and_watch missing log_file/path")
+
+        pattern = str(call.get("pattern") or call.get("regex") or "").strip()
+        if not pattern:
+            raise ValueError("sleep_and_watch missing pattern/regex")
+
+        timeout_seconds = _safe_int(call.get("timeout_seconds"), 600, 1, 86400)
+        poll_interval_seconds = float(call.get("poll_interval_seconds") or 0.5)
+        from_end = bool(call.get("from_end", True))
+        max_line_chars = _safe_int(call.get("max_line_chars"), 4000, 64, 20000)
+
+        safe_path = self.executor._resolve_safe_path(log_file, kind="log_file")
+        watch_result = await wait_for_log_pattern(
+            log_file=safe_path,
+            pattern=pattern,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=max(0.05, min(5.0, poll_interval_seconds)),
+            from_end=from_end,
+            max_line_chars=max_line_chars,
+        )
+
+        lines = [
+            f"[watch_id] {watch_result.watch_id}",
+            f"[matched] {watch_result.matched}",
+            f"[reason] {watch_result.reason}",
+            f"[elapsed_seconds] {watch_result.elapsed_seconds:.3f}",
+        ]
+        if watch_result.matched_line:
+            lines.append(f"[matched_line] {watch_result.matched_line}")
+        return "\n".join(lines)
+
+    async def _killswitch_plan(self, call: Dict[str, Any]) -> str:
+        mode = str(call.get("mode") or "freeze").strip().lower()
+        if mode not in {"freeze", "preview"}:
+            raise ValueError("killswitch_plan mode supports freeze/preview")
+
+        allowlist_raw = call.get("oob_allowlist")
+        if isinstance(allowlist_raw, str):
+            allowlist = [part.strip() for part in allowlist_raw.split(",") if part.strip()]
+        elif isinstance(allowlist_raw, list):
+            allowlist = [str(x).strip() for x in allowlist_raw if str(x).strip()]
+        else:
+            allowlist = []
+
+        dns_allow = bool(call.get("dns_allow", True))
+        plan = build_oob_killswitch_plan(oob_allowlist=allowlist, dns_allow=dns_allow)
+        lines = [
+            f"[mode] {plan.mode}",
+            f"[oob_allowlist] {', '.join(plan.oob_allowlist)}",
+            "[commands]",
+        ]
+        lines.extend(plan.commands)
+        return "\n".join(lines)
+
     async def _list_files(self, call: Dict[str, Any]) -> str:
         path = str(call.get("path") or ".").strip()
         recursive = bool(call.get("recursive", False))
@@ -618,7 +1167,19 @@ class NativeToolExecutor:
     async def _run_git(self, git_args: List[str], call: Dict[str, Any], *, default_timeout: int = 120) -> CommandResult:
         repo_path = str(call.get("repo_path") or call.get("cwd") or ".").strip()
         timeout_s = _safe_int(call.get("timeout_seconds"), default_timeout, 1, 1200)
-        return await self.executor.run(["git", *git_args], cwd=repo_path, timeout_s=timeout_s)
+        call_id = str(call.get("_tool_call_id") or f"call_git_{abs(hash(' '.join(git_args))) % 10_000_000}")
+        fencing_epoch_raw = call.get("_fencing_epoch")
+        try:
+            fencing_epoch = int(fencing_epoch_raw) if fencing_epoch_raw is not None else None
+        except Exception:
+            fencing_epoch = None
+        return await self.executor.run(
+            ["git", *git_args],
+            cwd=repo_path,
+            timeout_s=timeout_s,
+            call_id=call_id,
+            fencing_epoch=fencing_epoch,
+        )
 
     async def _git_status(self, call: Dict[str, Any]) -> str:
         porcelain = bool(call.get("porcelain", False))
@@ -857,6 +1418,12 @@ class NativeToolExecutor:
 
         timeout_s = _safe_int(call.get("timeout_seconds"), 15, 1, 180)
         max_output_chars = _safe_int(call.get("max_output_chars"), 10000, 200, 500000)
+        call_id = str(call.get("_tool_call_id") or f"call_py_{abs(hash(code)) % 10_000_000}")
+        fencing_epoch_raw = call.get("_fencing_epoch")
+        try:
+            fencing_epoch = int(fencing_epoch_raw) if fencing_epoch_raw is not None else None
+        except Exception:
+            fencing_epoch = None
 
         payload_script = _build_safe_python_payload(code)
         payload_b64 = base64.b64encode(payload_script.encode("utf-8")).decode("ascii")
@@ -884,7 +1451,13 @@ class NativeToolExecutor:
                 "-c",
                 _PY_REPL_BOOTSTRAP,
             ]
-            process = await self.executor.run(command, env=env, timeout_s=timeout_s + 10)
+            process = await self.executor.run(
+                command,
+                env=env,
+                timeout_s=timeout_s + 10,
+                call_id=call_id,
+                fencing_epoch=fencing_epoch,
+            )
         else:
             python_cmd = str(call.get("python_cmd") or "python").strip()
             if not python_cmd:
@@ -893,6 +1466,8 @@ class NativeToolExecutor:
                 [python_cmd, "-I", "-c", _PY_REPL_BOOTSTRAP],
                 env=env,
                 timeout_s=timeout_s,
+                call_id=call_id,
+                fencing_epoch=fencing_epoch,
             )
 
         raw_stdout = process.stdout or ""

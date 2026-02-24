@@ -3,9 +3,13 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
+
+from system.killswitch_guard import validate_freeze_command
+from system.process_lineage import get_process_lineage_registry
 
 
 class NativeSecurityError(PermissionError):
@@ -49,6 +53,22 @@ class NativeExecutor:
         "pushd",
         "popd",
     }
+
+    _INTERPRETER_GUARD_PATTERNS = (
+        (r"(?i)(^|[\s;&|()<>])python(?:3)?\s+-c\s+", "python -c"),
+        (r"(?i)(^|[\s;&|()<>])node\s+-e\s+", "node -e"),
+        (r"(?i)(^|[\s;&|()<>])(?:bash|sh)\s+-c\s+", "shell -c"),
+        (r"(?i)(^|[\s;&|()<>])(?:powershell|pwsh)\s+-(?:enc|encodedcommand)\b", "powershell encoded"),
+        (r"(?i)base64\s+-d\s*\|\s*(?:bash|sh)\b", "base64 | sh"),
+    )
+
+    _DETACHED_PROCESS_PATTERNS = (
+        (r"(?i)\bnohup\b", "nohup"),
+        (r"(?i)\bsetsid\b", "setsid"),
+        (r"(?i)\bdocker\s+run\s+-d\b", "docker run -d"),
+        (r"(?i)(^|[\s;&|()<>])start\s+/b\b", "start /b"),
+        (r"(?i)\s&\s*$", "background '&'"),
+    )
 
     _ABS_PATH_RE = re.compile(
         r"(?i)(?:\"([a-z]:[\\/][^\"]+)\"|'([a-z]:[\\/][^']+)'|([a-z]:[\\/][^\s\"']+))"
@@ -132,6 +152,17 @@ class NativeExecutor:
             raise ValueError("Command is empty")
 
         lowered = cmd.lower()
+
+        # NGA-WS14-002: 解释器入口硬门禁（阻断高风险 inline 执行）
+        for pattern, label in self._INTERPRETER_GUARD_PATTERNS:
+            if re.search(pattern, cmd):
+                raise NativeSecurityError(f"Interpreter gate blocked: {label}")
+
+        # NGA-WS14-005/006: 最小 detached 进程防护（防幽灵进程）
+        for pattern, label in self._DETACHED_PROCESS_PATTERNS:
+            if re.search(pattern, cmd):
+                raise NativeSecurityError(f"Detached process pattern blocked: {label}")
+
         for token in sorted(self._BLOCKED_TOKENS | self._BLOCKED_FLOW_TOKENS, key=len, reverse=True):
             pattern = self._TOKEN_BOUNDARY_RE.format(token=re.escape(token))
             if re.search(pattern, lowered):
@@ -150,6 +181,11 @@ class NativeExecutor:
             resolved = Path(path_token).resolve(strict=False)
             if not self._is_within_root(resolved, self.PROJECT_ROOT):
                 raise NativeSecurityError(f"Blocked absolute path outside project root: {path_token}")
+
+        # NGA-WS14-009: KillSwitch 命令必须保留 OOB allowlist，不允许无差别 OUTPUT DROP。
+        ok, reason = validate_freeze_command(cmd)
+        if not ok:
+            raise NativeSecurityError(reason)
 
     def is_safe_command(self, command: str) -> bool:
         """Best-effort safety precheck for shell command strings."""
@@ -174,9 +210,31 @@ class NativeExecutor:
         if program_key in self._BLOCKED_TOKENS:
             raise NativeSecurityError(f"Blocked program: {program_key}")
 
+        args_lower = [str(x).strip().lower() for x in argv[1:]]
+
+        # WS14-002: argv-level interpreter gate (avoid bypassing shell-string checks).
+        if program_key in {"python", "python3"} and "-c" in args_lower:
+            raise NativeSecurityError("Interpreter gate blocked: python -c")
+        if program_key in {"bash", "sh"} and "-c" in args_lower:
+            raise NativeSecurityError("Interpreter gate blocked: shell -c")
+        if program_key == "node" and "-e" in args_lower:
+            raise NativeSecurityError("Interpreter gate blocked: node -e")
+        if program_key in {"powershell", "pwsh"} and any(a in {"-enc", "-encodedcommand"} for a in args_lower):
+            raise NativeSecurityError("Interpreter gate blocked: powershell encoded")
+
+        # WS14-005/006: detached process guard in argv mode.
+        if program_key in {"nohup", "setsid"}:
+            raise NativeSecurityError(f"Detached process pattern blocked: {program_key}")
+        if program_key == "docker" and len(args_lower) >= 2 and args_lower[0] == "run" and "-d" in args_lower:
+            raise NativeSecurityError("Detached process pattern blocked: docker run -d")
+
         if program_key in {"cmd", "powershell", "pwsh"}:
             # Validate full command text to catch embedded destructive operations.
             self._validate_command_string(" ".join(str(x) for x in argv))
+
+        ok, reason = validate_freeze_command(" ".join(str(x) for x in argv))
+        if not ok:
+            raise NativeSecurityError(reason)
 
         for token in argv[1:]:
             tok = str(token)
@@ -206,6 +264,8 @@ class NativeExecutor:
         cwd: str | os.PathLike[str] | None = None,
         env: Mapping[str, str] | None = None,
         timeout_s: float | None = None,
+        call_id: str | None = None,
+        fencing_epoch: int | None = None,
     ) -> CommandResult:
         """
         Execute a shell command using cmd.exe and asyncio.create_subprocess_exec.
@@ -235,6 +295,17 @@ class NativeExecutor:
             stderr=asyncio.subprocess.PIPE,
         )
 
+        job_root_id: str | None = None
+        try:
+            job_root_id = get_process_lineage_registry().register_start(
+                call_id=call_id or f"call_{uuid.uuid4().hex[:12]}",
+                command=command,
+                root_pid=int(process.pid or 0),
+                fencing_epoch=fencing_epoch,
+            )
+        except Exception:
+            job_root_id = None
+
         effective_timeout = self.default_timeout_s if timeout_s is None else timeout_s
         try:
             if effective_timeout is None:
@@ -244,7 +315,27 @@ class NativeExecutor:
         except asyncio.TimeoutError as exc:
             process.kill()
             await process.communicate()
+            if job_root_id:
+                try:
+                    get_process_lineage_registry().register_end(
+                        job_root_id,
+                        return_code=None,
+                        status="timeout",
+                        reason=f"timeout_after_{effective_timeout}s",
+                    )
+                except Exception:
+                    pass
             raise TimeoutError(f"Command timed out after {effective_timeout}s") from exc
+
+        if job_root_id:
+            try:
+                get_process_lineage_registry().register_end(
+                    job_root_id,
+                    return_code=int(process.returncode or 0),
+                    status="ok" if int(process.returncode or 0) == 0 else "error",
+                )
+            except Exception:
+                pass
 
         return CommandResult(
             returncode=int(process.returncode or 0),
@@ -259,6 +350,8 @@ class NativeExecutor:
         cwd: str | os.PathLike[str] | None = None,
         env: Mapping[str, str] | None = None,
         timeout_s: float | None = None,
+        call_id: str | None = None,
+        fencing_epoch: int | None = None,
     ) -> CommandResult:
         """
         General async command runner.
@@ -267,7 +360,14 @@ class NativeExecutor:
         - sequence input -> direct argv exec with guard checks
         """
         if isinstance(cmd, str):
-            return await self.execute_shell(cmd, cwd=cwd, env=env, timeout_s=timeout_s)
+            return await self.execute_shell(
+                cmd,
+                cwd=cwd,
+                env=env,
+                timeout_s=timeout_s,
+                call_id=call_id,
+                fencing_epoch=fencing_epoch,
+            )
 
         argv = [str(x) for x in cmd]
         safe_cwd = self._resolve_safe_path(cwd or self.base_dir, kind="cwd")
@@ -288,6 +388,18 @@ class NativeExecutor:
             stderr=asyncio.subprocess.PIPE,
         )
 
+        joined_cmd = " ".join(argv)
+        job_root_id: str | None = None
+        try:
+            job_root_id = get_process_lineage_registry().register_start(
+                call_id=call_id or f"call_{uuid.uuid4().hex[:12]}",
+                command=joined_cmd,
+                root_pid=int(process.pid or 0),
+                fencing_epoch=fencing_epoch,
+            )
+        except Exception:
+            job_root_id = None
+
         effective_timeout = self.default_timeout_s if timeout_s is None else timeout_s
         try:
             if effective_timeout is None:
@@ -297,7 +409,27 @@ class NativeExecutor:
         except asyncio.TimeoutError as exc:
             process.kill()
             await process.communicate()
+            if job_root_id:
+                try:
+                    get_process_lineage_registry().register_end(
+                        job_root_id,
+                        return_code=None,
+                        status="timeout",
+                        reason=f"timeout_after_{effective_timeout}s",
+                    )
+                except Exception:
+                    pass
             raise TimeoutError(f"Command timed out after {effective_timeout}s") from exc
+
+        if job_root_id:
+            try:
+                get_process_lineage_registry().register_end(
+                    job_root_id,
+                    return_code=int(process.returncode or 0),
+                    status="ok" if int(process.returncode or 0) == 0 else "error",
+                )
+            except Exception:
+                pass
 
         return CommandResult(
             returncode=int(process.returncode or 0),
