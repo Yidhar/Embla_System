@@ -1,7 +1,7 @@
 ﻿# Task 拆解总览（迁移 + 增量开发）
 
 文档状态：执行规划（基于当前 As-Is 与目标态文档）  
-最后更新：2026-02-23
+最后更新：2026-02-24
 
 ## 1. 目标
 
@@ -73,6 +73,10 @@
     - 运行手册与故障恢复步骤（按任务场景维护）。
 26. `doc/task/runbooks/release_m0_m5_closure_onepager.md`
     - 发布收口一页清单（M0-M5 门禁、执行顺序、放行判定）。
+27. `doc/task/21-ws-phase3-subagent-runtime-and-scaffold.md`
+    - Phase 3 新增工作流：Sub-Agent Runtime + Scaffold Engine 增量落地（WS21）。
+28. `doc/task/22-ws-phase3-scheduler-bridge-and-rollout.md`
+    - Phase 3 调度接管工作流：SystemAgent 桥接、事件同步、灰度接管（WS22）。
 
 ## 4. 任务状态约定
 

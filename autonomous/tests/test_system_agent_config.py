@@ -11,6 +11,9 @@ def test_system_agent_config_from_source_defaults():
     assert cfg.lease.enabled is True
     assert cfg.outbox_dispatch.enabled is True
     assert cfg.release.enabled is True
+    assert cfg.subagent_runtime.enabled is False
+    assert cfg.subagent_runtime.fail_open is True
+    assert cfg.subagent_runtime.max_subtasks == 16
 
 
 def test_system_agent_config_from_dict():
@@ -52,6 +55,14 @@ def test_system_agent_config_from_dict():
             "auto_rollback_enabled": True,
             "rollback_command": "",
         },
+        "subagent_runtime": {
+            "enabled": True,
+            "max_subtasks": 9,
+            "fail_open": False,
+            "require_contract_negotiation": False,
+            "require_scaffold_patch": False,
+            "fail_fast_on_subtask_error": False,
+        },
     }
     cfg = SystemAgentConfig.from_source(source)
     assert cfg.enabled is True
@@ -62,3 +73,7 @@ def test_system_agent_config_from_dict():
     assert cfg.lease.owner_id == "agent-a"
     assert cfg.outbox_dispatch.batch_size == 25
     assert cfg.release.max_error_rate == 0.03
+    assert cfg.subagent_runtime.enabled is True
+    assert cfg.subagent_runtime.max_subtasks == 9
+    assert cfg.subagent_runtime.fail_open is False
+    assert cfg.subagent_runtime.require_contract_negotiation is False

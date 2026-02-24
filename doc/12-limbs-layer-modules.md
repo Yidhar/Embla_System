@@ -20,8 +20,8 @@
 > - Tool Registry → MCP Registry (mcpserver/mcp_registry.py)
 > - os_bash → Native Executor (system/native_executor.py)
 > - file_ast → 无（目标态）
-> - Sub-Agent Runtime → CLI Adapter (autonomous/tools/cli_adapter.py)
-> - Scaffold Engine → 无（目标态）
+> - Sub-Agent Runtime → `autonomous/tools/subagent_runtime.py` + CLI Adapter（Phase 3 增量 v1：依赖调度 + 契约协商前置 + 事件锚点）
+> - Scaffold Engine → `autonomous/scaffold_engine.py`（契约门禁 + 可插拔 verify pipeline + 事务回滚）
 
 ---
 

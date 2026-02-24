@@ -228,7 +228,7 @@ omni-operator-v2/
     │   │   ├── codex_adapter.py        # 🟢 Codex CLI/MCP 主执行器 (Codex-first v2)
     │   │   ├── claude_adapter.py       # 🟢 Claude Code 降级备选
     │   │   └── gemini_adapter.py       # 🟢 Gemini CLI 降级备选
-    │   └── tools/subagent_runtime.py   # 🔴 Sub-Agent Runtime (Phase 3 目标态，当前未实现)
+    │   └── tools/subagent_runtime.py   # 🟡 Sub-Agent Runtime v1（依赖调度 + 原子脚手架提交）
     ├── apiserver/                      # API 服务层 (FastAPI)
     ├── mcpserver/                      # MCP 工具注册与调度
     ├── memory/                         # 记忆 schema 与投影
@@ -245,11 +245,11 @@ omni-operator-v2/
 
 | 目标态组件 (Phase 3) | 当前实现 (Phase 0) | 实施阶段 | 状态 |
 |---------------------|-------------------|---------|------|
-| **Sub-Agent Runtime** | CLI Adapter | Phase 0 | 🟢 CLI 过渡方案已实现 |
+| **Sub-Agent Runtime** | `autonomous/tools/subagent_runtime.py` + CLI Adapter | Phase 3 增量 | 🟡 Runtime v1 已实现（依赖调度/契约协商前置/事件回放锚点/原子提交） |
 | Frontend Sub-Agent | Codex CLI | Phase 0 | 🟢 通过 CLI 调用实现 |
 | Backend Sub-Agent | Codex CLI | Phase 0 | 🟢 通过 CLI 调用实现 |
 | Ops Sub-Agent | Codex CLI | Phase 0 | 🟢 通过 CLI 调用实现 |
-| **Scaffold Engine** | 无 | Phase 3 | 🔴 未实现 |
+| **Scaffold Engine** | `autonomous/scaffold_engine.py` | Phase 3 增量 | 🟡 Scaffold v1 已实现（契约门禁 + 可插拔校验链 + 事务回滚） |
 | **Execution Bridge** | CLI Adapter | Phase 0 | 🟢 CLI 适配器实现 |
 | **Event Bus** | 轻量 Event Log | Phase 0 | 🟡 SQLite 事件存储 |
 | **Meta-Agent** | System Agent | Phase 0 | 🟡 单实例主循环 |

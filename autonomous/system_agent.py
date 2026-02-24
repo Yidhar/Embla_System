@@ -10,7 +10,7 @@ import uuid
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from autonomous.dispatcher import DispatchResult, Dispatcher
 from autonomous.event_log import EventStore
@@ -20,6 +20,13 @@ from autonomous.release import CanaryThresholds, ReleaseController
 from autonomous.sensor import Sensor
 from autonomous.state import WorkflowStore
 from autonomous.tools.codex_mcp_adapter import CodexMcpVerifier
+from autonomous.tools.subagent_runtime import (
+    RuntimeSubTaskResult,
+    RuntimeSubTaskSpec,
+    SubAgentRuntime,
+    SubAgentRuntimeConfig,
+    SubAgentRuntimeResult,
+)
 from autonomous.types import OptimizationTask
 
 
@@ -78,6 +85,7 @@ class SystemAgentConfig:
     lease: LeaseConfig = field(default_factory=LeaseConfig)
     outbox_dispatch: OutboxDispatchConfig = field(default_factory=OutboxDispatchConfig)
     release: ReleaseAutomationConfig = field(default_factory=ReleaseAutomationConfig)
+    subagent_runtime: SubAgentRuntimeConfig = field(default_factory=SubAgentRuntimeConfig)
 
     @classmethod
     def from_source(cls, source: Any) -> "SystemAgentConfig":
@@ -94,6 +102,7 @@ class SystemAgentConfig:
         lease = pick(source, "lease", {})
         outbox_dispatch = pick(source, "outbox_dispatch", {})
         release = pick(source, "release", {})
+        subagent_runtime = pick(source, "subagent_runtime", {})
 
         fallback_cfg = VerificationFallbackConfig(
             enable_codex_mcp=pick(verification, "enable_codex_mcp", True),
@@ -125,6 +134,14 @@ class SystemAgentConfig:
             auto_rollback_enabled=bool(pick(release, "auto_rollback_enabled", True)),
             rollback_command=str(pick(release, "rollback_command", "")),
         )
+        subagent_cfg = SubAgentRuntimeConfig(
+            enabled=bool(pick(subagent_runtime, "enabled", False)),
+            max_subtasks=max(1, int(pick(subagent_runtime, "max_subtasks", 16))),
+            fail_open=bool(pick(subagent_runtime, "fail_open", True)),
+            require_contract_negotiation=bool(pick(subagent_runtime, "require_contract_negotiation", True)),
+            require_scaffold_patch=bool(pick(subagent_runtime, "require_scaffold_patch", True)),
+            fail_fast_on_subtask_error=bool(pick(subagent_runtime, "fail_fast_on_subtask_error", True)),
+        )
 
         return cls(
             enabled=pick(source, "enabled", False),
@@ -138,7 +155,17 @@ class SystemAgentConfig:
             lease=lease_cfg,
             outbox_dispatch=outbox_cfg,
             release=release_cfg,
+            subagent_runtime=subagent_cfg,
         )
+
+
+@dataclass
+class TaskAttemptOutcome:
+    approved: bool
+    reasons: List[str] = field(default_factory=list)
+    dispatch_result: DispatchResult | None = None
+    subagent_runtime_result: SubAgentRuntimeResult | None = None
+    used_fail_open: bool = False
 
 
 class SystemAgent:
@@ -192,6 +219,15 @@ class SystemAgent:
         self._fencing_epoch = 1 if not self.config.lease.enabled else 0
         self._lease_task: asyncio.Task[None] | None = None
         self._outbox_task: asyncio.Task[None] | None = None
+        self.subagent_runtime = SubAgentRuntime(
+            project_root=self.repo_dir,
+            config=self.config.subagent_runtime,
+        )
+        self._subagent_gate_metrics: Dict[str, int] = {
+            "contract_failures": 0,
+            "scaffold_failures": 0,
+            "runtime_failures": 0,
+        }
 
     @staticmethod
     def _build_instance_id(configured_owner_id: str) -> str:
@@ -312,66 +348,90 @@ class SystemAgent:
 
         for attempt in range(1, max_attempt + 1):
             self._ensure_active_epoch(fencing_epoch)
-            idempotency_key = f"{task.task_id}:cli_execute:{attempt}"
+            using_subagent = bool(self.config.subagent_runtime.enabled)
+            command_type = "subagent_execute" if using_subagent else "cli_execute"
+            idempotency_key = f"{task.task_id}:{command_type}:{attempt}"
             command_id = self.workflow_store.create_command(
                 workflow_id=workflow_id,
                 step_name="implement_verify",
-                command_type="cli_execute",
+                command_type=command_type,
                 idempotency_key=idempotency_key,
                 attempt=attempt,
                 max_attempt=max_attempt,
                 fencing_epoch=fencing_epoch,
             )
 
-            dispatch_result = await self.dispatcher.dispatch(task)
+            if using_subagent:
+                outcome = await self._execute_subagent_attempt(
+                    task=task,
+                    workflow_id=workflow_id,
+                    attempt=attempt,
+                    fencing_epoch=fencing_epoch,
+                )
+            else:
+                outcome = await self._execute_legacy_attempt(
+                    task=task,
+                    workflow_id=workflow_id,
+                    attempt=attempt,
+                    fencing_epoch=fencing_epoch,
+                )
+
             self._ensure_active_epoch(fencing_epoch)
+            if outcome.dispatch_result is not None:
+                last_dispatch = outcome.dispatch_result
 
-            last_dispatch = dispatch_result
-            self._emit(
-                "CliExecutionCompleted",
-                {
-                    "workflow_id": workflow_id,
-                    "task_id": task.task_id,
-                    "attempt": attempt,
-                    "cli": dispatch_result.selected_cli,
-                    "success": dispatch_result.result.success,
-                    "exit_code": dispatch_result.result.exit_code,
-                    "duration_seconds": dispatch_result.result.duration_seconds,
-                },
-                workflow_id=workflow_id,
-                fencing_epoch=fencing_epoch,
-            )
-
-            self.workflow_store.transition(workflow_id, "Verifying", reason="verification_started", payload={"attempt": attempt})
-            report = self.evaluator.evaluate(task, dispatch_result.result)
-
-            if report.approved:
+            if outcome.approved:
                 self.workflow_store.update_command(command_id, status="succeeded")
+                release_payload: Dict[str, Any] = {
+                    "attempt": attempt,
+                    "runtime_mode": "subagent" if using_subagent else "legacy",
+                    "used_fail_open": outcome.used_fail_open,
+                }
+                if outcome.subagent_runtime_result is not None:
+                    release_payload["subagent_runtime_id"] = outcome.subagent_runtime_result.runtime_id
+                    release_payload["trace_id"] = outcome.subagent_runtime_result.trace_id
                 self.workflow_store.transition(
                     workflow_id,
                     "ReleaseCandidate",
                     reason="checks_passed",
-                    payload={"attempt": attempt},
+                    payload=release_payload,
                 )
+
+                approved_payload: Dict[str, Any] = {
+                    "workflow_id": workflow_id,
+                    "task_id": task.task_id,
+                    "attempt": attempt,
+                    "runtime_mode": "subagent" if using_subagent else "legacy",
+                    "used_fail_open": outcome.used_fail_open,
+                }
+                if outcome.subagent_runtime_result is not None:
+                    approved_payload["subagent_runtime_id"] = outcome.subagent_runtime_result.runtime_id
+                    approved_payload["trace_id"] = outcome.subagent_runtime_result.trace_id
                 self._emit(
                     "TaskApproved",
-                    {"workflow_id": workflow_id, "task_id": task.task_id, "attempt": attempt},
+                    approved_payload,
                     workflow_id=workflow_id,
                     enqueue_outbox=True,
                     fencing_epoch=fencing_epoch,
                 )
                 return
 
-            last_reasons = list(report.reasons)
+            last_reasons = list(outcome.reasons)
             self.workflow_store.update_command(command_id, status="failed", last_error="; ".join(last_reasons))
+            rejected_payload: Dict[str, Any] = {
+                "workflow_id": workflow_id,
+                "task_id": task.task_id,
+                "attempt": attempt,
+                "reasons": last_reasons,
+                "runtime_mode": "subagent" if using_subagent else "legacy",
+                "used_fail_open": outcome.used_fail_open,
+            }
+            if outcome.subagent_runtime_result is not None:
+                rejected_payload["subagent_runtime_id"] = outcome.subagent_runtime_result.runtime_id
+                rejected_payload["failed_subtasks"] = list(outcome.subagent_runtime_result.failed_subtasks)
             self._emit(
                 "TaskRejected",
-                {
-                    "workflow_id": workflow_id,
-                    "task_id": task.task_id,
-                    "attempt": attempt,
-                    "reasons": last_reasons,
-                },
+                rejected_payload,
                 workflow_id=workflow_id,
                 fencing_epoch=fencing_epoch,
             )
@@ -401,6 +461,205 @@ class SystemAgent:
                 reasons=last_reasons,
                 fencing_epoch=fencing_epoch,
             )
+
+    async def _execute_legacy_attempt(
+        self,
+        *,
+        task: OptimizationTask,
+        workflow_id: str,
+        attempt: int,
+        fencing_epoch: int,
+    ) -> TaskAttemptOutcome:
+        dispatch_result = await self.dispatcher.dispatch(task)
+        self._ensure_active_epoch(fencing_epoch)
+
+        self._emit(
+            "CliExecutionCompleted",
+            {
+                "workflow_id": workflow_id,
+                "task_id": task.task_id,
+                "attempt": attempt,
+                "cli": dispatch_result.selected_cli,
+                "success": dispatch_result.result.success,
+                "exit_code": dispatch_result.result.exit_code,
+                "duration_seconds": dispatch_result.result.duration_seconds,
+            },
+            workflow_id=workflow_id,
+            fencing_epoch=fencing_epoch,
+        )
+
+        self.workflow_store.transition(
+            workflow_id,
+            "Verifying",
+            reason="verification_started",
+            payload={"attempt": attempt},
+        )
+        report = self.evaluator.evaluate(task, dispatch_result.result)
+        return TaskAttemptOutcome(
+            approved=report.approved,
+            reasons=list(report.reasons),
+            dispatch_result=dispatch_result,
+        )
+
+    async def _execute_subagent_attempt(
+        self,
+        *,
+        task: OptimizationTask,
+        workflow_id: str,
+        attempt: int,
+        fencing_epoch: int,
+    ) -> TaskAttemptOutcome:
+        trace_id = self._build_runtime_trace_id(task.task_id, attempt)
+        session_id = f"{workflow_id}:attempt:{attempt}"
+
+        runtime_result = await self.subagent_runtime.run(
+            task=task,
+            workflow_id=workflow_id,
+            trace_id=trace_id,
+            session_id=session_id,
+            worker=lambda subtask: self._materialize_subtask_worker_result(task, subtask),
+            emit_event=lambda event_type, payload: self._emit(
+                event_type,
+                payload,
+                workflow_id=workflow_id,
+                fencing_epoch=fencing_epoch,
+            ),
+            lease_guard=lambda: self._ensure_active_epoch(fencing_epoch),
+        )
+
+        self._ensure_active_epoch(fencing_epoch)
+        if runtime_result.success and runtime_result.approved:
+            return TaskAttemptOutcome(
+                approved=True,
+                reasons=[],
+                subagent_runtime_result=runtime_result,
+            )
+
+        if runtime_result.gate_failure:
+            self._record_subagent_gate_failure(
+                gate=runtime_result.gate_failure,
+                workflow_id=workflow_id,
+                task_id=task.task_id,
+                runtime_result=runtime_result,
+                fencing_epoch=fencing_epoch,
+            )
+
+        if runtime_result.fail_open_recommended and self.config.subagent_runtime.fail_open:
+            self._emit(
+                "SubAgentRuntimeFailOpen",
+                {
+                    "workflow_id": workflow_id,
+                    "task_id": task.task_id,
+                    "attempt": attempt,
+                    "runtime_id": runtime_result.runtime_id,
+                    "gate_failure": runtime_result.gate_failure,
+                    "reasons": runtime_result.reasons,
+                },
+                workflow_id=workflow_id,
+                fencing_epoch=fencing_epoch,
+            )
+            legacy_outcome = await self._execute_legacy_attempt(
+                task=task,
+                workflow_id=workflow_id,
+                attempt=attempt,
+                fencing_epoch=fencing_epoch,
+            )
+            legacy_outcome.used_fail_open = True
+            legacy_outcome.subagent_runtime_result = runtime_result
+            if not legacy_outcome.approved:
+                merged_reasons = list(runtime_result.reasons)
+                merged_reasons.extend([item for item in legacy_outcome.reasons if item not in merged_reasons])
+                legacy_outcome.reasons = merged_reasons
+            return legacy_outcome
+
+        reasons = list(runtime_result.reasons) or ["subagent_runtime_failed"]
+        return TaskAttemptOutcome(
+            approved=False,
+            reasons=reasons,
+            subagent_runtime_result=runtime_result,
+        )
+
+    async def _materialize_subtask_worker_result(
+        self,
+        task: OptimizationTask,
+        subtask: RuntimeSubTaskSpec,
+    ) -> RuntimeSubTaskResult:
+        metadata = subtask.metadata if isinstance(subtask.metadata, dict) else {}
+        if bool(metadata.get("force_error")):
+            return RuntimeSubTaskResult(
+                subtask_id=subtask.subtask_id,
+                role=subtask.role,
+                success=False,
+                error=str(metadata.get("error") or "forced_subtask_error"),
+            )
+
+        if subtask.patches:
+            return RuntimeSubTaskResult(
+                subtask_id=subtask.subtask_id,
+                role=subtask.role,
+                success=True,
+                patches=list(subtask.patches),
+                summary=f"patch_intents={len(subtask.patches)}",
+                metadata={"source": "task.metadata.subtasks"},
+            )
+
+        # Bridge mode is patch-intent first. No intent means runtime cannot safely commit.
+        return RuntimeSubTaskResult(
+            subtask_id=subtask.subtask_id,
+            role=subtask.role,
+            success=False,
+            error="missing_patch_intent_for_scaffold_runtime",
+            metadata={"task_id": task.task_id},
+        )
+
+    def _record_subagent_gate_failure(
+        self,
+        *,
+        gate: str,
+        workflow_id: str,
+        task_id: str,
+        runtime_result: SubAgentRuntimeResult,
+        fencing_epoch: int,
+    ) -> None:
+        gate_key = str(gate or "runtime").strip().lower()
+        metric_map = {
+            "contract": "contract_failures",
+            "scaffold": "scaffold_failures",
+        }
+        metric_name = metric_map.get(gate_key, "runtime_failures")
+        self._subagent_gate_metrics[metric_name] = self._subagent_gate_metrics.get(metric_name, 0) + 1
+
+        self._emit(
+            "SubAgentGateMetricUpdated",
+            {
+                "workflow_id": workflow_id,
+                "task_id": task_id,
+                "runtime_id": runtime_result.runtime_id,
+                "gate": gate_key,
+                "metric_name": metric_name,
+                "metric_value": self._subagent_gate_metrics[metric_name],
+                "metrics_snapshot": dict(self._subagent_gate_metrics),
+            },
+            workflow_id=workflow_id,
+            fencing_epoch=fencing_epoch,
+        )
+        self._emit(
+            "ReleaseGateRejected",
+            {
+                "workflow_id": workflow_id,
+                "task_id": task_id,
+                "runtime_id": runtime_result.runtime_id,
+                "gate": gate_key,
+                "reasons": list(runtime_result.reasons),
+                "failed_subtasks": list(runtime_result.failed_subtasks),
+            },
+            workflow_id=workflow_id,
+            fencing_epoch=fencing_epoch,
+        )
+
+    @staticmethod
+    def _build_runtime_trace_id(task_id: str, attempt: int) -> str:
+        return f"trace_{task_id}_{attempt}_{uuid.uuid4().hex[:8]}"
 
     async def _attempt_verification_fallback(
         self,

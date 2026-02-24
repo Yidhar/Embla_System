@@ -1,7 +1,7 @@
 ﻿# 01 模块总览（Omni-Operator 开发预备版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
-最后更新：2026-02-22
+最后更新：2026-02-24
 
 ## 1. 目标
 
@@ -84,6 +84,7 @@
 - `system/config.py`（统一配置）
 - `apiserver/`（BFF 入口）
 - `autonomous/system_agent.py`（单活自治控制）
+  - 已支持可配置子代理桥接（`subagent_runtime.enabled`）用于 Phase 3 渐进接管。
 
 说明：`agentserver/` 不再是主控制路径，仅作为兼容保留。
 
@@ -102,6 +103,8 @@
 
 - `apiserver/native_tools.py` + `system/native_executor.py`
 - `mcpserver/mcp_registry.py` + `mcpserver/mcp_manager.py`
+- `autonomous/tools/subagent_runtime.py`（子代理依赖调度、契约协商前置与统一提交）
+- `autonomous/scaffold_engine.py`（契约门禁 + verify pipeline + 多文件事务回滚）
 - `voice/` 与前端交互执行动作
 
 ## 6. AgentServer 状态（已弃用）
@@ -137,7 +140,7 @@
 - BFF 内仍存在部分 MCP 状态占位接口，需统一真实状态语义。
 - 多租户、完整治理策略（详见 10/11/12 与 `00-omni-operator-architecture.md`）尚未完整落地。
 - Token 经济学控制仍偏“策略约束”，尚未在网关层形成 4 重硬门禁（缓存分层、模型分流、I/O 熔断、事件驱动休眠）。
-- 多 Agent 并发安全墙（文件乐观锁、全局状态互斥锁、仲裁熔断、令牌桶流控）尚未完整落地。
+- 多 Agent 并发安全墙已完成基础落地（乐观锁/全局互斥/仲裁熔断/事务回滚），但仍需 Phase 3 全量联调与长稳验证。
 
 ## 8. 系统落地最高原则（新增）
 
