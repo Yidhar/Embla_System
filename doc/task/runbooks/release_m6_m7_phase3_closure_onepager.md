@@ -26,12 +26,12 @@
 `.\.venv\Scripts\python.exe scripts/chaos_ws22_scheduler_longrun.py --rounds 120 --virtual-round-seconds 5 --fail-open-every 15 --lease-renew-every 20`
 
 3. T2 执行 Phase3 闭环门禁校验
-`.\.venv\Scripts\python.exe scripts/validate_ws22_phase3_closure_gate.py`
+`.\.venv\Scripts\python.exe scripts/validate_phase3_closure_gate_ws22_004.py`
 
 4. T3 文档一致性终检
 `.\.venv\Scripts\python.exe scripts/validate_doc_consistency_ws16_006.py --strict`
 
 ## 4. 放行判定
 
-- 放行条件：`T0-T3` 全通过，且 `scripts/validate_ws22_phase3_closure_gate.py` 返回 `passed=true`。
+- 放行条件：`T0-T3` 全通过，且 `scripts/validate_phase3_closure_gate_ws22_004.py` 返回 `passed=true`。
 - 当前判定：`Go`（已满足）。
