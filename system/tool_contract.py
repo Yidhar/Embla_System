@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Any, Dict, Optional
 
 from system.artifact_store import ContentType, get_artifact_store
+from system.gc_evidence_extractor import build_gc_fetch_hints, extract_gc_evidence
 
 class RiskLevel(str, Enum):
     """工具调用风险等级"""
@@ -183,8 +184,8 @@ class ToolCallEnvelope:
         # 对通用命令工具增加参数级判断（例如 run_cmd + npm install）。
         cmd_fields = ["command", "cmd", "script", "task"]
         cmd_text = ""
-        for field in cmd_fields:
-            value = args.get(field)
+        for cmd_field in cmd_fields:
+            value = args.get(cmd_field)
             if isinstance(value, str) and value.strip():
                 cmd_text = value.lower()
                 break
@@ -358,7 +359,7 @@ def build_tool_result_with_artifact(
             priority=priority,
         )
         preview = _summarize_structured(raw_output, content_type)
-        fetch_hints = _generate_fetch_hints(content_type)
+        fetch_hints = _generate_fetch_hints(content_type, raw_output)
 
         if not artifact_id:
             # 兜底：落盘失败时仍返回结构化摘要，但不给不可读 ref
@@ -478,12 +479,7 @@ def _summarize_structured(content: str, content_type: str) -> str:
     return f"Structured data ({content_type})\n[Use artifact_reader to access full content]"
 
 
-def _generate_fetch_hints(content_type: str) -> list[str]:
-    """生成二次读取提示"""
-    if content_type == "application/json":
-        return [
-            "jsonpath:$..error_code",
-            "jsonpath:$..trace_id",
-            "jsonpath:$..message",
-        ]
-    return ["line_range:1-100", "grep:ERROR"]
+def _generate_fetch_hints(content_type: str, raw_output: str = "") -> list[str]:
+    """生成二次读取提示（包含关键证据线索）。"""
+    evidence = extract_gc_evidence(raw_output, content_type=content_type)
+    return build_gc_fetch_hints(evidence, content_type=content_type)

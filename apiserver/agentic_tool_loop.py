@@ -16,6 +16,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from system.config import get_config, get_server_port
 from system.coding_intent import contains_direct_coding_signal, extract_latest_user_message, requires_codex_for_messages
 from system.global_mutex import LeaseHandle, get_global_mutex_manager
+from system.router_arbiter import MAX_DELEGATE_TURNS, evaluate_workspace_conflict_retry
 from system.tool_contract import ToolCallEnvelope
 from .native_tools import get_native_tool_executor
 
@@ -157,6 +158,17 @@ def _summarize_results_for_frontend(results: List[Dict[str, Any]], preview_chars
                 "result": display_result,
             }
         )
+        if r.get("conflict_ticket"):
+            summaries[-1]["conflict_ticket"] = str(r.get("conflict_ticket"))
+        if r.get("delegate_turns") is not None:
+            summaries[-1]["delegate_turns"] = _clamp_int(r.get("delegate_turns"), 0, 0, 10000)
+        if "freeze" in r:
+            summaries[-1]["freeze"] = bool(r.get("freeze"))
+        if "hitl" in r:
+            summaries[-1]["hitl"] = bool(r.get("hitl"))
+        router_arbiter = r.get("router_arbiter")
+        if isinstance(router_arbiter, dict):
+            summaries[-1]["router_arbiter"] = router_arbiter
     return summaries
 
 
@@ -697,6 +709,9 @@ async def _execute_tool_call_with_retry(
     retry_backoff_seconds: float,
 ) -> Dict[str, Any]:
     max_attempts = max(1, int(max_retries) + 1)
+    max_delegate_turns = _clamp_int(call.get("max_delegate_turns"), MAX_DELEGATE_TURNS, 1, 20)
+    tracked_conflict_ticket = ""
+    tracked_delegate_turns = 0
     call_id = str(call.get("_tool_call_id") or f"tool_{uuid.uuid4().hex[:8]}")
     agent_type = str(call.get("agentType", ""))
     service_name = str(call.get("service_name", ""))
@@ -790,6 +805,32 @@ async def _execute_tool_call_with_retry(
             if attempt > 1:
                 result["retry_attempts"] = attempt - 1
             return result
+
+        arbiter_signal = evaluate_workspace_conflict_retry(
+            call,
+            result,
+            previous_conflict_ticket=tracked_conflict_ticket,
+            previous_delegate_turns=tracked_delegate_turns,
+            max_delegate_turns=max_delegate_turns,
+        )
+        if arbiter_signal is not None:
+            tracked_conflict_ticket = arbiter_signal.conflict_ticket or tracked_conflict_ticket
+            tracked_delegate_turns = arbiter_signal.delegate_turns
+            result["conflict_ticket"] = tracked_conflict_ticket
+            result["delegate_turns"] = tracked_delegate_turns
+            result["freeze"] = arbiter_signal.freeze
+            result["hitl"] = arbiter_signal.hitl
+            result["router_arbiter"] = arbiter_signal.to_payload()
+            if arbiter_signal.escalated:
+                result["retry_attempts"] = attempt - 1
+                logger.warning(
+                    "[AgenticLoop] router arbiter escalation id=%s conflict_ticket=%s delegate_turns=%s threshold=%s",
+                    call_id,
+                    tracked_conflict_ticket or "<unknown>",
+                    tracked_delegate_turns,
+                    max_delegate_turns,
+                )
+                return result
 
         if not retry_failed:
             return result
@@ -1907,6 +1948,40 @@ async def run_agentic_loop(
         )
         if verify_start_event:
             yield verify_start_event
+
+        arbiter_escalation = next(
+            (
+                r.get("router_arbiter")
+                for r in executed_results
+                if isinstance(r.get("router_arbiter"), dict) and bool(r["router_arbiter"].get("escalated"))
+            ),
+            None,
+        )
+        if isinstance(arbiter_escalation, dict):
+            runtime.stop_reason = "router_arbiter_escalation"
+            logger.warning(
+                "[AgenticLoop] Router arbiter escalation triggered in round %s, conflict_ticket=%s, delegate_turns=%s",
+                round_num,
+                arbiter_escalation.get("conflict_ticket", ""),
+                arbiter_escalation.get("delegate_turns", 0),
+            )
+            verify_error_event = _format_workflow_stage_event(
+                round_num,
+                "verify",
+                "error",
+                policy=policy,
+                reason="router_arbiter_escalation",
+                decision="summary" if policy.enable_summary_round else "stop",
+                details=arbiter_escalation,
+            )
+            if verify_error_event:
+                yield verify_error_event
+            if policy.enable_summary_round:
+                needs_summary = True
+                yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
+            else:
+                yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+            break
 
         if runtime.consecutive_tool_failures >= policy.max_consecutive_tool_failures:
             runtime.stop_reason = "tool_failures"

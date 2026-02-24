@@ -5,12 +5,14 @@
 - native_call 与 mcp_call 返回字段一致性检查通过
 """
 
+from pathlib import Path
+import uuid
+
 import pytest
 from system.artifact_store import ArtifactStore, ArtifactStoreConfig
 import system.artifact_store as artifact_store_module
 from system.tool_contract import (
     ExecutionScope,
-    IOResultPolicy,
     RiskLevel,
     ToolCallEnvelope,
     ToolResultEnvelope,
@@ -185,6 +187,14 @@ class TestToolResultEnvelope:
 class TestBuildToolResultWithArtifact:
     """测试带 artifact 支持的结果构建"""
 
+    @staticmethod
+    def _make_workspace_tempdir(prefix: str) -> Path:
+        root = Path("tmp_ws15") / "test_tool_contract"
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / f"{prefix}{uuid.uuid4().hex[:8]}"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def test_small_text_no_artifact(self):
         """测试小文本不创建 artifact"""
         result = build_tool_result_with_artifact(
@@ -214,11 +224,12 @@ class TestBuildToolResultWithArtifact:
         assert result.total_chars == 10000
         assert len(result.display_preview) == 8000 + len("\n...[TRUNCATED]")
 
-    def test_large_json_with_artifact(self, tmp_path, monkeypatch):
+    def test_large_json_with_artifact(self, monkeypatch):
         """测试大 JSON 创建 artifact"""
+        temp_root = self._make_workspace_tempdir("artifacts_case1_")
         temp_store = ArtifactStore(
             ArtifactStoreConfig(
-                artifact_root=tmp_path / "artifacts_case1",
+                artifact_root=temp_root / "artifacts_case1",
                 max_total_size_mb=64,
                 max_single_artifact_mb=16,
                 max_artifact_count=1000,
@@ -241,11 +252,12 @@ class TestBuildToolResultWithArtifact:
         assert result.fetch_hints is not None
         assert "jsonpath:$..error_code" in result.fetch_hints
 
-    def test_large_json_artifact_roundtrip(self, tmp_path, monkeypatch):
+    def test_large_json_artifact_roundtrip(self, monkeypatch):
         """测试 artifact 落盘后可回读（NGA-WS11-001/002）"""
+        temp_root = self._make_workspace_tempdir("artifacts_case2_")
         temp_store = ArtifactStore(
             ArtifactStoreConfig(
-                artifact_root=tmp_path / "artifacts",
+                artifact_root=temp_root / "artifacts",
                 max_total_size_mb=64,
                 max_single_artifact_mb=16,
                 max_artifact_count=1000,
