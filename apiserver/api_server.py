@@ -109,6 +109,49 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+API_DEFAULT_VERSION = "v1"
+API_CONTRACT_VERSION = "2026-02-24"
+API_COMPATIBILITY_WINDOW_DAYS = 180
+API_SUPPORTED_VERSIONS = [API_DEFAULT_VERSION]
+_UNVERSIONED_ROUTE_DEPRECATIONS: Dict[str, Dict[str, str]] = {
+    "/health": {
+        "sunset": "2026-08-24",
+        "replacement": "/v1/health",
+    },
+    "/system/info": {
+        "sunset": "2026-08-24",
+        "replacement": "/v1/system/info",
+    },
+    "/chat": {
+        "sunset": "2026-08-24",
+        "replacement": "/v1/chat",
+    },
+    "/chat/stream": {
+        "sunset": "2026-08-24",
+        "replacement": "/v1/chat/stream",
+    },
+}
+
+
+def _resolve_api_deprecation_policy(path: str) -> Optional[Dict[str, str]]:
+    return _UNVERSIONED_ROUTE_DEPRECATIONS.get(str(path or ""))
+
+
+def _build_api_contract_snapshot() -> Dict[str, Any]:
+    return {
+        "api_version": API_DEFAULT_VERSION,
+        "contract_version": API_CONTRACT_VERSION,
+        "supported_versions": list(API_SUPPORTED_VERSIONS),
+        "compatibility_window_days": API_COMPATIBILITY_WINDOW_DAYS,
+        "deprecations": {
+            route: {
+                "sunset": meta["sunset"],
+                "replacement": meta["replacement"],
+            }
+            for route, meta in _UNVERSIONED_ROUTE_DEPRECATIONS.items()
+        },
+    }
+
 
 @app.middleware("http")
 async def sync_auth_token(request: Request, call_next):
@@ -119,6 +162,23 @@ async def sync_auth_token(request: Request, call_next):
         if token and token != naga_auth.get_access_token():
             naga_auth.restore_token(token)
     response = await call_next(request)
+    return response
+
+
+@app.middleware("http")
+async def inject_api_contract_headers(request: Request, call_next):
+    response = await call_next(request)
+    snapshot = _build_api_contract_snapshot()
+    response.headers.setdefault("X-NagaAgent-Api-Version", str(snapshot["api_version"]))
+    response.headers.setdefault("X-NagaAgent-Contract-Version", str(snapshot["contract_version"]))
+
+    deprecation = _resolve_api_deprecation_policy(request.url.path)
+    if isinstance(deprecation, dict):
+        response.headers["Deprecation"] = "true"
+        response.headers["Sunset"] = str(deprecation.get("sunset") or "")
+        replacement = str(deprecation.get("replacement") or "").strip()
+        if replacement:
+            response.headers["Link"] = f"<{replacement}>; rel=\"successor-version\""
     return response
 
 
@@ -323,9 +383,11 @@ async def auth_refresh(request: Request):
 @app.get("/", response_model=Dict[str, str])
 async def root():
     """API根路径"""
+    system_version = str(getattr(get_config().system, "version", "5.0.0"))
     return {
         "name": "NagaAgent API",
-        "version": "5.0.0",
+        "version": system_version,
+        "api_version": API_DEFAULT_VERSION,
         "status": "running",
         "docs": "/docs",
     }
@@ -335,6 +397,22 @@ async def root():
 async def health_check():
     """健康检查"""
     return {"status": "healthy", "agent_ready": True, "timestamp": str(asyncio.get_event_loop().time())}
+
+
+@app.get("/v1/health")
+async def health_check_v1():
+    return await health_check()
+
+
+@app.get("/system/api-contract")
+async def get_api_contract():
+    """返回当前 API 契约版本、兼容窗口与弃用策略。"""
+    return {"status": "success", **_build_api_contract_snapshot()}
+
+
+@app.get("/v1/system/api-contract")
+async def get_api_contract_v1():
+    return await get_api_contract()
 
 
 # ============ Utility APIs ============
@@ -378,13 +456,19 @@ async def tts_speech(request: TTSSpeechRequest):
 @app.get("/system/info", response_model=SystemInfoResponse)
 async def get_system_info():
     """获取系统信息"""
+    system_version = str(getattr(get_config().system, "version", "5.0.0"))
 
     return SystemInfoResponse(
-        version="5.0.0",
+        version=system_version,
         status="running",
         available_services=[],  # MCP服务现在由mcpserver独立管理
         api_key_configured=bool(get_config().api.api_key and get_config().api.api_key != "sk-placeholder-key-not-set"),
     )
+
+
+@app.get("/v1/system/info", response_model=SystemInfoResponse)
+async def get_system_info_v1():
+    return await get_system_info()
 
 
 @app.get("/system/config")
@@ -519,6 +603,11 @@ async def chat(request: ChatRequest):
         print(f"对话处理错误: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
+
+
+@app.post("/v1/chat", response_model=ChatResponse)
+async def chat_v1(request: ChatRequest):
+    return await chat(request)
 
 
 @app.post("/chat/stream")
@@ -823,6 +912,11 @@ async def chat_stream(request: ChatRequest):
             "X-Accel-Buffering": "no",  # 禁用nginx缓冲
         },
     )
+
+
+@app.post("/v1/chat/stream")
+async def chat_stream_v1(request: ChatRequest):
+    return await chat_stream(request)
 
 
 @app.api_route("/tools/search", methods=["GET", "POST"])
