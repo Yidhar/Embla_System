@@ -123,6 +123,32 @@ class SubAgentRuntime:
                 fail_open_recommended=True,
             )
 
+        spec_errors = self._validate_subtask_specs(subtasks)
+        if spec_errors:
+            self._emit(
+                emit_event,
+                "SubAgentRuntimeRejected",
+                runtime_id=runtime_id,
+                workflow_id=workflow_id,
+                task_id=task.task_id,
+                trace_id=trace_id,
+                session_id=session_id,
+                reason="invalid_subtask_spec",
+                errors=list(spec_errors),
+            )
+            return SubAgentRuntimeResult(
+                runtime_id=runtime_id,
+                workflow_id=workflow_id,
+                task_id=task.task_id,
+                trace_id=trace_id,
+                session_id=session_id,
+                success=False,
+                approved=False,
+                gate_failure="runtime",
+                reasons=list(spec_errors),
+                fail_open_recommended=True,
+            )
+
         self._emit(
             emit_event,
             "SubAgentRuntimeStarted",
@@ -535,6 +561,37 @@ class SubAgentRuntime:
             ),
             semantic_rebase=bool(payload.get("semantic_rebase", True)),
         )
+
+    @staticmethod
+    def _validate_subtask_specs(subtasks: List[RuntimeSubTaskSpec]) -> List[str]:
+        errors: List[str] = []
+        seen: set[str] = set()
+        duplicates: set[str] = set()
+        for item in subtasks:
+            subtask_id = str(item.subtask_id or "").strip()
+            if subtask_id in seen:
+                duplicates.add(subtask_id)
+            else:
+                seen.add(subtask_id)
+            if not str(item.instruction or "").strip():
+                errors.append(f"empty_instruction:{subtask_id}")
+
+        if duplicates:
+            errors.append("duplicate_subtask_id:" + ",".join(sorted(duplicates)))
+
+        valid_ids = {str(item.subtask_id or "").strip() for item in subtasks}
+        for item in subtasks:
+            subtask_id = str(item.subtask_id or "").strip()
+            for dep in item.dependencies:
+                dep_id = str(dep or "").strip()
+                if not dep_id:
+                    continue
+                if dep_id == subtask_id:
+                    errors.append(f"self_dependency:{subtask_id}")
+                elif dep_id not in valid_ids:
+                    errors.append(f"missing_dependency:{subtask_id}->{dep_id}")
+
+        return sorted(set(errors))
 
 
 __all__ = [
