@@ -68,6 +68,7 @@
 - progress:
   - 已覆盖：lease 丢失 + fail_open、无 fail_open 显式失败、max_subtasks 上限、dispatch 后 lease 丢失恢复路径、40 分片压力下的子任务上限守门
   - 已补齐：`NGA-WS22-004` 长稳等效基线（`virtual_elapsed_seconds=600`）与统计报告落盘
+  - 已补齐：Sub-Agent 子任务规范校验（重复 `subtask_id`、坏依赖、自依赖、空指令）并进入 `runtime` 拒绝链路
   - 报告位置：`scratch/reports/ws22_scheduler_longrun_baseline.json`
   - 实施记录：`doc/task/implementation/NGA-WS22-004-implementation.md`
 
