@@ -6,6 +6,22 @@ on:
     branches:
       - main
       - master
+  workflow_dispatch:
+    inputs:
+      closure_mode:
+        description: "Closure chain mode: quick (default), full, skip"
+        required: false
+        default: quick
+        type: choice
+        options:
+          - quick
+          - full
+          - skip
+      closure_timeout_seconds:
+        description: "Per-step timeout seconds for closure chain"
+        required: false
+        default: "2400"
+        type: string
 
 jobs:
   dod-check:
@@ -14,6 +30,65 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run DoD Baseline Script
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Sync dependencies for full closure mode
+        if: github.event_name == 'workflow_dispatch' && inputs.closure_mode == 'full'
         shell: pwsh
-        run: ./scripts/dod_check.ps1 -RepoRoot .
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          uv sync
+
+      - name: Run DoD Baseline Script (+ optional closure chain)
+        shell: pwsh
+        run: |
+          $mode = "quick"
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $dispatchMode = "${{ inputs.closure_mode }}"
+            if ($dispatchMode) {
+              $mode = $dispatchMode
+            }
+          }
+
+          $timeoutSeconds = 2400
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $rawTimeout = "${{ inputs.closure_timeout_seconds }}"
+            $parsedTimeout = 0
+            if ([int]::TryParse($rawTimeout, [ref]$parsedTimeout)) {
+              $timeoutSeconds = [Math]::Max(30, $parsedTimeout)
+            }
+          }
+
+          $args = @("-RepoRoot", ".", "-ClosureTimeoutSeconds", "$timeoutSeconds")
+          switch ($mode) {
+            "quick" {
+              $args += "-RunFullClosureChain"
+              $args += "-ClosureQuickMode"
+            }
+            "full" {
+              $args += "-RunFullClosureChain"
+            }
+            "skip" {
+            }
+            default {
+              throw "Unsupported closure_mode: $mode"
+            }
+          }
+
+          Write-Host "[dod-check] mode=$mode timeout=$timeoutSeconds"
+          ./scripts/dod_check.ps1 @args
+
+      - name: Upload closure reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dod-closure-reports
+          path: |
+            scratch/reports/release_closure_chain_full_m0_m7_ci.json
+            scratch/reports/release_closure_chain_m0_m5_result.json
+            scratch/reports/ws22_phase3_release_chain_result.json
+          if-no-files-found: ignore
