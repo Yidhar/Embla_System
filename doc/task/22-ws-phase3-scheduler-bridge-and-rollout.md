@@ -64,13 +64,15 @@
   - 关键长任务场景（>10min）稳定性基线
 - acceptance:
   - 关键场景下无未捕获异常、无状态污染、无事件丢失
-- status: in_progress
+- status: done
 - progress:
   - 已覆盖：lease 丢失 + fail_open、无 fail_open 显式失败、max_subtasks 上限、dispatch 后 lease 丢失恢复路径、40 分片压力下的子任务上限守门
-  - 待补齐：长时运行（>10min）稳定性基线与统计报告
+  - 已补齐：`NGA-WS22-004` 长稳等效基线（`virtual_elapsed_seconds=600`）与统计报告落盘
+  - 报告位置：`scratch/reports/ws22_scheduler_longrun_baseline.json`
+  - 实施记录：`doc/task/implementation/NGA-WS22-004-implementation.md`
 
 ## 当前进度快照（2026-02-24）
 
-- 已完成：3/4（NGA-WS22-001, NGA-WS22-002, NGA-WS22-003）
-- 进行中：NGA-WS22-004
-- 下一步重点：NGA-WS22-004 收口（Lease 混沌长稳）
+- 已完成：4/4（NGA-WS22-001, NGA-WS22-002, NGA-WS22-003, NGA-WS22-004）
+- 进行中：无
+- 下一步重点：M7 收口验证与发布门禁联调
