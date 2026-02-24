@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -37,6 +37,9 @@ class CanaryDecision:
     reason: str
     evaluated_windows: List[Dict[str, Any]]
     policy_snapshot: Dict[str, Any]
+    threshold_snapshot: Dict[str, float] = field(default_factory=dict)
+    stats: Dict[str, int] = field(default_factory=dict)
+    trigger_window_index: int | None = None
 
 
 class ReleaseController:
@@ -80,9 +83,19 @@ class ReleaseController:
 
         windows = list(observations or self._synthetic_windows(canary_window_min, min_sample_count, healthy_windows))
         evaluated: List[Dict[str, Any]] = []
+        threshold_snapshot = {
+            "max_error_rate": float(self.thresholds.max_error_rate),
+            "max_latency_p95_ms": float(self.thresholds.max_latency_p95_ms),
+            "min_kpi_ratio": float(self.thresholds.min_kpi_ratio),
+            "canary_window_min": float(canary_window_min),
+            "min_sample_count": float(min_sample_count),
+            "healthy_windows_for_promotion": float(healthy_windows),
+            "bad_windows_for_rollback": float(bad_windows),
+        }
 
         healthy_streak = 0
         bad_streak = 0
+        eligible_windows = 0
 
         for index, raw in enumerate(windows, start=1):
             window = dict(raw)
@@ -116,6 +129,7 @@ class ReleaseController:
             if not eligible:
                 continue
 
+            eligible_windows += 1
             if healthy:
                 healthy_streak += 1
                 bad_streak = 0
@@ -129,6 +143,14 @@ class ReleaseController:
                     reason=f"canary unhealthy for {bad_streak} consecutive windows",
                     evaluated_windows=evaluated,
                     policy_snapshot=deploy,
+                    threshold_snapshot=threshold_snapshot,
+                    stats={
+                        "total_windows": len(windows),
+                        "eligible_windows": eligible_windows,
+                        "healthy_streak": healthy_streak,
+                        "bad_streak": bad_streak,
+                    },
+                    trigger_window_index=index,
                 )
             if healthy_streak >= healthy_windows:
                 return CanaryDecision(
@@ -136,6 +158,14 @@ class ReleaseController:
                     reason=f"canary healthy for {healthy_streak} consecutive windows",
                     evaluated_windows=evaluated,
                     policy_snapshot=deploy,
+                    threshold_snapshot=threshold_snapshot,
+                    stats={
+                        "total_windows": len(windows),
+                        "eligible_windows": eligible_windows,
+                        "healthy_streak": healthy_streak,
+                        "bad_streak": bad_streak,
+                    },
+                    trigger_window_index=index,
                 )
 
         return CanaryDecision(
@@ -143,7 +173,43 @@ class ReleaseController:
             reason="insufficient eligible windows for promotion/rollback decision",
             evaluated_windows=evaluated,
             policy_snapshot=deploy,
+            threshold_snapshot=threshold_snapshot,
+            stats={
+                "total_windows": len(windows),
+                "eligible_windows": eligible_windows,
+                "healthy_streak": healthy_streak,
+                "bad_streak": bad_streak,
+            },
+            trigger_window_index=None,
         )
+
+    def evaluate_and_execute_rollback(
+        self,
+        observations: List[Dict[str, Any]] | None = None,
+        *,
+        auto_rollback_enabled: bool,
+        rollback_command: str | None = None,
+    ) -> tuple[CanaryDecision, Dict[str, Any]]:
+        """Evaluate canary and execute rollback when configured."""
+        decision = self.evaluate_canary(observations)
+        rollback_result: Dict[str, Any] = {
+            "enabled": bool(auto_rollback_enabled),
+            "attempted": False,
+            "status": "skipped",
+            "details": "",
+        }
+        if decision.outcome != "rollback":
+            rollback_result["details"] = "rollback not required"
+            return decision, rollback_result
+        if not auto_rollback_enabled:
+            rollback_result["details"] = "auto rollback disabled"
+            return decision, rollback_result
+
+        ok, details = self.execute_rollback(rollback_command)
+        rollback_result["attempted"] = True
+        rollback_result["status"] = "succeeded" if ok else "failed"
+        rollback_result["details"] = details
+        return decision, rollback_result
 
     def execute_rollback(self, rollback_command: str | None = None) -> tuple[bool, str]:
         command = (rollback_command or "").strip()

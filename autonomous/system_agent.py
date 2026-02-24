@@ -611,6 +611,10 @@ class SystemAgent:
             "outcome": decision.outcome,
             "reason": decision.reason,
             "evaluated_windows": decision.evaluated_windows,
+            "policy_snapshot": decision.policy_snapshot,
+            "threshold_snapshot": decision.threshold_snapshot,
+            "stats": decision.stats,
+            "trigger_window_index": decision.trigger_window_index,
         }
 
         if decision.outcome == "promote":
