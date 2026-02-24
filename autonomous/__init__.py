@@ -11,6 +11,7 @@ from autonomous.llm_gateway import (
     PromptEnvelopeInput,
 )
 from autonomous.meta_agent_runtime import Goal, MetaAgentRuntime, SubTask, TaskFeedback
+from autonomous.router_arbiter_guard import RouterArbiterDecision, RouterArbiterGuard
 from autonomous.router_engine import RouterDecision, RouterRequest, TaskRouterEngine
 from autonomous.system_agent import SystemAgent
 from autonomous.working_memory_manager import (
@@ -28,6 +29,8 @@ __all__ = [
     "TaskRouterEngine",
     "RouterRequest",
     "RouterDecision",
+    "RouterArbiterGuard",
+    "RouterArbiterDecision",
     "LLMGateway",
     "GatewayRouteRequest",
     "GatewayRouteDecision",
