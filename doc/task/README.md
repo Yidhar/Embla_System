@@ -17,7 +17,7 @@
 6. 排期执行优先参考 `02-sprint-plan-ai-agents.md`、`03-p0-shortest-path-onepager.md`、`04-parallel-execution-groups.md`。
 7. 细分派工与执行卡片参考 `05-sprint-assignment-matrix.md`、`06-task-unit-subtask-packages.md`。
 8. 执行启动与风控闭环参考 `07-execution-launch-playbook.md`、`08-risk-closure-ledger.md`、`09-execution-board.csv`。
-9. 文档一致性收口先执行 `python scripts/sync_risk_verify_mapping_ws16_006.py`，再执行 `python scripts/sync_risk_closure_ledger_ws16_006.py --apply`，最后执行 `python scripts/validate_doc_consistency_ws16_006.py --strict`。
+9. 文档一致性收口先执行 `python scripts/sync_risk_verify_mapping_ws16_006.py`，再执行 `python scripts/sync_risk_closure_ledger_ws16_006.py --apply`，再执行 `python scripts/sync_task_backlog_status.py --apply`，最后执行 `python scripts/validate_doc_consistency_ws16_006.py --strict`。
 
 ## 3. 文档清单
 
@@ -87,6 +87,8 @@
     - M0-M7 全量发布收口统一入口（串行执行 M0-M5 + M6-M7 两段门禁链）。
 33. `scripts/render_release_closure_summary.py`
     - 发布收口报告摘要生成器（汇总 M0-M7/M0-M5/M6-M7 结果并输出 Markdown）。
+34. `scripts/sync_task_backlog_status.py`
+    - 将 `99-task-backlog.csv` 的 `status` 字段从 `09-execution-board.csv` 同步对齐。
 
 ## 4. 任务状态约定
 

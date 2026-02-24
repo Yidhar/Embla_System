@@ -8,6 +8,7 @@
 - 校验脚本：`scripts/validate_doc_consistency_ws16_006.py`
 - 风险映射同步脚本：`scripts/sync_risk_verify_mapping_ws16_006.py`
 - 风险台账状态同步脚本：`scripts/sync_risk_closure_ledger_ws16_006.py`
+- backlog 状态同步脚本：`scripts/sync_task_backlog_status.py`
 - 核心校验模块：`system/doc_consistency.py`
 
 ## 3. 标准执行步骤
@@ -26,7 +27,13 @@ python scripts/sync_risk_verify_mapping_ws16_006.py
 python scripts/sync_risk_closure_ledger_ws16_006.py --apply --output-json logs/autonomous/risk_closure_status_ws16_006.json
 ```
 
-6. 执行一致性校验：
+6. 同步 backlog 状态（`99-task-backlog.csv`）：
+
+```bash
+python scripts/sync_task_backlog_status.py --apply --output-json logs/autonomous/task_backlog_status_sync.json
+```
+
+7. 执行一致性校验：
 
 ```bash
 python scripts/validate_doc_consistency_ws16_006.py --strict
@@ -51,7 +58,9 @@ python scripts/validate_doc_consistency_ws16_006.py --strict
 5. `missing mapped verification task(s)`
    - 检查 `08-risk-closure-ledger.md` 的 `verification_tasks` 映射与执行板任务状态。
 6. 风险台账 `status` 与执行板进度不一致
-   - 执行 `sync_risk_closure_ledger_ws16_006.py --apply` 重新对齐状态。
+    - 执行 `sync_risk_closure_ledger_ws16_006.py --apply` 重新对齐状态。
+7. backlog `status` 与执行板进度不一致
+   - 执行 `sync_task_backlog_status.py --apply` 对齐 `99-task-backlog.csv`。
 
 ## 6. 值班门禁建议
 1. 提交前本地执行 `--strict`。
