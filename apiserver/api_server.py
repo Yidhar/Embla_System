@@ -875,22 +875,101 @@ async def get_memory_stats():
 #     return await _call_mcpserver("GET", "/tasks", params=params)
 
 
-@app.get("/mcp/status")
-async def get_mcp_status_offline():
-    """MCP Server 未启动时返回离线状态，避免前端 503"""
+def _build_mcp_runtime_snapshot(
+    *,
+    registry_status: Optional[Dict[str, Any]] = None,
+    external_services: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """构建 MCP 运行时状态快照（供 /mcp/status 与 /mcp/tasks 复用）。"""
     from datetime import datetime
 
+    if registry_status is None:
+        try:
+            from mcpserver.mcp_registry import auto_register_mcp, get_registry_status
+
+            auto_register_mcp()
+            registry_status = get_registry_status()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning(f"构建 MCP registry 状态失败: {exc}")
+            registry_status = {"registered_services": 0, "service_names": []}
+
+    if external_services is None:
+        cfg = _load_mcporter_config()
+        external_cfg = cfg.get("mcpServers", {}) if isinstance(cfg, dict) else {}
+        external_services = list(external_cfg.keys()) if isinstance(external_cfg, dict) else []
+
+    builtin_names = [str(x) for x in (registry_status.get("service_names") or []) if str(x).strip()]
+    external_names = [str(x) for x in (external_services or []) if str(x).strip() and str(x) not in builtin_names]
+    service_total = len(builtin_names) + len(external_names)
+
     return {
-        "server": "offline",
+        "server": "online" if service_total > 0 else "offline",
         "timestamp": datetime.now().isoformat(),
-        "tasks": {"total": 0, "active": 0, "completed": 0, "failed": 0},
+        "tasks": {
+            "total": service_total,
+            "active": 0,
+            "completed": len(builtin_names),
+            "failed": 0,
+        },
+        "registry": {
+            "registered_services": int(registry_status.get("registered_services") or 0),
+            "cached_manifests": int(registry_status.get("cached_manifests") or 0),
+            "service_names": builtin_names,
+            "external_service_names": external_names,
+        },
+        "scheduler": {
+            "source": "registry_snapshot",
+            "tracked_tasks": service_total,
+        },
     }
+
+
+def _build_mcp_task_snapshot(
+    status: Optional[str] = None,
+    *,
+    snapshot: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if snapshot is None:
+        snapshot = _build_mcp_runtime_snapshot()
+    registry = snapshot.get("registry", {}) if isinstance(snapshot, dict) else {}
+
+    tasks: List[Dict[str, Any]] = []
+    for name in registry.get("service_names", []) or []:
+        tasks.append(
+            {
+                "task_id": f"builtin:{name}",
+                "service_name": str(name),
+                "status": "registered",
+                "source": "builtin",
+            }
+        )
+    for name in registry.get("external_service_names", []) or []:
+        tasks.append(
+            {
+                "task_id": f"mcporter:{name}",
+                "service_name": str(name),
+                "status": "configured",
+                "source": "mcporter",
+            }
+        )
+
+    normalized_filter = str(status or "").strip().lower()
+    if normalized_filter:
+        tasks = [item for item in tasks if str(item.get("status", "")).lower() == normalized_filter]
+
+    return {"tasks": tasks, "total": len(tasks)}
+
+
+@app.get("/mcp/status")
+async def get_mcp_status_offline():
+    """返回 MCP 运行态快照，兼容前端 status/tasks 字段。"""
+    return _build_mcp_runtime_snapshot()
 
 
 @app.get("/mcp/tasks")
 async def get_mcp_tasks_offline(status: Optional[str] = None):
-    """MCP Server 未启动时返回空任务列表，避免前端 503"""
-    return {"tasks": [], "total": 0}
+    """返回 MCP 任务（服务）快照，避免离线模式 503。"""
+    return _build_mcp_task_snapshot(status)
 
 
 # ============ MCP 服务列表 & 导入 ============

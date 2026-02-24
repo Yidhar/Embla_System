@@ -298,6 +298,197 @@ _CODING_KEYWORDS = (
 _CODEX_SERVICE_ALIASES = {"codex-cli", "codex-mcp"}
 _CODEX_TOOL_NAMES = {"ask-codex", "brainstorm", "help", "ping"}
 _MUTATING_NATIVE_TOOL_NAMES = {"write_file", "git_checkout_file", "workspace_txn_apply"}
+_SCHEMA_ERR_INPUT_INVALID = "E_SCHEMA_INPUT_INVALID"
+_SCHEMA_ERR_OUTPUT_INVALID = "E_SCHEMA_OUTPUT_INVALID"
+_LIVE2D_ACTIONS = {"normal", "happy", "enjoy", "sad", "surprise"}
+_NATIVE_TOOL_ALIASES = {
+    "read": "read_file",
+    "write": "write_file",
+    "cwd": "get_cwd",
+    "exec": "run_cmd",
+    "search": "search_keyword",
+    "docs": "query_docs",
+    "ls": "list_files",
+    "status": "git_status",
+    "diff": "git_diff",
+    "log": "git_log",
+    "show": "git_show",
+    "blame": "git_blame",
+    "grep": "git_grep",
+    "changed": "git_changed_files",
+    "checkout": "git_checkout_file",
+    "python": "python_repl",
+    "python_exec": "python_repl",
+    "artifact": "artifact_reader",
+    "read_artifact": "artifact_reader",
+    "file_ast_chunk": "file_ast_chunk_read",
+    "readchunkbyrange": "file_ast_chunk_read",
+    "sleep_watch": "sleep_and_watch",
+    "watch_log": "sleep_and_watch",
+    "txn_apply": "workspace_txn_apply",
+    "scaffold_apply": "workspace_txn_apply",
+    "killswitch": "killswitch_plan",
+    "repl": "python_repl",
+}
+_SUPPORTED_NATIVE_TOOL_NAMES = {
+    "read_file",
+    "write_file",
+    "get_cwd",
+    "run_cmd",
+    "search_keyword",
+    "query_docs",
+    "list_files",
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_show",
+    "git_blame",
+    "git_grep",
+    "git_changed_files",
+    "git_checkout_file",
+    "python_repl",
+    "artifact_reader",
+    "file_ast_skeleton",
+    "file_ast_chunk_read",
+    "workspace_txn_apply",
+    "sleep_and_watch",
+    "killswitch_plan",
+}
+_VALID_RESULT_STATUS = {"success", "ok", "error", "timeout", "blocked"}
+
+
+def _schema_error(code: str, call_id: str, detail: str) -> str:
+    normalized_detail = str(detail or "").strip()
+    return f"[{code}] id={call_id} {normalized_detail}".strip()
+
+
+def _as_nonempty_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _normalize_native_tool_name(tool_name: str) -> str:
+    lowered = _as_nonempty_text(tool_name).lower()
+    return _NATIVE_TOOL_ALIASES.get(lowered, lowered)
+
+
+def _validate_native_call_schema(call_id: str, args: Dict[str, Any]) -> Tuple[str, List[str]]:
+    errors: List[str] = []
+    normalized_tool = _normalize_native_tool_name(args.get("tool_name"))
+    if not normalized_tool:
+        errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "native_call 缺少 tool_name"))
+        return "", errors
+    if normalized_tool not in _SUPPORTED_NATIVE_TOOL_NAMES:
+        errors.append(
+            _schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, f"native_call tool_name 不支持: {normalized_tool}")
+        )
+        return normalized_tool, errors
+
+    has_path = bool(_as_nonempty_text(args.get("path")) or _as_nonempty_text(args.get("file_path")))
+    if normalized_tool in {"read_file", "write_file", "file_ast_skeleton", "file_ast_chunk_read", "git_checkout_file"}:
+        if not has_path:
+            errors.append(
+                _schema_error(
+                    _SCHEMA_ERR_INPUT_INVALID,
+                    call_id,
+                    f"{normalized_tool} 缺少 path/file_path",
+                )
+            )
+
+    if normalized_tool == "write_file" and args.get("content") is None:
+        errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "write_file 缺少 content"))
+
+    if normalized_tool == "run_cmd" and not (
+        _as_nonempty_text(args.get("command")) or _as_nonempty_text(args.get("cmd"))
+    ):
+        errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "run_cmd 缺少 command/cmd"))
+
+    if normalized_tool == "artifact_reader":
+        has_ref = bool(_as_nonempty_text(args.get("artifact_id")) or _as_nonempty_text(args.get("raw_result_ref")))
+        if not has_ref:
+            errors.append(
+                _schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "artifact_reader 缺少 artifact_id/raw_result_ref")
+            )
+
+    if normalized_tool == "workspace_txn_apply":
+        changes = args.get("changes")
+        if not isinstance(changes, list) or not changes:
+            errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "workspace_txn_apply 缺少 changes[]"))
+        else:
+            for idx, item in enumerate(changes):
+                if not isinstance(item, dict):
+                    errors.append(
+                        _schema_error(
+                            _SCHEMA_ERR_INPUT_INVALID,
+                            call_id,
+                            f"workspace_txn_apply changes[{idx}] 必须为对象",
+                        )
+                    )
+                    continue
+                if not _as_nonempty_text(item.get("path") or item.get("file_path")) or item.get("content") is None:
+                    errors.append(
+                        _schema_error(
+                            _SCHEMA_ERR_INPUT_INVALID,
+                            call_id,
+                            f"workspace_txn_apply changes[{idx}] 缺少 path/content",
+                        )
+                    )
+                    break
+
+    if normalized_tool == "sleep_and_watch":
+        if not has_path:
+            errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "sleep_and_watch 缺少 log_file/path"))
+        if not (_as_nonempty_text(args.get("pattern")) or _as_nonempty_text(args.get("regex"))):
+            errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "sleep_and_watch 缺少 pattern/regex"))
+
+    return normalized_tool, errors
+
+
+def _enforce_tool_result_schema(
+    result: Any,
+    *,
+    call: Dict[str, Any],
+    call_id: str,
+    default_service_name: str,
+    default_tool_name: str,
+) -> Dict[str, Any]:
+    if not isinstance(result, dict):
+        detail = f"result payload must be object, got {type(result).__name__}"
+        return {
+            "tool_call": call,
+            "result": _schema_error(_SCHEMA_ERR_OUTPUT_INVALID, call_id, detail),
+            "status": "error",
+            "service_name": "tool_protocol",
+            "tool_name": "validation",
+            "error_code": _SCHEMA_ERR_OUTPUT_INVALID,
+        }
+
+    errors: List[str] = []
+    status = _as_nonempty_text(result.get("status")).lower()
+    if not status:
+        errors.append("missing status")
+    elif status not in _VALID_RESULT_STATUS:
+        errors.append(f"unsupported status={status}")
+    if not _as_nonempty_text(result.get("service_name")):
+        errors.append("missing service_name")
+    if not _as_nonempty_text(result.get("tool_name")):
+        errors.append("missing tool_name")
+    if "result" not in result:
+        errors.append("missing result field")
+
+    if not errors:
+        return result
+
+    detail = "; ".join(errors)
+    return {
+        "tool_call": call,
+        "result": _schema_error(_SCHEMA_ERR_OUTPUT_INVALID, call_id, detail),
+        "status": "error",
+        "service_name": default_service_name or "tool_protocol",
+        "tool_name": default_tool_name or "validation",
+        "error_code": _SCHEMA_ERR_OUTPUT_INVALID,
+    }
 
 
 def _extract_latest_user_message(messages: List[Dict[str, Any]]) -> str:
@@ -859,6 +1050,20 @@ async def _execute_tool_call_with_retry(
                 except Exception:
                     pass
 
+        result = _enforce_tool_result_schema(
+            result,
+            call=call,
+            call_id=call_id,
+            default_service_name=service_name or "tool_protocol",
+            default_tool_name=tool_name or "validation",
+        )
+        if result.get("error_code") == _SCHEMA_ERR_OUTPUT_INVALID:
+            logger.warning(
+                "[AgenticLoop] output schema rejected id=%s detail=%s",
+                call_id,
+                _shorten_for_log(result.get("result", "")),
+            )
+
         logger.info(
             "[AgenticLoop] tool attempt done id=%s status=%s service=%s tool=%s result=%s",
             call_id,
@@ -1261,21 +1466,34 @@ def _convert_structured_tool_calls(
             call["_session_id"] = session_id
 
         if parse_error:
-            validation_errors.append(f"工具调用参数解析失败: id={call_id}, error={parse_error}")
+            validation_errors.append(
+                _schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, f"工具调用参数解析失败: error={parse_error}")
+            )
             continue
 
         if not isinstance(args, dict):
-            validation_errors.append(f"工具调用参数非法: id={call_id}, name={tool_name}, arguments必须是对象")
+            validation_errors.append(
+                _schema_error(
+                    _SCHEMA_ERR_INPUT_INVALID,
+                    call_id,
+                    f"工具调用参数非法: name={tool_name}, arguments必须是对象",
+                )
+            )
             continue
 
         if tool_name == "native_call":
             native_tool_name = str(args.get("tool_name") or "").strip()
             if not native_tool_name:
-                validation_errors.append(f"native_call 缺少 tool_name: id={call_id}")
+                validation_errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "native_call 缺少 tool_name"))
+                continue
+            normalized_native_tool, native_schema_errors = _validate_native_call_schema(call_id, args)
+            if native_schema_errors:
+                validation_errors.extend(native_schema_errors)
                 continue
             native_call = {
                 "agentType": "native",
                 **args,
+                "tool_name": normalized_native_tool,
             }
             _inject_call_context_metadata(
                 native_call,
@@ -1289,7 +1507,7 @@ def _convert_structured_tool_calls(
         if tool_name == "mcp_call":
             mcp_tool_name = str(args.get("tool_name") or "").strip()
             if not mcp_tool_name:
-                validation_errors.append(f"mcp_call 缺少 tool_name: id={call_id}")
+                validation_errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "mcp_call 缺少 tool_name"))
                 continue
 
             merged_call: Dict[str, Any] = {
@@ -1304,7 +1522,9 @@ def _convert_structured_tool_calls(
 
             arg_payload = args.get("arguments") or {}
             if not isinstance(arg_payload, dict):
-                validation_errors.append(f"mcp_call.arguments 必须是对象: id={call_id}")
+                validation_errors.append(
+                    _schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "mcp_call.arguments 必须是对象")
+                )
                 continue
             if mcp_tool_name == "ask-codex":
                 prompt = arg_payload.get("prompt")
@@ -1327,7 +1547,9 @@ def _convert_structured_tool_calls(
                         prompt = top_msg
                 arg_payload.pop("message", None)
                 if prompt is None or str(prompt).strip() == "":
-                    validation_errors.append(f"mcp_call ask-codex 缺少 prompt/message: id={call_id}")
+                    validation_errors.append(
+                        _schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "mcp_call ask-codex 缺少 prompt/message")
+                    )
                     continue
                 arg_payload.setdefault("sandboxMode", "workspace-write")
                 arg_payload.setdefault("approvalPolicy", "on-failure")
@@ -1344,7 +1566,16 @@ def _convert_structured_tool_calls(
         if tool_name == "live2d_action":
             action = str(args.get("action") or "").strip()
             if not action:
-                validation_errors.append(f"live2d_action 缺少 action: id={call_id}")
+                validation_errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "live2d_action 缺少 action"))
+                continue
+            if action not in _LIVE2D_ACTIONS:
+                validation_errors.append(
+                    _schema_error(
+                        _SCHEMA_ERR_INPUT_INVALID,
+                        call_id,
+                        f"live2d_action action 非法: {action}",
+                    )
+                )
                 continue
             live2d_call = {
                 "agentType": "live2d",
@@ -1360,7 +1591,7 @@ def _convert_structured_tool_calls(
             live2d_calls.append(live2d_call)
             continue
 
-        validation_errors.append(f"未知函数调用: id={call_id}, name={tool_name}")
+        validation_errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, f"未知函数调用: name={tool_name}"))
 
     return actionable_calls, live2d_calls, validation_errors
 
