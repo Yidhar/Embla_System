@@ -284,7 +284,7 @@ flowchart TB
         CACHE["🗄️ Prompt Cache Manager<br/>Cache Control 标记<br/>SystemPrompt + Tools 缓存"]
         RETRY["🔄 Retry Engine<br/>指数退避重试<br/>可重试错误分类"]
         STREAM["📡 Stream Parser<br/>SSE 流式解析<br/>ToolUse 提取"]
-        TRUNCATE["✂️ Output Truncator<br/>Head 200 + Tail 200 行<br/>防止上下文爆炸"]
+        TRUNCATE["🧰 Output Packager<br/>structured-safe preview + raw_result_ref<br/>防止上下文爆炸"]
 
         subgraph Providers["多模型提供者"]
             ANTHRO["Anthropic SDK<br/>Claude 3.5/3.7"]
@@ -301,8 +301,8 @@ flowchart TB
     STREAM -->|"error"| RETRY
     RETRY -->|"重试"| CACHE
 
-    MCP -->|"tool_result"| TRUNCATE
-    TRUNCATE -->|"压入messages"| CACHE
+    MCP -->|"tool_result"| RESULT_PACK
+    RESULT_PACK -->|"压入messages"| CACHE
 
     style LLMClient fill:#1a2a1a,stroke:#44aa44,color:#ccffcc
 ```
@@ -316,7 +316,7 @@ sequenceDiagram
     participant API as Anthropic API
     participant STREAM as Stream Parser
     participant MCP as MCP Host
-    participant TRUNC as Truncator
+    participant TRUNC as Result Packager
 
     RT->>CACHE: send(payload)
 
@@ -338,8 +338,8 @@ sequenceDiagram
         alt type == "tool_use"
             STREAM->>MCP: dispatch_tool(name, args)
             MCP-->>STREAM: tool_result (可能 5万行)
-            STREAM->>TRUNC: truncate(result, head=200, tail=200)
-            TRUNC-->>STREAM: truncated_result
+            STREAM->>TRUNC: package_result(raw_result)
+            TRUNC-->>STREAM: display_preview + raw_result_ref
             STREAM->>CACHE: append_to_messages(tool_result)
             Note right of CACHE: 进入下一轮 ReAct
         else type == "text"
@@ -384,7 +384,7 @@ interface PromptEnvelope {
 
 1. 主模型禁止处理低信息密度脏活（记忆压缩、超长日志清洗）。
 2. Block 3 超过 10k tokens 时必须先触发 GC，再允许主模型调用。
-3. 本地日志模型输出必须再次经过截断器后才能回注上下文。
+3. 本地日志模型输出必须经过结果封装器（preview + raw_result_ref）后才能回注上下文。
 
 ---
 
@@ -392,7 +392,7 @@ interface PromptEnvelope {
 
 ### 4.1 Working Memory 短期记忆
 
-当前任务的对话上下文，采用滑动窗口 + 自动截断机制。  
+当前任务的对话上下文，采用滑动窗口 + 结果封装回注机制。  
 目标态采用双阈值：
 
 1. 软阈值：动态窗口 > 10k tokens 时强制 GC。
@@ -534,6 +534,8 @@ sequenceDiagram
 
 当 Working Memory 的 Token 数超过阈值时，自动压缩历史、归档到长期记忆、瘦身当前上下文。
 
+新增硬约束：GC 输出的 `forensic_artifact_ref` 必须“可读可检索”，主模型可通过 `artifact_reader` 按需回拉证据分片，而非只拿到不可用引用。
+
 ### 5.2 GC 策略架构
 
 ```mermaid
@@ -542,15 +544,18 @@ flowchart TB
         direction TB
         DETECTOR["阈值检测器<br/>动态窗口 > 10K → 触发"]
         SELECTOR["GC 目标选择器<br/>选择哪些对话轮次回收"]
-        COMPRESSOR["压缩器<br/>调用 Haiku 生成摘要"]
-        ARCHIVER["归档器<br/>写入 ChromaDB + SQLite"]
-        INJECTOR["摘要注入器<br/>压缩后注入上下文头部"]
+        EXTRACTOR["证据提取器<br/>提取 TraceID/ErrorCode/Path/Addr"]
+        SUMMARIZER["摘要器<br/>生成叙事索引 (不改写原始证据)"]
+        ARCHIVER["归档器<br/>写入 Evidence Store + ChromaDB + SQLite"]
+        INJECTOR["索引注入器<br/>注入证据索引卡片"]
     end
 
     WM["Working Memory"] -->|"动态窗口 > 10K"| DETECTOR
     DETECTOR --> SELECTOR
-    SELECTOR -->|"选中超窗历史轮次"| COMPRESSOR
-    COMPRESSOR -->|"300字摘要"| ARCHIVER
+    SELECTOR -->|"选中超窗历史轮次"| EXTRACTOR
+    EXTRACTOR --> SUMMARIZER
+    EXTRACTOR -->|"原始证据块"| ARCHIVER
+    SUMMARIZER -->|"摘要索引 + 引用锚点"| ARCHIVER
     ARCHIVER --> INJECTOR
     INJECTOR -->|"splice + unshift"| WM
 
@@ -564,8 +569,11 @@ sequenceDiagram
     participant WM as Working Memory
     participant DET as Threshold Detector
     participant SEL as GC Selector
-    participant COMP as Compressor (Haiku)
+    participant COMP as Summarizer Worker
     participant ARCH as Archiver
+    participant POL as Artifact Policy
+    participant EVD as Evidence Store
+    participant AR as artifact_reader
     participant CHROMA as ChromaDB
     participant SQL as SQLite
     participant INJ as Injector
@@ -580,22 +588,35 @@ sequenceDiagram
     SEL->>SEL: 策略: 保留最新3~5轮<br/>回收超窗历史轮次
     SEL-->>COMP: gc_targets[old_window]
 
-    COMP->>COMP: 调用次模型:<br/>"将超窗历史对话压缩为结构化摘要:<br/>· 已尝试方案<br/>· 失败原因<br/>· 当前进展<br/>· 关键发现"
-    COMP-->>ARCH: compressed_summary (markdown)
+    COMP->>COMP: 提取关键证据字段:<br/>trace_id / error_code / stack_frame / hex_address / full_path
+    COMP->>COMP: 生成摘要索引:<br/>仅描述上下文脉络 + 引用锚点
+    COMP-->>ARCH: {forensic_artifact_ref, narrative_summary, key_fields}
+    ARCH->>POL: checkQuotaAndTTL(session_id, expected_size)
+    POL-->>ARCH: allow | deny_with_backpressure
 
     par 并行归档
-        ARCH->>CHROMA: vectorize_and_store(summary)
+        ARCH->>EVD: persist_raw_artifacts(forensic_artifact_ref)
+        Note right of EVD: 原始证据可回跳<br/>不得被摘要改写
+    and
+        ARCH->>CHROMA: vectorize_and_store(narrative_summary)
         Note right of CHROMA: 供未来 RAG 检索
     and
-        ARCH->>SQL: log_gc_event({<br/>  session_id,<br/>  rounds_removed: 50,<br/>  tokens_freed: 60000,<br/>  compression_ratio: 0.85<br/>})
+        ARCH->>SQL: log_gc_event({<br/>  session_id,<br/>  rounds_removed: 50,<br/>  tokens_freed: 60000,<br/>  artifact_ref: forensic_artifact_ref,<br/>  key_field_count: 42<br/>})
     end
 
     INJ->>WM: messages.splice(old_window_start, old_window_end)
     Note right of WM: 释放超窗 token
-    INJ->>WM: messages.unshift({<br/>  role: "system",<br/>  content: "[记忆摘要]\n" + summary<br/>})
+    INJ->>WM: messages.unshift({<br/>  role: "system",<br/>  content: "[记忆索引]\nsummary + forensic_artifact_ref"<br/>})
+
+    opt 需要查看证据原文
+        WM->>AR: readByRef({<br/>  raw_result_ref: forensic_artifact_ref,<br/>  mode: "jsonpath",<br/>  query: "$..trace_id"<br/>})
+        AR->>EVD: fetchChunk(forensic_artifact_ref, query)
+        EVD-->>AR: matched_chunk
+        AR-->>WM: chunk_preview + chunk_ref
+    end
 
     WM->>WM: resume_session()
-    Note right of WM: 当前动态窗口 Token: ~7,000 ✅
+    Note right of WM: 当前动态窗口 Token: ~7,000 ✅<br/>关键证据仍可按引用回读
 ```
 
 ---
@@ -615,8 +636,8 @@ stateDiagram-v2
     SECURITY_CHECK --> EXECUTING: 安全放行
     SECURITY_CHECK --> BLOCKED: 安全拦截
     BLOCKED --> THINKING: 拦截结果回传 LLM
-    EXECUTING --> TRUNCATING: 工具执行完成
-    TRUNCATING --> THINKING: 截断结果压入 messages
+    EXECUTING --> NORMALIZING_RESULT: 工具执行完成
+    NORMALIZING_RESULT --> THINKING: 结果封装后压入 messages
     RESPONDING --> GC_CHECK: 检查 Token 量
     GC_CHECK --> GC_RUNNING: Token > 阈值
     GC_CHECK --> IDLE: Token 正常
@@ -766,3 +787,7 @@ flowchart TB
 3. Router 必须执行仲裁熔断：`MAX_DELEGATE_TURNS = 3`。
 4. 平级 Agent 禁止直接对话，跨 Agent 冲突只能经 Router 传递。
 5. 任何触发物理宿主机变更的动作，必须交由 Brainstem 串行落地。
+6. 自我进化验证必须防止评测毒化（Test Poisoning）：关键测试基线不可由被测任务直接改写。
+7. 验证需采用双轨执行（工作区 + clean checkout），防止通过“修改测试”伪造通过结果。
+
+补充参考：`./13-security-blindspots-and-hardening.md`

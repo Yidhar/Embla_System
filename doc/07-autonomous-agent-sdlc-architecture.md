@@ -69,7 +69,7 @@
 
 说明：
 - 上述为当前代码 `As-Is` 能力，不代表目标态设计。
-- 目标态开发任务编排已在 `gemin + 10/11/12` 中切换为"子代理 + 脚手架"方案，不再以 CLI 节点作为主执行设计。
+- 目标态开发任务编排已在 `00-omni-operator-architecture.md + 10/11/12` 中切换为"子代理 + 脚手架"方案，不再以 CLI 节点作为主执行设计。
 - **演进路径**：Phase 0 (CLI Tools) → Phase 1-2 (增强监控) → Phase 3 (Sub-Agent Runtime)
 
 ### 2.2 状态机与工作流持久化
@@ -217,3 +217,4 @@
 - 工具执行管线：`./06-structured-tool-calls-and-local-first-native.md`
 - 前后端入口边界：`./08-frontend-backend-separation-plan.md`
 - 工具治理规范：`./09-tool-execution-specification.md`
+- 安全盲区与加固基线：`./13-security-blindspots-and-hardening.md`

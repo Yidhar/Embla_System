@@ -70,6 +70,11 @@ SSE 关键事件：
 - 路径穿越与 UNC 路径拦截
 - 超时与输出边界控制
 
+补充说明（安全边界）：
+
+- token/正则拦截只是一层“快速止血”，不能单独作为最终安全边界。
+- 对混淆命令（变量拼接、编码后执行、解释器二次执行）需通过“能力白名单 + 参数 schema + 风险门禁”补齐。
+
 ### 4.3 执行后反馈
 
 - 工具执行状态统一写回 `tool_results` 事件。
@@ -111,17 +116,50 @@ SSE 关键事件：
 
 ### 6.3 输出熔断器规范
 
-所有 Shell/Bash 执行结果必须经过截断器包裹，示例：
+强制规则：
+
+1. 结构化输出（JSON/XML/CSV）禁止做字符级“头尾截断”。
+2. 大响应应落盘为 artifact，并返回 `raw_result_ref + display_preview + truncated + total_chars/lines`。
+3. 纯文本日志可截断预览，但必须显式携带截断元数据，避免模型误判为执行失败。
+4. 返回 `raw_result_ref` 时必须可通过 `artifact_reader` 二次读取（`jsonpath/line_range/grep`）。
+5. Artifact Store 必须具备 `TTL + quota + high-watermark` 防爆策略。
+
+参考伪代码：
 
 ```ts
-function executeWithTruncation(cmd: string): string {
-  const result = execSync(cmd, { timeout: 30000 });
-  if (result.length > 8000) {
-    return result.slice(0, 3000) +
-      "\\n...[SYSTEM TRUNCATED: OUTPUT TOO LONG]...\\n" +
-      result.slice(-3000);
+type ToolResultEnvelope = {
+  display_preview: string;
+  raw_result_ref?: string;
+  fetch_hints?: string[];
+  truncated: boolean;
+  total_chars: number;
+  content_type: "text/plain" | "application/json" | "text/csv" | "application/xml";
+};
+
+function buildToolResult(raw: string, contentType: string): ToolResultEnvelope {
+  const total = raw.length;
+  const isStructured = ["application/json", "text/csv", "application/xml"].includes(contentType);
+
+  if (isStructured && total > 8000) {
+    ensureArtifactQuota(); // 高水位/配额检查
+    const ref = persistArtifact(raw); // 写入对象存储/临时文件并返回引用
+    return {
+      display_preview: summarizeStructured(raw), // schema/keys/sample rows
+      raw_result_ref: ref,
+      fetch_hints: ["jsonpath:$..error_code", "jsonpath:$..trace_id"],
+      truncated: true,
+      total_chars: total,
+      content_type: contentType as ToolResultEnvelope["content_type"],
+    };
   }
-  return result;
+
+  const preview = total > 8000 ? raw.slice(0, 8000) + "\n...[TRUNCATED]..." : raw;
+  return {
+    display_preview: preview,
+    truncated: total > 8000,
+    total_chars: total,
+    content_type: "text/plain",
+  };
 }
 ```
 
@@ -138,3 +176,4 @@ function executeWithTruncation(cmd: string): string {
 - 启动与调试：`./05-dev-startup-and-index.md`
 - 自治 SDLC：`./07-autonomous-agent-sdlc-architecture.md`
 - 工具治理规范：`./09-tool-execution-specification.md`
+- 安全盲区与加固基线：`./13-security-blindspots-and-hardening.md`

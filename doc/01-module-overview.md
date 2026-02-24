@@ -162,3 +162,4 @@
 - 前后端分离：`./08-frontend-backend-separation-plan.md`
 - 工具治理规范：`./09-tool-execution-specification.md`
 - 目标架构蓝图（仅目标态参考）：`./00-omni-operator-architecture.md`、`./10-brainstem-layer-modules.md`、`./11-brain-layer-modules.md`、`./12-limbs-layer-modules.md`
+- 安全盲区与加固基线：`./13-security-blindspots-and-hardening.md`

@@ -33,6 +33,8 @@
 
 系统采用 **三层进程隔离模型**：脑干层（不可变守护进程）、大脑层（认知路由与记忆）、手脚层（MCP 动态工具协议）。结合 **事件驱动总线 + 分布式微 Agent + 自我编译循环** 设计模式。
 
+安全盲区与强制加固基线见：`./13-security-blindspots-and-hardening.md`。
+
 ```mermaid
 graph TB
     subgraph BrainstemLayer["🧬 脑干层 Brainstem — 不可变守护进程区"]
@@ -43,9 +45,9 @@ graph TB
         KS["🔴 KillSwitch<br/>物理熔断器<br/>独立于Agent的监控"]
 
         subgraph SecurityKernel["安全内核"]
-            RF["🛡️ Regex Firewall<br/>Bash注入拦截<br/>危险命令阻断"]
+            RF["🛡️ Policy Firewall<br/>能力白名单 + 参数Schema<br/>危险命令阻断"]
             TB_["💰 Token Breaker<br/>账单熔断器<br/>单任务>$5强制kill"]
-            BRC["💥 Blast Radius Ctrl<br/>爆炸半径控制<br/>ZFS快照 · 回滚"]
+            BRC["💥 Blast Radius Ctrl<br/>爆炸半径控制<br/>多后端快照 · 回滚"]
         end
     end
 
@@ -72,7 +74,7 @@ graph TB
     subgraph LimbsLayer["🦾 手脚层 Limbs — MCP 动态工具协议"]
         direction TB
         subgraph SystemMCP["Host-OS 系统工具"]
-            BASH["⌨️ os_bash<br/>带超时截断的Bash执行器"]
+            BASH["⌨️ os_bash<br/>结构化结果封装的Bash执行器"]
             AST["🔧 file_ast<br/>AST精确代码编辑器"]
             SYS["📦 systemd_manager<br/>后台进程管理"]
         end
@@ -161,9 +163,9 @@ omni-operator-v2/
 │   │   └── lease_manager.ts            # Lease/Fencing 单活多备管理器
 │   │
 │   ├── security/
-│   │   ├── regex_firewall.ts           # Bash 注入·危险命令(rm -rf)阻断
+│   │   ├── policy_firewall.ts          # 命令能力白名单 + 参数Schema + 动态入口拦截
 │   │   ├── token_breaker.ts            # 账单熔断器 (单次任务>$5 强制kill)
-│   │   ├── blast_radius.ts             # 爆炸半径控制 (ZFS/Btrfs 快照管理)
+│   │   ├── blast_radius.ts             # 爆炸半径控制 (多后端快照管理)
 │   │   ├── kill_switch.ts              # 物理熔断 (异常IO/网络外发 → 全杀)
 │   │   └── human_approval.ts           # 人类核准旁路 (Slack/手机推送)
 │   │
@@ -190,7 +192,7 @@ omni-operator-v2/
 │   │
 │   ├── tools/                          # MCP 动态工具区
 │   │   ├── built_in/                   # 内置基础工具
-│   │   │   ├── os_bash.ts              # 带超时截断的 Bash 执行器
+│   │   │   ├── os_bash.ts              # 结构化结果封装的 Bash 执行器
 │   │   │   ├── file_ast.ts             # AST 精确文件编辑器
 │   │   │   ├── web_scraper.ts          # Playwright 无头浏览器
 │   │   │   ├── search_engine.ts        # Google/Tavily 搜索
@@ -199,7 +201,7 @@ omni-operator-v2/
 │   │   │   ├── snapshot_manager.ts     # 快照创建/恢复
 │   │   │   ├── systemd_manager.ts      # 后台进程管理
 │   │   │   └── git_operator.ts         # Git 操作封装
-│   │   └── plugins/                    # Agent 自主生成的扩展工具 (动态 import)
+│   │   └── plugins/                    # Agent 自主生成的扩展工具 (隔离 worker 加载)
 │   │       └── .gitkeep
 │   │
 │   ├── evolution/                      # 自我进化沙盒
@@ -287,7 +289,7 @@ sequenceDiagram
 
         loop ReAct 推理循环
             LLM-->>MCP: 返回 <tool_use> JSON
-            MCP->>SEC: 安全校验(regex_firewall + blast_radius)
+            MCP->>SEC: 安全校验(policy_firewall + blast_radius)
 
             alt 💥 触发安全规则
                 SEC-->>MCP: ❌ Permission Denied
@@ -295,8 +297,8 @@ sequenceDiagram
             else ✅ 校验通过
                 MCP->>OS: 执行命令 (timeout=30s)
                 OS-->>MCP: stdout/stderr
-                MCP->>MCP: 截断算法 (Head200行 + Tail200行)
-                MCP-->>LLM: <tool_result> 截断后结果
+                MCP->>MCP: 结果封装 (structured-safe + artifact_ref)
+                MCP-->>LLM: <tool_result> 预览 + 原文引用
             end
 
             LLM->>LLM: 判断: 是否需要更多工具?
@@ -312,13 +314,14 @@ sequenceDiagram
 
 ### 3.2 上下文垃圾回收与 RAG 归档 (Memory GC)
 
-当 messages 数组 Token 超限时，触发后台小模型压缩、向量化归档、上下文瘦身的完整流程。
+当 messages 数组 Token 超限时，触发后台“证据提取 + 摘要索引 + 归档”的完整流程，避免关键排障硬数据丢失。
 
 ```mermaid
 sequenceDiagram
     participant CTX as Context Window<br/>(Working Memory)
     participant GC as Memory GC Engine
-    participant Haiku as 小模型<br/>(Claude 3.5 Haiku)
+    participant SUM as Summarizer Worker
+    participant EVID as Evidence Store
     participant SQLite as SQLiteDB
     participant Chroma as ChromaDB<br/>(向量库)
     participant Graph as Semantic Graph
@@ -329,17 +332,18 @@ sequenceDiagram
         CTX->>GC: 发送挂起信号 (Pause Session)
         GC->>CTX: 提取前50轮历史工具调用记录
 
-        GC->>Haiku: "将以下试错过程压缩为300字复盘摘要"
-        Haiku-->>GC: 返回 Markdown 摘要
+        GC->>SUM: 提取关键证据字段<br/>TraceID / ErrorCode / Path / Address
+        SUM-->>GC: 返回 {narrative_summary, forensic_artifact_ref}
 
         par 并行持久化
-            GC->>Chroma: 向量化并长期存储 (供RAG检索)
-            GC->>SQLite: 记录 Token 消耗与压缩点位
+            GC->>EVID: 保存原始证据块 (可回跳)
+            GC->>Chroma: 向量化 narrative_summary (供RAG检索)
+            GC->>SQLite: 记录 Token 消耗、压缩点位、artifact_ref
             GC->>Graph: 更新系统拓扑 (新发现的依赖关系)
         end
 
         GC->>CTX: messages.splice(0, 50) 删除冗长
-        GC->>CTX: messages.unshift(摘要) 注入压缩记忆
+        GC->>CTX: messages.unshift(摘要索引 + 证据引用) 注入压缩记忆
         GC->>CTX: 解除挂起 (Resume Session)
     end
 ```
@@ -773,10 +777,10 @@ interface ToolCallEnvelope {
   // === 预算控制 ===
   estimated_token_cost: number;
   budget_remaining: number;
-  io_truncation_policy?: {
-    max_chars: number;      // 如 8000
-    head_chars: number;     // 如 3000
-    tail_chars: number;     // 如 3000
+  io_result_policy?: {
+    preview_max_chars: number;       // 如 8000
+    structured_passthrough: boolean; // JSON/XML/CSV 不做字符级截断
+    artifact_on_overflow: boolean;   // 超阈值落盘并返回 raw_result_ref
   };
 }
 ```
@@ -785,21 +789,22 @@ interface ToolCallEnvelope {
 
 ```mermaid
 flowchart LR
-    A["📦 工具脚本<br/>(*.ts)"] -->|"动态 import()"| B["📋 Schema 解析<br/>(参数·返回值)"]
-    B -->|"注册"| C["🗂️ Tool Registry"]
-    C -->|"健康检查"| D{"✅ Available?"}
-    D -->|Yes| E["🔧 就绪可用"]
-    D -->|No| F["⚠️ 降级标记"]
-    E -->|"调用时"| G["🛡️ 安全校验"]
-    G -->|"通过"| H["⚡ 执行"]
-    G -->|"拦截"| I["🚫 Denied"]
-    H -->|"超时"| J["⏰ 强制终止"]
-    H -->|"完成"| K["📊 结果截断"]
-    K --> L["📝 写入 Event Log"]
+    A["📦 工具脚本<br/>(*.ts)"] -->|"签名校验 + worker import()"| B["🧱 Isolated Tool Worker"]
+    B -->|"Schema 解析"| C["📋 参数·返回值契约"]
+    C -->|"注册"| D["🗂️ Tool Registry"]
+    D -->|"健康检查"| E{"✅ Available?"}
+    E -->|Yes| F["🔧 就绪可用"]
+    E -->|No| G["⚠️ 降级标记"]
+    F -->|"调用时"| H["🛡️ 安全校验"]
+    H -->|"通过"| I["⚡ 执行"]
+    H -->|"拦截"| J["🚫 Denied"]
+    I -->|"超时"| K["⏰ 强制终止"]
+    I -->|"完成"| L["📊 结果封装<br/>raw_result_ref + display_preview"]
+    L --> M["📝 写入 Event Log"]
 
     style A fill:#2a4a2a,stroke:#66aa66
-    style G fill:#4a2a2a,stroke:#aa6666
-    style L fill:#2a2a4a,stroke:#6666aa
+    style H fill:#4a2a2a,stroke:#aa6666
+    style M fill:#2a2a4a,stroke:#6666aa
 ```
 
 ### 6.4 Prompt Envelope 规范 (Caching + GC)
@@ -826,7 +831,7 @@ interface PromptEnvelope {
 执行规则：
 
 1. Block 3 超过 `soft_token_limit` 时，必须先执行 GC，再进入主模型调用。
-2. `sleep_and_watch(log_file, regex)` 进入休眠时，释放动态窗口内存，仅保留可恢复摘要。
+2. `sleep_and_watch(log_file, regex)` 进入休眠时，释放动态窗口内存，仅保留可恢复摘要与证据引用。
 3. 恢复唤醒后重新组装 `PromptEnvelope`，禁止直接恢复旧长上下文。
 
 ---
@@ -853,17 +858,17 @@ gantt
 
     section Phase 1 (W3-W4): MCP工具链与安全
     搭建 MCP Host 本地服务端          :         p1a, 2026-03-09, 2d
-    开发 os_bash 工具(含截断算法)     :         p1b, 2026-03-11, 2d
+    开发 os_bash 工具(结果封装双通道) :         p1b, 2026-03-11, 2d
     开发 file_ast 精确编辑器          :         p1c, 2026-03-13, 2d
     开发 web_scraper (Playwright)     :         p1d, 2026-03-15, 1d
-    Regex Firewall 安全拦截器         :         p1e, 2026-03-16, 2d
+    Command Policy 安全门禁           :         p1e, 2026-03-16, 2d
     Token Breaker 账单熔断            :         p1f, 2026-03-18, 1d
     Human Approval 审批旁路           :         p1g, 2026-03-19, 2d
     KillSwitch 物理熔断器             :         p1h, 2026-03-21, 1d
 
     section Phase 2 (W5-W6): 记忆与路由
     集成 SQLite 存储对话树            :         p2a, 2026-03-23, 2d
-    GC Engine 上下文压缩归档          :         p2b, 2026-03-25, 2d
+    GC Engine 证据保真归档            :         p2b, 2026-03-25, 2d
     ChromaDB RAG 向量检索             :         p2c, 2026-03-27, 2d
     Semantic Graph 系统拓扑           :         p2d, 2026-03-29, 1d
     Router Agent 多任务分派           :         p2e, 2026-03-30, 2d
@@ -873,7 +878,7 @@ gantt
 
     section Phase 3 (W7-W8): 自我进化与验收
     Chokidar 文件监听热加载           :         p3a, 2026-04-06, 2d
-    动态 import() 插件注册            :         p3b, 2026-04-08, 2d
+    隔离 worker 插件注册              :         p3b, 2026-04-08, 2d
     Sandbox 沙盒测试环境              :         p3c, 2026-04-10, 2d
     自我进化 CI/CD 全链路             :         p3d, 2026-04-12, 2d
     Blast Radius 快照管理             :         p3e, 2026-04-14, 1d
@@ -891,10 +896,10 @@ gantt
 |---|--------|----------|----------|
 | 1 | **事件驱动** | 模拟 CPU 告警事件 | Agent 自动响应并执行诊断 |
 | 2 | **工具执行** | Agent 使用 `os_bash` 遍历系统 | 找到指定 Log 并通过 `file_ast` 修复代码 |
-| 3 | **防爆性** | 执行输出 10 万行的 Bash 脚本 | Context 不崩溃，精确截断 |
-| 4 | **记忆持久** | 触发 GC 后检查 ChromaDB | 压缩摘要可被 RAG 成功检索 |
+| 3 | **防爆性** | 执行输出 10 万行的 Bash 脚本 | Context 不崩溃，结构化输出保真并返回引用 |
+| 4 | **记忆持久** | 触发 GC 后检查 ChromaDB | 摘要索引可检索，关键证据可回跳 |
 | 5 | **自我进化** | Agent 修改自己的 `sys_admin.md` | 下一条交互展现新认知，进程无需重启 |
-| 6 | **安全拦截** | 发送 `rm -rf /` 命令 | 被 Regex Firewall 拦截，推送审批 |
+| 6 | **安全拦截** | 发送 `rm -rf /` 命令 | 被 Policy Firewall 拦截并进入审批流程 |
 | 7 | **条件休眠** | 调用 `sleep_until(Error出现)` | Agent 挂起零 Token，条件满足后唤醒 |
 | 8 | **日结归档** | 运行 24h+ | 自动生成日结摘要，上下文重置 |
 | 9 | **回滚保障** | 自我进化后失败率飙升 | 自动 git revert 回退稳定版本 |

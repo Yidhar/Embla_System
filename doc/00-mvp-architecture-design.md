@@ -1,9 +1,9 @@
 ﻿# NagaAgent 多Agent自治架构设计文档（修订版）
 
 ---
-**文档类型**：As-Is 实施文档（Phase 0 MVP）
-**实施状态**：✅ 已实现（autonomous/ 模块）
-**最后验证**：2026-02-22
+**文档类型**：Phase 0 实施记录 + 目标态草案（Mixed）
+**实施状态**：✅ Phase 0 已实现（autonomous/ 模块）；⚠️ 含目标态设计片段
+**最后校准**：2026-02-22
 **Codex 策略版本**：v2 (Codex-first 主执行路径)
 **目标态参考**：`00-omni-operator-architecture.md` (Sub-Agent Runtime, Phase 3)
 ---
@@ -12,6 +12,7 @@
 > 编码工作由 System Agent 通过 **Codex CLI / Codex MCP（主路径）** + Claude Code / Gemini CLI（降级备选）以工具调用形式完成。
 > **文档定位**：本文是 `doc/07-autonomous-agent-sdlc-architecture.md` 的 Phase 0（MVP）实施稿，目标态约束以 07 文档为准。
 > **演进路径**：Phase 0 (CLI Tools) → Phase 1-2 (增强监控) → Phase 3 (Sub-Agent Runtime)
+> **阅读提示**：凡标注“目标态/规划中”的段落均非当前默认行为；当前可执行基线以 `config.json.example`、`system/config.py` 与 `autonomous/` 代码为准。
 
 ---
 
@@ -21,10 +22,10 @@
 
 | 平面 | 职责 | 文档引用 |
 |------|------|----------|
-| **控制面** | 编排、策略、质量门禁 | [§5 总体架构](file:///E:/Programs/NagaAgent/doc/07-autonomous-agent-sdlc-architecture.md#L68) |
-| **执行面** | 沙箱执行、工具调用、测试 | [§12 工具执行治理](file:///E:/Programs/NagaAgent/doc/07-autonomous-agent-sdlc-architecture.md#L441) |
-| **记忆面** | 事件溯源、投影裁决 | [§9 数据模型](file:///E:/Programs/NagaAgent/doc/07-autonomous-agent-sdlc-architecture.md#L273) |
-| **运维面** | 可观测、评测、审计 | [§15 可观测](file:///E:/Programs/NagaAgent/doc/07-autonomous-agent-sdlc-architecture.md#L523) |
+| **控制面** | 编排、策略、质量门禁 | [07 文档（总体架构）](./07-autonomous-agent-sdlc-architecture.md) |
+| **执行面** | 沙箱执行、工具调用、测试 | [07 文档（工具治理）](./07-autonomous-agent-sdlc-architecture.md) |
+| **记忆面** | 事件溯源、投影裁决 | [07 文档（状态与记忆）](./07-autonomous-agent-sdlc-architecture.md) |
+| **运维面** | 可观测、评测、审计 | [07 文档（运维与发布）](./07-autonomous-agent-sdlc-architecture.md) |
 
 ### 1.2 Gap Analysis
 
@@ -58,7 +59,7 @@ flowchart TB
 
     subgraph CLI["Agent CLI Tool Layer (外部进程调用)"]
         Adapter["CLI Adapter<br/>(统一接口)"]
-        Codex["Codex CLI<br/>codex --full-auto"]
+        Codex["Codex CLI<br/>codex --approval-mode full-auto"]
         Claude["Claude Code<br/>claude -p --dangerously-skip-permissions"]
         Gemini["Gemini CLI<br/>gemini -p"]
     end
@@ -174,7 +175,7 @@ class AgentCliAdapter(ABC):
 
 | CLI | 非交互命令 | 关键参数 | 优先级 | 用途 |
 |-----|-----------|---------|--------|------|
-| **Codex CLI** | `codex --approval-mode full-auto -q "instruction"` | `--full-auto` 无需确认 | **P0 主路径** | 所有编码任务 |
+| **Codex CLI** | `codex --approval-mode full-auto -q "instruction"` | `--approval-mode full-auto` 无需确认 | **P0 主路径** | 所有编码任务 |
 | **Codex MCP** | `ask-codex`（MCP Tool） | `workspace-write + on-failure` | **P0 主路径** | 编码任务（MCP 模式） |
 | **Claude Code** | `claude -p "instruction" --dangerously-skip-permissions` | `-p` 非交互管道模式 | P1 降级 | Codex 不可用时 |
 | **Gemini CLI** | `gemini -p "instruction"` | `-p` 非交互管道模式 | P2 降级 | Claude 不可用时 |
@@ -188,6 +189,8 @@ class AgentCliAdapter(ABC):
 > 所有 CLI 调用都在 `auto/<task_id>` Git 分支上执行，变更隔离在分支内。
 
 ### 3.3 CLI 选择策略（Codex-first 实现）
+
+> 说明：以下为策略伪代码（目标态表达）。当前实际实现以 `autonomous/tools/cli_selector.py` 为准，核心规则是 `preferred + complexity + fallback_order`。
 
 ```python
 # autonomous/tools/cli_selector.py
@@ -678,65 +681,45 @@ autonomous:
   cycle_interval_seconds: 3600        # 优化周期(秒)
 
   cli_tools:
-    preferred: "claude"               # 首选CLI
-    fallback_order: ["codex", "gemini"]
-    max_retries: 3
+    preferred: "codex"
+    fallback_order: ["claude", "gemini"]
+    max_retries: 2
 
-  cli_execution:
-    # 超时策略: 自适应 + 可配硬上限
-    timeout_mode: "adaptive"          # adaptive | fixed
-    fixed_timeout_seconds: 7200       # fixed模式下的硬上限(2小时)
-    adaptive:
-      base_timeout_seconds: 1800     # 基础超时(30分钟)
-      per_complexity:                 # 按任务复杂度乘数
-        low: 1.0                      # 30分钟
-        medium: 2.0                   # 1小时
-        high: 4.0                     # 2小时
-        epic: 8.0                     # 4小时
-      max_timeout_seconds: 14400     # 绝对上限(4小时)
-    monitoring:
-      poll_interval_seconds: 10      # 状态采样间隔
-      stall_threshold_seconds: 300   # 无输出超过此值判定停滞(5分钟)
-      stall_max_extensions: 3        # 停滞后最多延长次数
-      stall_extension_seconds: 300   # 每次延长时长(5分钟)
-
-  budget:
-    # 令牌预算: 软限制告警 + 硬限制熔断（与07文档一致）
-    daily_token_soft_limit: 100000000   # 软限制(10M), 超出触发告警
-    daily_token_hard_limit: 500000000   # 硬限制(50M), 超出停止本周期
-    warn_on_exceed: true
+  run_quality_checks: false
+  fixed_timeout_seconds: 3600
 
   verification_fallback:
     enable_codex_mcp: true
     mcp_server_name: "codex-cli"
     tool_name: "ask-codex"
-    trigger_on:
-      cli_unavailable: true
-      retry_exhausted: true
     sandbox_mode: "read-only"
     approval_policy: "on-failure"
 
-  security:
-    self_modify_whitelist:
-      - "autonomous/"
-      - "doc/"
-      - "tests/"
-    core_readonly:                     # 默认只读，特殊改动需走Gate审批
-      - "main.py"
-      - "apiserver/"
-      - "system/config.py"
-    diff_review_mode: "adaptive"      # adaptive | fixed
-    fixed_max_diff_lines: 5000        # fixed模式下硬上限
-    require_human_approval: false     # 是否需要人工确认合并
+  lease:
+    enabled: true
+    lease_name: "global_orchestrator"
+    owner_id: ""
+    renew_interval_seconds: 2
+    ttl_seconds: 10
+    standby_poll_interval_seconds: 2
 
-  git:
-    branch_prefix: "auto/"
-    auto_cleanup_branches: true
+  outbox_dispatch:
+    enabled: true
+    consumer_name: "release-controller"
+    poll_interval_seconds: 2
+    batch_size: 50
 
-  event_log:
-    backend: "sqlite"                 # sqlite | json_file
-    retention_days: 90
+  release:
+    enabled: true
+    gate_policy_path: "policy/gate_policy.yaml"
+    max_error_rate: 0.02
+    max_latency_p95_ms: 1500.0
+    min_kpi_ratio: 0.95
+    auto_rollback_enabled: true
+    rollback_command: ""
 ```
+
+> 说明：`cli_execution`、`budget`、`git.branch_prefix` 在当前配置模型中尚未落地，属于后续阶段规划字段。
 
 ---
 
@@ -744,58 +727,63 @@ autonomous:
 
 ### 8.1 ServiceManager 扩展点
 
-```diff
- # main.py - ServiceManager.start_all_servers()
-+    # 启动自治Agent (如果配置启用)
-+    if config.get("autonomous", {}).get("enabled", False):
-+        from autonomous.system_agent import SystemAgent
-+        self.system_agent = SystemAgent(config["autonomous"])
-+        asyncio.create_task(self.system_agent.start())
+```python
+# main.py (当前实现摘录)
+await self._try_start_autonomous_agent()
+
+async def _try_start_autonomous_agent(self):
+    auto_cfg = getattr(config, "autonomous", None)
+    if auto_cfg is None or not getattr(auto_cfg, "enabled", False):
+        return
+    from autonomous.system_agent import SystemAgent
+
+    cfg_payload = auto_cfg.model_dump() if hasattr(auto_cfg, "model_dump") else auto_cfg
+    self.system_agent = SystemAgent(cfg_payload, repo_dir=os.getcwd())
+    self._autonomous_task = asyncio.create_task(self.system_agent.start())
 ```
 
 ### 8.2 与 TaskScheduler 集成
 
-现有 [task_scheduler.py](file:///E:/Programs/NagaAgent/agentserver/task_scheduler.py) 提供任务管理和 LLM 压缩能力。System Agent 的规划器可复用其 LLM 调用基础设施。
+现有 `agentserver/task_scheduler.py` 提供任务管理和 LLM 压缩能力。System Agent 的规划器可复用其 LLM 调用基础设施。
 
 ---
 
-## 9. 安全约束
+## 9. 安全约束（当前实现 vs 目标态）
 
 ### 9.1 不可协商的硬规则
 
 | 规则 | 约束 |
 |------|------|
-| **白名单目录** | CLI 仅能修改 `self_modify_whitelist` 中的目录 |
-| **核心模块受控改动** | [main.py](file:///E:/Programs/NagaAgent/main.py)、`apiserver/`、[system/config.py](file:///E:/Programs/NagaAgent/system/config.py) 默认不改；若确需改动，必须通过 Gate + 审计事件 + 回滚预案 |
-| **Git 分支隔离** | 所有变更在 `auto/*` 分支，不直接写 `main` |
-| **回滚保障** | 合并前 Git snapshot，失败时 `git revert` |
-| **KillSwitch** | 配置项随时可关闭自治循环 |
+| **Native 执行边界** | `system/native_executor.py` 负责根目录边界、危险 token、路径穿越与超时控制 |
+| **自治单活保护** | `autonomous/system_agent.py` + `workflow_store.py` 已实现 lease/fencing 防双主写入 |
+| **Codex-first 编码路由** | 编码任务优先走 Codex（CLI/MCP），Claude/Gemini 仅做降级备选 |
+| **Git 分支隔离** | `auto/*` 分支隔离是目标态建议，当前实现未强制所有任务自动分支 |
+| **KillSwitch** | 尚未实现独立物理 KillSwitch（目标态能力） |
 
 ### 9.2 自适应弹性约束
 
 | 维度 | 策略 | 说明 |
 |------|------|------|
-| **变更规模** | System Agent **自主评估**，不设固定行数上限 | 根据任务复杂度和目标范围判断 diff 是否合理，异常放大时告警而非硬截断 |
-| **Token 预算** | 每日 **100 万软限制 + 500 万硬限制** | 软限制告警，硬限制熔断，避免无限消耗 |
-| **CLI 执行时间** | **自适应超时**：按任务复杂度 30min ~ 4h，System Agent 实时监控 | 停滞检测 + 智能续期，而非盲目截断 |
+| **变更规模** | Evaluator 进行结果评估与范围检查 | 当 `target_files` 存在时，会校验 `files_changed` 不越界 |
+| **Token 预算** | 当前未内置硬阈值配额器 | 预算熔断属于目标态治理项，尚未进入配置模型 |
+| **CLI 执行时间** | 固定超时：`fixed_timeout_seconds` | 由 `BaseSubprocessCliAdapter` 统一超时；默认 3600 秒 |
 | **验证降级** | 主 CLI 不可用时切换到 Codex MCP `ask-codex` | 仅用于 Verifying 阶段，且默认 read-only |
 
 ### 9.3 CLI 执行监控机制
 
-System Agent 在 CLI 执行期间**不是盲等**，而是主动监控：
+当前实现会采集执行快照并记录结果；尚未实现“每 10 秒实时停滞检测 + 自动续期”。
 
 | 监控维度 | 采集方式 | 决策依据 |
 |----------|----------|----------|
-| **stdout 输出流** | 非阻塞 readline，10s 采样 | 有新输出 = 正常工作 |
-| **文件变更** | `git status --short` 定期检查 | 有新文件变更 = 正在产出 |
-| **停滞检测** | 超过 5 分钟无任何新输出 | 触发停滞评估流程 |
-| **进度估算** | 基于输出模式（日志关键词）推断 | 辅助超时决策 |
+| **快照记录** | `ExecutionMonitor` 回调收集 `CliExecutionStatus` | 记录执行起止状态，支撑事后审计 |
+| **文件变更** | CLI 结束后读取 `git status --porcelain` | 回填 `files_changed` 供评估器做范围检查 |
+| **超时处理** | 统一 `asyncio.wait_for` 超时 | 超时返回结构化失败（`exit_code=124`） |
+| **实时停滞检测** | 目标态规划 | 当前默认未启用自动停滞杀进程机制 |
 
-**停滞处理流程：**
-1. 检测到停滞 → 检查 `git status`，若有新文件变更则视为"慢但在工作"，延长等待
-2. 延长最多 3 次（每次 +5 分钟）
-3. 若延长后仍无产出 → `terminate()` 并记录事件
-4. 所有决策写入 Event Log，支持事后审阅
+后续增强方向：
+1. 增加实时 stdout 采样和停滞阈值
+2. 增加自适应续期策略
+3. 把停滞决策写入统一事件流并做可视化
 
 ---
 
@@ -818,12 +806,12 @@ System Agent 在 CLI 执行期间**不是盲等**，而是主动监控：
 ### Automated Tests
 - `python -m pytest autonomous/tests/ -v`（新建单元测试）
 - `ruff check autonomous/`（代码质量）
-- 端到端：System Agent 启动→感知→生成任务→CLI 执行(含监控)→评审→合并
+- 端到端：System Agent 启动→感知→生成任务→CLI 执行→评估→工作流状态迁移
 - 降级链路：模拟主 CLI 不可用，验证触发 `ask-codex` 并写入 `VerificationDegradedToCodexMCP`
 
 ### Manual Verification
 - `autonomous.enabled=false` 时确认无额外进程
 - `autonomous.enabled=true` 时确认 System Agent 启动并完成至少一次循环
-- 验证 CLI 停滞检测：模拟长时间无输出，确认自动终止
+- 验证 CLI 固定超时：模拟超时任务，确认返回结构化超时错误
 - CLI 不可用时确认降级到 Codex MCP（`codex-cli` 服务 + `ask-codex`）
-- 触发 KillSwitch 确认立即停止
+- 验证 `SystemAgent.stop()` 或进程退出时可正常停止循环

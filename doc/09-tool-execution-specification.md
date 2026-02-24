@@ -184,7 +184,7 @@ Block 3（动态窗口）：
 
 1. 内容：最近 3~5 轮真实交互。
 2. 禁止缓存标记。
-3. 超过 10k tokens 软阈值时，强制触发 GC（摘要压缩 + 裁剪）。
+3. 超过 10k tokens 软阈值时，强制触发 GC（证据保真归档 + 摘要索引 + 历史裁剪）。
 
 ### 10.2 异构模型分流规范
 
@@ -199,13 +199,19 @@ Block 3（动态窗口）：
 1. 禁止全局大文件直读：禁止把 `cat` 作为默认读取工具。
 2. 强制结构化读取：优先 `grep`、`awk`、`file_ast_skeleton`。
 3. 强制 patch/diff 修改：禁止整文件重写。
-4. 命令输出必须经过截断器：超阈值只保留头尾并标记截断。
+4. 命令输出必须结构化封装：返回 `display_preview + truncated + total_chars/lines`。
+5. 对 JSON/XML/CSV 等结构化输出，禁止字符级头尾切断；超阈值时必须落盘 artifact，并返回 `raw_result_ref`。
+6. 仅纯文本日志允许预览截断；截断结果不可冒充原始结果。
+7. 返回 `raw_result_ref` 时，必须同时提供可调用读取路径（如 `artifact_reader`），支持 `jsonpath/line_range/grep`。
+8. Artifact Store 必须启用 `TTL + quota + high-watermark`，超过阈值时拒绝新大对象写入并告警。
 
 ### 10.4 事件驱动休眠规范
 
 1. 禁止轮询监控。
 2. 必须提供 `sleep_and_watch(log_file, regex)`。
-3. 休眠期间销毁会话上下文，由宿主接管监听，触发后再唤醒模型。
+3. 监听器必须具备 `tail -F` 语义（inode 变更检测 + 文件重开），防止 logrotate 后假死。
+4. 休眠期间销毁会话上下文，由宿主接管监听，触发后再唤醒模型。
+5. 每个 watch 必须有心跳与超时告警，防止永久挂起。
 
 ## 11. 多 Agent 并发灾难防护（硬约束）
 
@@ -214,12 +220,19 @@ Block 3（动态窗口）：
 1. `read_file` 必须返回 `file_hash`。
 2. `edit_file` 必须提交 `original_file_hash`。
 3. hash 冲突返回硬错误并强制重新拉取上下文。
+4. 巨型文件（例如 >5,000 行）默认走 `file_ast_skeleton` 分层读取，禁止冲突后全量回读。
+5. hash 冲突后必须优先 `semantic_rebase + conflict_ticket + exponential_backoff`，防止并发活锁。
 
 ### 11.2 全局状态互斥锁
 
 1. 局部行为可并发（受乐观锁保护）。
 2. 全局行为（装依赖、分支切换、服务启停等）必须申请 `MUTEX_GLOBAL_STATE`。
 3. 冲突请求进入 `QUEUE`，等待锁释放后串行执行。
+4. 锁必须具备 TTL + 心跳续租 + fencing token；禁止无过期时间的永久锁。
+5. 必须实现 orphan lock 清理：持锁进程异常退出后自动回收。
+6. 锁 owner 失去 lease 时，必须终止旧 owner 对应物理执行进程树。
+7. 进程回收不能只依赖 PGID；必须绑定 `cgroup/container_id/job_root_id` 做全链路清理。
+8. 对 `docker run -d` / `nohup` / `setsid` 双重派生进程，必须通过容器 runtime 或 cgroup 递归回收。
 
 ### 11.3 仲裁熔断
 
@@ -249,3 +262,21 @@ Block 3（动态窗口）：
 - 工具执行管线：`./06-structured-tool-calls-and-local-first-native.md`
 - 自治 SDLC：`./07-autonomous-agent-sdlc-architecture.md`
 - 目标契约参考：`./00-omni-operator-architecture.md`
+- 安全盲区与加固基线：`./13-security-blindspots-and-hardening.md`
+
+## 14. 已识别高风险盲区（补充）
+
+以下风险已被纳入强制治理范围：
+
+1. Regex 黑名单可被命令混淆绕过（变量拼接/编码执行/跨解释器调用）。
+2. `register_new_tool` 若在宿主进程内加载不受信插件，存在宿主劫持风险。
+3. 全局锁异常退出导致锁泄漏，及旧 epoch 物理任务残留导致 fencing 失效。
+4. 暴力截断结构化输出造成数据破损，引发错误重试回路。
+5. 自我进化阶段可能通过修改测试“骗过验证”（Test Poisoning）。
+6. `sleep_and_watch` 若仅依赖 `tail -f`，在日志轮转后可能永久挂起。
+7. `raw_result_ref` 若不可二次读取，会出现“读后即盲”认知死锁。
+8. `file_ast` 在巨型单体文件与高并发冲突下可能触发 OOM + 活锁风暴。
+9. 脚手架多文件非原子提交会造成半写损坏态（Dirty State）。
+10. Artifact Store 若无配额与淘汰策略，可能触发磁盘 DoS。
+
+详细威胁模型、控制项与验收标准见：`./13-security-blindspots-and-hardening.md`。

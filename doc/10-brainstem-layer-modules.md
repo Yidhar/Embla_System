@@ -393,7 +393,7 @@ sequenceDiagram
 
 ### 4.1 模块职责
 
-由四个子模块组成的安全纵深防御体系：正则拦截、成本熔断、爆炸半径控制、人类审批旁路。
+由四个子模块组成的安全纵深防御体系：命令策略门禁、成本熔断、爆炸半径控制、人类审批旁路。
 
 ### 4.2 安全纵深架构
 
@@ -401,9 +401,9 @@ sequenceDiagram
 flowchart TB
     subgraph SecurityKernel["Security Kernel 安全内核"]
         direction TB
-        subgraph Layer1["第一层: 正则拦截 (Regex Firewall)"]
+        subgraph Layer1["第一层: 命令策略门禁 (Policy Firewall)"]
             RF_INPUT["输入扫描<br/>命令·文件路径·SQL"]
-            RF_RULES["规则引擎<br/>黑名单正则 · 白名单目录"]
+            RF_RULES["规则引擎<br/>能力白名单 + 参数Schema<br/>正则仅辅助信号"]
             RF_OUTPUT["输出扫描<br/>工具返回内容敏感信息"]
         end
 
@@ -414,7 +414,7 @@ flowchart TB
         end
 
         subgraph Layer3["第三层: 爆炸半径 (Blast Radius)"]
-            BR_SNAP["快照管理<br/>ZFS/Btrfs 快照"]
+            BR_SNAP["快照管理<br/>多后端快照链路"]
             BR_SCOPE["影响范围评估<br/>变更文件数·行数"]
             BR_ROLLBACK["回滚策略<br/>自动/手动回滚"]
         end
@@ -449,7 +449,7 @@ flowchart TB
 ```mermaid
 sequenceDiagram
     participant AGENT as Agent
-    participant RF as Regex Firewall
+    participant RF as Policy Firewall
     participant TB as Token Breaker
     participant HA as Human Approval
     participant BR as Blast Radius
@@ -458,15 +458,16 @@ sequenceDiagram
 
     AGENT->>RF: tool_call("os_bash", {cmd: "rm -rf /var/log/old"})
 
-    Note over RF: === 第一层: 正则拦截 ===
-    RF->>RF: 扫描命令内容
-    RF->>RF: 匹配规则: rm\s+(-[a-zA-Z]*f|-[a-zA-Z]*r)
-    RF->>RF: 检查路径白名单: /var/log/old ∈ workspace/?
+    Note over RF: === 第一层: 命令策略门禁 ===
+    RF->>RF: 解析 argv/解释器入口
+    RF->>RF: 校验能力白名单 + 参数 Schema
+    RF->>RF: 拒绝动态执行入口: python -c / sh -c / EncodedCommand
+    RF->>RF: 正则黑名单仅做补充信号
 
-    alt 命中黑名单 & 非白名单路径
-        RF->>EB: emit(SecurityBlocked, {rule: "rm_rf", cmd})
+    alt 违反策略 (高危能力/参数不合规/动态入口)
+        RF->>EB: emit(SecurityBlocked, {rule: "policy_violation", cmd})
         RF-->>AGENT: ❌ BLOCKED: 危险命令被拦截
-    else 白名单路径 or 非危险命令
+    else 策略校验通过
         Note over TB: === 第二层: 成本评估 ===
         RF->>TB: 放行至成本检查
         TB->>TB: 检查当前任务已消耗预算
@@ -503,41 +504,62 @@ sequenceDiagram
     end
 ```
 
-### 4.4 Regex Firewall 规则配置
+### 4.4 Policy Firewall 规则配置
 
 ```yaml
-# omni.config.json → security.regex_firewall
-regex_firewall:
-  command_blacklist:
-    - pattern: 'rm\s+(-[a-zA-Z]*f|-[a-zA-Z]*r)'
-      severity: critical
-      message: "递归/强制删除被拦截"
-    - pattern: 'mkfs\.|dd\s+if='
-      severity: critical
-      message: "磁盘格式化/覆写被拦截"
-    - pattern: 'iptables\s+(-F|-X|-Z|--flush)'
-      severity: critical
-      message: "防火墙规则清除被拦截"
-    - pattern: '(DROP|TRUNCATE)\s+(TABLE|DATABASE)'
-      severity: critical
-      message: "数据库破坏性操作被拦截"
-    - pattern: 'chmod\s+777|chmod\s+-R'
-      severity: high
-      message: "危险权限变更被拦截"
-    - pattern: 'curl.*\|\s*bash|wget.*\|\s*sh'
-      severity: critical
-      message: "远程脚本执行被拦截"
+# omni.config.json → security.policy_firewall
+policy_firewall:
+  capability_allowlist:
+    - name: "filesystem.read"
+      tool: "os_bash"
+      allowed_commands: ["ls", "cat", "grep", "find", "awk", "sed"]
+    - name: "filesystem.write"
+      tool: "file_ast"
+      requires_approval: true
 
-  path_whitelist:
-    - "workspace/**"
-    - "/tmp/agent_dev/**"
-    - "/var/log/agent/**"
+  interpreter_gate:
+    deny_patterns:
+      - 'python\s+(-c|-m)\b'
+      - 'powershell(\.exe)?\s+(-Command|-EncodedCommand)\b'
+      - '(bash|sh)\s+-c\b'
 
-  path_blacklist:
-    - "/etc/**"
-    - "/boot/**"
-    - "/usr/bin/**"
-    - "/root/**"
+  argv_schema:
+    enforce: true
+    max_args: 32
+    max_arg_length: 512
+
+  regex_heuristics:
+    enabled: true
+    command_blacklist:
+      - pattern: 'rm\s+(-[a-zA-Z]*f|-[a-zA-Z]*r)'
+        severity: critical
+        message: "递归/强制删除命令高风险"
+      - pattern: 'mkfs\.|dd\s+if='
+        severity: critical
+        message: "磁盘格式化/覆写高风险"
+      - pattern: 'iptables\s+(-F|-X|-Z|--flush)'
+        severity: critical
+        message: "防火墙规则清除高风险"
+      - pattern: '(DROP|TRUNCATE)\s+(TABLE|DATABASE)'
+        severity: critical
+        message: "数据库破坏性操作高风险"
+      - pattern: 'chmod\s+777|chmod\s+-R'
+        severity: high
+        message: "危险权限变更高风险"
+      - pattern: 'curl.*\|\s*bash|wget.*\|\s*sh'
+        severity: critical
+        message: "远程脚本执行高风险"
+
+  path_policy:
+    whitelist:
+      - "workspace/**"
+      - "/tmp/agent_dev/**"
+      - "/var/log/agent/**"
+    blacklist:
+      - "/etc/**"
+      - "/boot/**"
+      - "/usr/bin/**"
+      - "/root/**"
 
   output_scrubbing:
     - pattern: '(?:password|secret|token|api_key)\s*[=:]\s*\S+'
@@ -572,7 +594,8 @@ flowchart TB
 
         subgraph Response["熔断响应"]
             R_KILL["SIGKILL 所有 Agent"]
-            R_NET["冻结网络出口"]
+            R_NET["冻结高风险出站<br/>保留 OOB 管理网段"]
+            R_OOB["保持带外管理通道<br/>堡垒机/SSM/云管探针"]
             R_SNAP["恢复最近快照"]
             R_NOTIFY["紧急通知管理员"]
             R_LOG["写入不可篡改日志"]
@@ -585,6 +608,7 @@ flowchart TB
 
     T_NET & T_CRYPT & T_FORK & T_MANUAL --> R_KILL
     R_KILL --> R_NET
+    R_KILL --> R_OOB
     R_KILL --> R_SNAP
     R_KILL --> R_NOTIFY
     R_KILL --> R_LOG
@@ -601,6 +625,7 @@ sequenceDiagram
     participant IO as Disk IO Monitor
     participant AGENTS as All Agent Processes
     participant FW as Firewall Rules
+    participant OOB as OOB Channel
     participant SNAP as Snapshot System
     participant ADMIN as 管理员
 
@@ -618,13 +643,14 @@ sequenceDiagram
 
         par 同时执行所有响应
             KS->>AGENTS: kill -9 (全部 Agent 进程)
-            KS->>FW: iptables -A OUTPUT -j DROP<br/>(冻结出站)
+            KS->>FW: apply emergency egress policy<br/>deny non-allowlist OUTPUT
+            KS->>OOB: keep allowlist routes alive<br/>(bastion/ssm/console)
             KS->>SNAP: 回滚到最近安全快照
             KS->>ADMIN: 🚨 紧急通知<br/>"检测到异常数据外发"
         end
 
         KS->>KS: 写入 WORM 审计日志<br/>(不可篡改)
-        KS->>KS: 等待人工响应后才能恢复
+        KS->>KS: 等待人工响应后才能恢复<br/>OOB 通道可执行 disarm/recover
     end
 ```
 
@@ -646,6 +672,8 @@ interface KillSwitch {
   setNetworkThreshold(mbPerMin: number): void;
   setDiskThreshold(mbPerMin: number): void;
   setWhitelistDomains(domains: string[]): void;
+  setOobAllowlistCIDR(cidrs: string[]): void;
+  verifyOobHealth(): Promise<{ healthy: boolean; channels: string[] }>;
 
   // 恢复
   recover(adminToken: string, snapshotId?: string): Promise<RecoveryResult>;
@@ -676,7 +704,7 @@ flowchart TB
         KS["KillSwitch"]
 
         subgraph SK["Security Kernel"]
-            RF["Regex Firewall"]
+            RF["Policy Firewall"]
             TB_["Token Breaker"]
             BR["Blast Radius"]
             HA["Human Approval"]
@@ -726,7 +754,7 @@ flowchart TB
         MUTEX["🔒 Global State Mutex<br/>MUTEX_GLOBAL_STATE"]
         QUEUE["📬 Serial Queue<br/>物理执行串行化"]
         BUCKET["🪣 Token Bucket<br/>MAX_CONCURRENT_API_CALLS"]
-        SLEEPD["💤 Sleep Watch Daemon<br/>tail -f + regex match"]
+        SLEEPD["💤 Sleep Watch Daemon<br/>tail -F semantics + safe-regex + timeout budget"]
         EB["Event Bus"]
     end
 
@@ -773,6 +801,8 @@ interface SleepWatchDaemon {
   sleepAndWatch(params: {
     log_file: string;
     regex: string;
+    regex_timeout_ms?: number;
+    regex_profile?: "safe" | "strict";
     timeout_ms?: number;
     wake_event: string;
   }): Promise<{ watch_id: string; suspended: true }>;
@@ -785,3 +815,10 @@ interface SleepWatchDaemon {
 1. 逻辑并发允许并行“思考/只读分析”。
 2. 物理写操作必须通过 `Serial Queue` 串行落地。
 3. 休眠阶段模型会话内存释放，Token 消耗归零。
+4. `Global State Mutex` 必须使用 TTL + 心跳续租，禁止永久锁；异常退出后由清道夫回收 orphan lock。
+5. Lease/Fencing 失效时，Brainstem 必须触发旧 epoch 进程树回收，避免物理层并发写入冲突。
+6. `Sleep Watch Daemon` 必须实现日志轮转容错（`tail -F` 语义：inode 变更重开 + 心跳告警）。
+7. `sleep_and_watch` 的 regex 必须经过复杂度门禁并设置匹配超时，防止 ReDoS。
+8. KillSwitch 冻结网络时必须保留 OOB 管理通道，禁止“一刀切”导致云主机失联。
+
+补充参考：`./13-security-blindspots-and-hardening.md`
