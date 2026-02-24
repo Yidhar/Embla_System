@@ -77,13 +77,22 @@ if session_id:
 #### 1.6 更新 live2d_action 构建
 
 ```python
-live2d_calls.append({
+live2d_call = {
     "agentType": "live2d",
+    "tool_name": "live2d_action",
     "action": action,
-    "_tool_call_id": call_id,
-    "_trace_id": trace_id,
-})
+}
+_inject_call_context_metadata(live2d_call, ...)
 ```
+
+#### 1.7 注入风险与执行元数据
+
+新增 `_inject_call_context_metadata()`，在 native/mcp/live2d 分发对象上统一补齐：
+
+- `_risk_level`
+- `_execution_scope`
+- `_requires_global_mutex`
+- `_fencing_epoch`（占位透传；实际 fencing lease 在执行阶段写入）
 
 ### 2. 更新调用点
 
@@ -115,14 +124,18 @@ actionable_calls, live2d_calls, validation_errors = _convert_structured_tool_cal
    - ✅ 支持可选注入（session_id 可为 None）
 
 4. **调用类型覆盖**:
-   - ✅ native_call 包含完整元数据
-   - ✅ mcp_call 包含完整元数据
-   - ✅ live2d_action 包含完整元数据
+    - ✅ native_call 包含完整元数据
+    - ✅ mcp_call 包含完整元数据
+    - ✅ live2d_action 包含完整元数据（含 session）
 
-5. **日志可回溯性**:
-   - ✅ 任意工具调用日志可通过 call_id 定位
-   - ✅ 同一请求的所有调用可通过 trace_id 关联
-   - ✅ 同一会话的所有调用可通过 session_id 关联
+5. **治理字段透传**:
+   - ✅ 风险等级、执行范围、全局互斥信号已在调度层注入
+   - ✅ fencing epoch 槽位已预留并兼容执行阶段写入
+
+6. **日志可回溯性**:
+    - ✅ 任意工具调用日志可通过 call_id 定位
+    - ✅ 同一请求的所有调用可通过 trace_id 关联
+    - ✅ 同一会话的所有调用可通过 session_id 关联
 
 ## 元数据字段说明
 
@@ -134,12 +147,11 @@ actionable_calls, live2d_calls, validation_errors = _convert_structured_tool_cal
 
 ## 后续增强（待实施）
 
-以下字段在 NGA-WS10-001 中定义，但尚未注入到实际调用中：
+以下字段在 NGA-WS10-001 中定义，尚未在调度层完整闭环：
 
-1. **fencing_epoch**: 防双主写入（需 autonomous 模块集成）
-2. **risk_level**: 风险等级（需在 NGA-WS10-003 中实现推断逻辑）
-3. **idempotency_key**: 幂等键（需在重试逻辑中实现）
-4. **caller_role**: 调用方角色（需身份认证集成）
+1. **idempotency_key**: 幂等键（需在重试逻辑中实现）
+2. **caller_role**: 调用方角色（需身份认证集成）
+3. **queue_ticket**: 队列票据（需与全局互斥队列协同）
 
 这些字段将在后续任务中逐步补齐。
 
