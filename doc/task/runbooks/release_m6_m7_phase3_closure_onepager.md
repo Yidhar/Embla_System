@@ -19,6 +19,9 @@
 
 ## 3. Phase3 放行顺序（T0-T3）
 
+统一入口（推荐）：
+`.\.venv\Scripts\python.exe scripts/release_phase3_closure_chain_ws22_004.py`
+
 1. T0 执行 Phase3 回归
 `.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_subagent_runtime_ws21_002.py autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py autonomous/tests/test_subagent_runtime_chaos_ws21_006.py autonomous/tests/test_scaffold_engine_ws21_001.py autonomous/tests/test_contract_negotiation_ws21_004.py autonomous/tests/test_scaffold_verify_pipeline_ws21_005.py autonomous/tests/test_system_agent_subagent_bridge_ws22_001.py autonomous/tests/test_system_agent_lease_guard_ws22_004.py autonomous/tests/test_system_agent_longrun_baseline_ws22_004.py`
 
@@ -34,4 +37,5 @@
 ## 4. 放行判定
 
 - 放行条件：`T0-T3` 全通过，且 `scripts/validate_phase3_closure_gate_ws22_004.py` 返回 `passed=true`。
+- 链路脚本放行条件：`scripts/release_phase3_closure_chain_ws22_004.py` 返回码为 `0`，且报告 `scratch/reports/ws22_phase3_release_chain_result.json` 中 `passed=true`。
 - 当前判定：`Go`（已满足）。

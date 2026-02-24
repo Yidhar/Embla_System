@@ -79,6 +79,8 @@
     - Phase 3 调度接管工作流：SystemAgent 桥接、事件同步、灰度接管（WS22）。
 29. `doc/task/runbooks/release_m6_m7_phase3_closure_onepager.md`
     - Phase 3（M6-M7）发布收口一页清单（WS21/WS22 门禁、长稳基线、闭环放行）。
+30. `scripts/release_phase3_closure_chain_ws22_004.py`
+    - Phase 3 发布脚本链统一入口（串行执行 T0-T3：回归、长稳、门禁、文档一致性）。
 
 ## 4. 任务状态约定
 
