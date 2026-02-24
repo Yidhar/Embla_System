@@ -13,6 +13,11 @@ from autonomous.llm_gateway import (
 from autonomous.meta_agent_runtime import Goal, MetaAgentRuntime, SubTask, TaskFeedback
 from autonomous.router_engine import RouterDecision, RouterRequest, TaskRouterEngine
 from autonomous.system_agent import SystemAgent
+from autonomous.working_memory_manager import (
+    MemoryWindowRebalanceResult,
+    MemoryWindowThresholds,
+    WorkingMemoryWindowManager,
+)
 
 __all__ = [
     "SystemAgent",
@@ -31,4 +36,7 @@ __all__ = [
     "PromptCacheOutcome",
     "GatewayPlanMetrics",
     "GatewayPlan",
+    "MemoryWindowThresholds",
+    "MemoryWindowRebalanceResult",
+    "WorkingMemoryWindowManager",
 ]
