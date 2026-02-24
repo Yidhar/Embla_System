@@ -12,6 +12,7 @@ import hashlib
 import time
 import uuid
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -26,6 +27,14 @@ class WorkspaceChange:
     content: str
     mode: str = "overwrite"  # overwrite|append
     encoding: str = "utf-8"
+    # optimistic-lock hash from caller's baseline. accept alias expected_file_hash upstream.
+    original_file_hash: str = ""
+    # optional explicit alias to ease legacy/heterogeneous callers.
+    expected_file_hash: str = ""
+    # baseline content used for conservative 3-way semantic rebase when hash mismatch.
+    original_content: Optional[str] = None
+    # conservative default: allow semantic rebase path only when safe.
+    semantic_rebase: bool = True
 
 
 @dataclass
@@ -34,6 +43,7 @@ class WorkspaceTransactionReceipt:
     committed: bool
     clean_state: bool
     changed_files: List[str] = field(default_factory=list)
+    semantic_rebased_files: List[str] = field(default_factory=list)
     rolled_back_files: List[str] = field(default_factory=list)
     recovery_ticket: str = ""
     verify_message: str = ""
@@ -67,6 +77,105 @@ class WorkspaceTransactionManager:
     def _write_text(path: Path, content: str, encoding: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding=encoding)
+
+    @staticmethod
+    def _normalize_hash(value: str) -> str:
+        return str(value or "").strip().lower()
+
+    @staticmethod
+    def _diff_non_equal_ops(base_lines: List[str], target_lines: List[str]) -> List[Tuple[str, int, int, int, int]]:
+        matcher = SequenceMatcher(a=base_lines, b=target_lines, autojunk=False)
+        return [op for op in matcher.get_opcodes() if op[0] != "equal"]
+
+    @staticmethod
+    def _ops_overlap(
+        op_a: Tuple[str, int, int, int, int],
+        op_b: Tuple[str, int, int, int, int],
+    ) -> bool:
+        _, a1, a2, _, _ = op_a
+        _, b1, b2, _, _ = op_b
+
+        a_point = a1 == a2
+        b_point = b1 == b2
+        if a_point and b_point:
+            return a1 == b1
+        if a_point:
+            # Conservative: insertion touching an edited boundary is treated as conflict.
+            return b1 <= a1 <= b2
+        if b_point:
+            return a1 <= b1 <= a2
+        return not (a2 <= b1 or b2 <= a1)
+
+    def _has_overlapping_ops(
+        self,
+        incoming_ops: List[Tuple[str, int, int, int, int]],
+        current_ops: List[Tuple[str, int, int, int, int]],
+    ) -> bool:
+        for op_a in incoming_ops:
+            for op_b in current_ops:
+                if self._ops_overlap(op_a, op_b):
+                    return True
+        return False
+
+    @staticmethod
+    def _translate_base_index_to_current(
+        base_index: int,
+        current_ops: List[Tuple[str, int, int, int, int]],
+    ) -> Optional[int]:
+        translated = base_index
+        for _, i1, i2, j1, j2 in current_ops:
+            base_len = i2 - i1
+            current_len = j2 - j1
+            delta = current_len - base_len
+
+            if base_len > 0 and i1 < base_index < i2:
+                return None
+            if base_index >= i2:
+                translated += delta
+                continue
+            if base_len == 0 and base_index >= i1:
+                translated += delta
+                continue
+            if base_index < i1:
+                break
+        return translated
+
+    def _semantic_rebase_overwrite(
+        self,
+        *,
+        base_content: str,
+        incoming_content: str,
+        current_content: str,
+    ) -> Tuple[bool, str, str]:
+        if incoming_content == current_content:
+            return True, current_content, "already up to date"
+
+        base_lines = base_content.splitlines(keepends=True)
+        incoming_lines = incoming_content.splitlines(keepends=True)
+        current_lines = current_content.splitlines(keepends=True)
+
+        incoming_ops = self._diff_non_equal_ops(base_lines, incoming_lines)
+        if not incoming_ops:
+            # Incoming edit is effectively a no-op against baseline.
+            return True, current_content, "incoming no-op on baseline"
+
+        current_ops = self._diff_non_equal_ops(base_lines, current_lines)
+        if not current_ops:
+            # Workspace stayed on baseline, safe to apply incoming directly.
+            return True, incoming_content, "workspace unchanged from baseline"
+
+        if self._has_overlapping_ops(incoming_ops, current_ops):
+            return False, "", "overlapping line-level edits"
+
+        merged_lines = list(current_lines)
+        for _, i1, i2, j1, j2 in reversed(incoming_ops):
+            start = self._translate_base_index_to_current(i1, current_ops)
+            end = self._translate_base_index_to_current(i2, current_ops)
+            if start is None or end is None or start > end:
+                return False, "", "index translation failed"
+            merged_lines[start:end] = incoming_lines[j1:j2]
+
+        return True, "".join(merged_lines), "non-overlap line rebase"
 
     def begin(self) -> WorkspaceTransactionReceipt:
         tx_id = f"txn_{uuid.uuid4().hex[:16]}"
@@ -107,15 +216,59 @@ class WorkspaceTransactionManager:
                     original_hash = _sha256_text(original) if existed else ""
                     backups[safe_path] = (existed, original, original_hash)
 
-                if mode == "append":
-                    current = backups[safe_path][1]
-                    merged = current + change.content
-                    self._write_text(safe_path, merged, encoding)
+                rel = str(safe_path.relative_to(self.project_root)).replace("\\", "/")
+
+                current_text = self._read_text(safe_path, encoding) if safe_path.exists() else ""
+                expected_hash = self._normalize_hash(change.expected_file_hash or change.original_file_hash)
+                current_hash = _sha256_text(current_text) if safe_path.exists() else ""
+
+                if expected_hash and current_hash != expected_hash:
+                    if not change.semantic_rebase:
+                        raise RuntimeError(
+                            "semantic rebase disabled: "
+                            f"path={rel}, expected_hash={expected_hash}, current_hash={current_hash}"
+                        )
+
+                    if mode == "append":
+                        merged = current_text + change.content
+                        self._write_text(safe_path, merged, encoding)
+                        if rel not in receipt.semantic_rebased_files:
+                            receipt.semantic_rebased_files.append(rel)
+                    else:
+                        base_content = change.original_content
+                        if base_content is None:
+                            raise RuntimeError(
+                                "semantic rebase requires original_content when overwrite hash mismatches: "
+                                f"path={rel}, expected_hash={expected_hash}, current_hash={current_hash}"
+                            )
+                        base_hash = self._normalize_hash(_sha256_text(base_content))
+                        if base_hash != expected_hash:
+                            raise RuntimeError(
+                                "original_content hash mismatch for semantic rebase: "
+                                f"path={rel}, expected_hash={expected_hash}, original_content_hash={base_hash}"
+                            )
+                        rebase_ok, rebased_text, rebase_reason = self._semantic_rebase_overwrite(
+                            base_content=base_content,
+                            incoming_content=change.content,
+                            current_content=current_text,
+                        )
+                        if not rebase_ok:
+                            raise RuntimeError(
+                                "semantic rebase failed: "
+                                f"path={rel}, expected_hash={expected_hash}, "
+                                f"current_hash={current_hash}, reason={rebase_reason}"
+                            )
+                        self._write_text(safe_path, rebased_text, encoding)
+                        if rel not in receipt.semantic_rebased_files:
+                            receipt.semantic_rebased_files.append(rel)
                 else:
-                    self._write_text(safe_path, change.content, encoding)
+                    if mode == "append":
+                        merged = current_text + change.content
+                        self._write_text(safe_path, merged, encoding)
+                    else:
+                        self._write_text(safe_path, change.content, encoding)
 
                 touched.append(safe_path)
-                rel = str(safe_path.relative_to(self.project_root)).replace("\\", "/")
                 if rel not in receipt.changed_files:
                     receipt.changed_files.append(rel)
 

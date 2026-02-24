@@ -24,6 +24,8 @@ class SleepWatchResult:
     reason: str
     matched_line: str = ""
     elapsed_seconds: float = 0.0
+    reopen_count: int = 0
+    reopen_reason: str = ""
 
 
 _UNSAFE_REGEX_PATTERNS = (
@@ -80,6 +82,15 @@ async def wait_for_log_pattern(
     current_inode: Optional[int] = None
     current_position = 0
     initialized = False
+    missing_since_initialized = False
+    reopen_count = 0
+    reopen_reason = ""
+
+    def _record_reopen(reason: str) -> None:
+        nonlocal current_position, reopen_count, reopen_reason
+        current_position = 0
+        reopen_count += 1
+        reopen_reason = reason
 
     async def _safe_match(line: str) -> bool:
         try:
@@ -99,9 +110,13 @@ async def wait_for_log_pattern(
                 matched=False,
                 reason="timeout",
                 elapsed_seconds=now_ts - started_at,
+                reopen_count=reopen_count,
+                reopen_reason=reopen_reason,
             )
 
         if not log_file.exists():
+            if initialized:
+                missing_since_initialized = True
             await asyncio.sleep(max(0.05, poll_interval_seconds))
             continue
 
@@ -113,10 +128,16 @@ async def wait_for_log_pattern(
 
         inode = int(getattr(stat, "st_ino", 0))
         size = int(getattr(stat, "st_size", 0))
+        recreated = initialized and missing_since_initialized
         rotated = current_inode is not None and inode and inode != current_inode
-        truncated = size < current_position
-        if rotated or truncated:
-            current_position = 0
+        truncated = initialized and size < current_position
+        if recreated:
+            _record_reopen("recreated")
+        elif rotated:
+            _record_reopen("inode_changed")
+        elif truncated:
+            _record_reopen("truncated")
+        missing_since_initialized = False
         current_inode = inode if inode else current_inode
 
         got_new_data = False
@@ -142,6 +163,8 @@ async def wait_for_log_pattern(
                             reason="matched",
                             matched_line=candidate,
                             elapsed_seconds=time.time() - started_at,
+                            reopen_count=reopen_count,
+                            reopen_reason=reopen_reason,
                         )
         except Exception:
             await asyncio.sleep(max(0.05, poll_interval_seconds))

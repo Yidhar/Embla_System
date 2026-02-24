@@ -137,6 +137,8 @@ class ArtifactStoreConfig:
     # 楂樻按浣嶉厤缃?
     high_watermark_ratio: float = 0.9  # 90% 瑙﹀彂娓呯悊
     low_watermark_ratio: float = 0.7  # 70% 娓呯悊鐩爣
+    critical_reserve_ratio: float = 0.05  # reserve for EventBus/SQLite (5%)
+    backpressure_mode: str = "enforce"  # enforce | warn_only (alias: warn/alert/loose)
 
     # 鍏冩暟鎹瓨鍌?
     metadata_file: str = "artifacts_metadata.json"
@@ -164,6 +166,7 @@ class ArtifactStore:
             "store_attempt": 0,
             "store_success": 0,
             "quota_reject": 0,
+            "backpressure_warn": 0,
             "cleanup_deleted": 0,
             "retrieve_hit": 0,
             "retrieve_miss": 0,
@@ -247,6 +250,7 @@ class ArtifactStore:
             "store_attempt": self._metrics.get("store_attempt", 0),
             "store_success": self._metrics.get("store_success", 0),
             "quota_reject": self._metrics.get("quota_reject", 0),
+            "backpressure_warn": self._metrics.get("backpressure_warn", 0),
             "cleanup_deleted": self._metrics.get("cleanup_deleted", 0),
             "retrieve_hit": self._metrics.get("retrieve_hit", 0),
             "retrieve_miss": self._metrics.get("retrieve_miss", 0),
@@ -257,6 +261,26 @@ class ArtifactStore:
         if value not in {"low", "normal", "high", "critical"}:
             return "normal"
         return value
+
+    def _normalize_backpressure_mode(self) -> str:
+        value = str(self.config.backpressure_mode or "enforce").strip().lower()
+        if value in {"warn", "warn_only", "alert", "alert_only", "loose", "relaxed"}:
+            return "warn_only"
+        return "enforce"
+
+    def _critical_reserve_ratio(self) -> float:
+        try:
+            value = float(self.config.critical_reserve_ratio)
+        except (TypeError, ValueError):
+            return 0.0
+        if value <= 0:
+            return 0.0
+        return min(value, 1.0)
+
+    def _resolve_backpressure(self, reason: str) -> tuple[bool, str]:
+        if self._normalize_backpressure_mode() == "warn_only":
+            return True, f"Warn-only backpressure bypassed: {reason}"
+        return False, reason
 
     def _usage_ratio(self) -> float:
         if self.config.max_total_size_mb <= 0:
@@ -292,9 +316,19 @@ class ArtifactStore:
         else:
             projected_usage_ratio = 1.0
 
+        # Critical reserve protection: keep disk headroom for EventBus/SQLite.
+        critical_reserve_ratio = self._critical_reserve_ratio()
+        if critical_reserve_ratio > 0 and normalized_priority in {"low", "normal"}:
+            critical_threshold = max(0.0, 1.0 - critical_reserve_ratio)
+            if projected_usage_ratio >= critical_threshold:
+                return self._resolve_backpressure(
+                    "Critical reserve protected for EventBus/SQLite: "
+                    f"{projected_usage_ratio:.1%} >= {critical_threshold:.1%} "
+                    f"(reserve={critical_reserve_ratio:.1%})",
+                )
+
         if projected_usage_ratio >= self.config.high_watermark_ratio and normalized_priority == "low":
-            return (
-                False,
+            return self._resolve_backpressure(
                 "High watermark reached for low-priority write: "
                 f"{projected_usage_ratio:.1%} >= {self.config.high_watermark_ratio:.1%}",
             )
@@ -332,15 +366,21 @@ class ArtifactStore:
             self.cleanup_to_watermark()
 
         # 检查配额
+        warning_reason: Optional[str] = None
         allowed, reason = self.check_quota(size_bytes, priority=normalized_priority)
+        if allowed and reason != "Quota check passed":
+            warning_reason = reason
         if not allowed and (
             "Total size exceeds limit" in reason
             or "Artifact count exceeds limit" in reason
             or "High watermark" in reason
+            or "Critical reserve" in reason
         ):
             # 再尝试一次回收，避免“可回收但直接拒绝”
             self.cleanup_to_watermark()
             allowed, reason = self.check_quota(size_bytes, priority=normalized_priority)
+            if allowed and reason != "Quota check passed":
+                warning_reason = reason
 
         if not allowed:
             self._inc_metric("quota_reject")
@@ -387,6 +427,13 @@ class ArtifactStore:
         self._metadata_cache[metadata.artifact_id] = metadata
         self._save_metadata()
         self._inc_metric("store_success")
+        if warning_reason:
+            self._inc_metric("backpressure_warn")
+            return (
+                True,
+                f"Artifact stored with warning: {metadata.artifact_id}; {warning_reason}",
+                metadata,
+            )
 
         return True, f"Artifact stored: {metadata.artifact_id}", metadata
 

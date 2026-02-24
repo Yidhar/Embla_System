@@ -951,8 +951,22 @@ class NativeToolExecutor:
         if not isinstance(changes_raw, list) or not changes_raw:
             raise ValueError("workspace_txn_apply 缺少 changes[]")
 
+        def _parse_bool(value: Any, default: bool) -> bool:
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                text = value.strip().lower()
+                if text in {"1", "true", "yes", "on"}:
+                    return True
+                if text in {"0", "false", "no", "off"}:
+                    return False
+            return bool(value)
+
         changes: List[WorkspaceChange] = []
         changed_paths: List[str] = []
+        semantic_rebase_default = _parse_bool(call.get("semantic_rebase"), True)
         requester = (
             str(call.get("requester") or call.get("_session_id") or call.get("session_id") or "").strip() or None
         )
@@ -966,6 +980,12 @@ class NativeToolExecutor:
                 raise ValueError(f"changes[{idx}] missing path/content")
             mode = str(item.get("mode") or "overwrite").strip().lower()
             encoding = str(item.get("encoding") or "utf-8").strip()
+            expected_hash = str(
+                item.get("expected_hash") or item.get("expected_file_hash") or item.get("original_file_hash") or ""
+            ).strip()
+            original_content_raw = item.get("original_content")
+            original_content = str(original_content_raw) if original_content_raw is not None else None
+            semantic_rebase = _parse_bool(item.get("semantic_rebase"), semantic_rebase_default)
 
             safe_path = self.executor._resolve_safe_path(path, kind="file")
             allowed, reason = guard.check_modification_allowed(safe_path, requester=requester)
@@ -981,6 +1001,10 @@ class NativeToolExecutor:
                     content=str(content),
                     mode=mode,
                     encoding=encoding,
+                    original_file_hash=expected_hash,
+                    expected_file_hash=expected_hash,
+                    original_content=original_content,
+                    semantic_rebase=semantic_rebase,
                 )
             )
 
@@ -1018,12 +1042,16 @@ class NativeToolExecutor:
             f"[clean_state] {receipt.clean_state}",
             f"[recovery_ticket] {receipt.recovery_ticket}",
             f"[changed_files] {len(receipt.changed_files)}",
+            f"[semantic_rebased_files] {len(receipt.semantic_rebased_files)}",
             f"[verify] {receipt.verify_message or 'verify ok'}",
         ]
         if contract_result.normalized_contract_id:
             lines.append(f"[contract_id] {contract_result.normalized_contract_id}")
             lines.append(f"[contract_checksum] {contract_result.expected_checksum}")
             lines.append(f"[scaffold_fingerprint] {contract_result.scaffold_fingerprint}")
+        if receipt.semantic_rebased_files:
+            lines.append("[semantic_rebase_paths]")
+            lines.extend(receipt.semantic_rebased_files)
         lines.append("[files]")
         lines.extend(receipt.changed_files)
         return "\n".join(lines)

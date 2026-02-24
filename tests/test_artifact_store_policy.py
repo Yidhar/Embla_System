@@ -50,6 +50,7 @@ def test_priority_normalization_and_ttl_selection() -> None:
         assert initial_metrics["store_attempt"] == 0
         assert initial_metrics["store_success"] == 0
         assert initial_metrics["quota_reject"] == 0
+        assert initial_metrics["backpressure_warn"] == 0
         assert initial_metrics["cleanup_deleted"] == 0
         assert initial_metrics["retrieve_hit"] == 0
         assert initial_metrics["retrieve_miss"] == 0
@@ -166,6 +167,101 @@ def test_store_cleans_expired_before_rejecting_by_total_size() -> None:
         assert metrics["store_success"] == 2
         assert metrics["cleanup_deleted"] >= 1
         assert metrics["artifact_count"] == 1
+    finally:
+        _cleanup(root)
+
+
+def test_critical_reserve_backpressures_low_and_normal() -> None:
+    store, root = _make_store(
+        "critical_reserve_low_normal_reject",
+        high_watermark_ratio=0.98,
+        low_watermark_ratio=0.80,
+        critical_reserve_ratio=0.30,
+    )
+    try:
+        ok, _, base_meta = store.store(
+            content=_text_kb(680),
+            content_type=ContentType.APPLICATION_JSON,
+            priority="high",
+        )
+        assert ok is True
+        assert base_meta is not None
+
+        ok, low_message, _ = store.store(
+            content=_text_kb(50),
+            content_type=ContentType.APPLICATION_JSON,
+            priority="low",
+        )
+        assert ok is False
+        assert "Critical reserve" in low_message
+
+        ok, normal_message, _ = store.store(
+            content=_text_kb(50),
+            content_type=ContentType.APPLICATION_JSON,
+            priority="normal",
+        )
+        assert ok is False
+        assert "Critical reserve" in normal_message
+
+        ok, _, high_meta = store.store(
+            content=_text_kb(50),
+            content_type=ContentType.APPLICATION_JSON,
+            priority="high",
+        )
+        assert ok is True
+        assert high_meta is not None
+
+        metrics = store.get_metrics_snapshot()
+        assert metrics["store_attempt"] == 4
+        assert metrics["store_success"] == 2
+        assert metrics["quota_reject"] == 2
+        assert metrics["backpressure_warn"] == 0
+    finally:
+        _cleanup(root)
+
+
+def test_warn_only_mode_allows_write_and_keeps_warning_semantics() -> None:
+    store, root = _make_store(
+        "warn_only_degrade_mode",
+        high_watermark_ratio=0.50,
+        low_watermark_ratio=0.60,
+        critical_reserve_ratio=0.20,
+        backpressure_mode="loose",
+    )
+    try:
+        ok, _, base_meta = store.store(
+            content=_text_kb(580),
+            content_type=ContentType.TEXT_PLAIN,
+            priority="normal",
+        )
+        assert ok is True
+        assert base_meta is not None
+
+        ok, low_message, low_meta = store.store(
+            content=_text_kb(40),
+            content_type=ContentType.TEXT_PLAIN,
+            priority="low",
+        )
+        assert ok is True
+        assert low_meta is not None
+        assert "Warn-only backpressure bypassed" in low_message
+        assert "High watermark" in low_message
+
+        ok, normal_message, normal_meta = store.store(
+            content=_text_kb(250),
+            content_type=ContentType.TEXT_PLAIN,
+            priority="normal",
+        )
+        assert ok is True
+        assert normal_meta is not None
+        assert "Warn-only backpressure bypassed" in normal_message
+        assert "Critical reserve" in normal_message
+
+        metrics = store.get_metrics_snapshot()
+        assert metrics["store_attempt"] == 3
+        assert metrics["store_success"] == 3
+        assert metrics["quota_reject"] == 0
+        assert metrics["backpressure_warn"] == 2
     finally:
         _cleanup(root)
 
