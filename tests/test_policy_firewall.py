@@ -57,3 +57,19 @@ def test_firewall_allows_known_safe_command():
         },
     )
     assert decision.allowed is True
+
+
+def test_firewall_allows_run_cmd_with_approval_fields():
+    base = Path("scratch/test_policy_firewall")
+    base.mkdir(parents=True, exist_ok=True)
+    fw = PolicyFirewall(audit_file=base / "pfw_audit_4.jsonl")
+    decision = fw.validate_native_call(
+        "run_cmd",
+        {
+            "tool_name": "run_cmd",
+            "command": "git status --short",
+            "approvalPolicy": "on-request",
+            "approval_granted": True,
+        },
+    )
+    assert decision.allowed is True

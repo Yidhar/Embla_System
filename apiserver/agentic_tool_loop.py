@@ -299,6 +299,10 @@ def _build_default_receipt_next_steps(
     normalized_risk = risk_level.lower()
 
     if normalized_status == "error":
+        if error_code == _RISK_ERR_APPROVAL_REQUIRED:
+            return ["request_human_approval_then_retry"]
+        if error_code == _RISK_ERR_POLICY_BLOCKED:
+            return ["select_lower_risk_alternative", "request_policy_exception_if_justified"]
         suggestions.append("inspect_error_and_retry")
         if artifact_ref:
             suggestions.append("read_artifact_with_artifact_reader")
@@ -349,6 +353,19 @@ def _build_tool_receipt(call: Dict[str, Any], result: Dict[str, Any]) -> Dict[st
     artifact_ref = str(result.get("forensic_artifact_ref") or result.get("raw_result_ref") or "").strip()
     status = str(result.get("status", "unknown")).strip().lower()
     error_code = str(result.get("error_code") or "").strip()
+    approval_required = bool(
+        call.get("_approval_required")
+        if "_approval_required" in call
+        else (call.get("approval_required") or context.get("approval_required"))
+    )
+    approval_policy = str(
+        call.get("_approval_policy")
+        or call.get("approvalPolicy")
+        or call.get("approval_policy")
+        or context.get("approval_policy")
+        or ""
+    ).strip()
+    approval_granted = bool(call.get("approval_granted") or call.get("approved") or call.get("_approval_granted"))
 
     next_steps = _normalize_receipt_next_steps(result.get("next_steps"))
     if not next_steps:
@@ -366,8 +383,14 @@ def _build_tool_receipt(call: Dict[str, Any], result: Dict[str, Any]) -> Dict[st
         risk_items.append(f"high_risk_action:{risk_level}")
     if error_code == _SCHEMA_ERR_LEGACY_DECOMMISSIONED:
         risk_items.append("legacy_contract_decommission_gate")
+    if error_code == _RISK_ERR_APPROVAL_REQUIRED:
+        risk_items.append("approval_required_gate")
+    if error_code == _RISK_ERR_POLICY_BLOCKED:
+        risk_items.append("risk_policy_block_gate")
     if requires_global_mutex:
         risk_items.append("global_mutex_required")
+    if approval_required:
+        risk_items.append(f"approval_hook:{approval_policy or 'unspecified'}")
 
     return {
         "version": "ws10-004-v1",
@@ -379,6 +402,11 @@ def _build_tool_receipt(call: Dict[str, Any], result: Dict[str, Any]) -> Dict[st
         "risk_level": risk_level,
         "execution_scope": execution_scope,
         "requires_global_mutex": requires_global_mutex,
+        "approval": {
+            "required": approval_required,
+            "policy": approval_policy or None,
+            "granted": approval_granted,
+        },
         "budget": {
             "estimated_token_cost": estimated_token_cost,
             "budget_remaining": budget_remaining,
@@ -400,6 +428,103 @@ def _attach_tool_receipt(call: Dict[str, Any], result: Dict[str, Any]) -> None:
     if not isinstance(call, dict):
         call = {}
     result["tool_receipt"] = _build_tool_receipt(call, result)
+
+
+def _normalize_approval_policy(raw_value: Any) -> str:
+    value = str(raw_value or "").strip().lower()
+    if not value:
+        return ""
+    aliases = {
+        "on_request": "on-request",
+        "onrequest": "on-request",
+        "manual_approval": "manual",
+        "required_approval": "required",
+        "auto": "on-failure",
+    }
+    return aliases.get(value, value)
+
+
+def _is_truthy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "y", "on"}
+
+
+def _resolve_call_risk_level(call: Dict[str, Any]) -> str:
+    return str(call.get("_risk_level") or call.get("risk_level") or "read_only").strip().lower() or "read_only"
+
+
+def _evaluate_risk_gate(call: Dict[str, Any]) -> Dict[str, Any]:
+    risk_level = _resolve_call_risk_level(call)
+    if risk_level not in _HIGH_RISK_LEVELS:
+        call["_approval_required"] = False
+        normalized_policy = _normalize_approval_policy(
+            call.get("_approval_policy") or call.get("approvalPolicy") or call.get("approval_policy")
+        )
+        if normalized_policy:
+            call["_approval_policy"] = normalized_policy
+            call.setdefault("approvalPolicy", normalized_policy)
+        return {
+            "allowed": True,
+            "risk_level": risk_level,
+            "requires_approval": False,
+            "approval_policy": normalized_policy,
+            "approval_granted": _is_truthy_flag(call.get("approval_granted") or call.get("approved")),
+        }
+
+    normalized_policy = _normalize_approval_policy(
+        call.get("_approval_policy") or call.get("approvalPolicy") or call.get("approval_policy")
+    )
+    if not normalized_policy:
+        normalized_policy = _RISK_DEFAULT_APPROVAL_POLICY.get(risk_level, "on-request")
+    call["_approval_required"] = True
+    call["_approval_policy"] = normalized_policy
+    call.setdefault("approvalPolicy", normalized_policy)
+    approval_granted = _is_truthy_flag(call.get("approval_granted") or call.get("approved") or call.get("_approval_granted"))
+
+    if normalized_policy in _RISK_POLICY_BLOCKLIST:
+        return {
+            "allowed": False,
+            "risk_level": risk_level,
+            "requires_approval": True,
+            "approval_policy": normalized_policy,
+            "approval_granted": approval_granted,
+            "error_code": _RISK_ERR_POLICY_BLOCKED,
+            "reason": f"risk gate blocked: {risk_level} call has approval_policy={normalized_policy}",
+        }
+
+    if risk_level in {"secrets", "self_modify"} and not approval_granted:
+        return {
+            "allowed": False,
+            "risk_level": risk_level,
+            "requires_approval": True,
+            "approval_policy": normalized_policy,
+            "approval_granted": False,
+            "error_code": _RISK_ERR_APPROVAL_REQUIRED,
+            "reason": f"risk gate requires explicit human approval for {risk_level}",
+        }
+
+    if normalized_policy in _RISK_POLICY_STRICT_APPROVAL and not approval_granted:
+        return {
+            "allowed": False,
+            "risk_level": risk_level,
+            "requires_approval": True,
+            "approval_policy": normalized_policy,
+            "approval_granted": False,
+            "error_code": _RISK_ERR_APPROVAL_REQUIRED,
+            "reason": f"risk gate requires explicit approval when approval_policy={normalized_policy}",
+        }
+
+    return {
+        "allowed": True,
+        "risk_level": risk_level,
+        "requires_approval": True,
+        "approval_policy": normalized_policy,
+        "approval_granted": approval_granted,
+    }
 
 
 def _is_retryable_tool_failure(call: Dict[str, Any], result: Dict[str, Any]) -> bool:
@@ -584,6 +709,8 @@ _MUTATING_NATIVE_TOOL_NAMES = {"write_file", "git_checkout_file", "workspace_txn
 _SCHEMA_ERR_INPUT_INVALID = "E_SCHEMA_INPUT_INVALID"
 _SCHEMA_ERR_OUTPUT_INVALID = "E_SCHEMA_OUTPUT_INVALID"
 _SCHEMA_ERR_LEGACY_DECOMMISSIONED = "E_LEGACY_CONTRACT_DECOMMISSIONED"
+_RISK_ERR_APPROVAL_REQUIRED = "E_RISK_APPROVAL_REQUIRED"
+_RISK_ERR_POLICY_BLOCKED = "E_RISK_POLICY_BLOCKED"
 _LIVE2D_ACTIONS = {"normal", "happy", "enjoy", "sad", "surprise"}
 _NATIVE_TOOL_ALIASES = {
     "read": "read_file",
@@ -639,6 +766,15 @@ _SUPPORTED_NATIVE_TOOL_NAMES = {
     "killswitch_plan",
 }
 _VALID_RESULT_STATUS = {"success", "ok", "error", "timeout", "blocked"}
+_HIGH_RISK_LEVELS = {"write_repo", "deploy", "secrets", "self_modify"}
+_RISK_DEFAULT_APPROVAL_POLICY = {
+    "write_repo": "on-request",
+    "deploy": "on-request",
+    "secrets": "always",
+    "self_modify": "always",
+}
+_RISK_POLICY_BLOCKLIST = {"never", "deny", "denied", "disabled", "off", "none"}
+_RISK_POLICY_STRICT_APPROVAL = {"always", "required"}
 
 
 def _schema_error(code: str, call_id: str, detail: str) -> str:
@@ -896,6 +1032,10 @@ def _inject_call_context_metadata(
         call.setdefault("_risk_level", "read_only")
         call.setdefault("_execution_scope", "local")
         call.setdefault("_requires_global_mutex", False)
+    try:
+        _evaluate_risk_gate(call)
+    except Exception:
+        call.setdefault("_approval_required", False)
 
 
 def _requires_global_mutex(call: Dict[str, Any]) -> bool:
@@ -1307,71 +1447,91 @@ async def _execute_tool_call_with_retry(
             attempt,
             max_attempts,
         )
+        risk_gate = _evaluate_risk_gate(call)
+        approval_hook = {
+            "required": bool(risk_gate.get("requires_approval")),
+            "policy": risk_gate.get("approval_policy"),
+            "granted": bool(risk_gate.get("approval_granted")),
+            "risk_level": risk_gate.get("risk_level"),
+        }
         lease: Optional[LeaseHandle] = None
         heartbeat_task: Optional[asyncio.Task[None]] = None
         stop_heartbeat = asyncio.Event()
         heartbeat_errors: List[str] = []
         mutex_manager = None
-        try:
-            if _requires_global_mutex(call):
-                mutex_manager = get_global_mutex_manager()
-                lease = await mutex_manager.acquire(
-                    owner_id=str(session_id or call.get("_session_id") or "unknown_session"),
-                    job_id=call_id,
-                    ttl_seconds=10.0,
-                    wait_timeout_seconds=30.0,
-                    poll_interval_seconds=0.2,
-                )
-                call["_fencing_epoch"] = lease.fencing_epoch
-
-                async def _heartbeat_loop() -> None:
-                    nonlocal lease
-                    if lease is None:
-                        return
-                    interval = max(1.0, min(5.0, lease.ttl_seconds / 2.0))
-                    while not stop_heartbeat.is_set():
-                        await asyncio.sleep(interval)
-                        if stop_heartbeat.is_set():
-                            return
-                        try:
-                            lease = await mutex_manager.renew(lease)  # type: ignore[union-attr]
-                        except Exception as hb_exc:
-                            heartbeat_errors.append(str(hb_exc))
-                            return
-
-                heartbeat_task = asyncio.create_task(_heartbeat_loop())
-
-            async with semaphore:
-                result = await _execute_single_tool_call(call, session_id)
-
-            if heartbeat_errors:
-                result = {
-                    "tool_call": call,
-                    "result": f"lease heartbeat failed: {'; '.join(heartbeat_errors)}",
-                    "status": "error",
-                    "service_name": "runtime",
-                    "tool_name": tool_name or "unknown",
-                }
-        except Exception as e:
+        if not bool(risk_gate.get("allowed", True)):
             result = {
                 "tool_call": call,
-                "result": f"执行异常: {e}",
+                "result": f"{risk_gate.get('reason', 'risk gate blocked')}",
                 "status": "error",
-                "service_name": "unknown",
-                "tool_name": "unknown",
+                "service_name": "tool_protocol",
+                "tool_name": tool_name or "risk_gate",
+                "error_code": str(risk_gate.get("error_code") or _RISK_ERR_POLICY_BLOCKED),
+                "approval_hook": approval_hook,
             }
-        finally:
-            stop_heartbeat.set()
-            if heartbeat_task is not None:
-                try:
-                    await heartbeat_task
-                except Exception:
-                    pass
-            if lease is not None and mutex_manager is not None:
-                try:
-                    await mutex_manager.release(lease)
-                except Exception:
-                    pass
+        else:
+            try:
+                if _requires_global_mutex(call):
+                    mutex_manager = get_global_mutex_manager()
+                    lease = await mutex_manager.acquire(
+                        owner_id=str(session_id or call.get("_session_id") or "unknown_session"),
+                        job_id=call_id,
+                        ttl_seconds=10.0,
+                        wait_timeout_seconds=30.0,
+                        poll_interval_seconds=0.2,
+                    )
+                    call["_fencing_epoch"] = lease.fencing_epoch
+
+                    async def _heartbeat_loop() -> None:
+                        nonlocal lease
+                        if lease is None:
+                            return
+                        interval = max(1.0, min(5.0, lease.ttl_seconds / 2.0))
+                        while not stop_heartbeat.is_set():
+                            await asyncio.sleep(interval)
+                            if stop_heartbeat.is_set():
+                                return
+                            try:
+                                lease = await mutex_manager.renew(lease)  # type: ignore[union-attr]
+                            except Exception as hb_exc:
+                                heartbeat_errors.append(str(hb_exc))
+                                return
+
+                    heartbeat_task = asyncio.create_task(_heartbeat_loop())
+
+                async with semaphore:
+                    result = await _execute_single_tool_call(call, session_id)
+
+                if heartbeat_errors:
+                    result = {
+                        "tool_call": call,
+                        "result": f"lease heartbeat failed: {'; '.join(heartbeat_errors)}",
+                        "status": "error",
+                        "service_name": "runtime",
+                        "tool_name": tool_name or "unknown",
+                    }
+            except Exception as e:
+                result = {
+                    "tool_call": call,
+                    "result": f"执行异常: {e}",
+                    "status": "error",
+                    "service_name": "unknown",
+                    "tool_name": "unknown",
+                }
+            finally:
+                stop_heartbeat.set()
+                if heartbeat_task is not None:
+                    try:
+                        await heartbeat_task
+                    except Exception:
+                        pass
+                if lease is not None and mutex_manager is not None:
+                    try:
+                        await mutex_manager.release(lease)
+                    except Exception:
+                        pass
+        if approval_hook.get("required"):
+            result.setdefault("approval_hook", approval_hook)
 
         result = _enforce_tool_result_schema(
             result,
@@ -1400,6 +1560,8 @@ async def _execute_tool_call_with_retry(
         if result.get("status") != "error":
             if attempt > 1:
                 result["retry_attempts"] = attempt - 1
+            return result
+        if result.get("error_code") in {_RISK_ERR_APPROVAL_REQUIRED, _RISK_ERR_POLICY_BLOCKED}:
             return result
 
         arbiter_signal = evaluate_workspace_conflict_retry(
@@ -1589,6 +1751,9 @@ def format_tool_results_for_llm(results: List[Dict[str, Any]]) -> str:
             result_info = receipt.get("result")
             if not isinstance(result_info, dict):
                 result_info = {}
+            approval = receipt.get("approval")
+            if not isinstance(approval, dict):
+                approval = {}
             next_steps = _normalize_receipt_next_steps(receipt.get("next_steps"))
             receipt_lines = [
                 "[tool_receipt]",
@@ -1596,6 +1761,11 @@ def format_tool_results_for_llm(results: List[Dict[str, Any]]) -> str:
                     f"- risk={receipt.get('risk_level', 'unknown')}, "
                     f"scope={receipt.get('execution_scope', 'unknown')}, "
                     f"mutex={bool(receipt.get('requires_global_mutex'))}"
+                ),
+                (
+                    f"- approval.required={bool(approval.get('required'))}, "
+                    f"policy={approval.get('policy', None)}, "
+                    f"granted={bool(approval.get('granted'))}"
                 ),
                 (
                     f"- budget.estimated_token_cost={budget.get('estimated_token_cost', 0)}, "
@@ -1758,6 +1928,10 @@ def get_agentic_tool_definitions() -> List[Dict[str, Any]]:
                         "oob_allowlist": {"type": "array", "items": {"type": "string"}},
                         "dns_allow": {"type": "boolean"},
                         "recursive": {"type": "boolean"},
+                        "approvalPolicy": {"type": "string"},
+                        "approval_policy": {"type": "string"},
+                        "approval_granted": {"type": "boolean"},
+                        "approved": {"type": "boolean"},
                     },
                     "required": ["tool_name"],
                 },

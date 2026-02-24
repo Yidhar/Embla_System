@@ -64,6 +64,10 @@ class PolicyFirewall:
             "timeout_seconds",
             "max_output_chars",
             "artifact_priority",
+            "approvalPolicy",
+            "approval_policy",
+            "approval_granted",
+            "approved",
         },
         "write_file": {
             "tool_name",
@@ -73,6 +77,10 @@ class PolicyFirewall:
             "mode",
             "encoding",
             "requester",
+            "approvalPolicy",
+            "approval_policy",
+            "approval_granted",
+            "approved",
         },
         "workspace_txn_apply": {
             "tool_name",
@@ -81,6 +89,10 @@ class PolicyFirewall:
             "contract_checksum",
             "verify_after_apply",
             "requester",
+            "approvalPolicy",
+            "approval_policy",
+            "approval_granted",
+            "approved",
         },
         "sleep_and_watch": {
             "tool_name",
