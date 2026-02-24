@@ -17,6 +17,7 @@
 6. 排期执行优先参考 `02-sprint-plan-ai-agents.md`、`03-p0-shortest-path-onepager.md`、`04-parallel-execution-groups.md`。
 7. 细分派工与执行卡片参考 `05-sprint-assignment-matrix.md`、`06-task-unit-subtask-packages.md`。
 8. 执行启动与风控闭环参考 `07-execution-launch-playbook.md`、`08-risk-closure-ledger.md`、`09-execution-board.csv`。
+9. 文档一致性收口可执行 `python scripts/validate_doc_consistency_ws16_006.py --strict`。
 
 ## 3. 文档清单
 
@@ -68,6 +69,8 @@
     - 可直接执行/流转的任务看板数据（已将 W1 任务置为 `in_progress`）。
 24. `doc/task/implementation/`
     - 各任务波次实施记录与验证证据归档（按任务 ID 命名）。
+25. `doc/task/runbooks/`
+    - 运行手册与故障恢复步骤（按任务场景维护）。
 
 ## 4. 任务状态约定
 
