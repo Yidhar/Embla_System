@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import uuid
 from pathlib import Path
 
 import pytest
@@ -16,17 +18,24 @@ import system.artifact_store as artifact_store_module
 
 
 @pytest.fixture
-def isolated_artifact_store(tmp_path, monkeypatch):
-    store = ArtifactStore(
-        ArtifactStoreConfig(
-            artifact_root=tmp_path / "artifacts",
-            max_total_size_mb=64,
-            max_single_artifact_mb=16,
-            max_artifact_count=200,
+def isolated_artifact_store(monkeypatch):
+    runtime_tmp_root = Path("logs/runtime/test_artifact_store_tmp")
+    runtime_tmp_root.mkdir(parents=True, exist_ok=True)
+    base = runtime_tmp_root / f"native_tools_artifacts_{uuid.uuid4().hex[:8]}"
+    base.mkdir(parents=True, exist_ok=False)
+    try:
+        store = ArtifactStore(
+            ArtifactStoreConfig(
+                artifact_root=base / "artifacts",
+                max_total_size_mb=64,
+                max_single_artifact_mb=16,
+                max_artifact_count=200,
+            )
         )
-    )
-    monkeypatch.setattr(artifact_store_module, "_artifact_store", store)
-    return store
+        monkeypatch.setattr(artifact_store_module, "_artifact_store", store)
+        yield store
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def test_artifact_reader_jsonpath_roundtrip(isolated_artifact_store):
