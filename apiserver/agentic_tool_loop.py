@@ -271,6 +271,137 @@ def _build_contract_observability_metadata(
     return metadata
 
 
+def _normalize_receipt_next_steps(raw_value: Any) -> List[str]:
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, str):
+        text = raw_value.strip()
+        return [text] if text else []
+    if not isinstance(raw_value, list):
+        return []
+    normalized: List[str] = []
+    for item in raw_value:
+        text = str(item or "").strip()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
+def _build_default_receipt_next_steps(
+    *,
+    status: str,
+    risk_level: str,
+    artifact_ref: str,
+    error_code: str,
+) -> List[str]:
+    suggestions: List[str] = []
+    normalized_status = status.lower()
+    normalized_risk = risk_level.lower()
+
+    if normalized_status == "error":
+        suggestions.append("inspect_error_and_retry")
+        if artifact_ref:
+            suggestions.append("read_artifact_with_artifact_reader")
+        if error_code == _SCHEMA_ERR_LEGACY_DECOMMISSIONED:
+            suggestions.append("switch_to_new_contract_payload")
+        return suggestions
+
+    if artifact_ref:
+        suggestions.append("follow_up_with_artifact_reader_if_needed")
+    if normalized_risk in {"write_repo", "deploy", "secrets", "self_modify"}:
+        suggestions.append("run_post_change_verification")
+    else:
+        suggestions.append("continue_next_planned_step")
+    return suggestions
+
+
+def _build_tool_receipt(call: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+    context = call.get("_context_metadata")
+    if not isinstance(context, dict):
+        context = {}
+
+    trace_id = str(call.get("_trace_id") or call.get("trace_id") or context.get("trace_id") or "").strip()
+    idempotency_key = str(call.get("idempotency_key") or context.get("idempotency_key") or "").strip()
+    risk_level = str(call.get("_risk_level") or call.get("risk_level") or context.get("risk_level") or "read_only").strip()
+    execution_scope = str(
+        call.get("_execution_scope") or call.get("execution_scope") or context.get("execution_scope") or "local"
+    ).strip()
+    requires_global_mutex = bool(
+        call.get("_requires_global_mutex")
+        if "_requires_global_mutex" in call
+        else (call.get("requires_global_mutex") or context.get("requires_global_mutex"))
+    )
+
+    estimated_token_cost = _clamp_int(
+        call.get("estimated_token_cost", context.get("estimated_token_cost", 0)),
+        0,
+        0,
+        100_000_000,
+    )
+    budget_remaining_raw = call.get("budget_remaining", context.get("budget_remaining"))
+    budget_remaining: Optional[int] = None
+    if budget_remaining_raw is not None:
+        try:
+            budget_remaining = int(budget_remaining_raw)
+        except Exception:
+            budget_remaining = None
+
+    artifact_ref = str(result.get("forensic_artifact_ref") or result.get("raw_result_ref") or "").strip()
+    status = str(result.get("status", "unknown")).strip().lower()
+    error_code = str(result.get("error_code") or "").strip()
+
+    next_steps = _normalize_receipt_next_steps(result.get("next_steps"))
+    if not next_steps:
+        next_steps = _build_default_receipt_next_steps(
+            status=status,
+            risk_level=risk_level,
+            artifact_ref=artifact_ref,
+            error_code=error_code,
+        )
+
+    risk_items: List[str] = []
+    if status == "error":
+        risk_items.append("tool_execution_failed")
+    if risk_level in {"write_repo", "deploy", "secrets", "self_modify"}:
+        risk_items.append(f"high_risk_action:{risk_level}")
+    if error_code == _SCHEMA_ERR_LEGACY_DECOMMISSIONED:
+        risk_items.append("legacy_contract_decommission_gate")
+    if requires_global_mutex:
+        risk_items.append("global_mutex_required")
+
+    return {
+        "version": "ws10-004-v1",
+        "call_type": str(call.get("agentType") or "unknown"),
+        "service_name": str(result.get("service_name") or call.get("service_name") or "unknown"),
+        "tool_name": str(result.get("tool_name") or call.get("tool_name") or "unknown"),
+        "trace_id": trace_id,
+        "idempotency_key": idempotency_key,
+        "risk_level": risk_level,
+        "execution_scope": execution_scope,
+        "requires_global_mutex": requires_global_mutex,
+        "budget": {
+            "estimated_token_cost": estimated_token_cost,
+            "budget_remaining": budget_remaining,
+        },
+        "result": {
+            "status": status,
+            "error_code": error_code or None,
+            "has_artifact": bool(artifact_ref),
+            "forensic_artifact_ref": artifact_ref or None,
+        },
+        "risk_items": risk_items,
+        "next_steps": next_steps,
+    }
+
+
+def _attach_tool_receipt(call: Dict[str, Any], result: Dict[str, Any]) -> None:
+    if not isinstance(result, dict):
+        return
+    if not isinstance(call, dict):
+        call = {}
+    result["tool_receipt"] = _build_tool_receipt(call, result)
+
+
 def _is_retryable_tool_failure(call: Dict[str, Any], result: Dict[str, Any]) -> bool:
     if bool(call.get("no_retry", False)):
         return False
@@ -319,6 +450,13 @@ def _summarize_results_for_frontend(
             meta = r.get("_contract_rollout")
             if isinstance(meta, dict):
                 summary["contract_rollout"] = meta
+        receipt = r.get("tool_receipt")
+        if not isinstance(receipt, dict):
+            tool_call = r.get("tool_call")
+            if isinstance(tool_call, dict):
+                receipt = _build_tool_receipt(tool_call, r)
+        if isinstance(receipt, dict):
+            summary["tool_receipt"] = receipt
 
         summaries.append(summary)
         if r.get("conflict_ticket"):
@@ -1242,6 +1380,7 @@ async def _execute_tool_call_with_retry(
             default_service_name=service_name or "tool_protocol",
             default_tool_name=tool_name or "validation",
         )
+        _attach_tool_receipt(call, result)
         if result.get("error_code") == _SCHEMA_ERR_OUTPUT_INVALID:
             logger.warning(
                 "[AgenticLoop] output schema rejected id=%s detail=%s",
@@ -1299,13 +1438,15 @@ async def _execute_tool_call_with_retry(
 
         await asyncio.sleep(max(0.0, min(10.0, retry_backoff_seconds * attempt)))
 
-    return {
+    fallback_row = {
         "tool_call": call,
         "result": "执行异常: 未知重试状态",
         "status": "error",
         "service_name": "unknown",
         "tool_name": "unknown",
     }
+    _attach_tool_receipt(call, fallback_row)
+    return fallback_row
 
 
 async def execute_tool_calls(
@@ -1341,15 +1482,16 @@ async def execute_tool_calls(
     final: List[Dict[str, Any]] = []
     for idx, r in enumerate(results):
         if isinstance(r, Exception):
-            final.append(
-                {
-                    "tool_call": tool_calls[idx] if idx < len(tool_calls) else {},
-                    "result": f"执行异常: {r}",
-                    "status": "error",
-                    "service_name": "unknown",
-                    "tool_name": "unknown",
-                }
-            )
+            failed_call = tool_calls[idx] if idx < len(tool_calls) else {}
+            row = {
+                "tool_call": failed_call,
+                "result": f"执行异常: {r}",
+                "status": "error",
+                "service_name": "unknown",
+                "tool_name": "unknown",
+            }
+            _attach_tool_receipt(failed_call, row)
+            final.append(row)
         else:
             final.append(r)
     return final
@@ -1364,13 +1506,15 @@ def _build_gc_reader_suggestion_result(reason: str, suggestion: str, error_text:
         lines.append(f"[readback_error] {error_text}")
     if suggestion:
         lines.append(f"[suggested_call] {suggestion}")
-    return {
+    row = {
         "tool_call": {"agentType": "native", "tool_name": "artifact_reader", "_gc_reader_bridge": True},
         "result": "\n".join(lines),
         "status": "success",
         "service_name": "gc_reader_bridge",
         "tool_name": "artifact_reader_suggestion",
     }
+    _attach_tool_receipt(row["tool_call"], row)
+    return row
 
 
 async def _maybe_execute_gc_reader_followup(
@@ -1436,9 +1580,42 @@ def format_tool_results_for_llm(results: List[Dict[str, Any]]) -> str:
     parts = []
     total = len(results)
     for idx, r in enumerate(results, 1):
+        receipt_block = ""
+        receipt = r.get("tool_receipt")
+        if isinstance(receipt, dict):
+            budget = receipt.get("budget")
+            if not isinstance(budget, dict):
+                budget = {}
+            result_info = receipt.get("result")
+            if not isinstance(result_info, dict):
+                result_info = {}
+            next_steps = _normalize_receipt_next_steps(receipt.get("next_steps"))
+            receipt_lines = [
+                "[tool_receipt]",
+                (
+                    f"- risk={receipt.get('risk_level', 'unknown')}, "
+                    f"scope={receipt.get('execution_scope', 'unknown')}, "
+                    f"mutex={bool(receipt.get('requires_global_mutex'))}"
+                ),
+                (
+                    f"- budget.estimated_token_cost={budget.get('estimated_token_cost', 0)}, "
+                    f"budget_remaining={budget.get('budget_remaining', None)}"
+                ),
+                (
+                    f"- result.status={result_info.get('status', 'unknown')}, "
+                    f"error_code={result_info.get('error_code', None)}, "
+                    f"has_artifact={bool(result_info.get('has_artifact'))}"
+                ),
+                f"- next_steps={', '.join(next_steps) if next_steps else '(none)'}",
+            ]
+            receipt_block = "\n".join(receipt_lines)
+
         memory_card = build_gc_memory_index_card(r, index=idx, total=total)
         if memory_card:
-            parts.append(memory_card)
+            if receipt_block:
+                parts.append(f"{receipt_block}\n{memory_card}")
+            else:
+                parts.append(memory_card)
             continue
 
         svc = r.get("service_name", "unknown")
@@ -1448,7 +1625,11 @@ def format_tool_results_for_llm(results: List[Dict[str, Any]]) -> str:
         label = f"{svc}"
         if tool:
             label += f": {tool}"
-        parts.append(f"[工具结果 {idx}/{total} - {label} ({status})]\n{result_text}")
+        header = f"[工具结果 {idx}/{total} - {label} ({status})]"
+        if receipt_block:
+            parts.append(f"{header}\n{receipt_block}\n{result_text}")
+        else:
+            parts.append(f"{header}\n{result_text}")
     return "\n\n".join(parts)
 
 
@@ -1784,15 +1965,15 @@ def _convert_structured_tool_calls(
 def _build_validation_results(errors: List[str]) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     for msg in errors:
-        results.append(
-            {
-                "tool_call": {"agentType": "tool_protocol"},
-                "result": msg,
-                "status": "error",
-                "service_name": "tool_protocol",
-                "tool_name": "validation",
-            }
-        )
+        row = {
+            "tool_call": {"agentType": "tool_protocol"},
+            "result": msg,
+            "status": "error",
+            "service_name": "tool_protocol",
+            "tool_name": "validation",
+        }
+        _attach_tool_receipt(row["tool_call"], row)
+        results.append(row)
     return results
 
 
