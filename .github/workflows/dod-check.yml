@@ -82,6 +82,18 @@ jobs:
           Write-Host "[dod-check] mode=$mode timeout=$timeoutSeconds"
           ./scripts/dod_check.ps1 @args
 
+      - name: Render closure summary
+        if: always()
+        shell: pwsh
+        run: |
+          python scripts/render_release_closure_summary.py `
+            --full-report scratch/reports/release_closure_chain_full_m0_m7_ci.json `
+            --m0-m5-report scratch/reports/release_closure_chain_m0_m5_result.json `
+            --m6-m7-report scratch/reports/ws22_phase3_release_chain_result.json `
+            --output scratch/reports/release_closure_summary.md `
+            --append-github-step-summary `
+            --allow-missing-full-report
+
       - name: Upload closure reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -91,4 +103,5 @@ jobs:
             scratch/reports/release_closure_chain_full_m0_m7_ci.json
             scratch/reports/release_closure_chain_m0_m5_result.json
             scratch/reports/ws22_phase3_release_chain_result.json
+            scratch/reports/release_closure_summary.md
           if-no-files-found: ignore

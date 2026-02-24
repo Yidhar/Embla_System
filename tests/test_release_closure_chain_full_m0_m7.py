@@ -104,5 +104,6 @@ def test_full_release_chain_quick_mode_forwards_skip_flags(monkeypatch) -> None:
         assert captured["m0"]["skip_t5"] is True
         assert captured["m6"]["skip_tests"] is True
         assert captured["m6"]["skip_longrun"] is True
+        assert captured["m6"]["skip_gate"] is True
     finally:
         _cleanup_case_root(case_root)

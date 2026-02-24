@@ -79,7 +79,7 @@ def run_release_closure_chain_full_m0_m7(
             output_file=m6_m7_output_file,
             skip_tests=bool(quick_mode),
             skip_longrun=bool(quick_mode),
-            skip_gate=False,
+            skip_gate=bool(quick_mode),
             skip_doc_consistency=False,
             continue_on_failure=bool(continue_on_failure),
             timeout_seconds=max(30, int(timeout_seconds)),
@@ -131,7 +131,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--quick-mode",
         action="store_true",
-        help="Run lightweight mode (skip heavy regressions and long-run drill)",
+        help="Run lightweight mode (skip heavy regressions, long-run drill, and phase3 gate)",
     )
     parser.add_argument("--continue-on-failure", action="store_true", help="Continue after group failure")
     parser.add_argument("--timeout-seconds", type=int, default=2400, help="Per-step timeout")
