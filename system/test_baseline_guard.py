@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Set
@@ -20,6 +19,7 @@ from typing import Optional, Set
 @dataclass
 class TestBaselineConfig:
     """测试基线配置"""
+    __test__ = False
 
     # Golden Suite 目录（只读保护）
     golden_suite_dirs: Set[str]
@@ -62,6 +62,7 @@ class TestBaselineGuard:
     2. 修改检测与拦截
     3. 审批白名单管理
     """
+    __test__ = False
 
     def __init__(self, config: Optional[TestBaselineConfig] = None):
         self.config = config or TestBaselineConfig.default()
@@ -77,9 +78,12 @@ class TestBaselineGuard:
             # 不在项目根目录内
             return False
 
-        # 检查是否在 golden suite 目录内
+        rel_parts = tuple(part.lower() for part in rel_path.parts)
+
+        # 检查是否在 golden suite 目录内（兼容 Windows/Posix 分隔符）
         for golden_dir in self.config.golden_suite_dirs:
-            if str(rel_path).startswith(golden_dir):
+            prefix_parts = tuple(part.lower() for part in Path(golden_dir).parts)
+            if rel_parts[: len(prefix_parts)] == prefix_parts:
                 return True
 
         return False
@@ -169,6 +173,7 @@ class TestPoisoningDetector:
     2. 测试跳过（@pytest.mark.skip）
     3. 异常捕获吞噬（except: pass）
     """
+    __test__ = False
 
     @staticmethod
     def detect_weakened_assertions(test_content: str) -> list[tuple[int, str]]:
@@ -196,8 +201,10 @@ class TestPoisoningDetector:
                 issues.append((line_num, "Empty assertion"))
 
             # Pass 替代断言
-            if stripped.startswith("# assert") and "pass" in lines[line_num] if line_num < len(lines) else False:
-                issues.append((line_num, "Commented out assertion with pass"))
+            if stripped.startswith("# assert"):
+                next_line = lines[line_num].strip() if line_num < len(lines) else ""
+                if next_line.startswith("pass"):
+                    issues.append((line_num, "Commented out assertion with pass"))
 
         return issues
 
@@ -228,13 +235,19 @@ class TestPoisoningDetector:
         for line_num, line in enumerate(lines, 1):
             stripped = line.strip()
 
-            # except: pass 模式
-            if stripped.startswith("except:") or stripped.startswith("except Exception:"):
-                # 检查下一行是否为 pass
-                if line_num < len(lines):
-                    next_line = lines[line_num].strip()
-                    if next_line == "pass":
-                        issues.append((line_num, "Exception swallowing: except: pass"))
+            # except ...: 后第一条有效语句是 pass，视为异常吞噬
+            if not stripped.startswith("except") or ":" not in stripped:
+                continue
+
+            next_index = line_num
+            while next_index < len(lines):
+                next_line = lines[next_index].strip()
+                if not next_line or next_line.startswith("#"):
+                    next_index += 1
+                    continue
+                if next_line.startswith("pass"):
+                    issues.append((line_num, "Exception swallowing: except ... pass"))
+                break
 
         return issues
 
@@ -254,9 +267,16 @@ class TestPoisoningDetector:
         if not path.exists():
             return {}
 
-        try:
-            content = path.read_text(encoding="utf-8")
-        except Exception:
+        content: Optional[str] = None
+        for encoding in ("utf-8", "gbk", "cp936"):
+            try:
+                content = path.read_text(encoding=encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+            except Exception:
+                return {}
+        if content is None:
             return {}
 
         return {

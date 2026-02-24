@@ -359,6 +359,31 @@ def _build_tool_envelope_from_call(call: Dict[str, Any]) -> ToolCallEnvelope:
     )
 
 
+def _inject_call_context_metadata(
+    call: Dict[str, Any],
+    *,
+    call_id: str,
+    trace_id: str,
+    session_id: Optional[str],
+) -> None:
+    """Attach normalized trace/session/risk metadata onto a dispatched call."""
+    call["_tool_call_id"] = call_id
+    call["_trace_id"] = trace_id
+    if session_id:
+        call["_session_id"] = session_id
+    if "_fencing_epoch" not in call:
+        call["_fencing_epoch"] = call.get("fencing_epoch")
+    try:
+        envelope = _build_tool_envelope_from_call(call)
+        call["_risk_level"] = envelope.risk_level.value
+        call["_execution_scope"] = envelope.execution_scope.value
+        call["_requires_global_mutex"] = bool(envelope.requires_global_mutex)
+    except Exception:
+        call.setdefault("_risk_level", "read_only")
+        call.setdefault("_execution_scope", "local")
+        call.setdefault("_requires_global_mutex", False)
+
+
 def _requires_global_mutex(call: Dict[str, Any]) -> bool:
     try:
         envelope = _build_tool_envelope_from_call(call)
@@ -1251,11 +1276,13 @@ def _convert_structured_tool_calls(
             native_call = {
                 "agentType": "native",
                 **args,
-                "_tool_call_id": call_id,
-                "_trace_id": trace_id,
             }
-            if session_id:
-                native_call["_session_id"] = session_id
+            _inject_call_context_metadata(
+                native_call,
+                call_id=call_id,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
             actionable_calls.append(native_call)
             continue
 
@@ -1268,11 +1295,7 @@ def _convert_structured_tool_calls(
             merged_call: Dict[str, Any] = {
                 "agentType": "mcp",
                 "tool_name": mcp_tool_name,
-                "_tool_call_id": call_id,
-                "_trace_id": trace_id,
             }
-            if session_id:
-                merged_call["_session_id"] = session_id
             service_name = str(args.get("service_name") or "").strip()
             if not service_name and mcp_tool_name in {"ask-codex", "brainstorm", "help", "ping"}:
                 service_name = "codex-cli"
@@ -1309,6 +1332,12 @@ def _convert_structured_tool_calls(
                 arg_payload.setdefault("sandboxMode", "workspace-write")
                 arg_payload.setdefault("approvalPolicy", "on-failure")
             merged_call.update(arg_payload)
+            _inject_call_context_metadata(
+                merged_call,
+                call_id=call_id,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
             actionable_calls.append(merged_call)
             continue
 
@@ -1317,12 +1346,18 @@ def _convert_structured_tool_calls(
             if not action:
                 validation_errors.append(f"live2d_action 缺少 action: id={call_id}")
                 continue
-            live2d_calls.append({
+            live2d_call = {
                 "agentType": "live2d",
+                "tool_name": "live2d_action",
                 "action": action,
-                "_tool_call_id": call_id,
-                "_trace_id": trace_id,
-            })
+            }
+            _inject_call_context_metadata(
+                live2d_call,
+                call_id=call_id,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            live2d_calls.append(live2d_call)
             continue
 
         validation_errors.append(f"未知函数调用: id={call_id}, name={tool_name}")
