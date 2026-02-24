@@ -31,6 +31,8 @@
 
 CI 接入（DoD）：
 `.github/workflows/dod-check.yml` 已默认在 PR/Push 触发 `quick-mode`（`workflow_dispatch` 支持 `full/skip`）。
+`quick-mode` 为轻量门禁：跳过重回归、长稳演练与 Phase3 Gate；`full` 执行完整 M0-M7 收口链。
+CI 摘要产物：`scratch/reports/release_closure_summary.md`（并写入 `GITHUB_STEP_SUMMARY`）。
 
 1. T0 基线校验  
    `python scripts/validate_doc_consistency_ws16_006.py --strict`

@@ -85,6 +85,8 @@
     - M0-M5 发布收口脚本链统一入口（串行执行 T0-T5：基线、回归、工单产物）。
 32. `scripts/release_closure_chain_full_m0_m7.py`
     - M0-M7 全量发布收口统一入口（串行执行 M0-M5 + M6-M7 两段门禁链）。
+33. `scripts/render_release_closure_summary.py`
+    - 发布收口报告摘要生成器（汇总 M0-M7/M0-M5/M6-M7 结果并输出 Markdown）。
 
 ## 4. 任务状态约定
 
