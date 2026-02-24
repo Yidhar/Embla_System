@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
+from autonomous.event_log.event_schema import build_event_envelope, is_event_envelope, normalize_event_envelope
+
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -220,6 +222,20 @@ class WorkflowStore:
 
     def enqueue_outbox(self, workflow_id: str, event_type: str, payload: Dict[str, Any] | None = None) -> int:
         now = _now_iso()
+        payload_data = dict(payload or {})
+        if is_event_envelope(payload_data):
+            envelope = normalize_event_envelope(
+                payload_data,
+                fallback_event_type=event_type,
+                fallback_timestamp=now,
+            )
+        else:
+            envelope = build_event_envelope(
+                event_type,
+                payload_data,
+                source=str(payload_data.get("source") or "autonomous.workflow_store"),
+                timestamp=now,
+            )
         with self._lock:
             with self._connect() as conn:
                 cur = conn.execute(
@@ -228,7 +244,7 @@ class WorkflowStore:
                     (workflow_id, event_type, payload_json, status, created_at, updated_at)
                     VALUES (?, ?, ?, 'pending', ?, ?)
                     """,
-                    (workflow_id, event_type, _json(payload), now, now),
+                    (workflow_id, event_type, _json(envelope), now, now),
                 )
                 conn.commit()
                 return int(cur.lastrowid)
@@ -250,15 +266,39 @@ class WorkflowStore:
         for row in rows:
             payload_json = row["payload_json"] or "{}"
             try:
-                payload = json.loads(payload_json)
+                payload_raw = json.loads(payload_json)
             except json.JSONDecodeError:
-                payload = {"raw": payload_json}
+                payload_raw = {"raw": payload_json}
+
+            if isinstance(payload_raw, dict) and is_event_envelope(payload_raw):
+                envelope = normalize_event_envelope(
+                    payload_raw,
+                    fallback_event_type=str(row["event_type"]),
+                    fallback_timestamp=str(row["created_at"]),
+                )
+            else:
+                payload_data = payload_raw if isinstance(payload_raw, dict) else {"raw": payload_raw}
+                envelope = build_event_envelope(
+                    str(row["event_type"]),
+                    payload_data,
+                    source="autonomous.workflow_store",
+                    timestamp=str(row["created_at"]),
+                )
+
+            payload = envelope.get("data")
+            if not isinstance(payload, dict):
+                payload = {"raw": payload}
             result.append(
                 {
                     "outbox_id": int(row["outbox_id"]),
                     "workflow_id": row["workflow_id"],
-                    "event_type": row["event_type"],
+                    "event_type": envelope.get("event_type", row["event_type"]),
                     "payload": payload,
+                    "event_envelope": envelope,
+                    "schema_version": envelope.get("schema_version"),
+                    "source": envelope.get("source"),
+                    "severity": envelope.get("severity"),
+                    "trace_id": envelope.get("trace_id"),
                     "status": row["status"],
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
