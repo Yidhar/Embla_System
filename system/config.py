@@ -6,6 +6,7 @@ NagaAgent 配置系统 - 基于Pydantic实现类型安全和验证
 
 import os
 import json
+import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime
@@ -191,6 +192,7 @@ class SystemConfig(BaseModel):
     """系统基础配置"""
 
     version: str = Field(default="5.0.0", description="系统版本号")
+    config_schema_version: int = Field(default=1, ge=1, description="配置结构版本号")
     ai_name: str = Field(default="娜迦", description="AI助手名称")
     base_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent, description="项目根目录")
     log_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "logs", description="日志目录")
@@ -997,7 +999,5 @@ except Exception:
 
 # 向后兼容的AI_NAME常量
 AI_NAME = config.system.ai_name
-
-import logging
 
 logger = logging.getLogger(__name__)
