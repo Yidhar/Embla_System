@@ -74,6 +74,40 @@ export interface MemoryStats {
     taskTimeout: number
   }
 }
+
+export interface McpRuntimeSnapshot {
+  server: 'online' | 'offline'
+  timestamp: string
+  tasks: {
+    total: number
+    active: number
+    completed: number
+    failed: number
+  }
+  registry: {
+    registeredServices: number
+    cachedManifests: number
+    serviceNames: string[]
+    externalServiceNames: string[]
+  }
+  scheduler?: {
+    source?: string
+    trackedTasks?: number
+  }
+}
+
+export interface McpTaskSnapshot {
+  taskId: string
+  serviceName: string
+  status: string
+  source: 'builtin' | 'mcporter' | string
+}
+
+export interface McpTaskListResponse {
+  tasks: McpTaskSnapshot[]
+  total: number
+}
+
 export class CoreApiClient extends ApiClient {
   health(): Promise<{
     status: 'healthy'
@@ -289,12 +323,7 @@ export class CoreApiClient extends ApiClient {
     return this.instance.get(`/memory/quintuples/search?keywords=${encodeURIComponent(keywords)}`)
   }
 
-  getMcpStatus(): Promise<{
-    server: string
-    timestamp: string
-    tasks: { total: number, active: number, completed: number, failed: number }
-    scheduler?: Record<string, any>
-  }> {
+  getMcpStatus(): Promise<McpRuntimeSnapshot> {
     return this.instance.get('/mcp/status')
   }
 
@@ -342,7 +371,7 @@ export class CoreApiClient extends ApiClient {
     return this.instance.get(`/logs/context/load?days=${days}`)
   }
 
-  getMcpTasks(status?: string): Promise<Record<string, any>> {
+  getMcpTasks(status?: string): Promise<McpTaskListResponse> {
     const params = status ? `?status=${status}` : ''
     return this.instance.get(`/mcp/tasks${params}`)
   }

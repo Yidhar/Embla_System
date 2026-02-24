@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { CodexMcpSetupResponse } from '@/api/core'
+import type { CodexMcpSetupResponse, McpRuntimeSnapshot, McpTaskSnapshot } from '@/api/core'
 import { useStorage } from '@vueuse/core'
 import { Accordion } from 'primevue'
 import { computed, ref } from 'vue'
@@ -17,31 +17,145 @@ interface McpService {
   available: boolean
 }
 
+type McpConsistency = 'aligned' | 'mismatch' | 'unknown'
+
+interface McpServiceRow extends McpService {
+  runtimeStatus: string
+  runtimeOnline: boolean
+  runtimeSource: string
+  consistency: McpConsistency
+}
+
 const accordionValue = useStorage('accordion-skill', ['mcp', 'skills'])
 
 // ── MCP 服务 ──
-const mcpServices = ref<McpService[]>([])
+const mcpServices = ref<McpServiceRow[]>([])
+const mcpRuntime = ref<McpRuntimeSnapshot | null>(null)
 const mcpLoading = ref(true)
+const mcpRuntimeError = ref('')
 const showMcpDialog = ref(false)
 const codexSetupLoading = ref(false)
 const codexSetupError = ref('')
 const codexSetupResult = ref<CodexMcpSetupResponse | null>(null)
+const mcpImportError = ref('')
+
+const mcpSummary = computed(() => {
+  const runtime = mcpRuntime.value
+  if (!runtime) {
+    return null
+  }
+  return {
+    server: runtime.server,
+    total: runtime.tasks.total,
+    active: runtime.tasks.active,
+    completed: runtime.tasks.completed,
+    failed: runtime.tasks.failed,
+    updatedAt: runtime.timestamp,
+  }
+})
 
 const codexConnected = computed(() => {
   return mcpServices.value.some((svc) => {
     const name = String(svc.name ?? '').toLowerCase()
-    return name === 'codex-cli' || name === 'codex-mcp'
+    return (name === 'codex-cli' || name === 'codex-mcp') && svc.runtimeOnline
   })
 })
 
+function resolveRuntimeStatus(
+  service: McpService,
+  taskMap: Map<string, McpTaskSnapshot>,
+  runtime: McpRuntimeSnapshot | null,
+): { status: string, source: string, online: boolean } {
+  const task = taskMap.get(service.name)
+  if (task) {
+    const status = String(task.status || '')
+    return {
+      status: status || 'unknown',
+      source: String(task.source || service.source || ''),
+      online: status !== 'unavailable' && status !== 'missing',
+    }
+  }
+
+  const builtinSet = new Set(runtime?.registry?.serviceNames || [])
+  const externalSet = new Set(runtime?.registry?.externalServiceNames || [])
+  if (service.source === 'builtin') {
+    const online = builtinSet.has(service.name)
+    return {
+      status: online ? 'registered' : 'unavailable',
+      source: 'builtin',
+      online,
+    }
+  }
+  const online = externalSet.has(service.name)
+  return {
+    status: online ? 'configured' : 'unavailable',
+    source: 'mcporter',
+    online,
+  }
+}
+
+function mergeMcpServiceRows(
+  services: McpService[],
+  runtime: McpRuntimeSnapshot | null,
+  tasks: McpTaskSnapshot[],
+): McpServiceRow[] {
+  const taskMap = new Map<string, McpTaskSnapshot>(
+    tasks.map(task => [String(task.serviceName || ''), task]),
+  )
+
+  return services.map((service) => {
+    const runtimeState = resolveRuntimeStatus(service, taskMap, runtime)
+    const consistency: McpConsistency = runtime
+      ? (service.available === runtimeState.online ? 'aligned' : 'mismatch')
+      : 'unknown'
+    return {
+      ...service,
+      runtimeStatus: runtimeState.status,
+      runtimeOnline: runtimeState.online,
+      runtimeSource: runtimeState.source,
+      consistency,
+    }
+  })
+}
+
+function statusLabel(status: string): string {
+  const key = String(status || '').toLowerCase()
+  const labels: Record<string, string> = {
+    registered: '已注册',
+    configured: '已配置',
+    unavailable: '不可用',
+    running: '运行中',
+    failed: '失败',
+  }
+  return labels[key] || (status || 'unknown')
+}
+
 async function loadMcpServices() {
   mcpLoading.value = true
+  mcpRuntimeError.value = ''
   try {
-    const res = await API.getMcpServices()
-    mcpServices.value = (res.services ?? []).filter(s => s.available)
+    const [servicesRes, runtimeRes, taskRes] = await Promise.all([
+      API.getMcpServices(),
+      API.getMcpStatus(),
+      API.getMcpTasks(),
+    ])
+    const services = (servicesRes.services ?? []) as McpService[]
+    const tasks = (taskRes.tasks ?? []) as McpTaskSnapshot[]
+
+    mcpRuntime.value = runtimeRes
+    mcpServices.value = mergeMcpServiceRows(services, runtimeRes, tasks)
   }
-  catch {
-    mcpServices.value = []
+  catch (error: any) {
+    mcpRuntime.value = null
+    mcpRuntimeError.value = `MCP 状态拉取失败: ${extractErrorMessage(error)}`
+    try {
+      const res = await API.getMcpServices()
+      const fallbackServices = (res.services ?? []) as McpService[]
+      mcpServices.value = mergeMcpServiceRows(fallbackServices, null, [])
+    }
+    catch {
+      mcpServices.value = []
+    }
   }
   finally {
     mcpLoading.value = false
@@ -76,27 +190,34 @@ async function setupCodexMcp() {
   }
 }
 
+function refreshMcpRuntime() {
+  void loadMcpServices()
+}
+
 async function onMcpConfirm(data: { name: string, config: Record<string, any> }) {
+  mcpImportError.value = ''
   try {
     await API.importMcpConfig(data.name, data.config)
     showMcpDialog.value = false
     await loadMcpServices()
   }
   catch (e: any) {
-    alert(`导入失败: ${extractErrorMessage(e)}`)
+    mcpImportError.value = `导入失败: ${extractErrorMessage(e)}`
   }
 }
 
 // ── 技能管理 ──
 const showSkillDialog = ref(false)
+const skillImportError = ref('')
 
 async function onSkillConfirm(data: { name: string, content: string }) {
+  skillImportError.value = ''
   try {
     await API.importCustomSkill(data.name, data.content)
     showSkillDialog.value = false
   }
   catch (e: any) {
-    alert(`导入失败: ${e.message}`)
+    skillImportError.value = `导入失败: ${extractErrorMessage(e)}`
   }
 }
 </script>
@@ -118,6 +239,9 @@ async function onSkillConfirm(data: { name: string, content: string }) {
             </div>
             <div class="ml-3 shrink-0 flex items-center gap-2">
               <span v-if="codexConnected" class="text-green-400 text-xs font-bold">已接入</span>
+              <button class="setup-btn setup-btn-ghost" :disabled="mcpLoading" @click="refreshMcpRuntime">
+                {{ mcpLoading ? '刷新中...' : '刷新状态' }}
+              </button>
               <button class="setup-btn" :disabled="codexSetupLoading" @click="setupCodexMcp">
                 {{ codexSetupLoading ? '接入中...' : (codexConnected ? '重新接入' : '一键接入') }}
               </button>
@@ -127,7 +251,10 @@ async function onSkillConfirm(data: { name: string, content: string }) {
           <div v-if="codexSetupError" class="setup-error">
             {{ codexSetupError }}
           </div>
-          <div v-else-if="codexSetupResult" class="setup-result">
+          <div v-if="mcpImportError" class="setup-error">
+            {{ mcpImportError }}
+          </div>
+          <div v-if="codexSetupResult" class="setup-result">
             <div class="setup-line">
               状态: {{ codexSetupResult.status }}
             </div>
@@ -145,6 +272,21 @@ async function onSkillConfirm(data: { name: string, content: string }) {
             </div>
           </div>
 
+          <div v-if="mcpSummary" class="runtime-summary">
+            <div class="setup-line">
+              运行态: {{ mcpSummary.server === 'online' ? '在线' : '离线' }}
+            </div>
+            <div class="setup-line">
+              服务总数: {{ mcpSummary.total }}（活跃 {{ mcpSummary.active }} / 内置 {{ mcpSummary.completed }} / 失败 {{ mcpSummary.failed }}）
+            </div>
+            <div class="setup-line text-white/50">
+              更新时间: {{ mcpSummary.updatedAt }}
+            </div>
+          </div>
+          <div v-else-if="mcpRuntimeError" class="setup-warning">
+            {{ mcpRuntimeError }}
+          </div>
+
           <div v-if="mcpLoading" class="text-white/40 text-xs py-2">
             检查可用性...
           </div>
@@ -160,6 +302,16 @@ async function onSkillConfirm(data: { name: string, content: string }) {
                   :class="svc.source === 'builtin' ? 'text-green-400' : 'text-blue-400'"
                 >
                   {{ svc.source === 'builtin' ? '内置' : '外部' }}
+                </span>
+                <span class="ml-2 text-xs font-bold" :class="svc.runtimeOnline ? 'text-green-300' : 'text-red-300'">
+                  {{ statusLabel(svc.runtimeStatus) }}
+                </span>
+                <span
+                  v-if="svc.consistency === 'mismatch'"
+                  class="ml-2 text-amber-300 text-xs"
+                  title="服务可用性与运行态快照不一致"
+                >
+                  漂移
                 </span>
               </div>
             </div>
@@ -187,6 +339,9 @@ async function onSkillConfirm(data: { name: string, content: string }) {
           <button class="add-btn" @click="showSkillDialog = true">
             +
           </button>
+          <div v-if="skillImportError" class="setup-error">
+            {{ skillImportError }}
+          </div>
         </div>
       </ConfigGroup>
     </Accordion>
@@ -276,6 +431,28 @@ async function onSkillConfirm(data: { name: string, content: string }) {
 .setup-warning {
   color: #ffcd6d;
   margin-top: 0.15rem;
+}
+
+.runtime-summary {
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  background: rgba(64, 158, 255, 0.06);
+  border: 1px solid rgba(64, 158, 255, 0.28);
+  color: rgba(220, 238, 255, 0.95);
+  font-size: 0.75rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.setup-btn-ghost {
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.setup-btn-ghost:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .add-btn {
