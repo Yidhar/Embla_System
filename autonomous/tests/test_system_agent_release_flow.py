@@ -33,6 +33,21 @@ def _cleanup_case_root(root: Path) -> None:
     shutil.rmtree(root, ignore_errors=True)
 
 
+def _create_agent(repo: Path) -> SystemAgent:
+    return SystemAgent(
+        config={
+            "enabled": False,
+            "release": {
+                "enabled": True,
+                "gate_policy_path": "policy/gate_policy.yaml",
+                "auto_rollback_enabled": False,
+                "rollback_command": "",
+            },
+        },
+        repo_dir=str(repo),
+    )
+
+
 def test_release_rollback_event_contains_canary_audit_fields() -> None:
     case_root = _make_case_root("test_system_agent_release_flow")
     try:
@@ -40,18 +55,7 @@ def test_release_rollback_event_contains_canary_audit_fields() -> None:
         repo.mkdir(parents=True, exist_ok=True)
         _write_policy(repo / "policy" / "gate_policy.yaml")
 
-        agent = SystemAgent(
-            config={
-                "enabled": False,
-                "release": {
-                    "enabled": True,
-                    "gate_policy_path": "policy/gate_policy.yaml",
-                    "auto_rollback_enabled": False,
-                    "rollback_command": "",
-                },
-            },
-            repo_dir=str(repo),
-        )
+        agent = _create_agent(repo)
 
         workflow_id = "wf-ws17-007"
         agent.workflow_store.create_workflow(workflow_id, task_id="task-ws17-007", initial_state="ReleaseCandidate")
@@ -99,5 +103,112 @@ def test_release_rollback_event_contains_canary_audit_fields() -> None:
         assert decision["trigger_window_index"] == 2
         assert rollback_payload["rollback_result"]["enabled"] is False
         assert rollback_payload["rollback_result"]["status"] == "skipped"
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_outbox_dispatch_failure_schedules_retry() -> None:
+    case_root = _make_case_root("test_system_agent_release_flow")
+    try:
+        repo = case_root / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        _write_policy(repo / "policy" / "gate_policy.yaml")
+        agent = _create_agent(repo)
+
+        workflow_id = "wf-outbox-retry"
+        agent.workflow_store.create_workflow(workflow_id, task_id="task-outbox-retry", initial_state="ReleaseCandidate")
+        agent.workflow_store.enqueue_outbox(
+            workflow_id,
+            "TaskApproved",
+            {"task_id": "task-outbox-retry", "workflow_id": workflow_id},
+            max_attempts=2,
+        )
+        event = agent.workflow_store.read_pending_outbox(limit=10)[0]
+
+        captured: list[tuple[str, dict]] = []
+
+        def _capture(event_type: str, payload: dict, **kwargs) -> None:
+            captured.append((event_type, dict(payload)))
+
+        agent._emit = _capture  # type: ignore[method-assign]
+
+        async def _boom(*args, **kwargs):
+            raise RuntimeError("outbox transient failure")
+
+        agent._handle_outbox_business_event = _boom  # type: ignore[method-assign]
+        asyncio.run(agent._dispatch_single_outbox_event(event, consumer="release-controller", fencing_epoch=1))
+
+        with agent.workflow_store._connect() as conn:  # noqa: SLF001
+            row = conn.execute(
+                """
+                SELECT status, dispatch_attempts, max_attempts, last_error, next_retry_at
+                FROM outbox_event
+                WHERE outbox_id = ?
+                """,
+                (event["outbox_id"],),
+            ).fetchone()
+
+        assert row is not None
+        assert row["status"] == "pending"
+        assert int(row["dispatch_attempts"]) == 1
+        assert int(row["max_attempts"]) == 2
+        assert "outbox transient failure" in str(row["last_error"] or "")
+        assert row["next_retry_at"]
+        assert any(event_type == "OutboxDispatchRetryScheduled" for event_type, _ in captured)
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_outbox_dispatch_failure_moves_to_dead_letter_when_exhausted() -> None:
+    case_root = _make_case_root("test_system_agent_release_flow")
+    try:
+        repo = case_root / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        _write_policy(repo / "policy" / "gate_policy.yaml")
+        agent = _create_agent(repo)
+
+        workflow_id = "wf-outbox-dead-letter"
+        agent.workflow_store.create_workflow(workflow_id, task_id="task-outbox-dead-letter", initial_state="ReleaseCandidate")
+        agent.workflow_store.enqueue_outbox(
+            workflow_id,
+            "TaskApproved",
+            {"task_id": "task-outbox-dead-letter", "workflow_id": workflow_id},
+            max_attempts=1,
+        )
+        event = agent.workflow_store.read_pending_outbox(limit=10)[0]
+
+        captured: list[tuple[str, dict]] = []
+
+        def _capture(event_type: str, payload: dict, **kwargs) -> None:
+            captured.append((event_type, dict(payload)))
+
+        agent._emit = _capture  # type: ignore[method-assign]
+
+        async def _boom(*args, **kwargs):
+            raise RuntimeError("outbox fatal failure")
+
+        agent._handle_outbox_business_event = _boom  # type: ignore[method-assign]
+        asyncio.run(agent._dispatch_single_outbox_event(event, consumer="release-controller", fencing_epoch=1))
+
+        pending = agent.workflow_store.read_pending_outbox(limit=10)
+        assert pending == []
+
+        with agent.workflow_store._connect() as conn:  # noqa: SLF001
+            row = conn.execute(
+                """
+                SELECT status, dispatch_attempts, max_attempts, last_error, next_retry_at
+                FROM outbox_event
+                WHERE outbox_id = ?
+                """,
+                (event["outbox_id"],),
+            ).fetchone()
+
+        assert row is not None
+        assert row["status"] == "dead_letter"
+        assert int(row["dispatch_attempts"]) == 1
+        assert int(row["max_attempts"]) == 1
+        assert "outbox fatal failure" in str(row["last_error"] or "")
+        assert row["next_retry_at"] is None
+        assert any(event_type == "OutboxDispatchDeadLetter" for event_type, _ in captured)
     finally:
         _cleanup_case_root(case_root)

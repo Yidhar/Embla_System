@@ -76,7 +76,23 @@ class WorkflowStore:
         with self._lock:
             with self._connect() as conn:
                 conn.executescript(schema)
+                self._ensure_outbox_columns(conn)
                 conn.commit()
+
+    @staticmethod
+    def _ensure_outbox_columns(conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(outbox_event)").fetchall()
+        existing = {str(row["name"]) for row in rows}
+        required: Dict[str, str] = {
+            "dispatch_attempts": "INTEGER NOT NULL DEFAULT 0",
+            "max_attempts": "INTEGER NOT NULL DEFAULT 5",
+            "last_error": "TEXT",
+            "next_retry_at": "TEXT",
+        }
+        for column, ddl in required.items():
+            if column in existing:
+                continue
+            conn.execute(f"ALTER TABLE outbox_event ADD COLUMN {column} {ddl}")
 
     def create_workflow(
         self,
@@ -220,7 +236,14 @@ class WorkflowStore:
                 )
                 conn.commit()
 
-    def enqueue_outbox(self, workflow_id: str, event_type: str, payload: Dict[str, Any] | None = None) -> int:
+    def enqueue_outbox(
+        self,
+        workflow_id: str,
+        event_type: str,
+        payload: Dict[str, Any] | None = None,
+        *,
+        max_attempts: int = 5,
+    ) -> int:
         now = _now_iso()
         payload_data = dict(payload or {})
         if is_event_envelope(payload_data):
@@ -241,26 +264,40 @@ class WorkflowStore:
                 cur = conn.execute(
                     """
                     INSERT INTO outbox_event
-                    (workflow_id, event_type, payload_json, status, created_at, updated_at)
-                    VALUES (?, ?, ?, 'pending', ?, ?)
+                    (workflow_id, event_type, payload_json, status, dispatch_attempts, max_attempts, created_at, updated_at)
+                    VALUES (?, ?, ?, 'pending', 0, ?, ?, ?)
                     """,
-                    (workflow_id, event_type, _json(envelope), now, now),
+                    (workflow_id, event_type, _json(envelope), max(1, int(max_attempts)), now, now),
                 )
                 conn.commit()
                 return int(cur.lastrowid)
 
     def read_pending_outbox(self, limit: int = 100) -> List[Dict[str, Any]]:
+        now = _now_iso()
         with self._lock:
             with self._connect() as conn:
                 rows = conn.execute(
                     """
-                    SELECT outbox_id, workflow_id, event_type, payload_json, status, created_at, updated_at
+                    SELECT
+                        outbox_id,
+                        workflow_id,
+                        event_type,
+                        payload_json,
+                        status,
+                        dispatch_attempts,
+                        max_attempts,
+                        last_error,
+                        next_retry_at,
+                        created_at,
+                        updated_at
                     FROM outbox_event
                     WHERE status = 'pending'
+                      AND dispatch_attempts < max_attempts
+                      AND (next_retry_at IS NULL OR next_retry_at <= ?)
                     ORDER BY outbox_id ASC
                     LIMIT ?
                     """,
-                    (limit,),
+                    (now, limit),
                 ).fetchall()
         result: List[Dict[str, Any]] = []
         for row in rows:
@@ -300,6 +337,10 @@ class WorkflowStore:
                     "severity": envelope.get("severity"),
                     "trace_id": envelope.get("trace_id"),
                     "status": row["status"],
+                    "dispatch_attempts": int(row["dispatch_attempts"] or 0),
+                    "max_attempts": int(row["max_attempts"] or 1),
+                    "last_error": row["last_error"] or "",
+                    "next_retry_at": row["next_retry_at"],
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                 }
@@ -313,7 +354,7 @@ class WorkflowStore:
                 conn.execute(
                     """
                     UPDATE outbox_event
-                    SET status = 'dispatched', updated_at = ?
+                    SET status = 'dispatched', last_error = '', next_retry_at = NULL, updated_at = ?
                     WHERE outbox_id = ?
                     """,
                     (now, outbox_id),
@@ -351,12 +392,79 @@ class WorkflowStore:
                 conn.execute(
                     """
                     UPDATE outbox_event
-                    SET status = 'dispatched', updated_at = ?
+                    SET status = 'dispatched', last_error = '', next_retry_at = NULL, updated_at = ?
                     WHERE outbox_id = ?
                     """,
                     (now, outbox_id),
                 )
                 conn.commit()
+
+    def record_outbox_attempt_failure(
+        self,
+        outbox_id: int,
+        error: str,
+        *,
+        base_backoff_seconds: float = 2.0,
+        max_backoff_seconds: float = 120.0,
+    ) -> Dict[str, Any]:
+        now_dt = _now_utc()
+        now = now_dt.isoformat()
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    """
+                    SELECT dispatch_attempts, max_attempts
+                    FROM outbox_event
+                    WHERE outbox_id = ?
+                    """,
+                    (outbox_id,),
+                ).fetchone()
+                if row is None:
+                    conn.commit()
+                    return {
+                        "outbox_id": outbox_id,
+                        "attempts": 0,
+                        "max_attempts": 0,
+                        "status": "missing",
+                        "exhausted": True,
+                        "next_retry_at": None,
+                    }
+
+                attempts = int(row["dispatch_attempts"] or 0) + 1
+                max_attempts = max(1, int(row["max_attempts"] or 1))
+                exhausted = attempts >= max_attempts
+                status = "dead_letter" if exhausted else "pending"
+
+                if exhausted:
+                    next_retry_at: str | None = None
+                else:
+                    base = max(0.0, float(base_backoff_seconds))
+                    max_backoff = max(base, float(max_backoff_seconds))
+                    backoff = min(max_backoff, base * (2 ** max(0, attempts - 1)))
+                    next_retry_at = (now_dt + timedelta(seconds=backoff)).isoformat()
+
+                conn.execute(
+                    """
+                    UPDATE outbox_event
+                    SET dispatch_attempts = ?,
+                        status = ?,
+                        last_error = ?,
+                        next_retry_at = ?,
+                        updated_at = ?
+                    WHERE outbox_id = ?
+                    """,
+                    (attempts, status, str(error or ""), next_retry_at, now, outbox_id),
+                )
+                conn.commit()
+        return {
+            "outbox_id": outbox_id,
+            "attempts": attempts,
+            "max_attempts": max_attempts,
+            "status": status,
+            "exhausted": exhausted,
+            "next_retry_at": next_retry_at,
+        }
 
     def try_acquire_or_renew_lease(self, lease_name: str, owner_id: str, ttl_seconds: int) -> LeaseStatus:
         ttl = max(1, int(ttl_seconds))

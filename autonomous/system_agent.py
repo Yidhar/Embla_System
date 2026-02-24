@@ -549,21 +549,52 @@ class SystemAgent:
 
         if self.workflow_store.is_inbox_processed(consumer, message_id):
             self.workflow_store.mark_outbox_dispatched(outbox_id)
+            self._emit(
+                "OutboxDedupHit",
+                {
+                    "outbox_id": outbox_id,
+                    "consumer": consumer,
+                    "event_type": event.get("event_type"),
+                    "workflow_id": workflow_id,
+                },
+                workflow_id=workflow_id or None,
+                fencing_epoch=fencing_epoch,
+            )
             return
 
-        await self._handle_outbox_business_event(event, fencing_epoch=fencing_epoch)
-        self.workflow_store.complete_outbox_for_consumer(outbox_id, consumer, message_id)
-        self._emit(
-            "OutboxDispatched",
-            {
-                "outbox_id": outbox_id,
-                "consumer": consumer,
-                "event_type": event.get("event_type"),
-                "workflow_id": workflow_id,
-            },
-            workflow_id=workflow_id or None,
-            fencing_epoch=fencing_epoch,
-        )
+        try:
+            await self._handle_outbox_business_event(event, fencing_epoch=fencing_epoch)
+            self.workflow_store.complete_outbox_for_consumer(outbox_id, consumer, message_id)
+            self._emit(
+                "OutboxDispatched",
+                {
+                    "outbox_id": outbox_id,
+                    "consumer": consumer,
+                    "event_type": event.get("event_type"),
+                    "workflow_id": workflow_id,
+                },
+                workflow_id=workflow_id or None,
+                fencing_epoch=fencing_epoch,
+            )
+            return
+        except Exception as exc:
+            retry_state = self.workflow_store.record_outbox_attempt_failure(outbox_id, str(exc))
+            event_name = "OutboxDispatchDeadLetter" if bool(retry_state.get("exhausted")) else "OutboxDispatchRetryScheduled"
+            self._emit(
+                event_name,
+                {
+                    "outbox_id": outbox_id,
+                    "consumer": consumer,
+                    "event_type": event.get("event_type"),
+                    "workflow_id": workflow_id,
+                    "error": str(exc),
+                    "attempts": retry_state.get("attempts"),
+                    "max_attempts": retry_state.get("max_attempts"),
+                    "next_retry_at": retry_state.get("next_retry_at"),
+                },
+                workflow_id=workflow_id or None,
+                fencing_epoch=fencing_epoch,
+            )
 
     async def _handle_outbox_business_event(self, event: Dict[str, Any], *, fencing_epoch: int) -> None:
         event_type = str(event.get("event_type", ""))

@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS outbox_event (
   event_type        TEXT NOT NULL,
   payload_json      TEXT NOT NULL,
   status            TEXT NOT NULL DEFAULT 'pending',
+  dispatch_attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts      INTEGER NOT NULL DEFAULT 5,
+  last_error        TEXT,
+  next_retry_at     TEXT,
   created_at        TEXT NOT NULL,
   updated_at        TEXT NOT NULL
 );

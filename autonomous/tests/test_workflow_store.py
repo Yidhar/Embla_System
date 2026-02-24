@@ -133,6 +133,48 @@ def test_workflow_store_read_pending_outbox_normalizes_legacy_payload():
         _cleanup_case_root(case_root)
 
 
+def test_workflow_store_outbox_retry_and_dead_letter():
+    case_root = _make_case_root("test_workflow_store")
+    try:
+        db_path = case_root / "workflow.db"
+        store = WorkflowStore(db_path=db_path)
+        workflow_id = "wf-outbox-retry"
+        store.create_workflow(workflow_id=workflow_id, task_id="task-retry")
+
+        outbox_id = store.enqueue_outbox(workflow_id, "TaskApproved", {"ok": True}, max_attempts=2)
+
+        first = store.record_outbox_attempt_failure(
+            outbox_id,
+            "transient failure",
+            base_backoff_seconds=0,
+            max_backoff_seconds=0,
+        )
+        assert first["status"] == "pending"
+        assert first["attempts"] == 1
+        assert first["exhausted"] is False
+
+        pending_after_first = store.read_pending_outbox(limit=10)
+        assert len(pending_after_first) == 1
+        assert pending_after_first[0]["outbox_id"] == outbox_id
+        assert pending_after_first[0]["dispatch_attempts"] == 1
+        assert pending_after_first[0]["last_error"] == "transient failure"
+
+        second = store.record_outbox_attempt_failure(
+            outbox_id,
+            "fatal failure",
+            base_backoff_seconds=0,
+            max_backoff_seconds=0,
+        )
+        assert second["status"] == "dead_letter"
+        assert second["attempts"] == 2
+        assert second["exhausted"] is True
+
+        pending_after_second = store.read_pending_outbox(limit=10)
+        assert pending_after_second == []
+    finally:
+        _cleanup_case_root(case_root)
+
+
 def test_workflow_store_lease_fencing():
     case_root = _make_case_root("test_workflow_store")
     try:
