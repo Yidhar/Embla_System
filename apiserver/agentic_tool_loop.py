@@ -16,9 +16,12 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from system.config import get_config, get_server_port
 from system.coding_intent import contains_direct_coding_signal, extract_latest_user_message, requires_codex_for_messages
 from system.episodic_memory import archive_tool_results_for_session, build_reinjection_context
+from system.gc_budget_guard import GCBudgetGuard, GCBudgetGuardConfig
 from system.gc_memory_card import build_gc_memory_index_card
+from system.gc_reader_bridge import build_gc_reader_followup_plan
 from system.global_mutex import LeaseHandle, get_global_mutex_manager
 from system.router_arbiter import MAX_DELEGATE_TURNS, evaluate_workspace_conflict_retry
+from system.semantic_graph import update_semantic_graph_from_records
 from system.tool_contract import ToolCallEnvelope
 from .native_tools import get_native_tool_executor
 
@@ -45,6 +48,9 @@ class AgenticLoopPolicy:
     retry_failed_tool_calls: bool
     max_tool_retries: int
     retry_backoff_seconds: float
+    gc_budget_guard_enabled: bool
+    gc_budget_repeat_threshold: int
+    gc_budget_window_size: int
 
 
 @dataclass
@@ -58,6 +64,10 @@ class AgenticLoopRuntimeState:
     consecutive_tool_failures: int = 0
     consecutive_validation_failures: int = 0
     consecutive_no_tool_rounds: int = 0
+    gc_guard_repeat_count: int = 0
+    gc_guard_error_total: int = 0
+    gc_guard_success_total: int = 0
+    gc_guard_hit_total: int = 0
     stop_reason: str = ""
 
 
@@ -101,6 +111,9 @@ def _resolve_agentic_loop_policy(max_rounds_override: Optional[int]) -> AgenticL
             retry_failed_tool_calls=True,
             max_tool_retries=1,
             retry_backoff_seconds=0.8,
+            gc_budget_guard_enabled=True,
+            gc_budget_repeat_threshold=3,
+            gc_budget_window_size=6,
         )
 
     return AgenticLoopPolicy(
@@ -124,6 +137,9 @@ def _resolve_agentic_loop_policy(max_rounds_override: Optional[int]) -> AgenticL
         retry_failed_tool_calls=bool(getattr(loop_cfg, "retry_failed_tool_calls", True)),
         max_tool_retries=_clamp_int(getattr(loop_cfg, "max_tool_retries", 1), 1, 0, 5),
         retry_backoff_seconds=float(getattr(loop_cfg, "retry_backoff_seconds", 0.8)),
+        gc_budget_guard_enabled=bool(getattr(loop_cfg, "gc_budget_guard_enabled", True)),
+        gc_budget_repeat_threshold=_clamp_int(getattr(loop_cfg, "gc_budget_repeat_threshold", 3), 3, 2, 10),
+        gc_budget_window_size=_clamp_int(getattr(loop_cfg, "gc_budget_window_size", 6), 6, 2, 30),
     )
 
 
@@ -171,6 +187,13 @@ def _summarize_results_for_frontend(results: List[Dict[str, Any]], preview_chars
         router_arbiter = r.get("router_arbiter")
         if isinstance(router_arbiter, dict):
             summaries[-1]["router_arbiter"] = router_arbiter
+        gc_budget_guard = r.get("gc_budget_guard")
+        if isinstance(gc_budget_guard, dict):
+            summaries[-1]["gc_budget_guard"] = gc_budget_guard
+        if "guard_hit" in r:
+            summaries[-1]["guard_hit"] = bool(r.get("guard_hit"))
+        if r.get("guard_stop_reason"):
+            summaries[-1]["guard_stop_reason"] = str(r.get("guard_stop_reason"))
     return summaries
 
 
@@ -917,6 +940,77 @@ async def execute_tool_calls(
     return final
 
 
+def _build_gc_reader_suggestion_result(reason: str, suggestion: str, error_text: str = "") -> Dict[str, Any]:
+    lines = [
+        "[gc_reader_bridge] 自动证据回读已降级为建议。",
+        f"[reason] {reason or 'unknown'}",
+    ]
+    if error_text:
+        lines.append(f"[readback_error] {error_text}")
+    if suggestion:
+        lines.append(f"[suggested_call] {suggestion}")
+    return {
+        "tool_call": {"agentType": "native", "tool_name": "artifact_reader", "_gc_reader_bridge": True},
+        "result": "\n".join(lines),
+        "status": "success",
+        "service_name": "gc_reader_bridge",
+        "tool_name": "artifact_reader_suggestion",
+    }
+
+
+async def _maybe_execute_gc_reader_followup(
+    primary_results: List[Dict[str, Any]],
+    session_id: str,
+    *,
+    round_num: int,
+) -> List[Dict[str, Any]]:
+    """Execute at most one automatic artifact_reader follow-up for current round."""
+    plan = build_gc_reader_followup_plan(primary_results, round_num=round_num, max_calls_per_round=1)
+    if not plan.call:
+        return []
+
+    logger.info(
+        "[AgenticLoop] gc_reader_bridge trigger round=%s source_index=%s reason=%s",
+        round_num,
+        plan.source_index,
+        plan.reason,
+    )
+    try:
+        followup_results = await execute_tool_calls(
+            [plan.call],
+            session_id,
+            max_parallel_calls=1,
+            retry_failed=False,
+            max_retries=0,
+            retry_backoff_seconds=0.0,
+        )
+    except Exception as exc:
+        logger.warning("[AgenticLoop] gc_reader_bridge execution failed round=%s error=%s", round_num, exc)
+        return [
+            _build_gc_reader_suggestion_result(
+                reason=plan.reason,
+                suggestion=plan.suggestion,
+                error_text=str(exc),
+            )
+        ]
+
+    if followup_results and followup_results[0].get("status") == "error":
+        err_preview = str(followup_results[0].get("result", ""))
+        logger.warning(
+            "[AgenticLoop] gc_reader_bridge follow-up failed round=%s detail=%s",
+            round_num,
+            _shorten_for_log(err_preview),
+        )
+        followup_results.append(
+            _build_gc_reader_suggestion_result(
+                reason=plan.reason,
+                suggestion=plan.suggestion,
+                error_text=err_preview,
+            )
+        )
+    return followup_results
+
+
 # ---------------------------------------------------------------------------
 # 格式化
 # ---------------------------------------------------------------------------
@@ -1275,6 +1369,8 @@ def _build_summary_instruction(runtime: AgenticLoopRuntimeState, max_rounds: int
         f"- 已执行轮次: {runtime.round_num}/{max_rounds}\n"
         f"- 工具调用总数: {runtime.total_tool_calls}\n"
         f"- 工具成功/失败: {runtime.total_tool_success}/{runtime.total_tool_errors}\n"
+        f"- GC防抖计数(命中/错误/成功): "
+        f"{runtime.gc_guard_hit_total}/{runtime.gc_guard_error_total}/{runtime.gc_guard_success_total}\n"
         "若关键工具全部失败，请诚实告知当前限制并给出下一步可执行方案。\n"
         "不要再发起任何工具调用。"
     )
@@ -1299,6 +1395,14 @@ async def run_agentic_loop(
     policy = _resolve_agentic_loop_policy(max_rounds)
     runtime = AgenticLoopRuntimeState()
     needs_summary = False
+    gc_budget_guard: Optional[GCBudgetGuard] = None
+    if policy.gc_budget_guard_enabled:
+        gc_budget_guard = GCBudgetGuard(
+            GCBudgetGuardConfig(
+                repeat_threshold=policy.gc_budget_repeat_threshold,
+                window_size=policy.gc_budget_window_size,
+            )
+        )
     latest_user_request = _extract_latest_user_message(messages)
     requires_codex = _looks_like_coding_request(latest_user_request) or requires_codex_for_messages(messages)
     codex_engaged = False
@@ -1929,7 +2033,7 @@ async def run_agentic_loop(
             call_descriptions.append(desc)
         yield _format_sse_event("tool_calls", {"calls": call_descriptions})
 
-        executed_results = await execute_tool_calls(
+        primary_results = await execute_tool_calls(
             actionable_calls,
             session_id,
             max_parallel_calls=policy.max_parallel_tool_calls,
@@ -1937,6 +2041,8 @@ async def run_agentic_loop(
             max_retries=policy.max_tool_retries,
             retry_backoff_seconds=policy.retry_backoff_seconds,
         )
+        followup_results = await _maybe_execute_gc_reader_followup(primary_results, session_id, round_num=round_num)
+        executed_results = primary_results + followup_results
 
         try:
             archived_records = archive_tool_results_for_session(session_id, executed_results)
@@ -1946,18 +2052,33 @@ async def run_agentic_loop(
                     len(archived_records),
                     round_num,
                 )
+                try:
+                    updated_edges = update_semantic_graph_from_records(session_id, archived_records)
+                    logger.debug(
+                        "[AgenticLoop] semantic graph updated with %s edge mutation(s) in round %s",
+                        updated_edges,
+                        round_num,
+                    )
+                except Exception as exc:
+                    logger.warning("[AgenticLoop] semantic graph update skipped in round %s: %s", round_num, exc)
         except Exception as exc:
             logger.warning("[AgenticLoop] episodic archive skipped in round %s: %s", round_num, exc)
 
         results = validation_results + executed_results
+        gc_guard_signal = gc_budget_guard.observe_round(executed_results) if gc_budget_guard is not None else None
+        gc_guard_snapshot = gc_budget_guard.snapshot() if gc_budget_guard is not None else {}
+        runtime.gc_guard_repeat_count = _clamp_int(gc_guard_snapshot.get("repeat_count", 0), 0, 0, 9999)
+        runtime.gc_guard_error_total = _clamp_int(gc_guard_snapshot.get("gc_error_total", 0), 0, 0, 999999)
+        runtime.gc_guard_success_total = _clamp_int(gc_guard_snapshot.get("gc_success_total", 0), 0, 0, 999999)
+        runtime.gc_guard_hit_total = _clamp_int(gc_guard_snapshot.get("gc_guard_hits", 0), 0, 0, 999999)
 
         runtime.total_tool_calls += len(actionable_calls)
-        success_count = sum(1 for r in executed_results if r.get("status") == "success")
-        error_count = sum(1 for r in executed_results if r.get("status") == "error")
+        success_count = sum(1 for r in primary_results if r.get("status") == "success")
+        error_count = sum(1 for r in primary_results if r.get("status") == "error")
         runtime.total_tool_success += success_count
         runtime.total_tool_errors += error_count
 
-        all_failed = bool(executed_results) and success_count == 0
+        all_failed = bool(primary_results) and success_count == 0
         if all_failed:
             runtime.consecutive_tool_failures += 1
             logger.warning(
@@ -1974,12 +2095,26 @@ async def run_agentic_loop(
             policy=policy,
             details={
                 "actionable_calls": len(actionable_calls),
+                "auto_followup_calls": len(followup_results),
                 "success_count": success_count,
                 "error_count": error_count,
+                "gc_guard_repeat_count": runtime.gc_guard_repeat_count,
+                "gc_guard_error_total": runtime.gc_guard_error_total,
+                "gc_guard_success_total": runtime.gc_guard_success_total,
+                "gc_guard_hit_total": runtime.gc_guard_hit_total,
             },
         )
         if execute_finish_event:
             yield execute_finish_event
+        if gc_guard_signal and gc_guard_signal.guard_hit:
+            yield _format_sse_event(
+                "guardrail",
+                {
+                    "guard_type": "gc_budget_guard",
+                    "round": round_num,
+                    **gc_guard_signal.to_payload(),
+                },
+            )
 
         result_summaries = _summarize_results_for_frontend(results, policy.tool_result_preview_chars)
         yield _format_sse_event("tool_results", {"results": result_summaries})
@@ -1993,7 +2128,11 @@ async def run_agentic_loop(
             "start",
             policy=policy,
             reason="post_execute",
-            details={"consecutive_tool_failures": runtime.consecutive_tool_failures},
+            details={
+                "consecutive_tool_failures": runtime.consecutive_tool_failures,
+                "gc_guard_repeat_count": runtime.gc_guard_repeat_count,
+                "gc_guard_hit_total": runtime.gc_guard_hit_total,
+            },
         )
         if verify_start_event:
             yield verify_start_event
@@ -2022,6 +2161,34 @@ async def run_agentic_loop(
                 reason="router_arbiter_escalation",
                 decision="summary" if policy.enable_summary_round else "stop",
                 details=arbiter_escalation,
+            )
+            if verify_error_event:
+                yield verify_error_event
+            if policy.enable_summary_round:
+                needs_summary = True
+                yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
+            else:
+                yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+            break
+
+        if gc_guard_signal and gc_guard_signal.guard_hit:
+            runtime.stop_reason = gc_guard_signal.stop_reason or "gc_budget_guard_hit"
+            logger.warning(
+                "[AgenticLoop] GC budget guard hit in round %s: fingerprint=%s repeat=%s threshold=%s artifact_ref=%s",
+                round_num,
+                gc_guard_signal.fingerprint,
+                gc_guard_signal.repeat_count,
+                gc_guard_signal.threshold,
+                gc_guard_signal.artifact_ref or "<none>",
+            )
+            verify_error_event = _format_workflow_stage_event(
+                round_num,
+                "verify",
+                "error",
+                policy=policy,
+                reason=runtime.stop_reason,
+                decision="summary" if policy.enable_summary_round else "stop",
+                details=gc_guard_signal.to_payload(),
             )
             if verify_error_event:
                 yield verify_error_event
