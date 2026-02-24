@@ -29,8 +29,34 @@ def _sha256(text: str) -> str:
 
 def _replace_line(content: str, line_index: int, new_line: str) -> str:
     lines = content.splitlines(keepends=True)
+    if line_index < 0 or line_index >= len(lines):
+        raise ValueError(
+            f"line index out of range: index={line_index}, total_lines={len(lines)}"
+        )
     lines[line_index] = f"{new_line}\n"
     return "".join(lines)
+
+
+def _read_stable_file_content(path: Path, *, min_lines: int, attempts: int = 80, sleep_seconds: float = 0.01) -> str:
+    """
+    Read a stable snapshot during concurrent writes.
+    We only accept snapshots that have the expected line topology to avoid partial reads.
+    """
+    fallback = ""
+    expected_min = max(1, int(min_lines))
+    for _ in range(max(1, int(attempts))):
+        text = path.read_text(encoding="utf-8")
+        line_count = len(text.splitlines())
+        if line_count >= expected_min:
+            return text
+        if text:
+            fallback = text
+        time.sleep(max(0.0, float(sleep_seconds)))
+
+    line_count = len(fallback.splitlines())
+    if line_count >= expected_min:
+        return fallback
+    raise RuntimeError(f"unable to read stable file content: min_lines={expected_min}, got={line_count}")
 
 
 def _extract_error_int(text: str, key: str) -> int:
@@ -124,7 +150,7 @@ def _run_worker(
             )
         else:
             with retry_lock:
-                base_content = target.read_text(encoding="utf-8")
+                base_content = _read_stable_file_content(target, min_lines=TOTAL_LINES)
                 base_hash = _sha256(base_content)
                 desired_content = _replace_line(base_content, TARGET_LINE_INDEX, worker_marker)
                 result = _run_workspace_apply(

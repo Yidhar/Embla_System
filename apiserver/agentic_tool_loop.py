@@ -15,6 +15,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from system.config import get_config, get_server_port
 from system.coding_intent import contains_direct_coding_signal, extract_latest_user_message, requires_codex_for_messages
+from system.episodic_memory import archive_tool_results_for_session, build_reinjection_context
+from system.gc_memory_card import build_gc_memory_index_card
 from system.global_mutex import LeaseHandle, get_global_mutex_manager
 from system.router_arbiter import MAX_DELEGATE_TURNS, evaluate_workspace_conflict_retry
 from system.tool_contract import ToolCallEnvelope
@@ -284,6 +286,23 @@ def _looks_like_coding_request(text: str) -> bool:
         return True
     lowered = (text or "").lower()
     return any(keyword in lowered for keyword in _CODING_KEYWORDS)
+
+
+def _inject_ephemeral_system_context(messages: List[Dict[str, Any]], content: str) -> bool:
+    text = str(content or "").strip()
+    if not text:
+        return False
+
+    marker = "[Episodic Memory Reinjection]"
+    for msg in messages:
+        if str(msg.get("role", "")).strip() == "system" and marker in str(msg.get("content", "")):
+            return False
+
+    insert_at = 0
+    while insert_at < len(messages) and str(messages[insert_at].get("role", "")).strip() == "system":
+        insert_at += 1
+    messages.insert(insert_at, {"role": "system", "content": text})
+    return True
 
 
 def _is_codex_mcp_call(call: Dict[str, Any]) -> bool:
@@ -908,6 +927,11 @@ def format_tool_results_for_llm(results: List[Dict[str, Any]]) -> str:
     parts = []
     total = len(results)
     for idx, r in enumerate(results, 1):
+        memory_card = build_gc_memory_index_card(r, index=idx, total=total)
+        if memory_card:
+            parts.append(memory_card)
+            continue
+
         svc = r.get("service_name", "unknown")
         tool = r.get("tool_name", "")
         status = r.get("status", "unknown")
@@ -1281,6 +1305,18 @@ async def run_agentic_loop(
 
     if requires_codex:
         logger.info("[AgenticLoop] coding request detected, enabling codex-first guard")
+
+    if latest_user_request:
+        try:
+            episodic_context = build_reinjection_context(
+                session_id=session_id,
+                query=latest_user_request,
+                top_k=3,
+            )
+            if episodic_context and _inject_ephemeral_system_context(messages, episodic_context):
+                logger.info("[AgenticLoop] injected episodic context for session=%s", session_id)
+        except Exception as exc:
+            logger.warning("[AgenticLoop] episodic reinjection skipped: %s", exc)
 
     for round_num in range(1, policy.max_rounds + 1):
         runtime.round_num = round_num
@@ -1901,6 +1937,18 @@ async def run_agentic_loop(
             max_retries=policy.max_tool_retries,
             retry_backoff_seconds=policy.retry_backoff_seconds,
         )
+
+        try:
+            archived_records = archive_tool_results_for_session(session_id, executed_results)
+            if archived_records:
+                logger.debug(
+                    "[AgenticLoop] archived %s episodic record(s) in round %s",
+                    len(archived_records),
+                    round_num,
+                )
+        except Exception as exc:
+            logger.warning("[AgenticLoop] episodic archive skipped in round %s: %s", round_num, exc)
+
         results = validation_results + executed_results
 
         runtime.total_tool_calls += len(actionable_calls)
