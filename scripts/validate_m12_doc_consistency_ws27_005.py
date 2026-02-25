@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""Validate WS27-005 M12 doc consistency closure."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Sequence
+
+from system.doc_consistency import validate_execution_board_consistency
+
+
+DEFAULT_OUTPUT = Path("scratch/reports/ws27_m12_doc_consistency_ws27_005.json")
+DEFAULT_BOARD = Path("doc/task/09-execution-board.csv")
+DEFAULT_RISK_LEDGER = Path("doc/task/08-risk-closure-ledger.md")
+DEFAULT_PHASE3_TASK_LIST = Path("doc/task/23-phase3-full-target-task-list.md")
+
+CORE_DOC_PATHS: Sequence[Path] = (
+    Path("doc/00-omni-operator-architecture.md"),
+    Path("doc/10-brainstem-layer-modules.md"),
+    Path("doc/11-brain-layer-modules.md"),
+    Path("doc/12-limbs-layer-modules.md"),
+    Path("doc/13-security-blindspots-and-hardening.md"),
+    DEFAULT_PHASE3_TASK_LIST,
+)
+
+WS27_IMPLEMENTATION_DOC_PATHS: Sequence[Path] = (
+    Path("doc/task/implementation/NGA-WS27-001-implementation.md"),
+    Path("doc/task/implementation/NGA-WS27-002-implementation.md"),
+    Path("doc/task/implementation/NGA-WS27-003-implementation.md"),
+    Path("doc/task/implementation/NGA-WS27-004-implementation.md"),
+)
+
+WS27_RUNBOOK_PATHS: Sequence[Path] = (
+    Path("doc/task/runbooks/release_m12_cutover_rollback_onepager_ws27_002.md"),
+    Path("doc/task/runbooks/release_m12_oob_repair_drill_onepager_ws27_003.md"),
+    Path("doc/task/runbooks/release_m12_full_chain_m0_m12_onepager_ws27_004.md"),
+)
+
+PHASE3_REQUIRED_MARKERS: Sequence[str] = (
+    "NGA-WS27-001` 已落地",
+    "NGA-WS27-002` 已落地",
+    "NGA-WS27-003` 已落地",
+    "NGA-WS27-004` 已落地",
+)
+
+
+def _utc_iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _to_unix_path(path: Path) -> str:
+    return str(path).replace("\\", "/")
+
+
+def _resolve_path(repo_root: Path, candidate: Path) -> Path:
+    return candidate if candidate.is_absolute() else repo_root / candidate
+
+
+def _missing_paths(*, repo_root: Path, candidates: Sequence[Path]) -> list[str]:
+    missing = []
+    for path in candidates:
+        resolved = _resolve_path(repo_root, path)
+        if not resolved.exists():
+            missing.append(_to_unix_path(path))
+    return missing
+
+
+def _missing_markers(*, repo_root: Path, phase3_task_list: Path, markers: Sequence[str]) -> list[str]:
+    target = _resolve_path(repo_root, phase3_task_list)
+    if not target.exists():
+        return list(markers)
+    content = target.read_text(encoding="utf-8")
+    return [marker for marker in markers if marker not in content]
+
+
+def run_validate_m12_doc_consistency_ws27_005(
+    *,
+    repo_root: Path,
+    board_file: Path = DEFAULT_BOARD,
+    risk_ledger_file: Path = DEFAULT_RISK_LEDGER,
+    phase3_task_list: Path = DEFAULT_PHASE3_TASK_LIST,
+    output_file: Path = DEFAULT_OUTPUT,
+) -> Dict[str, Any]:
+    root = repo_root.resolve()
+
+    board_report = validate_execution_board_consistency(
+        board_file=_resolve_path(root, board_file),
+        repo_root=root,
+        risk_ledger_file=_resolve_path(root, risk_ledger_file),
+    )
+
+    missing_core_docs = _missing_paths(repo_root=root, candidates=CORE_DOC_PATHS)
+    missing_impl_docs = _missing_paths(repo_root=root, candidates=WS27_IMPLEMENTATION_DOC_PATHS)
+    missing_runbooks = _missing_paths(repo_root=root, candidates=WS27_RUNBOOK_PATHS)
+    missing_phase3_markers = _missing_markers(
+        repo_root=root,
+        phase3_task_list=phase3_task_list,
+        markers=PHASE3_REQUIRED_MARKERS,
+    )
+
+    checks = {
+        "execution_board_has_no_errors": int(board_report.error_count) == 0,
+        "core_docs_present": len(missing_core_docs) == 0,
+        "ws27_implementation_docs_present": len(missing_impl_docs) == 0,
+        "ws27_runbooks_present": len(missing_runbooks) == 0,
+        "phase3_snapshot_markers_present": len(missing_phase3_markers) == 0,
+    }
+    passed = all(checks.values())
+
+    report: Dict[str, Any] = {
+        "task_id": "NGA-WS27-005",
+        "scenario": "m12_doc_consistency_closure_ws27_005",
+        "generated_at": _utc_iso_now(),
+        "repo_root": _to_unix_path(root),
+        "passed": passed,
+        "checks": checks,
+        "missing_items": {
+            "core_docs": missing_core_docs,
+            "ws27_implementation_docs": missing_impl_docs,
+            "ws27_runbooks": missing_runbooks,
+            "phase3_snapshot_markers": missing_phase3_markers,
+        },
+        "board_consistency_summary": {
+            "board_file": _to_unix_path(_resolve_path(root, board_file)),
+            "checked_rows": int(board_report.checked_rows),
+            "issue_count": int(board_report.issue_count),
+            "error_count": int(board_report.error_count),
+            "warn_count": int(board_report.warn_count),
+            "issues_sample": list(board_report.issues[:20]),
+        },
+    }
+
+    output = _resolve_path(root, output_file)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    report["output_file"] = _to_unix_path(output)
+    return report
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Validate WS27-005 M12 doc consistency closure")
+    parser.add_argument("--repo-root", type=Path, default=Path("."), help="Repository root")
+    parser.add_argument("--board", type=Path, default=DEFAULT_BOARD, help="Execution board CSV path")
+    parser.add_argument("--risk-ledger", type=Path, default=DEFAULT_RISK_LEDGER, help="Risk closure ledger path")
+    parser.add_argument(
+        "--phase3-task-list",
+        type=Path,
+        default=DEFAULT_PHASE3_TASK_LIST,
+        help="Phase3 task list markdown path",
+    )
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output JSON report path")
+    parser.add_argument("--strict", action="store_true", help="Return non-zero when checks fail")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    report = run_validate_m12_doc_consistency_ws27_005(
+        repo_root=args.repo_root,
+        board_file=args.board,
+        risk_ledger_file=args.risk_ledger,
+        phase3_task_list=args.phase3_task_list,
+        output_file=args.output,
+    )
+    print(
+        json.dumps(
+            {
+                "passed": bool(report.get("passed")),
+                "checks": report.get("checks", {}),
+                "output": report.get("output_file"),
+            },
+            ensure_ascii=False,
+        )
+    )
+    if args.strict and not bool(report.get("passed")):
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
