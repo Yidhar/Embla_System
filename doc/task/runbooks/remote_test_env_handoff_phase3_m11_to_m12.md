@@ -47,13 +47,22 @@
 - runbook：`doc/task/runbooks/release_m12_cutover_rollback_onepager_ws27_002.md`
 - 特性：支持 `plan/apply/rollback/status`，且 `rollback` 在快照缺失时可强制安全回退到 legacy
 
+9. `NGA-WS27-003` OOB 抢修 runbook 演练（首版已落地）
+- OOB 演练脚本：`scripts/run_ws27_oob_repair_drill_ws27_003.py`
+- runbook：`doc/task/runbooks/release_m12_oob_repair_drill_onepager_ws27_003.md`
+- 特性：覆盖快照恢复回滚、快照缺失强制 legacy 降级、OOB bundle 导出校验三条路径
+
 ## 3. 关键提交（用于远程环境核对）
 
-1. `229b638` `feat: add ws26 m11 closure gate and release chain`
-2. `6170cc6` `docs: record ws26-006 m11 closure gate rollout`
-3. `978757b` `feat: strengthen detached process cleanup for double-fork scenarios`
-4. `4389b7f` `feat: wire lock scavenger scan into global mutex execution path`
-5. `784a60a` `feat: enforce scaffold txn write path and fail-open guardrails`
+1. `a117d0c` `feat: add ws27-003 oob repair drill harness`
+2. `c2e837e` `docs: record ws27-001 and ws27-002 m12 rollout progress`
+3. `bd8cd65` `feat: add ws27-002 cutover and rollback manager`
+4. `e2e53c4` `feat: add ws27-001 endurance baseline harness and cli`
+5. `229b638` `feat: add ws26 m11 closure gate and release chain`
+6. `6170cc6` `docs: record ws26-006 m11 closure gate rollout`
+7. `978757b` `feat: strengthen detached process cleanup for double-fork scenarios`
+8. `4389b7f` `feat: wire lock scavenger scan into global mutex execution path`
+9. `784a60a` `feat: enforce scaffold txn write path and fail-open guardrails`
 
 ## 4. 远程环境启动与验证顺序
 
@@ -116,6 +125,18 @@ uv sync
   --output scratch/reports/ws27_subagent_cutover_status_ws27_002.json
 ```
 
+7. 执行 WS27-003 OOB 抢修演练
+
+```powershell
+.\.venv\Scripts\python.exe scripts/run_ws27_oob_repair_drill_ws27_003.py `
+  --repo-root . `
+  --output scratch/reports/ws27_oob_repair_drill_ws27_003.json `
+  --scratch-root scratch/ws27_oob_repair_drill `
+  --rollback-window-minutes 180 `
+  --oob-allowlist 10.0.0.0/24 bastion.example.com `
+  --probe-targets 10.0.0.10 bastion.example.com
+```
+
 ## 5. 预期产物路径
 
 1. `scratch/reports/ws26_runtime_snapshot_ws26_002.json`
@@ -128,12 +149,18 @@ uv sync
 8. `scratch/reports/ws27_subagent_cutover_apply_ws27_002.json`
 9. `scratch/reports/ws27_subagent_cutover_status_ws27_002.json`
 10. `scratch/reports/ws27_subagent_cutover_rollback_snapshot_ws27_002.json`
+11. `scratch/reports/ws27_oob_repair_drill_ws27_003.json`
+12. `scratch/ws27_oob_repair_drill/*/case_snapshot_recovery/repo/scratch/reports/ws27_drill_case1_plan.json`
+13. `scratch/ws27_oob_repair_drill/*/case_snapshot_recovery/repo/scratch/reports/ws27_drill_case1_apply.json`
+14. `scratch/ws27_oob_repair_drill/*/case_snapshot_recovery/repo/scratch/reports/ws27_drill_case1_rollback.json`
+15. `scratch/ws27_oob_repair_drill/*/case_force_legacy_fallback/repo/scratch/reports/ws27_drill_case2_rollback.json`
+16. `scratch/ws27_oob_repair_drill/*/case_oob_bundle_export/ws27_drill_oob_bundle.json`
 
 ## 6. 当前缺口与下一阶段任务（M12）
 
 1. `NGA-WS27-001` 72h 长稳耐久脚本与磁盘配额压测（首版已落地；待远程真实 72h 墙钟验收）
 2. `NGA-WS27-002` Legacy -> SubAgent Full cutover + 回滚窗（首版已落地；待远程灰度放量演练记录）
-3. `NGA-WS27-003` OOB 抢修 runbook 演练（未落地）
+3. `NGA-WS27-003` OOB 抢修 runbook 演练（首版已落地；待远程环境演练留痕与操作录像）
 4. `NGA-WS27-004` `release_closure_chain_full_m0_m12.py`（未落地）
 5. `NGA-WS27-005` 文档一致性收口（M12）（未落地）
 6. `NGA-WS27-006` Phase3 Full 放行报告与签署模板（未落地）

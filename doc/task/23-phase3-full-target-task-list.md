@@ -228,3 +228,9 @@
   - 新增 runbook：`doc/task/runbooks/release_m12_cutover_rollback_onepager_ws27_002.md`
   - 默认回滚快照：`scratch/reports/ws27_subagent_cutover_rollback_snapshot_ws27_002.json`
   - 新增回归：`tests/test_manage_ws27_subagent_cutover_ws27_002.py`
+- `NGA-WS27-003` 已落地 OOB 抢修演练首版：
+  - 新增 OOB 演练脚本：`scripts/run_ws27_oob_repair_drill_ws27_003.py`
+  - 演练覆盖：快照恢复回滚、无快照强制 legacy 降级、OOB bundle 导出校验
+  - 新增 runbook：`doc/task/runbooks/release_m12_oob_repair_drill_onepager_ws27_003.md`
+  - 默认报告：`scratch/reports/ws27_oob_repair_drill_ws27_003.json`
+  - 新增回归：`tests/test_run_ws27_oob_repair_drill_ws27_003.py`
