@@ -210,3 +210,10 @@
   - detached marker 扩展：`docker run --detach`、`disown`、`daemonize`
   - 新增回归：`tests/test_process_lineage.py`（root kill 成功仍触发签名回收、docker detach 识别）
   - 关联验证：`tests/test_chaos_runtime_storage.py`、`tests/test_global_mutex.py`、`tests/test_chaos_lock_failover.py`
+- `NGA-WS26-006` 已落地 M11 混沌门禁：
+  - 新增 M11 门禁评估器与入口：`autonomous/ws26_release_gate.py`、`scripts/validate_m11_closure_gate_ws26_006.py`
+  - 新增 M11 混沌回归报告脚本：`scripts/run_ws26_m11_runtime_chaos_suite_ws26_006.py`
+  - 新增 M11 收口链：`scripts/release_closure_chain_m11_ws26_006.py`
+  - 全量收口链扩展接入 M11 组：`scripts/release_closure_chain_full_m0_m7.py`（兼容命名，目标域已到 M0-M11）
+  - 新增 runbook：`doc/task/runbooks/release_m11_lock_fencing_closure_onepager_ws26_006.md`
+  - 新增回归：`autonomous/tests/test_ws26_release_gate.py`、`tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py`、`tests/test_release_closure_chain_m11_ws26_006.py`、`tests/test_release_closure_chain_full_m0_m7.py`
