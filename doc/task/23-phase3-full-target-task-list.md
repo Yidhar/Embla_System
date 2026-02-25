@@ -217,3 +217,14 @@
   - 全量收口链扩展接入 M11 组：`scripts/release_closure_chain_full_m0_m7.py`（兼容命名，目标域已到 M0-M11）
   - 新增 runbook：`doc/task/runbooks/release_m11_lock_fencing_closure_onepager_ws26_006.md`
   - 新增回归：`autonomous/tests/test_ws26_release_gate.py`、`tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py`、`tests/test_release_closure_chain_m11_ws26_006.py`、`tests/test_release_closure_chain_full_m0_m7.py`
+- `NGA-WS27-001` 已落地 72h 长稳 + 磁盘配额压测首版：
+  - 新增 endurance harness：`autonomous/ws27_longrun_endurance.py`
+  - 新增执行入口：`scripts/run_ws27_longrun_endurance_ws27_001.py`
+  - 默认报告：`scratch/reports/ws27_72h_endurance_ws27_001.json`
+  - 检查项覆盖：`no_enospc`、`no_unhandled_exceptions`、`no_event_loss`、`disk_quota_pressure_exercised`
+  - 新增回归：`autonomous/tests/test_ws27_longrun_endurance_ws27_001.py`、`tests/test_run_ws27_longrun_endurance_ws27_001.py`
+- `NGA-WS27-002` 已落地 cutover + 回滚窗首版：
+  - 新增 cutover 管理脚本：`scripts/manage_ws27_subagent_cutover_ws27_002.py`（`plan/apply/rollback/status`）
+  - 新增 runbook：`doc/task/runbooks/release_m12_cutover_rollback_onepager_ws27_002.md`
+  - 默认回滚快照：`scratch/reports/ws27_subagent_cutover_rollback_snapshot_ws27_002.json`
+  - 新增回归：`tests/test_manage_ws27_subagent_cutover_ws27_002.py`

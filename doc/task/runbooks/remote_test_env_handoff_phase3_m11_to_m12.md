@@ -1,4 +1,4 @@
-# 远程测试环境交接清单（Phase3：M11 已完成，M12 待启动）
+# 远程测试环境交接清单（Phase3：M11 已完成，M12 推进中）
 
 最后更新：2026-02-25  
 适用分支：`modifier/naga`
@@ -7,7 +7,7 @@
 
 - 在远程测试环境继续推进 `Phase3 Full`。
 - 当前基线已到 `M11`（`NGA-WS26-006` 已完成）。
-- 下一阶段从 `M12`（`NGA-WS27-001~006`）启动。
+- 当前进入 `M12`（`NGA-WS27-001~006`）推进期。
 
 ## 2. 当前已完成范围（落地状态）
 
@@ -36,6 +36,16 @@
 - 门禁校验入口：`scripts/validate_m11_closure_gate_ws26_006.py`
 - M11 收口链：`scripts/release_closure_chain_m11_ws26_006.py`
 - 全量链扩展：`scripts/release_closure_chain_full_m0_m7.py`（目标域已到 `M0-M11`）
+
+7. `NGA-WS27-001` 72h 长稳 + 磁盘配额压测（首版已落地）
+- baseline harness：`autonomous/ws27_longrun_endurance.py`
+- 执行入口：`scripts/run_ws27_longrun_endurance_ws27_001.py`
+- 说明：当前为“虚拟 72h 等效执行”基线，远程环境仍需补真实墙钟验收记录
+
+8. `NGA-WS27-002` Legacy -> SubAgent Full cutover + 回滚窗（首版已落地）
+- cutover 管理脚本：`scripts/manage_ws27_subagent_cutover_ws27_002.py`
+- runbook：`doc/task/runbooks/release_m12_cutover_rollback_onepager_ws27_002.md`
+- 特性：支持 `plan/apply/rollback/status`，且 `rollback` 在快照缺失时可强制安全回退到 legacy
 
 ## 3. 关键提交（用于远程环境核对）
 
@@ -76,6 +86,36 @@ uv sync
   --skip-m0-m5 --skip-m6-m7 --skip-m8 --skip-m9 --skip-m10
 ```
 
+5. 执行 WS27-001（快速演练参数）
+
+```powershell
+.\.venv\Scripts\python.exe scripts/run_ws27_longrun_endurance_ws27_001.py `
+  --target-hours 0.02 --virtual-round-seconds 6 --artifact-payload-kb 256 `
+  --max-total-size-mb 1 --max-single-artifact-mb 1 --max-artifact-count 256 `
+  --high-watermark-ratio 0.8 --low-watermark-ratio 0.5 --critical-reserve-ratio 0.1 `
+  --normal-priority-every 3 --high-priority-every 8
+```
+
+6. 执行 WS27-002 cutover 计划 + 应用 + 状态检查
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.manage_ws27_subagent_cutover_ws27_002 `
+  --action plan `
+  --runtime-snapshot-report scratch/reports/ws26_runtime_snapshot_ws26_002.json `
+  --output scratch/reports/ws27_subagent_cutover_plan_ws27_002.json
+
+.\.venv\Scripts\python.exe -m scripts.manage_ws27_subagent_cutover_ws27_002 `
+  --action apply `
+  --rollout-percent 100 `
+  --disable-fail-open `
+  --output scratch/reports/ws27_subagent_cutover_apply_ws27_002.json
+
+.\.venv\Scripts\python.exe -m scripts.manage_ws27_subagent_cutover_ws27_002 `
+  --action status `
+  --runtime-snapshot-report scratch/reports/ws26_runtime_snapshot_ws26_002.json `
+  --output scratch/reports/ws27_subagent_cutover_status_ws27_002.json
+```
+
 ## 5. 预期产物路径
 
 1. `scratch/reports/ws26_runtime_snapshot_ws26_002.json`
@@ -83,11 +123,16 @@ uv sync
 3. `scratch/reports/ws26_m11_closure_gate_result.json`
 4. `scratch/reports/release_closure_chain_m11_ws26_006_result.json`
 5. `scratch/reports/release_closure_chain_full_m0_m7_result.json`
+6. `scratch/reports/ws27_72h_endurance_ws27_001.json`
+7. `scratch/reports/ws27_subagent_cutover_plan_ws27_002.json`
+8. `scratch/reports/ws27_subagent_cutover_apply_ws27_002.json`
+9. `scratch/reports/ws27_subagent_cutover_status_ws27_002.json`
+10. `scratch/reports/ws27_subagent_cutover_rollback_snapshot_ws27_002.json`
 
 ## 6. 当前缺口与下一阶段任务（M12）
 
-1. `NGA-WS27-001` 72h 长稳耐久脚本与磁盘配额压测（未落地）
-2. `NGA-WS27-002` Legacy -> SubAgent Full cutover + 回滚窗（未落地）
+1. `NGA-WS27-001` 72h 长稳耐久脚本与磁盘配额压测（首版已落地；待远程真实 72h 墙钟验收）
+2. `NGA-WS27-002` Legacy -> SubAgent Full cutover + 回滚窗（首版已落地；待远程灰度放量演练记录）
 3. `NGA-WS27-003` OOB 抢修 runbook 演练（未落地）
 4. `NGA-WS27-004` `release_closure_chain_full_m0_m12.py`（未落地）
 5. `NGA-WS27-005` 文档一致性收口（M12）（未落地）
@@ -95,6 +140,6 @@ uv sync
 
 ## 7. 重要说明（避免误判）
 
-1. 当前仓库不存在“真实 72h 墙钟执行”的验收脚本；现有 long-run 基线主要是 `WS22` 的等效演练，不可替代 `WS27-001`。
+1. 当前仓库已新增 `WS27-001` 虚拟 72h 等效脚本，但尚无“连续 72h 墙钟执行完成”的远程验收记录；放行前需补齐真实墙钟报告。
 2. 如远程环境出现 `scratch` 膨胀、锁文件或权限清理问题，按人工清理流程处理后继续，不在自动脚本中执行破坏性清理。
 3. 继续开发时，优先保持“分片提交”节奏（功能提交与文档提交分离）。
