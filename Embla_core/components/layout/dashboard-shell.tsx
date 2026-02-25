@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { Activity, Blocks, Brain, Workflow } from "lucide-react";
+import { Activity, Blocks, Brain, Workflow, SlidersHorizontal } from "lucide-react";
 import type { ReactNode } from "react";
 import { normalizeLang, type AppLang } from "@/lib/i18n";
 
@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { href: "/mcp-fabric", key: "mcpFabric", icon: Blocks },
   { href: "/memory-graph", key: "memoryGraph", icon: Brain },
   { href: "/workflow-events", key: "workflowEvents", icon: Workflow },
+  { href: "/settings", key: "settings", icon: SlidersHorizontal },
 ];
 
 const LAYOUT_COPY: Record<
@@ -31,6 +32,7 @@ const LAYOUT_COPY: Record<
       mcpFabric: "MCP Fabric",
       memoryGraph: "Memory Graph",
       workflowEvents: "Workflow & Events",
+      settings: "Settings",
     },
   },
   "zh-CN": {
@@ -42,6 +44,7 @@ const LAYOUT_COPY: Record<
       mcpFabric: "MCP 织网",
       memoryGraph: "记忆图谱",
       workflowEvents: "工作流与事件",
+      settings: "设置",
     },
   },
 };
