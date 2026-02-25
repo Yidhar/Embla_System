@@ -196,3 +196,59 @@ def test_cutover_cli_status_returns_nonzero_when_not_full_cutover(monkeypatch) -
         assert output.exists() is True
     finally:
         _cleanup_case_root(case_root)
+
+
+def test_cutover_apply_preserves_non_runtime_yaml_layout() -> None:
+    case_root = _make_case_root("test_manage_ws27_subagent_cutover_ws27_002")
+    try:
+        repo_root = case_root / "repo"
+        config_path = repo_root / "autonomous" / "config" / "autonomous_config.yaml"
+        runtime_snapshot = repo_root / "scratch" / "reports" / "ws26_snapshot.json"
+        output = repo_root / "scratch" / "reports" / "ws27_apply_preserve_layout.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            "\n".join(
+                [
+                    "autonomous:",
+                    "  enabled: false",
+                    "",
+                    "  cli_tools:",
+                    '    preferred: "codex"',
+                    '    fallback_order: ["claude", "gemini"]',
+                    "",
+                    "  subagent_runtime:",
+                    "    enabled: false",
+                    "    max_subtasks: 16",
+                    "    rollout_percent: 10",
+                    "    fail_open: true",
+                    "    fail_open_budget_ratio: 0.15",
+                    "    enforce_scaffold_txn_for_write: true",
+                    "    allow_legacy_fail_open_for_write: false",
+                    "    require_contract_negotiation: true",
+                    "    require_scaffold_patch: true",
+                    "    fail_fast_on_subtask_error: true",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        _write_runtime_snapshot(runtime_snapshot, passed=True)
+
+        report = run_ws27_subagent_cutover_ws27_002(
+            repo_root=repo_root,
+            action="apply",
+            config_path=config_path.relative_to(repo_root),
+            runtime_snapshot_report=runtime_snapshot.relative_to(repo_root),
+            output_file=output.relative_to(repo_root),
+            rollout_percent=100,
+            disable_fail_open=True,
+        )
+        assert report["passed"] is True
+        content = config_path.read_text(encoding="utf-8")
+        assert 'preferred: "codex"' in content
+        assert 'fallback_order: ["claude", "gemini"]' in content
+        assert "    enabled: true" in content
+        assert "    rollout_percent: 100" in content
+        assert "    fail_open: false" in content
+    finally:
+        _cleanup_case_root(case_root)

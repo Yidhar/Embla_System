@@ -4,6 +4,7 @@
 - 任务ID: `NGA-WS27-002`
 - 标题: Legacy -> SubAgent Full cutover 方案与回滚窗
 - 状态: 已完成（首版）
+- 状态: 已完成（含配置布局保真修复）
 
 ## 变更范围
 
@@ -16,6 +17,7 @@
     - `rollback`: 优先从快照恢复；快照缺失时执行安全降级（`enabled=false + rollout_percent=0`）
     - `status`: 输出 cutover 完整性检查结果，作为门禁输入
   - 输出统一 JSON 报告，便于收口链与 runbook 追溯。
+  - `apply/rollback` 写回配置时改为“仅更新 `subagent_runtime` 目标键”，尽量保留 YAML 既有布局与引号风格，避免无语义大 diff。
 
 2. 回归测试
 - 文件: `tests/test_manage_ws27_subagent_cutover_ws27_002.py`
@@ -24,6 +26,7 @@
   - 覆盖 `apply -> rollback` 的快照恢复闭环。
   - 覆盖“无快照回退”安全降级分支。
   - 覆盖 `status` 在非 full-cutover 场景下返回非零退出码。
+  - 覆盖 `apply` 后非 `subagent_runtime` 区域布局保真（如 `cli_tools` 引号与 inline 列表风格）。
 
 3. 执行 runbook
 - 文件: `doc/task/runbooks/release_m12_cutover_rollback_onepager_ws27_002.md`
@@ -49,3 +52,4 @@
 - 已具备可执行 cutover 计划与一键回退能力，满足 WS27-002 的核心验收方向。
 - 具备“回滚快照恢复”与“快照缺失兜底降级”双通道，降低远程环境误操作风险。
 - 可作为后续 `NGA-WS27-004`（M0-M12 全量收口链）中的 M12 cutover 步骤输入。
+- 配置写回由“全文件重排”收敛为“目标字段最小改动”，减少提交噪音并降低误审风险。

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -57,6 +58,87 @@ def _write_yaml_payload(path: Path, payload: Dict[str, Any]) -> None:
         yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
+
+
+def _yaml_scalar_text(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    if isinstance(value, (int, float)):
+        return str(value)
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _patch_subagent_runtime_section(text: str, updates: Dict[str, Any]) -> str | None:
+    if not text or not updates:
+        return None
+
+    lines = text.splitlines()
+    anchor_index = -1
+    anchor_indent = 0
+    for idx, line in enumerate(lines):
+        if line.lstrip(" ").startswith("subagent_runtime:"):
+            anchor_index = idx
+            anchor_indent = len(line) - len(line.lstrip(" "))
+            break
+    if anchor_index < 0:
+        return None
+
+    block_start = anchor_index + 1
+    block_end = len(lines)
+    for idx in range(block_start, len(lines)):
+        stripped = lines[idx].strip()
+        if not stripped:
+            continue
+        current_indent = len(lines[idx]) - len(lines[idx].lstrip(" "))
+        if current_indent <= anchor_indent:
+            block_end = idx
+            break
+
+    child_indent = anchor_indent + 2
+    for idx in range(block_start, block_end):
+        stripped = lines[idx].strip()
+        if not stripped:
+            continue
+        current_indent = len(lines[idx]) - len(lines[idx].lstrip(" "))
+        if current_indent > anchor_indent:
+            child_indent = current_indent
+            break
+
+    updated_keys = set()
+    line_pattern = re.compile(r"^(\s*)([a-zA-Z0-9_]+)\s*:\s*(.*?)\s*$")
+    for idx in range(block_start, block_end):
+        match = line_pattern.match(lines[idx])
+        if not match:
+            continue
+        key_indent = len(match.group(1))
+        key_name = match.group(2)
+        if key_indent != child_indent or key_name not in updates:
+            continue
+        lines[idx] = f"{' ' * child_indent}{key_name}: {_yaml_scalar_text(updates[key_name])}"
+        updated_keys.add(key_name)
+
+    missing_keys = [key for key in updates.keys() if key not in updated_keys]
+    if missing_keys:
+        insertion = block_end
+        suffix = [f"{' ' * child_indent}{key}: {_yaml_scalar_text(updates[key])}" for key in missing_keys]
+        lines[insertion:insertion] = suffix
+
+    rendered = "\n".join(lines)
+    if text.endswith("\n"):
+        rendered += "\n"
+    return rendered
+
+
+def _write_config_preserve_layout(path: Path, payload: Dict[str, Any], subagent_runtime_updates: Dict[str, Any]) -> None:
+    original = path.read_text(encoding="utf-8") if path.exists() else ""
+    patched = _patch_subagent_runtime_section(original, subagent_runtime_updates)
+    if patched is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(patched, encoding="utf-8")
+        return
+    _write_yaml_payload(path, payload)
 
 
 def _ensure_subagent_runtime(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -261,7 +343,7 @@ def run_ws27_subagent_cutover_ws27_002(
         subagent_runtime["rollout_percent"] = target_percent
         if disable_fail_open:
             subagent_runtime["fail_open"] = False
-        _write_yaml_payload(config_file, payload)
+        _write_config_preserve_layout(config_file, payload, dict(subagent_runtime))
 
         updated = _normalized_runtime_config(_ensure_subagent_runtime(_read_yaml_payload(config_file)))
         report.update(
@@ -290,7 +372,7 @@ def run_ws27_subagent_cutover_ws27_002(
             subagent_runtime["enabled"] = False
             subagent_runtime["rollout_percent"] = 0
 
-        _write_yaml_payload(config_file, payload)
+        _write_config_preserve_layout(config_file, payload, dict(subagent_runtime))
         updated = _normalized_runtime_config(_ensure_subagent_runtime(_read_yaml_payload(config_file)))
         report.update(
             {

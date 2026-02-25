@@ -227,6 +227,7 @@
   - 新增回归：`autonomous/tests/test_ws27_longrun_endurance_ws27_001.py`、`tests/test_run_ws27_longrun_endurance_ws27_001.py`、`tests/test_manage_ws27_72h_wallclock_acceptance_ws27_001.py`
 - `NGA-WS27-002` 已落地 cutover + 回滚窗首版：
   - 新增 cutover 管理脚本：`scripts/manage_ws27_subagent_cutover_ws27_002.py`（`plan/apply/rollback/status`）
+  - `apply/rollback` 配置写回已收敛为最小改动策略，避免 `autonomous_config.yaml` 无语义重排
   - 新增 runbook：`doc/task/runbooks/release_m12_cutover_rollback_onepager_ws27_002.md`
   - 默认回滚快照：`scratch/reports/ws27_subagent_cutover_rollback_snapshot_ws27_002.json`
   - 新增回归：`tests/test_manage_ws27_subagent_cutover_ws27_002.py`
