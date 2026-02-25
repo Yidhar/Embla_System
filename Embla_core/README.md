@@ -10,6 +10,7 @@ Current P0 routes:
 - `/mcp-fabric`
 - `/memory-graph`
 - `/workflow-events`
+- `/debug-chat`
 - `/settings`
 
 ## Quick Start
@@ -30,6 +31,7 @@ NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000 npm run dev
 
 - Runtime posture: `/v1/ops/runtime/posture`
 - MCP fabric: `/v1/ops/mcp/fabric`
+- Debug chat + liveness: `/v1/chat`, `/v1/health`, `/v1/system/info`
 - Settings read/write: `/system/config`
 
 The first two routes are wired in `lib/api/ops.ts`; memory/workflow pages are scaffold placeholders for the next slice.
