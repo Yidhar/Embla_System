@@ -1055,6 +1055,210 @@ def _build_mcp_task_snapshot(
     return {"tasks": tasks, "total": len(tasks)}
 
 
+def _ops_utc_iso_now() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ops_unix_path(path: Path) -> str:
+    return str(path).replace("\\", "/")
+
+
+def _ops_status_to_severity(status: str) -> str:
+    normalized = str(status or "unknown").strip().lower()
+    if normalized in {"ok", "healthy", "success"}:
+        return "ok"
+    if normalized in {"warning", "warn"}:
+        return "warning"
+    if normalized in {"critical", "error", "failed", "fail"}:
+        return "critical"
+    return "unknown"
+
+
+def _ops_build_response(
+    *,
+    data: Dict[str, Any],
+    severity: str,
+    source_reports: Optional[List[str]] = None,
+    source_endpoints: Optional[List[str]] = None,
+    reason_code: Optional[str] = None,
+    reason_text: Optional[str] = None,
+    status: str = "success",
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "status": str(status or "success"),
+        "generated_at": _ops_utc_iso_now(),
+        "data": data,
+        "severity": str(severity or "unknown"),
+        "source_reports": list(source_reports or []),
+        "source_endpoints": list(source_endpoints or []),
+    }
+    if reason_code:
+        payload["reason_code"] = str(reason_code)
+    if reason_text:
+        payload["reason_text"] = str(reason_text)
+    return payload
+
+
+def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, Any]:
+    try:
+        from scripts.export_slo_snapshot import build_snapshot
+
+        repo_root = Path(__file__).resolve().parent.parent
+        snapshot = build_snapshot(repo_root=repo_root, events_limit=max(1, int(events_limit)))
+    except Exception as exc:
+        logger.error(f"构建 runtime posture 聚合失败: {exc}")
+        raise
+
+    metrics = snapshot.get("metrics") if isinstance(snapshot.get("metrics"), dict) else {}
+    summary = snapshot.get("summary") if isinstance(snapshot.get("summary"), dict) else {}
+    threshold_profile = snapshot.get("threshold_profile") if isinstance(snapshot.get("threshold_profile"), dict) else {}
+    sources = snapshot.get("sources") if isinstance(snapshot.get("sources"), dict) else {}
+
+    metric_status = summary.get("metric_status") if isinstance(summary.get("metric_status"), dict) else {}
+    overall_status = str(summary.get("overall_status") or "unknown")
+    severity = _ops_status_to_severity(overall_status)
+
+    repo_root = Path(__file__).resolve().parent.parent
+    ws26_runtime_report = repo_root / "scratch" / "reports" / "ws26_runtime_snapshot_ws26_002.json"
+    source_reports: List[str] = []
+    ws26_runtime_report_payload: Dict[str, Any] = {}
+
+    if ws26_runtime_report.exists():
+        source_reports.append(_ops_unix_path(ws26_runtime_report))
+        try:
+            loaded_payload = json.loads(ws26_runtime_report.read_text(encoding="utf-8"))
+            if isinstance(loaded_payload, dict):
+                ws26_runtime_report_payload = loaded_payload
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    for key in ("events_file", "workflow_db", "global_mutex_state", "autonomous_config"):
+        path_value = sources.get(key)
+        if isinstance(path_value, str) and path_value.strip():
+            source_reports.append(path_value.replace("\\", "/"))
+
+    response_data: Dict[str, Any] = {
+        "summary": {
+            "overall_status": overall_status,
+            "metric_status": metric_status,
+        },
+        "metrics": {
+            "runtime_rollout": metrics.get("runtime_rollout", {}),
+            "runtime_fail_open": metrics.get("runtime_fail_open", {}),
+            "runtime_lease": metrics.get("runtime_lease", {}),
+            "queue_depth": metrics.get("queue_depth", {}),
+            "lock_status": metrics.get("lock_status", {}),
+            "disk_watermark_ratio": metrics.get("disk_watermark_ratio", {}),
+            "error_rate": metrics.get("error_rate", {}),
+            "latency_p95_ms": metrics.get("latency_p95_ms", {}),
+        },
+        "threshold_profile": threshold_profile,
+        "sources": sources,
+    }
+    if ws26_runtime_report_payload:
+        response_data["ws26_runtime_snapshot_report"] = ws26_runtime_report_payload
+
+    reason_code: Optional[str] = None
+    reason_text: Optional[str] = None
+    if severity == "unknown":
+        reason_code = "RUNTIME_SIGNAL_UNKNOWN"
+        reason_text = "Runtime posture lacks enough signal coverage; verify events/workflow inputs."
+
+    return _ops_build_response(
+        data=response_data,
+        severity=severity,
+        source_reports=sorted(set(source_reports)),
+        source_endpoints=[],
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
+
+
+def _ops_build_mcp_fabric_payload() -> Dict[str, Any]:
+    registry_status: Dict[str, Any]
+    reason_code: Optional[str] = None
+    reason_text: Optional[str] = None
+
+    try:
+        from mcpserver.mcp_registry import auto_register_mcp, get_registry_status
+
+        auto_register_mcp()
+        registry_status = get_registry_status()
+    except Exception as exc:
+        logger.warning(f"获取 MCP registry 状态失败: {exc}")
+        registry_status = {
+            "registered_services": 0,
+            "isolated_worker_services": 0,
+            "rejected_plugin_manifests": 0,
+            "cached_manifests": 0,
+            "service_names": [],
+            "isolated_worker_names": [],
+            "rejected_plugin_names": [],
+        }
+        reason_code = "MCP_REGISTRY_UNAVAILABLE"
+        reason_text = f"MCP registry status unavailable: {exc}"
+
+    runtime_snapshot = _build_mcp_runtime_snapshot(registry_status=registry_status)
+    task_snapshot = _build_mcp_task_snapshot(snapshot=runtime_snapshot)
+    services_payload = get_mcp_services()
+    services = services_payload.get("services") if isinstance(services_payload, dict) else []
+    if not isinstance(services, list):
+        services = []
+
+    total_services = len(services)
+    available_services = sum(1 for item in services if bool(item.get("available")))
+    builtin_services = sum(1 for item in services if str(item.get("source") or "").strip().lower() == "builtin")
+    mcporter_services = sum(1 for item in services if str(item.get("source") or "").strip().lower() == "mcporter")
+    isolated_worker_services = int(registry_status.get("isolated_worker_services") or 0)
+    rejected_plugin_manifests = int(registry_status.get("rejected_plugin_manifests") or 0)
+
+    if total_services <= 0 and int(registry_status.get("registered_services") or 0) <= 0:
+        severity = "unknown"
+        reason_code = reason_code or "MCP_FABRIC_EMPTY"
+        reason_text = reason_text or "No builtin or mcporter services discovered."
+    elif available_services <= 0:
+        severity = "critical"
+        reason_code = reason_code or "MCP_FABRIC_UNAVAILABLE"
+        reason_text = reason_text or "Services exist but none are currently available."
+    elif available_services < total_services or rejected_plugin_manifests > 0:
+        severity = "warning"
+        if rejected_plugin_manifests > 0 and not reason_code:
+            reason_code = "MCP_PLUGIN_REJECTED"
+            reason_text = "One or more plugin manifests were rejected by policy."
+    else:
+        severity = "ok"
+
+    source_reports: List[str] = []
+    if MCPORTER_CONFIG_PATH.exists():
+        source_reports.append(_ops_unix_path(MCPORTER_CONFIG_PATH))
+
+    response_data = {
+        "summary": {
+            "total_services": total_services,
+            "available_services": available_services,
+            "builtin_services": builtin_services,
+            "mcporter_services": mcporter_services,
+            "isolated_worker_services": isolated_worker_services,
+            "rejected_plugin_manifests": rejected_plugin_manifests,
+        },
+        "runtime_snapshot": runtime_snapshot,
+        "registry": registry_status,
+        "tasks": task_snapshot,
+        "services": services,
+    }
+
+    return _ops_build_response(
+        data=response_data,
+        severity=severity,
+        source_reports=source_reports,
+        source_endpoints=["/mcp/status", "/mcp/services", "/mcp/tasks"],
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
+
+
 @app.get("/mcp/status")
 async def get_mcp_status_offline():
     """返回 MCP 运行态快照，兼容前端 status/tasks 字段。"""
@@ -1210,6 +1414,28 @@ def get_mcp_services():
         })
 
     return {"status": "success", "services": services}
+
+
+@app.get("/v1/ops/runtime/posture")
+async def get_ops_runtime_posture(events_limit: int = 5000):
+    """聚合运行态势：rollout/fail-open/lease/queue/lock/disk/error/latency。"""
+    try:
+        return _ops_build_runtime_posture_payload(events_limit=events_limit)
+    except Exception as exc:
+        logger.error(f"获取 /v1/ops/runtime/posture 失败: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取 runtime posture 失败: {str(exc)}")
+
+
+@app.get("/v1/ops/mcp/fabric")
+async def get_ops_mcp_fabric():
+    """聚合 MCP 织网状态：registry、services、task snapshot。"""
+    try:
+        return _ops_build_mcp_fabric_payload()
+    except Exception as exc:
+        logger.error(f"获取 /v1/ops/mcp/fabric 失败: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取 mcp fabric 失败: {str(exc)}")
 
 
 class McpImportRequest(BaseModel):
