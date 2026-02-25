@@ -299,6 +299,14 @@ class SystemAgent:
             "scaffold_failures": 0,
             "runtime_failures": 0,
         }
+        self._subagent_fail_open_budget: Dict[str, Any] = {
+            "subagent_attempt_count": 0,
+            "fail_open_count": 0,
+            "fail_open_ratio": 0.0,
+            "budget_ratio": float(self.config.subagent_runtime.fail_open_budget_ratio),
+            "degraded_to_legacy": False,
+            "degrade_reason": "",
+        }
 
     @staticmethod
     def _build_instance_id(configured_owner_id: str) -> str:
@@ -432,6 +440,9 @@ class SystemAgent:
                     "rollout_percent": rollout_context.get("rollout_percent", 100),
                     "rollout_bucket": rollout_context.get("rollout_bucket"),
                     "decision_reason": rollout_context.get("reason", "unknown"),
+                    "fail_open_budget_ratio": self._subagent_fail_open_budget.get("budget_ratio"),
+                    "fail_open_ratio": self._subagent_fail_open_budget.get("fail_open_ratio"),
+                    "auto_degraded_to_legacy": bool(self._subagent_fail_open_budget.get("degraded_to_legacy")),
                 },
                 workflow_id=workflow_id,
                 fencing_epoch=fencing_epoch,
@@ -694,6 +705,7 @@ class SystemAgent:
         )
 
         self._ensure_active_epoch(fencing_epoch)
+        self._record_subagent_attempt()
         if runtime_result.success and runtime_result.approved:
             return TaskAttemptOutcome(
                 approved=True,
@@ -750,6 +762,15 @@ class SystemAgent:
                     reasons=reasons,
                     subagent_runtime_result=runtime_result,
                 )
+            self._record_fail_open_and_maybe_degrade(
+                workflow_id=workflow_id,
+                task_id=task.task_id,
+                attempt=attempt,
+                runtime_id=runtime_result.runtime_id,
+                gate_failure=runtime_result.gate_failure,
+                reasons=list(runtime_result.reasons),
+                fencing_epoch=fencing_epoch,
+            )
             self._emit(
                 "SubAgentRuntimeFailOpen",
                 {
@@ -891,9 +912,120 @@ class SystemAgent:
                     return True
         return False
 
+    def _record_subagent_attempt(self) -> None:
+        attempts = int(self._subagent_fail_open_budget.get("subagent_attempt_count", 0)) + 1
+        fails = int(self._subagent_fail_open_budget.get("fail_open_count", 0))
+        ratio = (fails / attempts) if attempts > 0 else 0.0
+        self._subagent_fail_open_budget["subagent_attempt_count"] = attempts
+        self._subagent_fail_open_budget["fail_open_ratio"] = float(ratio)
+
+    def _record_fail_open_and_maybe_degrade(
+        self,
+        *,
+        workflow_id: str,
+        task_id: str,
+        attempt: int,
+        runtime_id: str,
+        gate_failure: str,
+        reasons: List[str],
+        fencing_epoch: int,
+    ) -> None:
+        fails = int(self._subagent_fail_open_budget.get("fail_open_count", 0)) + 1
+        attempts = max(1, int(self._subagent_fail_open_budget.get("subagent_attempt_count", 0)))
+        ratio = fails / attempts
+        budget = max(0.0, min(1.0, float(self.config.subagent_runtime.fail_open_budget_ratio)))
+        self._subagent_fail_open_budget["fail_open_count"] = fails
+        self._subagent_fail_open_budget["fail_open_ratio"] = float(ratio)
+        self._subagent_fail_open_budget["budget_ratio"] = float(budget)
+
+        self._emit(
+            "SubAgentFailOpenBudgetUpdated",
+            {
+                "workflow_id": workflow_id,
+                "task_id": task_id,
+                "attempt": attempt,
+                "runtime_id": runtime_id,
+                "gate_failure": gate_failure,
+                "fail_open_count": fails,
+                "subagent_attempt_count": attempts,
+                "fail_open_ratio": ratio,
+                "budget_ratio": budget,
+            },
+            workflow_id=workflow_id,
+            fencing_epoch=fencing_epoch,
+        )
+
+        if bool(self._subagent_fail_open_budget.get("degraded_to_legacy")):
+            return
+        if ratio <= budget:
+            return
+
+        self._subagent_fail_open_budget["degraded_to_legacy"] = True
+        self._subagent_fail_open_budget["degrade_reason"] = "fail_open_budget_exhausted"
+        self._emit(
+            "SubAgentRuntimeAutoDegraded",
+            {
+                "workflow_id": workflow_id,
+                "task_id": task_id,
+                "attempt": attempt,
+                "runtime_id": runtime_id,
+                "reason": "fail_open_budget_exhausted",
+                "fail_open_count": fails,
+                "subagent_attempt_count": attempts,
+                "fail_open_ratio": ratio,
+                "budget_ratio": budget,
+            },
+            workflow_id=workflow_id,
+            fencing_epoch=fencing_epoch,
+        )
+        self._emit(
+            "ReleaseGateRejected",
+            {
+                "workflow_id": workflow_id,
+                "task_id": task_id,
+                "gate": "fail_open_budget",
+                "attempt": attempt,
+                "runtime_mode": "subagent",
+                "reasons": ["fail_open_budget_exhausted"],
+                "fail_open_ratio": ratio,
+                "budget_ratio": budget,
+            },
+            workflow_id=workflow_id,
+            fencing_epoch=fencing_epoch,
+        )
+        try:
+            self.alert_event_producer.emit_alert(
+                alert_key="subagent_fail_open_budget_exhausted",
+                severity="critical",
+                topic="alert.runtime",
+                event_type="AlertRaised",
+                payload={
+                    "workflow_id": workflow_id,
+                    "task_id": task_id,
+                    "attempt": attempt,
+                    "runtime_id": runtime_id,
+                    "gate_failure": gate_failure,
+                    "reasons": list(reasons),
+                    "fail_open_count": fails,
+                    "subagent_attempt_count": attempts,
+                    "fail_open_ratio": ratio,
+                    "budget_ratio": budget,
+                    "action": "degrade_to_legacy",
+                },
+            )
+        except Exception:
+            pass
+
     def _resolve_runtime_mode(self, *, task: OptimizationTask) -> tuple[str, Dict[str, Any]]:
         metadata = task.metadata if isinstance(task.metadata, dict) else {}
         enforce_write_path = self._task_requires_scaffold_txn(task=task)
+        if bool(self._subagent_fail_open_budget.get("degraded_to_legacy")) and not enforce_write_path:
+            return "legacy", {
+                "reason": "fail_open_budget_exhausted_auto_degrade",
+                "rollout_percent": 0,
+                "fail_open_ratio": float(self._subagent_fail_open_budget.get("fail_open_ratio", 0.0)),
+                "budget_ratio": float(self._subagent_fail_open_budget.get("budget_ratio", 0.0)),
+            }
         forced_mode = str(
             metadata.get("runtime_mode")
             or metadata.get("force_runtime_mode")

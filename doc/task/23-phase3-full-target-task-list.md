@@ -193,3 +193,9 @@
   - 新增 WS26 指标导出入口：`scripts/export_ws26_runtime_snapshot_ws26_002.py`
   - 新增 runbook：`doc/task/runbooks/release_m11_runtime_guard_and_metrics_onepager_ws26_002.md`
   - 新增回归：`tests/test_slo_snapshot_export.py`、`tests/test_export_ws26_runtime_snapshot_ws26_002.py`
+- `NGA-WS26-003` 已落地 fail-open 预算超限自动降级：
+  - `SystemAgent` 新增 fail-open 预算状态机（attempt/fail_open/ratio/budget/degraded）
+  - 预算超限触发 `SubAgentRuntimeAutoDegraded` + `ReleaseGateRejected(gate=fail_open_budget)` + `alert.runtime` 告警
+  - 运行模式决策支持 `decision_reason=fail_open_budget_exhausted_auto_degrade`
+  - 与 WS26-001 兼容：写路径任务仍保持 `write_path_enforced -> subagent`
+  - 新增回归：`autonomous/tests/test_system_agent_fail_open_budget_ws26_003.py`
