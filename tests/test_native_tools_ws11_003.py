@@ -73,7 +73,10 @@ def test_run_cmd_structured_stdout_packs_artifact_envelope(monkeypatch):
         assert "[forensic_artifact_ref] artifact_" in text
         assert "[raw_result_ref] artifact_" in text
         assert "[fetch_hints]" in text
+        assert "[critical_evidence]" in text
         assert "jsonpath:$..error_code" in text
+        assert "trace-" in text
+        assert "E50" in text
         assert "[display_preview]" in text
 
         match = re.search(r"\[raw_result_ref\]\s+(artifact_[a-z0-9]+)", text)

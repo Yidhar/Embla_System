@@ -228,7 +228,7 @@ def _coalesce_result_text(result: Dict[str, Any]) -> str:
 def _has_new_contract_payload(result: Dict[str, Any]) -> bool:
     return any(
         bool(str(result.get(key) or "").strip())
-        for key in ("narrative_summary", "display_preview", "forensic_artifact_ref", "raw_result_ref")
+        for key in ("narrative_summary", "display_preview", "forensic_artifact_ref", "raw_result_ref", "critical_evidence")
     )
 
 

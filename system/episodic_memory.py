@@ -128,6 +128,39 @@ def _split_fetch_hints(value: Any) -> List[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _build_hints_from_critical_evidence(value: Any) -> List[str]:
+    if value is None:
+        return []
+    payload: Dict[str, Any]
+    if isinstance(value, dict):
+        payload = value
+    else:
+        text = _safe_text(value).strip()
+        if not text or _looks_like_none(text):
+            return []
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return []
+        if not isinstance(parsed, dict):
+            return []
+        payload = parsed
+
+    hints: List[str] = []
+    for key in ("trace_ids", "error_codes", "paths"):
+        raw_bucket = payload.get(key)
+        bucket: List[str] = []
+        if isinstance(raw_bucket, list):
+            bucket = [str(item).strip() for item in raw_bucket if str(item).strip()]
+        elif raw_bucket is not None:
+            text = str(raw_bucket).strip()
+            if text:
+                bucket = [text]
+        for item in bucket[:2]:
+            hints.append(f"grep:{item}")
+    return hints
+
+
 def _truncate_text(text: str, limit: int) -> str:
     if limit <= 0:
         return ""
@@ -285,6 +318,17 @@ class EpisodicMemoryArchive:
             forensic_ref = ""
 
         hints = _split_fetch_hints(scalar_fields.get("fetch_hints", ""))
+        critical_hints = _build_hints_from_critical_evidence(scalar_fields.get("critical_evidence"))
+        if critical_hints:
+            merged: List[str] = []
+            seen: set[str] = set()
+            for item in [*hints, *critical_hints]:
+                key = item.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(item)
+            hints = merged
         return narrative_summary, forensic_ref, hints
 
     def append_record(

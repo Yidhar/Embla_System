@@ -329,6 +329,8 @@ def _render_tool_result_envelope(
     forensic_ref = envelope.forensic_artifact_ref or envelope.raw_result_ref
     narrative_summary = envelope.narrative_summary if envelope.narrative_summary is not None else envelope.display_preview
     hints = ", ".join(envelope.fetch_hints or [])
+    critical_evidence = envelope.critical_evidence if isinstance(envelope.critical_evidence, dict) else {}
+    critical_evidence_text = json.dumps(critical_evidence, ensure_ascii=False) if critical_evidence else "(none)"
     lines = [
         f"[exit_code] {exit_code}",
         f"[content_type] {envelope.content_type}",
@@ -338,6 +340,7 @@ def _render_tool_result_envelope(
         f"[forensic_artifact_ref] {forensic_ref or '(none)'}",
         f"[raw_result_ref] {envelope.raw_result_ref or forensic_ref or '(none)'}",
         f"[fetch_hints] {hints if hints else '(none)'}",
+        f"[critical_evidence] {critical_evidence_text}",
         "[narrative_summary]",
         narrative_summary if narrative_summary else "(empty)",
         "[display_preview]",

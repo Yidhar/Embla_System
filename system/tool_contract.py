@@ -18,7 +18,7 @@ from enum import Enum
 from typing import Any, Dict, Optional
 
 from system.artifact_store import ContentType, get_artifact_store
-from system.gc_evidence_extractor import build_gc_fetch_hints, extract_gc_evidence
+from system.gc_evidence_extractor import GCEvidence, build_gc_fetch_hints, extract_gc_evidence
 
 class RiskLevel(str, Enum):
     """工具调用风险等级"""
@@ -252,6 +252,7 @@ class ToolResultEnvelope:
     narrative_summary: Optional[str] = None  # 叙事摘要（与证据引用解耦）
     forensic_artifact_ref: Optional[str] = None  # 证据 artifact 引用（独立可回读）
     fetch_hints: Optional[list[str]] = None  # 二次读取提示（jsonpath/line_range）
+    critical_evidence: Optional[Dict[str, list[str]]] = None  # 关键证据快照（trace/error/path）
 
     # === 元数据 ===
     truncated: bool = False
@@ -286,6 +287,9 @@ class ToolResultEnvelope:
         elif self.raw_result_ref is None:
             self.raw_result_ref = self.forensic_artifact_ref
 
+        if self.critical_evidence is not None:
+            self.critical_evidence = _normalize_critical_evidence(self.critical_evidence)
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -299,6 +303,7 @@ class ToolResultEnvelope:
             "narrative_summary": self.narrative_summary,
             "forensic_artifact_ref": self.forensic_artifact_ref,
             "fetch_hints": self.fetch_hints,
+            "critical_evidence": self.critical_evidence,
             "truncated": self.truncated,
             "total_chars": self.total_chars,
             "total_lines": self.total_lines,
@@ -368,6 +373,9 @@ def build_tool_result_with_artifact(
     # 阈值判断
     preview_limit = 8000
     needs_artifact = total_chars > preview_limit
+    evidence = extract_gc_evidence(raw_output, content_type=content_type)
+    critical_evidence = _build_critical_evidence_snapshot(evidence)
+    fetch_hints = _generate_fetch_hints(content_type, raw_output, evidence=evidence)
 
     if needs_artifact and is_structured:
         # 结构化数据：落盘 artifact，返回摘要
@@ -379,8 +387,11 @@ def build_tool_result_with_artifact(
             source_trace_id=trace_id,
             priority=priority,
         )
-        narrative_summary = _summarize_structured(raw_output, content_type)
-        fetch_hints = _generate_fetch_hints(content_type, raw_output)
+        narrative_summary = _summarize_structured(
+            raw_output,
+            content_type,
+            critical_evidence=critical_evidence,
+        )
 
         if not artifact_id:
             # 兜底：落盘失败时仍返回结构化摘要，但不给不可读 ref
@@ -396,6 +407,8 @@ def build_tool_result_with_artifact(
                 total_lines=total_lines,
                 content_type=content_type,
                 duration_ms=duration_ms,
+                fetch_hints=fetch_hints or None,
+                critical_evidence=critical_evidence or None,
             )
 
         return ToolResultEnvelope(
@@ -407,7 +420,8 @@ def build_tool_result_with_artifact(
             raw_result_ref=artifact_id,
             narrative_summary=narrative_summary,
             forensic_artifact_ref=artifact_id,
-            fetch_hints=fetch_hints,
+            fetch_hints=fetch_hints or None,
+            critical_evidence=critical_evidence or None,
             truncated=True,
             total_chars=total_chars,
             total_lines=total_lines,
@@ -417,13 +431,16 @@ def build_tool_result_with_artifact(
     elif needs_artifact:
         # 纯文本：截断预览
         preview = raw_output[:preview_limit] + "\n...[TRUNCATED]"
+        preview_with_evidence = _append_critical_evidence_summary(preview, critical_evidence)
         return ToolResultEnvelope(
             call_id=call_id,
             trace_id=trace_id,
             tool_name=tool_name,
             status="ok",
-            display_preview=preview,
-            narrative_summary=preview,
+            display_preview=preview_with_evidence,
+            narrative_summary=preview_with_evidence,
+            fetch_hints=fetch_hints or None,
+            critical_evidence=critical_evidence or None,
             truncated=True,
             total_chars=total_chars,
             total_lines=total_lines,
@@ -484,28 +501,97 @@ def _persist_artifact(
     return metadata.artifact_id
 
 
-def _summarize_structured(content: str, content_type: str) -> str:
+def _normalize_critical_evidence(value: Any) -> Dict[str, list[str]]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: Dict[str, list[str]] = {}
+    for key in ("trace_ids", "error_codes", "paths"):
+        raw_bucket = value.get(key)
+        if isinstance(raw_bucket, list):
+            bucket = [str(item).strip() for item in raw_bucket if str(item).strip()]
+        else:
+            bucket = [str(raw_bucket).strip()] if str(raw_bucket or "").strip() else []
+        if bucket:
+            deduped: list[str] = []
+            seen: set[str] = set()
+            for item in bucket:
+                lowered = item.lower()
+                if lowered in seen:
+                    continue
+                seen.add(lowered)
+                deduped.append(item)
+            if deduped:
+                normalized[key] = deduped[:3]
+    return normalized
+
+
+def _build_critical_evidence_snapshot(evidence: GCEvidence) -> Dict[str, list[str]]:
+    return _normalize_critical_evidence(
+        {
+            "trace_ids": list(evidence.trace_ids[:3]),
+            "error_codes": list(evidence.error_codes[:3]),
+            "paths": list(evidence.paths[:3]),
+        }
+    )
+
+
+def _append_critical_evidence_summary(summary: str, critical_evidence: Dict[str, list[str]]) -> str:
+    normalized = _normalize_critical_evidence(critical_evidence)
+    if not normalized:
+        return summary
+
+    segments: list[str] = []
+    trace_ids = normalized.get("trace_ids", [])
+    error_codes = normalized.get("error_codes", [])
+    paths = normalized.get("paths", [])
+    if trace_ids:
+        segments.append(f"trace_id={','.join(trace_ids[:2])}")
+    if error_codes:
+        segments.append(f"error_code={','.join(error_codes[:2])}")
+    if paths:
+        segments.append(f"path={','.join(paths[:2])}")
+
+    if not segments:
+        return summary
+    suffix = "Critical evidence: " + " | ".join(segments)
+    return f"{summary}\n{suffix}"
+
+
+def _summarize_structured(
+    content: str,
+    content_type: str,
+    *,
+    critical_evidence: Optional[Dict[str, list[str]]] = None,
+) -> str:
     """
     生成结构化数据摘要
 
     TODO: 实现智能摘要（schema/keys/sample rows）
     """
+    base_summary = f"Structured data ({content_type})\n[Use artifact_reader to access full content]"
     if content_type == "application/json":
         try:
             import json
             data = json.loads(content)
             if isinstance(data, dict):
                 keys = list(data.keys())[:10]
-                return f"JSON object with keys: {keys}\n[Use artifact_reader to access full content]"
+                base_summary = f"JSON object with keys: {keys}\n[Use artifact_reader to access full content]"
+                return _append_critical_evidence_summary(base_summary, critical_evidence or {})
             elif isinstance(data, list):
-                return f"JSON array with {len(data)} items\n[Use artifact_reader to access full content]"
+                base_summary = f"JSON array with {len(data)} items\n[Use artifact_reader to access full content]"
+                return _append_critical_evidence_summary(base_summary, critical_evidence or {})
         except Exception:
             pass
 
-    return f"Structured data ({content_type})\n[Use artifact_reader to access full content]"
+    return _append_critical_evidence_summary(base_summary, critical_evidence or {})
 
 
-def _generate_fetch_hints(content_type: str, raw_output: str = "") -> list[str]:
+def _generate_fetch_hints(
+    content_type: str,
+    raw_output: str = "",
+    *,
+    evidence: Optional[GCEvidence] = None,
+) -> list[str]:
     """生成二次读取提示（包含关键证据线索）。"""
-    evidence = extract_gc_evidence(raw_output, content_type=content_type)
-    return build_gc_fetch_hints(evidence, content_type=content_type)
+    effective_evidence = evidence if evidence is not None else extract_gc_evidence(raw_output, content_type=content_type)
+    return build_gc_fetch_hints(effective_evidence, content_type=content_type)

@@ -120,3 +120,33 @@ def test_archive_tool_result_and_reinjection_context():
         assert "jsonpath:$..error_code" in context
     finally:
         shutil.rmtree(case_dir, ignore_errors=True)
+
+
+def test_archive_tool_result_merges_critical_evidence_into_hints():
+    case_dir = _make_case_dir()
+    try:
+        store = EpisodicMemoryArchive(archive_path=case_dir / "episodic_archive.jsonl", vector_dims=2048, session_boost=0.0)
+
+        tool_result = {
+            "status": "success",
+            "service_name": "native",
+            "tool_name": "run_cmd",
+            "result": (
+                "[exit_code] 1\n"
+                "[forensic_artifact_ref] artifact_cmd_critical\n"
+                "[critical_evidence] {\"trace_ids\": [\"trace-critical-1\"], \"error_codes\": [\"E502\"], \"paths\": [\"/var/log/nginx/error.log\"]}\n"
+                "[narrative_summary]\n"
+                "定位到网关 502 与 trace-critical-1 相关。\n"
+                "[display_preview]\n"
+                "critical failure"
+            ),
+        }
+
+        archived = archive_tool_results_for_session("sess-critical", [tool_result], archive=store)
+        assert len(archived) == 1
+        assert archived[0].forensic_artifact_ref == "artifact_cmd_critical"
+        assert "grep:trace-critical-1" in archived[0].fetch_hints
+        assert "grep:E502" in archived[0].fetch_hints
+        assert "grep:/var/log/nginx/error.log" in archived[0].fetch_hints
+    finally:
+        shutil.rmtree(case_dir, ignore_errors=True)

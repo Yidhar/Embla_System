@@ -190,6 +190,7 @@ class TestToolResultEnvelope:
         assert data["narrative_summary"] == "Test result"
         assert data["raw_result_ref"] is None
         assert data["forensic_artifact_ref"] is None
+        assert data["critical_evidence"] is None
 
 
 class TestBuildToolResultWithArtifact:
@@ -218,11 +219,13 @@ class TestBuildToolResultWithArtifact:
         assert result.forensic_artifact_ref is None
         assert result.display_preview == "Small output"
         assert result.narrative_summary == "Small output"
+        assert result.critical_evidence is None
         payload = result.to_dict()
         assert payload["display_preview"] == "Small output"
         assert payload["narrative_summary"] == "Small output"
         assert payload["raw_result_ref"] is None
         assert payload["forensic_artifact_ref"] is None
+        assert payload["critical_evidence"] is None
 
     def test_large_text_truncated(self):
         """测试大文本截断"""
@@ -299,6 +302,12 @@ class TestBuildToolResultWithArtifact:
         ok, _, content = temp_store.retrieve(result.forensic_artifact_ref)
         assert ok is True
         assert content == large_json
+        assert result.critical_evidence is not None
+        assert "trace_ids" in result.critical_evidence
+        assert "error_codes" in result.critical_evidence
+        assert any(str(item).startswith("trace_abc123") for item in result.critical_evidence.get("trace_ids", []))
+        assert "500" in result.critical_evidence.get("error_codes", [])
+        assert "Critical evidence:" in (result.narrative_summary or "")
 
         meta = temp_store.get_metadata(result.forensic_artifact_ref)
         assert meta is not None
