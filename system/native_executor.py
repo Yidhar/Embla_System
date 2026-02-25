@@ -492,7 +492,9 @@ class NativeExecutor:
         safe_path.unlink()
 
     async def read_file(self, path: str | os.PathLike[str]) -> str:
-        return await asyncio.to_thread(self.read_text, path)
+        # Keep file I/O in-process: some environments do not allow worker thread
+        # offloading reliably (asyncio.to_thread), which can stall async callers.
+        return self.read_text(path)
 
     async def write_file(
         self,
@@ -502,10 +504,10 @@ class NativeExecutor:
         encoding: str = "utf-8",
         newline: str | None = None,
     ) -> None:
-        await asyncio.to_thread(self.write_text, path, content, encoding=encoding, newline=newline)
+        self.write_text(path, content, encoding=encoding, newline=newline)
 
     async def delete(self, path: str | os.PathLike[str], *, missing_ok: bool = True) -> None:
-        await asyncio.to_thread(self.delete_file, path, missing_ok=missing_ok)
+        self.delete_file(path, missing_ok=missing_ok)
 
 
 if __name__ == "__main__":
