@@ -234,3 +234,9 @@
   - 新增 runbook：`doc/task/runbooks/release_m12_oob_repair_drill_onepager_ws27_003.md`
   - 默认报告：`scratch/reports/ws27_oob_repair_drill_ws27_003.json`
   - 新增回归：`tests/test_run_ws27_oob_repair_drill_ws27_003.py`
+- `NGA-WS27-004` 已落地 M0-M12 全量收口链首版：
+  - 新增全量收口入口：`scripts/release_closure_chain_full_m0_m12.py`
+  - 复用 `M0-M11` 基础链并串联 `M12` 三步：`WS27-001/002/003`
+  - 新增 runbook：`doc/task/runbooks/release_m12_full_chain_m0_m12_onepager_ws27_004.md`
+  - 默认报告：`scratch/reports/release_closure_chain_full_m0_m12_result.json`
+  - 新增回归：`tests/test_release_closure_chain_full_m0_m12.py`
