@@ -113,7 +113,14 @@ def _build_steps(
     if not skip_t0:
         steps.append(
             ChainStep(
-                step_id="T0",
+                step_id="T0A",
+                description="Immutable DNA integrity gate validation",
+                command=[python_exe, "scripts/validate_immutable_dna_gate_ws23_003.py"],
+            )
+        )
+        steps.append(
+            ChainStep(
+                step_id="T0B",
                 description="Doc consistency strict validation",
                 command=[python_exe, "scripts/validate_doc_consistency_ws16_006.py", "--strict"],
             )
@@ -254,7 +261,7 @@ def parse_args() -> argparse.Namespace:
         default=Path("scratch/reports/release_closure_chain_m0_m5_result.json"),
         help="Output JSON report path",
     )
-    parser.add_argument("--skip-t0", action="store_true", help="Skip T0 doc consistency strict validation")
+    parser.add_argument("--skip-t0", action="store_true", help="Skip T0 preflight gates (DNA + doc consistency)")
     parser.add_argument("--skip-t1", action="store_true", help="Skip T1 runtime regression suite")
     parser.add_argument("--skip-t2", action="store_true", help="Skip T2 contract/evidence regression suite")
     parser.add_argument("--skip-t3", action="store_true", help="Skip T3 API/BFF regression suite")

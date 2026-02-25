@@ -39,3 +39,13 @@ autonomous:
     min_kpi_ratio: 0.95
     auto_rollback_enabled: true
     rollback_command: ""
+
+  watchdog:
+    enabled: false
+    warn_only: true
+    cpu_percent: 85.0
+    memory_percent: 85.0
+    disk_percent: 90.0
+    io_read_bps: 52428800
+    io_write_bps: 52428800
+    cost_per_hour: 5.0

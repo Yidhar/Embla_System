@@ -33,16 +33,17 @@ def test_release_closure_chain_runs_all_steps_with_green_runner() -> None:
         )
         assert report["passed"] is True
         assert report["failed_steps"] == []
-        assert report["step_count_planned"] == 8
-        assert report["step_count_executed"] == 8
-        assert "validate_doc_consistency_ws16_006.py" in " ".join(seen_commands[0])
-        assert "test_native_executor_guards.py" in " ".join(seen_commands[1])
-        assert "test_tool_contract.py" in " ".join(seen_commands[2])
-        assert "test_api_contract_ws20_001.py" in " ".join(seen_commands[3])
-        assert "test_event_store_ws18_001.py" in " ".join(seen_commands[4])
-        assert "export_slo_snapshot.py" in " ".join(seen_commands[5])
-        assert "desktop_release_compat_ws20_006.py" in " ".join(seen_commands[6])
-        assert "canary_rollback_drill.py" in " ".join(seen_commands[7])
+        assert report["step_count_planned"] == 9
+        assert report["step_count_executed"] == 9
+        assert "validate_immutable_dna_gate_ws23_003.py" in " ".join(seen_commands[0])
+        assert "validate_doc_consistency_ws16_006.py" in " ".join(seen_commands[1])
+        assert "test_native_executor_guards.py" in " ".join(seen_commands[2])
+        assert "test_tool_contract.py" in " ".join(seen_commands[3])
+        assert "test_api_contract_ws20_001.py" in " ".join(seen_commands[4])
+        assert "test_event_store_ws18_001.py" in " ".join(seen_commands[5])
+        assert "export_slo_snapshot.py" in " ".join(seen_commands[6])
+        assert "desktop_release_compat_ws20_006.py" in " ".join(seen_commands[7])
+        assert "canary_rollback_drill.py" in " ".join(seen_commands[8])
     finally:
         _cleanup_case_root(case_root)
 
@@ -64,6 +65,6 @@ def test_release_closure_chain_stops_on_first_failure_by_default() -> None:
         )
         assert report["passed"] is False
         assert report["failed_steps"] == ["T2"]
-        assert report["step_count_executed"] == 3
+        assert report["step_count_executed"] == 4
     finally:
         _cleanup_case_root(case_root)

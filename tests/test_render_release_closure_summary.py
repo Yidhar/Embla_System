@@ -25,18 +25,22 @@ def test_build_release_summary_markdown_all_pass() -> None:
         full_report = {"passed": True, "failed_groups": []}
         m0_report = {"passed": True, "failed_steps": [], "step_results": []}
         m6_report = {"passed": True, "failed_steps": [], "step_results": []}
+        m8_report = {"passed": True, "failed_steps": [], "step_results": []}
 
         markdown = build_release_summary_markdown(
             full_report=full_report,
             m0_m5_report=m0_report,
             m6_m7_report=m6_report,
+            m8_report=m8_report,
             full_report_path=case_root / "full.json",
             m0_m5_report_path=case_root / "m0.json",
             m6_m7_report_path=case_root / "m6.json",
+            m8_report_path=case_root / "m8.json",
             load_errors={},
         )
         assert "Overall: **PASS**" in markdown
         assert "| `full_m0_m7` | `PASS` |" in markdown
+        assert "| `m8` | `PASS` |" in markdown
         assert "Load issues:" not in markdown
     finally:
         _cleanup_case_root(case_root)
@@ -60,19 +64,23 @@ def test_build_release_summary_markdown_failed_steps_and_load_errors() -> None:
             ],
         }
         m6_report = {"passed": True, "failed_steps": [], "step_results": []}
+        m8_report = {"passed": True, "failed_steps": [], "step_results": []}
 
         markdown = build_release_summary_markdown(
             full_report=full_report,
             m0_m5_report=m0_report,
             m6_m7_report=m6_report,
+            m8_report=m8_report,
             full_report_path=case_root / "full.json",
             m0_m5_report_path=case_root / "m0.json",
             m6_m7_report_path=case_root / "m6.json",
-            load_errors={"m6_m7": "report file not found"},
+            m8_report_path=case_root / "m8.json",
+            load_errors={"m6_m7": "report file not found", "m8": "report file not found"},
         )
         assert "Overall: **FAIL**" in markdown
         assert "Load issues:" in markdown
         assert "`m6_m7`: report file not found" in markdown
+        assert "`m8`: report file not found" in markdown
         assert "Failed steps:" in markdown
         assert "`m0_m5` `T2` rc=2 contract suite" in markdown
         assert "assertion failed in contract validation" in markdown
@@ -95,6 +103,8 @@ def test_main_allows_missing_full_report(monkeypatch) -> None:
                 str(case_root / "missing_m0.json"),
                 "--m6-m7-report",
                 str(case_root / "missing_m6.json"),
+                "--m8-report",
+                str(case_root / "missing_m8.json"),
                 "--output",
                 str(output),
                 "--allow-missing-full-report",

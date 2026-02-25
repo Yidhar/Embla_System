@@ -219,3 +219,11 @@ tmp/
 
 # codex
 AGENTS.md
+
+*.dat
+*.jsonl
+*.json
+*.txt
+*.lock
+*.log
+scratch/

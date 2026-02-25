@@ -29,6 +29,8 @@ from autonomous.tools.subagent_runtime import (
     SubAgentRuntimeResult,
 )
 from autonomous.types import OptimizationTask
+from system.brainstem_event_bridge import BRIDGED_EVENT_TYPE, build_brainstem_bridge_payload
+from system.watchdog_daemon import WatchdogDaemon, WatchdogThresholds
 
 
 class LeaseLostError(RuntimeError):
@@ -74,6 +76,18 @@ class ReleaseAutomationConfig:
 
 
 @dataclass
+class WatchdogRuntimeConfig:
+    enabled: bool = False
+    warn_only: bool = True
+    cpu_percent: float = 85.0
+    memory_percent: float = 85.0
+    disk_percent: float = 90.0
+    io_read_bps: float = 50 * 1024 * 1024
+    io_write_bps: float = 50 * 1024 * 1024
+    cost_per_hour: float = 5.0
+
+
+@dataclass
 class SystemAgentConfig:
     enabled: bool = False
     cycle_interval_seconds: int = 3600
@@ -86,6 +100,7 @@ class SystemAgentConfig:
     lease: LeaseConfig = field(default_factory=LeaseConfig)
     outbox_dispatch: OutboxDispatchConfig = field(default_factory=OutboxDispatchConfig)
     release: ReleaseAutomationConfig = field(default_factory=ReleaseAutomationConfig)
+    watchdog: WatchdogRuntimeConfig = field(default_factory=WatchdogRuntimeConfig)
     subagent_runtime: SubAgentRuntimeConfig = field(default_factory=SubAgentRuntimeConfig)
 
     @classmethod
@@ -103,6 +118,7 @@ class SystemAgentConfig:
         lease = pick(source, "lease", {})
         outbox_dispatch = pick(source, "outbox_dispatch", {})
         release = pick(source, "release", {})
+        watchdog = pick(source, "watchdog", {})
         subagent_runtime = pick(source, "subagent_runtime", {})
 
         fallback_cfg = VerificationFallbackConfig(
@@ -135,6 +151,16 @@ class SystemAgentConfig:
             auto_rollback_enabled=bool(pick(release, "auto_rollback_enabled", True)),
             rollback_command=str(pick(release, "rollback_command", "")),
         )
+        watchdog_cfg = WatchdogRuntimeConfig(
+            enabled=bool(pick(watchdog, "enabled", False)),
+            warn_only=bool(pick(watchdog, "warn_only", True)),
+            cpu_percent=max(1.0, min(100.0, float(pick(watchdog, "cpu_percent", 85.0)))),
+            memory_percent=max(1.0, min(100.0, float(pick(watchdog, "memory_percent", 85.0)))),
+            disk_percent=max(1.0, min(100.0, float(pick(watchdog, "disk_percent", 90.0)))),
+            io_read_bps=max(1.0, float(pick(watchdog, "io_read_bps", 50 * 1024 * 1024))),
+            io_write_bps=max(1.0, float(pick(watchdog, "io_write_bps", 50 * 1024 * 1024))),
+            cost_per_hour=max(0.0, float(pick(watchdog, "cost_per_hour", 5.0))),
+        )
         subagent_cfg = SubAgentRuntimeConfig(
             enabled=bool(pick(subagent_runtime, "enabled", False)),
             max_subtasks=max(1, int(pick(subagent_runtime, "max_subtasks", 16))),
@@ -157,6 +183,7 @@ class SystemAgentConfig:
             lease=lease_cfg,
             outbox_dispatch=outbox_cfg,
             release=release_cfg,
+            watchdog=watchdog_cfg,
             subagent_runtime=subagent_cfg,
         )
 
@@ -168,6 +195,14 @@ class TaskAttemptOutcome:
     dispatch_result: DispatchResult | None = None
     subagent_runtime_result: SubAgentRuntimeResult | None = None
     used_fail_open: bool = False
+
+
+class _SystemAgentWatchdogEmitter:
+    def __init__(self, agent: "SystemAgent") -> None:
+        self._agent = agent
+
+    def emit(self, event_type: str, payload: Dict[str, Any], **kwargs: Any) -> None:
+        self._agent._emit(event_type, payload, **kwargs)
 
 
 class SystemAgent:
@@ -225,6 +260,20 @@ class SystemAgent:
             project_root=self.repo_dir,
             config=self.config.subagent_runtime,
         )
+        self.watchdog_daemon: WatchdogDaemon | None = None
+        if self.config.watchdog.enabled:
+            self.watchdog_daemon = WatchdogDaemon(
+                thresholds=WatchdogThresholds(
+                    cpu_percent=self.config.watchdog.cpu_percent,
+                    memory_percent=self.config.watchdog.memory_percent,
+                    disk_percent=self.config.watchdog.disk_percent,
+                    io_read_bps=self.config.watchdog.io_read_bps,
+                    io_write_bps=self.config.watchdog.io_write_bps,
+                    cost_per_hour=self.config.watchdog.cost_per_hour,
+                ),
+                event_emitter=_SystemAgentWatchdogEmitter(self),
+                warn_only=self.config.watchdog.warn_only,
+            )
         self._subagent_gate_metrics: Dict[str, int] = {
             "contract_failures": 0,
             "scaffold_failures": 0,
@@ -378,7 +427,16 @@ class SystemAgent:
                 fencing_epoch=fencing_epoch,
             )
 
-            if using_subagent:
+            watchdog_block = self._evaluate_watchdog_gate(
+                task=task,
+                workflow_id=workflow_id,
+                attempt=attempt,
+                runtime_mode="subagent" if using_subagent else "legacy",
+                fencing_epoch=fencing_epoch,
+            )
+            if watchdog_block is not None:
+                outcome = watchdog_block
+            elif using_subagent:
                 outcome = await self._execute_subagent_attempt(
                     task=task,
                     workflow_id=workflow_id,
@@ -468,7 +526,7 @@ class SystemAgent:
                 "FailedExhausted",
                 reason="checks_failed_retry_exhausted",
                 payload={"attempt": attempt, "max_attempt": max_attempt},
-            )
+                )
 
         if last_dispatch is not None:
             await self._attempt_verification_fallback(
@@ -478,6 +536,47 @@ class SystemAgent:
                 reasons=last_reasons,
                 fencing_epoch=fencing_epoch,
             )
+
+    def _evaluate_watchdog_gate(
+        self,
+        *,
+        task: OptimizationTask,
+        workflow_id: str,
+        attempt: int,
+        runtime_mode: str,
+        fencing_epoch: int,
+    ) -> TaskAttemptOutcome | None:
+        daemon = self.watchdog_daemon
+        if daemon is None:
+            return None
+
+        action = daemon.run_once()
+        if action is None:
+            return None
+
+        blocking_actions = {"pause_dispatch_and_escalate", "throttle_new_workloads"}
+        if action.action not in blocking_actions:
+            return None
+
+        reasons = [f"watchdog:{action.action}"]
+        reasons.extend([f"watchdog:{item}" for item in list(action.reasons)])
+        self._emit(
+            "ReleaseGateRejected",
+            {
+                "workflow_id": workflow_id,
+                "task_id": task.task_id,
+                "gate": "watchdog",
+                "attempt": attempt,
+                "runtime_mode": runtime_mode,
+                "watchdog_level": action.level,
+                "watchdog_action": action.action,
+                "reasons": reasons,
+                "snapshot": dict(action.snapshot),
+            },
+            workflow_id=workflow_id,
+            fencing_epoch=fencing_epoch,
+        )
+        return TaskAttemptOutcome(approved=False, reasons=reasons)
 
     async def _execute_legacy_attempt(
         self,
@@ -866,6 +965,13 @@ class SystemAgent:
             return
 
         try:
+            bridged_payload = build_brainstem_bridge_payload(event, consumer=consumer)
+            self._emit(
+                BRIDGED_EVENT_TYPE,
+                bridged_payload,
+                workflow_id=workflow_id or None,
+                fencing_epoch=fencing_epoch,
+            )
             await self._handle_outbox_business_event(event, fencing_epoch=fencing_epoch)
             self.workflow_store.complete_outbox_for_consumer(outbox_id, consumer, message_id)
             self._emit(

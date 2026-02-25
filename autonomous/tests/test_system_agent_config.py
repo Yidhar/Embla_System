@@ -11,6 +11,8 @@ def test_system_agent_config_from_source_defaults():
     assert cfg.lease.enabled is True
     assert cfg.outbox_dispatch.enabled is True
     assert cfg.release.enabled is True
+    assert cfg.watchdog.enabled is False
+    assert cfg.watchdog.warn_only is True
     assert cfg.subagent_runtime.enabled is False
     assert cfg.subagent_runtime.fail_open is True
     assert cfg.subagent_runtime.max_subtasks == 16
@@ -56,6 +58,16 @@ def test_system_agent_config_from_dict():
             "auto_rollback_enabled": True,
             "rollback_command": "",
         },
+        "watchdog": {
+            "enabled": True,
+            "warn_only": False,
+            "cpu_percent": 70.0,
+            "memory_percent": 75.0,
+            "disk_percent": 80.0,
+            "io_read_bps": 2048.0,
+            "io_write_bps": 4096.0,
+            "cost_per_hour": 1.5,
+        },
         "subagent_runtime": {
             "enabled": True,
             "max_subtasks": 9,
@@ -75,6 +87,9 @@ def test_system_agent_config_from_dict():
     assert cfg.lease.owner_id == "agent-a"
     assert cfg.outbox_dispatch.batch_size == 25
     assert cfg.release.max_error_rate == 0.03
+    assert cfg.watchdog.enabled is True
+    assert cfg.watchdog.warn_only is False
+    assert cfg.watchdog.cpu_percent == 70.0
     assert cfg.subagent_runtime.enabled is True
     assert cfg.subagent_runtime.max_subtasks == 9
     assert cfg.subagent_runtime.rollout_percent == 25

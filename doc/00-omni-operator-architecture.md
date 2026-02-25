@@ -1,9 +1,9 @@
 ---
 **文档类型**：🎯 目标态架构设计（Target Architecture）
-**实施状态**：Phase 3 规划（当前 Phase 0 已实现 CLI Adapter 过渡方案）
-**最后更新**：2026-02-22
+**实施状态**：Phase 3 增量落地中（M6-M7 已收口，向全目标态推进）
+**最后更新**：2026-02-24
 **当前替代方案**：见 `00-mvp-architecture-design.md` (CLI Tools + Codex-first)
-**实施路径**：Phase 0 (CLI) → Phase 1-2 (增强) → Phase 3 (本文档)
+**实施路径**：Phase 0 (CLI) → M0-M5 (治理与稳态) → M6-M7 (Phase3 接管) → Phase3 Full（本文档）
 ---
 
 本文档是 **Omni-Operator v2.0** 的全景架构设计蓝图，面向研发落地交付。包含完整架构拓扑图、交互时序图、系统树节点结构、数据模型、模块化原子规范与开发 Gantt 排期。可直接作为技术评审（TR）与敏捷开发的基线文档。
@@ -11,19 +11,22 @@
 > [!IMPORTANT]
 > **文档定位**：本文档描述 **Phase 3 目标态架构**，非当前实现。
 >
-> **当前实现**（Phase 0）：
-> - 执行模型：CLI Adapter (Codex/Claude/Gemini CLI)
-> - 子代理：无独立 Sub-Agent，通过 CLI 工具调用
-> - 脚手架：无 Scaffold Engine
+> **当前实现**（截至 2026-02-24）：
+> - 执行模型：CLI Adapter + `SystemAgent` 主循环
+> - 子代理：`Sub-Agent Runtime v1` 已落地并支持灰度接管（WS22）
+> - 脚手架：`Scaffold Engine v1` 已落地（契约门禁 + 事务回滚）
+> - 事件链：`WorkflowStore/EventLog` 已支持事件落盘与回放
 >
 > **演进路径**：
 > - Phase 0 (✅ 已实现)：CLI Tools + System Agent
-> - Phase 1-2 (🟡 规划中)：增强监控、降级、Token 经济学
-> - Phase 3 (🔴 本文档)：Sub-Agent Runtime + Scaffold Engine + Event Bus
+> - M0-M5 (✅ 已收口)：76 项任务完成（契约/安全/治理/发布基线）
+> - M6-M7 (✅ 已收口)：WS21/WS22 完成（Runtime/Scaffold/调度桥接）
+> - Phase3 Full (🟡 进行中)：补齐脑干层独立化与插件隔离等目标态能力
 >
 > **参考文档**：
 > - 当前实现：`00-mvp-architecture-design.md`
 > - SDLC 对齐：`07-autonomous-agent-sdlc-architecture.md`
+> - Phase3 Full 任务清单：`doc/task/23-phase3-full-target-task-list.md`
 
 ---
 
@@ -254,9 +257,25 @@ omni-operator-v2/
 | **Event Bus** | 轻量 Event Log | Phase 0 | 🟡 SQLite 事件存储 |
 | **Meta-Agent** | System Agent | Phase 0 | 🟡 单实例主循环 |
 | **Router** | CLI Selector | Phase 0 | 🟡 CLI 选择策略 |
-| **Watchdog** | 无 | Phase 2 | 🔴 未实现 |
+| **Watchdog** | `system/watchdog_daemon.py` + `system/brainstem_supervisor.py` | Phase 2 增量 | 🟡 监控守护已实现（尚未独立进程化托管） |
 | **Immutable DNA** | Prompt 文件 | Phase 0 | 🟡 静态 Prompt |
 | **Security Kernel** | Native Executor | Phase 0 | 🟡 基础沙箱 |
+
+### 2.1 当前实现证据矩阵（2026-02-24）
+
+| 目标态能力 | 当前落地状态 | 代码锚点 | 测试证据 | 主要缺口（走向 Phase3 Full） |
+|---|---|---|---|---|
+| Sub-Agent Runtime 依赖调度 | 🟡 Runtime v1 已上线 | `autonomous/tools/subagent_runtime.py` | `autonomous/tests/test_subagent_runtime_ws21_002.py`, `autonomous/tests/test_subagent_runtime_chaos_ws21_006.py`, `autonomous/tests/test_subagent_runtime_spec_validation_ws22_005.py` | 仍需把更多生产写路径从 CLI 直写收敛到统一原子提交链路 |
+| SystemAgent 灰度接管 | 🟢 M7 桥接已可用 | `autonomous/system_agent.py` | `autonomous/tests/test_system_agent_subagent_bridge_ws22_001.py`, `autonomous/tests/test_system_agent_subagent_rollout_ws22_006.py`, `autonomous/tests/test_system_agent_lease_guard_ws22_004.py`, `autonomous/tests/test_system_agent_longrun_baseline_ws22_004.py` | 需要补齐 rollout 运行指标面板与长期漂移告警 |
+| Scaffold 事务提交与验证 | 🟢 v1 已可用 | `autonomous/scaffold_engine.py`, `autonomous/scaffold_verify_pipeline.py` | `autonomous/tests/test_scaffold_engine_ws21_001.py`, `autonomous/tests/test_scaffold_verify_pipeline_ws21_005.py`, `tests/test_workspace_txn_e2e_regression.py` | 尚未做到所有代码改动默认强制经 Scaffold 提交 |
+| Event Log / Replay | 🟡 轻量回放可用（WS23-005 已补 outbox->Brainstem 桥接） | `autonomous/event_log/event_store.py`, `autonomous/event_log/replay_tool.py`, `autonomous/state/workflow_store.py`, `system/brainstem_event_bridge.py`, `autonomous/system_agent.py` | `autonomous/tests/test_event_store_ws18_001.py`, `autonomous/tests/test_event_replay_tool_ws18_003.py`, `autonomous/tests/test_workflow_store.py`, `autonomous/tests/test_system_agent_outbox_bridge_ws23_005.py` | 与蓝图中的独立 Event Bus（Topic/Cron/Alert）仍有差距，下一步进入 WS25 |
+| Policy Firewall + Native Guard | 🟢 安全门禁已上线 | `system/policy_firewall.py`, `system/native_executor.py`, `system/sleep_watch.py`, `system/killswitch_guard.py` | `tests/test_policy_firewall.py`, `tests/test_native_executor_guards.py`, `tests/test_native_tools_runtime_hardening.py`, `tests/test_process_lineage.py` | 仍需补齐插件执行面的完全隔离与签名信任链 |
+| Artifact 双通道与回读 | 🟢 已可用 | `system/tool_contract.py`, `system/artifact_store.py`, `system/gc_reader_bridge.py` | `tests/test_tool_contract.py`, `tests/test_native_tools_artifact_and_guard.py`, `tests/test_gc_reader_bridge.py` | 需要把 Artifact 生命周期与配额策略接入统一运维看板 |
+| Immutable DNA | 🟡 已实现校验与审计 | `system/immutable_dna.py`, `system/dna_change_audit.py` | `tests/test_immutable_dna_ws18_006.py`, `tests/test_dna_change_audit_ws18_007.py` | 还需与发布门禁深度联动（审批单自动校验） |
+| Watchdog / Loop-Cost Guard | 🟡 能力已具备 | `system/watchdog_daemon.py`, `system/loop_cost_guard.py`, `system/brainstem_supervisor.py` | `tests/test_watchdog_daemon_ws18_004.py`, `tests/test_loop_cost_guard_ws18_005.py`, `tests/test_brainstem_supervisor_ws18_008.py` | 尚未形成真正“不可变脑干进程”部署形态 |
+| Brain Core（Meta/Router/Memory） | 🟡 主干能力已上线 | `autonomous/meta_agent_runtime.py`, `autonomous/router_engine.py`, `autonomous/working_memory_manager.py`, `system/semantic_graph.py`, `system/episodic_memory.py` | `autonomous/tests/test_meta_agent_runtime_ws19_001.py`, `autonomous/tests/test_router_engine_ws19_002.py`, `autonomous/tests/test_working_memory_manager_ws19_004.py`, `tests/test_semantic_graph.py`, `tests/test_episodic_memory.py` | 还需完成多模型路由经济性与跨任务全局优化 |
+| 发布收口自动化（M0-M8） | 🟢 已接入（新增 M8 门禁链） | `scripts/release_phase3_closure_chain_ws22_004.py`, `scripts/release_closure_chain_m0_m5.py`, `scripts/release_closure_chain_m8_ws23_006.py`, `scripts/release_closure_chain_full_m0_m7.py`, `scripts/validate_m8_closure_gate_ws23_006.py` | `tests/test_release_phase3_closure_chain_ws22_004.py`, `tests/test_release_closure_chain_m0_m5.py`, `tests/test_release_closure_chain_m8_ws23_006.py`, `tests/test_release_closure_chain_full_m0_m7.py` | 需继续扩展到 M9-M12（插件隔离、Topic Event Bus、72h 长稳） |
+| `register_new_tool` 隔离插件宿主 | 🔴 目标态未完成 | （目标态见 `doc/12-limbs-layer-modules.md`） | （待新增） | 需落地独立插件 worker（进程/容器隔离、签名校验、只读宿主接口） |
 
 ---
 

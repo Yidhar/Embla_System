@@ -1,7 +1,7 @@
 ﻿# Task 拆解总览（迁移 + 增量开发）
 
 文档状态：执行规划（基于当前 As-Is 与目标态文档）  
-最后更新：2026-02-24
+最后更新：2026-02-25
 
 ## 1. 目标
 
@@ -84,11 +84,23 @@
 31. `scripts/release_closure_chain_m0_m5.py`
     - M0-M5 发布收口脚本链统一入口（串行执行 T0-T5：基线、回归、工单产物）。
 32. `scripts/release_closure_chain_full_m0_m7.py`
-    - M0-M7 全量发布收口统一入口（串行执行 M0-M5 + M6-M7 两段门禁链）。
+    - M0-M8 全量发布收口统一入口（兼容脚本名，串行执行 M0-M5 + M6-M7 + M8 门禁链）。
 33. `scripts/render_release_closure_summary.py`
-    - 发布收口报告摘要生成器（汇总 M0-M7/M0-M5/M6-M7 结果并输出 Markdown）。
+    - 发布收口报告摘要生成器（汇总 M0-M8/M0-M5/M6-M7/M8 结果并输出 Markdown）。
 34. `scripts/sync_task_backlog_status.py`
     - 将 `99-task-backlog.csv` 的 `status` 字段从 `09-execution-board.csv` 同步对齐。
+35. `doc/task/23-phase3-full-target-task-list.md`
+    - 从 M7 到 Phase3 Full 的增量任务清单（M8-M12、lane 并行、依赖分组、门禁定义）。
+36. `scripts/release_closure_chain_m8_ws23_006.py`
+    - M8 发布收口脚本链统一入口（串行执行 T0-T6：WS23 回归、产物生成、门禁、文档一致性）。
+37. `scripts/validate_m8_closure_gate_ws23_006.py`
+    - M8 闭环门禁校验入口（汇总 WS23-001/003/004/005 报告 + 文档 + runbook）。
+38. `scripts/run_outbox_brainstem_bridge_smoke_ws23_005.py`
+    - WS23-005 outbox->Brainstem 桥接 smoke 产物生成脚本。
+39. `autonomous/ws23_release_gate.py`
+    - WS23 M8 门禁评估器（报告规则、文档规则、runbook 规则）。
+40. `doc/task/runbooks/release_m8_phase3_closure_onepager_ws23_006.md`
+    - M8 发布收口一页清单（T0-T6 执行顺序、放行条件、产物归档）。
 
 ## 4. 任务状态约定
 

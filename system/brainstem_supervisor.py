@@ -219,6 +219,60 @@ class BrainstemSupervisor:
             return BrainstemServiceState(service_name=name)
         return BrainstemServiceState.from_dict(state.to_dict())
 
+    def build_health_snapshot(self, *, required_services: Optional[List[str]] = None) -> Dict[str, Any]:
+        with self._lock:
+            names = set(self._states.keys()) | set(self._specs.keys())
+            if required_services is not None:
+                names |= {str(item).strip() for item in required_services if str(item).strip()}
+
+            rows: List[Dict[str, Any]] = []
+            unhealthy_services: List[str] = []
+            for name in sorted(names):
+                state = self._states.get(name, BrainstemServiceState(service_name=name))
+                registered = name in self._specs
+                running = bool(state.running and state.pid > 0)
+                mode = str(state.mode or "managed").strip().lower()
+
+                if not registered:
+                    status = "missing"
+                    healthy = False
+                    reason = "service_not_registered"
+                elif running:
+                    status = "running"
+                    healthy = True
+                    reason = "ok"
+                elif mode == "lightweight":
+                    status = "degraded"
+                    healthy = False
+                    reason = "lightweight_fallback_mode"
+                else:
+                    status = "stopped"
+                    healthy = False
+                    reason = "service_not_running"
+
+                if not healthy:
+                    unhealthy_services.append(name)
+
+                rows.append(
+                    {
+                        "service_name": name,
+                        "registered": registered,
+                        "healthy": healthy,
+                        "status": status,
+                        "reason": reason,
+                        "state": state.to_dict(),
+                    }
+                )
+
+            return {
+                "generated_at": _utc_iso(),
+                "state_file": str(self.state_file),
+                "healthy": len(unhealthy_services) == 0,
+                "service_count": len(rows),
+                "unhealthy_services": sorted(unhealthy_services),
+                "services": rows,
+            }
+
     def build_supervisor_manifest(self) -> Dict[str, Any]:
         services: List[Dict[str, Any]] = []
         for name, spec in self._specs.items():

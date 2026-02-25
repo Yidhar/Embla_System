@@ -132,3 +132,27 @@ def test_brainstem_supervisor_renders_deployment_templates() -> None:
         assert manifest["services"][0]["service_name"] == "brainstem-watchdog"
     finally:
         _cleanup_case_root(case_root)
+
+
+def test_brainstem_supervisor_health_snapshot_marks_missing_and_stopped_services() -> None:
+    case_root = _make_case_root("test_brainstem_supervisor_ws18_008")
+    try:
+        supervisor = BrainstemSupervisor(state_file=case_root / "state.json", launcher=lambda _spec: 1200)
+        supervisor.register_service(
+            BrainstemServiceSpec(
+                service_name="brainstem-runtime",
+                command=["python", "main.py", "--headless"],
+                restart_policy="never",
+            )
+        )
+        supervisor.ensure_running("brainstem-runtime")
+        supervisor.mark_exit("brainstem-runtime", exit_code=0)
+
+        health = supervisor.build_health_snapshot(required_services=["brainstem-runtime", "brainstem-watchdog"])
+        assert health["healthy"] is False
+        assert sorted(health["unhealthy_services"]) == ["brainstem-runtime", "brainstem-watchdog"]
+        rows = {row["service_name"]: row for row in health["services"]}
+        assert rows["brainstem-runtime"]["status"] == "stopped"
+        assert rows["brainstem-watchdog"]["status"] == "missing"
+    finally:
+        _cleanup_case_root(case_root)

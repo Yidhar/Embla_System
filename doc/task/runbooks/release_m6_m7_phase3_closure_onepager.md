@@ -25,7 +25,7 @@
 发布链串接入口（Windows 打包前置门禁）：
 `.\.venv\Scripts\python.exe scripts/build-win.py --phase3-closure`
 
-全量总入口（M0-M7）：
+全量总入口（M0-M8）：
 `.\.venv\Scripts\python.exe scripts/release_closure_chain_full_m0_m7.py`
 
 1. T0 执行 Phase3 回归
