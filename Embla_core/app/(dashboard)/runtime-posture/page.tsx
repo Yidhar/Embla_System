@@ -1,6 +1,14 @@
 import { SignalCard, type SignalState } from "@/components/cards/signal-card";
 import { MetricBar, type MetricBarTone } from "@/components/charts/metric-bar";
 import { fetchEvidenceIndex, fetchRuntimePosture } from "@/lib/api/ops";
+import {
+  formatIsoDateTime,
+  formatNumber,
+  formatPercentRatio,
+  resolveLangFromSearchParams,
+  translateSignalState,
+  type AppLang,
+} from "@/lib/i18n";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +17,156 @@ type RuntimeCard = {
   value: string;
   note: string;
   state: SignalState;
+};
+
+type RuntimePageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+const PAGE_COPY: Record<
+  AppLang,
+  {
+    cards: {
+      runtimeRollout: { title: string; note: string };
+      failOpen: { title: string; note: string };
+      lease: { title: string; note: string };
+      queueDepth: { title: string; note: string };
+      lockStatus: { title: string; note: string };
+      diskWatermark: { title: string; note: string };
+    };
+    sections: {
+      runtimeBudget: string;
+      dataSources: string;
+      evidenceGates: string;
+      requiredEvidence: string;
+      leaseGuard: string;
+      summarySnapshot: string;
+      recentEvidenceFiles: string;
+    };
+    metricLabels: {
+      rolloutHitRatio: string;
+      failOpenUsage: string;
+      queuePressure: string;
+      diskUsage: string;
+      evidenceCoverage: string;
+      evidencePassRatio: string;
+    };
+    words: {
+      totalDecisions: string;
+      blocked: string;
+      budget: string;
+      critical: string;
+      oldestPendingAge: string;
+      gbFree: string;
+      eventsScanned: string;
+      missing: string;
+      failed: string;
+      discoveredRequiredEvidence: string;
+      requiredReportsPassed: string;
+      noSourceReport: string;
+      noEvidenceIndexed: string;
+      noRecentEvidenceFile: string;
+      state: string;
+      owner: string;
+      fencingEpoch: string;
+      secondsToExpiry: string;
+    };
+  }
+> = {
+  en: {
+    cards: {
+      runtimeRollout: { title: "Runtime Rollout", note: "SubAgent decision hit ratio" },
+      failOpen: { title: "Fail Open", note: "Current fail-open ratio" },
+      lease: { title: "Lease", note: "Global orchestrator lease state" },
+      queueDepth: { title: "Queue Depth", note: "Pending outbox events" },
+      lockStatus: { title: "Lock Status", note: "Global mutex lock health" },
+      diskWatermark: { title: "Disk Watermark", note: "Artifact storage usage ratio" },
+    },
+    sections: {
+      runtimeBudget: "Runtime Budget & Pressure",
+      dataSources: "Data Sources",
+      evidenceGates: "M12 Evidence Gates",
+      requiredEvidence: "Required Evidence Reports",
+      leaseGuard: "Lease Guard",
+      summarySnapshot: "Summary Snapshot",
+      recentEvidenceFiles: "Recent Evidence Files",
+    },
+    metricLabels: {
+      rolloutHitRatio: "Rollout Hit Ratio",
+      failOpenUsage: "Fail-Open Usage",
+      queuePressure: "Queue Pressure",
+      diskUsage: "Disk Usage",
+      evidenceCoverage: "Evidence Coverage",
+      evidencePassRatio: "Evidence Pass Ratio",
+    },
+    words: {
+      totalDecisions: "Total decisions",
+      blocked: "Blocked",
+      budget: "Budget",
+      critical: "Critical",
+      oldestPendingAge: "Oldest pending age",
+      gbFree: "GB free",
+      eventsScanned: "events_scanned",
+      missing: "Missing",
+      failed: "Failed",
+      discoveredRequiredEvidence: "Discovered required evidence reports",
+      requiredReportsPassed: "Required reports currently in passed state",
+      noSourceReport: "No source report detected.",
+      noEvidenceIndexed: "No evidence report indexed.",
+      noRecentEvidenceFile: "No recent evidence file.",
+      state: "State",
+      owner: "Owner",
+      fencingEpoch: "Fencing Epoch",
+      secondsToExpiry: "Seconds To Expiry",
+    },
+  },
+  "zh-CN": {
+    cards: {
+      runtimeRollout: { title: "运行分流命中率", note: "SubAgent 决策命中比例" },
+      failOpen: { title: "Fail-Open 比例", note: "当前降级放行占比" },
+      lease: { title: "租约状态", note: "全局调度租约健康状态" },
+      queueDepth: { title: "队列深度", note: "待处理 outbox 事件数" },
+      lockStatus: { title: "锁状态", note: "全局互斥锁健康度" },
+      diskWatermark: { title: "磁盘水位", note: "Artifact 存储使用率" },
+    },
+    sections: {
+      runtimeBudget: "运行预算与压力",
+      dataSources: "数据来源",
+      evidenceGates: "M12 证据门禁",
+      requiredEvidence: "必需证据报告",
+      leaseGuard: "租约防护",
+      summarySnapshot: "摘要快照",
+      recentEvidenceFiles: "最近证据文件",
+    },
+    metricLabels: {
+      rolloutHitRatio: "分流命中率",
+      failOpenUsage: "Fail-Open 使用率",
+      queuePressure: "队列压力",
+      diskUsage: "磁盘使用情况",
+      evidenceCoverage: "证据覆盖率",
+      evidencePassRatio: "证据通过率",
+    },
+    words: {
+      totalDecisions: "总决策数",
+      blocked: "已阻断",
+      budget: "预算",
+      critical: "严重阈值",
+      oldestPendingAge: "最老待处理时长",
+      gbFree: "GB 可用空间",
+      eventsScanned: "events_scanned",
+      missing: "缺失",
+      failed: "失败",
+      discoveredRequiredEvidence: "已发现的必需证据报告",
+      requiredReportsPassed: "当前处于通过状态的必需报告",
+      noSourceReport: "未检测到来源报告。",
+      noEvidenceIndexed: "未索引到证据报告。",
+      noRecentEvidenceFile: "暂无最近证据文件。",
+      state: "状态",
+      owner: "持有者",
+      fencingEpoch: "Fencing Epoch",
+      secondsToExpiry: "距过期秒数",
+    },
+  },
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -42,18 +200,16 @@ function asText(value: unknown, fallback = "--"): string {
   return fallback;
 }
 
-function toPercent(value: unknown): string {
-  if (typeof value !== "number" || Number.isNaN(value)) {
-    return "--";
-  }
-  return `${(value * 100).toFixed(1)}%`;
+function toPercent(value: unknown, lang: AppLang): string {
+  return formatPercentRatio(value, lang, 1, "--");
 }
 
-function toCompact(value: unknown): string {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-  return "--";
+function toNumber(value: unknown, lang: AppLang, maxFractionDigits = 0): string {
+  return formatNumber(value, lang, {
+    maximumFractionDigits: maxFractionDigits,
+    minimumFractionDigits: maxFractionDigits > 0 ? Math.min(maxFractionDigits, 2) : 0,
+    fallback: "--",
+  });
 }
 
 function toState(raw: unknown): SignalState {
@@ -108,7 +264,34 @@ function toneClassForState(state: SignalState): string {
   return "bg-slate-100 text-slate-700";
 }
 
-export default async function RuntimePosturePage() {
+function gateLabel(gateLevel: unknown, lang: AppLang): string {
+  const normalized = String(gateLevel || "soft").toLowerCase();
+  if (lang === "zh-CN") {
+    return normalized === "hard" ? "硬门禁" : "软门禁";
+  }
+  return normalized === "hard" ? "hard-gate" : "soft-gate";
+}
+
+function reportStatusLabel(status: unknown, lang: AppLang): string {
+  const normalized = String(status || "unknown").toLowerCase();
+  if (lang === "zh-CN") {
+    if (normalized === "passed") {
+      return "通过";
+    }
+    if (normalized === "failed") {
+      return "失败";
+    }
+    if (normalized === "missing") {
+      return "缺失";
+    }
+    return "未知";
+  }
+  return normalized;
+}
+
+export default async function RuntimePosturePage({ searchParams }: RuntimePageProps) {
+  const lang = await resolveLangFromSearchParams(searchParams);
+  const copy = PAGE_COPY[lang];
   const [payload, evidencePayload] = await Promise.all([fetchRuntimePosture(), fetchEvidenceIndex()]);
   const metrics = asRecord(payload?.data?.metrics);
   const runtimeRollout = asRecord(metrics.runtime_rollout);
@@ -143,39 +326,39 @@ export default async function RuntimePosturePage() {
 
   const cards: RuntimeCard[] = [
     {
-      title: "Runtime Rollout",
-      value: toPercent(rolloutValue),
-      note: "SubAgent decision hit ratio",
+      title: copy.cards.runtimeRollout.title,
+      value: toPercent(rolloutValue, lang),
+      note: copy.cards.runtimeRollout.note,
       state: toState(runtimeRollout.status),
     },
     {
-      title: "Fail Open",
-      value: toPercent(failOpenValue),
-      note: "Current fail-open ratio",
+      title: copy.cards.failOpen.title,
+      value: toPercent(failOpenValue, lang),
+      note: copy.cards.failOpen.note,
       state: toState(runtimeFailOpen.status),
     },
     {
-      title: "Lease",
+      title: copy.cards.lease.title,
       value: String(runtimeLease.state || "missing").toUpperCase(),
-      note: "Global orchestrator lease state",
+      note: copy.cards.lease.note,
       state: toState(runtimeLease.status),
     },
     {
-      title: "Queue Depth",
-      value: toCompact(queuePending),
-      note: "Pending outbox events",
+      title: copy.cards.queueDepth.title,
+      value: toNumber(queuePending, lang),
+      note: copy.cards.queueDepth.note,
       state: toState(queueDepth.status),
     },
     {
-      title: "Lock Status",
+      title: copy.cards.lockStatus.title,
       value: String(lockStatus.state || "unknown").toUpperCase(),
-      note: "Global mutex lock health",
+      note: copy.cards.lockStatus.note,
       state: toState(lockStatus.status),
     },
     {
-      title: "Disk Watermark",
-      value: toPercent(diskUsage),
-      note: "Artifact storage usage ratio",
+      title: copy.cards.diskWatermark.title,
+      value: toPercent(diskUsage, lang),
+      note: copy.cards.diskWatermark.note,
       state: toState(diskWatermark.status),
     },
   ];
@@ -184,49 +367,68 @@ export default async function RuntimePosturePage() {
     <div className="space-y-6">
       <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {cards.map((card) => (
-          <SignalCard key={card.title} title={card.title} value={card.value} note={card.note} state={card.state} />
+          <SignalCard
+            key={card.title}
+            title={card.title}
+            value={card.value}
+            note={card.note}
+            state={card.state}
+            stateLabel={translateSignalState(card.state, lang)}
+          />
         ))}
       </section>
 
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <article className="glass-card p-6">
-          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">Runtime Budget & Pressure</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.runtimeBudget}</p>
           <div className="mt-4 grid grid-cols-1 gap-3">
             <MetricBar
-              label="Rollout Hit Ratio"
-              value={toPercent(rolloutValue)}
+              label={copy.metricLabels.rolloutHitRatio}
+              value={toPercent(rolloutValue, lang)}
               ratio={rolloutValue}
               tone={toTone(toState(runtimeRollout.status))}
-              hint={`Total decisions: ${asText(runtimeRollout.total_decisions)}`}
+              hint={`${copy.words.totalDecisions}: ${asText(runtimeRollout.total_decisions)}`}
             />
             <MetricBar
-              label="Fail-Open Usage"
-              value={toPercent(failOpenValue)}
+              label={copy.metricLabels.failOpenUsage}
+              value={toPercent(failOpenValue, lang)}
               ratio={failOpenValue}
               tone={toTone(toState(runtimeFailOpen.status))}
-              right={<span>Budget {toPercent(failOpenBudget)}</span>}
-              hint={`Blocked: ${asText(runtimeFailOpen.fail_open_blocked_count)}`}
+              right={
+                <span>
+                  {copy.words.budget} {toPercent(failOpenBudget, lang)}
+                </span>
+              }
+              hint={`${copy.words.blocked}: ${asText(runtimeFailOpen.fail_open_blocked_count)}`}
             />
             <MetricBar
-              label="Queue Pressure"
-              value={toCompact(queuePending)}
+              label={copy.metricLabels.queuePressure}
+              value={toNumber(queuePending, lang)}
               ratio={queueRatio}
               tone={toTone(toState(queueDepth.status))}
-              right={<span>Critical {toCompact(queueCritical)}</span>}
-              hint={`Oldest pending age: ${toCompact(queueDepth.oldest_pending_age_seconds)}s`}
+              right={
+                <span>
+                  {copy.words.critical} {toNumber(queueCritical, lang)}
+                </span>
+              }
+              hint={`${copy.words.oldestPendingAge}: ${toNumber(queueDepth.oldest_pending_age_seconds, lang)}s`}
             />
             <MetricBar
-              label="Disk Usage"
-              value={toPercent(diskUsage)}
+              label={copy.metricLabels.diskUsage}
+              value={toPercent(diskUsage, lang)}
               ratio={diskUsage}
               tone={toTone(toState(diskWatermark.status))}
-              right={<span>{toCompact(diskWatermark.filesystem_free_gb)} GB free</span>}
+              right={
+                <span>
+                  {toNumber(diskWatermark.filesystem_free_gb, lang, 2)} {copy.words.gbFree}
+                </span>
+              }
             />
           </div>
         </article>
 
         <article className="glass-card p-6">
-          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">Data Sources</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.dataSources}</p>
           <ul className="mt-4 space-y-2 text-sm text-gray-700">
             {(payload?.source_reports || []).map((path) => (
               <li key={path} className="rounded-xl bg-white/70 px-3 py-2 font-mono text-xs">
@@ -234,47 +436,51 @@ export default async function RuntimePosturePage() {
               </li>
             ))}
             {(!payload || (payload.source_reports || []).length === 0) && (
-              <li className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-500">No source report detected.</li>
+              <li className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-500">{copy.words.noSourceReport}</li>
             )}
           </ul>
           <div className="mt-4 rounded-xl bg-white/70 p-3 text-xs text-gray-600">
-            events_scanned: <span className="font-bold">{asText(sources.events_scanned)}</span>
+            {copy.words.eventsScanned}: <span className="font-bold">{asText(sources.events_scanned)}</span>
           </div>
         </article>
       </section>
 
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <article className="glass-card p-6">
-          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">M12 Evidence Gates</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.evidenceGates}</p>
           <div className="mt-4 grid grid-cols-1 gap-3">
             <MetricBar
-              label="Evidence Coverage"
-              value={`${toCompact(requiredPresent)}/${toCompact(requiredTotal)}`}
+              label={copy.metricLabels.evidenceCoverage}
+              value={`${toNumber(requiredPresent, lang)}/${toNumber(requiredTotal, lang)}`}
               ratio={evidenceCoverageRatio}
               tone={requiredMissing && requiredMissing > 0 ? "warning" : "healthy"}
-              hint="Discovered required evidence reports"
+              hint={copy.words.discoveredRequiredEvidence}
             />
             <MetricBar
-              label="Evidence Pass Ratio"
-              value={`${toCompact(requiredPassed)}/${toCompact(requiredTotal)}`}
+              label={copy.metricLabels.evidencePassRatio}
+              value={`${toNumber(requiredPassed, lang)}/${toNumber(requiredTotal, lang)}`}
               ratio={evidencePassRatio}
               tone={requiredFailed && requiredFailed > 0 ? "critical" : "healthy"}
-              right={<span>Failed {toCompact(requiredFailed)}</span>}
-              hint="Required reports currently in passed state"
+              right={
+                <span>
+                  {copy.words.failed} {toNumber(requiredFailed, lang)}
+                </span>
+              }
+              hint={copy.words.requiredReportsPassed}
             />
           </div>
           <div className="mt-4 grid grid-cols-2 gap-2">
             <div className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-700">
-              Missing: <span className="font-bold">{toCompact(requiredMissing)}</span>
+              {copy.words.missing}: <span className="font-bold">{toNumber(requiredMissing, lang)}</span>
             </div>
             <div className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-700">
-              Failed: <span className="font-bold">{toCompact(requiredFailed)}</span>
+              {copy.words.failed}: <span className="font-bold">{toNumber(requiredFailed, lang)}</span>
             </div>
           </div>
         </article>
 
         <article className="glass-card p-6">
-          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">Required Evidence Reports</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.requiredEvidence}</p>
           <ul className="mt-4 space-y-2 text-xs text-gray-700">
             {requiredReports.slice(0, 12).map((item) => {
               const status = String(item.status || "unknown");
@@ -287,7 +493,7 @@ export default async function RuntimePosturePage() {
                     <span
                       className={`rounded-lg px-2 py-1 text-[10px] font-bold uppercase tracking-[0.16em] ${toneClassForState(state)}`}
                     >
-                      {gateLevel}/{status}
+                      {gateLabel(gateLevel, lang)}/{reportStatusLabel(status, lang)}
                     </span>
                   </div>
                   <p className="mt-1 font-mono text-[10px] text-gray-500">{String(item.path || "")}</p>
@@ -295,7 +501,7 @@ export default async function RuntimePosturePage() {
               );
             })}
             {requiredReports.length === 0 ? (
-              <li className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-500">No evidence report indexed.</li>
+              <li className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-500">{copy.words.noEvidenceIndexed}</li>
             ) : null}
           </ul>
         </article>
@@ -303,17 +509,25 @@ export default async function RuntimePosturePage() {
 
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <article className="glass-card p-6">
-          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">Lease Guard</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.leaseGuard}</p>
           <div className="mt-4 space-y-2 text-xs text-gray-700">
-            <p className="rounded-xl bg-white/70 px-3 py-2">State: {asText(runtimeLease.state).toUpperCase()}</p>
-            <p className="rounded-xl bg-white/70 px-3 py-2">Owner: {asText(runtimeLease.owner_id, "none")}</p>
-            <p className="rounded-xl bg-white/70 px-3 py-2">Fencing Epoch: {asText(runtimeLease.fencing_epoch)}</p>
-            <p className="rounded-xl bg-white/70 px-3 py-2">Seconds To Expiry: {toCompact(runtimeLease.value)}</p>
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.state}: {asText(runtimeLease.state).toUpperCase()}
+            </p>
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.owner}: {asText(runtimeLease.owner_id, "none")}
+            </p>
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.fencingEpoch}: {asText(runtimeLease.fencing_epoch)}
+            </p>
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.secondsToExpiry}: {toNumber(runtimeLease.value, lang)}
+            </p>
           </div>
         </article>
 
         <article className="glass-card p-6">
-          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">Summary Snapshot</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.summarySnapshot}</p>
           <pre className="mt-4 overflow-auto rounded-2xl bg-[#1c1c1e] p-4 text-xs text-gray-100">
             {JSON.stringify(payload?.data?.summary || { overall_status: "unknown" }, null, 2)}
           </pre>
@@ -322,16 +536,16 @@ export default async function RuntimePosturePage() {
 
       <section className="grid grid-cols-1 gap-4">
         <article className="glass-card p-6">
-          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">Recent Evidence Files</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.recentEvidenceFiles}</p>
           <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2">
             {recentReports.slice(0, 12).map((item) => (
               <div key={String(item.path || item.name || "report")} className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-700">
                 <p className="font-bold">{String(item.name || "unknown")}</p>
-                <p className="mt-1 font-mono text-[10px] text-gray-500">{String(item.modified_at || "--")}</p>
+                <p className="mt-1 font-mono text-[10px] text-gray-500">{formatIsoDateTime(item.modified_at, lang)}</p>
               </div>
             ))}
             {recentReports.length === 0 ? (
-              <div className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-500">No recent evidence file.</div>
+              <div className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-500">{copy.words.noRecentEvidenceFile}</div>
             ) : null}
           </div>
         </article>

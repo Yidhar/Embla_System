@@ -19,6 +19,36 @@ type GraphEdge = {
   predicate: string;
 };
 
+type MemoryGraphCanvasText = {
+  keyword: string;
+  keywordPlaceholder: string;
+  predicate: string;
+  predicateAll: string;
+  edges: string;
+  nodesCount: string;
+  edgesCount: string;
+  selected: string;
+  none: string;
+  nodeDetail: string;
+  type: string;
+  degreeWeight: string;
+};
+
+const DEFAULT_TEXT: MemoryGraphCanvasText = {
+  keyword: "Keyword",
+  keywordPlaceholder: "subject / predicate / object",
+  predicate: "Predicate",
+  predicateAll: "All",
+  edges: "Edges",
+  nodesCount: "Nodes",
+  edgesCount: "Edges",
+  selected: "Selected",
+  none: "none",
+  nodeDetail: "Node Detail",
+  type: "Type",
+  degreeWeight: "Degree Weight",
+};
+
 function hashHue(text: string): number {
   let value = 0;
   for (let i = 0; i < text.length; i += 1) {
@@ -79,7 +109,14 @@ function buildGraph(rows: MemoryGraphRow[], maxEdges: number): { nodes: GraphNod
   return { nodes, edges, predicates };
 }
 
-export function MemoryGraphCanvas({ rows }: { rows: MemoryGraphRow[] }) {
+export function MemoryGraphCanvas({
+  rows,
+  text,
+}: {
+  rows: MemoryGraphRow[];
+  text?: Partial<MemoryGraphCanvasText>;
+}) {
+  const t = { ...DEFAULT_TEXT, ...(text || {}) };
   const [keyword, setKeyword] = useState("");
   const [predicateFilter, setPredicateFilter] = useState("all");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -132,22 +169,22 @@ export function MemoryGraphCanvas({ rows }: { rows: MemoryGraphRow[] }) {
     <div className="rounded-3xl border border-gray-200/70 bg-white/70 p-4">
       <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-4">
         <label className="md:col-span-2">
-          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">Keyword</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">{t.keyword}</p>
           <input
             value={keyword}
             onChange={(event) => setKeyword(event.target.value)}
-            placeholder="subject / predicate / object"
+            placeholder={t.keywordPlaceholder}
             className="mt-1 h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
           />
         </label>
         <label>
-          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">Predicate</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">{t.predicate}</p>
           <select
             value={predicateFilter}
             onChange={(event) => setPredicateFilter(event.target.value)}
             className="mt-1 h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
           >
-            <option value="all">All</option>
+            <option value="all">{t.predicateAll}</option>
             {graph.predicates.map((predicate) => (
               <option key={predicate} value={predicate}>
                 {predicate}
@@ -156,7 +193,7 @@ export function MemoryGraphCanvas({ rows }: { rows: MemoryGraphRow[] }) {
           </select>
         </label>
         <label>
-          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">Edges</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">{t.edges}</p>
           <input
             type="range"
             min={20}
@@ -225,22 +262,26 @@ export function MemoryGraphCanvas({ rows }: { rows: MemoryGraphRow[] }) {
 
       <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
         <div className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-700">
-          Nodes: <span className="font-bold">{graph.nodes.length}</span>
+          {t.nodesCount}: <span className="font-bold">{graph.nodes.length}</span>
         </div>
         <div className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-700">
-          Edges: <span className="font-bold">{graph.edges.length}</span>
+          {t.edgesCount}: <span className="font-bold">{graph.edges.length}</span>
         </div>
         <div className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-700">
-          Selected: <span className="font-bold">{selectedNode?.id || "none"}</span>
+          {t.selected}: <span className="font-bold">{selectedNode?.id || t.none}</span>
         </div>
       </div>
 
       {selectedNode ? (
         <div className="mt-3 rounded-xl border border-gray-200/70 bg-white/80 p-3 text-xs text-gray-700">
-          <p className="font-bold uppercase tracking-[0.2em] text-gray-500">Node Detail</p>
+          <p className="font-bold uppercase tracking-[0.2em] text-gray-500">{t.nodeDetail}</p>
           <p className="mt-1 font-mono">{selectedNode.id}</p>
-          <p className="mt-1">Type: {selectedNode.typeLabel || "unknown"}</p>
-          <p>Degree Weight: {selectedNode.count}</p>
+          <p className="mt-1">
+            {t.type}: {selectedNode.typeLabel || "unknown"}
+          </p>
+          <p>
+            {t.degreeWeight}: {selectedNode.count}
+          </p>
         </div>
       ) : null}
     </div>

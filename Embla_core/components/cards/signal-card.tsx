@@ -24,11 +24,13 @@ export function SignalCard({
   value,
   note,
   state,
+  stateLabel,
 }: {
   title: string;
   value: string;
   note: string;
   state: SignalState;
+  stateLabel?: string;
 }) {
   return (
     <section className="glass-card p-6">
@@ -40,7 +42,7 @@ export function SignalCard({
           className={`inline-flex items-center gap-1 rounded-xl border px-2 py-1 text-[10px] font-bold uppercase tracking-[0.16em] ${STATE_STYLE[state]}`}
         >
           <StateIcon state={state} />
-          {state}
+          {stateLabel || state}
         </span>
       </div>
     </section>
