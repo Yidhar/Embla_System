@@ -1061,6 +1061,10 @@ def _ops_utc_iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _ops_repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
 def _ops_unix_path(path: Path) -> str:
     return str(path).replace("\\", "/")
 
@@ -1074,6 +1078,148 @@ def _ops_status_to_severity(status: str) -> str:
     if normalized in {"critical", "error", "failed", "fail"}:
         return "critical"
     return "unknown"
+
+
+_OPS_REQUIRED_REPORT_DEFINITIONS: List[Dict[str, Any]] = [
+    {
+        "id": "full_chain_m0_m12",
+        "label": "Release Closure Chain M0-M12",
+        "relative_path": "scratch/reports/release_closure_chain_full_m0_m12_result.json",
+        "gate_level": "hard",
+    },
+    {
+        "id": "cutover_status_ws27_002",
+        "label": "WS27-002 Cutover Status",
+        "relative_path": "scratch/reports/ws27_subagent_cutover_status_ws27_002.json",
+        "gate_level": "hard",
+    },
+    {
+        "id": "oob_drill_ws27_003",
+        "label": "WS27-003 OOB Repair Drill",
+        "relative_path": "scratch/reports/ws27_oob_repair_drill_ws27_003.json",
+        "gate_level": "hard",
+    },
+    {
+        "id": "doc_consistency_ws27_005",
+        "label": "WS27-005 Doc Consistency",
+        "relative_path": "scratch/reports/ws27_m12_doc_consistency_ws27_005.json",
+        "gate_level": "hard",
+    },
+    {
+        "id": "wallclock_acceptance_ws27_001",
+        "label": "WS27-001 72h Wallclock Acceptance",
+        "relative_path": "scratch/reports/ws27_72h_wallclock_acceptance_ws27_001.json",
+        "gate_level": "soft",
+    },
+    {
+        "id": "release_report_ws27_006",
+        "label": "WS27-006 Release Report",
+        "relative_path": "scratch/reports/phase3_full_release_report_ws27_006.json",
+        "gate_level": "soft",
+    },
+    {
+        "id": "signoff_chain_ws27_006",
+        "label": "WS27-006 Signoff Chain",
+        "relative_path": "scratch/reports/release_phase3_full_signoff_chain_ws27_006_result.json",
+        "gate_level": "soft",
+    },
+]
+
+_OPS_INCIDENT_EVENT_SEVERITY: Dict[str, str] = {
+    "IncidentOpened": "critical",
+    "SubAgentRuntimeAutoDegraded": "critical",
+    "LeaseLost": "critical",
+    "SubAgentRuntimeFailOpenBlocked": "warning",
+    "SubAgentRuntimeFailOpen": "warning",
+}
+
+
+def _ops_read_json_file(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
+def _ops_parse_iso_datetime(value: Any) -> Optional[float]:
+    from datetime import datetime
+
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
+def _ops_extract_failed_checks(payload: Dict[str, Any]) -> List[str]:
+    checks = payload.get("checks")
+    if not isinstance(checks, dict):
+        return []
+    failed: List[str] = []
+    for key, value in checks.items():
+        if value is False:
+            failed.append(str(key))
+    return failed
+
+
+def _ops_collect_required_reports(repo_root: Path) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for spec in _OPS_REQUIRED_REPORT_DEFINITIONS:
+        relative_path = Path(str(spec["relative_path"]))
+        absolute_path = repo_root / relative_path
+        exists = absolute_path.exists()
+        payload = _ops_read_json_file(absolute_path) if exists else {}
+        passed_value = payload.get("passed")
+        passed: Optional[bool]
+        if isinstance(passed_value, bool):
+            passed = passed_value
+        else:
+            passed = None
+        failed_checks = _ops_extract_failed_checks(payload)
+        status = "missing"
+        if exists and passed is True:
+            status = "passed"
+        elif exists and passed is False:
+            status = "failed"
+        elif exists:
+            status = "unknown"
+
+        mtime_iso = ""
+        try:
+            if exists:
+                from datetime import datetime, timezone
+
+                mtime_iso = datetime.fromtimestamp(absolute_path.stat().st_mtime, tz=timezone.utc).isoformat()
+        except OSError:
+            mtime_iso = ""
+
+        rows.append(
+            {
+                "id": str(spec["id"]),
+                "label": str(spec["label"]),
+                "gate_level": str(spec["gate_level"]),
+                "path": _ops_unix_path(absolute_path),
+                "exists": exists,
+                "status": status,
+                "passed": passed,
+                "generated_at": str(payload.get("generated_at") or ""),
+                "modified_at": mtime_iso,
+                "scenario": str(payload.get("scenario") or payload.get("task_id") or ""),
+                "failed_checks": failed_checks,
+            }
+        )
+    return rows
 
 
 def _ops_build_response(
@@ -1508,6 +1654,207 @@ async def _ops_build_memory_graph_payload(*, sample_limit: int = 200) -> Dict[st
     )
 
 
+def _ops_build_evidence_index_payload(*, max_reports: int = 100) -> Dict[str, Any]:
+    repo_root = _ops_repo_root()
+    reports_dir = repo_root / "scratch" / "reports"
+    required_reports = _ops_collect_required_reports(repo_root)
+
+    hard_missing = sum(1 for item in required_reports if item["gate_level"] == "hard" and item["status"] == "missing")
+    hard_failed = sum(1 for item in required_reports if item["gate_level"] == "hard" and item["status"] == "failed")
+    soft_missing = sum(1 for item in required_reports if item["gate_level"] == "soft" and item["status"] == "missing")
+    soft_failed = sum(1 for item in required_reports if item["gate_level"] == "soft" and item["status"] == "failed")
+    required_present = sum(1 for item in required_reports if bool(item["exists"]))
+    required_passed = sum(1 for item in required_reports if item["status"] == "passed")
+    required_unknown = sum(1 for item in required_reports if item["status"] == "unknown")
+
+    reason_code: Optional[str] = None
+    reason_text: Optional[str] = None
+    if hard_missing > 0:
+        severity = "critical"
+        reason_code = "EVIDENCE_HARD_REPORT_MISSING"
+        reason_text = "One or more hard-gate reports are missing."
+    elif hard_failed > 0:
+        severity = "critical"
+        reason_code = "EVIDENCE_HARD_REPORT_FAILED"
+        reason_text = "One or more hard-gate reports are in failed state."
+    elif soft_missing > 0 or soft_failed > 0 or required_unknown > 0:
+        severity = "warning"
+        reason_code = "EVIDENCE_SOFT_GATE_PENDING"
+        reason_text = "Soft-gate evidence is pending or not passed yet."
+    elif required_passed > 0:
+        severity = "ok"
+    else:
+        severity = "unknown"
+        reason_code = "EVIDENCE_REPORTS_UNAVAILABLE"
+        reason_text = "No required evidence report has been discovered."
+
+    recent_reports: List[Dict[str, Any]] = []
+    if reports_dir.exists():
+        all_reports = sorted(
+            reports_dir.glob("*.json"),
+            key=lambda path: path.stat().st_mtime if path.exists() else 0,
+            reverse=True,
+        )
+        from datetime import datetime, timezone
+
+        for path in all_reports[: max(1, int(max_reports))]:
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            recent_reports.append(
+                {
+                    "name": path.name,
+                    "path": _ops_unix_path(path),
+                    "size_bytes": int(stat.st_size),
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                }
+            )
+
+    source_reports = sorted(
+        {
+            item["path"]
+            for item in required_reports
+            if bool(item["exists"]) and isinstance(item.get("path"), str) and item["path"]
+        }
+    )
+
+    response_data = {
+        "summary": {
+            "required_total": len(required_reports),
+            "required_present": required_present,
+            "required_passed": required_passed,
+            "required_missing": len(required_reports) - required_present,
+            "required_failed": sum(1 for item in required_reports if item["status"] == "failed"),
+            "hard_missing": hard_missing,
+            "hard_failed": hard_failed,
+            "soft_missing": soft_missing,
+            "soft_failed": soft_failed,
+        },
+        "required_reports": required_reports,
+        "recent_reports": recent_reports,
+    }
+
+    return _ops_build_response(
+        data=response_data,
+        severity=severity,
+        source_reports=source_reports,
+        source_endpoints=[],
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
+
+
+def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
+    repo_root = _ops_repo_root()
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    event_rows = _ops_read_event_rows(events_file, limit=max(200, int(limit) * 10))
+    incidents: List[Dict[str, Any]] = []
+    event_counters: Dict[str, int] = {key: 0 for key in sorted(_OPS_INCIDENT_EVENT_SEVERITY.keys())}
+
+    for row in event_rows:
+        event_type = str(row.get("event_type") or "").strip()
+        severity = _OPS_INCIDENT_EVENT_SEVERITY.get(event_type)
+        if not severity:
+            continue
+        event_counters[event_type] = int(event_counters.get(event_type, 0)) + 1
+        incidents.append(
+            {
+                "source": "events",
+                "severity": severity,
+                "timestamp": str(row.get("timestamp") or ""),
+                "event_type": event_type,
+                "summary": f"{event_type} detected in runtime event stream",
+                "payload_excerpt": _ops_compact_event_payload(row.get("payload")),
+                "report_path": "",
+                "gate_level": "n/a",
+            }
+        )
+
+    required_reports = _ops_collect_required_reports(repo_root)
+    for report in required_reports:
+        status = str(report.get("status") or "")
+        gate_level = str(report.get("gate_level") or "soft")
+        if status not in {"missing", "failed"}:
+            continue
+        severity = "critical" if gate_level == "hard" else "warning"
+        summary = (
+            f"{report['label']} missing"
+            if status == "missing"
+            else f"{report['label']} failed checks: {', '.join(report.get('failed_checks') or ['unknown'])}"
+        )
+        incidents.append(
+            {
+                "source": "report",
+                "severity": severity,
+                "timestamp": str(report.get("generated_at") or report.get("modified_at") or ""),
+                "event_type": "EvidenceGateIssue",
+                "summary": summary,
+                "payload_excerpt": {"status": status, "report_id": report["id"]},
+                "report_path": str(report.get("path") or ""),
+                "gate_level": gate_level,
+            }
+        )
+
+    incidents.sort(
+        key=lambda row: _ops_parse_iso_datetime(row.get("timestamp")) or 0.0,
+        reverse=True,
+    )
+    incidents = incidents[: max(1, int(limit))]
+
+    critical_count = sum(1 for item in incidents if str(item.get("severity")) == "critical")
+    warning_count = sum(1 for item in incidents if str(item.get("severity")) == "warning")
+    latest_incident_at = ""
+    if incidents:
+        latest_incident_at = str(incidents[0].get("timestamp") or "")
+
+    source_reports: List[str] = []
+    if events_file.exists():
+        source_reports.append(_ops_unix_path(events_file))
+    for item in incidents:
+        report_path = str(item.get("report_path") or "")
+        if report_path:
+            source_reports.append(report_path)
+
+    reason_code: Optional[str] = None
+    reason_text: Optional[str] = None
+    if critical_count > 0:
+        severity = "critical"
+        reason_code = "INCIDENTS_CRITICAL_PRESENT"
+        reason_text = "Critical incidents are present in runtime signals."
+    elif warning_count > 0:
+        severity = "warning"
+        reason_code = "INCIDENTS_WARNING_PRESENT"
+        reason_text = "Warning-level incidents are present in runtime signals."
+    elif len(event_rows) > 0:
+        severity = "ok"
+    else:
+        severity = "unknown"
+        reason_code = "INCIDENTS_SIGNAL_EMPTY"
+        reason_text = "No incident signal source was discovered."
+
+    response_data = {
+        "summary": {
+            "total_incidents": len(incidents),
+            "critical_incidents": critical_count,
+            "warning_incidents": warning_count,
+            "latest_incident_at": latest_incident_at,
+        },
+        "event_counters": event_counters,
+        "events_scanned": len(event_rows),
+        "incidents": incidents,
+    }
+
+    return _ops_build_response(
+        data=response_data,
+        severity=severity,
+        source_reports=sorted(set(source_reports)),
+        source_endpoints=[],
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
+
+
 @app.get("/mcp/status")
 async def get_mcp_status_offline():
     """返回 MCP 运行态快照，兼容前端 status/tasks 字段。"""
@@ -1711,6 +2058,28 @@ async def get_ops_workflow_events(events_limit: int = 5000, context_days: int = 
         logger.error(f"获取 /v1/ops/workflow/events 失败: {exc}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"获取 workflow events 失败: {str(exc)}")
+
+
+@app.get("/v1/ops/incidents/latest")
+async def get_ops_incidents_latest(limit: int = 50):
+    """聚合近期事故态势：关键事件 + 关键报告门禁异常。"""
+    try:
+        return _ops_build_incidents_latest_payload(limit=limit)
+    except Exception as exc:
+        logger.error(f"获取 /v1/ops/incidents/latest 失败: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取 incidents latest 失败: {str(exc)}")
+
+
+@app.get("/v1/ops/evidence/index")
+async def get_ops_evidence_index(max_reports: int = 100):
+    """聚合证据索引：M12 关键报告可见性与门禁状态。"""
+    try:
+        return _ops_build_evidence_index_payload(max_reports=max_reports)
+    except Exception as exc:
+        logger.error(f"获取 /v1/ops/evidence/index 失败: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取 evidence index 失败: {str(exc)}")
 
 
 class McpImportRequest(BaseModel):
