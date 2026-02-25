@@ -45,6 +45,11 @@ def test_full_release_chain_runs_both_groups_when_green(monkeypatch) -> None:
             "run_release_closure_chain_m10_ws25_006",
             lambda **kwargs: {"passed": True, "group": "m10", "kwargs": kwargs},
         )
+        monkeypatch.setattr(
+            full_chain,
+            "run_release_closure_chain_m11_ws26_006",
+            lambda **kwargs: {"passed": True, "group": "m11", "kwargs": kwargs},
+        )
 
         report = full_chain.run_release_closure_chain_full_m0_m7(
             repo_root=Path("."),
@@ -54,6 +59,7 @@ def test_full_release_chain_runs_both_groups_when_green(monkeypatch) -> None:
             m8_output_file=case_root / "m8.json",
             m9_output_file=case_root / "m9.json",
             m10_output_file=case_root / "m10.json",
+            m11_output_file=case_root / "m11.json",
         )
         assert report["passed"] is True
         assert report["failed_groups"] == []
@@ -62,6 +68,7 @@ def test_full_release_chain_runs_both_groups_when_green(monkeypatch) -> None:
         assert "m8" in report["group_results"]
         assert "m9" in report["group_results"]
         assert "m10" in report["group_results"]
+        assert "m11" in report["group_results"]
     finally:
         _cleanup_case_root(case_root)
 
@@ -78,6 +85,7 @@ def test_full_release_chain_stops_after_m0_m5_failure_by_default(monkeypatch) ->
         m8_called = {"value": False}
         m9_called = {"value": False}
         m10_called = {"value": False}
+        m11_called = {"value": False}
 
         def _phase3_stub(**kwargs):
             phase3_called["value"] = True
@@ -103,6 +111,12 @@ def test_full_release_chain_stops_after_m0_m5_failure_by_default(monkeypatch) ->
 
         monkeypatch.setattr(full_chain, "run_release_closure_chain_m10_ws25_006", _m10_stub)
 
+        def _m11_stub(**kwargs):
+            m11_called["value"] = True
+            return {"passed": True}
+
+        monkeypatch.setattr(full_chain, "run_release_closure_chain_m11_ws26_006", _m11_stub)
+
         report = full_chain.run_release_closure_chain_full_m0_m7(
             repo_root=Path("."),
             output_file=case_root / "full.json",
@@ -111,6 +125,7 @@ def test_full_release_chain_stops_after_m0_m5_failure_by_default(monkeypatch) ->
             m8_output_file=case_root / "m8.json",
             m9_output_file=case_root / "m9.json",
             m10_output_file=case_root / "m10.json",
+            m11_output_file=case_root / "m11.json",
             continue_on_failure=False,
         )
         assert report["passed"] is False
@@ -119,10 +134,12 @@ def test_full_release_chain_stops_after_m0_m5_failure_by_default(monkeypatch) ->
         assert "m8" not in report["group_results"]
         assert "m9" not in report["group_results"]
         assert "m10" not in report["group_results"]
+        assert "m11" not in report["group_results"]
         assert phase3_called["value"] is False
         assert m8_called["value"] is False
         assert m9_called["value"] is False
         assert m10_called["value"] is False
+        assert m11_called["value"] is False
     finally:
         _cleanup_case_root(case_root)
 
@@ -130,7 +147,7 @@ def test_full_release_chain_stops_after_m0_m5_failure_by_default(monkeypatch) ->
 def test_full_release_chain_quick_mode_forwards_skip_flags(monkeypatch) -> None:
     case_root = _make_case_root("test_release_closure_chain_full_m0_m7")
     try:
-        captured = {"m0": None, "m6": None, "m8": None, "m9": None, "m10": None}
+        captured = {"m0": None, "m6": None, "m8": None, "m9": None, "m10": None, "m11": None}
 
         def _m0_stub(**kwargs):
             captured["m0"] = kwargs
@@ -152,11 +169,16 @@ def test_full_release_chain_quick_mode_forwards_skip_flags(monkeypatch) -> None:
             captured["m10"] = kwargs
             return {"passed": True}
 
+        def _m11_stub(**kwargs):
+            captured["m11"] = kwargs
+            return {"passed": True}
+
         monkeypatch.setattr(full_chain, "run_release_closure_chain_m0_m5", _m0_stub)
         monkeypatch.setattr(full_chain, "run_phase3_release_closure_chain", _m6_stub)
         monkeypatch.setattr(full_chain, "run_release_closure_chain_m8_ws23_006", _m8_stub)
         monkeypatch.setattr(full_chain, "run_release_closure_chain_m9_ws24_006", _m9_stub)
         monkeypatch.setattr(full_chain, "run_release_closure_chain_m10_ws25_006", _m10_stub)
+        monkeypatch.setattr(full_chain, "run_release_closure_chain_m11_ws26_006", _m11_stub)
 
         report = full_chain.run_release_closure_chain_full_m0_m7(
             repo_root=Path("."),
@@ -166,6 +188,7 @@ def test_full_release_chain_quick_mode_forwards_skip_flags(monkeypatch) -> None:
             m8_output_file=case_root / "m8.json",
             m9_output_file=case_root / "m9.json",
             m10_output_file=case_root / "m10.json",
+            m11_output_file=case_root / "m11.json",
             quick_mode=True,
         )
         assert report["passed"] is True
@@ -183,5 +206,8 @@ def test_full_release_chain_quick_mode_forwards_skip_flags(monkeypatch) -> None:
         assert captured["m10"]["skip_tests"] is True
         assert captured["m10"]["skip_runtime_checks"] is True
         assert captured["m10"]["skip_gate"] is True
+        assert captured["m11"]["skip_tests"] is True
+        assert captured["m11"]["skip_runtime_checks"] is True
+        assert captured["m11"]["skip_gate"] is True
     finally:
         _cleanup_case_root(case_root)
