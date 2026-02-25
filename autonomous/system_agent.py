@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from autonomous.dispatcher import DispatchResult, Dispatcher
-from autonomous.event_log import EventStore
+from autonomous.event_log import AlertEventProducer, CronEventProducer, EventStore
 from autonomous.evaluator import Evaluator
 from autonomous.planner import Planner
 from autonomous.release import CanaryThresholds, ReleaseController
@@ -218,6 +218,23 @@ class SystemAgent:
         db_path = log_dir / "workflow.db"
 
         self.event_store = EventStore(event_path)
+        self.cron_event_producer = CronEventProducer(
+            event_store=self.event_store,
+            source="autonomous.system_agent.cron",
+        )
+        self.alert_event_producer = AlertEventProducer(
+            event_store=self.event_store,
+            source="autonomous.system_agent.alert",
+            dedupe_window_seconds=30.0,
+        )
+        self.cron_event_producer.add_schedule(
+            schedule_id="system_agent_cycle_tick",
+            interval_seconds=max(1, int(self.config.cycle_interval_seconds)),
+            topic="cron.system_agent.cycle",
+            event_type="CronScheduleTriggered",
+            payload={"producer": "system_agent"},
+            run_immediately=True,
+        )
         self.workflow_store = WorkflowStore(db_path=db_path)
 
         self.sensor = Sensor(str(self.repo_dir))
@@ -348,6 +365,7 @@ class SystemAgent:
 
     async def run_cycle(self, fencing_epoch: int | None = None) -> None:
         active_epoch = self._ensure_active_epoch(fencing_epoch)
+        self.cron_event_producer.run_due()
         self._emit("CycleStarted", {"instance_id": self.instance_id}, fencing_epoch=active_epoch)
 
         findings = self.sensor.scan_codebase() + self.sensor.scan_logs()
@@ -553,6 +571,25 @@ class SystemAgent:
         action = daemon.run_once()
         if action is None:
             return None
+
+        try:
+            self.alert_event_producer.emit_alert(
+                alert_key="watchdog_threshold_exceeded",
+                severity=str(action.level or "warn"),
+                topic="alert.watchdog",
+                event_type="AlertRaised",
+                payload={
+                    "watchdog_action": action.action,
+                    "watchdog_reasons": list(action.reasons),
+                    "watchdog_snapshot": dict(action.snapshot),
+                    "workflow_id": workflow_id,
+                    "task_id": task.task_id,
+                    "attempt": attempt,
+                    "runtime_mode": runtime_mode,
+                },
+            )
+        except Exception:
+            pass
 
         blocking_actions = {"pause_dispatch_and_escalate", "throttle_new_workloads"}
         if action.action not in blocking_actions:

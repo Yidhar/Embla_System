@@ -6,9 +6,10 @@ import json
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
-from autonomous.event_log.event_schema import build_event_envelope, normalize_event_envelope
+from autonomous.event_log.event_schema import normalize_event_envelope
+from autonomous.event_log.topic_event_bus import ReplayDispatchResult, TopicEventBus, TopicSubscription, infer_event_topic
 
 
 @dataclass
@@ -20,6 +21,8 @@ class EventStore:
     def __post_init__(self) -> None:
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        topic_db_path = self.file_path.with_name(f"{self.file_path.stem}_topics.db")
+        self.topic_bus = TopicEventBus(db_path=topic_db_path, mirror_file_path=self.file_path)
 
     def emit(
         self,
@@ -30,18 +33,52 @@ class EventStore:
         severity: str | None = None,
         idempotency_key: str | None = None,
     ) -> None:
-        envelope = build_event_envelope(
-            event_type,
+        topic = infer_event_topic(event_type, dict(payload or {}))
+        self.topic_bus.publish(
+            topic,
             payload,
+            event_type=event_type,
             source=source,
             severity=severity,
             idempotency_key=idempotency_key,
         )
-        row = {**envelope, "payload": envelope["data"]}
-        line = json.dumps(row, ensure_ascii=False)
-        with self._lock:
-            with self.file_path.open("a", encoding="utf-8") as f:
-                f.write(line + "\n")
+
+    def publish(
+        self,
+        topic: str,
+        payload: Dict[str, Any],
+        *,
+        event_type: str,
+        source: str | None = None,
+        severity: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> str:
+        return self.topic_bus.publish(
+            topic,
+            payload,
+            event_type=event_type,
+            source=source,
+            severity=severity,
+            idempotency_key=idempotency_key,
+        )
+
+    def subscribe(
+        self,
+        pattern: str,
+        handler: Callable[[Dict[str, Any]], Any],
+        *,
+        timeout_ms: int = 5_000,
+        max_retries: int = 1,
+    ) -> TopicSubscription:
+        return self.topic_bus.subscribe(
+            pattern,
+            handler,
+            timeout_ms=timeout_ms,
+            max_retries=max_retries,
+        )
+
+    def unsubscribe(self, subscription: TopicSubscription | str) -> None:
+        self.topic_bus.unsubscribe(subscription)
 
     def _read_raw_rows(self) -> List[Dict[str, Any]]:
         if not self.file_path.exists():
@@ -95,3 +132,56 @@ class EventStore:
                 continue
             result.append(row)
         return result
+
+    def replay_by_topic(
+        self,
+        *,
+        topic_pattern: str | None = None,
+        from_seq: int = 1,
+        to_seq: int | None = None,
+        limit: int = 1_000,
+    ) -> List[Dict[str, Any]]:
+        return self.topic_bus.replay(
+            topic_pattern=topic_pattern,
+            from_seq=from_seq,
+            to_seq=to_seq,
+            limit=limit,
+        )
+
+    def replay_dispatch(
+        self,
+        *,
+        anchor_id: str,
+        topic_pattern: str | None = None,
+        from_seq: int | None = None,
+        to_seq: int | None = None,
+        limit: int = 1_000,
+    ) -> ReplayDispatchResult:
+        return self.topic_bus.replay_dispatch(
+            anchor_id=anchor_id,
+            topic_pattern=topic_pattern,
+            from_seq=from_seq,
+            to_seq=to_seq,
+            limit=limit,
+        )
+
+    def get_replay_anchor(self, anchor_id: str, *, topic_pattern: str | None = None) -> Dict[str, Any]:
+        return self.topic_bus.get_replay_anchor(anchor_id, topic_pattern=topic_pattern)
+
+    def reset_replay_anchor(
+        self,
+        anchor_id: str,
+        *,
+        last_seq: int = 0,
+        topic_pattern: str | None = None,
+        clear_dedupe: bool = False,
+    ) -> Dict[str, Any]:
+        return self.topic_bus.reset_replay_anchor(
+            anchor_id,
+            last_seq=last_seq,
+            topic_pattern=topic_pattern,
+            clear_dedupe=clear_dedupe,
+        )
+
+    def list_topics(self, *, limit: int = 200) -> List[str]:
+        return self.topic_bus.list_topics(limit=limit)
