@@ -1,4 +1,5 @@
 import { SignalCard, type SignalState } from "@/components/cards/signal-card";
+import { MemoryGraphCanvas } from "@/components/graphs/memory-graph-canvas";
 import { fetchMemoryGraph } from "@/lib/api/ops";
 
 export const dynamic = "force-dynamic";
@@ -48,33 +49,9 @@ export default async function MemoryGraphPage() {
 
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-5">
         <article className="glass-card col-span-3 p-6">
-          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">Graph Sample</p>
-          <div className="mt-4 overflow-auto rounded-3xl bg-white/70 p-3">
-            <table className="min-w-full text-left text-xs text-gray-700">
-              <thead>
-                <tr className="border-b border-gray-200/80">
-                  <th className="px-2 py-2 uppercase tracking-[0.2em]">Subject</th>
-                  <th className="px-2 py-2 uppercase tracking-[0.2em]">Predicate</th>
-                  <th className="px-2 py-2 uppercase tracking-[0.2em]">Object</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(payload?.data?.graph_sample || []).slice(0, 20).map((row, idx) => (
-                  <tr key={`${row.subject}-${row.predicate}-${row.object}-${idx}`} className="border-b border-gray-100/70">
-                    <td className="px-2 py-2 font-mono">{row.subject || "-"}</td>
-                    <td className="px-2 py-2">{row.predicate || "-"}</td>
-                    <td className="px-2 py-2 font-mono">{row.object || "-"}</td>
-                  </tr>
-                ))}
-                {(!payload || (payload.data.graph_sample || []).length === 0) && (
-                  <tr>
-                    <td colSpan={3} className="px-2 py-3 text-gray-500">
-                      No quintuple sample available.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">Interactive Graph</p>
+          <div className="mt-4">
+            <MemoryGraphCanvas rows={payload?.data?.graph_sample || []} />
           </div>
         </article>
 
