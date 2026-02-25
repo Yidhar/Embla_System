@@ -10,7 +10,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, Sequence
 
 import yaml
 
@@ -120,7 +120,7 @@ def _run_case_snapshot_recovery(*, case_root: Path, rollback_window_minutes: int
             rollout_percent=100,
             disable_fail_open=True,
         )
-        rollback_report = run_ws27_subagent_cutover_ws27_002(
+        run_ws27_subagent_cutover_ws27_002(
             repo_root=repo_root,
             action="rollback",
             config_path=config_rel,
