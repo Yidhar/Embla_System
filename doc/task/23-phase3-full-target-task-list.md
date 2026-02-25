@@ -199,3 +199,9 @@
   - 运行模式决策支持 `decision_reason=fail_open_budget_exhausted_auto_degrade`
   - 与 WS26-001 兼容：写路径任务仍保持 `write_path_enforced -> subagent`
   - 新增回归：`autonomous/tests/test_system_agent_fail_open_budget_ws26_003.py`
+- `NGA-WS26-004` 已落地锁泄漏清道夫与 fencing 联动：
+  - `agentic_tool_loop` 全局锁分支新增调用前清道夫扫描：`scan_and_reap_expired(reason=tool_call_pre_acquire:...)`
+  - 清道夫报告透传到调用上下文与执行结果：`_mutex_scavenge_report` / `mutex_scavenge_report`
+  - 心跳失败场景新增补偿扫描：`reason=tool_call_heartbeat_failure:...`
+  - 扫描异常采用非阻断策略（继续执行 acquire），并在回执中记录 `cleanup_mode=scan_error`
+  - 新增回归：`tests/test_agentic_loop_contract_and_mutex.py`（2 个 WS26-004 场景）
