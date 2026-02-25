@@ -118,3 +118,23 @@
   - M8 已接入全量发布链：`scripts/release_closure_chain_full_m0_m7.py`（新增 `m8` group）
   - 新增 runbook：`doc/task/runbooks/release_m8_phase3_closure_onepager_ws23_006.md`
   - 回归：`autonomous/tests/test_ws23_release_gate.py`、`tests/test_release_closure_chain_m8_ws23_006.py`、`tests/test_release_closure_chain_full_m0_m7.py`
+- `NGA-WS24-001` 已落地第一版隔离 worker + IPC：
+  - 新增隔离 worker 代理与子进程运行时：`mcpserver/plugin_worker.py`、`mcpserver/plugin_worker_runtime.py`
+  - `mcp_registry` 新增运行模式判定（`inprocess` / `isolated_worker`）与隔离服务注册池
+  - `mcp_manager` 服务视图新增 `runtime_mode` 与 `plugin_worker` 来源标记
+  - 回归：`tests/test_mcp_plugin_isolation_ws24_001.py`
+- `NGA-WS24-002` 已落地签名/清单/schema 校验：
+  - 新增插件清单治理模块：`mcpserver/plugin_manifest_policy.py`
+  - 隔离插件注册新增三层强校验：schema 白名单、`policy.scopes` allowlist、`signature(hmac-sha256)` 校验
+  - 非签名、非 allowlist、超权限 scope 的插件在注册期硬拒绝，拒绝原因写入 `REJECTED_PLUGIN_MANIFESTS`
+  - 回归：`tests/test_mcp_plugin_isolation_ws24_001.py::test_scan_rejects_unsigned_plugin_manifest_ws24_002`、`tests/test_mcp_plugin_isolation_ws24_001.py::test_scan_rejects_scope_not_allowlisted_ws24_002`
+- `NGA-WS24-003` 已落地资源限制与超时熔断：
+  - `PluginWorkerSpec` 新增 `payload/output` 预算、`timeout`、`cpu/memory` 限额和熔断阈值
+  - 运行时新增 payload/output 预算门禁、超时错误分型、失败熔断（circuit open）与运行指标统计
+  - `plugin_worker_runtime` 接入 `--max-memory-mb/--cpu-time-seconds`（POSIX best-effort `resource` 限额）
+  - 回归：`tests/test_mcp_plugin_isolation_ws24_001.py::test_plugin_worker_timeout_and_circuit_ws24_003`、`tests/test_mcp_plugin_isolation_ws24_001.py::test_plugin_worker_output_budget_rejected_ws24_003`
+- `NGA-WS24-004` 已落地生命周期与僵尸回收：
+  - 插件调用过程接入 `system.process_lineage`，记录 `register_start/register_end`
+  - worker 调用前新增 stale job 扫描回收；超时路径新增 `kill_job + orphan_scan` 闭环
+  - 运行时指标增加 `stale_reaped_total`，可用于 M9 门禁观测
+  - 回归：`tests/test_mcp_plugin_isolation_ws24_001.py::test_plugin_worker_reaps_stale_jobs_ws24_004`

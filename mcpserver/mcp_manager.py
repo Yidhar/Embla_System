@@ -146,12 +146,18 @@ class MCPManager:
         result: Dict[str, Any] = {}
         for name in MCP_REGISTRY:
             manifest = MANIFEST_CACHE.get(name, {})
-            result[name] = {
+            runtime_mode = str(manifest.get("_runtime_mode") or "inprocess")
+            payload = {
                 "displayName": manifest.get("displayName", name),
                 "description": manifest.get("description", ""),
                 "tools": manifest.get("capabilities", {}).get("invocationCommands", []),
-                "source": "builtin",
+                "source": "plugin_worker" if runtime_mode == "isolated_worker" else "builtin",
+                "runtime_mode": runtime_mode,
             }
+            if runtime_mode == "isolated_worker":
+                payload["worker_limits"] = dict(manifest.get("_worker_limits") or {})
+                payload["trust_policy"] = dict(manifest.get("_trust_policy") or {})
+            result[name] = payload
 
         for name, cfg in self._load_external_services().items():
             if name in result:
@@ -175,9 +181,16 @@ class MCPManager:
             display_name = manifest.get("displayName", name)
             desc = manifest.get("description", "")
             tools = manifest.get("capabilities", {}).get("invocationCommands", [])
+            runtime_mode = str(manifest.get("_runtime_mode") or "inprocess")
             lines.append(f"- 服务名(service_name): {name}")
             lines.append(f"  显示名: {display_name}")
             lines.append(f"  描述: {desc}")
+            if runtime_mode == "isolated_worker":
+                lines.append("  运行模式: isolated_worker")
+                trust = manifest.get("_trust_policy") or {}
+                key_id = str(trust.get("signature_key_id") or "").strip()
+                if key_id:
+                    lines.append(f"  信任链: signed+allowlist (key_id={key_id})")
             for tool in tools:
                 cmd = tool.get("command", "")
                 tool_desc = str(tool.get("description", "")).split("\n")[0]
