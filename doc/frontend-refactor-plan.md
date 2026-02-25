@@ -1,4 +1,4 @@
-# 全新 Web 前端重构方案（自治代理数据面板优先）
+# Embla_core 全新 Web 前端重构方案（自治代理数据面板优先）
 
 文档状态：设计基线（可执行版）  
 创建时间：2026-02-25  
@@ -9,7 +9,7 @@
 
 ## 1. 目标重定义
 
-本项目的新前端不再以“个人 AI 助手聊天 UI”为中心，而是以“自治代理运行与发布态势”作为第一视角。
+新前端不再以“个人 AI 助手聊天 UI”为中心，而是以“自治代理运行与发布态势”作为第一视角。
 
 核心定位：
 
@@ -19,7 +19,7 @@
 
 ---
 
-## 2. 现状问题（为什么原草案不适配）
+## 2. 现状问题（为什么旧草案不适配）
 
 当前旧草案的主要偏差：
 
@@ -30,7 +30,7 @@
 
 结论：
 
-- 旧草案可作为视觉参考，不可作为本项目执行方案。
+- 旧草案可作为灵感参考，不可作为本项目执行方案。
 
 ---
 
@@ -39,21 +39,21 @@
 1. **Ops-First**：发布态势与运行健康优先于聊天。
 2. **Evidence-First**：所有关键状态必须可追溯到报告路径或事件证据。
 3. **Guardrail-First**：展示门禁状态、失败原因、回滚路径，不只展示“成功”。
-4. **Composable**：新前端独立目录开发，不改旧 `frontend/`；可并行迭代。
+4. **Composable**：新前端独立目录开发，不改旧 `frontend/`。
 5. **Read-Only by Default**：默认只读看板；高风险操作需显式二次确认。
 
 ---
 
 ## 4. 信息架构（IA）
 
-新前端一级导航：
+`Embla_core` 一级导航：
 
 1. `Overview`：发布总览（默认首页）
 2. `Release Gates`：门禁链明细（M0-M12 + WS27）
 3. `Runtime`：运行稳态（预算、租约、fail-open、cutover）
 4. `Incidents`：风险与演练（OOB、drill、repair）
-5. `ChatOps`：对话与任务触发（次级入口）
-6. `Evidence`：报告与签署产物索引
+5. `Evidence`：报告与签署产物索引
+6. `ChatOps`：对话与任务触发（次级入口）
 
 页面优先级：
 
@@ -101,7 +101,7 @@
 3. `scratch/reports/ws27_subagent_cutover_apply_ws27_002.json`
 4. `scratch/reports/ws27_subagent_cutover_rollback_snapshot_ws27_002.json`
 
-### 5.3 事件与演练域（Incident/Drill Domain）
+### 5.3 演练域（Incident/Drill Domain）
 
 主要指标：
 
@@ -127,7 +127,7 @@
 建议新增：
 
 1. `GET /v1/ops/overview`
-- 返回总览卡片数据：全链状态、门禁数量、当前风险等级、72h 验收倒计时。
+- 返回总览卡片数据：全链状态、门禁数量、风险等级、72h 验收倒计时。
 
 2. `GET /v1/ops/release/gates`
 - 返回 WS27-004/005/006 聚合状态、失败项、产物路径。
@@ -152,42 +152,69 @@
 
 ---
 
-## 7. 新前端工程边界
+## 7. 工程边界（已拍板）
 
-### 7.1 目录策略
+### 7.1 新前端目录
 
-- 新建独立目录：`frontend_ops/`（或 `web_console/`，待最终命名确认）。
-- 不改旧目录：`frontend/` 保持现状。
+- 固定目录名：`Embla_core/`
+- 与旧 `frontend/` 并行维护，互不影响。
 
-### 7.2 技术建议（可落地优先）
+### 7.2 技术栈
 
-优先建议：
+- 固定为：`Next.js + TypeScript + Tailwind CSS + Lucide React`
+- 路由模式：`App Router`
+- 数据层：BFF 聚合接口 + 可选 React Query 缓存层
 
-1. `Vue 3 + Vite + TypeScript`（与现仓库技术栈一致，迁移成本低）。
-2. 采用轻量图表库（如 ECharts）用于趋势和门禁状态。
-3. 设计系统偏“控制台风格”：高信息密度、低装饰噪声。
+### 7.3 设计系统
 
-可选方案：
-
-- React 技术栈可行，但会增加一套独立心智和工程维护成本。
-
-### 7.3 视觉方向（针对本项目）
-
-1. 深浅双主题可切换，但默认浅色运维台（便于截图和评审）。
-2. 色彩语义固定：
-- 通过：绿色
-- 警告：橙色
-- 失败：红色
-- 未知：灰色
-3. 组件风格偏“指挥台”：卡片 + 表格 + 时间线 + 状态芯片。
+- 设计语言：`Zen-iOS Hybrid`
+- 详细规范：`doc/embla-core-ui-design-spec.md`
+- 该规范为 `Embla_core` 的 UI 实现强约束，不是建议项。
 
 ---
 
-## 8. 页面设计草图（功能视角）
+## 8. `Embla_core` 建议目录结构
 
-### 8.1 `Overview`（默认首页）
+```text
+Embla_core/
+  app/
+    (dashboard)/
+      overview/page.tsx
+      release-gates/page.tsx
+      runtime/page.tsx
+      incidents/page.tsx
+      evidence/page.tsx
+      chatops/page.tsx
+    layout.tsx
+    page.tsx
+  components/
+    layout/
+    cards/
+    charts/
+    tables/
+    chatops/
+  lib/
+    api/
+      ops.ts
+      chat.ts
+    types/
+      ops.ts
+      release.ts
+      runtime.ts
+      evidence.ts
+    format/
+  styles/
+    globals.css
+    tokens.css
+  public/
+  package.json
+```
 
-核心模块：
+---
+
+## 9. 页面设计草图（功能视角）
+
+### 9.1 `Overview`（默认首页）
 
 1. 顶部 KPI 行：
 - 全链状态
@@ -200,87 +227,81 @@
 - 右：当前高风险项 Top N
 
 3. 底部：
-- 最新报告清单（可跳 Evidence）
+- 最新报告清单（跳转 `Evidence`）
 
-### 8.2 `Release Gates`
+### 9.2 `Release Gates`
 
 1. 按 `WS27-004/005/006` 分区显示。
-2. 每区展示：
-- `passed`
-- 失败项列表
-- 关键 checks
-- 产物路径
-- 最近更新时间
-
+2. 每区展示：`passed`、失败项、关键 checks、产物路径、更新时间。
 3. 支持一键复制复核命令（只读，不执行）。
 
-### 8.3 `Runtime`
+### 9.3 `Runtime`
 
 1. `subagent_runtime` 配置快照。
 2. `rollout/fail-open/lease` 状态卡。
 3. cutover 与 rollback 快照对比。
 
-### 8.4 `Incidents`
+### 9.4 `Incidents`
 
 1. OOB 演练历史。
 2. 失败 drill 详情和修复建议链接。
-3. 近 24h 风险热区（由报告摘要构建）。
+3. 近 24h 风险热区。
 
-### 8.5 `ChatOps`
+### 9.5 `Evidence`
+
+1. 证据索引表（path、timestamp、pass/fail、摘要）。
+2. 按任务域过滤（WS27-001~006、M0-M12）。
+3. 失败证据优先排序。
+
+### 9.6 `ChatOps`
 
 1. 保留聊天与流式事件渲染。
 2. 显式标注“沟通通道”，避免误导为系统主界面。
 
 ---
 
-## 9. 里程碑（文档到交付）
+## 10. 里程碑（文档到交付）
 
-### Phase A（本轮，文档定稿）
+### Phase A（当前）
 
-1. 定稿本方案（本文件）。
-2. 定稿 BFF 接口契约草案。
-3. 定稿新前端目录边界。
+1. 完成方案文档定稿。
+2. 完成 UI 视觉规范定稿。
+3. 完成 BFF 聚合接口字段草案。
 
-### Phase B（MVP 开发）
+### Phase B（MVP）
 
 1. 后端：补 `/v1/ops/*` 聚合只读接口。
-2. 前端：完成 `Overview + Release Gates + Runtime` 三页。
-3. 打通真实报告渲染。
+2. 前端：完成 `Overview + Release Gates + Runtime`。
+3. 接入真实报告渲染并验证 72h 状态卡。
 
 ### Phase C（增强）
 
 1. 加 `Incidents + Evidence + ChatOps`。
-2. 增加筛选、对比、导出能力。
+2. 增加筛选、对比、导出。
 3. 增加权限模型（只读/操作员/审批人）。
 
 ---
 
-## 10. 验收标准（DoD）
+## 11. 验收标准（DoD）
 
 1. 进入首页 5 秒内可看到 M0-M12 当前结论。
 2. 任一红色状态可追溯到具体报告路径与失败字段。
 3. 可直接看到 72h 墙钟验收剩余时间与达标状态。
-4. 不依赖旧 `frontend/` 代码与打包链。
-5. 旧前端不被改动即可并行运行。
+4. 新前端可独立运行，不依赖旧 `frontend/` 打包链。
+5. 旧前端不改动也能并行运行。
 
 ---
 
-## 11. 风险与对策
+## 12. 风险与对策
 
-1. 风险：报告 JSON 字段不稳定。
-- 对策：BFF 做 schema 归一化层。
+1. 风险：报告 JSON 字段不稳定。  
+对策：BFF 做 schema 归一化层。
 
-2. 风险：接口多源拼装导致延迟。
-- 对策：聚合接口按域拆分 + 缓存（3~10 秒）。
+2. 风险：接口多源拼装导致延迟。  
+对策：聚合接口按域拆分 + 3~10 秒缓存。
 
-3. 风险：前端再次回到“聊天优先”。
-- 对策：导航顺序固定为 `Overview` 首位，`ChatOps` 后置。
+3. 风险：前端回退到“聊天优先”。  
+对策：导航顺序固定为 `Overview` 首位，`ChatOps` 后置。
 
----
-
-## 12. 待确认项（需你拍板）
-
-1. 新前端目录名：`frontend_ops/` 还是 `web_console/`。
-2. 技术栈：沿用 Vue 还是改 React（推荐沿用 Vue）。
-3. 第一批必须上线的页面：建议 `Overview + Release Gates + Runtime`。
-
+4. 风险：视觉效果华丽但可读性下降。  
+对策：严格执行 `Zen-iOS Hybrid` 的对比与密度规则，不牺牲信息层次。
