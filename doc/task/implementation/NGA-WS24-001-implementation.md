@@ -55,3 +55,5 @@
   - `doc/task/implementation/NGA-WS24-002-implementation.md`
   - `doc/task/implementation/NGA-WS24-003-implementation.md`
   - `doc/task/implementation/NGA-WS24-004-implementation.md`
+  - `doc/task/implementation/NGA-WS24-005-implementation.md`
+  - `doc/task/implementation/NGA-WS24-006-implementation.md`

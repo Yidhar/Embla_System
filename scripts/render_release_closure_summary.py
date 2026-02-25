@@ -61,16 +61,19 @@ def build_release_summary_markdown(
     m0_m5_report: Dict[str, Any] | None,
     m6_m7_report: Dict[str, Any] | None,
     m8_report: Dict[str, Any] | None,
+    m9_report: Dict[str, Any] | None,
     full_report_path: Path,
     m0_m5_report_path: Path,
     m6_m7_report_path: Path,
     m8_report_path: Path,
+    m9_report_path: Path,
     load_errors: Dict[str, str],
 ) -> str:
     full_passed = None if full_report is None else bool(full_report.get("passed"))
     m0_passed = None if m0_m5_report is None else bool(m0_m5_report.get("passed"))
     m6_passed = None if m6_m7_report is None else bool(m6_m7_report.get("passed"))
     m8_passed = None if m8_report is None else bool(m8_report.get("passed"))
+    m9_passed = None if m9_report is None else bool(m9_report.get("passed"))
 
     if full_passed is None:
         overall_status = "UNKNOWN"
@@ -78,7 +81,7 @@ def build_release_summary_markdown(
         overall_status = _status_label(full_passed)
 
     lines: List[str] = []
-    lines.append("## Release Closure Summary (M0-M8)")
+    lines.append("## Release Closure Summary (M0-M9)")
     lines.append("")
     lines.append(f"Overall: **{overall_status}**")
     lines.append("")
@@ -96,9 +99,12 @@ def build_release_summary_markdown(
     lines.append(
         f"| `m8` | `{_status_label(m8_passed)}` | failed_steps={list((m8_report or {}).get('failed_steps') or [])} |"
     )
+    lines.append(
+        f"| `m9` | `{_status_label(m9_passed)}` | failed_steps={list((m9_report or {}).get('failed_steps') or [])} |"
+    )
     lines.append("")
     lines.append("Report paths:")
-    lines.append(_format_paths(full_report_path, m0_m5_report_path, m6_m7_report_path, m8_report_path))
+    lines.append(_format_paths(full_report_path, m0_m5_report_path, m6_m7_report_path, m8_report_path, m9_report_path))
     lines.append("")
 
     if load_errors:
@@ -108,7 +114,7 @@ def build_release_summary_markdown(
         lines.append("")
 
     failed_rows: List[Tuple[str, Dict[str, Any]]] = []
-    for group_name, report in (("m0_m5", m0_m5_report), ("m6_m7", m6_m7_report), ("m8", m8_report)):
+    for group_name, report in (("m0_m5", m0_m5_report), ("m6_m7", m6_m7_report), ("m8", m8_report), ("m9", m9_report)):
         if not isinstance(report, dict):
             continue
         step_results = report.get("step_results")
@@ -161,6 +167,12 @@ def parse_args() -> argparse.Namespace:
         help="M8 closure report path",
     )
     parser.add_argument(
+        "--m9-report",
+        type=Path,
+        default=Path("scratch/reports/release_closure_chain_m9_ws24_006_result.json"),
+        help="M9 closure report path",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path("scratch/reports/release_closure_summary.md"),
@@ -195,16 +207,21 @@ def main() -> int:
     m8_report, m8_error = _load_report(args.m8_report)
     if m8_error:
         load_errors["m8"] = m8_error
+    m9_report, m9_error = _load_report(args.m9_report)
+    if m9_error:
+        load_errors["m9"] = m9_error
 
     markdown = build_release_summary_markdown(
         full_report=full_report,
         m0_m5_report=m0_report,
         m6_m7_report=m6_report,
         m8_report=m8_report,
+        m9_report=m9_report,
         full_report_path=args.full_report,
         m0_m5_report_path=args.m0_m5_report,
         m6_m7_report_path=args.m6_m7_report,
         m8_report_path=args.m8_report,
+        m9_report_path=args.m9_report,
         load_errors=load_errors,
     )
 

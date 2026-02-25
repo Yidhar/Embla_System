@@ -138,3 +138,14 @@
   - worker 调用前新增 stale job 扫描回收；超时路径新增 `kill_job + orphan_scan` 闭环
   - 运行时指标增加 `stale_reaped_total`，可用于 M9 门禁观测
   - 回归：`tests/test_mcp_plugin_isolation_ws24_001.py::test_plugin_worker_reaps_stale_jobs_ws24_004`
+- `NGA-WS24-005` 已落地插件隔离混沌演练集：
+  - 新增演练脚本：`scripts/run_plugin_isolation_chaos_suite_ws24_005.py`
+  - 覆盖 unsigned manifest / forbidden scope / payload budget / timeout+circuit-open 样例
+  - 产出审计报告：`scratch/reports/plugin_isolation_chaos_ws24_005.json`
+  - 回归：`tests/test_run_plugin_isolation_chaos_suite_ws24_005.py`
+- `NGA-WS24-006` 已落地 M9 发布门禁接入：
+  - 新增 M9 门禁评估器与入口：`autonomous/ws24_release_gate.py`、`scripts/validate_m9_closure_gate_ws24_006.py`
+  - 新增 M9 收口链：`scripts/release_closure_chain_m9_ws24_006.py`
+  - 全量收口链扩展接入 M9 组：`scripts/release_closure_chain_full_m0_m7.py`（兼容命名，目标域已到 M0-M9）
+  - 新增 runbook：`doc/task/runbooks/release_m9_plugin_isolation_closure_onepager_ws24_006.md`
+  - 回归：`autonomous/tests/test_ws24_release_gate.py`、`tests/test_release_closure_chain_m9_ws24_006.py`、`tests/test_release_closure_chain_full_m0_m7.py`

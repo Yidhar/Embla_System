@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified release closure chain runner for M0-M8 gates."""
+"""Unified release closure chain runner for M0-M9 gates."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from typing import Dict, List
 
 from scripts.release_closure_chain_m0_m5 import run_release_closure_chain_m0_m5
 from scripts.release_closure_chain_m8_ws23_006 import run_release_closure_chain_m8_ws23_006
+from scripts.release_closure_chain_m9_ws24_006 import run_release_closure_chain_m9_ws24_006
 from scripts.release_phase3_closure_chain_ws22_004 import run_phase3_release_closure_chain
 
 
@@ -33,14 +34,17 @@ def run_release_closure_chain_full_m0_m7(
     m0_m5_output_file: Path,
     m6_m7_output_file: Path,
     m8_output_file: Path,
+    m9_output_file: Path | None = None,
     skip_m0_m5: bool = False,
     skip_m6_m7: bool = False,
     skip_m8: bool = False,
+    skip_m9: bool = False,
     quick_mode: bool = False,
     continue_on_failure: bool = False,
     timeout_seconds: int = 2400,
 ) -> Dict[str, object]:
     root = repo_root.resolve()
+    m9_output = m9_output_file if m9_output_file is not None else Path("scratch/reports/release_closure_chain_m9_ws24_006_result.json")
     started_at = time.time()
     failed_groups: List[str] = []
     group_results: Dict[str, object] = {}
@@ -67,7 +71,7 @@ def run_release_closure_chain_full_m0_m7(
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "repo_root": str(root).replace("\\", "/"),
                     "elapsed_seconds": round(time.time() - started_at, 4),
-                    "target_scope": "M0-M8",
+                    "target_scope": "M0-M9",
                     "passed": False,
                     "failed_groups": failed_groups,
                     "group_results": group_results,
@@ -97,7 +101,7 @@ def run_release_closure_chain_full_m0_m7(
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "repo_root": str(root).replace("\\", "/"),
                     "elapsed_seconds": round(time.time() - started_at, 4),
-                    "target_scope": "M0-M8",
+                    "target_scope": "M0-M9",
                     "passed": False,
                     "failed_groups": failed_groups,
                     "group_results": group_results,
@@ -121,6 +125,36 @@ def run_release_closure_chain_full_m0_m7(
         group_results["m8"] = m8_report
         if not bool(m8_report.get("passed")):
             failed_groups.append("m8")
+            if not continue_on_failure:
+                report = {
+                    "scenario": "release_closure_chain_full_m0_m7",
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "repo_root": str(root).replace("\\", "/"),
+                    "elapsed_seconds": round(time.time() - started_at, 4),
+                    "target_scope": "M0-M9",
+                    "passed": False,
+                    "failed_groups": failed_groups,
+                    "group_results": group_results,
+                }
+                output = output_file if output_file.is_absolute() else root / output_file
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_text(json.dumps(_to_jsonable(report), ensure_ascii=False, indent=2), encoding="utf-8")
+                return report
+
+    if not skip_m9:
+        m9_report = run_release_closure_chain_m9_ws24_006(
+            repo_root=root,
+            output_file=m9_output,
+            skip_tests=bool(quick_mode),
+            skip_runtime_checks=bool(quick_mode),
+            skip_gate=bool(quick_mode),
+            skip_doc_consistency=False,
+            continue_on_failure=bool(continue_on_failure),
+            timeout_seconds=max(30, int(timeout_seconds)),
+        )
+        group_results["m9"] = m9_report
+        if not bool(m9_report.get("passed")):
+            failed_groups.append("m9")
 
     passed = len(failed_groups) == 0
     report = {
@@ -128,7 +162,7 @@ def run_release_closure_chain_full_m0_m7(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "repo_root": str(root).replace("\\", "/"),
         "elapsed_seconds": round(time.time() - started_at, 4),
-        "target_scope": "M0-M8",
+        "target_scope": "M0-M9",
         "passed": passed,
         "failed_groups": failed_groups,
         "group_results": group_results,
@@ -141,7 +175,7 @@ def run_release_closure_chain_full_m0_m7(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run unified release closure chain for M0-M8")
+    parser = argparse.ArgumentParser(description="Run unified release closure chain for M0-M9")
     parser.add_argument("--repo-root", type=Path, default=Path("."), help="Repository root")
     parser.add_argument(
         "--output",
@@ -167,9 +201,16 @@ def parse_args() -> argparse.Namespace:
         default=Path("scratch/reports/release_closure_chain_m8_ws23_006_result.json"),
         help="M8 output JSON report path",
     )
+    parser.add_argument(
+        "--m9-output",
+        type=Path,
+        default=Path("scratch/reports/release_closure_chain_m9_ws24_006_result.json"),
+        help="M9 output JSON report path",
+    )
     parser.add_argument("--skip-m0-m5", action="store_true", help="Skip M0-M5 closure chain group")
     parser.add_argument("--skip-m6-m7", action="store_true", help="Skip M6-M7 closure chain group")
     parser.add_argument("--skip-m8", action="store_true", help="Skip M8 closure chain group")
+    parser.add_argument("--skip-m9", action="store_true", help="Skip M9 closure chain group")
     parser.add_argument(
         "--quick-mode",
         action="store_true",
@@ -188,9 +229,11 @@ def main() -> int:
         m0_m5_output_file=args.m0_m5_output,
         m6_m7_output_file=args.m6_m7_output,
         m8_output_file=args.m8_output,
+        m9_output_file=args.m9_output,
         skip_m0_m5=bool(args.skip_m0_m5),
         skip_m6_m7=bool(args.skip_m6_m7),
         skip_m8=bool(args.skip_m8),
+        skip_m9=bool(args.skip_m9),
         quick_mode=bool(args.quick_mode),
         continue_on_failure=bool(args.continue_on_failure),
         timeout_seconds=max(30, int(args.timeout_seconds)),
