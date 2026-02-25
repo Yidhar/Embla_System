@@ -79,6 +79,10 @@ async def wait_for_log_pattern(
     watch_id = f"watch_{uuid.uuid4().hex[:12]}"
     started_at = time.time()
     deadline = started_at + max(1, int(timeout_seconds))
+    try:
+        match_budget_seconds = max(0.001, float(regex_match_timeout_seconds))
+    except (TypeError, ValueError):
+        match_budget_seconds = 0.05
     current_inode: Optional[int] = None
     current_position = 0
     initialized = False
@@ -140,6 +144,7 @@ async def wait_for_log_pattern(
         current_inode = inode if inode else current_inode
 
         got_new_data = False
+        budget_exhausted = False
         try:
             with log_file.open("r", encoding="utf-8", errors="ignore") as fh:
                 if not initialized and from_end and current_position == 0:
@@ -148,6 +153,7 @@ async def wait_for_log_pattern(
                 else:
                     fh.seek(max(0, min(current_position, size)), 0)
 
+                match_round_started = time.perf_counter()
                 while True:
                     line = fh.readline()
                     if not line:
@@ -165,13 +171,16 @@ async def wait_for_log_pattern(
                             reopen_count=reopen_count,
                             reopen_reason=reopen_reason,
                         )
+                    if (time.perf_counter() - match_round_started) >= match_budget_seconds:
+                        budget_exhausted = True
+                        break
         except Exception:
             await asyncio.sleep(max(0.05, poll_interval_seconds))
             continue
         finally:
             initialized = True
 
-        if not got_new_data:
+        if budget_exhausted or not got_new_data:
             await asyncio.sleep(max(0.05, poll_interval_seconds))
 
 

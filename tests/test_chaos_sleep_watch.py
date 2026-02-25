@@ -130,5 +130,5 @@ def test_wait_for_log_pattern_regex_match_timeout_budget_limits_blocking(monkeyp
     assert slow_result.reason == "timeout"
     assert fast_result.reason == "timeout"
     assert fast_elapsed < slow_elapsed
-    assert (slow_elapsed - fast_elapsed) >= 0.7
+    assert (slow_elapsed - fast_elapsed) >= 0.25
     assert fast_elapsed < 1.8

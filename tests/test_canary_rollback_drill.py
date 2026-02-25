@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import shutil
+import sys
 import uuid
 from pathlib import Path
 
 from autonomous.release import CanaryThresholds
-from scripts.canary_rollback_drill import run_drill
+from scripts.canary_rollback_drill import parse_args, run_drill
 
 
 def _write_policy(path: Path) -> None:
@@ -86,3 +87,9 @@ def test_run_drill_executes_logical_rollback_when_auto_enabled() -> None:
         assert report["rollback_result"]["status"] == "succeeded"
     finally:
         _cleanup_case_root(case_root)
+
+
+def test_parse_args_accepts_legacy_dry_run_flag(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["canary_rollback_drill.py", "--dry-run"])
+    args = parse_args()
+    assert args.dry_run is True

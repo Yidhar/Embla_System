@@ -97,6 +97,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--rollback-command", type=str, default="", help="Rollback command to execute when enabled")
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Compatibility flag. Parsed for legacy release chains; execution remains non-destructive by default.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path("logs/runtime/canary_rollback_drill_report.json"),
