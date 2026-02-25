@@ -205,3 +205,8 @@
   - 心跳失败场景新增补偿扫描：`reason=tool_call_heartbeat_failure:...`
   - 扫描异常采用非阻断策略（继续执行 acquire），并在回执中记录 `cleanup_mode=scan_error`
   - 新增回归：`tests/test_agentic_loop_contract_and_mutex.py`（2 个 WS26-004 场景）
+- `NGA-WS26-005` 已落地 double-fork/脱离进程树回收链：
+  - `process_lineage.kill_job()` 调整为 detached 命令始终执行签名扫描（不再仅在 root kill 失败时触发）
+  - detached marker 扩展：`docker run --detach`、`disown`、`daemonize`
+  - 新增回归：`tests/test_process_lineage.py`（root kill 成功仍触发签名回收、docker detach 识别）
+  - 关联验证：`tests/test_chaos_runtime_storage.py`、`tests/test_global_mutex.py`、`tests/test_chaos_lock_failover.py`
