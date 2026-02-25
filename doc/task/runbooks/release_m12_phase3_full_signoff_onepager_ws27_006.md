@@ -12,12 +12,21 @@
 ## 2. 关键脚本
 
 - 主脚本：`scripts/generate_phase3_full_release_report_ws27_006.py`
+- 一键收口链：`scripts/release_phase3_full_signoff_chain_ws27_006.py`
 - 默认 JSON 输出：`scratch/reports/phase3_full_release_report_ws27_006.json`
 - 默认签署模板：`scratch/reports/phase3_full_release_signoff_ws27_006.md`
+- 一键链报告：`scratch/reports/release_phase3_full_signoff_chain_ws27_006_result.json`
 
 ## 3. 推荐执行顺序
 
-1. 先确保前置报告已生成
+1. 一键执行（推荐）
+
+```powershell
+.\.venv\Scripts\python.exe scripts/release_phase3_full_signoff_chain_ws27_006.py `
+  --require-wallclock-acceptance
+```
+
+2. 先确保前置报告已生成（手工分步模式）
 
 - `scratch/reports/release_closure_chain_full_m0_m12_result.json`
 - `scratch/reports/ws27_m12_doc_consistency_ws27_005.json`
@@ -26,7 +35,7 @@
 - `scratch/reports/ws27_subagent_cutover_status_ws27_002.json`
 - `scratch/reports/ws27_oob_repair_drill_ws27_003.json`
 
-2. 生成放行报告与签署模板（严格模式）
+3. 生成放行报告与签署模板（严格模式，手工分步模式）
 
 ```powershell
 .\.venv\Scripts\python.exe scripts/generate_phase3_full_release_report_ws27_006.py `
@@ -39,8 +48,9 @@
 
 ## 4. 预期产物
 
-1. `scratch/reports/phase3_full_release_report_ws27_006.json`
-2. `scratch/reports/phase3_full_release_signoff_ws27_006.md`
+1. `scratch/reports/release_phase3_full_signoff_chain_ws27_006_result.json`
+2. `scratch/reports/phase3_full_release_report_ws27_006.json`
+3. `scratch/reports/phase3_full_release_signoff_ws27_006.md`
 
 ## 5. 判定标准
 
@@ -48,6 +58,7 @@
 - `checks` 全部为 `true`
 - `missing_required_reports=[]`
 - `checks.ws27_wallclock_acceptance_passed=true`
+- 一键链报告中 `failed_steps=[]`
 - 签署模板中“放行结论”显示 `PASS`
 
 ## 6. 风险与说明

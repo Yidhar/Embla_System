@@ -25,7 +25,15 @@
     - 关闭时：墙钟报告仅展示，不纳入强制门禁。
     - 开启时：墙钟报告纳入强制门禁，适用于正式签署。
 
-2. 自动化回归
+2. 一键签署收口链（补充）
+- 文件: `scripts/release_phase3_full_signoff_chain_ws27_006.py`
+- 变更:
+  - 新增 `WS27-004 -> WS27-005 -> WS27-006` 的单命令收口链。
+  - 支持 `--require-wallclock-acceptance` 向下透传至 `WS27-006` 步骤。
+  - 支持 `--quick-mode`、`--skip-m0-m11`、`--skip-full-chain`、`--skip-doc-consistency`、`--skip-release-report`。
+  - 产出统一链路报告：`scratch/reports/release_phase3_full_signoff_chain_ws27_006_result.json`。
+
+3. 自动化回归
 - 文件: `tests/test_ws27_006_phase3_release_report.py`
 - 变更:
   - 覆盖全部输入通过时 `PASS` 路径与模板内容校验。
@@ -33,10 +41,17 @@
   - 覆盖启用 `require_wallclock_acceptance=True` 且墙钟报告缺失时失败路径。
   - 覆盖 CLI `--strict` 非零返回码路径。
 
-3. 执行 runbook
+- 文件: `tests/test_release_phase3_full_signoff_chain_ws27_006.py`
+- 变更:
+  - 覆盖一键链全步骤通过路径。
+  - 覆盖默认失败即停路径。
+  - 覆盖 `--require-wallclock-acceptance` 透传路径。
+
+4. 执行 runbook
 - 文件: `doc/task/runbooks/release_m12_phase3_full_signoff_onepager_ws27_006.md`
 - 变更:
-  - 固化 `WS27-004 + WS27-005` 后的签署报告生成命令与判定标准。
+  - 新增一键链推荐命令，保留手工分步模式。
+  - 固化正式签署必须启用 `--require-wallclock-acceptance`。
 
 4. 任务快照更新
 - 文件: `doc/task/23-phase3-full-target-task-list.md`
@@ -47,14 +62,16 @@
 
 1. WS27-006 定向回归
 - `python3 -m pytest -q tests/test_ws27_006_phase3_release_report.py -p no:tmpdir`
+- `python3 -m pytest -q tests/test_release_phase3_full_signoff_chain_ws27_006.py -p no:tmpdir`
 
 2. 代码规范
-- `python3 -m ruff check scripts/generate_phase3_full_release_report_ws27_006.py tests/test_ws27_006_phase3_release_report.py`
+- `python3 -m ruff check scripts/generate_phase3_full_release_report_ws27_006.py scripts/release_phase3_full_signoff_chain_ws27_006.py tests/test_ws27_006_phase3_release_report.py tests/test_release_phase3_full_signoff_chain_ws27_006.py`
 
-3. 本地执行（严格 + 墙钟硬门禁）
-- `python3 scripts/generate_phase3_full_release_report_ws27_006.py --strict --require-wallclock-acceptance --output-json scratch/reports/phase3_full_release_report_ws27_006.json --output-markdown scratch/reports/phase3_full_release_signoff_ws27_006.md`
+3. 本地执行（一键链 + 墙钟硬门禁）
+- `python3 scripts/release_phase3_full_signoff_chain_ws27_006.py --require-wallclock-acceptance`
 
 ## 结果摘要
 
 - `NGA-WS27-006` 已提供可审计的放行报告聚合器与可直接签署的模板产物。
 - 该能力将 `M12` 分散证据收敛到单一判定域，并支持“预览模式/正式签署模式”双轨门禁。
+- 新增一键签署收口链后，本机可通过单命令完成 `WS27-004~006` 的串行闭环。
