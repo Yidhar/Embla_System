@@ -220,9 +220,11 @@
 - `NGA-WS27-001` 已落地 72h 长稳 + 磁盘配额压测首版：
   - 新增 endurance harness：`autonomous/ws27_longrun_endurance.py`
   - 新增执行入口：`scripts/run_ws27_longrun_endurance_ws27_001.py`
+  - 新增墙钟验收记录脚本：`scripts/manage_ws27_72h_wallclock_acceptance_ws27_001.py`
   - 默认报告：`scratch/reports/ws27_72h_endurance_ws27_001.json`
+  - 墙钟验收报告：`scratch/reports/ws27_72h_wallclock_acceptance_ws27_001.json`
   - 检查项覆盖：`no_enospc`、`no_unhandled_exceptions`、`no_event_loss`、`disk_quota_pressure_exercised`
-  - 新增回归：`autonomous/tests/test_ws27_longrun_endurance_ws27_001.py`、`tests/test_run_ws27_longrun_endurance_ws27_001.py`
+  - 新增回归：`autonomous/tests/test_ws27_longrun_endurance_ws27_001.py`、`tests/test_run_ws27_longrun_endurance_ws27_001.py`、`tests/test_manage_ws27_72h_wallclock_acceptance_ws27_001.py`
 - `NGA-WS27-002` 已落地 cutover + 回滚窗首版：
   - 新增 cutover 管理脚本：`scripts/manage_ws27_subagent_cutover_ws27_002.py`（`plan/apply/rollback/status`）
   - 新增 runbook：`doc/task/runbooks/release_m12_cutover_rollback_onepager_ws27_002.md`

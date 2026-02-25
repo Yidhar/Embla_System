@@ -37,7 +37,16 @@
   - baseline 回归覆盖报告结构与关键检查结果。
   - CLI smoke 覆盖参数解析、执行与落盘路径。
 
-4. 任务快照更新
+4. 真实 72h 墙钟验收记录脚本（补充）
+- 文件:
+  - `scripts/manage_ws27_72h_wallclock_acceptance_ws27_001.py`
+  - `tests/test_manage_ws27_72h_wallclock_acceptance_ws27_001.py`
+- 变更:
+  - 新增 `start/status/finish` 三段式墙钟验收记录管理。
+  - 将“真实 72h 验收证据”独立成 `scratch/reports/ws27_72h_wallclock_acceptance_ws27_001.json`。
+  - `finish --strict` 可直接作为签署前的硬门禁命令。
+
+5. 任务快照更新
 - 文件: `doc/task/23-phase3-full-target-task-list.md`
 - 变更:
   - 在“本轮推进快照”新增 `NGA-WS27-001` 首版落地说明与代码锚点。
@@ -49,6 +58,11 @@
 
 2. 单独运行 WS27-001 脚本（快速演练）
 - `python3 scripts/run_ws27_longrun_endurance_ws27_001.py --target-hours 0.02 --virtual-round-seconds 6 --artifact-payload-kb 256 --max-total-size-mb 1 --max-single-artifact-mb 1 --max-artifact-count 256 --high-watermark-ratio 0.8 --low-watermark-ratio 0.5 --critical-reserve-ratio 0.1 --normal-priority-every 3 --high-priority-every 8`
+
+3. 墙钟验收记录（补充）
+- `python3 scripts/manage_ws27_72h_wallclock_acceptance_ws27_001.py --action start --target-hours 72`
+- `python3 scripts/manage_ws27_72h_wallclock_acceptance_ws27_001.py --action status`
+- `python3 scripts/manage_ws27_72h_wallclock_acceptance_ws27_001.py --action finish --strict`
 
 ## 结果摘要
 
