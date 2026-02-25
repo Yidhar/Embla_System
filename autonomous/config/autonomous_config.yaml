@@ -51,10 +51,10 @@ autonomous:
     cost_per_hour: 5.0
 
   subagent_runtime:
-    enabled: false
+    enabled: true
     max_subtasks: 16
     rollout_percent: 100
-    fail_open: true
+    fail_open: false
     enforce_scaffold_txn_for_write: true
     allow_legacy_fail_open_for_write: false
     fail_open_budget_ratio: 0.15
