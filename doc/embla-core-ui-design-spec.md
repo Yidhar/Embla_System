@@ -14,6 +14,13 @@ Core Objective：消除界面模糊感，通过物理边框、内阴影和层级
 
 该文档是实现约束，不是视觉建议。
 
+### 1.1 信息层级硬约束（新增）
+
+1. 首页主视觉必须服务于 `Runtime + MCP + Memory + Workflow`。
+2. 发布相关内容只允许出现在次级 `Evidence` 区域。
+3. `Release countdown` 不得占据 hero 区、首屏第一行或最大卡片位。
+4. `ChatOps` 必须视觉后置，明确标识为沟通通道。
+
 ---
 
 ## 2. 核心视觉基调
@@ -197,8 +204,8 @@ Core Objective：消除界面模糊感，通过物理边框、内阴影和层级
 
 ```tsx
 <section className="rounded-[28px] border border-gray-200/40 bg-white/55 backdrop-blur-[45px] p-6 shadow-[0_24px_48px_-12px_rgba(0,0,0,0.08)]">
-  <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Release Status</p>
-  <h3 className="mt-2 text-2xl font-extrabold tracking-tight text-[#1C1C1E]">PASS</h3>
+  <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Runtime Lease</p>
+  <h3 className="mt-2 text-2xl font-extrabold tracking-tight text-[#1C1C1E]">HEALTHY</h3>
 </section>
 ```
 
@@ -222,28 +229,41 @@ Core Objective：消除界面模糊感，通过物理边框、内阴影和层级
 
 ## 9. 页面级布局约束
 
-### 9.1 Overview
+### 9.1 Runtime Posture（首页）
 
-1. 顶部 4 张 KPI 卡必须同高。
-2. 中部左时间线、右风险列表必须视觉重量平衡。
-3. 底部证据表格使用高可读行高（`min-h-12`）。
+1. 顶部核心指标卡优先展示 rollout/fail-open/lease/queue/lock/disk。
+2. 中部趋势图必须保留错误率与延迟两条核心曲线。
+3. 首屏不得出现发布倒计时主卡。
 
-### 9.2 Release Gates
+### 9.2 MCP Fabric
 
-1. 每个 WS 区块使用独立玻璃卡。
-2. 失败项必须红色状态芯片 + 错误摘要 + 来源报告路径。
+1. 来源分组（builtin/mcporter/isolated/rejected）必须同屏可见。
+2. 不可把“服务数量”替代“可用性状态”，必须同时展示。
+3. 降级或不可用服务必须有明显状态芯片与原因摘要。
 
-### 9.3 Runtime
+### 9.3 Memory Graph
 
-1. rollout/fail-open/lease 用三列状态卡。
-2. 配置快照与状态结论并排展示，避免只看结论。
+1. 图谱画布与统计栏并排，不允许只有图不显示数字。
+2. 关系边颜色保持克制，避免干扰节点可读性。
+3. 搜索结果要有数量与耗时反馈。
 
-### 9.4 Evidence
+### 9.4 Workflow & Events
 
-1. 表格必须支持按失败优先排序。
-2. 路径列必须可复制并显式展示更新时间。
+1. Outbox 积压卡片与事件时间线需同屏，防止只看单一指标。
+2. 关键事件（fail-open/lease-lost）采用高对比告警色。
+3. 日志上下文区与工具状态区分层展示，避免信息混叠。
 
-### 9.5 ChatOps
+### 9.5 Incidents
+
+1. 最近演练结论放在页首，历史列表放后。
+2. 失败 case 必须带修复入口（runbook link 或命令片段）。
+
+### 9.6 Evidence（次级）
+
+1. 发布/签署/72h 验收只在该页展示，不前置到首页。
+2. 失败证据优先排序，路径列必须可复制。
+
+### 9.7 ChatOps（次级）
 
 1. 页面头部需标注“沟通通道（非主态势页）”。
 2. 工具流事件展示优先于闲聊装饰。
@@ -256,7 +276,7 @@ Core Objective：消除界面模糊感，通过物理边框、内阴影和层级
 2. `>=1280px`：三栏主布局。
 3. `>=1024px`：双栏布局。
 4. `<1024px`：单栏堆叠，保证数据可读优先。
-5. 移动端保留玻璃与边框逻辑，但适当降低 blur 到 `40px` 控制性能。
+5. 移动端保留玻璃与边框逻辑，但 blur 可降到 `40px` 以控制性能。
 
 ---
 
@@ -264,8 +284,8 @@ Core Objective：消除界面模糊感，通过物理边框、内阴影和层级
 
 1. 过渡时长：`120ms` 到 `220ms`。
 2. 默认缓动：`cubic-bezier(0.2, 0.8, 0.2, 1)`。
-3. 状态变更（PASS/FAIL）必须有轻微颜色过渡。
-4. 严禁炫技型长动画影响看板读数。
+3. 状态变更（healthy/warning/critical）必须有轻微颜色过渡。
+4. 严禁炫技型长动画影响读数判断。
 
 ---
 
@@ -277,6 +297,7 @@ Core Objective：消除界面模糊感，通过物理边框、内阴影和层级
 4. 按钮无按压反馈。
 5. 图标混用不同风格库。
 6. 聊天页抢占首页地位。
+7. 发布倒计时占据首屏主视觉。
 
 ---
 
@@ -285,7 +306,6 @@ Core Objective：消除界面模糊感，通过物理边框、内阴影和层级
 1. 是否已引入 `Inter` + `SF Pro Display` fallback。
 2. 是否全局启用底色 `#F2F2F7`/`#F9F9FB`。
 3. 是否建立 `tokens.css` 与可复用玻璃容器类。
-4. 主按钮与次级按钮是否按规范区分。
-5. 所有可点击元素是否具备 `active:scale` 反馈。
-6. 看板页面是否保持 `Overview` 首位。
-
+4. 是否固定首页为 `Runtime Posture`。
+5. 是否将 `MCP Fabric`、`Memory Graph`、`Workflow & Events` 设为一级主域。
+6. 是否确认发布内容仅位于 `Evidence` 次级域。
