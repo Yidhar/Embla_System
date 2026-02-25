@@ -27,6 +27,15 @@ type SettingsConsoleProps = {
   lang: AppLang;
 };
 
+type SectionKey = "api" | "voice" | "autonomous" | "ui" | "patch";
+
+type DiffRow = {
+  path: string;
+  before: unknown;
+  after: unknown;
+  sensitive: boolean;
+};
+
 const FORM_DEFAULT: QuickForm = {
   apiBaseUrl: "",
   apiModel: "",
@@ -45,6 +54,29 @@ const FORM_DEFAULT: QuickForm = {
   logLevel: "INFO",
   debugMode: false,
 };
+
+const COLLAPSED_DEFAULT: Record<SectionKey, boolean> = {
+  api: false,
+  voice: false,
+  autonomous: false,
+  ui: false,
+  patch: false,
+};
+
+const SENSITIVE_PATHS: Array<{ id: string; path: string[]; labelKey: string }> = [
+  { id: "api.api_key", path: ["api", "api_key"], labelKey: "apiKey" },
+  { id: "voice_realtime.api_key", path: ["voice_realtime", "api_key"], labelKey: "realtimeApiKey" },
+  { id: "tts.api_key", path: ["tts", "api_key"], labelKey: "ttsApiKey" },
+  { id: "computer_control.api_key", path: ["computer_control", "api_key"], labelKey: "computerControlApiKey" },
+  {
+    id: "computer_control.grounding_api_key",
+    path: ["computer_control", "grounding_api_key"],
+    labelKey: "groundingApiKey",
+  },
+];
+
+const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"] as const;
+const REALTIME_VOICE_MODES = ["auto", "realtime", "hybrid"] as const;
 
 const PAGE_COPY: Record<
   AppLang,
@@ -94,11 +126,36 @@ const PAGE_COPY: Record<
         releaseMaxErrorRate: string;
       };
     };
+    preview: {
+      title: string;
+      description: string;
+      noChange: string;
+      changedCount: string;
+      path: string;
+      before: string;
+      after: string;
+      sensitiveMasked: string;
+      invalid: string;
+    };
     patch: {
       title: string;
       description: string;
       apply: string;
       placeholder: string;
+      parseOk: string;
+    };
+    secrets: {
+      title: string;
+      description: string;
+      configured: string;
+      empty: string;
+      labels: {
+        apiKey: string;
+        realtimeApiKey: string;
+        ttsApiKey: string;
+        computerControlApiKey: string;
+        groundingApiKey: string;
+      };
     };
     status: {
       loadFailed: string;
@@ -156,11 +213,36 @@ const PAGE_COPY: Record<
         releaseMaxErrorRate: "Recommended range: 0.0 - 1.0",
       },
     },
+    preview: {
+      title: "Change Preview",
+      description: "Review changes before applying quick settings.",
+      noChange: "No quick-setting change detected.",
+      changedCount: "Changed fields",
+      path: "Path",
+      before: "Before",
+      after: "After",
+      sensitiveMasked: "Sensitive values are masked.",
+      invalid: "Change preview unavailable due to invalid numeric input.",
+    },
     patch: {
       title: "Advanced Patch (JSON)",
       description: "Apply a partial config patch. Only fields included in the JSON will be updated.",
       apply: "Apply Patch",
       placeholder: '{\n  "system": {\n    "debug": false\n  }\n}',
+      parseOk: "JSON parse OK",
+    },
+    secrets: {
+      title: "Secret Fields (Masked)",
+      description: "Secrets are displayed in masked form for safety.",
+      configured: "Configured",
+      empty: "Empty",
+      labels: {
+        apiKey: "API Key",
+        realtimeApiKey: "Realtime Voice API Key",
+        ttsApiKey: "TTS API Key",
+        computerControlApiKey: "Computer Control API Key",
+        groundingApiKey: "Grounding API Key",
+      },
     },
     status: {
       loadFailed: "Failed to load config from backend.",
@@ -217,11 +299,36 @@ const PAGE_COPY: Record<
         releaseMaxErrorRate: "建议区间：0.0 - 1.0",
       },
     },
+    preview: {
+      title: "变更预览",
+      description: "保存快捷设置前先查看字段变更。",
+      noChange: "当前未检测到快捷设置变更。",
+      changedCount: "变更字段数",
+      path: "路径",
+      before: "变更前",
+      after: "变更后",
+      sensitiveMasked: "敏感字段已掩码显示。",
+      invalid: "存在无效数字输入，无法生成变更预览。",
+    },
     patch: {
       title: "高级补丁（JSON）",
       description: "提交部分配置补丁。仅会更新 JSON 中提供的字段。",
       apply: "应用补丁",
       placeholder: '{\n  "system": {\n    "debug": false\n  }\n}',
+      parseOk: "JSON 解析成功",
+    },
+    secrets: {
+      title: "敏感字段（掩码）",
+      description: "为安全起见，敏感值仅展示掩码。",
+      configured: "已配置",
+      empty: "为空",
+      labels: {
+        apiKey: "API 密钥",
+        realtimeApiKey: "实时语音 API 密钥",
+        ttsApiKey: "TTS API 密钥",
+        computerControlApiKey: "电脑控制 API 密钥",
+        groundingApiKey: "Grounding API 密钥",
+      },
     },
     status: {
       loadFailed: "从后端加载配置失败。",
@@ -241,13 +348,17 @@ function asRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function getNestedValue(root: Record<string, unknown>, path: string[]): unknown {
   let current: unknown = root;
   for (const key of path) {
-    if (typeof current !== "object" || current === null) {
+    if (!isPlainObject(current)) {
       return undefined;
     }
-    current = (current as Record<string, unknown>)[key];
+    current = current[key];
   }
   return current;
 }
@@ -292,8 +403,150 @@ function buildQuickForm(config: Record<string, unknown>): QuickForm {
   };
 }
 
-function sectionTitle(title: string) {
-  return <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">{title}</p>;
+function isSensitivePath(path: string): boolean {
+  const lowered = path.toLowerCase();
+  return (
+    lowered.includes("api_key") ||
+    lowered.includes("password") ||
+    lowered.includes("secret") ||
+    lowered.includes("token")
+  );
+}
+
+function maskSecret(value: unknown): string {
+  const text = String(value ?? "").trim();
+  if (!text) {
+    return "******";
+  }
+  if (text.length <= 4) {
+    return "*".repeat(text.length);
+  }
+  return `${text.slice(0, 2)}${"*".repeat(Math.max(3, text.length - 4))}${text.slice(-2)}`;
+}
+
+function primitiveEquals(a: unknown, b: unknown): boolean {
+  if (typeof a === "number" && typeof b === "number") {
+    if (!Number.isFinite(a) && !Number.isFinite(b)) {
+      return true;
+    }
+    return Object.is(a, b);
+  }
+  return Object.is(a, b);
+}
+
+function collectDiffRows(base: unknown, patch: unknown, path: string[] = []): DiffRow[] {
+  if (isPlainObject(patch)) {
+    let rows: DiffRow[] = [];
+    for (const [key, value] of Object.entries(patch)) {
+      const nextPath = [...path, key];
+      const baseValue = isPlainObject(base) ? base[key] : undefined;
+      rows = rows.concat(collectDiffRows(baseValue, value, nextPath));
+    }
+    return rows;
+  }
+
+  if (Array.isArray(patch)) {
+    const beforeSerialized = JSON.stringify(base);
+    const afterSerialized = JSON.stringify(patch);
+    if (beforeSerialized === afterSerialized) {
+      return [];
+    }
+    const pathText = path.join(".");
+    return [{ path: pathText, before: base, after: patch, sensitive: isSensitivePath(pathText) }];
+  }
+
+  if (primitiveEquals(base, patch)) {
+    return [];
+  }
+
+  const pathText = path.join(".");
+  return [{ path: pathText, before: base, after: patch, sensitive: isSensitivePath(pathText) }];
+}
+
+function formatValueDisplay(value: unknown, lang: AppLang, masked = false): string {
+  if (masked) {
+    return maskSecret(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return formatNumber(value, lang, { maximumFractionDigits: 6, fallback: "--" });
+  }
+  if (typeof value === "string") {
+    return value || '""';
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "undefined") {
+    return "--";
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function buildQuickPayload(form: QuickForm): { ok: true; payload: Record<string, unknown> } | { ok: false } {
+  const apiTemperature = Number(form.apiTemperature);
+  const apiTimeout = Number(form.apiTimeout);
+  const cycleSeconds = Number(form.autonomousCycleSeconds);
+  const releaseMaxErrorRate = Number(form.releaseMaxErrorRate);
+  const releaseMaxLatencyP95 = Number(form.releaseMaxLatencyP95);
+  const numberValues = [apiTemperature, apiTimeout, cycleSeconds, releaseMaxErrorRate, releaseMaxLatencyP95];
+  if (numberValues.some((value) => !Number.isFinite(value))) {
+    return { ok: false };
+  }
+
+  return {
+    ok: true,
+    payload: {
+      api: {
+        base_url: form.apiBaseUrl.trim(),
+        model: form.apiModel.trim(),
+        temperature: apiTemperature,
+        request_timeout: Math.max(1, Math.round(apiTimeout)),
+      },
+      system: {
+        voice_enabled: form.voiceEnabled,
+        log_level: form.logLevel.trim() || "INFO",
+        debug: form.debugMode,
+      },
+      voice_realtime: {
+        enabled: form.realtimeVoiceEnabled,
+        voice_mode: form.realtimeVoiceMode.trim() || "auto",
+        tts_voice: form.realtimeTtsVoice.trim(),
+      },
+      autonomous: {
+        enabled: form.autonomousEnabled,
+        cycle_interval_seconds: Math.max(10, Math.round(cycleSeconds)),
+        release: {
+          enabled: form.releaseGuardEnabled,
+          max_error_rate: releaseMaxErrorRate,
+          max_latency_p95_ms: releaseMaxLatencyP95,
+        },
+      },
+      ui: {
+        user_name: form.userName.trim(),
+      },
+    },
+  };
+}
+
+function sectionHeader(title: string, section: SectionKey, collapsed: Record<SectionKey, boolean>, onToggle: (section: SectionKey) => void) {
+  const isCollapsed = collapsed[section];
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(section)}
+      className="flex w-full items-center justify-between rounded-xl bg-white/80 px-3 py-2 text-left text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500"
+    >
+      <span>{title}</span>
+      <span>{isCollapsed ? "+" : "−"}</span>
+    </button>
+  );
 }
 
 export function SettingsConsole({ lang }: SettingsConsoleProps) {
@@ -304,6 +557,7 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
   const [loading, setLoading] = useState(true);
   const [savingQuick, setSavingQuick] = useState(false);
   const [savingPatch, setSavingPatch] = useState(false);
+  const [collapsed, setCollapsed] = useState<Record<SectionKey, boolean>>(COLLAPSED_DEFAULT);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -340,61 +594,69 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
     };
   }, [config]);
 
+  const secretRows = useMemo(() => {
+    const snapshot = asRecord(config || {});
+    return SENSITIVE_PATHS.map((item) => {
+      const raw = getNestedValue(snapshot, item.path);
+      const text = String(raw ?? "").trim();
+      return {
+        id: item.id,
+        label: copy.secrets.labels[item.labelKey as keyof typeof copy.secrets.labels],
+        configured: Boolean(text),
+        masked: maskSecret(raw),
+      };
+    });
+  }, [config, copy]);
+
+  const quickPayloadResult = useMemo(() => buildQuickPayload(form), [form]);
+
+  const quickDiffRows = useMemo(() => {
+    if (!quickPayloadResult.ok) {
+      return null;
+    }
+    const base = asRecord(config || {});
+    return collectDiffRows(base, quickPayloadResult.payload);
+  }, [config, quickPayloadResult]);
+
+  const patchParseResult = useMemo(() => {
+    try {
+      const parsed = JSON.parse(patchText);
+      if (!isPlainObject(parsed)) {
+        return { ok: false as const };
+      }
+      return { ok: true as const, payload: parsed as Record<string, unknown> };
+    } catch {
+      return { ok: false as const };
+    }
+  }, [patchText]);
+
+  const patchDiffRows = useMemo(() => {
+    if (!patchParseResult.ok) {
+      return null;
+    }
+    const base = asRecord(config || {});
+    return collectDiffRows(base, patchParseResult.payload);
+  }, [config, patchParseResult]);
+
   const setField = <K extends keyof QuickForm>(key: K, value: QuickForm[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const toggleSection = (section: SectionKey) => {
+    setCollapsed((prev) => ({ ...prev, [section]: !prev[section] }));
   };
 
   const saveQuickSettings = async () => {
     setError("");
     setMessage("");
-
-    const apiTemperature = Number(form.apiTemperature);
-    const apiTimeout = Number(form.apiTimeout);
-    const cycleSeconds = Number(form.autonomousCycleSeconds);
-    const releaseMaxErrorRate = Number(form.releaseMaxErrorRate);
-    const releaseMaxLatencyP95 = Number(form.releaseMaxLatencyP95);
-
-    const numberValues = [apiTemperature, apiTimeout, cycleSeconds, releaseMaxErrorRate, releaseMaxLatencyP95];
-    if (numberValues.some((value) => !Number.isFinite(value))) {
+    if (!quickPayloadResult.ok) {
       setError(copy.status.invalidNumber);
       return;
     }
 
-    const payload: Record<string, unknown> = {
-      api: {
-        base_url: form.apiBaseUrl.trim(),
-        model: form.apiModel.trim(),
-        temperature: apiTemperature,
-        request_timeout: Math.max(1, Math.round(apiTimeout)),
-      },
-      system: {
-        voice_enabled: form.voiceEnabled,
-        log_level: form.logLevel.trim() || "INFO",
-        debug: form.debugMode,
-      },
-      voice_realtime: {
-        enabled: form.realtimeVoiceEnabled,
-        voice_mode: form.realtimeVoiceMode.trim() || "auto",
-        tts_voice: form.realtimeTtsVoice.trim(),
-      },
-      autonomous: {
-        enabled: form.autonomousEnabled,
-        cycle_interval_seconds: Math.max(10, Math.round(cycleSeconds)),
-        release: {
-          enabled: form.releaseGuardEnabled,
-          max_error_rate: releaseMaxErrorRate,
-          max_latency_p95_ms: releaseMaxLatencyP95,
-        },
-      },
-      ui: {
-        user_name: form.userName.trim(),
-      },
-    };
-
     setSavingQuick(true);
-    const result = await updateSystemConfig(payload);
+    const result = await updateSystemConfig(quickPayloadResult.payload);
     setSavingQuick(false);
-
     if (!result.ok) {
       setError(`${copy.status.saveFailed} ${result.message}`);
       return;
@@ -406,21 +668,13 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
   const applyPatch = async () => {
     setError("");
     setMessage("");
-    let payload: Record<string, unknown>;
-    try {
-      const parsed = JSON.parse(patchText);
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        setError(copy.status.invalidPatch);
-        return;
-      }
-      payload = parsed as Record<string, unknown>;
-    } catch {
+    if (!patchParseResult.ok) {
       setError(copy.status.invalidPatch);
       return;
     }
 
     setSavingPatch(true);
-    const result = await updateSystemConfig(payload);
+    const result = await updateSystemConfig(patchParseResult.payload);
     setSavingPatch(false);
     if (!result.ok) {
       setError(`${copy.status.saveFailed} ${result.message}`);
@@ -459,6 +713,23 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
             {copy.summary.debug}: <span className="font-bold">{summary.debugEnabled ? copy.summary.enabled : copy.summary.disabled}</span>
           </div>
         </div>
+
+        <article className="mt-4 rounded-2xl border border-gray-200/60 bg-white/70 p-4">
+          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">{copy.secrets.title}</p>
+          <p className="mt-1 text-xs text-gray-600">{copy.secrets.description}</p>
+          <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+            {secretRows.map((item) => (
+              <div key={item.id} className="rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
+                <p className="font-bold">{item.label}</p>
+                <p className="mt-1 font-mono text-[10px] text-gray-500">{item.masked}</p>
+                <p className="mt-1 text-[10px] text-gray-500">
+                  {item.configured ? copy.secrets.configured : copy.secrets.empty}
+                </p>
+              </div>
+            ))}
+          </div>
+        </article>
+
         {error ? <p className="mt-4 text-sm text-rose-600">{error}</p> : null}
         {message ? <p className="mt-4 text-sm text-emerald-600">{message}</p> : null}
       </section>
@@ -487,208 +758,299 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
 
         <div className="mt-4 grid grid-cols-1 gap-6 xl:grid-cols-2">
           <article className="space-y-3 rounded-2xl border border-gray-200/60 bg-white/70 p-4">
-            {sectionTitle(copy.quick.sections.api)}
-            <label className="block">
-              <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiBaseUrl}</p>
-              <input
-                value={form.apiBaseUrl}
-                onChange={(event) => setField("apiBaseUrl", event.target.value)}
-                className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
-              />
-            </label>
-            <label className="block">
-              <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiModel}</p>
-              <input
-                value={form.apiModel}
-                onChange={(event) => setField("apiModel", event.target.value)}
-                className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
-              />
-            </label>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <label className="block">
-                <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiTemperature}</p>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={form.apiTemperature}
-                  onChange={(event) => setField("apiTemperature", event.target.value)}
-                  className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
-                />
-                <p className="mt-1 text-[10px] text-gray-500">{copy.quick.hints.apiTemperature}</p>
-              </label>
-              <label className="block">
-                <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiTimeout}</p>
-                <input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={form.apiTimeout}
-                  onChange={(event) => setField("apiTimeout", event.target.value)}
-                  className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
-                />
-              </label>
-            </div>
+            {sectionHeader(copy.quick.sections.api, "api", collapsed, toggleSection)}
+            {collapsed.api ? null : (
+              <div className="space-y-3">
+                <label className="block">
+                  <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiBaseUrl}</p>
+                  <input
+                    value={form.apiBaseUrl}
+                    onChange={(event) => setField("apiBaseUrl", event.target.value)}
+                    className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                  />
+                </label>
+                <label className="block">
+                  <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiModel}</p>
+                  <input
+                    value={form.apiModel}
+                    onChange={(event) => setField("apiModel", event.target.value)}
+                    className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                  />
+                </label>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <label className="block">
+                    <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiTemperature}</p>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={form.apiTemperature}
+                      onChange={(event) => setField("apiTemperature", event.target.value)}
+                      className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                    />
+                    <p className="mt-1 text-[10px] text-gray-500">{copy.quick.hints.apiTemperature}</p>
+                  </label>
+                  <label className="block">
+                    <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiTimeout}</p>
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={form.apiTimeout}
+                      onChange={(event) => setField("apiTimeout", event.target.value)}
+                      className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
           </article>
 
           <article className="space-y-3 rounded-2xl border border-gray-200/60 bg-white/70 p-4">
-            {sectionTitle(copy.quick.sections.voice)}
-            <label className="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
-              <span>{copy.quick.fields.voiceEnabled}</span>
-              <input
-                type="checkbox"
-                checked={form.voiceEnabled}
-                onChange={(event) => setField("voiceEnabled", event.target.checked)}
-                className="h-4 w-4"
-              />
-            </label>
-            <label className="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
-              <span>{copy.quick.fields.realtimeVoiceEnabled}</span>
-              <input
-                type="checkbox"
-                checked={form.realtimeVoiceEnabled}
-                onChange={(event) => setField("realtimeVoiceEnabled", event.target.checked)}
-                className="h-4 w-4"
-              />
-            </label>
-            <label className="block">
-              <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.realtimeVoiceMode}</p>
-              <select
-                value={form.realtimeVoiceMode}
-                onChange={(event) => setField("realtimeVoiceMode", event.target.value)}
-                className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
-              >
-                <option value="auto">auto</option>
-                <option value="realtime">realtime</option>
-                <option value="hybrid">hybrid</option>
-              </select>
-            </label>
-            <label className="block">
-              <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.realtimeTtsVoice}</p>
-              <input
-                value={form.realtimeTtsVoice}
-                onChange={(event) => setField("realtimeTtsVoice", event.target.value)}
-                className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
-              />
-            </label>
+            {sectionHeader(copy.quick.sections.voice, "voice", collapsed, toggleSection)}
+            {collapsed.voice ? null : (
+              <div className="space-y-3">
+                <label className="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
+                  <span>{copy.quick.fields.voiceEnabled}</span>
+                  <input
+                    type="checkbox"
+                    checked={form.voiceEnabled}
+                    onChange={(event) => setField("voiceEnabled", event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                </label>
+                <label className="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
+                  <span>{copy.quick.fields.realtimeVoiceEnabled}</span>
+                  <input
+                    type="checkbox"
+                    checked={form.realtimeVoiceEnabled}
+                    onChange={(event) => setField("realtimeVoiceEnabled", event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                </label>
+                <label className="block">
+                  <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.realtimeVoiceMode}</p>
+                  <select
+                    value={form.realtimeVoiceMode}
+                    onChange={(event) => setField("realtimeVoiceMode", event.target.value)}
+                    className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                  >
+                    {REALTIME_VOICE_MODES.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {mode}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block">
+                  <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.realtimeTtsVoice}</p>
+                  <input
+                    value={form.realtimeTtsVoice}
+                    onChange={(event) => setField("realtimeTtsVoice", event.target.value)}
+                    className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                  />
+                </label>
+              </div>
+            )}
           </article>
 
           <article className="space-y-3 rounded-2xl border border-gray-200/60 bg-white/70 p-4">
-            {sectionTitle(copy.quick.sections.autonomous)}
-            <label className="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
-              <span>{copy.quick.fields.autonomousEnabled}</span>
-              <input
-                type="checkbox"
-                checked={form.autonomousEnabled}
-                onChange={(event) => setField("autonomousEnabled", event.target.checked)}
-                className="h-4 w-4"
-              />
-            </label>
-            <label className="block">
-              <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.autonomousCycleSeconds}</p>
-              <input
-                type="number"
-                min={10}
-                step={10}
-                value={form.autonomousCycleSeconds}
-                onChange={(event) => setField("autonomousCycleSeconds", event.target.value)}
-                className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
-              />
-            </label>
-            <label className="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
-              <span>{copy.quick.fields.releaseGuardEnabled}</span>
-              <input
-                type="checkbox"
-                checked={form.releaseGuardEnabled}
-                onChange={(event) => setField("releaseGuardEnabled", event.target.checked)}
-                className="h-4 w-4"
-              />
-            </label>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <label className="block">
-                <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.releaseMaxErrorRate}</p>
-                <input
-                  type="number"
-                  step="0.01"
-                  min={0}
-                  max={1}
-                  value={form.releaseMaxErrorRate}
-                  onChange={(event) => setField("releaseMaxErrorRate", event.target.value)}
-                  className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
-                />
-                <p className="mt-1 text-[10px] text-gray-500">{copy.quick.hints.releaseMaxErrorRate}</p>
-              </label>
-              <label className="block">
-                <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.releaseMaxLatencyP95}</p>
-                <input
-                  type="number"
-                  min={10}
-                  step={10}
-                  value={form.releaseMaxLatencyP95}
-                  onChange={(event) => setField("releaseMaxLatencyP95", event.target.value)}
-                  className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
-                />
-              </label>
-            </div>
+            {sectionHeader(copy.quick.sections.autonomous, "autonomous", collapsed, toggleSection)}
+            {collapsed.autonomous ? null : (
+              <div className="space-y-3">
+                <label className="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
+                  <span>{copy.quick.fields.autonomousEnabled}</span>
+                  <input
+                    type="checkbox"
+                    checked={form.autonomousEnabled}
+                    onChange={(event) => setField("autonomousEnabled", event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                </label>
+                <label className="block">
+                  <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.autonomousCycleSeconds}</p>
+                  <input
+                    type="number"
+                    min={10}
+                    step={10}
+                    value={form.autonomousCycleSeconds}
+                    onChange={(event) => setField("autonomousCycleSeconds", event.target.value)}
+                    className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                  />
+                </label>
+                <label className="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
+                  <span>{copy.quick.fields.releaseGuardEnabled}</span>
+                  <input
+                    type="checkbox"
+                    checked={form.releaseGuardEnabled}
+                    onChange={(event) => setField("releaseGuardEnabled", event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                </label>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <label className="block">
+                    <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.releaseMaxErrorRate}</p>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min={0}
+                      max={1}
+                      value={form.releaseMaxErrorRate}
+                      onChange={(event) => setField("releaseMaxErrorRate", event.target.value)}
+                      className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                    />
+                    <p className="mt-1 text-[10px] text-gray-500">{copy.quick.hints.releaseMaxErrorRate}</p>
+                  </label>
+                  <label className="block">
+                    <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.releaseMaxLatencyP95}</p>
+                    <input
+                      type="number"
+                      min={10}
+                      step={10}
+                      value={form.releaseMaxLatencyP95}
+                      onChange={(event) => setField("releaseMaxLatencyP95", event.target.value)}
+                      className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
           </article>
 
           <article className="space-y-3 rounded-2xl border border-gray-200/60 bg-white/70 p-4">
-            {sectionTitle(copy.quick.sections.ui)}
-            <label className="block">
-              <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.userName}</p>
-              <input
-                value={form.userName}
-                onChange={(event) => setField("userName", event.target.value)}
-                className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
-              />
-            </label>
-            <label className="block">
-              <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.logLevel}</p>
-              <select
-                value={form.logLevel}
-                onChange={(event) => setField("logLevel", event.target.value)}
-                className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
-              >
-                <option value="DEBUG">DEBUG</option>
-                <option value="INFO">INFO</option>
-                <option value="WARNING">WARNING</option>
-                <option value="ERROR">ERROR</option>
-              </select>
-            </label>
-            <label className="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
-              <span>{copy.quick.fields.debugMode}</span>
-              <input
-                type="checkbox"
-                checked={form.debugMode}
-                onChange={(event) => setField("debugMode", event.target.checked)}
-                className="h-4 w-4"
-              />
-            </label>
-            <div className="rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
-              <span className="font-bold">API timeout: </span>
-              {formatNumber(Number(form.apiTimeout), lang, { maximumFractionDigits: 0, fallback: "--" })} s
-            </div>
+            {sectionHeader(copy.quick.sections.ui, "ui", collapsed, toggleSection)}
+            {collapsed.ui ? null : (
+              <div className="space-y-3">
+                <label className="block">
+                  <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.userName}</p>
+                  <input
+                    value={form.userName}
+                    onChange={(event) => setField("userName", event.target.value)}
+                    className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                  />
+                </label>
+                <label className="block">
+                  <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.logLevel}</p>
+                  <select
+                    value={form.logLevel}
+                    onChange={(event) => setField("logLevel", event.target.value)}
+                    className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                  >
+                    {LOG_LEVELS.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
+                  <span>{copy.quick.fields.debugMode}</span>
+                  <input
+                    type="checkbox"
+                    checked={form.debugMode}
+                    onChange={(event) => setField("debugMode", event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                </label>
+                <div className="rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
+                  <span className="font-bold">API timeout: </span>
+                  {formatNumber(Number(form.apiTimeout), lang, { maximumFractionDigits: 0, fallback: "--" })} s
+                </div>
+              </div>
+            )}
           </article>
         </div>
       </section>
 
       <section className="glass-card p-6">
-        <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.patch.title}</p>
-        <p className="mt-2 text-sm text-gray-600">{copy.patch.description}</p>
-        <textarea
-          value={patchText}
-          onChange={(event) => setPatchText(event.target.value)}
-          className="mt-4 h-64 w-full rounded-2xl border border-gray-200/60 bg-white/80 p-4 font-mono text-xs text-gray-700 outline-none"
-          spellCheck={false}
-        />
-        <div className="mt-4">
-          <button
-            type="button"
-            onClick={() => void applyPatch()}
-            disabled={savingPatch}
-            className="rounded-xl border border-white/70 bg-[#1c1c1e] px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {savingPatch ? copy.quick.saving : copy.patch.apply}
-          </button>
+        <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.preview.title}</p>
+        <p className="mt-2 text-sm text-gray-600">{copy.preview.description}</p>
+        <div className="mt-3 rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
+          {quickDiffRows === null ? (
+            <span className="text-amber-600">{copy.preview.invalid}</span>
+          ) : quickDiffRows.length === 0 ? (
+            <span>{copy.preview.noChange}</span>
+          ) : (
+            <span>
+              {copy.preview.changedCount}: <span className="font-bold">{quickDiffRows.length}</span>
+            </span>
+          )}
+        </div>
+        {quickDiffRows && quickDiffRows.length > 0 ? (
+          <>
+            <div className="mt-2 text-[10px] text-gray-500">{copy.preview.sensitiveMasked}</div>
+            <div className="mt-3 overflow-auto rounded-2xl border border-gray-200/60 bg-white/80">
+              <table className="min-w-full text-left text-xs text-gray-700">
+                <thead>
+                  <tr className="border-b border-gray-200/80">
+                    <th className="px-3 py-2 uppercase tracking-[0.18em]">{copy.preview.path}</th>
+                    <th className="px-3 py-2 uppercase tracking-[0.18em]">{copy.preview.before}</th>
+                    <th className="px-3 py-2 uppercase tracking-[0.18em]">{copy.preview.after}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {quickDiffRows.map((row) => (
+                    <tr key={row.path} className="border-b border-gray-100/80">
+                      <td className="px-3 py-2 font-mono">{row.path}</td>
+                      <td className="px-3 py-2 font-mono">{formatValueDisplay(row.before, lang, row.sensitive)}</td>
+                      <td className="px-3 py-2 font-mono">{formatValueDisplay(row.after, lang, row.sensitive)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : null}
+      </section>
+
+      <section className="glass-card p-6">
+        <div className="space-y-3">
+          {sectionHeader(copy.patch.title, "patch", collapsed, toggleSection)}
+          {collapsed.patch ? null : (
+            <>
+              <p className="text-sm text-gray-600">{copy.patch.description}</p>
+              <textarea
+                value={patchText}
+                onChange={(event) => setPatchText(event.target.value)}
+                className="h-64 w-full rounded-2xl border border-gray-200/60 bg-white/80 p-4 font-mono text-xs text-gray-700 outline-none"
+                spellCheck={false}
+              />
+              <div className="rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
+                {patchParseResult.ok ? copy.patch.parseOk : copy.status.invalidPatch}
+              </div>
+              {patchDiffRows && patchDiffRows.length > 0 ? (
+                <div className="overflow-auto rounded-2xl border border-gray-200/60 bg-white/80">
+                  <table className="min-w-full text-left text-xs text-gray-700">
+                    <thead>
+                      <tr className="border-b border-gray-200/80">
+                        <th className="px-3 py-2 uppercase tracking-[0.18em]">{copy.preview.path}</th>
+                        <th className="px-3 py-2 uppercase tracking-[0.18em]">{copy.preview.before}</th>
+                        <th className="px-3 py-2 uppercase tracking-[0.18em]">{copy.preview.after}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {patchDiffRows.map((row) => (
+                        <tr key={`${row.path}-patch`} className="border-b border-gray-100/80">
+                          <td className="px-3 py-2 font-mono">{row.path}</td>
+                          <td className="px-3 py-2 font-mono">{formatValueDisplay(row.before, lang, row.sensitive)}</td>
+                          <td className="px-3 py-2 font-mono">{formatValueDisplay(row.after, lang, row.sensitive)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+              <div className="mt-1">
+                <button
+                  type="button"
+                  onClick={() => void applyPatch()}
+                  disabled={savingPatch}
+                  className="rounded-xl border border-white/70 bg-[#1c1c1e] px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {savingPatch ? copy.quick.saving : copy.patch.apply}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </section>
     </div>
