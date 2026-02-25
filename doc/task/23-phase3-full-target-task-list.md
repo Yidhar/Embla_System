@@ -183,3 +183,13 @@
   - 全量收口链扩展接入 M10 组：`scripts/release_closure_chain_full_m0_m7.py`（兼容命名，目标域已到 M0-M10）
   - 新增 runbook：`doc/task/runbooks/release_m10_event_gc_closure_onepager_ws25_006.md`
   - 新增回归：`autonomous/tests/test_ws25_release_gate.py`、`tests/test_release_closure_chain_m10_ws25_006.py`
+- `NGA-WS26-001` 已落地写路径强制收敛：
+  - `SubAgentRuntimeConfig` 增加写路径门禁开关（默认强制、默认不允许 write fail-open 回退 legacy）
+  - `SystemAgent` 新增写意图识别与 `gate=write_path` 拒绝链路，阻断绕过 Scaffold/Txn 的默认路径
+  - write 任务 fail-open 默认触发 `SubAgentRuntimeFailOpenBlocked`（可通过显式开关兼容）
+  - 新增回归：`autonomous/tests/test_system_agent_write_path_ws26_001.py`
+- `NGA-WS26-002` 已落地 rollout/fail-open/lease 统一指标导出：
+  - `scripts/export_slo_snapshot.py` 新增 `runtime_rollout/runtime_fail_open/runtime_lease` 三组指标
+  - 新增 WS26 指标导出入口：`scripts/export_ws26_runtime_snapshot_ws26_002.py`
+  - 新增 runbook：`doc/task/runbooks/release_m11_runtime_guard_and_metrics_onepager_ws26_002.md`
+  - 新增回归：`tests/test_slo_snapshot_export.py`、`tests/test_export_ws26_runtime_snapshot_ws26_002.py`
