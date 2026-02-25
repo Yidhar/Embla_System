@@ -240,3 +240,16 @@
   - 新增 runbook：`doc/task/runbooks/release_m12_full_chain_m0_m12_onepager_ws27_004.md`
   - 默认报告：`scratch/reports/release_closure_chain_full_m0_m12_result.json`
   - 新增回归：`tests/test_release_closure_chain_full_m0_m12.py`
+- `NGA-WS27-005` 已落地 M12 文档一致性收口首版：
+  - 新增校验脚本：`scripts/validate_m12_doc_consistency_ws27_005.py`
+  - 覆盖检查：board evidence 一致性、`00/10/11/12/13 + task` 核心文档存在性、`WS27-001~004` 产物完整性
+  - 新增 runbook：`doc/task/runbooks/release_m12_doc_consistency_onepager_ws27_005.md`
+  - 默认报告：`scratch/reports/ws27_m12_doc_consistency_ws27_005.json`
+  - 新增回归：`tests/test_ws27_005_m12_doc_consistency.py`
+- `NGA-WS27-006` 已落地 Phase3 Full 放行报告首版：
+  - 新增放行聚合脚本：`scripts/generate_phase3_full_release_report_ws27_006.py`
+  - 产物：JSON 放行报告 + Markdown 签署模板
+    - `scratch/reports/phase3_full_release_report_ws27_006.json`
+    - `scratch/reports/phase3_full_release_signoff_ws27_006.md`
+  - 新增 runbook：`doc/task/runbooks/release_m12_phase3_full_signoff_onepager_ws27_006.md`
+  - 新增回归：`tests/test_ws27_006_phase3_release_report.py`
