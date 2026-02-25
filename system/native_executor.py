@@ -28,13 +28,13 @@ class NativeExecutor:
     Native command/file executor with strict project-root confinement.
 
     Security goals:
-    - All file operations are restricted to E:\\Programs\\NagaAgent.
+    - All file operations are restricted to repository root.
     - Command execution uses asyncio.create_subprocess_exec.
     - High-risk commands are blocked (format, del /f /s, rm, etc.).
     - Deletion is file-only and limited to project-root files.
     """
 
-    PROJECT_ROOT = Path(r"E:\Programs\NagaAgent").resolve()
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
     _BLOCKED_TOKENS = {
         "format",

@@ -92,14 +92,13 @@ async def wait_for_log_pattern(
         reopen_count += 1
         reopen_reason = reason
 
-    async def _safe_match(line: str) -> bool:
+    def _safe_match(line: str) -> bool:
+        # Keep matching in-process: some runtime environments do not allow background
+        # worker threads for asyncio.to_thread(), which can stall watcher shutdown.
+        # validate_safe_regex() already blocks known catastrophic patterns.
         try:
-            found = await asyncio.wait_for(
-                asyncio.to_thread(lambda: bool(compiled.search(line))),
-                timeout=max(0.01, float(regex_match_timeout_seconds)),
-            )
-            return bool(found)
-        except asyncio.TimeoutError:
+            return bool(compiled.search(line))
+        except re.error:
             return False
 
     while True:
@@ -156,7 +155,7 @@ async def wait_for_log_pattern(
                     got_new_data = True
                     current_position = int(fh.tell())
                     candidate = line.rstrip("\n")[:max(64, int(max_line_chars))]
-                    if await _safe_match(candidate):
+                    if _safe_match(candidate):
                         return SleepWatchResult(
                             watch_id=watch_id,
                             matched=True,
