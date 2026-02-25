@@ -1259,6 +1259,255 @@ def _ops_build_mcp_fabric_payload() -> Dict[str, Any]:
     )
 
 
+def _ops_safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _ops_read_event_rows(events_file: Path, *, limit: int) -> List[Dict[str, Any]]:
+    if not events_file.exists() or limit <= 0:
+        return []
+
+    lines = events_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+    rows: List[Dict[str, Any]] = []
+    for line in lines[-limit:]:
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            rows.append(payload)
+    return rows
+
+
+def _ops_compact_event_payload(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    compact: Dict[str, Any] = {}
+    for key, value in payload.items():
+        if len(compact) >= 8:
+            break
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            compact[str(key)] = value
+            continue
+        if isinstance(value, dict):
+            for nested_key, nested_value in value.items():
+                if len(compact) >= 8:
+                    break
+                if isinstance(nested_value, (str, int, float, bool)) or nested_value is None:
+                    compact[f"{key}.{nested_key}"] = nested_value
+    return compact
+
+
+def _ops_build_workflow_events_payload(
+    *,
+    events_limit: int = 5000,
+    context_days: int = 7,
+    recent_critical_limit: int = 50,
+) -> Dict[str, Any]:
+    try:
+        from scripts.export_slo_snapshot import build_snapshot
+
+        repo_root = Path(__file__).resolve().parent.parent
+        snapshot = build_snapshot(repo_root=repo_root, events_limit=max(1, int(events_limit)))
+    except Exception as exc:
+        logger.error(f"构建 workflow/events 聚合失败: {exc}")
+        raise
+
+    metrics = snapshot.get("metrics") if isinstance(snapshot.get("metrics"), dict) else {}
+    summary = snapshot.get("summary") if isinstance(snapshot.get("summary"), dict) else {}
+    sources = snapshot.get("sources") if isinstance(snapshot.get("sources"), dict) else {}
+    severity = _ops_status_to_severity(str(summary.get("overall_status") or "unknown"))
+
+    events_file_raw = str(sources.get("events_file") or "").strip()
+    events_file = Path(events_file_raw) if events_file_raw else Path("")
+    event_rows = _ops_read_event_rows(events_file, limit=max(100, int(events_limit)))
+
+    critical_event_types = {
+        "SubAgentRuntimeFailOpen",
+        "SubAgentRuntimeFailOpenBlocked",
+        "SubAgentRuntimeAutoDegraded",
+        "LeaseLost",
+        "IncidentOpened",
+    }
+    event_counters = {name: 0 for name in sorted(critical_event_types)}
+    recent_critical_events: List[Dict[str, Any]] = []
+    for row in event_rows:
+        event_type = str(row.get("event_type") or "").strip()
+        if event_type not in critical_event_types:
+            continue
+        event_counters[event_type] = int(event_counters.get(event_type, 0)) + 1
+        recent_critical_events.append({
+            "timestamp": str(row.get("timestamp") or ""),
+            "event_type": event_type,
+            "payload_excerpt": _ops_compact_event_payload(row.get("payload")),
+        })
+    recent_critical_events = recent_critical_events[-max(1, int(recent_critical_limit)) :]
+
+    queue_depth = metrics.get("queue_depth") if isinstance(metrics.get("queue_depth"), dict) else {}
+    lock_status = metrics.get("lock_status") if isinstance(metrics.get("lock_status"), dict) else {}
+    runtime_lease = metrics.get("runtime_lease") if isinstance(metrics.get("runtime_lease"), dict) else {}
+
+    queue_status = _ops_status_to_severity(str(queue_depth.get("status") or "unknown"))
+    if queue_status == "critical":
+        severity = "critical"
+    elif queue_status == "warning" and severity != "critical":
+        severity = "warning"
+    elif sum(event_counters.values()) > 0 and severity == "ok":
+        severity = "warning"
+
+    context_stats = message_manager.get_context_statistics(max(1, int(context_days)))
+    tool_status = _tool_status_store.get("current", {"message": "", "visible": False})
+
+    reason_code: Optional[str] = None
+    reason_text: Optional[str] = None
+    if severity == "critical":
+        reason_code = "WORKFLOW_RISK_CRITICAL"
+        reason_text = "Critical workflow pressure or high-risk runtime events detected."
+    elif severity == "unknown":
+        reason_code = "WORKFLOW_SIGNAL_UNKNOWN"
+        reason_text = "Workflow signal coverage is insufficient; verify events/workflow data sources."
+
+    source_reports: List[str] = []
+    for key in ("events_file", "workflow_db", "global_mutex_state"):
+        value = sources.get(key)
+        if isinstance(value, str) and value.strip():
+            source_reports.append(value.replace("\\", "/"))
+
+    response_data = {
+        "summary": {
+            "overall_status": str(summary.get("overall_status") or "unknown"),
+            "events_scanned": _ops_safe_int(sources.get("events_scanned"), default=0),
+            "outbox_pending": queue_depth.get("value"),
+            "oldest_pending_age_seconds": queue_depth.get("oldest_pending_age_seconds"),
+            "critical_events_total": sum(event_counters.values()),
+        },
+        "queue_depth": queue_depth,
+        "lock_status": lock_status,
+        "runtime_lease": runtime_lease,
+        "event_counters": event_counters,
+        "recent_critical_events": recent_critical_events,
+        "log_context_statistics": context_stats,
+        "tool_status": tool_status,
+    }
+
+    return _ops_build_response(
+        data=response_data,
+        severity=severity,
+        source_reports=sorted(set(source_reports)),
+        source_endpoints=["/logs/context/statistics", "/tool_status"],
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
+
+
+async def _ops_build_memory_graph_payload(*, sample_limit: int = 200) -> Dict[str, Any]:
+    stats_response = await get_memory_stats()
+    memory_stats = stats_response.get("memory_stats") if isinstance(stats_response, dict) else {}
+    if not isinstance(memory_stats, dict):
+        memory_stats = {}
+
+    quintuples_response = await get_quintuples()
+    quintuples = quintuples_response.get("quintuples") if isinstance(quintuples_response, dict) else []
+    if not isinstance(quintuples, list):
+        quintuples = []
+
+    task_manager = memory_stats.get("task_manager") if isinstance(memory_stats.get("task_manager"), dict) else {}
+    pending_tasks = _ops_safe_int(task_manager.get("pending_tasks"), default=0)
+    running_tasks = _ops_safe_int(task_manager.get("running_tasks"), default=0)
+    failed_tasks = _ops_safe_int(task_manager.get("failed_tasks"), default=0)
+
+    from collections import Counter
+
+    relation_counter: Counter[str] = Counter()
+    entity_counter: Counter[str] = Counter()
+    graph_sample: List[Dict[str, str]] = []
+    for row in quintuples[: max(20, min(1000, int(sample_limit)))]:
+        if not isinstance(row, dict):
+            continue
+        subject = str(row.get("subject") or "")
+        subject_type = str(row.get("subject_type") or "")
+        predicate = str(row.get("predicate") or "")
+        obj = str(row.get("object") or "")
+        object_type = str(row.get("object_type") or "")
+        if subject:
+            entity_counter[subject] += 1
+        if obj:
+            entity_counter[obj] += 1
+        if predicate:
+            relation_counter[predicate] += 1
+        graph_sample.append({
+            "subject": subject,
+            "subject_type": subject_type,
+            "predicate": predicate,
+            "object": obj,
+            "object_type": object_type,
+        })
+
+    total_quintuples = _ops_safe_int(
+        memory_stats.get("total_quintuples"),
+        default=_ops_safe_int(quintuples_response.get("count"), default=len(quintuples)),
+    )
+    active_tasks = _ops_safe_int(memory_stats.get("active_tasks"), default=0)
+    enabled = bool(memory_stats.get("enabled"))
+    error_text = str(memory_stats.get("error") or "").strip()
+
+    if error_text:
+        severity = "critical"
+        reason_code = "MEMORY_BACKEND_ERROR"
+        reason_text = error_text
+    elif not enabled:
+        severity = "unknown"
+        reason_code = "MEMORY_DISABLED"
+        reason_text = str(memory_stats.get("message") or "Memory subsystem is disabled.")
+    elif failed_tasks > 0:
+        severity = "warning"
+        reason_code = "MEMORY_TASK_FAILURE"
+        reason_text = "Memory extraction task failures detected."
+    elif total_quintuples <= 0:
+        severity = "unknown"
+        reason_code = "MEMORY_EMPTY_GRAPH"
+        reason_text = "Memory graph currently has no extracted quintuples."
+    else:
+        severity = "ok"
+        reason_code = None
+        reason_text = None
+
+    response_data = {
+        "summary": {
+            "enabled": enabled,
+            "total_quintuples": total_quintuples,
+            "active_tasks": active_tasks,
+            "pending_tasks": pending_tasks,
+            "running_tasks": running_tasks,
+            "failed_tasks": failed_tasks,
+            "graph_sample_size": len(graph_sample),
+        },
+        "task_manager": task_manager,
+        "relation_hotspots": [
+            {"relation": relation, "count": count} for relation, count in relation_counter.most_common(12)
+        ],
+        "entity_hotspots": [
+            {"entity": entity, "count": count} for entity, count in entity_counter.most_common(12)
+        ],
+        "graph_sample": graph_sample,
+    }
+
+    return _ops_build_response(
+        data=response_data,
+        severity=severity,
+        source_reports=[],
+        source_endpoints=["/memory/stats", "/memory/quintuples"],
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
+
+
 @app.get("/mcp/status")
 async def get_mcp_status_offline():
     """返回 MCP 运行态快照，兼容前端 status/tasks 字段。"""
@@ -1436,6 +1685,32 @@ async def get_ops_mcp_fabric():
         logger.error(f"获取 /v1/ops/mcp/fabric 失败: {exc}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"获取 mcp fabric 失败: {str(exc)}")
+
+
+@app.get("/v1/ops/memory/graph")
+async def get_ops_memory_graph(sample_limit: int = 200):
+    """聚合记忆图谱运行态：统计、热点关系与样本图数据。"""
+    try:
+        return await _ops_build_memory_graph_payload(sample_limit=sample_limit)
+    except Exception as exc:
+        logger.error(f"获取 /v1/ops/memory/graph 失败: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取 memory graph 失败: {str(exc)}")
+
+
+@app.get("/v1/ops/workflow/events")
+async def get_ops_workflow_events(events_limit: int = 5000, context_days: int = 7, recent_critical_limit: int = 50):
+    """聚合工作流与事件态势：队列、锁、关键事件与日志上下文。"""
+    try:
+        return _ops_build_workflow_events_payload(
+            events_limit=events_limit,
+            context_days=context_days,
+            recent_critical_limit=recent_critical_limit,
+        )
+    except Exception as exc:
+        logger.error(f"获取 /v1/ops/workflow/events 失败: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取 workflow events 失败: {str(exc)}")
 
 
 class McpImportRequest(BaseModel):
