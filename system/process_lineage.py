@@ -144,7 +144,7 @@ class ProcessLineageRegistry:
         if not text:
             return []
         lowered = text.lower()
-        detached_markers = ("nohup", "setsid", "docker run -d", "start /b")
+        detached_markers = ("nohup", "setsid", "docker run -d", "docker run --detach", "start /b", "disown", "daemonize")
         if not any(m in lowered for m in detached_markers):
             return []
 
@@ -363,13 +363,13 @@ class ProcessLineageRegistry:
 
         ok = self._kill_pid_tree(pid)
         signature_killed = 0
-        # WS14-006 fallback: if detached/double-fork escaped process-group kill,
-        # attempt conservative signature sweep.
-        if not ok:
-            tokens = self._extract_signature_tokens(cmd)
-            if tokens:
-                signature_killed = self._kill_by_signature(tokens, exclude_pids=[pid])
-                ok = signature_killed > 0
+        tokens = self._extract_signature_tokens(cmd)
+        # WS26-005: detached/double-fork ghosts may survive even when root pid was killed.
+        # Always attempt conservative signature sweep for detached-launch commands.
+        if tokens:
+            signature_killed = self._kill_by_signature(tokens, exclude_pids=[pid])
+            if not ok and signature_killed > 0:
+                ok = True
 
         self.register_end(
             job_root_id,

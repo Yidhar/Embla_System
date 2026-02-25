@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from system.process_lineage import ProcessLineageRegistry
@@ -78,6 +79,40 @@ def test_process_lineage_kill_job_fallback_signature(monkeypatch):
     ok = registry.kill_job(job_id, reason="unit_test_fallback")
     assert ok is True
     assert registry.list_running() == []
+
+
+def test_process_lineage_kill_job_signature_runs_even_when_root_kill_succeeds(monkeypatch):
+    base = Path("scratch/test_process_lineage")
+    base.mkdir(parents=True, exist_ok=True)
+    state_file = base / "lineage_state_6.json"
+    audit_file = base / "lineage_audit_6.jsonl"
+    registry = ProcessLineageRegistry(
+        state_file=state_file,
+        audit_file=audit_file,
+    )
+    monkeypatch.setattr(ProcessLineageRegistry, "_kill_pid_tree", staticmethod(lambda pid: int(pid) == 777))
+    monkeypatch.setattr(ProcessLineageRegistry, "_kill_by_signature", lambda self, tokens, exclude_pids=None: 2)
+
+    job_id = registry.register_start(
+        call_id="call_detached_success_root",
+        command="setsid python worker.py --tenant alpha &",
+        root_pid=777,
+        fencing_epoch=9,
+    )
+    ok = registry.kill_job(job_id, reason="unit_test_root_success")
+    assert ok is True
+    assert registry.list_running() == []
+
+    saved = json.loads(state_file.read_text(encoding="utf-8"))
+    record = saved[job_id]
+    assert record["status"] == "killed"
+    assert "signature_killed=2" in str(record.get("reason") or "")
+
+
+def test_extract_signature_tokens_supports_docker_detach_variant():
+    tokens = ProcessLineageRegistry._extract_signature_tokens("docker run --detach my-image:1.2.3")
+    assert tokens
+    assert any("my-image:1.2.3" in token for token in tokens)
 
 
 def test_reap_orphaned_running_jobs(monkeypatch):
