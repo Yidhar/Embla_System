@@ -6,6 +6,7 @@ import asyncio
 
 import apiserver.agentic_tool_loop as tool_loop
 from apiserver.agentic_tool_loop import _apply_parallel_contract_gate, _requires_global_mutex
+from system.global_mutex import LeaseHandle
 
 
 def test_contract_gate_downgrades_parallel_mutating_calls():
@@ -58,6 +59,144 @@ def test_global_mutex_signal_for_read_only_call():
         "path": "README.md",
     }
     assert _requires_global_mutex(call) is False
+
+
+def test_global_mutex_pre_acquire_scavenger_runs_and_attaches_report(monkeypatch):
+    class DummyMutexManager:
+        def __init__(self) -> None:
+            self.scan_reasons = []
+            self.acquire_calls = 0
+            self.release_calls = 0
+
+        async def scan_and_reap_expired(self, *, reason: str):
+            self.scan_reasons.append(reason)
+            return {
+                "reason": reason,
+                "reclaimed_count": 1,
+                "cleanup_mode": "fencing_epoch",
+                "lineage_reaped_count": 1,
+                "fencing_epoch": 3,
+            }
+
+        async def acquire(self, **kwargs):
+            self.acquire_calls += 1
+            return LeaseHandle(
+                lease_id="lease-ws26",
+                owner_id=str(kwargs.get("owner_id") or "owner"),
+                job_id=str(kwargs.get("job_id") or "job"),
+                fencing_epoch=7,
+                expires_at=9999999999.0,
+                ttl_seconds=10.0,
+            )
+
+        async def renew(self, handle: LeaseHandle):
+            return handle
+
+        async def release(self, handle: LeaseHandle):
+            self.release_calls += 1
+            return True
+
+    manager = DummyMutexManager()
+
+    async def _execute_ok(call: dict, session_id: str) -> dict:
+        return {
+            "status": "success",
+            "service_name": "native",
+            "tool_name": "run_cmd",
+            "result": "ok",
+        }
+
+    monkeypatch.setattr(tool_loop, "get_global_mutex_manager", lambda: manager)
+    monkeypatch.setattr(tool_loop, "_execute_single_tool_call", _execute_ok)
+
+    call = {
+        "agentType": "native",
+        "tool_name": "run_cmd",
+        "command": "npm install",
+    }
+    result = asyncio.run(
+        tool_loop._execute_tool_call_with_retry(
+            call,
+            "sess-mutex-scavenge",
+            semaphore=asyncio.Semaphore(1),
+            retry_failed=True,
+            max_retries=0,
+            retry_backoff_seconds=0.0,
+        )
+    )
+
+    assert manager.acquire_calls == 1
+    assert manager.release_calls == 1
+    assert manager.scan_reasons
+    assert manager.scan_reasons[0].startswith("tool_call_pre_acquire:")
+    assert call.get("_fencing_epoch") == 7
+    assert result["status"] == "success"
+    assert isinstance(result.get("mutex_scavenge_report"), dict)
+    assert int(result["mutex_scavenge_report"].get("reclaimed_count") or 0) == 1
+
+
+def test_global_mutex_pre_acquire_scavenger_scan_error_is_non_blocking(monkeypatch):
+    class DummyMutexManager:
+        def __init__(self) -> None:
+            self.acquire_calls = 0
+            self.release_calls = 0
+
+        async def scan_and_reap_expired(self, *, reason: str):
+            raise RuntimeError("scan_failed")
+
+        async def acquire(self, **kwargs):
+            self.acquire_calls += 1
+            return LeaseHandle(
+                lease_id="lease-ws26-scan-error",
+                owner_id=str(kwargs.get("owner_id") or "owner"),
+                job_id=str(kwargs.get("job_id") or "job"),
+                fencing_epoch=5,
+                expires_at=9999999999.0,
+                ttl_seconds=10.0,
+            )
+
+        async def renew(self, handle: LeaseHandle):
+            return handle
+
+        async def release(self, handle: LeaseHandle):
+            self.release_calls += 1
+            return True
+
+    manager = DummyMutexManager()
+
+    async def _execute_ok(call: dict, session_id: str) -> dict:
+        return {
+            "status": "success",
+            "service_name": "native",
+            "tool_name": "run_cmd",
+            "result": "ok",
+        }
+
+    monkeypatch.setattr(tool_loop, "get_global_mutex_manager", lambda: manager)
+    monkeypatch.setattr(tool_loop, "_execute_single_tool_call", _execute_ok)
+
+    call = {
+        "agentType": "native",
+        "tool_name": "run_cmd",
+        "command": "npm install",
+    }
+    result = asyncio.run(
+        tool_loop._execute_tool_call_with_retry(
+            call,
+            "sess-mutex-scan-error",
+            semaphore=asyncio.Semaphore(1),
+            retry_failed=True,
+            max_retries=0,
+            retry_backoff_seconds=0.0,
+        )
+    )
+
+    assert manager.acquire_calls == 1
+    assert manager.release_calls == 1
+    assert result["status"] == "success"
+    assert isinstance(result.get("mutex_scavenge_report"), dict)
+    assert result["mutex_scavenge_report"].get("cleanup_mode") == "scan_error"
+    assert result["mutex_scavenge_report"].get("scan_error") == "RuntimeError"
 
 
 def _workspace_conflict_result(ticket: str) -> dict:

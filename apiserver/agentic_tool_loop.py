@@ -1489,6 +1489,7 @@ async def _execute_tool_call_with_retry(
         stop_heartbeat = asyncio.Event()
         heartbeat_errors: List[str] = []
         mutex_manager = None
+        mutex_scavenge_report: Dict[str, Any] = {}
         if not bool(risk_gate.get("allowed", True)):
             result = {
                 "tool_call": call,
@@ -1503,6 +1504,14 @@ async def _execute_tool_call_with_retry(
             try:
                 if _requires_global_mutex(call):
                     mutex_manager = get_global_mutex_manager()
+                    try:
+                        mutex_scavenge_report = await mutex_manager.scan_and_reap_expired(
+                            reason=f"tool_call_pre_acquire:{call_id}:attempt:{attempt}"
+                        )
+                    except Exception as scavenge_exc:
+                        mutex_scavenge_report = {"cleanup_mode": "scan_error", "scan_error": type(scavenge_exc).__name__}
+                    if mutex_scavenge_report:
+                        call["_mutex_scavenge_report"] = dict(mutex_scavenge_report)
                     lease = await mutex_manager.acquire(
                         owner_id=str(session_id or call.get("_session_id") or "unknown_session"),
                         job_id=call_id,
@@ -1540,6 +1549,18 @@ async def _execute_tool_call_with_retry(
                         "service_name": "runtime",
                         "tool_name": tool_name or "unknown",
                     }
+                    if mutex_manager is not None:
+                        try:
+                            heartbeat_scavenge = await mutex_manager.scan_and_reap_expired(
+                                reason=f"tool_call_heartbeat_failure:{call_id}:attempt:{attempt}"
+                            )
+                            if heartbeat_scavenge:
+                                result["mutex_scavenge_report"] = heartbeat_scavenge
+                        except Exception as scavenge_exc:
+                            result["mutex_scavenge_report"] = {
+                                "cleanup_mode": "scan_error",
+                                "scan_error": type(scavenge_exc).__name__,
+                            }
             except Exception as e:
                 result = {
                     "tool_call": call,
@@ -1560,6 +1581,8 @@ async def _execute_tool_call_with_retry(
                         await mutex_manager.release(lease)
                     except Exception:
                         pass
+        if mutex_scavenge_report and "mutex_scavenge_report" not in result:
+            result["mutex_scavenge_report"] = mutex_scavenge_report
         if approval_hook.get("required"):
             result.setdefault("approval_hook", approval_hook)
 
