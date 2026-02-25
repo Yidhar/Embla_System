@@ -88,7 +88,7 @@ class WorkspaceConflictError(RuntimeError):
 
 
 class WorkspaceTransactionManager:
-    PROJECT_ROOT = Path(r"E:\Programs\NagaAgent").resolve()
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
     def __init__(self, project_root: Optional[Path] = None) -> None:
         self.project_root = (project_root or self.PROJECT_ROOT).resolve()

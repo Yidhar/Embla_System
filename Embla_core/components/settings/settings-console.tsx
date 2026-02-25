@@ -5,8 +5,11 @@ import { fetchSystemConfig, updateSystemConfig } from "@/lib/api/system";
 import { formatNumber, type AppLang } from "@/lib/i18n";
 
 type QuickForm = {
+  apiKey: string;
   apiBaseUrl: string;
   apiModel: string;
+  apiProvider: string;
+  apiProtocol: string;
   apiTemperature: string;
   apiTimeout: string;
   voiceEnabled: boolean;
@@ -37,8 +40,11 @@ type DiffRow = {
 };
 
 const FORM_DEFAULT: QuickForm = {
+  apiKey: "",
   apiBaseUrl: "",
   apiModel: "",
+  apiProvider: "openai_compatible",
+  apiProtocol: "auto",
   apiTemperature: "0.7",
   apiTimeout: "120",
   voiceEnabled: true,
@@ -77,6 +83,8 @@ const SENSITIVE_PATHS: Array<{ id: string; path: string[]; labelKey: string }> =
 
 const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"] as const;
 const REALTIME_VOICE_MODES = ["auto", "realtime", "hybrid"] as const;
+const API_PROVIDER_OPTIONS = ["openai_compatible", "openai", "google", "gemini", "auto"] as const;
+const API_PROTOCOL_OPTIONS = ["auto", "openai_chat_completions"] as const;
 
 const PAGE_COPY: Record<
   AppLang,
@@ -104,8 +112,11 @@ const PAGE_COPY: Record<
         ui: string;
       };
       fields: {
+        apiKey: string;
         apiBaseUrl: string;
         apiModel: string;
+        apiProvider: string;
+        apiProtocol: string;
         apiTemperature: string;
         apiTimeout: string;
         voiceEnabled: string;
@@ -191,8 +202,11 @@ const PAGE_COPY: Record<
         ui: "UI & Diagnostics",
       },
       fields: {
+        apiKey: "API Key",
         apiBaseUrl: "API Base URL",
         apiModel: "Model",
+        apiProvider: "Provider",
+        apiProtocol: "Protocol",
         apiTemperature: "Temperature",
         apiTimeout: "Request Timeout (s)",
         voiceEnabled: "Enable Voice Output",
@@ -277,8 +291,11 @@ const PAGE_COPY: Record<
         ui: "界面与诊断",
       },
       fields: {
+        apiKey: "API 密钥",
         apiBaseUrl: "API Base URL",
         apiModel: "模型",
+        apiProvider: "Provider",
+        apiProtocol: "Protocol",
         apiTemperature: "Temperature",
         apiTimeout: "请求超时（秒）",
         voiceEnabled: "启用语音输出",
@@ -384,8 +401,11 @@ function getNestedBoolean(root: Record<string, unknown>, path: string[], fallbac
 
 function buildQuickForm(config: Record<string, unknown>): QuickForm {
   return {
+    apiKey: getNestedString(config, ["api", "api_key"], ""),
     apiBaseUrl: getNestedString(config, ["api", "base_url"], ""),
     apiModel: getNestedString(config, ["api", "model"], ""),
+    apiProvider: getNestedString(config, ["api", "provider"], "openai_compatible"),
+    apiProtocol: getNestedString(config, ["api", "protocol"], "auto"),
     apiTemperature: getNestedString(config, ["api", "temperature"], "0.7"),
     apiTimeout: getNestedString(config, ["api", "request_timeout"], "120"),
     voiceEnabled: getNestedBoolean(config, ["system", "voice_enabled"], true),
@@ -504,8 +524,11 @@ function buildQuickPayload(form: QuickForm): { ok: true; payload: Record<string,
     ok: true,
     payload: {
       api: {
+        api_key: form.apiKey.trim(),
         base_url: form.apiBaseUrl.trim(),
         model: form.apiModel.trim(),
+        provider: form.apiProvider.trim() || "openai_compatible",
+        protocol: form.apiProtocol.trim() || "auto",
         temperature: apiTemperature,
         request_timeout: Math.max(1, Math.round(apiTimeout)),
       },
@@ -762,6 +785,16 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
             {collapsed.api ? null : (
               <div className="space-y-3">
                 <label className="block">
+                  <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiKey}</p>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={form.apiKey}
+                    onChange={(event) => setField("apiKey", event.target.value)}
+                    className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                  />
+                </label>
+                <label className="block">
                   <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiBaseUrl}</p>
                   <input
                     value={form.apiBaseUrl}
@@ -777,6 +810,36 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
                     className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
                   />
                 </label>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <label className="block">
+                    <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiProvider}</p>
+                    <select
+                      value={form.apiProvider}
+                      onChange={(event) => setField("apiProvider", event.target.value)}
+                      className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                    >
+                      {API_PROVIDER_OPTIONS.map((provider) => (
+                        <option key={provider} value={provider}>
+                          {provider}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block">
+                    <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiProtocol}</p>
+                    <select
+                      value={form.apiProtocol}
+                      onChange={(event) => setField("apiProtocol", event.target.value)}
+                      className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                    >
+                      {API_PROTOCOL_OPTIONS.map((protocol) => (
+                        <option key={protocol} value={protocol}>
+                          {protocol}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   <label className="block">
                     <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiTemperature}</p>

@@ -31,7 +31,7 @@ class LeaseHandle:
 
 
 class GlobalMutexManager:
-    PROJECT_ROOT = Path(r"E:\Programs\NagaAgent").resolve()
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
     def __init__(self, state_file: Optional[Path] = None, audit_file: Optional[Path] = None) -> None:
         runtime_dir = self.PROJECT_ROOT / "logs" / "runtime"

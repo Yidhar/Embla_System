@@ -27,7 +27,7 @@ class FirewallDecision:
 
 
 class PolicyFirewall:
-    PROJECT_ROOT = Path(r"E:\Programs\NagaAgent").resolve()
+    PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
     _ALLOWED_NATIVE_TOOLS: Set[str] = {
         "read_file",
