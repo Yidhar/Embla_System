@@ -4,7 +4,7 @@ import os  # 操作系统 #
 import glob  # 文件匹配 #
 import asyncio  # 异步 #
 from typing import List, Dict, Optional  # 类型 #
-import json  # JSON #
+from system.asyncio_offload import offload_blocking
 
 # 平台特定导入
 if platform.system() == 'Windows':
@@ -50,8 +50,7 @@ class ComprehensiveAppScanner:
     async def _scan_registry_async(self) -> List[Dict]:
         """异步扫描Windows注册表获取应用信息 #"""
         # 在线程池中执行同步的注册表扫描 #
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._scan_registry_sync)
+        return await offload_blocking(self._scan_registry_sync)
     
     def _scan_registry_sync(self) -> List[Dict]:
         """同步扫描Windows注册表获取应用信息 #"""
@@ -169,8 +168,7 @@ class ComprehensiveAppScanner:
     async def _scan_shortcuts_async(self) -> List[Dict]:
         """异步扫描快捷方式获取应用信息 #"""
         # 在线程池中执行同步的快捷方式扫描 #
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._scan_shortcuts_sync)
+        return await offload_blocking(self._scan_shortcuts_sync)
     
     def _scan_shortcuts_sync(self) -> List[Dict]:
         """同步扫描快捷方式获取应用信息 #"""

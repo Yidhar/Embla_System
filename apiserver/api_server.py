@@ -34,6 +34,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 import shutil
 from pathlib import Path
+from system.asyncio_offload import offload_blocking
 
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -432,7 +433,7 @@ async def tts_speech(request: TTSSpeechRequest):
     try:
         from voice.tts_wrapper import generate_speech_safe
 
-        audio_file = await asyncio.to_thread(
+        audio_file = await offload_blocking(
             generate_speech_safe,
             text,
             voice,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import subprocess
@@ -14,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from system.asyncio_offload import offload_blocking
 from system.process_lineage import get_process_lineage_registry
 
 
@@ -147,7 +147,7 @@ class PluginWorkerProxy:
 
     async def handle_handoff(self, tool_call: Dict[str, Any]) -> str:
         payload = dict(tool_call or {})
-        return await asyncio.to_thread(self._invoke_worker_subprocess, payload)
+        return await offload_blocking(self._invoke_worker_subprocess, payload)
 
     def _invoke_worker_subprocess(self, payload: Dict[str, Any]) -> str:
         started_at = time.monotonic()

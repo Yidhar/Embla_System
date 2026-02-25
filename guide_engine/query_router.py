@@ -8,9 +8,10 @@
 """
 
 import re
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple
 from enum import Enum
 from dataclasses import dataclass, field
+from system.asyncio_offload import offload_blocking
 
 
 class QueryMode(str, Enum):
@@ -307,9 +308,7 @@ C = 需要攻略建议（培养建议、配队推荐、打法技巧、评价对�
 
     async def _call_llm(self, model, prompt: str) -> str:
         """调用LLM"""
-        import asyncio
-
-        response = await asyncio.to_thread(
+        response = await offload_blocking(
             model.generate_content,
             prompt,
             generation_config={

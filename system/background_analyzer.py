@@ -10,6 +10,7 @@ import json
 import time
 from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
 from urllib.parse import urlparse
+from system.asyncio_offload import offload_blocking
 from system.config import config, logger
 from system.coding_intent import extract_latest_user_message as extract_latest_user_message_shared
 from system.coding_intent import requires_codex_for_messages
@@ -473,14 +474,13 @@ class BackgroundAnalyzer:
 
         try:
             logger.info(f"[博弈论] 开始异步意图分析，消息数量: {len(messages)}")
-            loop = asyncio.get_running_loop()
-            # Offload sync LLM call to threadpool to avoid blocking event loop
+            # Offload sync LLM call away from the event loop.
             logger.info("[博弈论] 在线程池中执行LLM分析...")
 
             # 添加异步超时机制
             try:
                 analysis = await asyncio.wait_for(
-                    loop.run_in_executor(None, self.analyzer.analyze, messages),
+                    offload_blocking(self.analyzer.analyze, messages),
                     timeout=60.0,  # 60秒超时
                 )
                 logger.info(f"[博弈论] LLM分析完成，结果类型: {type(analysis)}")
@@ -751,4 +751,3 @@ def get_background_analyzer() -> BackgroundAnalyzer:
     if _background_analyzer is None:
         _background_analyzer = BackgroundAnalyzer()
     return _background_analyzer
-

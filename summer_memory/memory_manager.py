@@ -7,6 +7,7 @@ from .quintuple_extractor import extract_quintuples
 from .quintuple_graph import store_quintuples, query_graph_by_keywords, get_all_quintuples
 from .quintuple_rag_query import query_knowledge, set_context
 from .task_manager import task_manager, start_auto_cleanup
+from system.asyncio_offload import offload_blocking
 from system.config import config, AI_NAME
 
 logger = logging.getLogger(__name__)
@@ -137,12 +138,12 @@ class GRAGMemoryManager:
                 return True
 
             logger.info(f"使用回退方法提取五元组: {text[:100]}...")
-            
+
             # 添加超时保护，避免长时间阻塞
             try:
                 quintuples = await asyncio.wait_for(
-                    asyncio.to_thread(extract_quintuples, text), 
-                    timeout=30.0  # 30秒超时
+                    offload_blocking(extract_quintuples, text),
+                    timeout=30.0,  # 30秒超时
                 )
             except asyncio.TimeoutError:
                 logger.warning("五元组提取超时，跳过本次提取")
@@ -157,8 +158,8 @@ class GRAGMemoryManager:
             # 存储到Neo4j - 也添加超时保护
             try:
                 store_success = await asyncio.wait_for(
-                    asyncio.to_thread(store_quintuples, quintuples),
-                    timeout=15.0  # 15秒超时
+                    offload_blocking(store_quintuples, quintuples),
+                    timeout=15.0,  # 15秒超时
                 )
             except asyncio.TimeoutError:
                 logger.warning("五元组存储超时，跳过本次存储")
@@ -187,7 +188,7 @@ class GRAGMemoryManager:
             set_context(self.recent_context)
             
             # 异步查询
-            result = await asyncio.to_thread(query_knowledge, question)
+            result = await offload_blocking(query_knowledge, question)
             
             if result and "未在知识图谱中找到相关信息" not in result:
                 logger.info("从记忆中找到相关信息")
@@ -204,7 +205,7 @@ class GRAGMemoryManager:
             
         try:
             # 从Neo4j查询相关五元组
-            quintuples = await asyncio.to_thread(query_graph_by_keywords, [query])
+            quintuples = await offload_blocking(query_graph_by_keywords, [query])
             
             # 限制返回数量
             return quintuples[:limit]
