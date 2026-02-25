@@ -149,3 +149,37 @@
   - 全量收口链扩展接入 M9 组：`scripts/release_closure_chain_full_m0_m7.py`（兼容命名，目标域已到 M0-M9）
   - 新增 runbook：`doc/task/runbooks/release_m9_plugin_isolation_closure_onepager_ws24_006.md`
   - 回归：`autonomous/tests/test_ws24_release_gate.py`、`tests/test_release_closure_chain_m9_ws24_006.py`、`tests/test_release_closure_chain_full_m0_m7.py`
+- `NGA-WS25-001` 已落地 Topic Event Bus 第一版：
+  - 新增 Topic 总线抽象：`autonomous/event_log/topic_event_bus.py`（publish/subscribe/replay/dead-letter）
+  - `EventStore` 接入 TopicBus 发布路径，保留 JSONL 兼容回读并新增 topic 回放接口
+  - 新增回归：`autonomous/tests/test_topic_event_bus_ws25_001.py`、`autonomous/tests/test_system_agent_topic_bus_ws25_001.py`
+  - 兼容回归通过：`autonomous/tests/test_event_store_ws18_001.py`、`autonomous/tests/test_event_replay_tool_ws18_003.py`
+- `NGA-WS25-002` 已落地 Cron/Alert 生产者接入：
+  - 新增生产者模块：`autonomous/event_log/cron_alert_producer.py`（`CronEventProducer` / `AlertEventProducer`）
+  - `SystemAgent` 挂载 cron/alert producer：
+    - cycle 触发 `cron.system_agent.cycle`
+    - watchdog 门禁触发 `alert.watchdog`
+  - 新增回归：`autonomous/tests/test_cron_alert_producer_ws25_002.py`、`autonomous/tests/test_system_agent_cron_alert_ws25_002.py`
+- `NGA-WS25-003` 已落地 Replay 幂等锚点与去重强化：
+  - `TopicEventBus` 新增持久化锚点与去重表：`replay_anchor`、`replay_dedupe`
+  - 新增 `replay_dispatch(anchor_id, ...)`：支持按锚点推进重放，避免重复副作用
+  - 新增锚点管理接口：`get_replay_anchor()`、`reset_replay_anchor()`
+  - `EventStore` 暴露 replay 幂等接口：`replay_dispatch()/get_replay_anchor()/reset_replay_anchor()`
+  - 新增回归：`autonomous/tests/test_topic_event_bus_replay_idempotency_ws25_003.py`
+- `NGA-WS25-004` 已落地关键证据字段保真策略：
+  - `ToolResultEnvelope` 新增 `critical_evidence`（`trace_ids/error_codes/paths`）
+  - `build_tool_result_with_artifact()` 在结构化与超长输出分支保留证据快照并透传
+  - `native_tools` 结果文本新增 `[critical_evidence]` 标准字段，供下游 GC/回读链路消费
+  - `episodic_memory` 归档解析支持从 `critical_evidence` 自动补全 `grep:*` 提示
+  - 新增/更新回归：`tests/test_tool_contract.py`、`tests/test_native_tools_ws11_003.py`、`tests/test_episodic_memory.py`
+- `NGA-WS25-005` 已落地 Event/GC 质量评测基线脚本：
+  - 新增 baseline harness：`autonomous/ws25_event_gc_quality_baseline.py`
+  - 新增执行入口：`scripts/run_event_gc_quality_baseline_ws25_005.py`
+  - 覆盖检查：Replay 幂等演练 + GC 质量阈值 + 关键证据保真检查
+  - 新增回归：`autonomous/tests/test_ws25_event_gc_quality_baseline.py`、`tests/test_run_event_gc_quality_baseline_ws25_005.py`
+- `NGA-WS25-006` 已落地 M10 综合门禁脚本链：
+  - 新增 M10 门禁评估器与入口：`autonomous/ws25_release_gate.py`、`scripts/validate_m10_closure_gate_ws25_006.py`
+  - 新增 M10 收口链：`scripts/release_closure_chain_m10_ws25_006.py`
+  - 全量收口链扩展接入 M10 组：`scripts/release_closure_chain_full_m0_m7.py`（兼容命名，目标域已到 M0-M10）
+  - 新增 runbook：`doc/task/runbooks/release_m10_event_gc_closure_onepager_ws25_006.md`
+  - 新增回归：`autonomous/tests/test_ws25_release_gate.py`、`tests/test_release_closure_chain_m10_ws25_006.py`

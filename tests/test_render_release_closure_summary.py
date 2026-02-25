@@ -27,6 +27,7 @@ def test_build_release_summary_markdown_all_pass() -> None:
         m6_report = {"passed": True, "failed_steps": [], "step_results": []}
         m8_report = {"passed": True, "failed_steps": [], "step_results": []}
         m9_report = {"passed": True, "failed_steps": [], "step_results": []}
+        m10_report = {"passed": True, "failed_steps": [], "step_results": []}
 
         markdown = build_release_summary_markdown(
             full_report=full_report,
@@ -34,17 +35,20 @@ def test_build_release_summary_markdown_all_pass() -> None:
             m6_m7_report=m6_report,
             m8_report=m8_report,
             m9_report=m9_report,
+            m10_report=m10_report,
             full_report_path=case_root / "full.json",
             m0_m5_report_path=case_root / "m0.json",
             m6_m7_report_path=case_root / "m6.json",
             m8_report_path=case_root / "m8.json",
             m9_report_path=case_root / "m9.json",
+            m10_report_path=case_root / "m10.json",
             load_errors={},
         )
         assert "Overall: **PASS**" in markdown
         assert "| `full_m0_m7` | `PASS` |" in markdown
         assert "| `m8` | `PASS` |" in markdown
         assert "| `m9` | `PASS` |" in markdown
+        assert "| `m10` | `PASS` |" in markdown
         assert "Load issues:" not in markdown
     finally:
         _cleanup_case_root(case_root)
@@ -70,6 +74,7 @@ def test_build_release_summary_markdown_failed_steps_and_load_errors() -> None:
         m6_report = {"passed": True, "failed_steps": [], "step_results": []}
         m8_report = {"passed": True, "failed_steps": [], "step_results": []}
         m9_report = {"passed": True, "failed_steps": [], "step_results": []}
+        m10_report = {"passed": True, "failed_steps": [], "step_results": []}
 
         markdown = build_release_summary_markdown(
             full_report=full_report,
@@ -77,18 +82,26 @@ def test_build_release_summary_markdown_failed_steps_and_load_errors() -> None:
             m6_m7_report=m6_report,
             m8_report=m8_report,
             m9_report=m9_report,
+            m10_report=m10_report,
             full_report_path=case_root / "full.json",
             m0_m5_report_path=case_root / "m0.json",
             m6_m7_report_path=case_root / "m6.json",
             m8_report_path=case_root / "m8.json",
             m9_report_path=case_root / "m9.json",
-            load_errors={"m6_m7": "report file not found", "m8": "report file not found", "m9": "report file not found"},
+            m10_report_path=case_root / "m10.json",
+            load_errors={
+                "m6_m7": "report file not found",
+                "m8": "report file not found",
+                "m9": "report file not found",
+                "m10": "report file not found",
+            },
         )
         assert "Overall: **FAIL**" in markdown
         assert "Load issues:" in markdown
         assert "`m6_m7`: report file not found" in markdown
         assert "`m8`: report file not found" in markdown
         assert "`m9`: report file not found" in markdown
+        assert "`m10`: report file not found" in markdown
         assert "Failed steps:" in markdown
         assert "`m0_m5` `T2` rc=2 contract suite" in markdown
         assert "assertion failed in contract validation" in markdown
@@ -115,6 +128,8 @@ def test_main_allows_missing_full_report(monkeypatch) -> None:
                 str(case_root / "missing_m8.json"),
                 "--m9-report",
                 str(case_root / "missing_m9.json"),
+                "--m10-report",
+                str(case_root / "missing_m10.json"),
                 "--output",
                 str(output),
                 "--allow-missing-full-report",
