@@ -13,6 +13,7 @@ from typing import Any, Dict
 DEFAULT_FULL_CHAIN_REPORT = Path("scratch/reports/release_closure_chain_full_m0_m12_result.json")
 DEFAULT_DOC_CONSISTENCY_REPORT = Path("scratch/reports/ws27_m12_doc_consistency_ws27_005.json")
 DEFAULT_WS27_ENDURANCE_REPORT = Path("scratch/reports/ws27_72h_endurance_ws27_001.json")
+DEFAULT_WS27_WALLCLOCK_REPORT = Path("scratch/reports/ws27_72h_wallclock_acceptance_ws27_001.json")
 DEFAULT_WS27_CUTOVER_STATUS_REPORT = Path("scratch/reports/ws27_subagent_cutover_status_ws27_002.json")
 DEFAULT_WS27_OOB_REPORT = Path("scratch/reports/ws27_oob_repair_drill_ws27_003.json")
 DEFAULT_OUTPUT_JSON = Path("scratch/reports/phase3_full_release_report_ws27_006.json")
@@ -48,6 +49,7 @@ def _build_signoff_markdown(
     checks: Dict[str, bool],
     report_paths: Dict[str, str],
     verdict_passed: bool,
+    require_wallclock_acceptance: bool,
 ) -> str:
     verdict = "PASS" if verdict_passed else "FAIL"
     lines = [
@@ -73,8 +75,13 @@ def _build_signoff_markdown(
             f"- `full_chain_report`: `{report_paths['full_chain_report']}`",
             f"- `doc_consistency_report`: `{report_paths['doc_consistency_report']}`",
             f"- `ws27_endurance_report`: `{report_paths['ws27_endurance_report']}`",
+            f"- `ws27_wallclock_report`: `{report_paths['ws27_wallclock_report']}`",
             f"- `ws27_cutover_status_report`: `{report_paths['ws27_cutover_status_report']}`",
             f"- `ws27_oob_report`: `{report_paths['ws27_oob_report']}`",
+            "",
+            "## 签署策略",
+            "",
+            f"- `require_wallclock_acceptance`: `{'true' if require_wallclock_acceptance else 'false'}`",
             "",
             "## 签署信息",
             "",
@@ -95,16 +102,19 @@ def run_generate_phase3_full_release_report_ws27_006(
     full_chain_report: Path = DEFAULT_FULL_CHAIN_REPORT,
     doc_consistency_report: Path = DEFAULT_DOC_CONSISTENCY_REPORT,
     ws27_endurance_report: Path = DEFAULT_WS27_ENDURANCE_REPORT,
+    ws27_wallclock_report: Path = DEFAULT_WS27_WALLCLOCK_REPORT,
     ws27_cutover_status_report: Path = DEFAULT_WS27_CUTOVER_STATUS_REPORT,
     ws27_oob_report: Path = DEFAULT_WS27_OOB_REPORT,
     output_json: Path = DEFAULT_OUTPUT_JSON,
     output_markdown: Path = DEFAULT_OUTPUT_MARKDOWN,
+    require_wallclock_acceptance: bool = False,
 ) -> Dict[str, Any]:
     root = repo_root.resolve()
     resolved_paths = {
         "full_chain_report": _resolve_path(root, full_chain_report),
         "doc_consistency_report": _resolve_path(root, doc_consistency_report),
         "ws27_endurance_report": _resolve_path(root, ws27_endurance_report),
+        "ws27_wallclock_report": _resolve_path(root, ws27_wallclock_report),
         "ws27_cutover_status_report": _resolve_path(root, ws27_cutover_status_report),
         "ws27_oob_report": _resolve_path(root, ws27_oob_report),
     }
@@ -112,6 +122,7 @@ def run_generate_phase3_full_release_report_ws27_006(
     full_chain_payload = _read_json_if_exists(resolved_paths["full_chain_report"])
     doc_consistency_payload = _read_json_if_exists(resolved_paths["doc_consistency_report"])
     ws27_endurance_payload = _read_json_if_exists(resolved_paths["ws27_endurance_report"])
+    ws27_wallclock_payload = _read_json_if_exists(resolved_paths["ws27_wallclock_report"])
     ws27_cutover_status_payload = _read_json_if_exists(resolved_paths["ws27_cutover_status_report"])
     ws27_oob_payload = _read_json_if_exists(resolved_paths["ws27_oob_report"])
 
@@ -119,14 +130,35 @@ def run_generate_phase3_full_release_report_ws27_006(
         "full_chain_passed": bool(full_chain_payload.get("passed")),
         "doc_consistency_passed": bool(doc_consistency_payload.get("passed")),
         "ws27_endurance_passed": bool(ws27_endurance_payload.get("passed")),
+        "ws27_wallclock_report_present": resolved_paths["ws27_wallclock_report"].exists(),
+        "ws27_wallclock_acceptance_passed": bool(ws27_wallclock_payload.get("passed")),
         "ws27_cutover_status_passed": bool(ws27_cutover_status_payload.get("passed")),
         "ws27_oob_drill_passed": bool(ws27_oob_payload.get("passed")),
     }
-    required_paths = list(resolved_paths.values())
+    required_path_keys = [
+        "full_chain_report",
+        "doc_consistency_report",
+        "ws27_endurance_report",
+        "ws27_cutover_status_report",
+        "ws27_oob_report",
+    ]
+    if require_wallclock_acceptance:
+        required_path_keys.append("ws27_wallclock_report")
+    required_paths = [resolved_paths[key] for key in required_path_keys]
     missing_required_reports = [_to_unix_path(path) for path in required_paths if not path.exists()]
     checks["all_required_reports_present"] = len(missing_required_reports) == 0
 
-    passed = all(checks.values())
+    gating_check_ids = [
+        "full_chain_passed",
+        "doc_consistency_passed",
+        "ws27_endurance_passed",
+        "ws27_cutover_status_passed",
+        "ws27_oob_drill_passed",
+        "all_required_reports_present",
+    ]
+    if require_wallclock_acceptance:
+        gating_check_ids.append("ws27_wallclock_acceptance_passed")
+    passed = all(bool(checks.get(check_id)) for check_id in gating_check_ids)
     generated_at = _utc_iso_now()
     path_report = {key: _to_unix_path(path) for key, path in resolved_paths.items()}
 
@@ -138,12 +170,15 @@ def run_generate_phase3_full_release_report_ws27_006(
         "release_candidate": str(release_candidate or "phase3-full-m12"),
         "passed": passed,
         "checks": checks,
+        "gating_check_ids": gating_check_ids,
+        "require_wallclock_acceptance": bool(require_wallclock_acceptance),
         "missing_required_reports": missing_required_reports,
         "report_paths": path_report,
         "sources": {
             "full_chain_report": full_chain_payload,
             "doc_consistency_report": doc_consistency_payload,
             "ws27_endurance_report": ws27_endurance_payload,
+            "ws27_wallclock_report": ws27_wallclock_payload,
             "ws27_cutover_status_report": ws27_cutover_status_payload,
             "ws27_oob_report": ws27_oob_payload,
         },
@@ -161,6 +196,7 @@ def run_generate_phase3_full_release_report_ws27_006(
         checks=checks,
         report_paths=path_report,
         verdict_passed=passed,
+        require_wallclock_acceptance=bool(require_wallclock_acceptance),
     )
     output_signoff.write_text(markdown_text + "\n", encoding="utf-8")
 
@@ -187,12 +223,23 @@ def parse_args() -> argparse.Namespace:
         help="WS27-001 endurance report path",
     )
     parser.add_argument(
+        "--ws27-wallclock-report",
+        type=Path,
+        default=DEFAULT_WS27_WALLCLOCK_REPORT,
+        help="WS27-001 wall-clock acceptance report path",
+    )
+    parser.add_argument(
         "--ws27-cutover-status-report",
         type=Path,
         default=DEFAULT_WS27_CUTOVER_STATUS_REPORT,
         help="WS27-002 cutover status report path",
     )
     parser.add_argument("--ws27-oob-report", type=Path, default=DEFAULT_WS27_OOB_REPORT, help="WS27-003 OOB drill report path")
+    parser.add_argument(
+        "--require-wallclock-acceptance",
+        action="store_true",
+        help="Treat WS27-001 wall-clock acceptance report as required release gate",
+    )
     parser.add_argument("--output-json", type=Path, default=DEFAULT_OUTPUT_JSON, help="Output JSON report path")
     parser.add_argument("--output-markdown", type=Path, default=DEFAULT_OUTPUT_MARKDOWN, help="Output markdown signoff template path")
     parser.add_argument("--strict", action="store_true", help="Return non-zero when checks fail")
@@ -207,10 +254,12 @@ def main() -> int:
         full_chain_report=args.full_chain_report,
         doc_consistency_report=args.doc_consistency_report,
         ws27_endurance_report=args.ws27_endurance_report,
+        ws27_wallclock_report=args.ws27_wallclock_report,
         ws27_cutover_status_report=args.ws27_cutover_status_report,
         ws27_oob_report=args.ws27_oob_report,
         output_json=args.output_json,
         output_markdown=args.output_markdown,
+        require_wallclock_acceptance=bool(args.require_wallclock_acceptance),
     )
     print(
         json.dumps(

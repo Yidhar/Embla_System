@@ -250,6 +250,7 @@
   - 新增回归：`tests/test_ws27_005_m12_doc_consistency.py`
 - `NGA-WS27-006` 已落地 Phase3 Full 放行报告首版：
   - 新增放行聚合脚本：`scripts/generate_phase3_full_release_report_ws27_006.py`
+  - 已接入 `WS27-001` 墙钟验收报告，并支持 `--require-wallclock-acceptance` 正式签署硬门禁
   - 产物：JSON 放行报告 + Markdown 签署模板
     - `scratch/reports/phase3_full_release_report_ws27_006.json`
     - `scratch/reports/phase3_full_release_signoff_ws27_006.md`

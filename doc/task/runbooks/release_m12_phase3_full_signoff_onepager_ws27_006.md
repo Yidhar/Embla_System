@@ -22,6 +22,7 @@
 - `scratch/reports/release_closure_chain_full_m0_m12_result.json`
 - `scratch/reports/ws27_m12_doc_consistency_ws27_005.json`
 - `scratch/reports/ws27_72h_endurance_ws27_001.json`
+- `scratch/reports/ws27_72h_wallclock_acceptance_ws27_001.json`（真实 72h 验收后生成）
 - `scratch/reports/ws27_subagent_cutover_status_ws27_002.json`
 - `scratch/reports/ws27_oob_repair_drill_ws27_003.json`
 
@@ -31,6 +32,7 @@
 .\.venv\Scripts\python.exe scripts/generate_phase3_full_release_report_ws27_006.py `
   --strict `
   --release-candidate phase3-full-m12 `
+  --require-wallclock-acceptance `
   --output-json scratch/reports/phase3_full_release_report_ws27_006.json `
   --output-markdown scratch/reports/phase3_full_release_signoff_ws27_006.md
 ```
@@ -45,9 +47,10 @@
 - JSON 报告 `passed=true`
 - `checks` 全部为 `true`
 - `missing_required_reports=[]`
+- `checks.ws27_wallclock_acceptance_passed=true`
 - 签署模板中“放行结论”显示 `PASS`
 
 ## 6. 风险与说明
 
-- 若 `WS27-001` 仍是 quick-mode 等效结果，最终签署前需补真实 72h 墙钟验收证据。
+- 如仍处于快速演练阶段，可不加 `--require-wallclock-acceptance` 生成预览报告；正式签署必须开启该参数。
 - 该步骤只负责证据聚合与模板生成，不自动执行回滚或修复动作。

@@ -4,6 +4,7 @@
 - 任务ID: `NGA-WS27-006`
 - 标题: Phase3 Full 放行报告与签署模板
 - 状态: 已完成（首版）
+- 状态: 已完成（含 WS27-001 墙钟验收可选硬门禁）
 
 ## 变更范围
 
@@ -13,18 +14,23 @@
   - 新增 `run_generate_phase3_full_release_report_ws27_006(...)`，聚合读取下列报告：
     - `WS27-004` 全量收口报告
     - `WS27-005` 文档一致性报告
-    - `WS27-001/002/003` 分项执行报告
+    - `WS27-001` 虚拟耐久报告 + 墙钟验收报告
+    - `WS27-002/003` 分项执行报告
   - 统一输出放行 JSON 报告：
     - `scratch/reports/phase3_full_release_report_ws27_006.json`
   - 同步输出 Markdown 签署模板：
     - `scratch/reports/phase3_full_release_signoff_ws27_006.md`
   - 支持 `--strict`（检查失败时返回非零）。
+  - 支持 `--require-wallclock-acceptance`：
+    - 关闭时：墙钟报告仅展示，不纳入强制门禁。
+    - 开启时：墙钟报告纳入强制门禁，适用于正式签署。
 
 2. 自动化回归
 - 文件: `tests/test_ws27_006_phase3_release_report.py`
 - 变更:
   - 覆盖全部输入通过时 `PASS` 路径与模板内容校验。
   - 覆盖输入报告缺失时失败路径（含缺失清单）。
+  - 覆盖启用 `require_wallclock_acceptance=True` 且墙钟报告缺失时失败路径。
   - 覆盖 CLI `--strict` 非零返回码路径。
 
 3. 执行 runbook
@@ -45,10 +51,10 @@
 2. 代码规范
 - `python3 -m ruff check scripts/generate_phase3_full_release_report_ws27_006.py tests/test_ws27_006_phase3_release_report.py`
 
-3. 本地执行（严格模式）
-- `python3 scripts/generate_phase3_full_release_report_ws27_006.py --strict --output-json scratch/reports/phase3_full_release_report_ws27_006.json --output-markdown scratch/reports/phase3_full_release_signoff_ws27_006.md`
+3. 本地执行（严格 + 墙钟硬门禁）
+- `python3 scripts/generate_phase3_full_release_report_ws27_006.py --strict --require-wallclock-acceptance --output-json scratch/reports/phase3_full_release_report_ws27_006.json --output-markdown scratch/reports/phase3_full_release_signoff_ws27_006.md`
 
 ## 结果摘要
 
 - `NGA-WS27-006` 已提供可审计的放行报告聚合器与可直接签署的模板产物。
-- 该能力将 `M12` 分散证据收敛到单一判定域，支持本机端到端放行闭环。
+- 该能力将 `M12` 分散证据收敛到单一判定域，并支持“预览模式/正式签署模式”双轨门禁。
