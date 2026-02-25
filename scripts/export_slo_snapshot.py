@@ -485,12 +485,235 @@ def _collect_lock_status(
     }
 
 
+def _collect_runtime_rollout(
+    events: List[Dict[str, Any]],
+    *,
+    configured_rollout_percent: int,
+) -> Dict[str, Any]:
+    decisions = []
+    for row in events:
+        if row.get("event_type") != "SubAgentRuntimeRolloutDecision":
+            continue
+        payload = row.get("payload")
+        if isinstance(payload, dict):
+            decisions.append(payload)
+
+    total = len(decisions)
+    subagent_count = 0
+    legacy_count = 0
+    reason_counts: Dict[str, int] = {}
+    for payload in decisions:
+        runtime_mode = str(payload.get("runtime_mode") or "").strip().lower()
+        if runtime_mode == "subagent":
+            subagent_count += 1
+        elif runtime_mode == "legacy":
+            legacy_count += 1
+        reason = str(payload.get("decision_reason") or "unknown")
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
+    hit_ratio = (subagent_count / total) if total > 0 else None
+    expected_ratio = max(0.0, min(1.0, float(configured_rollout_percent) / 100.0))
+    if total <= 0:
+        status = "unknown"
+        thresholds = {"warning": None, "critical": None}
+    elif expected_ratio <= 0.0:
+        status = _classify_numeric(hit_ratio, warning=0.2, critical=0.4, higher_is_bad=True)
+        thresholds = {"warning": 0.2, "critical": 0.4}
+    else:
+        status = _classify_numeric(
+            hit_ratio,
+            warning=max(0.0, expected_ratio * 0.7),
+            critical=max(0.0, expected_ratio * 0.4),
+            higher_is_bad=False,
+        )
+        thresholds = {
+            "warning": max(0.0, expected_ratio * 0.7),
+            "critical": max(0.0, expected_ratio * 0.4),
+        }
+
+    return {
+        "value": hit_ratio,
+        "unit": "ratio",
+        "total_decisions": total,
+        "subagent_decisions": subagent_count,
+        "legacy_decisions": legacy_count,
+        "decision_reasons": reason_counts,
+        "configured_rollout_percent": int(max(0, min(100, int(configured_rollout_percent)))),
+        "source": "runtime_rollout_events",
+        "thresholds": thresholds,
+        "status": status,
+    }
+
+
+def _collect_runtime_fail_open(
+    events: List[Dict[str, Any]],
+    *,
+    fail_open_budget_ratio: float,
+) -> Dict[str, Any]:
+    budget = max(0.0, min(1.0, float(fail_open_budget_ratio)))
+    fail_open_count = 0
+    blocked_count = 0
+    subagent_attempt_count = 0
+    gate_failure_counts: Dict[str, int] = {}
+
+    for row in events:
+        event_type = str(row.get("event_type") or "")
+        payload = row.get("payload")
+        payload_dict = payload if isinstance(payload, dict) else {}
+        if event_type == "SubAgentRuntimeCompleted":
+            subagent_attempt_count += 1
+        if event_type == "SubAgentRuntimeFailOpen":
+            fail_open_count += 1
+            gate_failure = str(payload_dict.get("gate_failure") or "unknown")
+            gate_failure_counts[gate_failure] = gate_failure_counts.get(gate_failure, 0) + 1
+        if event_type == "SubAgentRuntimeFailOpenBlocked":
+            blocked_count += 1
+            gate_failure = str(payload_dict.get("gate_failure") or "unknown")
+            gate_failure_counts[gate_failure] = gate_failure_counts.get(gate_failure, 0) + 1
+
+    fail_open_ratio = (fail_open_count / subagent_attempt_count) if subagent_attempt_count > 0 else None
+    blocked_ratio = (blocked_count / subagent_attempt_count) if subagent_attempt_count > 0 else None
+    status = _classify_numeric(
+        fail_open_ratio,
+        warning=max(0.0, budget * 0.8),
+        critical=budget,
+        higher_is_bad=True,
+    )
+    if subagent_attempt_count <= 0:
+        status = "unknown"
+
+    budget_exhausted = bool(fail_open_ratio is not None and fail_open_ratio > budget)
+    budget_remaining_ratio = None
+    if fail_open_ratio is not None:
+        budget_remaining_ratio = max(0.0, budget - fail_open_ratio)
+
+    return {
+        "value": fail_open_ratio,
+        "unit": "ratio",
+        "subagent_attempt_count": subagent_attempt_count,
+        "fail_open_count": fail_open_count,
+        "fail_open_blocked_count": blocked_count,
+        "fail_open_blocked_ratio": blocked_ratio,
+        "gate_failure_counts": gate_failure_counts,
+        "configured_budget_ratio": budget,
+        "budget_exhausted": budget_exhausted,
+        "budget_remaining_ratio": budget_remaining_ratio,
+        "source": "runtime_fail_open_events",
+        "thresholds": {
+            "warning": max(0.0, budget * 0.8),
+            "critical": budget,
+        },
+        "status": status,
+    }
+
+
+def _collect_runtime_lease(
+    events: List[Dict[str, Any]],
+    *,
+    workflow_db: Path,
+    now_dt: datetime,
+    lease_name: str,
+    lease_ttl_hint_seconds: float,
+) -> Dict[str, Any]:
+    lease_acquired_count = sum(1 for row in events if row.get("event_type") == "LeaseAcquired")
+    lease_lost_count = sum(1 for row in events if row.get("event_type") == "LeaseLost")
+    churn_ratio = (lease_lost_count / lease_acquired_count) if lease_acquired_count > 0 else None
+
+    warning_churn_ratio = 0.1
+    critical_churn_ratio = 0.3
+    churn_status = _classify_numeric(
+        churn_ratio,
+        warning=warning_churn_ratio,
+        critical=critical_churn_ratio,
+        higher_is_bad=True,
+    )
+    if lease_acquired_count <= 0 and lease_lost_count <= 0:
+        churn_status = "unknown"
+
+    owner_id = ""
+    fencing_epoch = 0
+    seconds_to_expiry: Optional[float] = None
+    lease_state = "missing"
+    source = "workflow_db_lease_missing"
+
+    if workflow_db.exists():
+        try:
+            conn = sqlite3.connect(str(workflow_db))
+            with conn:
+                row = conn.execute(
+                    """
+                    SELECT owner_id, fencing_epoch, lease_expire_at
+                    FROM orchestrator_lease
+                    WHERE lease_name = ?
+                    """,
+                    (lease_name,),
+                ).fetchone()
+            if row is not None:
+                owner_id = str(row[0] or "")
+                fencing_epoch = _to_int(row[1], 0)
+                expires_at = _parse_iso_datetime(row[2])
+                if expires_at is not None:
+                    seconds_to_expiry = max(0.0, (expires_at - now_dt).total_seconds())
+                source = "workflow_db_lease"
+        except sqlite3.DatabaseError:
+            source = "workflow_db_lease_query_failed"
+        finally:
+            try:
+                conn.close()  # type: ignore[misc]
+            except Exception:
+                pass
+
+    warn_seconds = max(2.0, lease_ttl_hint_seconds * 0.2)
+    expiry_status = _classify_numeric(
+        seconds_to_expiry,
+        warning=warn_seconds,
+        critical=0.0,
+        higher_is_bad=False,
+    )
+    if seconds_to_expiry is None:
+        lease_state = "missing"
+        expiry_status = "unknown"
+    elif seconds_to_expiry <= 0:
+        lease_state = "expired"
+    elif seconds_to_expiry <= warn_seconds:
+        lease_state = "near_expiry"
+    else:
+        lease_state = "healthy"
+
+    status = _stronger_status(churn_status, expiry_status)
+    if lease_state == "missing" and lease_acquired_count <= 0 and lease_lost_count <= 0:
+        status = "unknown"
+
+    return {
+        "value": seconds_to_expiry,
+        "unit": "seconds_to_expiry",
+        "state": lease_state,
+        "lease_name": str(lease_name or ""),
+        "owner_id": owner_id,
+        "fencing_epoch": fencing_epoch,
+        "lease_acquired_count": lease_acquired_count,
+        "lease_lost_count": lease_lost_count,
+        "lease_lost_churn_ratio": churn_ratio,
+        "source": source,
+        "thresholds": {
+            "warning_seconds_to_expiry": warn_seconds,
+            "critical_seconds_to_expiry": 0.0,
+            "warning_churn_ratio": warning_churn_ratio,
+            "critical_churn_ratio": critical_churn_ratio,
+        },
+        "status": status,
+    }
+
+
 def _load_threshold_config(config_file: Path) -> Dict[str, Any]:
     defaults = {
         "max_error_rate": 0.02,
         "max_latency_p95_ms": 1500.0,
         "queue_batch_size": 50,
         "lease_ttl_seconds": 10.0,
+        "lease_name": "global_orchestrator",
+        "subagent_rollout_percent": 100,
+        "fail_open_budget_ratio": 0.15,
     }
 
     payload = _read_yaml(config_file)
@@ -498,6 +721,7 @@ def _load_threshold_config(config_file: Path) -> Dict[str, Any]:
     release = autonomous.get("release") if isinstance(autonomous.get("release"), dict) else {}
     outbox = autonomous.get("outbox_dispatch") if isinstance(autonomous.get("outbox_dispatch"), dict) else {}
     lease = autonomous.get("lease") if isinstance(autonomous.get("lease"), dict) else {}
+    subagent_runtime = autonomous.get("subagent_runtime") if isinstance(autonomous.get("subagent_runtime"), dict) else {}
 
     defaults["max_error_rate"] = max(0.0, _to_float(release.get("max_error_rate"), defaults["max_error_rate"]) or 0.0)
     defaults["max_latency_p95_ms"] = max(
@@ -508,6 +732,19 @@ def _load_threshold_config(config_file: Path) -> Dict[str, Any]:
     defaults["lease_ttl_seconds"] = max(
         1.0,
         _to_float(lease.get("ttl_seconds"), defaults["lease_ttl_seconds"]) or defaults["lease_ttl_seconds"],
+    )
+    defaults["lease_name"] = str(lease.get("lease_name") or defaults["lease_name"])
+    defaults["subagent_rollout_percent"] = max(
+        0,
+        min(100, _to_int(subagent_runtime.get("rollout_percent"), defaults["subagent_rollout_percent"])),
+    )
+    defaults["fail_open_budget_ratio"] = max(
+        0.0,
+        min(
+            1.0,
+            _to_float(subagent_runtime.get("fail_open_budget_ratio"), defaults["fail_open_budget_ratio"])
+            or defaults["fail_open_budget_ratio"],
+        ),
     )
     return defaults
 
@@ -546,6 +783,21 @@ def build_snapshot(
     metrics["lock_status"] = _collect_lock_status(
         paths.global_mutex_state,
         now_ts=now_dt.timestamp(),
+        lease_ttl_hint_seconds=float(thresholds["lease_ttl_seconds"]),
+    )
+    metrics["runtime_rollout"] = _collect_runtime_rollout(
+        events,
+        configured_rollout_percent=int(thresholds["subagent_rollout_percent"]),
+    )
+    metrics["runtime_fail_open"] = _collect_runtime_fail_open(
+        events,
+        fail_open_budget_ratio=float(thresholds["fail_open_budget_ratio"]),
+    )
+    metrics["runtime_lease"] = _collect_runtime_lease(
+        events,
+        workflow_db=paths.workflow_db,
+        now_dt=now_dt,
+        lease_name=str(thresholds["lease_name"]),
         lease_ttl_hint_seconds=float(thresholds["lease_ttl_seconds"]),
     )
 

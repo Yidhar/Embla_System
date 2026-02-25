@@ -29,7 +29,15 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text(payload + "\n", encoding="utf-8")
 
 
-def _write_autonomous_config(path: Path, *, max_error_rate: float, max_latency_p95_ms: float, batch_size: int) -> None:
+def _write_autonomous_config(
+    path: Path,
+    *,
+    max_error_rate: float,
+    max_latency_p95_ms: float,
+    batch_size: int,
+    rollout_percent: int = 100,
+    fail_open_budget_ratio: float = 0.15,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "\n".join(
@@ -42,6 +50,10 @@ def _write_autonomous_config(path: Path, *, max_error_rate: float, max_latency_p
                 f"    batch_size: {batch_size}",
                 "  lease:",
                 "    ttl_seconds: 10",
+                "    lease_name: global_orchestrator",
+                "  subagent_runtime:",
+                f"    rollout_percent: {rollout_percent}",
+                f"    fail_open_budget_ratio: {fail_open_budget_ratio}",
                 "",
             ]
         ),
@@ -59,6 +71,8 @@ def test_build_snapshot_schema_and_values() -> None:
             max_error_rate=0.2,
             max_latency_p95_ms=300.0,
             batch_size=1,
+            rollout_percent=50,
+            fail_open_budget_ratio=0.6,
         )
 
         events = [
@@ -77,6 +91,41 @@ def test_build_snapshot_schema_and_values() -> None:
                 "event_type": "CliExecutionCompleted",
                 "payload": {"success": True, "duration_seconds": 0.1},
             },
+            {
+                "timestamp": (now_dt + timedelta(seconds=3)).isoformat(),
+                "event_type": "SubAgentRuntimeRolloutDecision",
+                "payload": {"runtime_mode": "subagent", "decision_reason": "rollout_bucket_hit"},
+            },
+            {
+                "timestamp": (now_dt + timedelta(seconds=4)).isoformat(),
+                "event_type": "SubAgentRuntimeRolloutDecision",
+                "payload": {"runtime_mode": "legacy", "decision_reason": "rollout_bucket_miss"},
+            },
+            {
+                "timestamp": (now_dt + timedelta(seconds=5)).isoformat(),
+                "event_type": "SubAgentRuntimeCompleted",
+                "payload": {"runtime_id": "sar-1"},
+            },
+            {
+                "timestamp": (now_dt + timedelta(seconds=6)).isoformat(),
+                "event_type": "SubAgentRuntimeCompleted",
+                "payload": {"runtime_id": "sar-2"},
+            },
+            {
+                "timestamp": (now_dt + timedelta(seconds=7)).isoformat(),
+                "event_type": "SubAgentRuntimeFailOpen",
+                "payload": {"runtime_id": "sar-2", "gate_failure": "scaffold"},
+            },
+            {
+                "timestamp": (now_dt + timedelta(seconds=8)).isoformat(),
+                "event_type": "LeaseAcquired",
+                "payload": {"fencing_epoch": 1},
+            },
+            {
+                "timestamp": (now_dt + timedelta(seconds=9)).isoformat(),
+                "event_type": "LeaseLost",
+                "payload": {"fencing_epoch": 1},
+            },
         ]
         _write_jsonl(repo_root / "logs" / "autonomous" / "events.jsonl", events)
 
@@ -84,6 +133,11 @@ def test_build_snapshot_schema_and_values() -> None:
         store.create_workflow(workflow_id="wf-1", task_id="task-1")
         store.enqueue_outbox("wf-1", "TaskApproved", {"ok": True})
         store.enqueue_outbox("wf-1", "TaskApproved", {"ok": True})
+        store.try_acquire_or_renew_lease(
+            lease_name="global_orchestrator",
+            owner_id="owner-a",
+            ttl_seconds=1,
+        )
 
         lock_payload = {
             "lease_id": "lease-test",
@@ -120,6 +174,9 @@ def test_build_snapshot_schema_and_values() -> None:
             "queue_depth",
             "disk_watermark_ratio",
             "lock_status",
+            "runtime_rollout",
+            "runtime_fail_open",
+            "runtime_lease",
         }
 
         assert metrics["error_rate"]["source"] == "cli_execution_events"
@@ -137,6 +194,22 @@ def test_build_snapshot_schema_and_values() -> None:
 
         assert metrics["lock_status"]["state"] == "near_expiry"
         assert metrics["lock_status"]["status"] == "warning"
+
+        assert metrics["runtime_rollout"]["total_decisions"] == 2
+        assert metrics["runtime_rollout"]["subagent_decisions"] == 1
+        assert metrics["runtime_rollout"]["legacy_decisions"] == 1
+        assert metrics["runtime_rollout"]["value"] == pytest.approx(0.5)
+
+        assert metrics["runtime_fail_open"]["subagent_attempt_count"] == 2
+        assert metrics["runtime_fail_open"]["fail_open_count"] == 1
+        assert metrics["runtime_fail_open"]["fail_open_blocked_count"] == 0
+        assert metrics["runtime_fail_open"]["value"] == pytest.approx(0.5)
+        assert metrics["runtime_fail_open"]["budget_exhausted"] is False
+
+        assert metrics["runtime_lease"]["lease_acquired_count"] == 1
+        assert metrics["runtime_lease"]["lease_lost_count"] == 1
+        assert metrics["runtime_lease"]["owner_id"] == "owner-a"
+        assert metrics["runtime_lease"]["state"] == "near_expiry"
 
         assert snapshot["summary"]["overall_status"] == "critical"
 
