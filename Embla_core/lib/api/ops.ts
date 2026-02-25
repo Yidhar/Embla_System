@@ -1,4 +1,10 @@
-import type { McpFabricData, OpsEnvelope, RuntimePostureData } from "@/lib/types/ops";
+import type {
+  McpFabricData,
+  MemoryGraphData,
+  OpsEnvelope,
+  RuntimePostureData,
+  WorkflowEventsData,
+} from "@/lib/types/ops";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "").replace(/\/$/, "");
 
@@ -29,4 +35,12 @@ export async function fetchRuntimePosture(): Promise<OpsEnvelope<RuntimePostureD
 
 export async function fetchMcpFabric(): Promise<OpsEnvelope<McpFabricData> | null> {
   return fetchOps<McpFabricData>("/v1/ops/mcp/fabric");
+}
+
+export async function fetchMemoryGraph(): Promise<OpsEnvelope<MemoryGraphData> | null> {
+  return fetchOps<MemoryGraphData>("/v1/ops/memory/graph");
+}
+
+export async function fetchWorkflowEvents(): Promise<OpsEnvelope<WorkflowEventsData> | null> {
+  return fetchOps<WorkflowEventsData>("/v1/ops/workflow/events");
 }

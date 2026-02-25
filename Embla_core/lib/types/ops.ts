@@ -43,3 +43,64 @@ export interface McpFabricData {
   tasks: Record<string, unknown>;
   services: Array<Record<string, unknown>>;
 }
+
+export interface MemoryGraphSummary {
+  enabled: boolean;
+  total_quintuples: number;
+  active_tasks: number;
+  pending_tasks: number;
+  running_tasks: number;
+  failed_tasks: number;
+  graph_sample_size: number;
+}
+
+export interface MemoryHotspot {
+  relation?: string;
+  entity?: string;
+  count: number;
+}
+
+export interface MemoryGraphRow {
+  subject: string;
+  subject_type: string;
+  predicate: string;
+  object: string;
+  object_type: string;
+}
+
+export interface MemoryGraphData {
+  summary: MemoryGraphSummary;
+  task_manager: Record<string, unknown>;
+  relation_hotspots: MemoryHotspot[];
+  entity_hotspots: MemoryHotspot[];
+  graph_sample: MemoryGraphRow[];
+}
+
+export interface WorkflowEventCounter {
+  [eventType: string]: number;
+}
+
+export interface WorkflowRecentEvent {
+  timestamp: string;
+  event_type: string;
+  payload_excerpt: Record<string, unknown>;
+}
+
+export interface WorkflowSummary {
+  overall_status: string;
+  events_scanned: number;
+  outbox_pending: number | null;
+  oldest_pending_age_seconds: number | null;
+  critical_events_total: number;
+}
+
+export interface WorkflowEventsData {
+  summary: WorkflowSummary;
+  queue_depth: Record<string, unknown>;
+  lock_status: Record<string, unknown>;
+  runtime_lease: Record<string, unknown>;
+  event_counters: WorkflowEventCounter;
+  recent_critical_events: WorkflowRecentEvent[];
+  log_context_statistics: Record<string, unknown>;
+  tool_status: Record<string, unknown>;
+}
