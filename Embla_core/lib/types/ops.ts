@@ -25,6 +25,9 @@ export interface RuntimePostureMetrics {
 export interface RuntimePostureData {
   summary: Record<string, unknown>;
   metrics: RuntimePostureMetrics;
+  threshold_profile?: Record<string, unknown>;
+  sources?: Record<string, unknown>;
+  ws26_runtime_snapshot_report?: Record<string, unknown>;
 }
 
 export interface McpFabricSummary {
@@ -103,4 +106,68 @@ export interface WorkflowEventsData {
   recent_critical_events: WorkflowRecentEvent[];
   log_context_statistics: Record<string, unknown>;
   tool_status: Record<string, unknown>;
+}
+
+export interface OpsIncidentSummary {
+  total_incidents: number;
+  critical_incidents: number;
+  warning_incidents: number;
+  latest_incident_at: string;
+}
+
+export interface OpsIncidentItem {
+  source: string;
+  severity: OpsSeverity;
+  timestamp: string;
+  event_type: string;
+  summary: string;
+  payload_excerpt: Record<string, unknown>;
+  report_path: string;
+  gate_level: string;
+}
+
+export interface IncidentsLatestData {
+  summary: OpsIncidentSummary;
+  event_counters: Record<string, number>;
+  events_scanned: number;
+  incidents: OpsIncidentItem[];
+}
+
+export interface EvidenceSummary {
+  required_total: number;
+  required_present: number;
+  required_passed: number;
+  required_missing: number;
+  required_failed: number;
+  hard_missing: number;
+  hard_failed: number;
+  soft_missing: number;
+  soft_failed: number;
+}
+
+export interface EvidenceRequiredReport {
+  id: string;
+  label: string;
+  gate_level: string;
+  path: string;
+  exists: boolean;
+  status: "passed" | "failed" | "missing" | "unknown";
+  passed: boolean | null;
+  generated_at: string;
+  modified_at: string;
+  scenario: string;
+  failed_checks: string[];
+}
+
+export interface EvidenceRecentReport {
+  name: string;
+  path: string;
+  size_bytes: number;
+  modified_at: string;
+}
+
+export interface EvidenceIndexData {
+  summary: EvidenceSummary;
+  required_reports: EvidenceRequiredReport[];
+  recent_reports: EvidenceRecentReport[];
 }

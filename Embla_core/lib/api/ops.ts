@@ -1,4 +1,6 @@
 import type {
+  EvidenceIndexData,
+  IncidentsLatestData,
   McpFabricData,
   MemoryGraphData,
   OpsEnvelope,
@@ -43,4 +45,12 @@ export async function fetchMemoryGraph(): Promise<OpsEnvelope<MemoryGraphData> |
 
 export async function fetchWorkflowEvents(): Promise<OpsEnvelope<WorkflowEventsData> | null> {
   return fetchOps<WorkflowEventsData>("/v1/ops/workflow/events");
+}
+
+export async function fetchIncidentsLatest(): Promise<OpsEnvelope<IncidentsLatestData> | null> {
+  return fetchOps<IncidentsLatestData>("/v1/ops/incidents/latest");
+}
+
+export async function fetchEvidenceIndex(): Promise<OpsEnvelope<EvidenceIndexData> | null> {
+  return fetchOps<EvidenceIndexData>("/v1/ops/evidence/index");
 }
