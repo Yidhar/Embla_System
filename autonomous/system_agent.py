@@ -166,6 +166,9 @@ class SystemAgentConfig:
             max_subtasks=max(1, int(pick(subagent_runtime, "max_subtasks", 16))),
             rollout_percent=max(0, min(100, int(pick(subagent_runtime, "rollout_percent", 100)))),
             fail_open=bool(pick(subagent_runtime, "fail_open", True)),
+            fail_open_budget_ratio=max(0.0, min(1.0, float(pick(subagent_runtime, "fail_open_budget_ratio", 0.15)))),
+            enforce_scaffold_txn_for_write=bool(pick(subagent_runtime, "enforce_scaffold_txn_for_write", True)),
+            allow_legacy_fail_open_for_write=bool(pick(subagent_runtime, "allow_legacy_fail_open_for_write", False)),
             require_contract_negotiation=bool(pick(subagent_runtime, "require_contract_negotiation", True)),
             require_scaffold_patch=bool(pick(subagent_runtime, "require_scaffold_patch", True)),
             fail_fast_on_subtask_error=bool(pick(subagent_runtime, "fail_fast_on_subtask_error", True)),
@@ -452,7 +455,17 @@ class SystemAgent:
                 runtime_mode="subagent" if using_subagent else "legacy",
                 fencing_epoch=fencing_epoch,
             )
-            if watchdog_block is not None:
+            write_path_block = self._evaluate_write_path_gate(
+                task=task,
+                workflow_id=workflow_id,
+                attempt=attempt,
+                runtime_mode="subagent" if using_subagent else "legacy",
+                rollout_context=rollout_context,
+                fencing_epoch=fencing_epoch,
+            )
+            if write_path_block is not None:
+                outcome = write_path_block
+            elif watchdog_block is not None:
                 outcome = watchdog_block
             elif using_subagent:
                 outcome = await self._execute_subagent_attempt(
@@ -698,6 +711,45 @@ class SystemAgent:
             )
 
         if runtime_result.fail_open_recommended and self.config.subagent_runtime.fail_open:
+            if self._task_requires_scaffold_txn(task=task) and not bool(
+                self.config.subagent_runtime.allow_legacy_fail_open_for_write
+            ):
+                reasons = list(runtime_result.reasons)
+                blocked_reason = "write_path:legacy_fail_open_blocked"
+                if blocked_reason not in reasons:
+                    reasons.append(blocked_reason)
+                self._emit(
+                    "SubAgentRuntimeFailOpenBlocked",
+                    {
+                        "workflow_id": workflow_id,
+                        "task_id": task.task_id,
+                        "attempt": attempt,
+                        "runtime_id": runtime_result.runtime_id,
+                        "gate_failure": runtime_result.gate_failure,
+                        "reasons": reasons,
+                    },
+                    workflow_id=workflow_id,
+                    fencing_epoch=fencing_epoch,
+                )
+                self._emit(
+                    "ReleaseGateRejected",
+                    {
+                        "workflow_id": workflow_id,
+                        "task_id": task.task_id,
+                        "gate": "write_path",
+                        "attempt": attempt,
+                        "runtime_mode": "subagent",
+                        "decision_reason": "legacy_fail_open_blocked",
+                        "reasons": reasons,
+                    },
+                    workflow_id=workflow_id,
+                    fencing_epoch=fencing_epoch,
+                )
+                return TaskAttemptOutcome(
+                    approved=False,
+                    reasons=reasons,
+                    subagent_runtime_result=runtime_result,
+                )
             self._emit(
                 "SubAgentRuntimeFailOpen",
                 {
@@ -814,8 +866,34 @@ class SystemAgent:
     def _build_runtime_trace_id(task_id: str, attempt: int) -> str:
         return f"trace_{task_id}_{attempt}_{uuid.uuid4().hex[:8]}"
 
+    def _task_requires_scaffold_txn(self, *, task: OptimizationTask) -> bool:
+        if not bool(self.config.subagent_runtime.enforce_scaffold_txn_for_write):
+            return False
+
+        metadata = task.metadata if isinstance(task.metadata, dict) else {}
+        explicit_write = metadata.get("write_intent")
+        if isinstance(explicit_write, bool):
+            return explicit_write
+
+        explicit_read_only = metadata.get("read_only")
+        if isinstance(explicit_read_only, bool) and explicit_read_only:
+            return False
+
+        if task.target_files:
+            return True
+
+        subtasks = metadata.get("subtasks")
+        if isinstance(subtasks, list):
+            for item in subtasks:
+                if not isinstance(item, dict):
+                    continue
+                if "patches" in item:
+                    return True
+        return False
+
     def _resolve_runtime_mode(self, *, task: OptimizationTask) -> tuple[str, Dict[str, Any]]:
         metadata = task.metadata if isinstance(task.metadata, dict) else {}
+        enforce_write_path = self._task_requires_scaffold_txn(task=task)
         forced_mode = str(
             metadata.get("runtime_mode")
             or metadata.get("force_runtime_mode")
@@ -824,12 +902,31 @@ class SystemAgent:
         ).strip().lower()
 
         if forced_mode in {"subagent", "legacy"}:
-            return forced_mode, {"reason": "task_forced_mode", "rollout_percent": self.config.subagent_runtime.rollout_percent}
+            if forced_mode == "legacy" and enforce_write_path and bool(self.config.subagent_runtime.enabled):
+                return "subagent", {
+                    "reason": "write_path_enforced",
+                    "requested_mode": "legacy",
+                    "rollout_percent": self.config.subagent_runtime.rollout_percent,
+                    "write_path_enforced": True,
+                }
+            return forced_mode, {
+                "reason": "task_forced_mode",
+                "rollout_percent": self.config.subagent_runtime.rollout_percent,
+                "write_path_enforced": enforce_write_path,
+            }
 
         if not bool(self.config.subagent_runtime.enabled):
-            return "legacy", {"reason": "subagent_disabled", "rollout_percent": 0}
+            reason = "write_path_subagent_disabled" if enforce_write_path else "subagent_disabled"
+            return "legacy", {"reason": reason, "rollout_percent": 0, "write_path_enforced": enforce_write_path}
 
         rollout_percent = max(0, min(100, int(self.config.subagent_runtime.rollout_percent)))
+        if enforce_write_path:
+            return "subagent", {
+                "reason": "write_path_enforced",
+                "rollout_percent": rollout_percent,
+                "write_path_enforced": True,
+            }
+
         if rollout_percent <= 0:
             return "legacy", {"reason": "rollout_zero", "rollout_percent": rollout_percent}
         if rollout_percent >= 100:
@@ -840,6 +937,39 @@ class SystemAgent:
         if bucket < rollout_percent:
             return "subagent", {"reason": "rollout_bucket_hit", "rollout_percent": rollout_percent, "rollout_bucket": bucket}
         return "legacy", {"reason": "rollout_bucket_miss", "rollout_percent": rollout_percent, "rollout_bucket": bucket}
+
+    def _evaluate_write_path_gate(
+        self,
+        *,
+        task: OptimizationTask,
+        workflow_id: str,
+        attempt: int,
+        runtime_mode: str,
+        rollout_context: Dict[str, Any],
+        fencing_epoch: int,
+    ) -> TaskAttemptOutcome | None:
+        if runtime_mode == "subagent":
+            return None
+        if not self._task_requires_scaffold_txn(task=task):
+            return None
+
+        reason = str(rollout_context.get("reason") or "legacy_runtime")
+        reasons = ["write_path:scaffold_txn_required", f"write_path:{reason}"]
+        self._emit(
+            "ReleaseGateRejected",
+            {
+                "workflow_id": workflow_id,
+                "task_id": task.task_id,
+                "gate": "write_path",
+                "attempt": attempt,
+                "runtime_mode": runtime_mode,
+                "decision_reason": reason,
+                "reasons": reasons,
+            },
+            workflow_id=workflow_id,
+            fencing_epoch=fencing_epoch,
+        )
+        return TaskAttemptOutcome(approved=False, reasons=reasons)
 
     async def _attempt_verification_fallback(
         self,

@@ -52,6 +52,7 @@ def test_system_agent_subagent_bridge_approves_task_via_scaffold_runtime() -> No
                 "subagent_runtime": {
                     "enabled": True,
                     "fail_open": True,
+                    "allow_legacy_fail_open_for_write": True,
                     "require_contract_negotiation": True,
                 },
                 "release": {
@@ -111,6 +112,7 @@ def test_system_agent_subagent_fail_open_falls_back_to_legacy_attempt() -> None:
                 "subagent_runtime": {
                     "enabled": True,
                     "fail_open": True,
+                    "allow_legacy_fail_open_for_write": True,
                     "require_contract_negotiation": True,
                 },
                 "release": {

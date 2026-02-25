@@ -98,6 +98,7 @@ def run_ws22_longrun_baseline(
             "subagent_runtime": {
                 "enabled": True,
                 "fail_open": True,
+                "allow_legacy_fail_open_for_write": True,
                 "require_contract_negotiation": True,
                 "require_scaffold_patch": True,
                 "max_subtasks": 16,

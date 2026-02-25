@@ -21,6 +21,9 @@ class SubAgentRuntimeConfig:
     max_subtasks: int = 16
     rollout_percent: int = 100
     fail_open: bool = True
+    fail_open_budget_ratio: float = 0.15
+    enforce_scaffold_txn_for_write: bool = True
+    allow_legacy_fail_open_for_write: bool = False
     require_contract_negotiation: bool = True
     require_scaffold_patch: bool = True
     fail_fast_on_subtask_error: bool = True

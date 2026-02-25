@@ -49,3 +49,15 @@ autonomous:
     io_read_bps: 52428800
     io_write_bps: 52428800
     cost_per_hour: 5.0
+
+  subagent_runtime:
+    enabled: false
+    max_subtasks: 16
+    rollout_percent: 100
+    fail_open: true
+    enforce_scaffold_txn_for_write: true
+    allow_legacy_fail_open_for_write: false
+    fail_open_budget_ratio: 0.15
+    require_contract_negotiation: true
+    require_scaffold_patch: true
+    fail_fast_on_subtask_error: true
