@@ -14,6 +14,7 @@ from system.doc_consistency import validate_execution_board_consistency
 
 DEFAULT_OUTPUT = Path("scratch/reports/ws27_m12_doc_consistency_ws27_005.json")
 DEFAULT_BOARD = Path("doc/task/09-execution-board.csv")
+DEFAULT_PHASE3_BOARD = Path("doc/task/23-phase3-full-execution-board.csv")
 DEFAULT_RISK_LEDGER = Path("doc/task/08-risk-closure-ledger.md")
 DEFAULT_PHASE3_TASK_LIST = Path("doc/task/23-phase3-full-target-task-list.md")
 
@@ -80,14 +81,20 @@ def run_validate_m12_doc_consistency_ws27_005(
     *,
     repo_root: Path,
     board_file: Path = DEFAULT_BOARD,
+    phase3_board_file: Path = DEFAULT_PHASE3_BOARD,
     risk_ledger_file: Path = DEFAULT_RISK_LEDGER,
     phase3_task_list: Path = DEFAULT_PHASE3_TASK_LIST,
     output_file: Path = DEFAULT_OUTPUT,
 ) -> Dict[str, Any]:
     root = repo_root.resolve()
 
-    board_report = validate_execution_board_consistency(
+    legacy_board_report = validate_execution_board_consistency(
         board_file=_resolve_path(root, board_file),
+        repo_root=root,
+        risk_ledger_file=_resolve_path(root, risk_ledger_file),
+    )
+    phase3_board_report = validate_execution_board_consistency(
+        board_file=_resolve_path(root, phase3_board_file),
         repo_root=root,
         risk_ledger_file=_resolve_path(root, risk_ledger_file),
     )
@@ -102,7 +109,11 @@ def run_validate_m12_doc_consistency_ws27_005(
     )
 
     checks = {
-        "execution_board_has_no_errors": int(board_report.error_count) == 0,
+        "execution_board_has_no_errors": (
+            int(legacy_board_report.error_count) == 0 and int(phase3_board_report.error_count) == 0
+        ),
+        "legacy_execution_board_has_no_errors": int(legacy_board_report.error_count) == 0,
+        "phase3_execution_board_has_no_errors": int(phase3_board_report.error_count) == 0,
         "core_docs_present": len(missing_core_docs) == 0,
         "ws27_implementation_docs_present": len(missing_impl_docs) == 0,
         "ws27_runbooks_present": len(missing_runbooks) == 0,
@@ -124,12 +135,28 @@ def run_validate_m12_doc_consistency_ws27_005(
             "phase3_snapshot_markers": missing_phase3_markers,
         },
         "board_consistency_summary": {
-            "board_file": _to_unix_path(_resolve_path(root, board_file)),
-            "checked_rows": int(board_report.checked_rows),
-            "issue_count": int(board_report.issue_count),
-            "error_count": int(board_report.error_count),
-            "warn_count": int(board_report.warn_count),
-            "issues_sample": list(board_report.issues[:20]),
+            "legacy_board": {
+                "board_file": _to_unix_path(_resolve_path(root, board_file)),
+                "checked_rows": int(legacy_board_report.checked_rows),
+                "issue_count": int(legacy_board_report.issue_count),
+                "error_count": int(legacy_board_report.error_count),
+                "warn_count": int(legacy_board_report.warn_count),
+                "issues_sample": list(legacy_board_report.issues[:20]),
+            },
+            "phase3_board": {
+                "board_file": _to_unix_path(_resolve_path(root, phase3_board_file)),
+                "checked_rows": int(phase3_board_report.checked_rows),
+                "issue_count": int(phase3_board_report.issue_count),
+                "error_count": int(phase3_board_report.error_count),
+                "warn_count": int(phase3_board_report.warn_count),
+                "issues_sample": list(phase3_board_report.issues[:20]),
+            },
+            "combined": {
+                "checked_rows": int(legacy_board_report.checked_rows + phase3_board_report.checked_rows),
+                "issue_count": int(legacy_board_report.issue_count + phase3_board_report.issue_count),
+                "error_count": int(legacy_board_report.error_count + phase3_board_report.error_count),
+                "warn_count": int(legacy_board_report.warn_count + phase3_board_report.warn_count),
+            },
         },
     }
 
@@ -144,6 +171,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate WS27-005 M12 doc consistency closure")
     parser.add_argument("--repo-root", type=Path, default=Path("."), help="Repository root")
     parser.add_argument("--board", type=Path, default=DEFAULT_BOARD, help="Execution board CSV path")
+    parser.add_argument(
+        "--phase3-board",
+        type=Path,
+        default=DEFAULT_PHASE3_BOARD,
+        help="Phase3 WS23-WS27 execution board CSV path",
+    )
     parser.add_argument("--risk-ledger", type=Path, default=DEFAULT_RISK_LEDGER, help="Risk closure ledger path")
     parser.add_argument(
         "--phase3-task-list",
@@ -161,6 +194,7 @@ def main() -> int:
     report = run_validate_m12_doc_consistency_ws27_005(
         repo_root=args.repo_root,
         board_file=args.board,
+        phase3_board_file=args.phase3_board,
         risk_ledger_file=args.risk_ledger,
         phase3_task_list=args.phase3_task_list,
         output_file=args.output,

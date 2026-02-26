@@ -88,6 +88,7 @@
 - 按 `G0 -> G9` 顺序推进；同组任务按 lane 并行派发。
 - 每个 `P0` 任务必须绑定至少 1 个自动化验证任务与 1 份 Runbook 更新。
 - 每个里程碑结束时，先跑门禁脚本，再更新 `doc/00-omni-operator-architecture.md` 的证据矩阵与状态字段。
+- `WS23-WS27` 状态跟踪优先维护在 `doc/task/23-phase3-full-execution-board.csv`，并与本清单快照保持一致。
 
 ## 8. 本轮推进快照（2026-02-25）
 

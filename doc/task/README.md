@@ -109,6 +109,8 @@
     - WS23-003 DNA manifest 一键同步工具（更新 manifest + 可选 gate 复验 + 报告落盘）。
 44. `doc/task/25-subagent-development-fabric-status-matrix.md`
     - 子代理开发执行面分层状态矩阵（区分 `BRIDGE_DONE` 与 `TARGET_DONE`，并标注文档噪音与统一判定口径）。
+45. `doc/task/23-phase3-full-execution-board.csv`
+    - Phase3 Full（WS23-WS27）专用执行板，作为 `09/99`（WS10-WS20）之外的增量任务状态源。
 
 ## 4. 任务状态约定
 
@@ -124,3 +126,4 @@
 1. 所有高风险任务必须带回滚方案与演练记录。
 2. 任何跨模块任务必须明确依赖与接口契约。
 3. 迁移任务禁止一次性大爆炸切换，必须支持灰度与回退。
+4. 执行板读取顺序：`WS10-WS20` 看 `09/99`；`WS23-WS27` 看 `23-phase3-full-execution-board.csv` + `23-phase3-full-target-task-list.md`。

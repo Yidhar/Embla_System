@@ -1,8 +1,8 @@
 ---
 **文档类型**：🎯 目标态架构设计（Target Architecture - Phase 3）
-**实施状态**：Phase 3 规划（当前 Phase 0 部分实现）
-**最后更新**：2026-02-22
-**当前替代方案**：System Agent (autonomous/system_agent.py) + CLI Selector
+**实施状态**：Phase 3 目标态对齐中（当前为 Phase 0 + 增量桥接混合态）
+**最后更新**：2026-02-26
+**当前替代方案**：System Agent (autonomous/system_agent.py) + Router/Memory 增量实现 + CLI Bridge
 **实施路径**：Phase 0 (System Agent) → Phase 1-2 (增强) → Phase 3 (本文档)
 ---
 
@@ -16,11 +16,15 @@
 > - 🔴 **Phase 3 目标态**：Meta-Agent、Router、完整三维记忆（本文档）
 >
 > **当前实现映射**：
-> - Meta-Agent → System Agent (autonomous/system_agent.py)
-> - Router → CLI Selector (autonomous/tools/cli_selector.py)
-> - Working Memory → 对话上下文（apiserver/llm_service.py）
-> - Episodic Memory → 无（目标态）
-> - Semantic Graph → 无（目标态）
+> - Meta-Agent → `autonomous/meta_agent_runtime.py` + `autonomous/system_agent.py`（桥接）
+> - Router → `autonomous/router_engine.py`（主）+ `autonomous/tools/cli_selector.py`（兼容）
+> - Working Memory → `autonomous/working_memory_manager.py` + 对话上下文（`apiserver/llm_service.py`）
+> - Episodic Memory → `system/episodic_memory.py`（增量）
+> - Semantic Graph → `system/semantic_graph.py`（增量）
+>
+> **一致性口径（2026-02-26）**：
+> - 阶段与目标态判定以 `doc/00-omni-operator-architecture.md` 为主。
+> - 子代理“桥接完成 vs 目标态完成”判定以 `doc/task/25-subagent-development-fabric-status-matrix.md` 为主。
 
 ---
 

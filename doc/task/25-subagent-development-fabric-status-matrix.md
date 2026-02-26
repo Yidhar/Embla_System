@@ -100,7 +100,8 @@
 
 1. `doc/00-omni-operator-architecture.md`（总蓝图与阶段边界）
 2. `doc/task/25-subagent-development-fabric-status-matrix.md`（本文，状态判定基线）
-3. `doc/task/21-ws-phase3-subagent-runtime-and-scaffold.md`（Runtime/Scaffold 主任务）
-4. `doc/task/22-ws-phase3-scheduler-bridge-and-rollout.md`（调度桥接与灰度接管）
-5. `doc/task/implementation/NGA-WS22-005-implementation.md`、`doc/task/implementation/NGA-WS22-006-implementation.md`
-6. `doc/task/implementation/NGA-WS27-002-implementation.md`（M12 full cutover）
+3. `doc/task/23-phase3-full-execution-board.csv`（WS23-WS27 实时状态）
+4. `doc/task/21-ws-phase3-subagent-runtime-and-scaffold.md`（Runtime/Scaffold 主任务）
+5. `doc/task/22-ws-phase3-scheduler-bridge-and-rollout.md`（调度桥接与灰度接管）
+6. `doc/task/implementation/NGA-WS22-005-implementation.md`、`doc/task/implementation/NGA-WS22-006-implementation.md`
+7. `doc/task/implementation/NGA-WS27-002-implementation.md`（M12 full cutover）

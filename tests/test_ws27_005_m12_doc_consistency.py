@@ -8,6 +8,7 @@ from pathlib import Path
 from scripts.validate_m12_doc_consistency_ws27_005 import (
     CORE_DOC_PATHS,
     DEFAULT_BOARD,
+    DEFAULT_PHASE3_BOARD,
     PHASE3_REQUIRED_MARKERS,
     WS27_IMPLEMENTATION_DOC_PATHS,
     WS27_RUNBOOK_PATHS,
@@ -66,6 +67,7 @@ def _bootstrap_repo(
         _write_text(root / relative, f"# {relative.name}\n")
 
     _write_board_csv(root / DEFAULT_BOARD)
+    _write_board_csv(root / DEFAULT_PHASE3_BOARD)
 
 
 def test_validate_m12_doc_consistency_passes_when_all_required_docs_exist() -> None:
@@ -81,10 +83,15 @@ def test_validate_m12_doc_consistency_passes_when_all_required_docs_exist() -> N
         assert report["passed"] is True
         checks = report["checks"]
         assert checks["execution_board_has_no_errors"] is True
+        assert checks["legacy_execution_board_has_no_errors"] is True
+        assert checks["phase3_execution_board_has_no_errors"] is True
         assert checks["core_docs_present"] is True
         assert checks["ws27_implementation_docs_present"] is True
         assert checks["ws27_runbooks_present"] is True
         assert checks["phase3_snapshot_markers_present"] is True
+        board_summary = report["board_consistency_summary"]
+        assert board_summary["legacy_board"]["error_count"] == 0
+        assert board_summary["phase3_board"]["error_count"] == 0
         assert (repo_root / "scratch/reports/ws27_doc_consistency.json").exists() is True
     finally:
         _cleanup_case_root(case_root)
@@ -102,6 +109,7 @@ def test_validate_m12_doc_consistency_reports_missing_marker_and_runbook() -> No
         )
         assert report["passed"] is False
         checks = report["checks"]
+        assert checks["execution_board_has_no_errors"] is True
         assert checks["ws27_runbooks_present"] is False
         assert checks["phase3_snapshot_markers_present"] is False
         missing_items = report["missing_items"]

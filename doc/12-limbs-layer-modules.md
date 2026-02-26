@@ -1,8 +1,8 @@
 ---
 **文档类型**：🎯 目标态架构设计（Target Architecture - Phase 3）
-**实施状态**：Phase 3 规划（当前 Phase 0 部分实现）
-**最后更新**：2026-02-22
-**当前替代方案**：MCP Manager (mcpserver/) + Native Executor (system/)
+**实施状态**：Phase 3 目标态对齐中（当前为 Phase 0 + 增量桥接混合态）
+**最后更新**：2026-02-26
+**当前替代方案**：MCP Manager (mcpserver/) + Native Executor (system/) + SubAgent Runtime Bridge
 **实施路径**：Phase 0 (基础 MCP) → Phase 1-2 (增强) → Phase 3 (本文档)
 ---
 
@@ -22,6 +22,11 @@
 > - file_ast → 无（目标态）
 > - Sub-Agent Runtime → `autonomous/tools/subagent_runtime.py` + CLI Adapter（Phase 3 增量 v1：依赖调度 + 契约协商前置 + 事件锚点）
 > - Scaffold Engine → `autonomous/scaffold_engine.py`（契约门禁 + 可插拔 verify pipeline + 事务回滚）
+> - Execution Bridge（终态）→ 仍未完成；当前以 CLI 兼容桥接为主
+>
+> **一致性口径（2026-02-26）**：
+> - 阶段边界与目标态判定以 `doc/00-omni-operator-architecture.md` 为主。
+> - 子代理执行面状态分层以 `doc/task/25-subagent-development-fabric-status-matrix.md` 为主。
 
 ---
 
