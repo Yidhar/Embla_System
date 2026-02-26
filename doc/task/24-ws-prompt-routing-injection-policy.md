@@ -155,6 +155,31 @@
 
 ---
 
+## 5.1 聊天与执行的三路径准入（新增）
+
+为同时满足“高自动化 + 低延迟 + 低误触发”，采用三路径准入：
+
+1. `Path-A: Outer Direct Read-Only`（默认优先）
+- 适用：问候、闲聊、上传文件总结、文档检索、只读问答。
+- 执行：Outer Chat 直接处理，仅加载只读能力，不进入 Core。
+- 目标：`hi` 类请求 P95 `<300ms`。
+
+2. `Path-B: Outer Clarify`
+- 适用：意图不明确或输入信息不足。
+- 执行：Outer 先澄清并补全 Contract（目标、范围、副作用、验收），再决定是否升级 Core。
+
+3. `Path-C: Core Execution`
+- 适用：写操作、跨模块编排、多代理协同、需要回滚/重试治理。
+- 执行：进入 Core 做路由、门禁、契约校验、权限裁剪与调度。
+
+升级到 Core 的最小条件（建议）：
+
+1. `write_intent=true` 或存在外部副作用。
+2. 需要多阶段编排（单轮只读无法完成）。
+3. 需要拉起专家子代理并行处理。
+
+---
+
 ## 6. Prompt 分层、优先级与覆盖规则
 
 建议引入六层（兼容当前 `PromptEnvelope`，并补上 `L1.5`）：
@@ -197,7 +222,8 @@
 1. 外层交互代理（Outer Chat Agent）
 - 职能：负责闲聊、需求澄清、生成执行契约（Contract）。
 - 注入包：`L0_DNA + L1_TASK_BASE + L2_ROLE(Chat/Router)`。
-- 工具权限：`ask_user`, `search_kb`, `delegate_to_core`（目标态）。
+- 工具权限：`ask_user`, `search_kb`, `read_uploaded_file`, `summarize_doc`, `delegate_to_core`（目标态）。
+- 说明：上传文件总结/文档检索默认走 Outer 只读路径，不必直接拉起 Core。
 
 2. 核心执行代理（Core Execution Agent）
 - 职能：后台无头执行，不直接消费闲聊历史，仅消费 Contract。
@@ -221,6 +247,24 @@
 1. 并行前先注入共享契约片段（字段名、版本、错误码）。
 2. 生成并广播 `contract_checksum` 到所有子任务元数据。
 3. 未通过契约一致性时，禁止并行写入，只允许只读探索。
+
+### 7.4 高风险二次确认矩阵（新增）
+
+必须二次确认（默认）：
+
+1. 删除/覆盖/批量改写类操作。
+2. 生产态或外部系统高影响动作（部署、回滚、权限变更、网络隔离）。
+3. 可能产生不可逆副作用的命令链。
+
+可免二次确认（受限）：
+
+1. 明确在沙箱/隔离环境中的编码和测试动作。
+2. 无外部副作用、可回滚、且权限已限定在工作区内的写操作。
+
+兜底规则：
+
+1. 即使处于“可免确认”路径，一旦命中高危模式仍强制确认。
+2. 二次确认仅作用于高风险动作，避免把低风险动作全部变成人工审批。
 
 ---
 
@@ -305,6 +349,10 @@ class PromptComposeDecision:
 - `shadow`：仅记录越权/冲突审计，不拦截。
 - `block`：触发即拒绝执行。
 
+5. 准入策略要求：
+- Path-A（Outer 只读）默认开启，用于聊天/上传总结/文档检索。
+- 仅当满足 Core 升级条件时才进入 Path-C。
+
 ### 10.2 P1（可观测）
 
 1. 在 `logs/autonomous/events.jsonl` 写入注入决策事件。
@@ -314,6 +362,8 @@ class PromptComposeDecision:
 - `recovery_slice_hit_rate`
 - `prompt_conflict_drop_count`
 - `delegation_hit_rate`
+- `outer_readonly_hit_rate`
+- `core_escalation_rate`
 
 ### 10.3 P2（多代理并行保障）
 
@@ -321,7 +371,24 @@ class PromptComposeDecision:
 2. 并行写任务必须带 `contract_checksum`，否则降级为只读探索。
 3. 只读代理注入时，写工具暴露率必须可观测并可审计。
 
-### 10.4 P3（专家路由评估管道）
+### 10.4 P3（动态并发控制，无固定 hard cap）
+
+并发控制不使用固定“每轮最多 N 个子代理”，改为资源驱动：
+
+1. `machine_slots`：由 CPU、内存、IO、队列长度实时计算。
+2. `task_slots`：由任务 DAG 可并行宽度计算（仅对无依赖冲突单元并行）。
+3. `time_slots`：由任务时间成本预测计算（避免长任务挤占导致雪崩）。
+
+建议并发上限：
+
+`max_parallel = min(machine_slots, task_slots, time_slots)`
+
+说明：
+
+1. 预算（cost/tokens）作为观测项，不作为并发门禁硬条件。
+2. 保留熔断器：机器水位超阈值或失败风暴出现时自动下调并发。
+
+### 10.5 P4（专家路由评估管道）
 
 1. 构建 Ground Truth 评测集（建议 >= 500 标准开发/运维场景）。
 2. 建立 `Routing Evaluator` 离线回放机制，周期评估 Router 派发质量。
@@ -337,6 +404,8 @@ class PromptComposeDecision:
 4. 多职能并行场景下，接口字段不一致失败率较当前基线下降 60%+。
 5. 专家子代理路由命中率：标准意图集首次命中准确率 >= 85%。
 6. 权限降级可靠性：只读子代理注入时写权限工具暴露率 = 0%。
+7. 聊天快路径性能：`hi` 类请求 P95 `<300ms`（不触发 Core/工具链）。
+8. 并发稳定性：动态并发场景下无持续排队放大和无界 agent 膨胀。
 
 ---
 
@@ -356,6 +425,10 @@ class PromptComposeDecision:
 
 4. 远程环境灰度策略
 - 结论：先 `enforcement_mode=shadow`，稳定后再切 `block`。
+
+5. 并发控制策略
+- 结论：不设固定 hard cap。
+- 规则：按 `machine + task + time` 三因子动态决定并发；预算作为观测项。
 
 ---
 
