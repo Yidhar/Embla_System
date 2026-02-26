@@ -64,7 +64,7 @@ def test_brainstem_supervisor_entry_health_mode_detects_stopped_service() -> Non
     try:
         spec_file = _write_spec(case_root, restart_policy="never")
         state_file = case_root / "state.json"
-        supervisor = BrainstemSupervisor(state_file=state_file, launcher=lambda _spec: 43210)
+        supervisor = BrainstemSupervisor(state_file=state_file, launcher=lambda _spec: 43210, pid_alive=lambda _pid: True)
         supervisor.register_service(
             BrainstemServiceSpec(
                 service_name="brainstem-core",

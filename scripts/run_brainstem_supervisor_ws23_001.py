@@ -107,7 +107,8 @@ def run_brainstem_supervisor_entry(
 ) -> Dict[str, Any]:
     specs = _load_specs(spec_file)
     run_launcher = launcher or (_build_dry_run_launcher() if dry_run else None)
-    supervisor = BrainstemSupervisor(state_file=state_file, launcher=run_launcher)
+    pid_alive_checker = (lambda _pid: True) if dry_run else None
+    supervisor = BrainstemSupervisor(state_file=state_file, launcher=run_launcher, pid_alive=pid_alive_checker)
     for spec in specs:
         supervisor.register_service(spec)
 

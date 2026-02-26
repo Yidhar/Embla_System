@@ -20,6 +20,7 @@ def _utc_iso() -> str:
 
 
 Launcher = Callable[["BrainstemServiceSpec"], int]
+PidAliveChecker = Callable[[int], bool]
 
 
 @dataclass(frozen=True)
@@ -103,11 +104,13 @@ class BrainstemSupervisor:
         *,
         state_file: Path,
         launcher: Optional[Launcher] = None,
+        pid_alive: Optional[PidAliveChecker] = None,
         now_fn: Optional[Callable[[], float]] = None,
     ) -> None:
         self.state_file = Path(state_file)
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.launcher = launcher or self._default_launcher
+        self._pid_alive = pid_alive or self._default_pid_alive
         self._now_fn = now_fn or time.time
         self._lock = threading.Lock()
         self._specs: Dict[str, BrainstemServiceSpec] = {}
@@ -128,15 +131,55 @@ class BrainstemSupervisor:
         with self._lock:
             spec = self._require_spec(name)
             state = self._states.setdefault(name, BrainstemServiceState(service_name=name))
+            detected_dead_pid = False
             if state.running and state.pid > 0:
-                return SupervisorAction(
-                    action="noop",
-                    service_name=name,
-                    pid=state.pid,
-                    restart_count=state.restart_count,
-                    reason="already_running",
-                    mode=state.mode,
-                )
+                if self._pid_alive(int(state.pid)):
+                    return SupervisorAction(
+                        action="noop",
+                        service_name=name,
+                        pid=state.pid,
+                        restart_count=state.restart_count,
+                        reason="already_running",
+                        mode=state.mode,
+                    )
+                detected_dead_pid = True
+                state.running = False
+                state.pid = 0
+                state.last_exit_code = 255
+                state.updated_at = _utc_iso()
+
+                if spec.restart_policy in {"always", "on-failure"}:
+                    if state.restart_count < spec.max_restarts:
+                        state.restart_count += 1
+                        pid = int(self.launcher(spec))
+                        state.running = True
+                        state.pid = pid
+                        state.mode = "managed"
+                        state.last_started_at = _utc_iso()
+                        state.updated_at = _utc_iso()
+                        self._persist_state()
+                        return SupervisorAction(
+                            action="restarted",
+                            service_name=name,
+                            pid=pid,
+                            restart_count=state.restart_count,
+                            reason="stale_pid_auto_restart",
+                            mode=state.mode,
+                            backoff_seconds=spec.restart_backoff_seconds,
+                        )
+                    if spec.lightweight_fallback_command:
+                        state.mode = "lightweight"
+                        state.updated_at = _utc_iso()
+                        self._persist_state()
+                        return SupervisorAction(
+                            action="fallback",
+                            service_name=name,
+                            pid=0,
+                            restart_count=state.restart_count,
+                            reason="restart_budget_exhausted",
+                            mode=state.mode,
+                            backoff_seconds=0.0,
+                        )
             pid = int(self.launcher(spec))
             state.running = True
             state.pid = pid
@@ -149,7 +192,7 @@ class BrainstemSupervisor:
                 service_name=name,
                 pid=pid,
                 restart_count=state.restart_count,
-                reason="initial_start",
+                reason="detected_dead_pid_start" if detected_dead_pid else "initial_start",
                 mode=state.mode,
             )
 
@@ -232,7 +275,8 @@ class BrainstemSupervisor:
             for name in sorted(names):
                 state = self._states.get(name, BrainstemServiceState(service_name=name))
                 registered = name in self._specs
-                running = bool(state.running and state.pid > 0)
+                pid_alive = bool(state.pid > 0 and self._pid_alive(int(state.pid)))
+                running = bool(state.running and state.pid > 0 and pid_alive)
                 mode = str(state.mode or "managed").strip().lower()
 
                 if not registered:
@@ -243,6 +287,10 @@ class BrainstemSupervisor:
                     status = "running"
                     healthy = True
                     reason = "ok"
+                elif state.running and state.pid > 0 and not pid_alive:
+                    status = "stopped"
+                    healthy = False
+                    reason = "service_pid_not_alive"
                 elif mode == "lightweight":
                     status = "degraded"
                     healthy = False
@@ -376,6 +424,19 @@ class BrainstemSupervisor:
         if spec is None:
             raise KeyError(f"service not registered: {service_name}")
         return spec
+
+    @staticmethod
+    def _default_pid_alive(pid: int) -> bool:
+        target_pid = int(pid)
+        if target_pid <= 0:
+            return False
+        try:
+            os.kill(target_pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
 
     @staticmethod
     def _resolve_command(command: List[str]) -> List[str]:
