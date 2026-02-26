@@ -1,6 +1,6 @@
 # WS24x 设计讨论稿：Prompt 路由注入与多职能 Agent 注入时机
 
-文档状态：讨论稿（Design Draft）  
+文档状态：设计稿（Executable Draft）  
 最后更新：2026-02-26  
 适用范围：`SystemAgent / Router / LLM Gateway / Agentic Loop / Sub-Agent Runtime`  
 
@@ -46,6 +46,18 @@
 12. 冲突消解从 `conflicts_with[str]` 升级为语义域规则：采纳。
 - 原因：降低 slice 重命名导致静默失效的风险。
 
+13. DNA manifest 语义统一为 `.spec`：采纳。
+- 原因：当前发布门禁和收口脚本默认使用 `system/prompts/immutable_dna_manifest.spec`，需消除 `.json` 与 `.spec` 混用歧义。
+
+14. 增加“现状可支持度评估”并明确分阶段能力边界：采纳。
+- 原因：当前代码可支持多 Agent Prompt 的“第一阶段”，但尚不具备完整 Prompt Slice 引擎与物理双层隔离。
+
+15. 增加 Prompt 可修改分级（S0/S1/S2）与 AI 可改边界：采纳。
+- 原因：需要在“自治效率”与“核心安全”之间建立可执行治理边界。
+
+16. 增加目录规范与框架改造清单（文件级）：采纳。
+- 原因：便于后续按增量任务直接实施，不再停留在概念描述。
+
 ---
 
 ## 1. 背景与问题
@@ -68,7 +80,7 @@
 
 1. 固定顺序 DNA 注入：
 - `system/immutable_dna.py`
-- 基于 `immutable_dna_manifest.json` 的 `injection_order` 做顺序装配与 hash 校验。
+- 基于 `immutable_dna_manifest.spec` 的 `injection_order` 做顺序装配与 hash 校验（发布门禁同源）。
 
 2. 三段式 Prompt Envelope：
 - `autonomous/llm_gateway.py`
@@ -93,6 +105,23 @@
 3. 子代理 spawn 时缺“最小必要上下文”强约束。
 4. 缺注入冲突消解机制（例如技能指令覆盖安全策略）。
 5. Outer/Core 尚未物理隔离，执行代理仍会间接受到闲聊历史影响。
+
+### 2.3 现状可支持度评估（2026-02-26）
+
+| 能力项 | 当前状态 | 结论 |
+|---|---|---|
+| 三路径准入（Path-A/B/C） | 部分具备（逻辑上可区分，未形成统一路由判定层） | 可先落地 P0 逻辑隔离 |
+| 多 Agent Prompt 路由 | 部分具备（role/tool profile 有基础） | 需补 `prompt_profile/injection_mode` |
+| Prompt Slice 组合引擎 | 未落地 | 需在 `autonomous/llm_gateway.py` 实现 |
+| Prompt ACL（按文件/层级权限） | 未落地 | 必须优先补齐 |
+| Outer/Core 物理隔离 | 未落地 | 先逻辑隔离，后进程隔离 |
+| DNA 门禁一致性 | 已具备（`.spec`） | 作为核心不可降级约束 |
+
+当前可执行判断：
+
+1. 当前项目支持“多 Agent Prompt 的第一阶段（逻辑隔离 + 路由字段扩展）”。
+2. 当前项目不支持“完全放任 AI 修改 Prompt”。
+3. 在未引入 ACL 之前，核心 Prompt 改动必须走“审批票据 + manifest 重算 + gate 复验”。
 
 ---
 
@@ -136,6 +165,14 @@
 5. 安全不可被覆盖：安全层优先级高于技能层与任务层。
 6. 工具物理权限优先：模型角色描述不得突破工具层权限隔离。
 7. 逻辑优先级与物理拼接顺序解耦：先按逻辑裁剪，再按缓存友好顺序序列化。
+
+### 4.1 DNA 单源约束（强制）
+
+1. DNA manifest 统一使用：`system/prompts/immutable_dna_manifest.spec`。
+2. 发布与验收链统一依赖 `.spec`，禁止并行维护 `.json` 作为第二事实源。
+3. 任何受 DNA 保护 prompt 变更后，必须执行：
+- `scripts/update_immutable_dna_manifest_ws23_003.py --approval-ticket ... --strict`
+- 或等价“approved_update_manifest + gate 复验”流程。
 
 ---
 
@@ -246,6 +283,70 @@
 1. 高动态切片（`L1.5/L4`）禁止插入缓存前缀。
 2. `L3` 约束必须在最终可见 Prompt 中明确出现（可位于静态前缀末端）。
 3. 每轮记录 `prefix_hash` 与 `tail_hash`，用于命中率与漂移追踪。
+
+### 6.2 Prompt 可修改分级（Lockdown Policy）
+
+定义三层可修改策略：
+
+1. `S0_LOCKED`（核心锁死，AI 不可直接修改）
+- 仅允许人工审批+代码评审+门禁链路变更。
+- 目录/文件（当前）：
+  - `system/immutable_dna.py`
+  - `scripts/validate_immutable_dna_gate_ws23_003.py`
+  - `scripts/update_immutable_dna_manifest_ws23_003.py`
+  - `system/policy_firewall.py`
+  - `apiserver/agentic_tool_loop.py`
+  - `apiserver/native_tools.py`
+  - `system/native_executor.py`
+  - `system/workspace_transaction.py`
+  - `system/global_mutex.py`
+  - `system/process_lineage.py`
+  - `autonomous/policy/gate_policy.yaml`
+
+2. `S1_CONTROLLED`（可改但强管控）
+- 允许 AI 生成变更，但必须审批票据+DNA 重算+gate 通过。
+- 文件（当前 4/4）：
+  - `system/prompts/conversation_style_prompt.txt`
+  - `system/prompts/conversation_analyzer_prompt.txt`
+  - `system/prompts/tool_dispatch_prompt.txt`
+  - `system/prompts/agentic_tool_prompt.txt`
+
+3. `S2_FLEXIBLE`（可放任修改）
+- 非核心专家 prompt、实验型角色 prompt、可回退模板。
+- 当前仓库尚未拆分此目录，现阶段可放任数量：`0`。
+
+治理结论（当前阶段）：
+
+1. 当前 4 个 DNA prompt 均不是“放任修改”对象。
+2. 在多 Agent Prompt 目录拆分完成前，默认按 `S1_CONTROLLED` 处理。
+
+### 6.3 目录规范（多 Agent Prompt）
+
+目标目录（To-Be）：
+
+1. `system/prompts/core/`
+- DNA 受控核心 prompt（S1/S0 配套治理）
+
+2. `system/prompts/agents/outer/`
+- 外层交互代理 prompt（Path-A/B）
+
+3. `system/prompts/agents/core_exec/`
+- 核心执行代理 prompt（Path-C）
+
+4. `system/prompts/agents/experts/`
+- 专家子代理 prompt（Explore/Plan/Review/Ops 等）
+
+5. `system/prompts/agents/recovery/`
+- 故障恢复与补救策略 prompt（L4）
+
+6. `system/prompts/specs/`
+- `prompt_registry.spec`（切片注册、层级、TTL、冲突域）
+- `prompt_acl.spec`（文件级修改权限策略）
+
+迁移约束：
+
+1. P0 先保持现有平铺文件可读，新增 registry 映射层兼容旧路径。
+2. 目录迁移期需支持 alias 与回放对齐，避免旧切片引用失效。
 
 ---
 
@@ -372,6 +473,17 @@ class PromptComposeDecision:
     tail_hash: str
 ```
 
+```python
+@dataclass(frozen=True)
+class PromptACLRule:
+    path_pattern: str            # e.g. system/prompts/core/*
+    level: str                   # S0_LOCKED | S1_CONTROLLED | S2_FLEXIBLE
+    require_ticket: bool
+    require_manifest_refresh: bool
+    require_gate_verify: bool
+    allow_ai_direct_write: bool
+```
+
 ---
 
 ## 9. 组合算法（建议）
@@ -477,6 +589,204 @@ class PromptComposeDecision:
 2. 建立 `Routing Evaluator` 离线回放机制，周期评估 Router 派发质量。
 3. 输出 `Precision / Recall / F1 / First-hit-rate`，用于专家代理增删和阈值调优。
 
+### 10.6 文件级改造清单（必须项）
+
+为支持“多 Agent Prompt + 可控改写”，需改造以下模块：
+
+1. `autonomous/router_engine.py`
+- 增加：`prompt_profile`、`injection_mode`、`delegation_intent`。
+- 输出路由决策时携带 prompt 侧约束元数据。
+
+2. `autonomous/llm_gateway.py`
+- 增加：`PromptSlice` 输入结构、`resolve()` 与 `serialize_for_cache()` 双阶段组合。
+- 增加：`PromptComposeDecision` 回执与 `prefix_hash/tail_hash` 观测。
+
+3. `system/config.py`
+- `build_system_prompt()` 从固定拼接迁移为基于 profile 的切片组合入口。
+- 保留旧接口兼容层，避免 `/chat` 与 `/chat/stream` 行为突变。
+
+4. `system/background_analyzer.py`
+- `conversation_analyzer_prompt + tool_dispatch_prompt` 从固定模板升级为 profile 可选模板集。
+- 保证 analyzer 路由与 Core 路由策略一致。
+
+5. `apiserver/api_server.py`
+- `/system/prompts/*` 引入 `prompt_acl.spec` 校验。
+- 对 S0/S1 文件实施写入拦截与审批票据校验。
+
+6. `scripts/validate_immutable_dna_gate_ws23_003.py`
+- 继续作为 `.spec` 单源门禁，不引入并行 `.json` 事实源。
+
+7. `scripts/update_immutable_dna_manifest_ws23_003.py`
+- 作为受控更新入口，后续接入 ACL 与审计元数据（owner/change_reason）。
+
+### 10.7 P0 实施任务卡（按文件+测试项+验收标准）
+
+> 说明：以下任务卡按 `doc/task/00-task-unit-spec.md` 最小字段组织，定位为本设计稿对应的首批可落地改造包。  
+> 任务号采用 `NGA-WS28-*` 暂编排，后续并入主任务清单时可按排期重映射。
+
+### NGA-WS28-001 扩展 Router 决策字段并保持兼容
+- type: `feature`
+- priority: `P0`
+- phase: `M13`
+- owner_role: `backend`
+- scope: `RouterDecision` 输出契约扩展；不改变现有调用方默认行为
+- inputs: `doc/task/24-ws-prompt-routing-injection-policy.md` §5/§10.6；`autonomous/router_engine.py`
+- depends_on: `-`
+- deliverables:
+  - 代码文件：`autonomous/router_engine.py`
+  - 测试文件：`tests/test_router_engine_prompt_profile_ws28_001.py`
+  - 报告产物：`scratch/reports/ws28_001_router_prompt_profile.json`
+- acceptance:
+  - 新增字段 `prompt_profile`、`injection_mode`、`delegation_intent`，默认值覆盖旧调用链。
+  - 旧链路（不传新字段）执行结果与基线一致（行为无突变）。
+  - 执行：`.venv/bin/pytest -q tests/test_router_engine_prompt_profile_ws28_001.py`
+  - 产物文件存在且 `passed=true`。
+- rollback:
+  - 回退到仅保留旧字段输出分支，并移除新增字段在序列化中的强依赖。
+  - 恢复前需保留本次新增测试作为回归防护（预期改为 xfail 或删除并记录原因）。
+- status: `done`（2026-02-26，已通过 `tests/test_router_engine_prompt_profile_ws28_001.py`）
+
+### NGA-WS28-002 落地 Prompt Slice 组合引擎（Resolve/Serialize 双阶段）
+- type: `feature`
+- priority: `P0`
+- phase: `M13`
+- owner_role: `backend`
+- scope: `LLM Gateway` 的 prompt 组合核心；支持逻辑裁剪与缓存友好序列化解耦
+- inputs: `doc/task/24-ws-prompt-routing-injection-policy.md` §6/§9/§10.6；`autonomous/llm_gateway.py`
+- depends_on: `NGA-WS28-001`
+- deliverables:
+  - 代码文件：`autonomous/llm_gateway.py`
+  - 可选新增：`autonomous/prompt_slices.py`（若需独立结构定义）
+  - 测试文件：`tests/test_llm_gateway_prompt_slice_ws28_002.py`
+  - 报告产物：`scratch/reports/ws28_002_prompt_slice_compose.json`
+- acceptance:
+  - 实现 `resolve()`（逻辑优先级裁剪）与 `serialize_for_cache()`（物理拼接）双阶段。
+  - 生成并暴露 `prefix_hash`、`tail_hash` 与 `PromptComposeDecision`。
+  - Path-A 请求不得拼接执行态高动态切片（保持快路径轻量）。
+  - 执行：`.venv/bin/pytest -q tests/test_llm_gateway_prompt_slice_ws28_002.py`
+  - 产物文件存在且 `passed=true`。
+- rollback:
+  - 保留 `PromptSlice` 数据结构，组合逻辑退回现有三段式 envelope；关闭新字段强校验。
+  - 回滚后必须保持 `prefix_hash` 观测可用，避免可观测性退化。
+- status: `done`（2026-02-26，已通过 `tests/test_llm_gateway_prompt_slice_ws28_002.py`）
+
+### NGA-WS28-003 建立 Prompt ACL 与 API 写入门禁
+- type: `hardening`
+- priority: `P0`
+- phase: `M13`
+- owner_role: `security`
+- scope: `/system/prompts/*` 写入控制、审批票据校验、S0/S1/S2 分级落地
+- inputs: `doc/task/24-ws-prompt-routing-injection-policy.md` §6.2/§6.3/§10.6；`apiserver/api_server.py`；`system/config.py`
+- depends_on: `NGA-WS28-001`
+- deliverables:
+  - 代码文件：`apiserver/api_server.py`
+  - 代码文件：`system/config.py`
+  - 配置文件：`system/prompts/prompt_acl.spec`
+  - 测试文件：`tests/test_prompt_acl_api_guard_ws28_003.py`
+  - 报告产物：`scratch/reports/ws28_003_prompt_acl_guard.json`
+- acceptance:
+  - `S0_LOCKED` 文件写入被拒绝（无例外）。
+  - `S1_CONTROLLED` 文件需携带审批票据（缺失时拒绝）。
+  - `S2_FLEXIBLE`（后续放开时）可按策略放行，且审计字段完整。
+  - 执行：`.venv/bin/pytest -q tests/test_prompt_acl_api_guard_ws28_003.py`
+  - 产物文件存在且 `passed=true`。
+- rollback:
+  - 失败时先切回 `enforcement_mode=shadow`，仅审计不拦截。
+  - 保留 ACL 解析与日志链路，避免完全回退到“无治理”状态。
+- status: `done`（2026-02-26，已通过 `tests/test_prompt_acl_api_guard_ws28_003.py`）
+
+### NGA-WS28-004 对齐 Analyzer 与 Core 的路由注入策略
+- type: `refactor`
+- priority: `P0`
+- phase: `M13`
+- owner_role: `backend`
+- scope: 背景分析器 prompt 选择策略与 Core 路由字段一致化
+- inputs: `doc/task/24-ws-prompt-routing-injection-policy.md` §7/§10.6；`system/background_analyzer.py`
+- depends_on: `NGA-WS28-001;NGA-WS28-002`
+- deliverables:
+  - 代码文件：`system/background_analyzer.py`
+  - 测试文件：`tests/test_background_analyzer_prompt_parity_ws28_004.py`
+  - 报告产物：`scratch/reports/ws28_004_analyzer_parity.json`
+- acceptance:
+  - Analyzer 侧使用同源 `prompt_profile/injection_mode` 判定，不再硬编码固定模板。
+  - Analyzer 与 Core 在同类输入下的切片选择结果可比对（字段一致）。
+  - 执行：`.venv/bin/pytest -q tests/test_background_analyzer_prompt_parity_ws28_004.py`
+  - 产物文件存在且 `passed=true`。
+- rollback:
+  - 保留新字段透传，模板选择临时退回 legacy 分支。
+  - 记录不一致样本并落盘，作为下一轮修复输入。
+- status: `done`（2026-02-26，已通过 `tests/test_background_analyzer_prompt_parity_ws28_004.py`）
+
+### NGA-WS28-005 固化 DNA `.spec` 单源门禁与受控更新链
+- type: `hardening`
+- priority: `P0`
+- phase: `M13`
+- owner_role: `qa`
+- scope: Manifest 更新脚本与 gate 校验脚本单源一致性
+- inputs: `doc/task/24-ws-prompt-routing-injection-policy.md` §4.1/§10.6；现有 ws23 脚本与测试
+- depends_on: `NGA-WS28-003`
+- deliverables:
+  - 代码文件：`scripts/update_immutable_dna_manifest_ws23_003.py`
+  - 代码文件：`scripts/validate_immutable_dna_gate_ws23_003.py`
+  - 测试文件：`tests/test_update_immutable_dna_manifest_ws23_003.py`
+  - 测试文件：`tests/test_ws23_003_immutable_dna_gate.py`
+  - 报告产物：`scratch/reports/ws28_005_dna_spec_gate.json`
+- acceptance:
+  - 校验脚本明确拒绝 `.json` 作为并行事实源。
+  - 受控更新链要求 `approval_ticket`，并在产物中记录 `change_reason`（若未传则拒绝 strict 模式）。
+  - 执行：`.venv/bin/pytest -q tests/test_update_immutable_dna_manifest_ws23_003.py tests/test_ws23_003_immutable_dna_gate.py`
+  - 产物文件存在且 `passed=true`。
+- rollback:
+  - 保留 `.spec` 单源判断，临时放宽新增审计字段为 warning（不阻断）。
+  - 回滚记录需写入 runbook，说明放宽窗口与恢复计划。
+- status: `done`（2026-02-26，已通过 DNA `.spec` gate 相关测试）
+
+### NGA-WS28-006 建立 P0 全链回归脚本与统一证据输出
+- type: `qa`
+- priority: `P0`
+- phase: `M13`
+- owner_role: `qa`
+- scope: 聚合 WS28-001~005 回归，形成一次命令可复验的收口链
+- inputs: `doc/task/24-ws-prompt-routing-injection-policy.md` §11；前置 WS28-001~005 产物约定
+- depends_on: `NGA-WS28-001;NGA-WS28-002;NGA-WS28-003;NGA-WS28-004;NGA-WS28-005`
+- deliverables:
+  - 脚本文件：`scripts/release_closure_prompt_routing_ws28_006.py`
+  - 测试文件：`tests/test_release_closure_prompt_routing_ws28_006.py`
+  - 报告产物：`scratch/reports/release_closure_prompt_routing_ws28_006.json`
+- acceptance:
+  - 单命令执行完成 P0 关键链路检查并输出 `passed/failed_groups`。
+  - 至少覆盖：Router 字段、Slice 组合、ACL 拦截、Analyzer 对齐、DNA gate 五组检查。
+  - 执行：`.venv/bin/python scripts/release_closure_prompt_routing_ws28_006.py`
+  - 产物文件存在且当 `passed=true` 时允许进入后续排期。
+- rollback:
+  - 若脚本链不稳定，可拆回分项脚本执行，但必须继续输出统一汇总 JSON。
+  - 不允许回退为“人工口头确认”。
+- status: `done`（2026-02-26，`scripts/release_closure_prompt_routing_ws28_006.py --strict` 通过）
+
+### 10.7.1 增量状态同步（截至 2026-02-26）
+
+以下增量任务在 P0 基线之后已完成，并已纳入回归链：
+
+1. `NGA-WS28-007` Outer/Core 三路径准入门（Path-A/B/C）  
+status: `done`；锚点：`c43b60c`；回归：`tests/test_chat_route_outer_core_ws28_007.py`
+2. `NGA-WS28-008` Path-C Contract-only 输入（ExecutionContractInput）  
+status: `done`；锚点：`c1ac6af`；回归：`tests/test_chat_core_contract_input_ws28_008.py`
+3. `NGA-WS28-009` Path-B 澄清预算与自动升级 Core  
+status: `done`；锚点：`b68349a`；回归：`tests/test_run_ws28_path_b_clarify_budget_ws28_009.py`
+4. `NGA-WS28-010` Outer/Core 会话桥接（`execution_session_id` 指向 Core 会话）  
+status: `done`；锚点：`ff30de5`；回归：`tests/test_run_ws28_outer_core_session_bridge_ws28_010.py`
+5. `NGA-WS28-011` 路由桥接可观测性（`/v1/chat/route_bridge/{session_id}` + Debug UI）  
+status: `done`；锚点：`c2c5539`、`26b94ff`；回归：`tests/test_chat_route_bridge_snapshot_ws28_011.py`
+
+### 10.8 P0 执行顺序（建议）
+
+1. 顺序链：`WS28-001 -> WS28-002 -> WS28-003 -> WS28-004 -> WS28-005 -> WS28-006`。
+2. 并行建议：
+- `WS28-004` 可在 `WS28-002` 稳定后与 `WS28-003` 并行推进（不同主文件）。
+- `WS28-005` 依赖 `WS28-003` 的 ACL 审计字段约定，建议串行。
+3. 发布门禁：
+- `WS28-006` 通过前，不应将 Prompt ACL enforcement 从 `shadow` 切换到 `block`。
+
 ---
 
 ## 11. 验收标准（讨论版）
@@ -505,9 +815,9 @@ class PromptComposeDecision:
 - 结论：设为 `L1.5_EPISODIC_MEMORY`。
 - 规则：绑定任务生命周期，不属于临时补救层 `L4`。
 
-3. Prompt 存储位置
-- 结论：`Markdown + YAML Frontmatter`。
-- 规则：便于业务编辑与热重载，不写死在 Python 常量。
+3. Prompt 存储与 DNA 语义
+- 结论：DNA 单源统一为 `.spec`，并保留当前 `.txt` 核心 prompt 兼容。
+- 规则：在未完成 registry 迁移前，不强制切换到 Frontmatter；后续专家 prompt 可逐步引入 `Markdown + YAML Frontmatter`。
 
 4. 远程环境灰度策略
 - 结论：先 `enforcement_mode=shadow`，稳定后再切 `block`。
@@ -515,6 +825,10 @@ class PromptComposeDecision:
 5. 并发控制策略
 - 结论：不设固定 hard cap。
 - 规则：按 `machine + task + time` 三因子动态决定并发；预算作为观测项。
+
+6. Prompt 可修改边界
+- 结论：当前阶段 `S2_FLEXIBLE=0`，核心 4 prompt 全部按 `S1_CONTROLLED` 执行。
+- 规则：任何核心 prompt 变更必须经过审批票据、manifest 同步、gate 通过。
 
 ---
 
