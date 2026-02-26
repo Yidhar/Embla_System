@@ -1400,7 +1400,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     try:
         from scripts.export_slo_snapshot import build_snapshot
 
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = _ops_repo_root()
         snapshot = build_snapshot(repo_root=repo_root, events_limit=max(1, int(events_limit)))
     except Exception as exc:
         logger.error(f"构建 runtime posture 聚合失败: {exc}")
@@ -1415,7 +1415,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     overall_status = str(summary.get("overall_status") or "unknown")
     severity = _ops_status_to_severity(overall_status)
 
-    repo_root = Path(__file__).resolve().parent.parent
+    repo_root = _ops_repo_root()
     ws26_runtime_report = repo_root / "scratch" / "reports" / "ws26_runtime_snapshot_ws26_002.json"
     source_reports: List[str] = []
     ws26_runtime_report_payload: Dict[str, Any] = {}
@@ -1448,6 +1448,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "disk_watermark_ratio": metrics.get("disk_watermark_ratio", {}),
             "error_rate": metrics.get("error_rate", {}),
             "latency_p95_ms": metrics.get("latency_p95_ms", {}),
+            "prompt_slice_count_by_layer": metrics.get("prompt_slice_count_by_layer", {}),
+            "outer_readonly_hit_rate": metrics.get("outer_readonly_hit_rate", {}),
+            "readonly_write_tool_exposure_rate": metrics.get("readonly_write_tool_exposure_rate", {}),
         },
         "threshold_profile": threshold_profile,
         "sources": sources,

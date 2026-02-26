@@ -6,6 +6,7 @@ Agentic Tool Loop 核心引擎
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -98,6 +99,19 @@ class ToolContractRolloutRuntime:
             "decommission_legacy_gate": bool(self.decommission_legacy_gate),
             "emit_observability_metadata": bool(self.emit_observability_metadata),
         }
+
+
+@dataclass
+class ParallelContractGateDecision:
+    """Parallel contract gate decision payload for one planning round."""
+
+    actionable_calls: List[Dict[str, Any]]
+    messages: List[str]
+    force_serial: bool = False
+    readonly_downgraded: bool = False
+    dropped_mutating_calls: int = 0
+    validation_errors: List[str] | None = None
+    reason: str = ""
 
 
 _TOOL_CONTRACT_ROLLOUT_MODES = {"legacy_only", "dual_stack", "new_stack_only"}
@@ -797,6 +811,9 @@ _RISK_DEFAULT_APPROVAL_POLICY = {
 }
 _RISK_POLICY_BLOCKLIST = {"never", "deny", "denied", "disabled", "off", "none"}
 _RISK_POLICY_STRICT_APPROVAL = {"always", "required"}
+_L15_SLICE_MARKER = "[Prompt Slice][L1.5_EPISODIC_MEMORY]"
+_L15_SLICE_UID = "l1_5_ep_reinjection"
+_CONTRACT_GATE_REASON_READONLY_DOWNGRADE = "contract_checksum_missing_parallel_write_downgraded_to_readonly"
 
 
 def _schema_error(code: str, call_id: str, detail: str) -> str:
@@ -991,20 +1008,249 @@ def _looks_like_coding_request(text: str) -> bool:
     return any(keyword in lowered for keyword in _CODING_KEYWORDS)
 
 
+def _stable_contract_checksum(payload: Dict[str, Any]) -> str:
+    normalized = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
+
+
+def _looks_like_write_intent(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    write_markers = (
+        "修改",
+        "改造",
+        "重构",
+        "实现",
+        "修复",
+        "提交",
+        "发布",
+        "部署",
+        "回滚",
+        "写入",
+        "删除",
+        "apply",
+        "patch",
+        "fix",
+        "implement",
+        "refactor",
+        "release",
+        "deploy",
+        "rollback",
+    )
+    return any(marker in lowered for marker in write_markers)
+
+
+def _should_seed_contract(latest_user_request: str) -> bool:
+    text = str(latest_user_request or "").strip()
+    if not text:
+        return False
+    return _looks_like_coding_request(text) or _looks_like_write_intent(text)
+
+
+def _build_seed_contract_state(
+    *,
+    session_id: str,
+    latest_user_request: str,
+    requires_codex: bool,
+) -> Optional[Dict[str, Any]]:
+    normalized_request = str(latest_user_request or "").strip()
+    if not _should_seed_contract(normalized_request):
+        return None
+
+    requires_write_intent = _looks_like_write_intent(normalized_request)
+    seed_contract = {
+        "session_id": str(session_id or ""),
+        "intent_summary": normalized_request[:500],
+        "requires_write_intent": bool(requires_write_intent),
+        "requires_core_escalation": bool(requires_codex or requires_write_intent),
+        "acceptance_hint": "提供可验证证据路径（例如 scratch/reports/...）",
+        "evidence_path_hint": "scratch/reports/",
+        "created_at_ms": int(time.time() * 1000),
+    }
+    seed_checksum = _stable_contract_checksum(seed_contract)
+    seed_contract_id = f"seed_{seed_checksum[:12]}"
+    return {
+        "stage": "seed",
+        "seed_contract": seed_contract,
+        "seed_contract_id": seed_contract_id,
+        "seed_contract_checksum": seed_checksum,
+        "execution_contract": {},
+        "execution_contract_id": "",
+        "execution_contract_checksum": "",
+        "contract_upgrade_latency_ms": None,
+        "upgraded_round": 0,
+    }
+
+
+def _upgrade_seed_to_execution_contract_state(
+    *,
+    contract_state: Optional[Dict[str, Any]],
+    actionable_calls: List[Dict[str, Any]],
+    round_num: int,
+    elapsed_ms: float,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(contract_state, dict):
+        return contract_state
+    if str(contract_state.get("stage") or "").strip().lower() == "execution":
+        return contract_state
+    if not actionable_calls:
+        return contract_state
+
+    mutating_call_count = 0
+    call_specs: List[Dict[str, Any]] = []
+    existing_contract_ids = set()
+    for call in actionable_calls:
+        if _is_mutating_native_call(call):
+            mutating_call_count += 1
+        cid = str(call.get("contract_id") or "").strip()
+        if cid:
+            existing_contract_ids.add(cid)
+        call_specs.append(
+            {
+                "agent_type": str(call.get("agentType") or "").strip().lower(),
+                "service_name": str(call.get("service_name") or "").strip().lower(),
+                "tool_name": str(call.get("tool_name") or "").strip().lower(),
+                "risk_level": str(call.get("_risk_level") or call.get("risk_level") or "").strip().lower(),
+                "mutating": bool(_is_mutating_native_call(call)),
+            }
+        )
+
+    if len(existing_contract_ids) == 1:
+        execution_contract_id = next(iter(existing_contract_ids))
+    else:
+        seed_checksum = str(contract_state.get("seed_contract_checksum") or "")
+        execution_contract_id = f"exec_{seed_checksum[:12] or uuid.uuid4().hex[:12]}"
+
+    execution_contract = {
+        "source_seed_contract_id": str(contract_state.get("seed_contract_id") or ""),
+        "mutating_call_count": int(mutating_call_count),
+        "total_call_count": int(len(actionable_calls)),
+        "call_specs": call_specs,
+        "requires_parallel_contract_gate": bool(mutating_call_count > 1),
+        "upgraded_round": int(round_num),
+        "upgraded_at_ms": int(time.time() * 1000),
+    }
+    execution_checksum = _stable_contract_checksum(execution_contract)
+
+    upgraded = dict(contract_state)
+    upgraded["stage"] = "execution"
+    upgraded["execution_contract"] = execution_contract
+    upgraded["execution_contract_id"] = execution_contract_id
+    upgraded["execution_contract_checksum"] = execution_checksum
+    upgraded["upgraded_round"] = int(round_num)
+    upgraded["contract_upgrade_latency_ms"] = max(0.0, float(elapsed_ms))
+    return upgraded
+
+
+def _bind_execution_contract_to_calls(
+    actionable_calls: List[Dict[str, Any]],
+    *,
+    contract_state: Optional[Dict[str, Any]],
+) -> None:
+    if not isinstance(contract_state, dict):
+        return
+    if str(contract_state.get("stage") or "").strip().lower() != "execution":
+        return
+    execution_contract_id = str(contract_state.get("execution_contract_id") or "").strip()
+    execution_checksum = str(contract_state.get("execution_contract_checksum") or "").strip()
+    if not execution_contract_id or not execution_checksum:
+        return
+
+    for call in actionable_calls:
+        call["_contract_stage"] = "execution"
+        call["_contract_id"] = execution_contract_id
+        call["_contract_checksum"] = execution_checksum
+        if _is_mutating_native_call(call):
+            call.setdefault("contract_id", execution_contract_id)
+            call.setdefault("contract_checksum", execution_checksum)
+
+
+def _build_contract_state_event_payload(
+    *,
+    contract_state: Dict[str, Any],
+    transition: str,
+    round_num: int,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "round": int(round_num),
+        "transition": str(transition or "state_update"),
+        "contract_stage": str(contract_state.get("stage") or ""),
+        "seed_contract_id": str(contract_state.get("seed_contract_id") or ""),
+        "seed_contract_checksum": str(contract_state.get("seed_contract_checksum") or ""),
+        "execution_contract_id": str(contract_state.get("execution_contract_id") or ""),
+        "execution_contract_checksum": str(contract_state.get("execution_contract_checksum") or ""),
+    }
+    latency_ms = contract_state.get("contract_upgrade_latency_ms")
+    if latency_ms is not None:
+        try:
+            payload["contract_upgrade_latency_ms"] = max(0.0, float(latency_ms))
+        except Exception:
+            pass
+    seed_contract = contract_state.get("seed_contract")
+    if isinstance(seed_contract, dict):
+        payload["requires_core_escalation"] = bool(seed_contract.get("requires_core_escalation"))
+        payload["requires_write_intent"] = bool(seed_contract.get("requires_write_intent"))
+    payload["upgraded_round"] = int(contract_state.get("upgraded_round") or 0)
+    return payload
+
+
+def _build_l1_5_prompt_slice_context(
+    *,
+    episodic_context: str,
+    contract_state: Optional[Dict[str, Any]],
+) -> str:
+    normalized_episodic = str(episodic_context or "").strip()
+    if normalized_episodic.startswith("[Episodic Memory Reinjection]"):
+        normalized_episodic = normalized_episodic.split("\n", 1)[1].strip() if "\n" in normalized_episodic else ""
+
+    lines: List[str] = [
+        _L15_SLICE_MARKER,
+        f"slice_uid: {_L15_SLICE_UID}",
+        "ttl_scope: task_lifecycle",
+    ]
+    if isinstance(contract_state, dict):
+        stage = str(contract_state.get("stage") or "")
+        lines.append(f"contract_stage: {stage}")
+        lines.append(f"seed_contract_id: {str(contract_state.get('seed_contract_id') or '')}")
+        lines.append(f"seed_contract_checksum: {str(contract_state.get('seed_contract_checksum') or '')}")
+        if stage == "execution":
+            lines.append(f"execution_contract_id: {str(contract_state.get('execution_contract_id') or '')}")
+            lines.append(
+                f"execution_contract_checksum: {str(contract_state.get('execution_contract_checksum') or '')}"
+            )
+
+    if normalized_episodic:
+        lines.append("[Episodic Memory Reinjection]")
+        lines.append(normalized_episodic)
+
+    if len(lines) <= 3 and not normalized_episodic:
+        return ""
+    lines.append("若历史经验与当前事实冲突，以当前事实为准。")
+    return "\n".join(lines)
+
+
 def _inject_ephemeral_system_context(messages: List[Dict[str, Any]], content: str) -> bool:
     text = str(content or "").strip()
     if not text:
         return False
 
-    marker = "[Episodic Memory Reinjection]"
-    for msg in messages:
-        if str(msg.get("role", "")).strip() == "system" and marker in str(msg.get("content", "")):
+    normalized = text if _L15_SLICE_MARKER in text else f"{_L15_SLICE_MARKER}\n{text}"
+
+    for index, msg in enumerate(messages):
+        if str(msg.get("role", "")).strip() != "system":
+            continue
+        if _L15_SLICE_MARKER not in str(msg.get("content", "")):
+            continue
+        if str(msg.get("content", "")).strip() == normalized:
             return False
+        messages[index] = {"role": "system", "content": normalized}
+        return True
 
     insert_at = 0
     while insert_at < len(messages) and str(messages[insert_at].get("role", "")).strip() == "system":
         insert_at += 1
-    messages.insert(insert_at, {"role": "system", "content": text})
+    messages.insert(insert_at, {"role": "system", "content": normalized})
     return True
 
 
@@ -1076,15 +1322,54 @@ def _requires_global_mutex(call: Dict[str, Any]) -> bool:
         return False
 
 
-def _apply_parallel_contract_gate(actionable_calls: List[Dict[str, Any]]) -> Tuple[List[str], bool]:
+def _apply_parallel_contract_gate(actionable_calls: List[Dict[str, Any]]) -> ParallelContractGateDecision:
     """
-    WS13-002:
+    WS13-002 + WS24x(P2):
     - Parallel mutating calls must share the same non-empty contract_id.
-    - On mismatch, downgrade this round to serial mode instead of blind parallel writes.
+    - Parallel mutating calls must carry non-empty contract_checksum.
+    - Missing checksum on parallel mutating writes downgrades this round to readonly exploration.
     """
     mutating_native_calls = [call for call in actionable_calls if _is_mutating_native_call(call)]
     if len(mutating_native_calls) <= 1:
-        return [], False
+        return ParallelContractGateDecision(
+            actionable_calls=actionable_calls,
+            messages=[],
+            validation_errors=[],
+        )
+
+    missing_checksum_calls = [
+        call
+        for call in mutating_native_calls
+        if not str(call.get("contract_checksum") or "").strip()
+    ]
+    if missing_checksum_calls:
+        passthrough_calls = [call for call in actionable_calls if not _is_mutating_native_call(call)]
+        validation_errors: List[str] = []
+        for idx, call in enumerate(missing_checksum_calls, 1):
+            call_id = str(call.get("_tool_call_id") or f"parallel_write_{idx}")
+            call["_contract_gate_blocked"] = True
+            call["_contract_gate_reason"] = _CONTRACT_GATE_REASON_READONLY_DOWNGRADE
+            validation_errors.append(
+                _schema_error(
+                    _SCHEMA_ERR_INPUT_INVALID,
+                    call_id,
+                    "并行写任务缺少 contract_checksum，已降级为只读探索；请先建立 execution contract 后重试。",
+                )
+            )
+
+        message = (
+            "Contract gate: parallel mutating calls missing contract_checksum; "
+            "downgraded to readonly exploration for this round."
+        )
+        return ParallelContractGateDecision(
+            actionable_calls=passthrough_calls,
+            messages=[message],
+            force_serial=False,
+            readonly_downgraded=True,
+            dropped_mutating_calls=len(mutating_native_calls),
+            validation_errors=validation_errors,
+            reason=_CONTRACT_GATE_REASON_READONLY_DOWNGRADE,
+        )
 
     contract_ids = {
         str(call.get("contract_id") or "").strip()
@@ -1113,7 +1398,12 @@ def _apply_parallel_contract_gate(actionable_calls: List[Dict[str, Any]]) -> Tup
         for call in mutating_native_calls:
             call["_force_serial"] = True
 
-    return gate_messages, force_serial
+    return ParallelContractGateDecision(
+        actionable_calls=actionable_calls,
+        messages=gate_messages,
+        force_serial=force_serial,
+        validation_errors=[],
+    )
 
 
 def _build_forced_codex_call(user_request: str, round_num: int) -> Dict[str, Any]:
@@ -2270,12 +2560,27 @@ async def run_agentic_loop(
     latest_user_request = _extract_latest_user_message(messages)
     requires_codex = _looks_like_coding_request(latest_user_request) or requires_codex_for_messages(messages)
     codex_engaged = False
+    loop_start_monotonic = time.monotonic()
+    contract_state = _build_seed_contract_state(
+        session_id=session_id,
+        latest_user_request=latest_user_request,
+        requires_codex=requires_codex,
+    )
 
     if requires_codex:
         logger.info("[AgenticLoop] coding request detected, enabling codex-first guard")
 
     if contract_rollout.emit_observability_metadata:
         yield _format_sse_event("contract_rollout_snapshot", {"snapshot": contract_rollout.snapshot()})
+        if isinstance(contract_state, dict):
+            yield _format_sse_event(
+                "contract_state",
+                _build_contract_state_event_payload(
+                    contract_state=contract_state,
+                    transition="seed_initialized",
+                    round_num=0,
+                ),
+            )
 
     if latest_user_request:
         try:
@@ -2284,8 +2589,12 @@ async def run_agentic_loop(
                 query=latest_user_request,
                 top_k=3,
             )
-            if episodic_context and _inject_ephemeral_system_context(messages, episodic_context):
-                logger.info("[AgenticLoop] injected episodic context for session=%s", session_id)
+            l1_5_context = _build_l1_5_prompt_slice_context(
+                episodic_context=episodic_context,
+                contract_state=contract_state,
+            )
+            if l1_5_context and _inject_ephemeral_system_context(messages, l1_5_context):
+                logger.info("[AgenticLoop] injected L1.5 prompt slice context for session=%s", session_id)
         except Exception as exc:
             logger.warning("[AgenticLoop] episodic reinjection skipped: %s", exc)
 
@@ -2500,19 +2809,69 @@ async def run_agentic_loop(
                 blocked_mutating_calls,
             )
 
-        contract_gate_messages, contract_force_serial = _apply_parallel_contract_gate(actionable_calls)
-        if contract_gate_messages:
-            for msg in contract_gate_messages:
+        contract_gate = _apply_parallel_contract_gate(actionable_calls)
+        actionable_calls = contract_gate.actionable_calls
+        if contract_gate.validation_errors:
+            validation_errors.extend(contract_gate.validation_errors)
+
+        if contract_gate.messages:
+            for msg in contract_gate.messages:
                 logger.warning("[AgenticLoop] round %s %s", round_num, msg)
-            yield _format_sse_event(
-                "guardrail",
-                {
-                    "round": round_num,
-                    "type": "contract_gate",
-                    "force_serial": contract_force_serial,
-                    "messages": contract_gate_messages,
-                },
-            )
+            guardrail_payload: Dict[str, Any] = {
+                "round": round_num,
+                "type": "contract_gate",
+                "force_serial": bool(contract_gate.force_serial),
+                "readonly_downgraded": bool(contract_gate.readonly_downgraded),
+                "dropped_mutating_calls": int(contract_gate.dropped_mutating_calls),
+                "messages": contract_gate.messages,
+            }
+            if contract_gate.reason:
+                guardrail_payload["reason"] = contract_gate.reason
+            yield _format_sse_event("guardrail", guardrail_payload)
+
+        if actionable_calls:
+            if not isinstance(contract_state, dict):
+                contract_state = _build_seed_contract_state(
+                    session_id=session_id,
+                    latest_user_request=latest_user_request,
+                    requires_codex=requires_codex,
+                )
+                if contract_rollout.emit_observability_metadata and isinstance(contract_state, dict):
+                    yield _format_sse_event(
+                        "contract_state",
+                        _build_contract_state_event_payload(
+                            contract_state=contract_state,
+                            transition="seed_initialized",
+                            round_num=round_num,
+                        ),
+                    )
+
+            if isinstance(contract_state, dict) and str(contract_state.get("stage") or "") != "execution":
+                contract_state = _upgrade_seed_to_execution_contract_state(
+                    contract_state=contract_state,
+                    actionable_calls=actionable_calls,
+                    round_num=round_num,
+                    elapsed_ms=(time.monotonic() - loop_start_monotonic) * 1000.0,
+                )
+                if isinstance(contract_state, dict):
+                    _bind_execution_contract_to_calls(actionable_calls, contract_state=contract_state)
+                    execution_l1_5 = _build_l1_5_prompt_slice_context(
+                        episodic_context="",
+                        contract_state=contract_state,
+                    )
+                    if execution_l1_5:
+                        _inject_ephemeral_system_context(messages, execution_l1_5)
+                    if contract_rollout.emit_observability_metadata:
+                        yield _format_sse_event(
+                            "contract_state",
+                            _build_contract_state_event_payload(
+                                contract_state=contract_state,
+                                transition="seed_to_execution",
+                                round_num=round_num,
+                            ),
+                        )
+            else:
+                _bind_execution_contract_to_calls(actionable_calls, contract_state=contract_state)
 
         validation_results = _build_validation_results(validation_errors)
         pending_tool_intent = False

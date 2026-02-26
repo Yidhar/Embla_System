@@ -7,6 +7,7 @@ import json
 import threading
 import time
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
@@ -22,12 +23,35 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(raw) // 4)
 
 
+_WRITE_TOOL_EXPOSURE_MARKERS = (
+    "tool_name\":\"write_file",
+    "tool_name\": \"write_file",
+    "\"write_file\"",
+    "tool_name\":\"workspace_txn_apply",
+    "tool_name\": \"workspace_txn_apply",
+    "\"workspace_txn_apply\"",
+    "tool_name\":\"run_cmd",
+    "tool_name\": \"run_cmd",
+    "\"run_cmd\"",
+    "tool_name\":\"apply_patch",
+    "tool_name\": \"apply_patch",
+    "\"apply_patch\"",
+)
+
+
 @dataclass(frozen=True)
 class GatewayRouteRequest:
     task_type: str
     severity: str = "medium"
     budget_remaining: Optional[float] = None
     path: str = "path-c"
+    prompt_profile: str = ""
+    injection_mode: str = ""
+    delegation_intent: str = ""
+    workflow_id: str = ""
+    trace_id: str = ""
+    contract_upgrade_latency_ms: Optional[float] = None
+    recovery_context_survived: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -156,6 +180,8 @@ class LLMGateway:
         block1_ttl_seconds: int = 6 * 3600,
         block2_ttl_seconds: int = 3600,
         now_fn: Optional[Any] = None,
+        event_log_file: Optional[Path] = Path("logs/autonomous/events.jsonl"),
+        event_source: str = "autonomous.llm_gateway",
     ) -> None:
         merged_map = dict(self.DEFAULT_MODEL_MAP)
         if model_map:
@@ -177,6 +203,15 @@ class LLMGateway:
             "block2_hits": 0,
             "block2_misses": 0,
         }
+        self._event_source = str(event_source or "autonomous.llm_gateway")
+        self._event_store = None
+        if event_log_file is not None:
+            try:
+                from autonomous.event_log import EventStore
+
+                self._event_store = EventStore(file_path=Path(event_log_file))
+            except Exception:
+                self._event_store = None
 
     def route(self, request: GatewayRouteRequest) -> GatewayRouteDecision:
         task_type = str(request.task_type or "").strip().lower()
@@ -385,6 +420,13 @@ class LLMGateway:
 
         cache_outcome = self.apply_prompt_cache(envelope)
         metrics = self.estimate_metrics(route=route, envelope=envelope, cache_outcome=cache_outcome)
+        self._emit_prompt_injection_event(
+            request=request,
+            prompt_input=prompt_input,
+            route=route,
+            compose_decision=compose_decision,
+            cache_outcome=cache_outcome,
+        )
         return GatewayPlan(
             route=route,
             prompt_envelope=envelope,
@@ -483,3 +525,128 @@ class LLMGateway:
         if owner in {"tool_policy", "execution", "recovery"}:
             return True
         return False
+
+    @staticmethod
+    def _normalize_path(path: str) -> str:
+        normalized_path = str(path or "").strip().lower()
+        if normalized_path in {"path_a", "outer_readonly"}:
+            return "path-a"
+        if normalized_path in {"path_c", "core_execution"}:
+            return "path-c"
+        return normalized_path or "path-c"
+
+    @staticmethod
+    def _is_write_tool_exposure_slice(slice_item: PromptSlice) -> bool:
+        layer = str(slice_item.layer or "").strip().upper()
+        owner = str(slice_item.owner or "").strip().lower()
+        if layer.startswith("L3"):
+            return True
+        if owner in {"tool_policy", "execution"}:
+            return True
+
+        text = str(slice_item.text or "").strip().lower()
+        if not text:
+            return False
+        return any(marker in text for marker in _WRITE_TOOL_EXPOSURE_MARKERS)
+
+    def _emit_prompt_injection_event(
+        self,
+        *,
+        request: GatewayRouteRequest,
+        prompt_input: PromptEnvelopeInput,
+        route: GatewayRouteDecision,
+        compose_decision: PromptComposeDecision,
+        cache_outcome: PromptCacheOutcome,
+    ) -> None:
+        if self._event_store is None:
+            return
+
+        try:
+            normalized_path = self._normalize_path(str(request.path or "path-c"))
+            selected_ids = set(compose_decision.selected_slices)
+            selected_slices = [
+                item for item in self._collect_prompt_slices(prompt_input) if str(item.slice_uid) in selected_ids
+            ]
+            selected_layer_counts: Dict[str, int] = {}
+            selected_layers: List[str] = []
+            recovery_hit = False
+            readonly_write_tool_selected_ids: List[str] = []
+            readonly_write_tool_dropped_ids: List[str] = []
+            for item in selected_slices:
+                layer = str(item.layer or "L_UNKNOWN")
+                selected_layer_counts[layer] = selected_layer_counts.get(layer, 0) + 1
+                if layer not in selected_layers:
+                    selected_layers.append(layer)
+                if layer.strip().upper().startswith("L4"):
+                    recovery_hit = True
+                if self._is_write_tool_exposure_slice(item):
+                    readonly_write_tool_selected_ids.append(str(item.slice_uid))
+
+            selected_slice_ids = {str(item.slice_uid) for item in selected_slices}
+            all_slices = self._collect_prompt_slices(prompt_input)
+            for item in all_slices:
+                if not self._is_write_tool_exposure_slice(item):
+                    continue
+                slice_uid = str(item.slice_uid)
+                if slice_uid in selected_slice_ids:
+                    continue
+                readonly_write_tool_dropped_ids.append(slice_uid)
+
+            delegation_intent = str(request.delegation_intent or "").strip().lower()
+            delegation_hit = delegation_intent.startswith("delegate")
+            outer_readonly_hit = normalized_path == "path-a"
+            core_escalation = normalized_path == "path-c"
+            readonly_write_tool_exposed = outer_readonly_hit and bool(readonly_write_tool_selected_ids)
+            readonly_write_tool_candidate_count = len(readonly_write_tool_selected_ids) + len(readonly_write_tool_dropped_ids)
+
+            payload: Dict[str, Any] = {
+                "task_type": str(request.task_type or ""),
+                "severity": str(request.severity or ""),
+                "path": normalized_path,
+                "trigger": normalized_path,
+                "prompt_profile": str(request.prompt_profile or ""),
+                "injection_mode": str(request.injection_mode or ""),
+                "delegation_intent": delegation_intent,
+                "delegation_hit": delegation_hit,
+                "outer_readonly_hit": outer_readonly_hit,
+                "core_escalation": core_escalation,
+                "readonly_write_tool_exposed": readonly_write_tool_exposed,
+                "readonly_write_tool_candidate_count": readonly_write_tool_candidate_count,
+                "readonly_write_tool_selected_count": len(readonly_write_tool_selected_ids),
+                "readonly_write_tool_dropped_count": len(readonly_write_tool_dropped_ids),
+                "readonly_write_tool_selected_slices": readonly_write_tool_selected_ids,
+                "readonly_write_tool_dropped_slices": readonly_write_tool_dropped_ids,
+                "selected_slices": list(compose_decision.selected_slices),
+                "dropped_slices": list(compose_decision.dropped_slices),
+                "selected_slice_count": len(compose_decision.selected_slices),
+                "dropped_slice_count": len(compose_decision.dropped_slices),
+                "dropped_conflict_count": len(compose_decision.dropped_slices),
+                "selected_layers": selected_layers,
+                "selected_layer_counts": selected_layer_counts,
+                "recovery_hit": recovery_hit,
+                "prefix_hash": str(compose_decision.prefix_hash or ""),
+                "tail_hash": str(compose_decision.tail_hash or ""),
+                "prefix_cache_hit": bool(cache_outcome.block1_hit and cache_outcome.block2_hit),
+                "block1_cache_hit": bool(cache_outcome.block1_hit),
+                "block2_cache_hit": bool(cache_outcome.block2_hit),
+                "token_budget_before": int(compose_decision.token_budget_before),
+                "token_budget_after": int(compose_decision.token_budget_after),
+                "model_tier": str(route.model_tier or ""),
+                "model_id": str(route.model_id or ""),
+            }
+            if request.workflow_id:
+                payload["workflow_id"] = str(request.workflow_id)
+            if request.trace_id:
+                payload["trace_id"] = str(request.trace_id)
+            if request.contract_upgrade_latency_ms is not None:
+                payload["contract_upgrade_latency_ms"] = float(request.contract_upgrade_latency_ms)
+            if request.recovery_context_survived is not None:
+                payload["recovery_context_survived"] = bool(request.recovery_context_survived)
+
+            self._event_store.emit(
+                "PromptInjectionComposed",
+                payload,
+                source=self._event_source,
+            )
+        except Exception:
+            return

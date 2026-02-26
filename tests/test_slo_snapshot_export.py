@@ -126,6 +126,59 @@ def test_build_snapshot_schema_and_values() -> None:
                 "event_type": "LeaseLost",
                 "payload": {"fencing_epoch": 1},
             },
+            {
+                "timestamp": (now_dt + timedelta(seconds=10)).isoformat(),
+                "event_type": "PromptInjectionComposed",
+                "payload": {
+                    "path": "path-a",
+                    "trigger": "path-a",
+                    "selected_slice_count": 2,
+                    "dropped_slice_count": 2,
+                    "dropped_conflict_count": 2,
+                    "selected_layer_counts": {
+                        "L0_DNA": 1,
+                        "L1_TASK_BASE": 1,
+                    },
+                    "delegation_intent": "read_only_exploration",
+                    "delegation_hit": False,
+                    "outer_readonly_hit": True,
+                    "core_escalation": False,
+                    "readonly_write_tool_exposed": False,
+                    "readonly_write_tool_selected_count": 0,
+                    "readonly_write_tool_dropped_count": 1,
+                    "prefix_cache_hit": False,
+                    "tail_hash": "tail-a",
+                    "recovery_hit": False,
+                },
+            },
+            {
+                "timestamp": (now_dt + timedelta(seconds=11)).isoformat(),
+                "event_type": "PromptInjectionComposed",
+                "payload": {
+                    "path": "path-c",
+                    "trigger": "path-c",
+                    "selected_slice_count": 3,
+                    "dropped_slice_count": 0,
+                    "dropped_conflict_count": 0,
+                    "selected_layer_counts": {
+                        "L0_DNA": 1,
+                        "L3_TOOL_POLICY": 1,
+                        "L4_RECOVERY": 1,
+                    },
+                    "delegation_intent": "delegate_core_execution",
+                    "delegation_hit": True,
+                    "outer_readonly_hit": False,
+                    "core_escalation": True,
+                    "readonly_write_tool_exposed": False,
+                    "readonly_write_tool_selected_count": 1,
+                    "readonly_write_tool_dropped_count": 0,
+                    "prefix_cache_hit": True,
+                    "tail_hash": "tail-b",
+                    "recovery_hit": True,
+                    "contract_upgrade_latency_ms": 120.0,
+                    "recovery_context_survived": True,
+                },
+            },
         ]
         _write_jsonl(repo_root / "logs" / "autonomous" / "events.jsonl", events)
 
@@ -177,6 +230,18 @@ def test_build_snapshot_schema_and_values() -> None:
             "runtime_rollout",
             "runtime_fail_open",
             "runtime_lease",
+            "prompt_slice_count_by_layer",
+            "injection_trigger_distribution",
+            "recovery_slice_hit_rate",
+            "prompt_conflict_drop_count",
+            "delegation_hit_rate",
+            "outer_readonly_hit_rate",
+            "readonly_write_tool_exposure_rate",
+            "core_escalation_rate",
+            "prompt_prefix_cache_hit_rate",
+            "prompt_tail_churn_rate",
+            "contract_upgrade_latency_ms",
+            "recovery_context_survival_rate",
         }
 
         assert metrics["error_rate"]["source"] == "cli_execution_events"
@@ -210,6 +275,25 @@ def test_build_snapshot_schema_and_values() -> None:
         assert metrics["runtime_lease"]["lease_lost_count"] == 1
         assert metrics["runtime_lease"]["owner_id"] == "owner-a"
         assert metrics["runtime_lease"]["state"] == "near_expiry"
+
+        assert metrics["prompt_slice_count_by_layer"]["value"] == pytest.approx(2.5)
+        assert metrics["prompt_slice_count_by_layer"]["selected_layer_counts"]["L0_DNA"] == 2
+        assert metrics["prompt_slice_count_by_layer"]["selected_layer_counts"]["L4_RECOVERY"] == 1
+        assert metrics["injection_trigger_distribution"]["trigger_counts"]["path-a"] == 1
+        assert metrics["injection_trigger_distribution"]["trigger_counts"]["path-c"] == 1
+        assert metrics["recovery_slice_hit_rate"]["value"] == pytest.approx(0.5)
+        assert metrics["prompt_conflict_drop_count"]["value"] == pytest.approx(2.0)
+        assert metrics["delegation_hit_rate"]["value"] == pytest.approx(0.5)
+        assert metrics["outer_readonly_hit_rate"]["value"] == pytest.approx(0.5)
+        assert metrics["readonly_write_tool_exposure_rate"]["value"] == pytest.approx(0.0)
+        assert metrics["readonly_write_tool_exposure_rate"]["sample_count"] == 1
+        assert metrics["readonly_write_tool_exposure_rate"]["exposure_count"] == 0
+        assert metrics["readonly_write_tool_exposure_rate"]["status"] == "ok"
+        assert metrics["core_escalation_rate"]["value"] == pytest.approx(0.5)
+        assert metrics["prompt_prefix_cache_hit_rate"]["value"] == pytest.approx(0.5)
+        assert metrics["prompt_tail_churn_rate"]["value"] == pytest.approx(1.0)
+        assert metrics["contract_upgrade_latency_ms"]["value"] == pytest.approx(120.0)
+        assert metrics["recovery_context_survival_rate"]["value"] == pytest.approx(1.0)
 
         assert snapshot["summary"]["overall_status"] == "critical"
 

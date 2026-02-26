@@ -116,3 +116,67 @@ def test_ops_incidents_latest_payload_merges_events_and_report_issues(tmp_path, 
     assert any(item["event_type"] == "EvidenceGateIssue" for item in incidents)
     assert any(path.endswith("events.jsonl") for path in payload["source_reports"])
 
+
+def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    ws26_report = repo_root / "scratch" / "reports" / "ws26_runtime_snapshot_ws26_002.json"
+    _write_json(
+        ws26_report,
+        {
+            "scenario": "runtime_rollout_fail_open_lease_unified_snapshot",
+            "passed": True,
+        },
+    )
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {
+                "overall_status": "warning",
+                "metric_status": {
+                    "readonly_write_tool_exposure_rate": "warning",
+                },
+            },
+            "metrics": {
+                "runtime_rollout": {"value": 0.5, "status": "ok"},
+                "runtime_fail_open": {"value": 0.1, "status": "ok"},
+                "runtime_lease": {"value": 3.0, "status": "warning", "state": "near_expiry"},
+                "queue_depth": {"value": 2, "status": "warning"},
+                "lock_status": {"state": "near_expiry", "status": "warning"},
+                "disk_watermark_ratio": {"value": 0.2, "status": "ok"},
+                "error_rate": {"value": 0.02, "status": "ok"},
+                "latency_p95_ms": {"value": 260.0, "status": "warning"},
+                "prompt_slice_count_by_layer": {"value": 2.1, "status": "ok"},
+                "outer_readonly_hit_rate": {"value": 0.4, "status": "ok"},
+                "readonly_write_tool_exposure_rate": {
+                    "value": 0.03,
+                    "sample_count": 20,
+                    "exposure_count": 1,
+                    "status": "warning",
+                },
+            },
+            "threshold_profile": {"max_error_rate": 0.2},
+            "sources": {
+                "events_file": "logs/autonomous/events.jsonl",
+                "workflow_db": "logs/autonomous/workflow.db",
+                "global_mutex_state": "logs/runtime/global_mutex_lease.json",
+                "autonomous_config": "autonomous/config/autonomous_config.yaml",
+            },
+        }
+
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+
+    payload = api_server._ops_build_runtime_posture_payload(events_limit=200)
+    assert payload["status"] == "success"
+    assert payload["severity"] == "warning"
+
+    metrics = payload["data"]["metrics"]
+    assert metrics["prompt_slice_count_by_layer"]["value"] == 2.1
+    assert metrics["outer_readonly_hit_rate"]["value"] == 0.4
+    assert metrics["readonly_write_tool_exposure_rate"]["value"] == 0.03
+    assert metrics["readonly_write_tool_exposure_rate"]["sample_count"] == 20
+    assert metrics["readonly_write_tool_exposure_rate"]["status"] == "warning"
+
+    assert any(path.endswith("ws26_runtime_snapshot_ws26_002.json") for path in payload["source_reports"])

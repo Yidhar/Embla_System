@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import yaml
 
+from autonomous.event_log.event_schema import normalize_event_envelope
 from system.artifact_store import ArtifactStore, ArtifactStoreConfig
 
 
@@ -113,7 +114,12 @@ def _read_events(events_file: Path, *, limit: int) -> List[Dict[str, Any]]:
         except json.JSONDecodeError:
             continue
         if isinstance(row, dict):
-            records.append(row)
+            envelope = normalize_event_envelope(
+                row,
+                fallback_event_type=str(row.get("event_type") or ""),
+                fallback_timestamp=str(row.get("timestamp") or ""),
+            )
+            records.append({**envelope, "payload": dict(envelope.get("data") or {})})
     return records
 
 
@@ -705,6 +711,347 @@ def _collect_runtime_lease(
     }
 
 
+def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    decisions: List[Dict[str, Any]] = []
+    for row in events:
+        if str(row.get("event_type") or "") != "PromptInjectionComposed":
+            continue
+        payload = row.get("payload")
+        if isinstance(payload, dict):
+            decisions.append(payload)
+
+    total = len(decisions)
+    layer_counts: Dict[str, int] = {}
+    trigger_counts: Dict[str, int] = {}
+    selected_slice_total = 0
+    recovery_hit_count = 0
+    conflict_drop_count = 0
+    delegation_hit_count = 0
+    outer_readonly_hit_count = 0
+    readonly_exposure_sample_count = 0
+    readonly_write_tool_exposure_count = 0
+    readonly_write_tool_exposed_slice_count = 0
+    core_escalation_count = 0
+    prefix_cache_hit_count = 0
+    tail_hashes: List[str] = []
+    contract_upgrade_latencies_ms: List[float] = []
+    recovery_survival_total = 0
+    recovery_survival_count = 0
+
+    for payload in decisions:
+        selected_layer_counts = payload.get("selected_layer_counts")
+        if isinstance(selected_layer_counts, dict) and selected_layer_counts:
+            for layer, raw_count in selected_layer_counts.items():
+                layer_key = str(layer or "L_UNKNOWN")
+                layer_counts[layer_key] = layer_counts.get(layer_key, 0) + max(0, _to_int(raw_count, 0))
+        else:
+            selected_layers = payload.get("selected_layers")
+            if isinstance(selected_layers, list):
+                for layer in selected_layers:
+                    layer_key = str(layer or "L_UNKNOWN")
+                    layer_counts[layer_key] = layer_counts.get(layer_key, 0) + 1
+
+        selected_slice_count = _to_int(payload.get("selected_slice_count"), -1)
+        if selected_slice_count < 0:
+            selected_slices = payload.get("selected_slices")
+            if isinstance(selected_slices, list):
+                selected_slice_count = len(selected_slices)
+            else:
+                selected_slice_count = 0
+        selected_slice_total += max(0, selected_slice_count)
+
+        trigger = str(payload.get("trigger") or payload.get("path") or "unknown")
+        trigger_counts[trigger] = trigger_counts.get(trigger, 0) + 1
+
+        if bool(payload.get("recovery_hit")):
+            recovery_hit_count += 1
+
+        dropped_conflict_count = _to_int(payload.get("dropped_conflict_count"), -1)
+        if dropped_conflict_count < 0:
+            dropped_conflict_count = _to_int(payload.get("dropped_slice_count"), -1)
+        if dropped_conflict_count < 0:
+            dropped_slices = payload.get("dropped_slices")
+            if isinstance(dropped_slices, list):
+                dropped_conflict_count = len(dropped_slices)
+            else:
+                dropped_conflict_count = 0
+        conflict_drop_count += max(0, dropped_conflict_count)
+
+        delegation_hit = payload.get("delegation_hit")
+        if isinstance(delegation_hit, bool):
+            if delegation_hit:
+                delegation_hit_count += 1
+        else:
+            delegation_intent = str(payload.get("delegation_intent") or "").strip().lower()
+            if delegation_intent.startswith("delegate"):
+                delegation_hit_count += 1
+
+        if bool(payload.get("outer_readonly_hit")):
+            outer_readonly_hit_count += 1
+            readonly_exposure_sample_count += 1
+            readonly_selected_count = _to_int(payload.get("readonly_write_tool_selected_count"), -1)
+            if readonly_selected_count < 0:
+                selected_exposed = payload.get("readonly_write_tool_selected_slices")
+                if isinstance(selected_exposed, list):
+                    readonly_selected_count = len(selected_exposed)
+                else:
+                    readonly_selected_count = 0
+            readonly_exposed = bool(payload.get("readonly_write_tool_exposed")) or readonly_selected_count > 0
+            if readonly_exposed:
+                readonly_write_tool_exposure_count += 1
+                readonly_write_tool_exposed_slice_count += max(0, readonly_selected_count)
+        if bool(payload.get("core_escalation")):
+            core_escalation_count += 1
+
+        prefix_cache_hit = payload.get("prefix_cache_hit")
+        if isinstance(prefix_cache_hit, bool):
+            if prefix_cache_hit:
+                prefix_cache_hit_count += 1
+        else:
+            block1_hit = bool(payload.get("block1_cache_hit"))
+            block2_hit = bool(payload.get("block2_cache_hit"))
+            if block1_hit and block2_hit:
+                prefix_cache_hit_count += 1
+
+        tail_hash = str(payload.get("tail_hash") or "").strip()
+        if tail_hash:
+            tail_hashes.append(tail_hash)
+
+        latency_ms = _to_float(payload.get("contract_upgrade_latency_ms"))
+        if latency_ms is not None and latency_ms >= 0:
+            contract_upgrade_latencies_ms.append(latency_ms)
+
+        if "recovery_context_survived" in payload:
+            recovery_survival_total += 1
+            if bool(payload.get("recovery_context_survived")):
+                recovery_survival_count += 1
+
+    average_selected_slice_count = (selected_slice_total / total) if total > 0 else None
+    trigger_distribution = {
+        trigger: (count / total) for trigger, count in trigger_counts.items()
+    } if total > 0 else {}
+    recovery_slice_hit_rate = (recovery_hit_count / total) if total > 0 else None
+    delegation_hit_rate = (delegation_hit_count / total) if total > 0 else None
+    outer_readonly_hit_rate = (outer_readonly_hit_count / total) if total > 0 else None
+    readonly_write_tool_exposure_rate = (
+        readonly_write_tool_exposure_count / readonly_exposure_sample_count
+    ) if readonly_exposure_sample_count > 0 else None
+    core_escalation_rate = (core_escalation_count / total) if total > 0 else None
+    prefix_cache_hit_rate = (prefix_cache_hit_count / total) if total > 0 else None
+
+    tail_churn_rate: Optional[float] = None
+    if len(tail_hashes) > 1:
+        changed_count = 0
+        previous = tail_hashes[0]
+        for current in tail_hashes[1:]:
+            if current != previous:
+                changed_count += 1
+            previous = current
+        tail_churn_rate = changed_count / float(len(tail_hashes) - 1)
+
+    contract_upgrade_latency_p95_ms = _percentile(contract_upgrade_latencies_ms, 95)
+    recovery_context_survival_rate = (
+        (recovery_survival_count / recovery_survival_total) if recovery_survival_total > 0 else None
+    )
+
+    prompt_slice_status = "ok" if total > 0 else "unknown"
+    trigger_status = "ok" if total > 0 else "unknown"
+    recovery_slice_status = _classify_numeric(
+        recovery_slice_hit_rate,
+        warning=0.2,
+        critical=0.05,
+        higher_is_bad=False,
+    )
+    if total <= 0:
+        recovery_slice_status = "unknown"
+    conflict_drop_status = _classify_numeric(
+        float(conflict_drop_count) if total > 0 else None,
+        warning=max(1.0, float(total) * 0.3),
+        critical=max(3.0, float(total) * 0.6),
+        higher_is_bad=True,
+    )
+    if total <= 0:
+        conflict_drop_status = "unknown"
+    delegation_status = "ok" if total > 0 else "unknown"
+    outer_readonly_status = "ok" if total > 0 else "unknown"
+    readonly_write_tool_exposure_status = _classify_numeric(
+        readonly_write_tool_exposure_rate,
+        warning=0.01,
+        critical=0.05,
+        higher_is_bad=True,
+    )
+    if readonly_exposure_sample_count <= 0:
+        readonly_write_tool_exposure_status = "unknown"
+    core_escalation_status = _classify_numeric(
+        core_escalation_rate,
+        warning=0.8,
+        critical=0.95,
+        higher_is_bad=True,
+    )
+    if total <= 0:
+        core_escalation_status = "unknown"
+    prefix_cache_status = _classify_numeric(
+        prefix_cache_hit_rate,
+        warning=0.8,
+        critical=0.6,
+        higher_is_bad=False,
+    )
+    if total <= 0:
+        prefix_cache_status = "unknown"
+    tail_churn_status = _classify_numeric(
+        tail_churn_rate,
+        warning=0.4,
+        critical=0.6,
+        higher_is_bad=True,
+    )
+    if total <= 1:
+        tail_churn_status = "unknown"
+    contract_upgrade_latency_status = _classify_numeric(
+        contract_upgrade_latency_p95_ms,
+        warning=2_000.0,
+        critical=5_000.0,
+        higher_is_bad=True,
+    )
+    recovery_survival_status = _classify_numeric(
+        recovery_context_survival_rate,
+        warning=0.8,
+        critical=0.6,
+        higher_is_bad=False,
+    )
+    if recovery_survival_total <= 0:
+        recovery_survival_status = "unknown"
+
+    return {
+        "prompt_slice_count_by_layer": {
+            "value": average_selected_slice_count,
+            "unit": "avg_selected_slice_count",
+            "sample_count": total,
+            "selected_layer_counts": layer_counts,
+            "source": "prompt_injection_events",
+            "status": prompt_slice_status,
+        },
+        "injection_trigger_distribution": {
+            "value": float(total),
+            "unit": "count",
+            "sample_count": total,
+            "trigger_counts": trigger_counts,
+            "trigger_distribution": trigger_distribution,
+            "source": "prompt_injection_events",
+            "status": trigger_status,
+        },
+        "recovery_slice_hit_rate": {
+            "value": recovery_slice_hit_rate,
+            "unit": "ratio",
+            "sample_count": total,
+            "hit_count": recovery_hit_count,
+            "source": "prompt_injection_events",
+            "thresholds": {
+                "warning": 0.2,
+                "critical": 0.05,
+            },
+            "status": recovery_slice_status,
+        },
+        "prompt_conflict_drop_count": {
+            "value": float(conflict_drop_count) if total > 0 else None,
+            "unit": "count",
+            "sample_count": total,
+            "source": "prompt_injection_events",
+            "thresholds": {
+                "warning": max(1.0, float(total) * 0.3),
+                "critical": max(3.0, float(total) * 0.6),
+            },
+            "status": conflict_drop_status,
+        },
+        "delegation_hit_rate": {
+            "value": delegation_hit_rate,
+            "unit": "ratio",
+            "sample_count": total,
+            "hit_count": delegation_hit_count,
+            "source": "prompt_injection_events",
+            "status": delegation_status,
+        },
+        "outer_readonly_hit_rate": {
+            "value": outer_readonly_hit_rate,
+            "unit": "ratio",
+            "sample_count": total,
+            "hit_count": outer_readonly_hit_count,
+            "source": "prompt_injection_events",
+            "status": outer_readonly_status,
+        },
+        "readonly_write_tool_exposure_rate": {
+            "value": readonly_write_tool_exposure_rate,
+            "unit": "ratio",
+            "sample_count": readonly_exposure_sample_count,
+            "exposure_count": readonly_write_tool_exposure_count,
+            "exposed_slice_count": readonly_write_tool_exposed_slice_count,
+            "source": "prompt_injection_events",
+            "thresholds": {
+                "warning": 0.01,
+                "critical": 0.05,
+            },
+            "status": readonly_write_tool_exposure_status,
+        },
+        "core_escalation_rate": {
+            "value": core_escalation_rate,
+            "unit": "ratio",
+            "sample_count": total,
+            "hit_count": core_escalation_count,
+            "source": "prompt_injection_events",
+            "thresholds": {
+                "warning": 0.8,
+                "critical": 0.95,
+            },
+            "status": core_escalation_status,
+        },
+        "prompt_prefix_cache_hit_rate": {
+            "value": prefix_cache_hit_rate,
+            "unit": "ratio",
+            "sample_count": total,
+            "hit_count": prefix_cache_hit_count,
+            "source": "prompt_injection_events",
+            "thresholds": {
+                "warning": 0.8,
+                "critical": 0.6,
+            },
+            "status": prefix_cache_status,
+        },
+        "prompt_tail_churn_rate": {
+            "value": tail_churn_rate,
+            "unit": "ratio",
+            "sample_count": len(tail_hashes),
+            "source": "prompt_injection_events",
+            "thresholds": {
+                "warning": 0.4,
+                "critical": 0.6,
+            },
+            "status": tail_churn_status,
+        },
+        "contract_upgrade_latency_ms": {
+            "value": contract_upgrade_latency_p95_ms,
+            "unit": "p95_ms",
+            "sample_count": len(contract_upgrade_latencies_ms),
+            "source": "prompt_injection_events",
+            "thresholds": {
+                "warning": 2_000.0,
+                "critical": 5_000.0,
+            },
+            "status": contract_upgrade_latency_status,
+        },
+        "recovery_context_survival_rate": {
+            "value": recovery_context_survival_rate,
+            "unit": "ratio",
+            "sample_count": recovery_survival_total,
+            "survived_count": recovery_survival_count,
+            "source": "prompt_injection_events",
+            "thresholds": {
+                "warning": 0.8,
+                "critical": 0.6,
+            },
+            "status": recovery_survival_status,
+        },
+    }
+
+
 def _load_threshold_config(config_file: Path) -> Dict[str, Any]:
     defaults = {
         "max_error_rate": 0.02,
@@ -800,6 +1147,7 @@ def build_snapshot(
         lease_name=str(thresholds["lease_name"]),
         lease_ttl_hint_seconds=float(thresholds["lease_ttl_seconds"]),
     )
+    metrics.update(_collect_prompt_injection_quality(events))
 
     snapshot = {
         "schema_version": "1.0.0",
