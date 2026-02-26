@@ -75,6 +75,9 @@
 8. `scratch/reports/ws27_subagent_cutover_status_ws27_002.json`
 9. `scratch/reports/ws27_subagent_cutover_rollback_snapshot_ws27_002.json`
 10. `scratch/reports/ws27_oob_repair_drill_ws27_003.json`
+11. `scratch/reports/ws28_execution_governance_gate_ws28_021.json`
+12. `scratch/reports/ws28_execution_governance_runtime_posture_ws28_021.json`
+13. `scratch/reports/ws28_execution_governance_incidents_ws28_021.json`
 
 ## 5. 判定标准
 
@@ -85,6 +88,7 @@
   - `m12_endurance`
   - `m12_cutover`
   - `m12_oob_repair`
+  - `m12_execution_governance`
 - `m12_brainstem_control_plane` 检查项必须通过：
   - `start_passed=true`
   - `status_passed=true`
@@ -99,6 +103,12 @@
   - `rollout_percent_is_full=true`
   - `runtime_snapshot_ready=true`
   - `rollback_snapshot_exists=true`
+- `m12_execution_governance` 检查项必须通过：
+  - `runtime_governance_status_not_critical=true`
+  - `incidents_governance_status_not_critical=true`
+  - `critical_governance_issue_count_zero=true`
+  - `governance_warning_ratio_within_budget=true`
+  - `governance_rejection_ratio_within_budget=true`
 
 ## 6. 风险与说明
 

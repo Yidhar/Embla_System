@@ -92,6 +92,22 @@ def test_full_chain_m0_m12_runs_all_groups_when_green(monkeypatch) -> None:
             "run_ws27_oob_repair_drill_ws27_003",
             lambda **kwargs: {"passed": True, "checks": {"snapshot_recovery_path": True}},
         )
+        monkeypatch.setattr(
+            full_chain,
+            "_run_m12_execution_governance_gate_step",
+            lambda **kwargs: {
+                "passed": True,
+                "checks": {
+                    "runtime_posture_payload_success": True,
+                    "incidents_payload_success": True,
+                    "runtime_governance_status_not_critical": True,
+                    "incidents_governance_status_not_critical": True,
+                    "critical_governance_issue_count_zero": True,
+                    "governance_warning_ratio_within_budget": True,
+                    "governance_rejection_ratio_within_budget": True,
+                },
+            },
+        )
 
         output = repo_root / "scratch" / "reports" / "release_closure_chain_full_m0_m12_result.json"
         report = full_chain.run_release_closure_chain_full_m0_m12(
@@ -106,6 +122,7 @@ def test_full_chain_m0_m12_runs_all_groups_when_green(monkeypatch) -> None:
         assert "m12_endurance" in report["group_results"]
         assert "m12_cutover" in report["group_results"]
         assert "m12_oob_repair" in report["group_results"]
+        assert "m12_execution_governance" in report["group_results"]
         brainstem = report["group_results"]["m12_brainstem_control_plane"]
         assert brainstem["action_sequence"] == ["start", "status"]
         assert brainstem["checks"]["state_file_consistent"] is True
@@ -164,6 +181,22 @@ def test_full_chain_m0_m12_stops_after_cutover_failure_by_default(monkeypatch) -
             return {"passed": True}
 
         monkeypatch.setattr(full_chain, "run_ws27_oob_repair_drill_ws27_003", _oob_stub)
+        monkeypatch.setattr(
+            full_chain,
+            "_run_m12_execution_governance_gate_step",
+            lambda **kwargs: {
+                "passed": True,
+                "checks": {
+                    "runtime_posture_payload_success": True,
+                    "incidents_payload_success": True,
+                    "runtime_governance_status_not_critical": True,
+                    "incidents_governance_status_not_critical": True,
+                    "critical_governance_issue_count_zero": True,
+                    "governance_warning_ratio_within_budget": True,
+                    "governance_rejection_ratio_within_budget": True,
+                },
+            },
+        )
 
         report = full_chain.run_release_closure_chain_full_m0_m12(
             repo_root=repo_root,
@@ -231,6 +264,22 @@ def test_full_chain_m0_m12_quick_mode_forwards_flags(monkeypatch) -> None:
             else {"passed": True},
         )
         monkeypatch.setattr(full_chain, "run_ws27_oob_repair_drill_ws27_003", lambda **kwargs: {"passed": True})
+        monkeypatch.setattr(
+            full_chain,
+            "_run_m12_execution_governance_gate_step",
+            lambda **kwargs: {
+                "passed": True,
+                "checks": {
+                    "runtime_posture_payload_success": True,
+                    "incidents_payload_success": True,
+                    "runtime_governance_status_not_critical": True,
+                    "incidents_governance_status_not_critical": True,
+                    "critical_governance_issue_count_zero": True,
+                    "governance_warning_ratio_within_budget": True,
+                    "governance_rejection_ratio_within_budget": True,
+                },
+            },
+        )
 
         report = full_chain.run_release_closure_chain_full_m0_m12(
             repo_root=repo_root,
@@ -283,6 +332,22 @@ def test_full_chain_m0_m12_stops_when_brainstem_control_plane_step_fails(monkeyp
         monkeypatch.setattr(full_chain, "run_ws27_72h_endurance_baseline", _endurance_stub)
         monkeypatch.setattr(full_chain, "run_ws27_subagent_cutover_ws27_002", lambda **kwargs: {"passed": True})
         monkeypatch.setattr(full_chain, "run_ws27_oob_repair_drill_ws27_003", lambda **kwargs: {"passed": True})
+        monkeypatch.setattr(
+            full_chain,
+            "_run_m12_execution_governance_gate_step",
+            lambda **kwargs: {
+                "passed": True,
+                "checks": {
+                    "runtime_posture_payload_success": True,
+                    "incidents_payload_success": True,
+                    "runtime_governance_status_not_critical": True,
+                    "incidents_governance_status_not_critical": True,
+                    "critical_governance_issue_count_zero": True,
+                    "governance_warning_ratio_within_budget": True,
+                    "governance_rejection_ratio_within_budget": True,
+                },
+            },
+        )
 
         report = full_chain.run_release_closure_chain_full_m0_m12(
             repo_root=repo_root,
@@ -295,5 +360,76 @@ def test_full_chain_m0_m12_stops_when_brainstem_control_plane_step_fails(monkeyp
         assert "m12_brainstem_control_plane" in report["group_results"]
         assert "m12_endurance" not in report["group_results"]
         assert endurance_called["value"] is False
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_full_chain_m0_m12_stops_when_execution_governance_gate_fails(monkeypatch) -> None:
+    case_root = _make_case_root("test_release_closure_chain_full_m0_m12")
+    try:
+        repo_root = case_root / "repo"
+        runtime_snapshot = repo_root / "scratch" / "reports" / "ws26_runtime_snapshot_ws26_002.json"
+        _write_runtime_snapshot(runtime_snapshot)
+
+        monkeypatch.setattr(full_chain, "run_release_closure_chain_full_m0_m7", lambda **kwargs: {"passed": True})
+        monkeypatch.setattr(full_chain, "run_ws27_72h_endurance_baseline", lambda **kwargs: {"passed": True, "checks": {}})
+        monkeypatch.setattr(
+            full_chain,
+            "run_manage_brainstem_control_plane_ws28_017",
+            lambda **kwargs: {
+                "passed": True,
+                "checks": {
+                    "spawned": True,
+                    "heartbeat_gate": True,
+                    "launcher_pid_alive": True,
+                    "manager_state_exists": True,
+                },
+                "heartbeat": {"checks": {"heartbeat_exists": True}},
+                "state_file": "scratch/runtime/brainstem_control_plane_manager_ws28_017_state.json",
+                "heartbeat_file": "scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json",
+            },
+        )
+        monkeypatch.setattr(
+            full_chain,
+            "run_ws27_subagent_cutover_ws27_002",
+            lambda **kwargs: {
+                "passed": True,
+                "checks": {
+                    "subagent_runtime_enabled": True,
+                    "rollout_percent_is_full": True,
+                    "runtime_snapshot_ready": True,
+                    "rollback_snapshot_exists": True,
+                },
+            }
+            if str(kwargs.get("action") or "") == "status"
+            else {"passed": True},
+        )
+        monkeypatch.setattr(full_chain, "run_ws27_oob_repair_drill_ws27_003", lambda **kwargs: {"passed": True})
+        monkeypatch.setattr(
+            full_chain,
+            "_run_m12_execution_governance_gate_step",
+            lambda **kwargs: {
+                "passed": False,
+                "checks": {
+                    "runtime_posture_payload_success": True,
+                    "incidents_payload_success": True,
+                    "runtime_governance_status_not_critical": False,
+                    "incidents_governance_status_not_critical": False,
+                    "critical_governance_issue_count_zero": False,
+                    "governance_warning_ratio_within_budget": False,
+                    "governance_rejection_ratio_within_budget": False,
+                },
+            },
+        )
+
+        report = full_chain.run_release_closure_chain_full_m0_m12(
+            repo_root=repo_root,
+            output_file=Path("scratch/reports/full_m0_m12_governance_fail.json"),
+            ws26_runtime_snapshot_report=runtime_snapshot,
+            continue_on_failure=False,
+        )
+        assert report["passed"] is False
+        assert report["failed_groups"] == ["m12_execution_governance"]
+        assert "m12_execution_governance" in report["group_results"]
     finally:
         _cleanup_case_root(case_root)

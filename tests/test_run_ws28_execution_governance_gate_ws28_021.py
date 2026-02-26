@@ -1,0 +1,151 @@
+from __future__ import annotations
+
+import json
+import shutil
+import uuid
+from pathlib import Path
+
+import scripts.run_ws28_execution_governance_gate_ws28_021 as ws28_gate
+
+
+def _make_case_root(prefix: str) -> Path:
+    root = Path("scratch") / prefix / uuid.uuid4().hex[:12]
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _cleanup_case_root(root: Path) -> None:
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def _read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_run_ws28_execution_governance_gate_passes_when_within_budget(monkeypatch) -> None:
+    case_root = _make_case_root("test_run_ws28_execution_governance_gate_ws28_021")
+    try:
+        repo_root = case_root / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+
+        import apiserver.api_server as api_server
+
+        monkeypatch.setattr(
+            api_server,
+            "_ops_build_runtime_posture_payload",
+            lambda events_limit=5000: {
+                "status": "success",
+                "data": {
+                    "summary": {"execution_bridge_governance_status": "warning"},
+                    "execution_bridge_governance": {
+                        "status": "warning",
+                        "reason_codes": ["ROLE_EXECUTOR_GUARD_WARNING"],
+                        "governed_warning_ratio": 0.2,
+                        "rejection_ratio": 0.1,
+                    },
+                },
+            },
+        )
+        monkeypatch.setattr(
+            api_server,
+            "_ops_build_incidents_latest_payload",
+            lambda limit=50: {
+                "status": "success",
+                "data": {
+                    "summary": {
+                        "execution_bridge_governance": {
+                            "status": "warning",
+                            "governed_critical_count": 0,
+                        }
+                    }
+                },
+            },
+        )
+
+        output_file = repo_root / "scratch" / "reports" / "ws28_gate.json"
+        runtime_output = repo_root / "scratch" / "reports" / "runtime_posture.json"
+        incidents_output = repo_root / "scratch" / "reports" / "incidents.json"
+        report = ws28_gate.run_ws28_execution_governance_gate_ws28_021(
+            repo_root=repo_root,
+            output_file=output_file.relative_to(repo_root),
+            runtime_posture_output=runtime_output.relative_to(repo_root),
+            incidents_output=incidents_output.relative_to(repo_root),
+            max_warning_ratio=0.3,
+            max_rejection_ratio=0.2,
+        )
+
+        assert report["passed"] is True
+        assert report["checks"]["runtime_posture_payload_success"] is True
+        assert report["checks"]["incidents_payload_success"] is True
+        assert report["checks"]["runtime_governance_status_not_critical"] is True
+        assert report["checks"]["critical_governance_issue_count_zero"] is True
+        assert output_file.exists() is True
+        assert runtime_output.exists() is True
+        assert incidents_output.exists() is True
+
+        persisted = _read_json(output_file)
+        assert persisted["passed"] is True
+        assert persisted["governance"]["warning_ratio"] == 0.2
+        assert persisted["governance"]["rejection_ratio"] == 0.1
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_run_ws28_execution_governance_gate_fails_when_critical_present(monkeypatch) -> None:
+    case_root = _make_case_root("test_run_ws28_execution_governance_gate_ws28_021")
+    try:
+        repo_root = case_root / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+
+        import apiserver.api_server as api_server
+
+        monkeypatch.setattr(
+            api_server,
+            "_ops_build_runtime_posture_payload",
+            lambda events_limit=5000: {
+                "status": "success",
+                "data": {
+                    "summary": {"execution_bridge_governance_status": "critical"},
+                    "execution_bridge_governance": {
+                        "status": "critical",
+                        "reason_codes": ["SEMANTIC_TOOLCHAIN_VIOLATION"],
+                        "governed_warning_ratio": 0.7,
+                        "rejection_ratio": 0.5,
+                    },
+                },
+            },
+        )
+        monkeypatch.setattr(
+            api_server,
+            "_ops_build_incidents_latest_payload",
+            lambda limit=50: {
+                "status": "success",
+                "data": {
+                    "summary": {
+                        "execution_bridge_governance": {
+                            "status": "critical",
+                            "governed_critical_count": 2,
+                        }
+                    }
+                },
+            },
+        )
+
+        report = ws28_gate.run_ws28_execution_governance_gate_ws28_021(
+            repo_root=repo_root,
+            output_file=Path("scratch/reports/ws28_gate_fail.json"),
+            runtime_posture_output=Path("scratch/reports/runtime_posture_fail.json"),
+            incidents_output=Path("scratch/reports/incidents_fail.json"),
+            max_warning_ratio=0.3,
+            max_rejection_ratio=0.2,
+        )
+
+        assert report["passed"] is False
+        failed_checks = set(report["failed_checks"])
+        assert "runtime_governance_status_not_critical" in failed_checks
+        assert "incidents_governance_status_not_critical" in failed_checks
+        assert "critical_governance_issue_count_zero" in failed_checks
+        assert "governance_warning_ratio_within_budget" in failed_checks
+        assert "governance_rejection_ratio_within_budget" in failed_checks
+    finally:
+        _cleanup_case_root(case_root)

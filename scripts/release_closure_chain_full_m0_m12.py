@@ -16,6 +16,7 @@ from scripts.export_ws26_runtime_snapshot_ws26_002 import _build_ws26_report
 from scripts.manage_brainstem_control_plane_ws28_017 import run_manage_brainstem_control_plane_ws28_017
 from scripts.manage_ws27_subagent_cutover_ws27_002 import run_ws27_subagent_cutover_ws27_002
 from scripts.release_closure_chain_full_m0_m7 import run_release_closure_chain_full_m0_m7
+from scripts.run_ws28_execution_governance_gate_ws28_021 import run_ws28_execution_governance_gate_ws28_021
 from scripts.run_ws27_oob_repair_drill_ws27_003 import run_ws27_oob_repair_drill_ws27_003
 
 
@@ -38,6 +39,13 @@ DEFAULT_WS27_OOB_OUTPUT = Path("scratch/reports/ws27_oob_repair_drill_ws27_003.j
 DEFAULT_WS27_OOB_SCRATCH = Path("scratch/ws27_oob_repair_drill")
 DEFAULT_WS28_BRAINSTEM_START_OUTPUT = Path("scratch/reports/ws28_brainstem_control_plane_start_ws28_017.json")
 DEFAULT_WS28_BRAINSTEM_STATUS_OUTPUT = Path("scratch/reports/ws28_brainstem_control_plane_status_ws28_017.json")
+DEFAULT_WS28_EXECUTION_GOVERNANCE_GATE_OUTPUT = Path("scratch/reports/ws28_execution_governance_gate_ws28_021.json")
+DEFAULT_WS28_EXECUTION_GOVERNANCE_RUNTIME_POSTURE_OUTPUT = Path(
+    "scratch/reports/ws28_execution_governance_runtime_posture_ws28_021.json"
+)
+DEFAULT_WS28_EXECUTION_GOVERNANCE_INCIDENTS_OUTPUT = Path(
+    "scratch/reports/ws28_execution_governance_incidents_ws28_021.json"
+)
 DEFAULT_AUTONOMOUS_CONFIG = Path("autonomous/config/autonomous_config.yaml")
 
 
@@ -344,6 +352,63 @@ def _run_m12_oob_step(
         }
 
 
+def _run_m12_execution_governance_gate_step(
+    *,
+    repo_root: Path,
+    gate_output: Path,
+    runtime_posture_output: Path,
+    incidents_output: Path,
+    quick_mode: bool,
+) -> Dict[str, Any]:
+    started = time.time()
+    try:
+        max_warning_ratio = 0.35 if quick_mode else 0.30
+        max_rejection_ratio = 0.25 if quick_mode else 0.20
+        gate_report = run_ws28_execution_governance_gate_ws28_021(
+            repo_root=repo_root,
+            output_file=gate_output,
+            runtime_posture_output=runtime_posture_output,
+            incidents_output=incidents_output,
+            events_limit=2000 if quick_mode else 5000,
+            incidents_limit=30 if quick_mode else 50,
+            max_warning_ratio=max_warning_ratio,
+            max_rejection_ratio=max_rejection_ratio,
+        )
+        checks = gate_report.get("checks") if isinstance(gate_report.get("checks"), dict) else {}
+        governance = gate_report.get("governance") if isinstance(gate_report.get("governance"), dict) else {}
+        return {
+            "step_id": "M12-T4",
+            "name": "ws28_021_execution_governance_gate",
+            "passed": bool(gate_report.get("passed")),
+            "checks": checks,
+            "governance": governance,
+            "thresholds": {
+                "max_warning_ratio": max_warning_ratio,
+                "max_rejection_ratio": max_rejection_ratio,
+            },
+            "outputs": {
+                "gate_output": _to_unix_path(gate_output),
+                "runtime_posture_output": _to_unix_path(runtime_posture_output),
+                "incidents_output": _to_unix_path(incidents_output),
+            },
+            "duration_seconds": round(time.time() - started, 4),
+        }
+    except Exception as exc:  # pragma: no cover - defensive wrapper
+        return {
+            "step_id": "M12-T4",
+            "name": "ws28_021_execution_governance_gate",
+            "passed": False,
+            "checks": {"completed_without_exception": False},
+            "outputs": {
+                "gate_output": _to_unix_path(gate_output),
+                "runtime_posture_output": _to_unix_path(runtime_posture_output),
+                "incidents_output": _to_unix_path(incidents_output),
+            },
+            "duration_seconds": round(time.time() - started, 4),
+            "error": f"{type(exc).__name__}:{exc}",
+        }
+
+
 def _write_report(*, repo_root: Path, output_file: Path, report: Dict[str, Any]) -> None:
     output = _resolve_path(repo_root, output_file)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -372,6 +437,9 @@ def run_release_closure_chain_full_m0_m12(
     ws27_oob_scratch_root: Path = DEFAULT_WS27_OOB_SCRATCH,
     ws28_brainstem_start_output: Path = DEFAULT_WS28_BRAINSTEM_START_OUTPUT,
     ws28_brainstem_status_output: Path = DEFAULT_WS28_BRAINSTEM_STATUS_OUTPUT,
+    ws28_execution_governance_gate_output: Path = DEFAULT_WS28_EXECUTION_GOVERNANCE_GATE_OUTPUT,
+    ws28_execution_governance_runtime_posture_output: Path = DEFAULT_WS28_EXECUTION_GOVERNANCE_RUNTIME_POSTURE_OUTPUT,
+    ws28_execution_governance_incidents_output: Path = DEFAULT_WS28_EXECUTION_GOVERNANCE_INCIDENTS_OUTPUT,
     config_path: Path = DEFAULT_AUTONOMOUS_CONFIG,
     rollback_window_minutes: int = 180,
     skip_m0_m11: bool = False,
@@ -386,6 +454,7 @@ def run_release_closure_chain_full_m0_m12(
     skip_m12_endurance: bool = False,
     skip_m12_cutover: bool = False,
     skip_m12_oob: bool = False,
+    skip_m12_governance: bool = False,
     quick_mode: bool = False,
     continue_on_failure: bool = False,
     timeout_seconds: int = 2400,
@@ -445,6 +514,9 @@ def run_release_closure_chain_full_m0_m12(
         oob_scratch_root = _resolve_path(root, ws27_oob_scratch_root)
         brainstem_start_output = _resolve_path(root, ws28_brainstem_start_output)
         brainstem_status_output = _resolve_path(root, ws28_brainstem_status_output)
+        governance_gate_output = _resolve_path(root, ws28_execution_governance_gate_output)
+        governance_runtime_posture_output = _resolve_path(root, ws28_execution_governance_runtime_posture_output)
+        governance_incidents_output = _resolve_path(root, ws28_execution_governance_incidents_output)
 
         if not skip_m12_brainstem:
             brainstem_report = _run_m12_brainstem_control_plane_step(
@@ -532,6 +604,31 @@ def run_release_closure_chain_full_m0_m12(
             group_results["m12_oob_repair"] = oob_report
             if not bool(oob_report.get("passed")):
                 failed_groups.append("m12_oob_repair")
+
+        if not skip_m12_governance:
+            governance_report = _run_m12_execution_governance_gate_step(
+                repo_root=root,
+                gate_output=governance_gate_output,
+                runtime_posture_output=governance_runtime_posture_output,
+                incidents_output=governance_incidents_output,
+                quick_mode=bool(quick_mode),
+            )
+            group_results["m12_execution_governance"] = governance_report
+            if not bool(governance_report.get("passed")):
+                failed_groups.append("m12_execution_governance")
+                if not continue_on_failure:
+                    report = {
+                        "scenario": "release_closure_chain_full_m0_m12",
+                        "generated_at": _utc_iso_now(),
+                        "repo_root": _to_unix_path(root),
+                        "elapsed_seconds": round(time.time() - started_at, 4),
+                        "target_scope": "M0-M12",
+                        "passed": False,
+                        "failed_groups": failed_groups,
+                        "group_results": group_results,
+                    }
+                    _write_report(repo_root=root, output_file=output_file, report=report)
+                    return report
 
     report = {
         "scenario": "release_closure_chain_full_m0_m12",
@@ -630,6 +727,24 @@ def parse_args() -> argparse.Namespace:
         help="WS28-017 brainstem manage status output JSON report path",
     )
     parser.add_argument(
+        "--ws28-021-governance-output",
+        type=Path,
+        default=DEFAULT_WS28_EXECUTION_GOVERNANCE_GATE_OUTPUT,
+        help="WS28-021 execution governance gate output JSON report path",
+    )
+    parser.add_argument(
+        "--ws28-021-runtime-posture-output",
+        type=Path,
+        default=DEFAULT_WS28_EXECUTION_GOVERNANCE_RUNTIME_POSTURE_OUTPUT,
+        help="WS28-021 runtime posture snapshot output JSON report path",
+    )
+    parser.add_argument(
+        "--ws28-021-incidents-output",
+        type=Path,
+        default=DEFAULT_WS28_EXECUTION_GOVERNANCE_INCIDENTS_OUTPUT,
+        help="WS28-021 incidents snapshot output JSON report path",
+    )
+    parser.add_argument(
         "--config",
         type=Path,
         default=DEFAULT_AUTONOMOUS_CONFIG,
@@ -653,6 +768,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-m12-endurance", action="store_true", help="Skip WS27-001 endurance step")
     parser.add_argument("--skip-m12-cutover", action="store_true", help="Skip WS27-002 cutover step")
     parser.add_argument("--skip-m12-oob", action="store_true", help="Skip WS27-003 OOB drill step")
+    parser.add_argument("--skip-m12-governance", action="store_true", help="Skip WS28-021 execution governance gate step")
     parser.add_argument("--quick-mode", action="store_true", help="Run lightweight mode for M0-M12 chain")
     parser.add_argument("--continue-on-failure", action="store_true", help="Continue after group failure")
     parser.add_argument("--timeout-seconds", type=int, default=2400, help="Per-group timeout passed to M0-M11 chain")
@@ -682,6 +798,9 @@ def main() -> int:
         ws27_oob_scratch_root=args.ws27_003_scratch_root,
         ws28_brainstem_start_output=args.ws28_017_start_output,
         ws28_brainstem_status_output=args.ws28_017_status_output,
+        ws28_execution_governance_gate_output=args.ws28_021_governance_output,
+        ws28_execution_governance_runtime_posture_output=args.ws28_021_runtime_posture_output,
+        ws28_execution_governance_incidents_output=args.ws28_021_incidents_output,
         config_path=args.config,
         rollback_window_minutes=max(15, int(args.rollback_window_minutes)),
         skip_m0_m11=bool(args.skip_m0_m11),
@@ -696,6 +815,7 @@ def main() -> int:
         skip_m12_endurance=bool(args.skip_m12_endurance),
         skip_m12_cutover=bool(args.skip_m12_cutover),
         skip_m12_oob=bool(args.skip_m12_oob),
+        skip_m12_governance=bool(args.skip_m12_governance),
         quick_mode=bool(args.quick_mode),
         continue_on_failure=bool(args.continue_on_failure),
         timeout_seconds=max(30, int(args.timeout_seconds)),
