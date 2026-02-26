@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -11,6 +12,10 @@ from typing import Any, Dict, List, Sequence
 from autonomous.scaffold_engine import ScaffoldPatch
 from autonomous.tools.subagent_runtime import RuntimeSubTaskResult, RuntimeSubTaskSpec
 from autonomous.types import OptimizationTask
+
+
+DEFAULT_ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC = Path("policy/role_executor_semantic_guard.spec")
+ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC_SCHEMA = "ws28-role-executor-semantic-guard-v1"
 
 
 def _utc_now_iso() -> str:
@@ -477,7 +482,13 @@ class OpsRoleExecutor(RoleSpecializedExecutor):
 class NativeExecutionBridge:
     """Patch-intent execution bridge with deterministic audit receipts."""
 
-    def __init__(self, *, project_root: str | Path, mode: str = "native_patch_intent_v1") -> None:
+    def __init__(
+        self,
+        *,
+        project_root: str | Path,
+        mode: str = "native_patch_intent_v1",
+        semantic_guard_spec: str | Path | None = None,
+    ) -> None:
         self.project_root = Path(project_root).resolve()
         self.mode = str(mode or "native_patch_intent_v1").strip() or "native_patch_intent_v1"
         self.role_executors: List[RoleSpecializedExecutor] = [
@@ -491,6 +502,8 @@ class NativeExecutionBridge:
             allowed_path_prefixes=(),
             default_semantic_toolchains=(),
         )
+        self.semantic_guard_spec_path = self._resolve_semantic_guard_spec_path(semantic_guard_spec)
+        self.semantic_guard_spec = self._load_semantic_guard_spec()
 
     def execute_subtask(self, *, task: OptimizationTask, subtask: RuntimeSubTaskSpec) -> RuntimeSubTaskResult:
         metadata = subtask.metadata if isinstance(subtask.metadata, dict) else {}
@@ -652,6 +665,13 @@ class NativeExecutionBridge:
 
         merged: Dict[str, Any] = {}
         source = "default"
+        spec_policy = self._resolve_policy_from_semantic_guard_spec(
+            role=subtask.role,
+            executor=executor,
+        )
+        if spec_policy:
+            merged.update(spec_policy)
+            source = f"policy.role_executor_semantic_guard.spec:{self.semantic_guard_spec_path.name}"
         for candidate, label in (
             (task_meta.get("execution_bridge_policy"), "task.execution_bridge_policy"),
             (task_meta.get("role_executor_policy"), "task.role_executor_policy"),
@@ -700,6 +720,84 @@ class NativeExecutionBridge:
             allowed_semantic_toolchains=semantic_toolchains,
             policy_source=source,
         )
+
+    def _resolve_semantic_guard_spec_path(self, semantic_guard_spec: str | Path | None) -> Path:
+        candidate = Path(semantic_guard_spec) if semantic_guard_spec is not None else DEFAULT_ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC
+        return candidate if candidate.is_absolute() else self.project_root / candidate
+
+    def _load_semantic_guard_spec(self) -> Dict[str, Any]:
+        path = self.semantic_guard_spec_path
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        schema_version = str(payload.get("schema_version") or "").strip()
+        if schema_version and schema_version != ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC_SCHEMA:
+            return {}
+        return payload
+
+    def _resolve_policy_from_semantic_guard_spec(
+        self,
+        *,
+        role: str,
+        executor: RoleSpecializedExecutor,
+    ) -> Dict[str, Any]:
+        spec = self.semantic_guard_spec
+        if not isinstance(spec, dict) or not spec:
+            return {}
+
+        role_name = RoleSpecializedExecutor._normalize_role(role)
+        resolved: Dict[str, Any] = {}
+
+        defaults = spec.get("defaults")
+        if isinstance(defaults, dict):
+            strict_default = defaults.get("strict_semantic_guard")
+            if isinstance(strict_default, bool):
+                resolved["strict_semantic_guard"] = strict_default
+            strict_path_default = defaults.get("strict_role_paths")
+            if isinstance(strict_path_default, bool):
+                resolved["strict_role_paths"] = strict_path_default
+            default_toolchains = defaults.get("allowed_semantic_toolchains")
+            if isinstance(default_toolchains, list):
+                normalized = RoleSpecializedExecutor._normalize_semantic_toolchains([str(item) for item in default_toolchains])
+                if normalized:
+                    resolved["allowed_semantic_toolchains"] = normalized
+            default_prefixes = defaults.get("allowed_path_prefixes")
+            if isinstance(default_prefixes, list):
+                normalized_prefixes = RoleSpecializedExecutor._normalize_prefixes([str(item) for item in default_prefixes])
+                if normalized_prefixes:
+                    resolved["allowed_path_prefixes"] = normalized_prefixes
+
+        roles = spec.get("roles")
+        if isinstance(roles, dict):
+            for key, value in roles.items():
+                if not isinstance(value, dict):
+                    continue
+                normalized_key = RoleSpecializedExecutor._normalize_role(str(key))
+                if normalized_key not in {role_name, executor.name}:
+                    continue
+                strict = value.get("strict_semantic_guard")
+                if isinstance(strict, bool):
+                    resolved["strict_semantic_guard"] = strict
+                strict_paths = value.get("strict_role_paths")
+                if isinstance(strict_paths, bool):
+                    resolved["strict_role_paths"] = strict_paths
+                toolchains = value.get("allowed_semantic_toolchains")
+                if isinstance(toolchains, list):
+                    normalized = RoleSpecializedExecutor._normalize_semantic_toolchains([str(item) for item in toolchains])
+                    if normalized:
+                        resolved["allowed_semantic_toolchains"] = normalized
+                prefixes = value.get("allowed_path_prefixes")
+                if isinstance(prefixes, list):
+                    normalized_prefixes = RoleSpecializedExecutor._normalize_prefixes([str(item) for item in prefixes])
+                    if normalized_prefixes:
+                        resolved["allowed_path_prefixes"] = normalized_prefixes
+
+        return resolved
 
     @staticmethod
     def _extract_role_executor_policy_from_contract_schema(

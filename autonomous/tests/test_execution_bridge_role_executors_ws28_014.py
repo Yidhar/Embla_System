@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from autonomous.scaffold_engine import ScaffoldPatch
 from autonomous.tools.execution_bridge import NativeExecutionBridge
 from autonomous.tools.subagent_runtime import RuntimeSubTaskSpec
@@ -172,3 +174,66 @@ def test_backend_role_executor_strict_semantic_toolchain_blocks_ops_patch() -> N
     violations = governance.get("violations")
     assert isinstance(violations, list)
     assert any(str(item).endswith("::test_frontend") for item in violations)
+
+
+def test_execution_bridge_uses_semantic_guard_spec_as_default_policy_source(tmp_path) -> None:
+    spec_path = tmp_path / "policy" / "role_executor_semantic_guard.spec"
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
+    spec_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "ws28-role-executor-semantic-guard-v1",
+                "roles": {
+                    "backend": {
+                        "strict_semantic_guard": True,
+                        "allowed_semantic_toolchains": ["backend"],
+                    }
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    bridge = NativeExecutionBridge(project_root=tmp_path)
+    subtask = RuntimeSubTaskSpec(
+        subtask_id="be-spec-1",
+        role="backend",
+        instruction="backend role with spec-driven semantic guard",
+        patches=[ScaffoldPatch(path="doc/task/readme.md", content="# touched by backend")],
+    )
+
+    result = bridge.execute_subtask(task=_task("task-role-be-spec"), subtask=subtask)
+
+    assert result.success is False
+    assert result.error == "execution_bridge_semantic_toolchain_violation:backend"
+    receipt = result.metadata.get("execution_bridge_receipt")
+    assert isinstance(receipt, dict)
+    role_policy = receipt.get("role_policy")
+    assert isinstance(role_policy, dict)
+    assert role_policy.get("strict_semantic_guard") is True
+    assert role_policy.get("policy_source") == "policy.role_executor_semantic_guard.spec:role_executor_semantic_guard.spec"
+
+
+def test_execution_bridge_invalid_semantic_guard_spec_falls_back_to_default_policy(tmp_path) -> None:
+    spec_path = tmp_path / "policy" / "role_executor_semantic_guard.spec"
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
+    spec_path.write_text("{not-json}", encoding="utf-8")
+
+    bridge = NativeExecutionBridge(project_root=tmp_path)
+    subtask = RuntimeSubTaskSpec(
+        subtask_id="be-spec-2",
+        role="backend",
+        instruction="backend role fallback on invalid spec",
+        patches=[ScaffoldPatch(path="autonomous/system_agent.py", content="# backend update")],
+    )
+
+    result = bridge.execute_subtask(task=_task("task-role-be-spec-invalid"), subtask=subtask)
+
+    assert result.success is True
+    receipt = result.metadata.get("execution_bridge_receipt")
+    assert isinstance(receipt, dict)
+    role_policy = receipt.get("role_policy")
+    assert isinstance(role_policy, dict)
+    assert role_policy.get("policy_source") == "default"
