@@ -20,6 +20,7 @@ def test_system_agent_config_from_source_defaults():
     assert cfg.subagent_runtime.rollout_percent == 100
     assert cfg.subagent_runtime.enforce_scaffold_txn_for_write is True
     assert cfg.subagent_runtime.allow_legacy_fail_open_for_write is False
+    assert cfg.subagent_runtime.disable_legacy_cli_fallback is False
 
 
 def test_system_agent_config_from_dict():
@@ -79,6 +80,7 @@ def test_system_agent_config_from_dict():
             "fail_open_budget_ratio": 0.45,
             "enforce_scaffold_txn_for_write": False,
             "allow_legacy_fail_open_for_write": True,
+            "disable_legacy_cli_fallback": True,
             "require_contract_negotiation": False,
             "require_scaffold_patch": False,
             "fail_fast_on_subtask_error": False,
@@ -103,4 +105,5 @@ def test_system_agent_config_from_dict():
     assert cfg.subagent_runtime.fail_open_budget_ratio == 0.45
     assert cfg.subagent_runtime.enforce_scaffold_txn_for_write is False
     assert cfg.subagent_runtime.allow_legacy_fail_open_for_write is True
+    assert cfg.subagent_runtime.disable_legacy_cli_fallback is True
     assert cfg.subagent_runtime.require_contract_negotiation is False

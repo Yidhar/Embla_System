@@ -51,6 +51,7 @@ autonomous:
     fail_open: false
     enforce_scaffold_txn_for_write: true
     allow_legacy_fail_open_for_write: false
+    disable_legacy_cli_fallback: true
     fail_open_budget_ratio: 0.15
     require_contract_negotiation: true
     require_scaffold_patch: true

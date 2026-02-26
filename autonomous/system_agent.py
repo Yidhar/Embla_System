@@ -21,6 +21,7 @@ from autonomous.release import CanaryThresholds, ReleaseController
 from autonomous.sensor import Sensor
 from autonomous.state import WorkflowStore
 from autonomous.tools.codex_mcp_adapter import CodexMcpVerifier
+from autonomous.tools.execution_bridge import NativeExecutionBridge
 from autonomous.tools.subagent_runtime import (
     RuntimeSubTaskResult,
     RuntimeSubTaskSpec,
@@ -169,6 +170,7 @@ class SystemAgentConfig:
             fail_open_budget_ratio=max(0.0, min(1.0, float(pick(subagent_runtime, "fail_open_budget_ratio", 0.15)))),
             enforce_scaffold_txn_for_write=bool(pick(subagent_runtime, "enforce_scaffold_txn_for_write", True)),
             allow_legacy_fail_open_for_write=bool(pick(subagent_runtime, "allow_legacy_fail_open_for_write", False)),
+            disable_legacy_cli_fallback=bool(pick(subagent_runtime, "disable_legacy_cli_fallback", False)),
             require_contract_negotiation=bool(pick(subagent_runtime, "require_contract_negotiation", True)),
             require_scaffold_patch=bool(pick(subagent_runtime, "require_scaffold_patch", True)),
             fail_fast_on_subtask_error=bool(pick(subagent_runtime, "fail_fast_on_subtask_error", True)),
@@ -280,6 +282,7 @@ class SystemAgent:
             project_root=self.repo_dir,
             config=self.config.subagent_runtime,
         )
+        self.execution_bridge = NativeExecutionBridge(project_root=self.repo_dir)
         self.watchdog_daemon: WatchdogDaemon | None = None
         if self.config.watchdog.enabled:
             self.watchdog_daemon = WatchdogDaemon(
@@ -723,6 +726,43 @@ class SystemAgent:
             )
 
         if runtime_result.fail_open_recommended and self.config.subagent_runtime.fail_open:
+            if bool(self.config.subagent_runtime.disable_legacy_cli_fallback):
+                reasons = list(runtime_result.reasons)
+                blocked_reason = "execution_bridge:legacy_cli_layer_disabled"
+                if blocked_reason not in reasons:
+                    reasons.append(blocked_reason)
+                self._emit(
+                    "SubAgentRuntimeFailOpenBlocked",
+                    {
+                        "workflow_id": workflow_id,
+                        "task_id": task.task_id,
+                        "attempt": attempt,
+                        "runtime_id": runtime_result.runtime_id,
+                        "gate_failure": runtime_result.gate_failure,
+                        "reasons": reasons,
+                    },
+                    workflow_id=workflow_id,
+                    fencing_epoch=fencing_epoch,
+                )
+                self._emit(
+                    "ReleaseGateRejected",
+                    {
+                        "workflow_id": workflow_id,
+                        "task_id": task.task_id,
+                        "gate": "execution_bridge",
+                        "attempt": attempt,
+                        "runtime_mode": "subagent",
+                        "decision_reason": "legacy_cli_layer_disabled",
+                        "reasons": reasons,
+                    },
+                    workflow_id=workflow_id,
+                    fencing_epoch=fencing_epoch,
+                )
+                return TaskAttemptOutcome(
+                    approved=False,
+                    reasons=reasons,
+                    subagent_runtime_result=runtime_result,
+                )
             if self._task_requires_scaffold_txn(task=task) and not bool(
                 self.config.subagent_runtime.allow_legacy_fail_open_for_write
             ):
@@ -810,33 +850,7 @@ class SystemAgent:
         task: OptimizationTask,
         subtask: RuntimeSubTaskSpec,
     ) -> RuntimeSubTaskResult:
-        metadata = subtask.metadata if isinstance(subtask.metadata, dict) else {}
-        if bool(metadata.get("force_error")):
-            return RuntimeSubTaskResult(
-                subtask_id=subtask.subtask_id,
-                role=subtask.role,
-                success=False,
-                error=str(metadata.get("error") or "forced_subtask_error"),
-            )
-
-        if subtask.patches:
-            return RuntimeSubTaskResult(
-                subtask_id=subtask.subtask_id,
-                role=subtask.role,
-                success=True,
-                patches=list(subtask.patches),
-                summary=f"patch_intents={len(subtask.patches)}",
-                metadata={"source": "task.metadata.subtasks"},
-            )
-
-        # Bridge mode is patch-intent first. No intent means runtime cannot safely commit.
-        return RuntimeSubTaskResult(
-            subtask_id=subtask.subtask_id,
-            role=subtask.role,
-            success=False,
-            error="missing_patch_intent_for_scaffold_runtime",
-            metadata={"task_id": task.task_id},
-        )
+        return self.execution_bridge.execute_subtask(task=task, subtask=subtask)
 
     def _record_subagent_gate_failure(
         self,
@@ -1019,6 +1033,14 @@ class SystemAgent:
     def _resolve_runtime_mode(self, *, task: OptimizationTask) -> tuple[str, Dict[str, Any]]:
         metadata = task.metadata if isinstance(task.metadata, dict) else {}
         enforce_write_path = self._task_requires_scaffold_txn(task=task)
+        rollout_percent = max(0, min(100, int(self.config.subagent_runtime.rollout_percent)))
+        if bool(self.config.subagent_runtime.disable_legacy_cli_fallback):
+            return "subagent", {
+                "reason": "legacy_cli_layer_disabled",
+                "rollout_percent": rollout_percent,
+                "write_path_enforced": enforce_write_path,
+                "subagent_enabled": bool(self.config.subagent_runtime.enabled),
+            }
         if bool(self._subagent_fail_open_budget.get("degraded_to_legacy")) and not enforce_write_path:
             return "legacy", {
                 "reason": "fail_open_budget_exhausted_auto_degrade",
@@ -1051,7 +1073,6 @@ class SystemAgent:
             reason = "write_path_subagent_disabled" if enforce_write_path else "subagent_disabled"
             return "legacy", {"reason": reason, "rollout_percent": 0, "write_path_enforced": enforce_write_path}
 
-        rollout_percent = max(0, min(100, int(self.config.subagent_runtime.rollout_percent)))
         if enforce_write_path:
             return "subagent", {
                 "reason": "write_path_enforced",

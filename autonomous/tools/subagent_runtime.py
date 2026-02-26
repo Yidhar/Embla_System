@@ -24,6 +24,7 @@ class SubAgentRuntimeConfig:
     fail_open_budget_ratio: float = 0.15
     enforce_scaffold_txn_for_write: bool = True
     allow_legacy_fail_open_for_write: bool = False
+    disable_legacy_cli_fallback: bool = False
     require_contract_negotiation: bool = True
     require_scaffold_patch: bool = True
     fail_fast_on_subtask_error: bool = True
@@ -264,10 +265,27 @@ class SubAgentRuntime:
                 result.subtask_id = subtask.subtask_id
                 result.role = subtask.role
 
+                bridge_receipt = (
+                    result.metadata.get("execution_bridge_receipt")
+                    if isinstance(result.metadata, dict)
+                    else None
+                )
+                if isinstance(bridge_receipt, dict):
+                    self._emit(
+                        emit_event,
+                        "SubTaskExecutionBridgeReceipt",
+                        runtime_id=runtime_id,
+                        workflow_id=workflow_id,
+                        task_id=task.task_id,
+                        trace_id=trace_id,
+                        session_id=session_id,
+                        subtask_id=subtask.subtask_id,
+                        role=subtask.role,
+                        bridge_receipt=dict(bridge_receipt),
+                    )
+
                 subtask_results.append(result)
-                self._emit(
-                    emit_event,
-                    "SubTaskCliExecutionCompleted",
+                completion_payload = dict(
                     runtime_id=runtime_id,
                     workflow_id=workflow_id,
                     task_id=task.task_id,
@@ -278,6 +296,17 @@ class SubAgentRuntime:
                     success=result.success,
                     duration_seconds=round(result.duration_seconds, 4),
                     patch_count=len(result.patches),
+                )
+                self._emit(
+                    emit_event,
+                    "SubTaskExecutionCompleted",
+                    **completion_payload,
+                )
+                self._emit(
+                    emit_event,
+                    "SubTaskCliExecutionCompleted",
+                    alias_of="SubTaskExecutionCompleted",
+                    **completion_payload,
                 )
 
                 if result.success:
