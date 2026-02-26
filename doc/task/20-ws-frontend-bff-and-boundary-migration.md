@@ -17,7 +17,7 @@
 - deliverables: API versioning + deprecation policy
 - acceptance: 新旧接口兼容窗口明确
 - rollback: 旧版本路由保留
-- status: todo
+- status: done
 
 ### NGA-WS20-002 SSE 事件协议统一
 - type: feature
@@ -30,7 +30,7 @@
 - deliverables: `tool_calls/tool_results/round_*` 事件字段统一
 - acceptance: 前端消费无需多分支适配
 - rollback: SSE 兼容适配器
-- status: todo
+- status: done
 
 ### NGA-WS20-003 前端模块按域解耦
 - type: refactor
@@ -43,7 +43,7 @@
 - deliverables: chat/tools/settings/ops 模块边界拆分
 - acceptance: 模块依赖关系清晰且可独立测试
 - rollback: 分支级回退
-- status: todo
+- status: done
 
 ### NGA-WS20-004 MCP 状态展示与真实后端对齐
 - type: migration
@@ -56,7 +56,7 @@
 - deliverables: UI 状态来源切换到真实状态接口
 - acceptance: UI 与后台状态一致率达标
 - rollback: 回切占位展示
-- status: todo
+- status: done
 
 ### NGA-WS20-005 前后端联调回归套件
 - type: qa
@@ -69,7 +69,7 @@
 - deliverables: 合同测试 + SSE 回归 + 错误场景回归
 - acceptance: 核心链路回归全通过
 - rollback: 发布前锁定版本
-- status: todo
+- status: done
 
 ### NGA-WS20-006 桌面端发布兼容性验证
 - type: qa
@@ -82,4 +82,4 @@
 - deliverables: 不同配置与网络场景兼容报告
 - acceptance: 关键平台可稳定运行
 - rollback: 暂停升级并回退前一稳定包
-- status: todo
+- status: review

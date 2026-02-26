@@ -18,6 +18,7 @@
 7. 细分派工与执行卡片参考 `05-sprint-assignment-matrix.md`、`06-task-unit-subtask-packages.md`。
 8. 执行启动与风控闭环参考 `07-execution-launch-playbook.md`、`08-risk-closure-ledger.md`、`09-execution-board.csv`。
 9. 文档一致性收口先执行 `python scripts/sync_risk_verify_mapping_ws16_006.py`，再执行 `python scripts/sync_risk_closure_ledger_ws16_006.py --apply`，再执行 `python scripts/sync_task_backlog_status.py --apply`，最后执行 `python scripts/validate_doc_consistency_ws16_006.py --strict`。
+10. 若怀疑任务状态漂移或“全部 done”误读，先执行 `python scripts/sync_ws_doc_status_from_board.py --apply` 对齐 WS10-WS20 文档状态，再执行 `python scripts/audit_task_status_drift.py` 产出漂移报告；必要时执行 `python scripts/audit_task_status_drift.py --apply-demote-undated-done --apply` 把“无日期证据的 done”回调为 `review`，再执行 `python scripts/sync_task_backlog_status.py --apply`。
 
 ## 3. 文档清单
 
@@ -111,6 +112,12 @@
     - 子代理开发执行面分层状态矩阵（区分 `BRIDGE_DONE` 与 `TARGET_DONE`，并标注文档噪音与统一判定口径）。
 45. `doc/task/23-phase3-full-execution-board.csv`
     - Phase3 Full（WS23-WS27）专用执行板，作为 `09/99`（WS10-WS20）之外的增量任务状态源。
+46. `scripts/audit_task_status_drift.py`
+    - 状态漂移审计与批量回调工具（检查 `09/99` 漂移、`done` 缺少日期证据、WS markdown 状态漂移；可把弱证据 `done` 回调为 `review`）。
+47. `scripts/sync_ws_doc_status_from_board.py`
+    - WS10-WS20 文档状态同步工具（将 `10~20-ws-*.md` 的 `- status:` 与 `09-execution-board.csv` 对齐）。
+48. `doc/task/runbooks/task_status_maintenance_protocol.md`
+    - 任务状态维护协议（单一状态源、`done` 证据标准、回调与复验流程）。
 
 ## 4. 任务状态约定
 
@@ -120,6 +127,11 @@
 - `review`：开发完成待验证
 - `done`：通过验收与回归
 - `deferred`：暂缓，需记录原因与回收条件
+
+补充口径（避免误读）：
+1. `done` 表示在对应阶段门禁下已闭环，不等于“在当前新环境已复验”。
+2. 新机器迁移、依赖栈变化或验收标准抬升后，允许把历史 `done` 回调为 `review`，待复验通过后再恢复 `done`。
+3. `99-task-backlog.csv` 由 `scripts/sync_task_backlog_status.py` 从执行板同步状态；人工修正状态时需先改执行板，再同步到 backlog。
 
 ## 5. 约束
 

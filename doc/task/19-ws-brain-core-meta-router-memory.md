@@ -17,7 +17,7 @@
 - deliverables: 任务拆解、反思、恢复入口
 - acceptance: 典型任务可由 Meta-Agent 拆解分发
 - rollback: 回退当前 system_agent 单链模式
-- status: todo
+- status: done
 
 ### NGA-WS19-002 Router 规则引擎与角色路由
 - type: feature
@@ -30,7 +30,7 @@
 - deliverables: 按任务类型/风险/预算路由角色与模型
 - acceptance: 路由决策可解释且可重放
 - rollback: 固定路由表兜底
-- status: todo
+- status: done
 
 ### NGA-WS19-003 LLM Gateway 分层路由与缓存
 - type: refactor
@@ -43,7 +43,7 @@
 - deliverables: 主/次/本地模型分流 + 三段缓存策略
 - acceptance: 成本与延迟指标达预期
 - rollback: 单模型回退开关
-- status: todo
+- status: done
 
 ### NGA-WS19-004 Working Memory 窗口管理器
 - type: feature
@@ -56,7 +56,7 @@
 - deliverables: 双阈值窗口管理与策略回调
 - acceptance: token 峰值受控且不丢关键上下文
 - rollback: 固定窗口策略
-- status: todo
+- status: done
 
 ### NGA-WS19-005 Episodic Memory 写入与检索链路
 - type: feature
@@ -69,7 +69,7 @@
 - deliverables: 向量化归档、检索与回注
 - acceptance: 历史经验可稳定召回
 - rollback: 降级仅保留短期记忆
-- status: todo
+- status: done
 
 ### NGA-WS19-006 Semantic Graph 拓扑扫描与更新
 - type: feature
@@ -82,7 +82,7 @@
 - deliverables: 拓扑节点/关系更新服务
 - acceptance: 依赖链查询准确率达标
 - rollback: 关闭图谱写入，仅保留检索
-- status: todo
+- status: done
 
 ### NGA-WS19-007 Daily Checkpoint 日结归档
 - type: ops
@@ -95,7 +95,7 @@
 - deliverables: 24h 总结与次日恢复卡片
 - acceptance: 日结任务稳定执行并可审计
 - rollback: 手工日结脚本兜底
-- status: todo
+- status: done
 
 ### NGA-WS19-008 Router 仲裁熔断联动
 - type: hardening
@@ -108,4 +108,4 @@
 - deliverables: delegate 上限、冲突冻结、HITL 接管
 - acceptance: 超限冲突不进入无限修复循环
 - rollback: 人工仲裁强制接管
-- status: todo
+- status: done

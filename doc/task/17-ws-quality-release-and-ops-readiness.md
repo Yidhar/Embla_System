@@ -17,7 +17,7 @@
 - deliverables: golden suite 只读保护策略
 - acceptance: 被测任务无法直接改写裁判测试
 - rollback: 人工审批白名单改写通道
-- status: todo
+- status: done
 
 ### NGA-WS17-002 Anti-Test-Poisoning 检查器
 - type: hardening
@@ -30,7 +30,7 @@
 - deliverables: “assert 弱化/恒真断言”检测规则
 - acceptance: 测试毒化样例可稳定拦截
 - rollback: 规则降级为告警并人工审阅
-- status: todo
+- status: review
 
 ### NGA-WS17-003 Clean Checkout 双轨验证
 - type: qa
@@ -43,7 +43,7 @@
 - deliverables: workspace run + clean checkout run
 - acceptance: 双轨结果一致方可合并
 - rollback: 失败自动阻断合并
-- status: todo
+- status: done
 
 ### NGA-WS17-004 混沌演练：锁泄漏与切主
 - type: qa
@@ -56,7 +56,7 @@
 - deliverables: kill -9 注入与恢复脚本
 - acceptance: 锁在 TTL 内回收，系统持续可用
 - rollback: 回退单实例模式
-- status: todo
+- status: done
 
 ### NGA-WS17-005 混沌演练：ReDoS 与 logrotate
 - type: qa
@@ -69,7 +69,7 @@
 - deliverables: regex 压力 + logrotate 场景脚本
 - acceptance: 不假死、不打爆 CPU
 - rollback: 降级为预定义规则监听
-- status: todo
+- status: done
 
 ### NGA-WS17-006 混沌演练：double-fork 与磁盘压力
 - type: qa
@@ -82,7 +82,7 @@
 - deliverables: detached 进程与 ENOSPC 场景回归
 - acceptance: 旧进程可回收，核心数据库不损坏
 - rollback: 开启保守限流策略
-- status: todo
+- status: done
 
 ### NGA-WS17-007 Canary 与自动回滚收敛
 - type: ops
@@ -95,7 +95,7 @@
 - deliverables: canary 阈值、回滚策略、演练记录
 - acceptance: canary 异常可自动回滚
 - rollback: 手工回滚 runbook
-- status: todo
+- status: done
 
 ### NGA-WS17-008 SLO/告警看板上线
 - type: ops
@@ -108,4 +108,4 @@
 - deliverables: 错误率/延迟/队列深度/磁盘水位/锁状态面板
 - acceptance: 告警阈值与值班流程联动
 - rollback: 保留旧监控入口
-- status: todo
+- status: done

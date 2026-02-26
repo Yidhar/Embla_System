@@ -5,14 +5,14 @@ NGA-WS10-003,WS10,M1,P0,hardening,建立输入输出 schema 强校验,NGA-WS10-0
 NGA-WS10-004,WS10,M1,P1,feature,统一工具回执模板与审计记录,NGA-WS10-002,09,event_log|receipt,关键工具回执模板全覆盖,done
 NGA-WS10-005,WS10,M1,P1,hardening,风险门禁与审批钩子收敛,NGA-WS10-003,10|13,policy_gate|approval,高风险动作按策略阻断/审批,done
 NGA-WS10-006,WS10,M2,P1,migration,兼容开关与灰度发布策略,NGA-WS10-001;NGA-WS10-003,07|09,feature_flags,新旧 contract 双栈灰度可回退,done
-NGA-WS11-001,WS11,M1,P0,feature,建立 Artifact 元数据模型,NGA-WS10-001,12|13,artifact_store,每个 ref 可查询元数据,done
-NGA-WS11-002,WS11,M1,P0,feature,实现 artifact_reader 工具,NGA-WS11-001,06|12,tool_registry|artifact_reader,ref 可按模式二次读取,done
+NGA-WS11-001,WS11,M1,P0,feature,建立 Artifact 元数据模型,NGA-WS10-001,12|13,artifact_store,每个 ref 可查询元数据,review
+NGA-WS11-002,WS11,M1,P0,feature,实现 artifact_reader 工具,NGA-WS11-001,06|12,tool_registry|artifact_reader,ref 可按模式二次读取,review
 NGA-WS11-003,WS11,M1,P0,feature,os_bash 接入 fetch_hints,NGA-WS11-002,12,os_bash,超大结构化输出带检索提示,done
 NGA-WS11-004,WS11,M1,P0,hardening,实现 Artifact 配额与生命周期策略,NGA-WS11-001,09|12|13,artifact_store,72h 压测无 ENOSPC 雪崩,done
 NGA-WS11-005,WS11,M2,P1,hardening,高水位背压与关键路径保护,NGA-WS11-004,12|13,backpressure|storage_guard,高水位下核心数据库可写,done
 NGA-WS11-006,WS11,M2,P1,ops,证据链可观测性,NGA-WS11-002;NGA-WS11-004,11|13,metrics|logging,ref 命中率与回收统计可视化,done
-NGA-WS12-001,WS12,M1,P0,feature,实现 file_ast_skeleton 分层读取,NGA-WS10-001,09|12,file_ast,大文件默认不全量回读,done
-NGA-WS12-002,WS12,M1,P0,feature,实现定向 chunk 读取,NGA-WS12-001,12,file_ast_chunk_api,编辑只拉目标区域,done
+NGA-WS12-001,WS12,M1,P0,feature,实现 file_ast_skeleton 分层读取,NGA-WS10-001,09|12,file_ast,大文件默认不全量回读,review
+NGA-WS12-002,WS12,M1,P0,feature,实现定向 chunk 读取,NGA-WS12-001,12,file_ast_chunk_api,编辑只拉目标区域,review
 NGA-WS12-003,WS12,M2,P1,hardening,语义重基 semantic_rebase,NGA-WS12-002,12|13,file_ast_conflict,轻度冲突可自动重基,done
 NGA-WS12-004,WS12,M2,P1,hardening,冲突票据与退避机制,NGA-WS12-003,09|12,conflict_coordinator,无无界重试活锁,done
 NGA-WS12-005,WS12,M2,P1,feature,Router 仲裁升级路径,NGA-WS12-004,09|11,router_arbiter,冲突超限自动升级仲裁,done
@@ -23,8 +23,8 @@ NGA-WS13-003,WS13,M2,P1,feature,Scaffold contract-aware 生成,NGA-WS13-002,12,s
 NGA-WS13-004,WS13,M2,P0,hardening,Workspace Transaction 管理器,NGA-WS13-003,12|13,execution_bridge,多文件提交原子化,done
 NGA-WS13-005,WS13,M2,P1,hardening,clean_state 保证与恢复票据,NGA-WS13-004,12,rollback_manager,失败后 clean_state=true,done
 NGA-WS13-006,WS13,M3,P1,qa,跨文件事务回归与联调,NGA-WS13-004;NGA-WS13-005,13,e2e_suite,事务失败自动回滚通过,done
-NGA-WS14-001,WS14,M1,P0,hardening,Policy Firewall 能力白名单校验,NGA-WS10-003,10|13,policy_firewall,混淆命令被拦截,done
-NGA-WS14-002,WS14,M1,P0,hardening,解释器入口硬门禁,NGA-WS14-001,10|13,interpreter_gate,python/sh encoded 入口阻断,done
+NGA-WS14-001,WS14,M1,P0,hardening,Policy Firewall 能力白名单校验,NGA-WS10-003,10|13,policy_firewall,混淆命令被拦截,review
+NGA-WS14-002,WS14,M1,P0,hardening,解释器入口硬门禁,NGA-WS14-001,10|13,interpreter_gate,python/sh encoded 入口阻断,review
 NGA-WS14-003,WS14,M2,P0,hardening,Global Mutex TTL Heartbeat Fencing,NGA-WS10-002,09|10|13,global_mutex,kill-9 注入后锁自动回收,done
 NGA-WS14-004,WS14,M2,P1,hardening,Orphan Lock 清道夫,NGA-WS14-003,13,lock_scavenger,无永久悬挂锁,done
 NGA-WS14-005,WS14,M2,P0,hardening,Process Lineage 绑定与回收,NGA-WS14-003,09|13,executor_runtime,按 lineage 递归清理,done
@@ -46,7 +46,7 @@ NGA-WS16-004,WS16,M4,P1,migration,配置迁移脚本与版本化,NGA-WS16-001,05
 NGA-WS16-005,WS16,M4,P1,ops,兼容双栈灰度与下线开关,NGA-WS16-003;NGA-WS16-004,07|09,feature_flags,灰度可回退,done
 NGA-WS16-006,WS16,M4,P2,migration,文档与 runbook 同步收口,NGA-WS16-005,README|all_docs,docs_runbook,迁移后口径一致,done
 NGA-WS17-001,WS17,M1,P0,qa,测试基线只读隔离,,13,test_governance,golden suite 只读可执行,done
-NGA-WS17-002,WS17,M1,P0,hardening,Anti-Test-Poisoning 检查器,NGA-WS17-001,13,ci_guard,毒化样例可拦截,done
+NGA-WS17-002,WS17,M1,P0,hardening,Anti-Test-Poisoning 检查器,NGA-WS17-001,13,ci_guard,毒化样例可拦截,review
 NGA-WS17-003,WS17,M2,P1,qa,Clean Checkout 双轨验证,NGA-WS17-001,13,ci_pipeline,双轨一致才可合并,done
 NGA-WS17-004,WS17,M5,P1,qa,混沌演练 锁泄漏与切主,NGA-WS14-003;NGA-WS14-004,13,chaos_lock,TTL 回收验证通过,done
 NGA-WS17-005,WS17,M5,P1,qa,混沌演练 ReDoS 与 logrotate,NGA-WS14-007;NGA-WS14-008,13,chaos_sleepwatch,不假死不打爆 CPU,done
@@ -74,4 +74,4 @@ NGA-WS20-002,WS20,M2,P1,feature,SSE 事件协议统一,NGA-WS10-004,01|04,sse_pr
 NGA-WS20-003,WS20,M3,P2,refactor,前端模块按域解耦,NGA-WS20-001,08,frontend_modules,模块边界清晰可测,done
 NGA-WS20-004,WS20,M4,P1,migration,MCP 状态展示与真实后端对齐,NGA-WS16-003,01|08,mcp_status_ui,UI 与后台状态一致,done
 NGA-WS20-005,WS20,M4,P1,qa,前后端联调回归套件,NGA-WS20-002;NGA-WS20-004,05|08,e2e_front_back,核心链路回归全通过,done
-NGA-WS20-006,WS20,M5,P2,qa,桌面端发布兼容性验证,NGA-WS20-005,05|08,electron_release_checks,关键平台稳定运行,done
+NGA-WS20-006,WS20,M5,P2,qa,桌面端发布兼容性验证,NGA-WS20-005,05|08,electron_release_checks,关键平台稳定运行,review

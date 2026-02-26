@@ -17,7 +17,7 @@
 - deliverables: `ref/content_type/size/ttl/created_at/fetch_hints` 元数据
 - acceptance: 每个 raw_result_ref 都可查询元数据
 - rollback: 旧 ref 自动映射默认元数据
-- status: todo
+- status: review
 
 ### NGA-WS11-002 实现 artifact_reader 工具（jsonpath/line_range/grep）
 - type: feature
@@ -30,7 +30,7 @@
 - deliverables: artifact_reader 工具及 schema
 - acceptance: 预览不足场景可通过 ref 二次定位根因
 - rollback: 只读模式不影响现有执行链
-- status: todo
+- status: review
 
 ### NGA-WS11-003 在 os_bash 接入 fetch_hints 与二次读取指引
 - type: feature
@@ -43,7 +43,7 @@
 - deliverables: `fetch_hints` 自动生成
 - acceptance: 超大结构化输出返回有效检索提示
 - rollback: hints 失败不影响主结果
-- status: todo
+- status: done
 
 ### NGA-WS11-004 实现 Artifact 配额与生命周期策略
 - type: hardening
@@ -56,7 +56,7 @@
 - deliverables: global/session/tenant quota + TTL + LRU
 - acceptance: 72h 压测磁盘占用受控，无 ENOSPC 雪崩
 - rollback: 先启用告警阈值，再启强制拒绝
-- status: todo
+- status: done
 
 ### NGA-WS11-005 高水位背压与关键路径保护
 - type: hardening
@@ -69,7 +69,7 @@
 - deliverables: 高水位拒绝低优先级写入、关键数据库保护
 - acceptance: 高水位时 EventBus/SQLite 仍可写
 - rollback: 背压策略可临时降级为只告警
-- status: todo
+- status: done
 
 ### NGA-WS11-006 证据链可观测性（指标与审计）
 - type: ops
@@ -82,4 +82,4 @@
 - deliverables: ref 命中率、读取延迟、回收统计看板
 - acceptance: 可观测面覆盖关键指标
 - rollback: 保留原日志链路
-- status: todo
+- status: done
