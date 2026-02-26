@@ -1901,6 +1901,29 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
     repo_root = _ops_repo_root()
     events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
     event_rows = _ops_read_event_rows(events_file, limit=max(200, int(limit) * 10))
+    prompt_safety_summary: Dict[str, Any] = {}
+    try:
+        from scripts.export_slo_snapshot import build_snapshot
+
+        snapshot = build_snapshot(repo_root=repo_root, events_limit=max(200, int(limit) * 10))
+        snapshot_metrics = snapshot.get("metrics") if isinstance(snapshot.get("metrics"), dict) else {}
+        outer_readonly_hit = (
+            snapshot_metrics.get("outer_readonly_hit_rate")
+            if isinstance(snapshot_metrics.get("outer_readonly_hit_rate"), dict)
+            else {}
+        )
+        readonly_write_exposure = (
+            snapshot_metrics.get("readonly_write_tool_exposure_rate")
+            if isinstance(snapshot_metrics.get("readonly_write_tool_exposure_rate"), dict)
+            else {}
+        )
+        prompt_safety_summary = {
+            "outer_readonly_hit_rate": outer_readonly_hit,
+            "readonly_write_tool_exposure_rate": readonly_write_exposure,
+        }
+    except Exception as exc:
+        logger.warning(f"构建 incidents prompt safety 摘要失败（降级为空）: {exc}")
+
     incidents: List[Dict[str, Any]] = []
     event_counters: Dict[str, int] = {key: 0 for key in sorted(_OPS_INCIDENT_EVENT_SEVERITY.keys())}
 
@@ -1991,6 +2014,7 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             "critical_incidents": critical_count,
             "warning_incidents": warning_count,
             "latest_incident_at": latest_incident_at,
+            "runtime_prompt_safety": prompt_safety_summary,
         },
         "event_counters": event_counters,
         "events_scanned": len(event_rows),

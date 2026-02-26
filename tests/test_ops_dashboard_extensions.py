@@ -102,6 +102,24 @@ def test_ops_incidents_latest_payload_merges_events_and_report_issues(tmp_path, 
     )
 
     monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(
+        export_slo_snapshot,
+        "build_snapshot",
+        lambda **_kwargs: {
+            "metrics": {
+                "outer_readonly_hit_rate": {"value": 0.6, "sample_count": 10, "hit_count": 6, "status": "ok"},
+                "readonly_write_tool_exposure_rate": {
+                    "value": 0.1,
+                    "sample_count": 10,
+                    "exposure_count": 1,
+                    "exposed_slice_count": 1,
+                    "status": "warning",
+                },
+            }
+        },
+    )
     payload = api_server._ops_build_incidents_latest_payload(limit=30)
 
     assert payload["status"] == "success"
@@ -115,6 +133,11 @@ def test_ops_incidents_latest_payload_merges_events_and_report_issues(tmp_path, 
     assert any(item["source"] == "report" for item in incidents)
     assert any(item["event_type"] == "EvidenceGateIssue" for item in incidents)
     assert any(path.endswith("events.jsonl") for path in payload["source_reports"])
+
+    runtime_prompt_safety = payload["data"]["summary"]["runtime_prompt_safety"]
+    assert runtime_prompt_safety["outer_readonly_hit_rate"]["value"] == 0.6
+    assert runtime_prompt_safety["readonly_write_tool_exposure_rate"]["value"] == 0.1
+    assert runtime_prompt_safety["readonly_write_tool_exposure_rate"]["status"] == "warning"
 
 
 def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_path, monkeypatch) -> None:
