@@ -30,6 +30,7 @@ const PAGE_COPY: Record<
       runtimeRollout: { title: string; note: string };
       failOpen: { title: string; note: string };
       readonlyExposure: { title: string; note: string };
+      routeQuality: { title: string; note: string };
       lease: { title: string; note: string };
       queueDepth: { title: string; note: string };
       lockStatus: { title: string; note: string };
@@ -91,6 +92,7 @@ const PAGE_COPY: Record<
       runtimeRollout: { title: "Runtime Rollout", note: "SubAgent decision hit ratio" },
       failOpen: { title: "Fail Open", note: "Current fail-open ratio" },
       readonlyExposure: { title: "Readonly Write Exposure", note: "Path-A write-tool leakage ratio" },
+      routeQuality: { title: "Route Quality", note: "Unified route-quality guard status" },
       lease: { title: "Lease", note: "Global orchestrator lease state" },
       queueDepth: { title: "Queue Depth", note: "Pending outbox events" },
       lockStatus: { title: "Lock Status", note: "Global mutex lock health" },
@@ -151,6 +153,7 @@ const PAGE_COPY: Record<
       runtimeRollout: { title: "运行分流命中率", note: "SubAgent 决策命中比例" },
       failOpen: { title: "Fail-Open 比例", note: "当前降级放行占比" },
       readonlyExposure: { title: "只读写工具暴露率", note: "Path-A 写工具泄露占比" },
+      routeQuality: { title: "路由质量", note: "统一路由质量门禁状态" },
       lease: { title: "租约状态", note: "全局调度租约健康状态" },
       queueDepth: { title: "队列深度", note: "待处理 outbox 事件数" },
       lockStatus: { title: "锁状态", note: "全局互斥锁健康度" },
@@ -345,6 +348,8 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
   const pathBBudgetEscalation = asRecord(metrics.path_b_budget_escalation_rate);
   const coreSessionCreation = asRecord(metrics.core_session_creation_rate);
   const sources = asRecord(payload?.data?.sources);
+  const postureSummary = asRecord(payload?.data?.summary);
+  const routeQuality = asRecord(postureSummary.route_quality);
 
   const evidenceSummary = asRecord(evidencePayload?.data?.summary);
   const requiredReports = asArray(evidencePayload?.data?.required_reports);
@@ -368,6 +373,8 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
   const coreSessionCreationValue = asNumber(coreSessionCreation.value);
   const coreSessionCreatedCount = asNumber(coreSessionCreation.created_count);
   const coreSessionSampleCount = asNumber(coreSessionCreation.sample_count);
+  const routeQualityStatusText = asText(routeQuality.status, "unknown");
+  const routeQualityReason = asText(routeQuality.reason_text, "");
   const queuePending = asNumber(queueDepth.value);
   const queueCritical = asNumber(asRecord(queueDepth.thresholds).critical);
   const queueRatio = queuePending !== null && queueCritical && queueCritical > 0 ? queuePending / queueCritical : null;
@@ -400,6 +407,12 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
       value: toPercent(readonlyWriteExposureValue, lang),
       note: copy.cards.readonlyExposure.note,
       state: toState(readonlyWriteToolExposure.status),
+    },
+    {
+      title: copy.cards.routeQuality.title,
+      value: routeQualityStatusText.toUpperCase(),
+      note: routeQualityReason || copy.cards.routeQuality.note,
+      state: toState(routeQualityStatusText),
     },
     {
       title: copy.cards.lease.title,

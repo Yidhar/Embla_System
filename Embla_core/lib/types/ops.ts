@@ -125,6 +125,7 @@ export interface OpsIncidentSummary {
     chat_route_path_distribution?: Record<string, unknown>;
     path_b_budget_escalation_rate?: Record<string, unknown>;
     core_session_creation_rate?: Record<string, unknown>;
+    route_quality?: Record<string, unknown>;
   };
 }
 

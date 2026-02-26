@@ -45,6 +45,7 @@ const PAGE_COPY: Record<
       pathCRouteShare: string;
       pathBBudgetEscalation: string;
       coreSessionCreation: string;
+      routeQuality: string;
     };
     columns: {
       time: string;
@@ -70,6 +71,7 @@ const PAGE_COPY: Record<
       pathARatio: string;
       pathBRatio: string;
       pathCRatio: string;
+      routeQualityReason: string;
     };
   }
 > = {
@@ -100,6 +102,7 @@ const PAGE_COPY: Record<
       pathCRouteShare: "Path-C Route Share",
       pathBBudgetEscalation: "Path-B Budget Escalation",
       coreSessionCreation: "Core Session Creation",
+      routeQuality: "Route Quality",
     },
     columns: {
       time: "Time",
@@ -125,6 +128,7 @@ const PAGE_COPY: Record<
       pathARatio: "Path-A",
       pathBRatio: "Path-B",
       pathCRatio: "Path-C",
+      routeQualityReason: "Reason",
     },
   },
   "zh-CN": {
@@ -154,6 +158,7 @@ const PAGE_COPY: Record<
       pathCRouteShare: "Path-C 路由占比",
       pathBBudgetEscalation: "Path-B 预算升级率",
       coreSessionCreation: "Core 会话新建率",
+      routeQuality: "路由质量",
     },
     columns: {
       time: "时间",
@@ -179,6 +184,7 @@ const PAGE_COPY: Record<
       pathARatio: "Path-A",
       pathBRatio: "Path-B",
       pathCRatio: "Path-C",
+      routeQualityReason: "原因",
     },
   },
 };
@@ -236,6 +242,19 @@ function toTone(state: SignalState): MetricBarTone {
   return "unknown";
 }
 
+function stateToRatio(state: SignalState): number {
+  if (state === "healthy") {
+    return 1;
+  }
+  if (state === "warning") {
+    return 0.6;
+  }
+  if (state === "critical") {
+    return 0.25;
+  }
+  return 0;
+}
+
 export default async function WorkflowEventsPage({ searchParams }: WorkflowPageProps) {
   const lang = await resolveLangFromSearchParams(searchParams);
   const copy = PAGE_COPY[lang];
@@ -253,6 +272,7 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
   const incidentsSummary = incidentsPayload?.data?.summary;
   const incidents = incidentsPayload?.data?.incidents || [];
   const runtimeMetrics = runtimePayload?.data?.metrics || {};
+  const runtimeSummary = asRecord(runtimePayload?.data?.summary);
   const readonlyExposureMetric =
     typeof runtimeMetrics.readonly_write_tool_exposure_rate === "object" && runtimeMetrics.readonly_write_tool_exposure_rate
       ? runtimeMetrics.readonly_write_tool_exposure_rate
@@ -273,12 +293,14 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
     typeof runtimeMetrics.core_session_creation_rate === "object" && runtimeMetrics.core_session_creation_rate
       ? runtimeMetrics.core_session_creation_rate
       : {};
+  const runtimeRouteQuality = asRecord(runtimeSummary.route_quality);
   const incidentPromptSafety = asRecord(incidentsSummary?.runtime_prompt_safety);
   const incidentReadonlyExposure = asRecord(incidentPromptSafety.readonly_write_tool_exposure_rate);
   const incidentOuterReadonlyHit = asRecord(incidentPromptSafety.outer_readonly_hit_rate);
   const incidentRouteDistribution = asRecord(incidentPromptSafety.chat_route_path_distribution);
   const incidentPathBBudgetEscalation = asRecord(incidentPromptSafety.path_b_budget_escalation_rate);
   const incidentCoreSessionCreation = asRecord(incidentPromptSafety.core_session_creation_rate);
+  const incidentRouteQuality = asRecord(incidentPromptSafety.route_quality);
 
   const outboxPending = summary?.outbox_pending;
   const oldestPendingAge = summary?.oldest_pending_age_seconds;
@@ -292,6 +314,8 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
     String((pathBBudgetEscalationMetric as { status?: unknown }).status || "unknown"),
   );
   const coreSessionCreationState = toState(String((coreSessionCreationMetric as { status?: unknown }).status || "unknown"));
+  const runtimeRouteQualityState = toState(String(runtimeRouteQuality.status || "unknown"));
+  const incidentRouteQualityState = toState(String(incidentRouteQuality.status || "unknown"));
   const latestIncidentText = formatIsoDateTime(incidentsSummary?.latest_incident_at, lang, "--");
 
   return (
@@ -499,6 +523,13 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
                   }
                   hint={`${copy.words.createdCount}: ${toNumber((coreSessionCreationMetric as { created_count?: unknown }).created_count, lang)}`}
                 />
+                <MetricBar
+                  label={copy.metricLabels.routeQuality}
+                  value={String(runtimeRouteQuality.status || copy.words.unknown).toUpperCase()}
+                  ratio={stateToRatio(runtimeRouteQualityState)}
+                  tone={toTone(runtimeRouteQualityState)}
+                  hint={`${copy.words.routeQualityReason}: ${String(runtimeRouteQuality.reason_text || "--")}`}
+                />
               </div>
             </div>
             <div className="rounded-xl bg-white/70 p-3">
@@ -572,6 +603,13 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
                     </span>
                   }
                   hint={`${copy.words.createdCount}: ${toNumber(incidentCoreSessionCreation.created_count, lang)}`}
+                />
+                <MetricBar
+                  label={copy.metricLabels.routeQuality}
+                  value={String(incidentRouteQuality.status || copy.words.unknown).toUpperCase()}
+                  ratio={stateToRatio(incidentRouteQualityState)}
+                  tone={toTone(incidentRouteQualityState)}
+                  hint={`${copy.words.routeQualityReason}: ${String(incidentRouteQuality.reason_text || "--")}`}
                 />
               </div>
             </div>
