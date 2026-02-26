@@ -25,6 +25,11 @@
 2. 门禁闭环（Phase D）
 - 新增脚本：`scripts/run_ws28_execution_governance_gate_ws28_021.py`
   - 聚合 `/ops/runtime_posture` 与 `/ops/incidents_latest` 侧治理信号
+  - 增加策略文件门禁：`policy/role_executor_semantic_guard.spec`
+    - 文件存在性
+    - `schema_version` 校验
+    - `frontend/backend/ops` 角色策略完整性
+    - `sha256` 审计哈希输出
   - 输出 gate/runtime/incidents 三份报告
   - 核心检查项：
     - governance status 非 critical

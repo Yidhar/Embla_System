@@ -4,16 +4,24 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from autonomous.tools.execution_bridge import (
+    DEFAULT_ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC,
+    ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC_SCHEMA,
+)
+
 
 DEFAULT_OUTPUT = Path("scratch/reports/ws28_execution_governance_gate_ws28_021.json")
 DEFAULT_RUNTIME_POSTURE_OUTPUT = Path("scratch/reports/ws28_execution_governance_runtime_posture_ws28_021.json")
 DEFAULT_INCIDENTS_OUTPUT = Path("scratch/reports/ws28_execution_governance_incidents_ws28_021.json")
+DEFAULT_SEMANTIC_GUARD_SPEC = DEFAULT_ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC
+_REQUIRED_SEMANTIC_ROLES = ("frontend", "backend", "ops")
 
 
 def _utc_iso_now() -> str:
@@ -47,6 +55,74 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _sha256_file(path: Path) -> str:
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
+    return digest
+
+
+def _validate_semantic_guard_spec(spec_path: Path) -> Dict[str, Any]:
+    checks = {
+        "semantic_guard_spec_exists": spec_path.exists(),
+        "semantic_guard_spec_schema_valid": False,
+        "semantic_guard_spec_roles_ready": False,
+    }
+    failed_reasons = []
+    schema_version = ""
+    roles_summary: Dict[str, Any] = {}
+    sha256 = ""
+
+    if not checks["semantic_guard_spec_exists"]:
+        failed_reasons.append("semantic_guard_spec_missing")
+        return {
+            "path": _to_unix_path(spec_path),
+            "schema_version": schema_version,
+            "sha256": sha256,
+            "checks": checks,
+            "failed_reasons": failed_reasons,
+            "roles": roles_summary,
+        }
+
+    sha256 = _sha256_file(spec_path)
+    payload: Dict[str, Any] = {}
+    try:
+        loaded = json.loads(spec_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            payload = loaded
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+
+    schema_version = str(payload.get("schema_version") or "").strip()
+    checks["semantic_guard_spec_schema_valid"] = schema_version == ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC_SCHEMA
+    if not checks["semantic_guard_spec_schema_valid"]:
+        failed_reasons.append("semantic_guard_spec_schema_invalid")
+
+    roles = payload.get("roles") if isinstance(payload.get("roles"), dict) else {}
+    role_checks: Dict[str, bool] = {}
+    for role in _REQUIRED_SEMANTIC_ROLES:
+        config = roles.get(role) if isinstance(roles, dict) else None
+        allowed_toolchains = config.get("allowed_semantic_toolchains") if isinstance(config, dict) else None
+        role_checks[role] = isinstance(allowed_toolchains, list) and len([item for item in allowed_toolchains if str(item).strip()]) > 0
+        roles_summary[role] = {
+            "configured": isinstance(config, dict),
+            "allowed_semantic_toolchains_count": len(allowed_toolchains) if isinstance(allowed_toolchains, list) else 0,
+        }
+    checks["semantic_guard_spec_roles_ready"] = all(role_checks.values())
+    if not checks["semantic_guard_spec_roles_ready"]:
+        failed_reasons.append("semantic_guard_spec_roles_incomplete")
+
+    return {
+        "path": _to_unix_path(spec_path),
+        "schema_version": schema_version,
+        "sha256": sha256,
+        "checks": checks,
+        "failed_reasons": failed_reasons,
+        "roles": roles_summary,
+    }
+
+
 def run_ws28_execution_governance_gate_ws28_021(
     *,
     repo_root: Path,
@@ -57,12 +133,14 @@ def run_ws28_execution_governance_gate_ws28_021(
     incidents_limit: int = 50,
     max_warning_ratio: float = 0.30,
     max_rejection_ratio: float = 0.20,
+    semantic_guard_spec: Path = DEFAULT_SEMANTIC_GUARD_SPEC,
 ) -> Dict[str, Any]:
     started = time.time()
     root = repo_root.resolve()
     runtime_output_path = _resolve_path(root, runtime_posture_output)
     incidents_output_path = _resolve_path(root, incidents_output)
     output_path = _resolve_path(root, output_file)
+    semantic_guard_spec_path = _resolve_path(root, semantic_guard_spec)
 
     import apiserver.api_server as api_server
 
@@ -100,6 +178,12 @@ def run_ws28_execution_governance_gate_ws28_021(
 
     warning_ratio = _safe_float(runtime_governance.get("governed_warning_ratio"))
     rejection_ratio = _safe_float(runtime_governance.get("rejection_ratio"))
+    semantic_guard_spec_report = _validate_semantic_guard_spec(semantic_guard_spec_path)
+    semantic_guard_spec_checks = (
+        semantic_guard_spec_report.get("checks")
+        if isinstance(semantic_guard_spec_report.get("checks"), dict)
+        else {}
+    )
 
     checks = {
         "runtime_posture_payload_success": str(runtime_posture_payload.get("status") or "") == "success",
@@ -109,6 +193,9 @@ def run_ws28_execution_governance_gate_ws28_021(
         "critical_governance_issue_count_zero": critical_issue_count == 0,
         "governance_warning_ratio_within_budget": warning_ratio is None or warning_ratio <= float(max_warning_ratio),
         "governance_rejection_ratio_within_budget": rejection_ratio is None or rejection_ratio <= float(max_rejection_ratio),
+        "semantic_guard_spec_exists": bool(semantic_guard_spec_checks.get("semantic_guard_spec_exists")),
+        "semantic_guard_spec_schema_valid": bool(semantic_guard_spec_checks.get("semantic_guard_spec_schema_valid")),
+        "semantic_guard_spec_roles_ready": bool(semantic_guard_spec_checks.get("semantic_guard_spec_roles_ready")),
     }
     passed = all(bool(value) for value in checks.values())
     failed_checks = [key for key, value in checks.items() if not bool(value)]
@@ -133,6 +220,7 @@ def run_ws28_execution_governance_gate_ws28_021(
             "rejection_ratio": rejection_ratio,
             "reason_codes": list(runtime_governance.get("reason_codes") or []),
         },
+        "semantic_guard_spec": semantic_guard_spec_report,
         "outputs": {
             "runtime_posture_output": _to_unix_path(runtime_output_path),
             "incidents_output": _to_unix_path(incidents_output_path),
@@ -174,6 +262,12 @@ def parse_args() -> argparse.Namespace:
         default=0.20,
         help="Maximum accepted governance rejection ratio",
     )
+    parser.add_argument(
+        "--semantic-guard-spec",
+        type=Path,
+        default=DEFAULT_SEMANTIC_GUARD_SPEC,
+        help="Semantic guard policy .spec path",
+    )
     parser.add_argument("--strict", action="store_true", help="Return non-zero when checks fail")
     return parser.parse_args()
 
@@ -189,6 +283,7 @@ def main() -> int:
         incidents_limit=max(1, int(args.incidents_limit)),
         max_warning_ratio=max(0.0, float(args.max_warning_ratio)),
         max_rejection_ratio=max(0.0, float(args.max_rejection_ratio)),
+        semantic_guard_spec=args.semantic_guard_spec,
     )
     print(
         json.dumps(

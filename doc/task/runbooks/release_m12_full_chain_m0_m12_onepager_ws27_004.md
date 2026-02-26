@@ -109,6 +109,9 @@
   - `critical_governance_issue_count_zero=true`
   - `governance_warning_ratio_within_budget=true`
   - `governance_rejection_ratio_within_budget=true`
+  - `semantic_guard_spec_exists=true`
+  - `semantic_guard_spec_schema_valid=true`
+  - `semantic_guard_spec_roles_ready=true`
 
 ## 6. 风险与说明
 

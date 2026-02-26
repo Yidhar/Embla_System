@@ -22,11 +22,33 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _write_semantic_guard_spec(repo_root: Path) -> Path:
+    spec_path = repo_root / "policy" / "role_executor_semantic_guard.spec"
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
+    spec_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "ws28-role-executor-semantic-guard-v1",
+                "roles": {
+                    "frontend": {"allowed_semantic_toolchains": ["frontend", "docs", "config"]},
+                    "backend": {"allowed_semantic_toolchains": ["backend", "docs", "config", "ops"]},
+                    "ops": {"allowed_semantic_toolchains": ["ops", "docs", "config"]},
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return spec_path
+
+
 def test_run_ws28_execution_governance_gate_passes_when_within_budget(monkeypatch) -> None:
     case_root = _make_case_root("test_run_ws28_execution_governance_gate_ws28_021")
     try:
         repo_root = case_root / "repo"
         repo_root.mkdir(parents=True, exist_ok=True)
+        _write_semantic_guard_spec(repo_root)
 
         import apiserver.api_server as api_server
 
@@ -79,6 +101,9 @@ def test_run_ws28_execution_governance_gate_passes_when_within_budget(monkeypatc
         assert report["checks"]["incidents_payload_success"] is True
         assert report["checks"]["runtime_governance_status_not_critical"] is True
         assert report["checks"]["critical_governance_issue_count_zero"] is True
+        assert report["checks"]["semantic_guard_spec_exists"] is True
+        assert report["checks"]["semantic_guard_spec_schema_valid"] is True
+        assert report["checks"]["semantic_guard_spec_roles_ready"] is True
         assert output_file.exists() is True
         assert runtime_output.exists() is True
         assert incidents_output.exists() is True
@@ -87,6 +112,8 @@ def test_run_ws28_execution_governance_gate_passes_when_within_budget(monkeypatc
         assert persisted["passed"] is True
         assert persisted["governance"]["warning_ratio"] == 0.2
         assert persisted["governance"]["rejection_ratio"] == 0.1
+        assert persisted["semantic_guard_spec"]["schema_version"] == "ws28-role-executor-semantic-guard-v1"
+        assert bool(persisted["semantic_guard_spec"]["sha256"])
     finally:
         _cleanup_case_root(case_root)
 
@@ -96,6 +123,7 @@ def test_run_ws28_execution_governance_gate_fails_when_critical_present(monkeypa
     try:
         repo_root = case_root / "repo"
         repo_root.mkdir(parents=True, exist_ok=True)
+        _write_semantic_guard_spec(repo_root)
 
         import apiserver.api_server as api_server
 
@@ -147,5 +175,67 @@ def test_run_ws28_execution_governance_gate_fails_when_critical_present(monkeypa
         assert "critical_governance_issue_count_zero" in failed_checks
         assert "governance_warning_ratio_within_budget" in failed_checks
         assert "governance_rejection_ratio_within_budget" in failed_checks
+        assert "semantic_guard_spec_exists" not in failed_checks
+        assert "semantic_guard_spec_schema_valid" not in failed_checks
+        assert "semantic_guard_spec_roles_ready" not in failed_checks
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_run_ws28_execution_governance_gate_fails_when_semantic_spec_missing(monkeypatch) -> None:
+    case_root = _make_case_root("test_run_ws28_execution_governance_gate_ws28_021")
+    try:
+        repo_root = case_root / "repo"
+        repo_root.mkdir(parents=True, exist_ok=True)
+
+        import apiserver.api_server as api_server
+
+        monkeypatch.setattr(
+            api_server,
+            "_ops_build_runtime_posture_payload",
+            lambda events_limit=5000: {
+                "status": "success",
+                "data": {
+                    "summary": {"execution_bridge_governance_status": "ok"},
+                    "execution_bridge_governance": {
+                        "status": "ok",
+                        "reason_codes": ["EXECUTION_BRIDGE_GOVERNANCE_OK"],
+                        "governed_warning_ratio": 0.0,
+                        "rejection_ratio": 0.0,
+                    },
+                },
+            },
+        )
+        monkeypatch.setattr(
+            api_server,
+            "_ops_build_incidents_latest_payload",
+            lambda limit=50: {
+                "status": "success",
+                "data": {
+                    "summary": {
+                        "execution_bridge_governance": {
+                            "status": "ok",
+                            "governed_critical_count": 0,
+                        }
+                    }
+                },
+            },
+        )
+
+        report = ws28_gate.run_ws28_execution_governance_gate_ws28_021(
+            repo_root=repo_root,
+            output_file=Path("scratch/reports/ws28_gate_spec_missing.json"),
+            runtime_posture_output=Path("scratch/reports/runtime_posture_spec_missing.json"),
+            incidents_output=Path("scratch/reports/incidents_spec_missing.json"),
+            max_warning_ratio=0.3,
+            max_rejection_ratio=0.2,
+        )
+
+        assert report["passed"] is False
+        failed_checks = set(report["failed_checks"])
+        assert "semantic_guard_spec_exists" in failed_checks
+        assert "semantic_guard_spec_schema_valid" in failed_checks
+        assert "semantic_guard_spec_roles_ready" in failed_checks
+        assert report["semantic_guard_spec"]["failed_reasons"] == ["semantic_guard_spec_missing"]
     finally:
         _cleanup_case_root(case_root)

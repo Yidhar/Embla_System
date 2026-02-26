@@ -158,4 +158,4 @@
   - 已完成 Phase A：`role_executor_policy` 从任务 contract 侧透传为标准事件字段（`SubTaskDispatching` / `SubTaskExecutionCompleted`），不再依赖手填 metadata。
   - 已完成 Phase B：执行桥新增 FE/BE/Ops 语义工具链守卫（semantic toolchain guard），并将结构化拒绝原因（`reason_code/category/severity/violations/policy_source`）接入 `SubTaskExecutionCompleted/SubTaskRejected` 事件与 `/v1/ops/runtime/posture`、`/v1/ops/incidents/latest` 聚合视图。
   - 已完成 Phase C：语义守卫策略外置为 `.spec`（`policy/role_executor_semantic_guard.spec`），`execution_bridge` 按 spec 加载并支持任务 contract 覆盖。
-  - 已完成 Phase D：`M0-M12` 全链新增 `m12_execution_governance` 门禁组，治理 critical 与预算超限可直接阻断收口链。
+  - 已完成 Phase D：`M0-M12` 全链新增 `m12_execution_governance` 门禁组，治理 critical 与预算超限可直接阻断收口链；同时对 `role_executor_semantic_guard.spec` 执行低成本发布门禁（存在性/schema/角色完整性+hash）。
