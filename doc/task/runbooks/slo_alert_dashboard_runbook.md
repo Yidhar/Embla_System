@@ -9,8 +9,8 @@
 
 | 指标 | 采集来源（本地） | 计算口径 | Warning 阈值 | Critical 阈值 |
 |---|---|---|---|---|
-| 错误率 `error_rate` | `logs/autonomous/events.jsonl`（优先 `CliExecutionCompleted`，缺失时回退 canary `evaluated_windows`） | `失败次数 / 总样本` | `max_error_rate * 0.5`（默认 `1%`） | `max_error_rate`（默认 `2%`） |
-| 延迟 `latency_p95_ms` | 同上 | CLI 事件 `duration_seconds` 的 p95（ms）；回退路径取 canary window 的最大 p95 | `max_latency_p95_ms * 0.8`（默认 `1200ms`） | `max_latency_p95_ms`（默认 `1500ms`） |
+| 错误率 `error_rate` | `logs/autonomous/events.jsonl`（优先 `TaskExecutionCompleted`，缺失时回退 canary `evaluated_windows`） | `失败次数 / 总样本` | `max_error_rate * 0.5`（默认 `1%`） | `max_error_rate`（默认 `2%`） |
+| 延迟 `latency_p95_ms` | 同上 | 执行事件 `duration_seconds` 的 p95（ms）；回退路径取 canary window 的最大 p95 | `max_latency_p95_ms * 0.8`（默认 `1200ms`） | `max_latency_p95_ms`（默认 `1500ms`） |
 | 队列深度 `queue_depth` | `logs/autonomous/workflow.db` 的 `outbox_event` 表 | `status='pending'` 条数 + 最老 pending 年龄 | `batch_size`（默认 `50`）或最老年龄 `120s` | `max(batch_size*3, batch_size+1)`（默认 `150`）或最老年龄 `300s` |
 | 磁盘水位 `disk_watermark_ratio` | `ArtifactStore`（`logs/artifacts` 元数据） | `total_size_mb / max_total_size_mb` | `high_watermark_ratio`（默认 `0.90`） | `1 - critical_reserve_ratio`（默认 `0.95`） |
 | 锁状态 `lock_status` | `logs/runtime/global_mutex_lease.json` | `seconds_to_expiry = expires_at - now` | `seconds_to_expiry <= max(2, ttl*0.2)` | `seconds_to_expiry <= 0` |
@@ -66,7 +66,7 @@ uv --cache-dir .uv_cache run python scripts/export_slo_snapshot.py --output logs
    ```bash
    uv --cache-dir .uv_cache run python scripts/export_slo_snapshot.py --stdout-only
    ```
-2. 检查 `logs/autonomous/events.jsonl` 最新 `CliExecutionCompleted` 与回滚事件。
+2. 检查 `logs/autonomous/events.jsonl` 最新 `TaskExecutionCompleted` 与回滚事件。
 3. 若连续 `critical`，暂停高风险自动变更，转入人工审批执行。
 
 #### B. 队列深度告警

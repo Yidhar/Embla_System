@@ -31,7 +31,6 @@
 - inputs: `doc/10#1`, `doc/11#8`
 - deliverables:
   - 子任务事件链：`SubTaskDispatching/SubTaskExecutionCompleted/SubTaskApproved/SubTaskRejected`
-  - 兼容事件别名：`SubTaskCliExecutionCompleted`（alias of `SubTaskExecutionCompleted`，用于历史报表兼容）
   - Runtime 事件携带 `workflow_id/trace_id/session_id`
   - 父任务事件中回写 `subagent_runtime_id` 与失败子任务摘要
 - acceptance:

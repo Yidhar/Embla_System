@@ -12,7 +12,7 @@
 > **文档定位**：本文档描述 **Phase 3 目标态架构**，非当前实现。
 >
 > **当前实现**（截至 2026-02-26）：
-> - 执行模型：CLI Adapter + `SystemAgent` 主循环（过渡桥接态，非目标态终局）
+> - 执行模型：`NativeExecutionBridge` + `SystemAgent` 主循环（已去 CLI 黑盒，仍属桥接态）
 > - 子代理：`Sub-Agent Runtime v1` 已落地并支持灰度接管（WS22）
 > - 脚手架：`Scaffold Engine v1` 已落地（契约门禁 + 事务回滚）
 > - 事件链：`Topic Event Bus v1 + WorkflowStore/EventLog` 已支持事件落盘、回放与 topic 化消费

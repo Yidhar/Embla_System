@@ -118,6 +118,8 @@
     - WS10-WS20 文档状态同步工具（将 `10~20-ws-*.md` 的 `- status:` 与 `09-execution-board.csv` 对齐）。
 48. `doc/task/runbooks/task_status_maintenance_protocol.md`
     - 任务状态维护协议（单一状态源、`done` 证据标准、回调与复验流程）。
+49. `doc/task/runbooks/subagent_runtime_native_bridge_sequence_and_gate_runbook.md`
+    - Sub-Agent 内生执行桥时序图与 Gate 决策图（排障与 onboarding 入口，覆盖 `SubTaskExecutionCompleted` 主事件语义）。
 
 ## 4. 任务状态约定
 

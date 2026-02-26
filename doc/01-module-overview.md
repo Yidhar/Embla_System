@@ -120,7 +120,7 @@
 
 **替代方案**：
 - 工具调用：`apiserver/agentic_tool_loop.py` + `native_tools.py` / `mcp_manager.py`
-- 自治执行：`autonomous/system_agent.py` + CLI Adapter
+- 自治执行：`autonomous/system_agent.py` + `autonomous/tools/execution_bridge.py`（内生执行桥）
 
 **保留原因**：
 - 兼容性考虑，避免破坏性删除

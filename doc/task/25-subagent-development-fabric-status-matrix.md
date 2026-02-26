@@ -43,7 +43,7 @@
 | SystemAgent 调度桥接 | 主链可灰度接管 Runtime，失败可回退 | 已具备 `runtime_mode` 决策、`rollout_percent`、fail-open 预算降级 | `BRIDGE_DONE` | `autonomous/system_agent.py` | `autonomous/tests/test_system_agent_subagent_bridge_ws22_001.py`, `autonomous/tests/test_system_agent_subagent_rollout_ws22_006.py`, `autonomous/tests/test_system_agent_fail_open_budget_ws26_003.py` |
 | M12 Full Cutover 运营能力 | 可执行全量切换与回滚窗 | 已具备 `plan/apply/status/rollback` 管理脚本 | `BRIDGE_DONE` | `scripts/manage_ws27_subagent_cutover_ws27_002.py` | `tests/test_manage_ws27_subagent_cutover_ws27_002.py`, `doc/task/implementation/NGA-WS27-002-implementation.md` |
 | FE/BE/Ops 子代理执行面（内生） | 非黑盒的内生子代理进程执行器，具备统一可控审计 | 已切到内生 `NativeExecutionBridge`（patch-intent first）；角色专用执行器仍在后续排期 | `BRIDGE_DONE` | `autonomous/system_agent.py`, `autonomous/tools/execution_bridge.py` | `autonomous/tests/test_execution_bridge_native_ws28_013.py`, `autonomous/tests/test_system_agent_execution_bridge_cutover_ws28_013.py` |
-| Execution Bridge 终态 | 子代理输出到执行动作的内建可审计桥，不依赖外部黑盒 | 已落地 `SubTaskExecutionBridgeReceipt + SubTaskExecutionCompleted`，并保留旧事件别名兼容 | `BRIDGE_DONE` | `autonomous/tools/execution_bridge.py`, `autonomous/tools/subagent_runtime.py`, `autonomous/system_agent.py` | `autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py`, `autonomous/tests/test_execution_bridge_native_ws28_013.py` |
+| Execution Bridge 终态 | 子代理输出到执行动作的内建可审计桥，不依赖外部黑盒 | 已落地 `SubTaskExecutionBridgeReceipt + SubTaskExecutionCompleted`，并完成旧别名事件退役 | `BRIDGE_DONE` | `autonomous/tools/execution_bridge.py`, `autonomous/tools/subagent_runtime.py`, `autonomous/system_agent.py` | `autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py`, `autonomous/tests/test_execution_bridge_native_ws28_013.py` |
 
 ---
 
@@ -69,17 +69,17 @@
 1. 在 WS22 文档中显式标注“`4/4` 不含扩展项 005/006”。
 2. 统一通过本文件矩阵判断“桥接完成 vs 目标态完成”。
 
-### 5.2 噪音点 B：事件命名历史遗留（已部分收敛）
+### 5.2 噪音点 B：事件命名历史遗留（已收口）
 
 现状：
 
 1. 主事件已切到 `SubTaskExecutionCompleted`。
-2. 兼容事件 `SubTaskCliExecutionCompleted` 仍保留（alias）以避免历史报表断层。
+2. `SubTaskCliExecutionCompleted` 兼容别名已退役，报表应统一使用主事件。
 
 建议：
 
-1. 保持 `SubTaskExecutionCompleted` 为主语义，逐步清理“CLI”命名依赖。
-2. 发布门禁脚本继续兼容新旧字段，直到历史统计窗口完成迁移。
+1. 保持 `SubTaskExecutionCompleted` 为主语义，禁止新增“CLI”事件命名依赖。
+2. 发布门禁脚本统一切到主事件字段，旧字段仅保留历史报告离线兼容。
 
 ### 5.3 噪音点 C：旧版目标文档时间戳
 
