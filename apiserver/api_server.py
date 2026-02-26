@@ -221,6 +221,77 @@ def _build_chat_route_prompt_hints(route_meta: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _trim_contract_text(value: Any, *, limit: int = 240) -> str:
+    text = " ".join(str(value or "").strip().split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)] + "..."
+
+
+def _build_core_execution_contract_payload(
+    *,
+    session_id: str,
+    current_message: str,
+    recent_messages: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    latest_user_history: List[str] = []
+    latest_assistant_history: List[str] = []
+    for item in reversed(list(recent_messages or [])):
+        role = str(item.get("role") or "").strip().lower()
+        content = _trim_contract_text(item.get("content", ""))
+        if not content:
+            continue
+        if role == "user" and len(latest_user_history) < 3:
+            latest_user_history.append(content)
+        elif role == "assistant" and len(latest_assistant_history) < 2:
+            latest_assistant_history.append(content)
+        if len(latest_user_history) >= 3 and len(latest_assistant_history) >= 2:
+            break
+
+    latest_user_history.reverse()
+    latest_assistant_history.reverse()
+    goal = _trim_contract_text(current_message, limit=320)
+    scope_hint = latest_user_history[-1] if latest_user_history else goal
+    acceptance_hint = "输出可验证的执行证据（含结果与报告路径），必要时附失败根因与下一步。"
+    assumptions: List[str] = []
+    if not latest_user_history:
+        assumptions.append("历史上下文为空，按当前请求建立新执行契约。")
+    if len(goal) <= 24 and any(marker in goal.lower() for marker in _CHAT_ROUTE_FOLLOWUP_MARKERS):
+        assumptions.append("用户输入可能是续写指令，需结合 recent_user_history 推断目标。")
+
+    return {
+        "contract_stage": "seed",
+        "session_id": str(session_id or ""),
+        "goal": goal,
+        "scope_hint": scope_hint,
+        "acceptance_hint": acceptance_hint,
+        "recent_user_history": latest_user_history,
+        "recent_assistant_history": latest_assistant_history,
+        "assumptions": assumptions,
+        "evidence_path_hint": "scratch/reports/",
+    }
+
+
+def _build_core_execution_messages(
+    *,
+    session_id: str,
+    system_prompt: str,
+    current_message: str,
+) -> List[Dict[str, Any]]:
+    recent_messages = message_manager.get_recent_messages(session_id, count=10)
+    contract_payload = _build_core_execution_contract_payload(
+        session_id=session_id,
+        current_message=current_message,
+        recent_messages=recent_messages,
+    )
+    contract_text = "[ExecutionContractInput]\n" + json.dumps(contract_payload, ensure_ascii=False, sort_keys=True)
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": contract_text},
+        {"role": "user", "content": current_message},
+    ]
+
+
 def _get_chat_route_event_store() -> Optional[EventStore]:
     global _CHAT_ROUTE_EVENT_STORE
     if _CHAT_ROUTE_EVENT_STORE is not None:
@@ -1060,9 +1131,16 @@ async def chat_stream(request: ChatRequest):
             effective_message = request.message
 
             # 使用消息管理器构建完整的对话消息
-            messages = message_manager.build_conversation_messages(
+            conversation_messages = message_manager.build_conversation_messages(
                 session_id=session_id, system_prompt=system_prompt, current_message=effective_message
             )
+            messages = conversation_messages
+            if path == "path-c":
+                messages = _build_core_execution_messages(
+                    session_id=session_id,
+                    system_prompt=system_prompt,
+                    current_message=effective_message,
+                )
 
             # 如果携带截屏图片，将最后一条用户消息改为多模态格式（OpenAI vision 兼容）
             if request.images:
