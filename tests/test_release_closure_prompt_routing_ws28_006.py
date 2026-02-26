@@ -38,6 +38,6 @@ def test_release_closure_prompt_routing_cli_main_smoke(monkeypatch) -> None:
         assert output.exists() is True
         payload = json.loads(output.read_text(encoding="utf-8"))
         groups = {str(item.get("group_id")) for item in payload.get("group_results", [])}
-        assert {"ws28_001", "ws28_002", "ws28_003", "ws28_004", "ws28_005", "ws28_007", "ws28_008"} <= groups
+        assert {"ws28_001", "ws28_002", "ws28_003", "ws28_004", "ws28_005", "ws28_007", "ws28_008", "ws28_009"} <= groups
     finally:
         _cleanup_case_root(case_root)
