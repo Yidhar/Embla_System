@@ -84,6 +84,8 @@ const PAGE_COPY: Record<
       owner: string;
       fencingEpoch: string;
       secondsToExpiry: string;
+      trend: string;
+      volatility: string;
     };
   }
 > = {
@@ -146,6 +148,8 @@ const PAGE_COPY: Record<
       owner: "Owner",
       fencingEpoch: "Fencing Epoch",
       secondsToExpiry: "Seconds To Expiry",
+      trend: "Trend",
+      volatility: "Volatility",
     },
   },
   "zh-CN": {
@@ -207,6 +211,8 @@ const PAGE_COPY: Record<
       owner: "持有者",
       fencingEpoch: "Fencing Epoch",
       secondsToExpiry: "距过期秒数",
+      trend: "趋势",
+      volatility: "波动率",
     },
   },
 };
@@ -350,6 +356,7 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
   const sources = asRecord(payload?.data?.sources);
   const postureSummary = asRecord(payload?.data?.summary);
   const routeQuality = asRecord(postureSummary.route_quality);
+  const routeQualityTrend = asRecord(routeQuality.trend);
 
   const evidenceSummary = asRecord(evidencePayload?.data?.summary);
   const requiredReports = asArray(evidencePayload?.data?.required_reports);
@@ -375,6 +382,8 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
   const coreSessionSampleCount = asNumber(coreSessionCreation.sample_count);
   const routeQualityStatusText = asText(routeQuality.status, "unknown");
   const routeQualityReason = asText(routeQuality.reason_text, "");
+  const routeQualityDirection = asText(routeQualityTrend.direction, "unknown");
+  const routeQualityVolatility = asNumber(routeQualityTrend.volatility);
   const queuePending = asNumber(queueDepth.value);
   const queueCritical = asNumber(asRecord(queueDepth.thresholds).critical);
   const queueRatio = queuePending !== null && queueCritical && queueCritical > 0 ? queuePending / queueCritical : null;
@@ -411,7 +420,10 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
     {
       title: copy.cards.routeQuality.title,
       value: routeQualityStatusText.toUpperCase(),
-      note: routeQualityReason || copy.cards.routeQuality.note,
+      note:
+        routeQualityReason
+          ? `${routeQualityReason} · ${copy.words.trend}: ${routeQualityDirection} · ${copy.words.volatility}: ${toNumber(routeQualityVolatility, lang, 2)}`
+          : copy.cards.routeQuality.note,
       state: toState(routeQualityStatusText),
     },
     {

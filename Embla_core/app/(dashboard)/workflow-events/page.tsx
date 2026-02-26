@@ -72,6 +72,8 @@ const PAGE_COPY: Record<
       pathBRatio: string;
       pathCRatio: string;
       routeQualityReason: string;
+      trend: string;
+      volatility: string;
     };
   }
 > = {
@@ -129,6 +131,8 @@ const PAGE_COPY: Record<
       pathBRatio: "Path-B",
       pathCRatio: "Path-C",
       routeQualityReason: "Reason",
+      trend: "Trend",
+      volatility: "Volatility",
     },
   },
   "zh-CN": {
@@ -185,6 +189,8 @@ const PAGE_COPY: Record<
       pathBRatio: "Path-B",
       pathCRatio: "Path-C",
       routeQualityReason: "原因",
+      trend: "趋势",
+      volatility: "波动率",
     },
   },
 };
@@ -294,6 +300,7 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
       ? runtimeMetrics.core_session_creation_rate
       : {};
   const runtimeRouteQuality = asRecord(runtimeSummary.route_quality);
+  const runtimeRouteQualityTrend = asRecord(runtimeRouteQuality.trend);
   const incidentPromptSafety = asRecord(incidentsSummary?.runtime_prompt_safety);
   const incidentReadonlyExposure = asRecord(incidentPromptSafety.readonly_write_tool_exposure_rate);
   const incidentOuterReadonlyHit = asRecord(incidentPromptSafety.outer_readonly_hit_rate);
@@ -301,6 +308,7 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
   const incidentPathBBudgetEscalation = asRecord(incidentPromptSafety.path_b_budget_escalation_rate);
   const incidentCoreSessionCreation = asRecord(incidentPromptSafety.core_session_creation_rate);
   const incidentRouteQuality = asRecord(incidentPromptSafety.route_quality);
+  const incidentRouteQualityTrend = asRecord(incidentRouteQuality.trend);
 
   const outboxPending = summary?.outbox_pending;
   const oldestPendingAge = summary?.oldest_pending_age_seconds;
@@ -316,6 +324,8 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
   const coreSessionCreationState = toState(String((coreSessionCreationMetric as { status?: unknown }).status || "unknown"));
   const runtimeRouteQualityState = toState(String(runtimeRouteQuality.status || "unknown"));
   const incidentRouteQualityState = toState(String(incidentRouteQuality.status || "unknown"));
+  const runtimeRouteQualityDirection = String(runtimeRouteQualityTrend.direction || copy.words.unknown);
+  const incidentRouteQualityDirection = String(incidentRouteQualityTrend.direction || copy.words.unknown);
   const latestIncidentText = formatIsoDateTime(incidentsSummary?.latest_incident_at, lang, "--");
 
   return (
@@ -528,7 +538,7 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
                   value={String(runtimeRouteQuality.status || copy.words.unknown).toUpperCase()}
                   ratio={stateToRatio(runtimeRouteQualityState)}
                   tone={toTone(runtimeRouteQualityState)}
-                  hint={`${copy.words.routeQualityReason}: ${String(runtimeRouteQuality.reason_text || "--")}`}
+                  hint={`${copy.words.routeQualityReason}: ${String(runtimeRouteQuality.reason_text || "--")} · ${copy.words.trend}: ${runtimeRouteQualityDirection} · ${copy.words.volatility}: ${toNumber(runtimeRouteQualityTrend.volatility, lang)}`}
                 />
               </div>
             </div>
@@ -609,7 +619,7 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
                   value={String(incidentRouteQuality.status || copy.words.unknown).toUpperCase()}
                   ratio={stateToRatio(incidentRouteQualityState)}
                   tone={toTone(incidentRouteQualityState)}
-                  hint={`${copy.words.routeQualityReason}: ${String(incidentRouteQuality.reason_text || "--")}`}
+                  hint={`${copy.words.routeQualityReason}: ${String(incidentRouteQuality.reason_text || "--")} · ${copy.words.trend}: ${incidentRouteQualityDirection} · ${copy.words.volatility}: ${toNumber(incidentRouteQualityTrend.volatility, lang)}`}
                 />
               </div>
             </div>
