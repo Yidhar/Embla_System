@@ -58,6 +58,8 @@ def run_update_immutable_dna_manifest(
     output_file: Path | None = None,
     approval_ticket: str | None = None,
     approval_ticket_env: str | None = "DNA_APPROVAL_TICKET",
+    change_reason: str | None = None,
+    strict_mode: bool = False,
     verify_after_update: bool = True,
 ) -> Dict[str, Any]:
     root = prompts_root.resolve()
@@ -68,6 +70,7 @@ def run_update_immutable_dna_manifest(
         else Path("scratch/reports/immutable_dna_audit_ws23_003.jsonl").resolve()
     )
     ticket = _normalize_ticket(approval_ticket, approval_ticket_env=approval_ticket_env)
+    normalized_change_reason = str(change_reason or "").strip()
 
     report: Dict[str, Any] = {
         "task_id": "NGA-WS23-003",
@@ -78,6 +81,8 @@ def run_update_immutable_dna_manifest(
         "audit_file": str(audit).replace("\\", "/"),
         "required_prompt_files": list(REQUIRED_PROMPT_FILES),
         "verify_after_update": bool(verify_after_update),
+        "change_reason": normalized_change_reason,
+        "strict_mode": bool(strict_mode),
     }
 
     if not ticket:
@@ -86,6 +91,20 @@ def run_update_immutable_dna_manifest(
                 "passed": False,
                 "reason": "missing_approval_ticket",
                 "approval_ticket_source": str(approval_ticket_env or ""),
+            }
+        )
+        if output_file is not None:
+            target = output_file.resolve() if output_file.is_absolute() else (Path(".").resolve() / output_file)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            report["output_file"] = str(target).replace("\\", "/")
+        return report
+
+    if strict_mode and not normalized_change_reason:
+        report.update(
+            {
+                "passed": False,
+                "reason": "missing_change_reason",
             }
         )
         if output_file is not None:
@@ -165,6 +184,12 @@ def parse_args() -> argparse.Namespace:
         help="Environment variable name used when --approval-ticket is empty",
     )
     parser.add_argument(
+        "--change-reason",
+        type=str,
+        default="",
+        help="Reason for updating immutable DNA manifest (required in --strict mode)",
+    )
+    parser.add_argument(
         "--skip-verify",
         action="store_true",
         help="Only update manifest without gate verification",
@@ -186,6 +211,8 @@ def main() -> int:
         output_file=args.output,
         approval_ticket=args.approval_ticket,
         approval_ticket_env=args.approval_ticket_env,
+        change_reason=args.change_reason,
+        strict_mode=bool(args.strict),
         verify_after_update=not bool(args.skip_verify),
     )
     print(

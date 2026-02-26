@@ -32,7 +32,7 @@ def test_immutable_dna_gate_can_bootstrap_and_pass() -> None:
         _write_prompt_files(prompts_root)
         report = run_immutable_dna_gate(
             prompts_root=prompts_root,
-            manifest_path=prompts_root / "immutable_dna_manifest.json",
+            manifest_path=prompts_root / "immutable_dna_manifest.spec",
             audit_file=case_root / "audit.jsonl",
             output_file=case_root / "report.json",
             bootstrap_if_missing=True,
@@ -52,7 +52,7 @@ def test_immutable_dna_gate_rejects_missing_manifest_without_bootstrap() -> None
         _write_prompt_files(prompts_root)
         report = run_immutable_dna_gate(
             prompts_root=prompts_root,
-            manifest_path=prompts_root / "immutable_dna_manifest.json",
+            manifest_path=prompts_root / "immutable_dna_manifest.spec",
             audit_file=case_root / "audit.jsonl",
             output_file=case_root / "report.json",
             bootstrap_if_missing=False,
@@ -70,7 +70,7 @@ def test_immutable_dna_gate_detects_prompt_tamper_after_manifest_bootstrap() -> 
         _write_prompt_files(prompts_root)
         run_immutable_dna_gate(
             prompts_root=prompts_root,
-            manifest_path=prompts_root / "immutable_dna_manifest.json",
+            manifest_path=prompts_root / "immutable_dna_manifest.spec",
             audit_file=case_root / "audit.jsonl",
             output_file=case_root / "bootstrap.json",
             bootstrap_if_missing=True,
@@ -79,7 +79,7 @@ def test_immutable_dna_gate_detects_prompt_tamper_after_manifest_bootstrap() -> 
 
         report = run_immutable_dna_gate(
             prompts_root=prompts_root,
-            manifest_path=prompts_root / "immutable_dna_manifest.json",
+            manifest_path=prompts_root / "immutable_dna_manifest.spec",
             audit_file=case_root / "audit.jsonl",
             output_file=case_root / "report.json",
             bootstrap_if_missing=False,
@@ -87,5 +87,23 @@ def test_immutable_dna_gate_detects_prompt_tamper_after_manifest_bootstrap() -> 
         assert report["passed"] is False
         assert report["reason"] == "dna_hash_mismatch"
         assert "tool_dispatch_prompt.txt" in report["verify"]["mismatch_files"]
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_immutable_dna_gate_rejects_json_manifest_extension() -> None:
+    case_root = _make_case_root("test_ws23_003_immutable_dna_gate")
+    try:
+        prompts_root = case_root / "prompts"
+        _write_prompt_files(prompts_root)
+        report = run_immutable_dna_gate(
+            prompts_root=prompts_root,
+            manifest_path=prompts_root / "immutable_dna_manifest.json",
+            audit_file=case_root / "audit.jsonl",
+            output_file=case_root / "report.json",
+            bootstrap_if_missing=True,
+        )
+        assert report["passed"] is False
+        assert report["reason"] == "manifest_extension_not_spec"
     finally:
         _cleanup_case_root(case_root)

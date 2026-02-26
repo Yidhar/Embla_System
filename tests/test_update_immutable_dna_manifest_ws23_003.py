@@ -38,11 +38,13 @@ def test_update_immutable_dna_manifest_success_and_verify_passes() -> None:
             audit_file=case_root / "audit.jsonl",
             output_file=case_root / "report.json",
             approval_ticket="CHG-TEST-001",
+            change_reason="sync dna after controlled prompt update",
             verify_after_update=True,
         )
         assert report["passed"] is True
         assert report["reason"] == "ok"
         assert report["manifest_file_count"] == 4
+        assert report["change_reason"] == "sync dna after controlled prompt update"
         assert report["gate_report"]["passed"] is True
         payload = json.loads((prompts_root / "immutable_dna_manifest.spec").read_text(encoding="utf-8"))
         assert payload["schema_version"] == "ws18-006-v1"
@@ -84,10 +86,34 @@ def test_update_immutable_dna_manifest_can_skip_verify() -> None:
             audit_file=case_root / "audit.jsonl",
             output_file=case_root / "report.json",
             approval_ticket="CHG-TEST-002",
+            change_reason="skip verify in local rehearsal",
             verify_after_update=False,
         )
         assert report["passed"] is True
         assert report["reason"] == "manifest_updated_without_verify"
         assert "gate_report" not in report
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_update_immutable_dna_manifest_strict_requires_change_reason() -> None:
+    case_root = _make_case_root("test_update_immutable_dna_manifest_ws23_003")
+    try:
+        prompts_root = case_root / "prompts"
+        _write_prompt_files(prompts_root)
+
+        report = run_update_immutable_dna_manifest(
+            prompts_root=prompts_root,
+            manifest_path=prompts_root / "immutable_dna_manifest.spec",
+            audit_file=case_root / "audit.jsonl",
+            output_file=case_root / "report.json",
+            approval_ticket="CHG-TEST-003",
+            change_reason="",
+            strict_mode=True,
+            verify_after_update=True,
+        )
+        assert report["passed"] is False
+        assert report["reason"] == "missing_change_reason"
+        assert not (prompts_root / "immutable_dna_manifest.spec").exists()
     finally:
         _cleanup_case_root(case_root)

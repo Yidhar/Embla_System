@@ -53,6 +53,33 @@ def run_immutable_dna_gate(
     root = prompts_root.resolve()
     manifest = manifest_path.resolve() if manifest_path is not None else (root / "immutable_dna_manifest.spec")
     audit = audit_file.resolve() if audit_file is not None else (Path("scratch/reports/immutable_dna_audit_ws23_003.jsonl").resolve())
+    if manifest.suffix.lower() != ".spec":
+        report = {
+            "task_id": "NGA-WS23-003",
+            "scenario": "immutable_dna_gate_validation",
+            "generated_at": _utc_iso(),
+            "prompts_root": str(root).replace("\\", "/"),
+            "manifest_path": str(manifest).replace("\\", "/"),
+            "audit_file": str(audit).replace("\\", "/"),
+            "bootstrapped_manifest": False,
+            "required_prompt_files": list(REQUIRED_PROMPT_FILES),
+            "missing_required_files": list(REQUIRED_PROMPT_FILES),
+            "verify": {
+                "ok": False,
+                "reason": "manifest_extension_not_spec",
+                "mismatch_files": [],
+                "missing_files": list(REQUIRED_PROMPT_FILES),
+            },
+            "passed": False,
+            "reason": "manifest_extension_not_spec",
+        }
+        if output_file is not None:
+            target = output_file.resolve() if output_file.is_absolute() else (Path(".").resolve() / output_file)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            report["output_file"] = str(target).replace("\\", "/")
+        return report
+
     loader = ImmutableDNALoader(
         root_dir=root,
         dna_files=[DNAFileSpec(path=name, required=True) for name in REQUIRED_PROMPT_FILES],
