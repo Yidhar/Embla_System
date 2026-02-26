@@ -35,6 +35,7 @@ const PAGE_COPY: Record<
       eventPostureSummary: string;
       runtimeCrossSignals: string;
       incidentCounters: string;
+      incidentPromptSafety: string;
       eventCounters: string;
       logContextStats: string;
     };
@@ -81,6 +82,7 @@ const PAGE_COPY: Record<
       eventPostureSummary: "Event Posture Summary",
       runtimeCrossSignals: "Runtime Cross-Page Signals",
       incidentCounters: "Incident Counters",
+      incidentPromptSafety: "Incident Prompt Safety Snapshot",
       eventCounters: "Event Counters",
       logContextStats: "Log Context Stats",
     },
@@ -126,6 +128,7 @@ const PAGE_COPY: Record<
       eventPostureSummary: "事件态势摘要",
       runtimeCrossSignals: "运行态跨页信号",
       incidentCounters: "事件计数器",
+      incidentPromptSafety: "事件 Prompt 安全快照",
       eventCounters: "事件分类计数",
       logContextStats: "日志上下文统计",
     },
@@ -178,6 +181,20 @@ function toNumber(value: unknown, lang: AppLang, suffix = ""): string {
   return `${formatted}${suffix}`;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === "object" && value !== null) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function toRatio(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return null;
+}
+
 function toPercent(value: unknown, lang: AppLang): string {
   return formatPercentRatio(value, lang, 1, "--");
 }
@@ -220,6 +237,9 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
     typeof runtimeMetrics.outer_readonly_hit_rate === "object" && runtimeMetrics.outer_readonly_hit_rate
       ? runtimeMetrics.outer_readonly_hit_rate
       : {};
+  const incidentPromptSafety = asRecord(incidentsSummary?.runtime_prompt_safety);
+  const incidentReadonlyExposure = asRecord(incidentPromptSafety.readonly_write_tool_exposure_rate);
+  const incidentOuterReadonlyHit = asRecord(incidentPromptSafety.outer_readonly_hit_rate);
 
   const outboxPending = summary?.outbox_pending;
   const oldestPendingAge = summary?.oldest_pending_age_seconds;
@@ -414,20 +434,48 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
 
         <article className="glass-card p-6">
           <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.incidentCounters}</p>
-          <div className="mt-4 rounded-xl bg-white/70 p-3 text-xs text-gray-700">
-            <pre className="whitespace-pre-wrap">
-              {JSON.stringify(
-                {
-                  severity: incidentsPayload?.severity || copy.words.unknown,
-                  reason_code: incidentsPayload?.reason_code || "",
-                  reason_text: incidentsPayload?.reason_text || "",
-                  event_counters: incidentsPayload?.data?.event_counters || {},
-                  events_scanned: incidentsPayload?.data?.events_scanned || 0,
-                },
-                null,
-                2,
-              )}
-            </pre>
+          <div className="mt-4 space-y-3 text-xs text-gray-700">
+            <div className="rounded-xl bg-white/70 p-3">
+              <p className="font-bold uppercase tracking-[0.2em] text-gray-500">{copy.sections.incidentPromptSafety}</p>
+              <div className="mt-2 grid grid-cols-1 gap-3">
+                <MetricBar
+                  label={copy.metricLabels.readonlyWriteExposure}
+                  value={toPercent(incidentReadonlyExposure.value, lang)}
+                  ratio={toRatio(incidentReadonlyExposure.value)}
+                  tone={toTone(toState(String(incidentReadonlyExposure.status || "unknown")))}
+                  right={
+                    <span>
+                      {copy.words.sampleCount} {toNumber(incidentReadonlyExposure.sample_count, lang)}
+                    </span>
+                  }
+                  hint={`${copy.words.exposureCount}: ${toNumber(incidentReadonlyExposure.exposure_count, lang)}`}
+                />
+                <MetricBar
+                  label={copy.metricLabels.outerReadonlyHitRate}
+                  value={toPercent(incidentOuterReadonlyHit.value, lang)}
+                  ratio={toRatio(incidentOuterReadonlyHit.value)}
+                  tone={toTone(toState(String(incidentOuterReadonlyHit.status || "unknown")))}
+                  hint={`${copy.words.hitCount}: ${toNumber(incidentOuterReadonlyHit.hit_count, lang)}`}
+                />
+              </div>
+            </div>
+
+            <div className="rounded-xl bg-white/70 p-3 text-xs text-gray-700">
+              <pre className="whitespace-pre-wrap">
+                {JSON.stringify(
+                  {
+                    severity: incidentsPayload?.severity || copy.words.unknown,
+                    reason_code: incidentsPayload?.reason_code || "",
+                    reason_text: incidentsPayload?.reason_text || "",
+                    event_counters: incidentsPayload?.data?.event_counters || {},
+                    events_scanned: incidentsPayload?.data?.events_scanned || 0,
+                    runtime_prompt_safety: incidentPromptSafety,
+                  },
+                  null,
+                  2,
+                )}
+              </pre>
+            </div>
           </div>
         </article>
       </section>

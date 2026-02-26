@@ -116,6 +116,10 @@ export interface OpsIncidentSummary {
   critical_incidents: number;
   warning_incidents: number;
   latest_incident_at: string;
+  runtime_prompt_safety?: {
+    outer_readonly_hit_rate?: Record<string, unknown>;
+    readonly_write_tool_exposure_rate?: Record<string, unknown>;
+  };
 }
 
 export interface OpsIncidentItem {
