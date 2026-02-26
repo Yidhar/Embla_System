@@ -34,6 +34,18 @@
 8. 原“开放讨论问题”闭环为决议：采纳。
 - 原因：进入工程化阶段需要明确约束而非继续悬而未决。
 
+9. `Logical Priority` 与 `Physical Serialization` 解耦：采纳。
+- 原因：避免把高动态切片提前拼接，导致 Anthropic Prompt Cache 前缀失效。
+
+10. `L4_RECOVERY` 由固定 `ttl_rounds` 升级为混合 TTL：采纳。
+- 原因：纯轮次 TTL 对 ReAct 长链修复不稳定，易在根因未收敛前失忆。
+
+11. 契约屏障分级（Seed Contract -> Execution Contract）：采纳。
+- 原因：避免 Outer 在 Path-B 进入“表单式盘问”，保持交互流畅性。
+
+12. 冲突消解从 `conflicts_with[str]` 升级为语义域规则：采纳。
+- 原因：降低 slice 重命名导致静默失效的风险。
+
 ---
 
 ## 1. 背景与问题
@@ -123,6 +135,7 @@
 4. 可审计可回放：每轮输出注入快照（含来源、版本、hash）。
 5. 安全不可被覆盖：安全层优先级高于技能层与任务层。
 6. 工具物理权限优先：模型角色描述不得突破工具层权限隔离。
+7. 逻辑优先级与物理拼接顺序解耦：先按逻辑裁剪，再按缓存友好顺序序列化。
 
 ---
 
@@ -166,7 +179,7 @@
 
 2. `Path-B: Outer Clarify`
 - 适用：意图不明确或输入信息不足。
-- 执行：Outer 先澄清并补全 Contract（目标、范围、副作用、验收），再决定是否升级 Core。
+- 执行：Outer 先澄清并生成 `Seed Contract`（最小必填 + 假设项），再决定是否升级 Core。
 
 3. `Path-C: Core Execution`
 - 适用：写操作、跨模块编排、多代理协同、需要回滚/重试治理。
@@ -180,7 +193,7 @@
 
 ---
 
-## 6. Prompt 分层、优先级与覆盖规则
+## 6. Prompt 分层、优先级、物理拼接与缓存规则
 
 建议引入六层（兼容当前 `PromptEnvelope`，并补上 `L1.5`）：
 
@@ -213,6 +226,27 @@
 2. 即使 `L2` 声称“可执行任意改动”，当 `L3` 只挂载只读工具时，模型必须服从只读约束。
 3. 禁止“模糊局部覆盖”绕过工具层物理权限。
 
+### 6.1 Prompt Caching 悖论处理（Logical vs Physical）
+
+逻辑优先级用于“冲突裁剪”，不等于“物理拼接顺序”。  
+物理拼接目标是提升缓存命中并降低延迟/成本。
+
+推荐两阶段流程：
+
+1. 逻辑阶段（无关序列化）
+- 按 `L0 > L3 > L2 > L1.5 > L1 > L4` 做筛选与冲突消解。
+- 输出“已确定的最终有效切片集合”。
+
+2. 物理序列化阶段（缓存友好）
+- `P0_STATIC_PREFIX`（尽量稳定，可缓存）：`L0 + L1(稳定部分) + L2 + L3`
+- `P1_DYNAMIC_TAIL`（高动态，不放在前缀）：`L1.5 + L4 + 本轮证据/错误摘要`
+
+硬规则：
+
+1. 高动态切片（`L1.5/L4`）禁止插入缓存前缀。
+2. `L3` 约束必须在最终可见 Prompt 中明确出现（可位于静态前缀末端）。
+3. 每轮记录 `prefix_hash` 与 `tail_hash`，用于命中率与漂移追踪。
+
 ---
 
 ## 7. 多职能 Agent 注入时机（关键）
@@ -237,16 +271,28 @@
 ### 7.2 专家子代理拉起与权限降级（Sub-Agent Spawning & Downgrade）
 
 1. 子代理禁止越权直连用户，必须由 Core Agent 基于 Contract 拉起。
-2. 拉起时必须声明 `delegation_intent`、`target_agent_type`、`contract_checksum`。
+2. 拉起时必须声明 `delegation_intent`、`target_agent_type`、`contract_stage` 与契约校验和（`seed_contract_checksum` 或 `contract_checksum`）。
 3. 若目标代理为 `Explore` 或 `Security_Review`：
 - LLM Gateway 组装时必须剔除写工具 schema（如 `os_bash` 写命令、`edit_file`、`workspace_txn_apply`）。
 - Prompt 层追加强只读约束（如 `CRITICAL: READ-ONLY MODE`）。
 
 ### 7.3 并行多职能契约屏障（Frontend/Backend/Ops）
 
-1. 并行前先注入共享契约片段（字段名、版本、错误码）。
-2. 生成并广播 `contract_checksum` 到所有子任务元数据。
-3. 未通过契约一致性时，禁止并行写入，只允许只读探索。
+为避免 Path-B 退化为“盘问式 UX”，采用分级契约屏障：
+
+1. `Seed Contract`（低阻塞）
+- 最小必填：`goal`、`scope_hint`、`risk_class`、`acceptance_hint`。
+- 允许 `unknown_fields`，由 Outer 写入 `assumptions[]` 并标注 `confidence`。
+- 生成 `seed_contract_checksum`，可用于 Core 的只读侦察/计划。
+
+2. `Execution Contract`（写入前强校验）
+- 首次写操作前，必须补齐写路径/副作用/回滚与验收口径。
+- 生成 `contract_checksum` 并广播到所有子任务元数据。
+
+3. 执行门禁
+- `seed_contract_checksum`：允许 Path-C 只读分析、依赖探测、方案草拟。
+- `contract_checksum`：才允许并行写入和落地执行。
+- 未达 Execution Contract 时，系统自动降级为只读探索，不阻塞整个会话。
 
 ### 7.4 高风险二次确认矩阵（新增）
 
@@ -272,17 +318,35 @@
 
 ```python
 @dataclass(frozen=True)
+class SliceTTLPolicy:
+    mode: str                    # rounds|time|event|hybrid
+    rounds_soft: int             # 软过期：超过后降权但不立即删除
+    rounds_hard: int             # 硬过期：超过后强制移除
+    max_age_seconds: int
+    keep_until_error_resolved: bool
+    renew_on_progress: bool      # 发现新证据/进展时续租
+    drop_on_resolution: bool
+```
+
+```python
+@dataclass(frozen=True)
 class PromptSlice:
-    slice_id: str
+    slice_uid: str               # 不随重命名变化的稳定 ID
+    slice_name: str              # 可读名称，可演进
     layer: str                   # L0/L1/L1.5/L2/L3/L4
     owner: str                   # system/router/role/tool/memory/recovery
     content_ref: str             # prompt repo path or inline key
     source_hash: str
+    stability_class: str         # static|session|round
+    cache_segment: str           # prefix_static|prefix_session|tail_dynamic
     inject_when: dict[str, Any]  # phase/risk/evidence/failure conditions
     drop_when: dict[str, Any]
-    ttl_rounds: int
+    ttl_policy: SliceTTLPolicy
     priority: int
-    conflicts_with: list[str]
+    conflict_domain: str         # e.g. "tool_policy.exec_mode"
+    conflict_tags: list[str]     # e.g. ["read_only", "write_enabled"]
+    supersedes: list[str]        # 以 slice_uid 声明替代关系
+    aliases: list[str]           # 历史名称，用于兼容与迁移校验
 ```
 
 ```python
@@ -299,7 +363,13 @@ class PromptComposeDecision:
     # 路由评估追踪字段
     delegation_intent: str       # 预期意图 (e.g., "read_only_exploration")
     target_agent_type: str       # 实际路由目标 (e.g., "ExploreAgent")
-    contract_checksum: str       # 本轮绑定契约
+    contract_stage: str          # seed|execution
+    seed_contract_checksum: str | None
+    contract_checksum: str | None
+
+    # 缓存与序列化观测字段
+    prefix_hash: str
+    tail_hash: str
 ```
 
 ---
@@ -312,17 +382,24 @@ class PromptComposeDecision:
 2. 按触发器筛选。
 - 仅保留满足 `inject_when` 的切片。
 
-3. 冲突消解。
-- 按层级优先级和 `conflicts_with` 规则淘汰。
+3. 语义冲突消解。
+- 先按 `conflict_domain` 分组，再按层级优先级/priority/版本进行选择。
+- `supersedes` 仅接受稳定 `slice_uid`，禁止以可变 `slice_name` 做硬依赖。
+- 兼容模式下可读取旧 `conflicts_with`，但必须在启动期做 dangling 引用校验并告警。
 
 4. 生命周期处理。
-- 先移除已过 TTL 或满足 `drop_when` 的切片。
+- 按 `ttl_policy` 执行软过期/硬过期。
+- 对 `keep_until_error_resolved=true` 的 L4：在“根因未解决且有进展”时续租，避免中途失忆。
 
 5. 预算裁剪。
 - 固定保留 `L0/L3`。
 - 优先裁剪 `L4`，再裁剪低优先级扩展段。
 
-6. 产出审计事件。
+6. 物理序列化。
+- 先输出 `prefix_static/prefix_session`，最后附加 `tail_dynamic`。
+- 记录 `prefix_hash`、`tail_hash` 与 `cache_hit_expected`。
+
+7. 产出审计事件。
 - `PromptComposeDecisionMade`
 - `PromptSliceInjected`
 - `PromptSliceDropped`
@@ -341,9 +418,11 @@ class PromptComposeDecision:
 - `PromptSlice` 输入
 - `compose()` 逻辑与 `PromptComposeDecision` 回执
 - `enforcement_mode: shadow | block`
+- 逻辑裁剪与物理序列化分离（`resolve()` vs `serialize_for_cache()`）
 
 3. 在 `apiserver/agentic_tool_loop.py`：
 - 将 episodic reinjection 迁移为标准 `L1.5` 切片（任务生命周期绑定）
+- 引入 `Seed Contract` 到 `Execution Contract` 的升级状态机
 
 4. 灰度模式要求：
 - `shadow`：仅记录越权/冲突审计，不拦截。
@@ -364,6 +443,10 @@ class PromptComposeDecision:
 - `delegation_hit_rate`
 - `outer_readonly_hit_rate`
 - `core_escalation_rate`
+- `prompt_prefix_cache_hit_rate`
+- `prompt_tail_churn_rate`
+- `contract_upgrade_latency_ms`
+- `recovery_context_survival_rate`
 
 ### 10.3 P2（多代理并行保障）
 
@@ -400,12 +483,15 @@ class PromptComposeDecision:
 
 1. 同一任务多轮执行中，注入切片来源可完整追溯（100%）。
 2. `write_intent` 任务安全策略覆盖率 100%。
-3. 恢复切片平均生存轮次 <= 3（避免长期污染）。
+3. 恢复切片 TTL 策略生效：`rounds_soft<=3` 且同根因未收敛时允许续租，不得中途硬截断。
 4. 多职能并行场景下，接口字段不一致失败率较当前基线下降 60%+。
 5. 专家子代理路由命中率：标准意图集首次命中准确率 >= 85%。
 6. 权限降级可靠性：只读子代理注入时写权限工具暴露率 = 0%。
 7. 聊天快路径性能：`hi` 类请求 P95 `<300ms`（不触发 Core/工具链）。
 8. 并发稳定性：动态并发场景下无持续排队放大和无界 agent 膨胀。
+9. 缓存稳定性：`P0_STATIC_PREFIX` 命中率在同任务多轮对话中不低于 80%。
+10. 交互效率：Path-B 到 Path-C 的升级中位追问次数 <= 1（高风险写操作除外）。
+11. 恢复连续性：同根因修复链路中，`L4` 上下文不可在未收敛前被硬过期截断。
 
 ---
 
