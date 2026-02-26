@@ -48,6 +48,7 @@ def test_release_closure_prompt_routing_cli_main_smoke(monkeypatch) -> None:
             "ws28_008",
             "ws28_009",
             "ws28_010",
+            "ws28_011",
         } <= groups
     finally:
         _cleanup_case_root(case_root)

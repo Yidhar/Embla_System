@@ -21,6 +21,9 @@ from scripts.run_ws28_router_prompt_profile_ws28_001 import run_ws28_router_prom
 from scripts.run_ws28_core_contract_input_ws28_008 import run_ws28_core_contract_input_ws28_008
 from scripts.run_ws28_path_b_clarify_budget_ws28_009 import run_ws28_path_b_clarify_budget_ws28_009
 from scripts.run_ws28_outer_core_session_bridge_ws28_010 import run_ws28_outer_core_session_bridge_ws28_010
+from scripts.run_ws28_chat_route_bridge_observability_ws28_011 import (
+    run_ws28_chat_route_bridge_observability_ws28_011,
+)
 
 
 DEFAULT_OUTPUT = Path("scratch/reports/release_closure_prompt_routing_ws28_006.json")
@@ -57,6 +60,7 @@ def run_release_closure_prompt_routing_ws28_006(
         ("ws28_008", run_ws28_core_contract_input_ws28_008),
         ("ws28_009", run_ws28_path_b_clarify_budget_ws28_009),
         ("ws28_010", run_ws28_outer_core_session_bridge_ws28_010),
+        ("ws28_011", run_ws28_chat_route_bridge_observability_ws28_011),
     ]
 
     for group_id, fn in group_specs:

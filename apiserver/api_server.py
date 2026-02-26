@@ -454,6 +454,106 @@ def _emit_chat_route_prompt_event(route_meta: Dict[str, Any], *, session_id: str
     store.emit("PromptInjectionComposed", payload, source="apiserver.chat_stream")
 
 
+def _read_chat_route_event_rows(*, limit: int = 2000) -> List[Dict[str, Any]]:
+    event_file = Path(__file__).resolve().parent.parent / "logs" / "autonomous" / "events.jsonl"
+    if not event_file.exists() or limit <= 0:
+        return []
+    try:
+        lines = event_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    for line in lines[-max(1, int(limit)) :]:
+        text = str(line or "").strip()
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            rows.append(payload)
+    return rows
+
+
+def _collect_chat_route_bridge_events(*, session_ids: List[str], limit: int = 20) -> List[Dict[str, Any]]:
+    ids = {str(item or "").strip() for item in session_ids if str(item or "").strip()}
+    if not ids:
+        return []
+
+    rows = _read_chat_route_event_rows(limit=max(200, int(limit) * 200))
+    matched: List[Dict[str, Any]] = []
+    for row in reversed(rows):
+        if str(row.get("event_type") or "").strip() != "PromptInjectionComposed":
+            continue
+        payload = row.get("payload")
+        if not isinstance(payload, dict):
+            continue
+
+        outer_session_id = str(payload.get("outer_session_id") or payload.get("session_id") or "").strip()
+        core_session_id = str(payload.get("core_session_id") or "").strip()
+        execution_session_id = str(payload.get("execution_session_id") or "").strip()
+        event_session_ids = {sid for sid in (outer_session_id, core_session_id, execution_session_id) if sid}
+        if not (event_session_ids & ids):
+            continue
+
+        matched.append(
+            {
+                "timestamp": str(row.get("timestamp") or ""),
+                "event_type": "PromptInjectionComposed",
+                "path": str(payload.get("path") or ""),
+                "trigger": str(payload.get("trigger") or ""),
+                "delegation_intent": str(payload.get("delegation_intent") or ""),
+                "prompt_profile": str(payload.get("prompt_profile") or ""),
+                "injection_mode": str(payload.get("injection_mode") or ""),
+                "outer_session_id": outer_session_id,
+                "core_session_id": core_session_id,
+                "execution_session_id": execution_session_id,
+                "path_b_budget_escalated": bool(payload.get("path_b_budget_escalated")),
+                "path_b_budget_reason": str(payload.get("path_b_budget_reason") or ""),
+                "path_b_clarify_turns": int(payload.get("path_b_clarify_turns") or 0),
+                "path_b_clarify_limit": int(payload.get("path_b_clarify_limit") or _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT),
+                "core_session_created": bool(payload.get("core_session_created")),
+                "source": str(row.get("source") or ""),
+            }
+        )
+        if len(matched) >= max(1, int(limit)):
+            break
+    matched.reverse()
+    return matched
+
+
+def _build_chat_route_bridge_payload(session_id: str, *, limit: int = 20) -> Dict[str, Any]:
+    session = message_manager.get_session(session_id)
+    if not isinstance(session, dict):
+        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
+
+    state = _ensure_chat_route_state(session_id)
+    core_session_id = str(state.get("core_session_id") or "").strip()
+    execution_session_id = str(state.get("last_execution_session_id") or session_id)
+    session_ids = [session_id]
+    if core_session_id:
+        session_ids.append(core_session_id)
+    route_events = _collect_chat_route_bridge_events(session_ids=session_ids, limit=max(1, int(limit)))
+
+    return {
+        "status": "success",
+        "outer_session_id": str(session_id),
+        "core_session_id": core_session_id,
+        "execution_session_id": execution_session_id,
+        "outer_session_exists": True,
+        "core_session_exists": bool(core_session_id and message_manager.get_session(core_session_id)),
+        "state": {
+            "path_b_clarify_turns": int(state.get("path_b_clarify_turns") or 0),
+            "path_b_clarify_limit": _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT,
+            "last_execution_session_id": execution_session_id,
+            "last_core_escalation_at_ms": int(state.get("last_core_escalation_at_ms") or 0),
+        },
+        "recent_route_events": route_events,
+    }
+
+
 def _format_sse_payload_chunk(payload: Dict[str, Any]) -> str:
     b64 = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode("utf-8")).decode("ascii")
     return f"data: {b64}\n\n"
@@ -3007,6 +3107,24 @@ async def get_session_detail(session_id: str):
         print(f"获取会话详情错误: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/chat/route_bridge/{session_id}")
+async def get_chat_route_bridge(session_id: str, limit: int = 20):
+    """获取 outer/core 会话桥接状态与最近路由事件。"""
+    try:
+        return _build_chat_route_bridge_payload(session_id, limit=limit)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取会话桥接状态失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/chat/route_bridge/{session_id}")
+async def get_chat_route_bridge_v1(session_id: str, limit: int = 20):
+    return await get_chat_route_bridge(session_id=session_id, limit=limit)
 
 
 @app.delete("/sessions/{session_id}")
