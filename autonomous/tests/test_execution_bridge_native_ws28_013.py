@@ -26,6 +26,7 @@ def test_native_execution_bridge_materializes_subtask_patches() -> None:
     assert receipt["success"] is True
     assert receipt["patch_count"] == 1
     assert receipt["task_id"] == "task-bridge-1"
+    assert receipt["role_executor"] == "backend"
 
 
 def test_native_execution_bridge_uses_metadata_patch_intents_when_subtask_patch_list_empty() -> None:
