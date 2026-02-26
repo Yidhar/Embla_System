@@ -30,6 +30,9 @@
 3. T2 执行 Immutable DNA 门禁校验
 `.\.venv\Scripts\python.exe scripts/validate_immutable_dna_gate_ws23_003.py --output scratch/reports/immutable_dna_gate_ws23_003_result.json`
 
+3.1 T2A（推荐）先同步 manifest 再复验 DNA gate
+`python3 scripts/update_immutable_dna_manifest_ws23_003.py --approval-ticket CHG-2026-XXXX --strict --output scratch/reports/immutable_dna_manifest_update_ws23_003.json`
+
 4. T3 导出 KillSwitch OOB 预案
 `.\.venv\Scripts\python.exe scripts/export_killswitch_oob_bundle_ws23_004.py --oob-allowlist 10.0.0.0/24 bastion.example.com --probe-targets 10.0.0.10 bastion.example.com --dns-allow --output scratch/reports/killswitch_oob_bundle_ws23_004.json`
 
@@ -58,6 +61,6 @@
 - `scratch/reports/ws23_m8_closure_gate_result.json`
 - `scratch/reports/brainstem_supervisor_entry_ws23_001.json`
 - `scratch/reports/immutable_dna_gate_ws23_003_result.json`
+- `scratch/reports/immutable_dna_manifest_update_ws23_003.json`
 - `scratch/reports/killswitch_oob_bundle_ws23_004.json`
 - `scratch/reports/outbox_brainstem_bridge_ws23_005.json`
-

@@ -50,3 +50,44 @@
 
 - `NGA-WS27-005` 已形成可执行、可回归、可审计的 M12 文档一致性校验入口。
 - 该脚本可直接作为 `WS27-006` 放行报告生成的前置输入之一。
+
+## 补充更新（2026-02-25）
+
+为适配当前自主运行 agent 架构，本轮补充了 Prompt 层任务排期协议（TSP-v1）对齐：
+
+1. Prompt 批量重构（4 文件）
+- `system/prompts/conversation_style_prompt.txt`
+- `system/prompts/conversation_analyzer_prompt.txt`
+- `system/prompts/tool_dispatch_prompt.txt`
+- `system/prompts/agentic_tool_prompt.txt`
+- 统一引入 `T0 发现 -> T1 实施 -> T2 验证 -> T3 证据` 的排期语义与交付口径。
+
+2. 新增 runbook
+- `doc/task/runbooks/prompt_task_scheduling_protocol_tsp_v1.md`
+- 固化 TSP-v1 字段定义、状态流转、Prompt 职责分层与回退策略。
+
+3. 文档索引更新
+- `doc/task/README.md`
+- 新增 TSP-v1 runbook 入口，便于后续任务排期复用。
+
+## 补充推进进度（2026-02-26）
+
+当前阶段围绕 Prompt 治理继续推进到“可一键同步 DNA”的可执行状态：
+
+1. 新增 DNA 同步工具
+- `scripts/update_immutable_dna_manifest_ws23_003.py`
+- 支持审批票据、manifest 更新、可选 gate 复验、严格失败返回码。
+
+2. 新增自动化回归
+- `tests/test_update_immutable_dna_manifest_ws23_003.py`
+- 覆盖成功、缺票据失败、`skip_verify` 三条路径。
+
+3. 文档与 runbook 对齐
+- `doc/task/implementation/NGA-WS23-003-implementation.md`
+- `doc/task/runbooks/release_m8_phase3_closure_onepager_ws23_006.md`
+- `doc/task/runbooks/prompt_task_scheduling_protocol_tsp_v1.md`
+
+4. 进度状态
+- Prompt 批量重构（TSP-v1）：已完成
+- DNA manifest 门禁闭环（含一键同步工具）：已完成
+- 现阶段可直接进入下一批 prompt 实战样本回归与调度行为压测

@@ -105,6 +105,8 @@
     - Prompt 层任务排期协议（TSP-v1）：统一 `T0->T1->T2->T3` 执行语义、证据路径与回退口径。
 42. `doc/task/24-ws-prompt-routing-injection-policy.md`
     - Prompt 路由注入与多职能 Agent 注入时机设计讨论稿（阶段/风险/证据/失败触发模型）。
+43. `scripts/update_immutable_dna_manifest_ws23_003.py`
+    - WS23-003 DNA manifest 一键同步工具（更新 manifest + 可选 gate 复验 + 报告落盘）。
 
 ## 4. 任务状态约定
 

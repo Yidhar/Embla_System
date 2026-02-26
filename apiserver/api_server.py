@@ -532,6 +532,114 @@ async def update_system_prompt(payload: Dict[str, Any]):
         raise HTTPException(status_code=500, detail=f"更新系统提示词失败: {str(e)}")
 
 
+def _normalize_prompt_template_name(name: str) -> str:
+    normalized = str(name or "").strip()
+    if normalized.lower().endswith(".txt"):
+        normalized = normalized[:-4]
+    if not normalized:
+        raise HTTPException(status_code=400, detail="提示词名称不能为空")
+    if len(normalized) > 128:
+        raise HTTPException(status_code=400, detail="提示词名称过长")
+    if not all(ch.isalnum() or ch == "_" for ch in normalized):
+        raise HTTPException(status_code=400, detail="提示词名称仅允许字母、数字、下划线")
+    return normalized
+
+
+def _build_prompt_template_meta(path: Path) -> Dict[str, Any]:
+    from datetime import datetime, timezone
+
+    stat = path.stat()
+    return {
+        "name": path.stem,
+        "filename": path.name,
+        "size_bytes": int(stat.st_size),
+        "updated_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+    }
+
+
+def _list_prompt_template_metas() -> List[Dict[str, Any]]:
+    from system.config import get_prompt_manager
+
+    manager = get_prompt_manager()
+    prompts_dir = Path(manager.prompts_dir)
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    items: List[Dict[str, Any]] = []
+    for item in sorted(prompts_dir.glob("*.txt"), key=lambda p: p.name.lower()):
+        if not item.is_file():
+            continue
+        items.append(_build_prompt_template_meta(item))
+    return items
+
+
+@app.get("/system/prompts")
+async def list_system_prompts():
+    try:
+        return {"status": "success", "prompts": _list_prompt_template_metas()}
+    except Exception as e:
+        logger.error(f"读取提示词列表失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"读取提示词列表失败: {str(e)}")
+
+
+@app.get("/v1/system/prompts")
+async def list_system_prompts_v1():
+    return await list_system_prompts()
+
+
+@app.get("/system/prompts/{name}")
+async def get_system_prompt_template(name: str):
+    try:
+        from system.config import get_prompt_manager
+
+        normalized = _normalize_prompt_template_name(name)
+        manager = get_prompt_manager()
+        prompt_file = Path(manager.prompts_dir) / f"{normalized}.txt"
+        if not prompt_file.exists():
+            raise HTTPException(status_code=404, detail=f"提示词不存在: {normalized}")
+        content = prompt_file.read_text(encoding="utf-8")
+        return {
+            "status": "success",
+            "name": normalized,
+            "content": content,
+            "meta": _build_prompt_template_meta(prompt_file),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"读取提示词失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"读取提示词失败: {str(e)}")
+
+
+@app.get("/v1/system/prompts/{name}")
+async def get_system_prompt_template_v1(name: str):
+    return await get_system_prompt_template(name)
+
+
+@app.post("/system/prompts/{name}")
+async def update_system_prompt_template(name: str, payload: Dict[str, Any]):
+    try:
+        from system.config import save_prompt
+
+        normalized = _normalize_prompt_template_name(name)
+        content = payload.get("content")
+        if not isinstance(content, str):
+            raise HTTPException(status_code=400, detail="缺少content参数或类型错误")
+        save_prompt(normalized, content)
+        return {"status": "success", "message": "提示词更新成功", "name": normalized}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新提示词失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"更新提示词失败: {str(e)}")
+
+
+@app.post("/v1/system/prompts/{name}")
+async def update_system_prompt_template_v1(name: str, payload: Dict[str, Any]):
+    return await update_system_prompt_template(name, payload)
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """普通对话接口 - 仅处理纯文本对话"""

@@ -1,12 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  fetchPromptTemplate,
+  fetchPromptTemplates,
   fetchDebugHealth,
   fetchDebugSystemInfo,
+  savePromptTemplate,
   sendDebugChatMessage,
   type DebugChatReply,
   type DebugHealthPayload,
+  type PromptTemplateMeta,
   type DebugSystemInfoPayload,
 } from "@/lib/api/debug-chat";
 import { formatIsoDateTime, formatNumber, type AppLang } from "@/lib/i18n";
@@ -60,6 +64,24 @@ const PAGE_COPY: Record<
       inputRequired: string;
       requestFailed: string;
     };
+    prompts: {
+      title: string;
+      subtitle: string;
+      template: string;
+      refresh: string;
+      loading: string;
+      updatedAt: string;
+      tokenEstimate: string;
+      content: string;
+      save: string;
+      saving: string;
+      empty: string;
+      selectRequired: string;
+      listFailed: string;
+      loadFailed: string;
+      saveFailed: string;
+      saveSuccess: string;
+    };
   }
 > = {
   en: {
@@ -97,6 +119,24 @@ const PAGE_COPY: Record<
       inputRequired: "Message cannot be empty.",
       requestFailed: "Request failed",
     },
+    prompts: {
+      title: "Prompts Hub",
+      subtitle: "Centralized prompt template management for runtime debugging.",
+      template: "Template",
+      refresh: "Refresh",
+      loading: "Loading prompt template...",
+      updatedAt: "Updated at",
+      tokenEstimate: "Estimated Tokens",
+      content: "Prompt Content",
+      save: "Save Prompt",
+      saving: "Saving...",
+      empty: "No prompt template found.",
+      selectRequired: "Please select a prompt template.",
+      listFailed: "Failed to load prompt template list.",
+      loadFailed: "Failed to load prompt template.",
+      saveFailed: "Failed to save prompt template.",
+      saveSuccess: "Prompt template saved.",
+    },
   },
   "zh-CN": {
     title: "调试会话",
@@ -133,6 +173,24 @@ const PAGE_COPY: Record<
       inputRequired: "消息不能为空。",
       requestFailed: "请求失败",
     },
+    prompts: {
+      title: "Prompts 管理",
+      subtitle: "集中管理运行时提示词模板，用于调试与运维。",
+      template: "模板",
+      refresh: "刷新",
+      loading: "正在加载提示词模板...",
+      updatedAt: "更新时间",
+      tokenEstimate: "预估 Token",
+      content: "Prompt 内容",
+      save: "保存 Prompt",
+      saving: "保存中...",
+      empty: "未发现可用的提示词模板。",
+      selectRequired: "请先选择提示词模板。",
+      listFailed: "加载提示词模板列表失败。",
+      loadFailed: "加载提示词模板失败。",
+      saveFailed: "保存提示词模板失败。",
+      saveSuccess: "提示词模板已保存。",
+    },
   },
 };
 
@@ -161,6 +219,14 @@ function shortSessionId(value: string): string {
   return `${value.slice(0, 8)}...${value.slice(-4)}`;
 }
 
+function estimateTokenCount(content: string): number {
+  const text = String(content || "").trim();
+  if (!text) {
+    return 0;
+  }
+  return Math.max(1, Math.round(text.length / 4));
+}
+
 export function DebugChatConsole({ lang }: DebugChatConsoleProps) {
   const copy = PAGE_COPY[lang];
   const [health, setHealth] = useState<DebugHealthPayload | null>(null);
@@ -172,6 +238,16 @@ export function DebugChatConsole({ lang }: DebugChatConsoleProps) {
   const [sending, setSending] = useState(false);
   const [items, setItems] = useState<ChatItem[]>([]);
   const [error, setError] = useState("");
+  const [promptTemplates, setPromptTemplates] = useState<PromptTemplateMeta[]>([]);
+  const [promptName, setPromptName] = useState("");
+  const [promptContent, setPromptContent] = useState("");
+  const [promptUpdatedAt, setPromptUpdatedAt] = useState("");
+  const [promptLoading, setPromptLoading] = useState(false);
+  const [promptSaving, setPromptSaving] = useState(false);
+  const [promptError, setPromptError] = useState("");
+  const [promptMessage, setPromptMessage] = useState("");
+  const didAutoProbe = useRef(false);
+  const didAutoLoadPrompts = useRef(false);
 
   const healthText = useMemo(() => {
     if (health?.status === "healthy") {
@@ -180,7 +256,7 @@ export function DebugChatConsole({ lang }: DebugChatConsoleProps) {
     return copy.words.unhealthy;
   }, [copy.words.healthy, copy.words.unhealthy, health?.status]);
 
-  const runProbe = async () => {
+  const runProbe = useCallback(async () => {
     setProbing(true);
     setError("");
     const [healthPayload, systemInfoPayload] = await Promise.all([fetchDebugHealth(), fetchDebugSystemInfo()]);
@@ -191,7 +267,72 @@ export function DebugChatConsole({ lang }: DebugChatConsoleProps) {
     if (!healthPayload || !systemInfoPayload) {
       setError(copy.words.probeFailed);
     }
-  };
+  }, [copy.words.probeFailed]);
+
+  const loadPromptTemplate = useCallback(
+    async (name: string) => {
+      setPromptLoading(true);
+      setPromptError("");
+      setPromptMessage("");
+      const result = await fetchPromptTemplate(name);
+      setPromptLoading(false);
+      if (!result.ok || !result.data) {
+        setPromptError(`${copy.prompts.loadFailed} ${result.error || "--"}`);
+        return;
+      }
+      setPromptName(String(result.data.name || name));
+      setPromptContent(String(result.data.content || ""));
+      setPromptUpdatedAt(String(result.data.meta?.updated_at || ""));
+    },
+    [copy.prompts.loadFailed],
+  );
+
+  const loadPromptTemplateList = useCallback(async () => {
+    setPromptLoading(true);
+    setPromptError("");
+    setPromptMessage("");
+    const result = await fetchPromptTemplates();
+    if (!result.ok) {
+      setPromptLoading(false);
+      setPromptTemplates([]);
+      setPromptError(`${copy.prompts.listFailed} ${result.error || "--"}`);
+      return;
+    }
+
+    const templates = result.prompts;
+    setPromptTemplates(templates);
+    if (templates.length === 0) {
+      setPromptLoading(false);
+      setPromptName("");
+      setPromptContent("");
+      setPromptUpdatedAt("");
+      return;
+    }
+
+    const preferred = templates.find((item) => item.name === "conversation_style_prompt");
+    const nextName = (promptName && templates.some((item) => item.name === promptName) ? promptName : preferred?.name || templates[0]?.name || "").trim();
+    if (!nextName) {
+      setPromptLoading(false);
+      return;
+    }
+    await loadPromptTemplate(nextName);
+  }, [copy.prompts.listFailed, loadPromptTemplate, promptName]);
+
+  useEffect(() => {
+    if (didAutoProbe.current) {
+      return;
+    }
+    didAutoProbe.current = true;
+    void runProbe();
+  }, [runProbe]);
+
+  useEffect(() => {
+    if (didAutoLoadPrompts.current) {
+      return;
+    }
+    didAutoLoadPrompts.current = true;
+    void loadPromptTemplateList();
+  }, [loadPromptTemplateList]);
 
   const resetSession = () => {
     setSessionId("");
@@ -258,6 +399,28 @@ export function DebugChatConsole({ lang }: DebugChatConsoleProps) {
         timestamp: nowIso(),
       },
     ]);
+  };
+
+  const savePrompt = async () => {
+    const normalizedName = promptName.trim();
+    if (!normalizedName) {
+      setPromptError(copy.prompts.selectRequired);
+      return;
+    }
+    setPromptSaving(true);
+    setPromptError("");
+    setPromptMessage("");
+    const result = await savePromptTemplate({
+      name: normalizedName,
+      content: promptContent,
+    });
+    setPromptSaving(false);
+    if (!result.ok) {
+      setPromptError(`${copy.prompts.saveFailed} ${result.error || "--"}`);
+      return;
+    }
+    setPromptMessage(copy.prompts.saveSuccess);
+    await loadPromptTemplateList();
   };
 
   return (
@@ -360,6 +523,80 @@ export function DebugChatConsole({ lang }: DebugChatConsoleProps) {
         <p>
           token_hint: {formatNumber(items.length, lang, { maximumFractionDigits: 0, fallback: "--" })} items
         </p>
+      </section>
+
+      <section className="glass-card p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.prompts.title}</p>
+            <p className="mt-2 text-sm text-gray-600">{copy.prompts.subtitle}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void loadPromptTemplateList()}
+              disabled={promptLoading}
+              className="rounded-xl border border-gray-200/60 bg-white/80 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-gray-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {copy.prompts.refresh}
+            </button>
+            <button
+              type="button"
+              onClick={() => void savePrompt()}
+              disabled={promptSaving || promptLoading}
+              className="rounded-xl border border-white/70 bg-[#1c1c1e] px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {promptSaving ? copy.prompts.saving : copy.prompts.save}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-[240px_1fr]">
+          <label className="block">
+            <p className="mb-1 text-xs text-gray-600">{copy.prompts.template}</p>
+            <select
+              value={promptName}
+              onChange={(event) => {
+                const nextName = event.target.value;
+                setPromptName(nextName);
+                if (nextName) {
+                  void loadPromptTemplate(nextName);
+                }
+              }}
+              className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+            >
+              {promptTemplates.length === 0 ? <option value="">{copy.prompts.empty}</option> : null}
+              {promptTemplates.map((item) => (
+                <option key={item.name} value={item.name}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-600">
+            <p>
+              {copy.prompts.updatedAt}: {promptUpdatedAt ? formatIsoDateTime(promptUpdatedAt, lang) : "--"}
+            </p>
+            <p className="mt-1">
+              {copy.prompts.tokenEstimate}: {formatNumber(estimateTokenCount(promptContent), lang, { maximumFractionDigits: 0, fallback: "--" })}
+            </p>
+          </div>
+        </div>
+
+        <label className="mt-4 block">
+          <p className="mb-1 text-xs text-gray-600">{copy.prompts.content}</p>
+          <textarea
+            value={promptContent}
+            onChange={(event) => setPromptContent(event.target.value)}
+            placeholder={copy.prompts.loading}
+            className="h-72 w-full rounded-2xl border border-gray-200/60 bg-white/80 p-4 font-mono text-xs text-gray-700 outline-none"
+            spellCheck={false}
+          />
+        </label>
+
+        {promptLoading ? <p className="mt-3 text-sm text-gray-500">{copy.prompts.loading}</p> : null}
+        {promptError ? <p className="mt-3 text-sm text-rose-600">{promptError}</p> : null}
+        {promptMessage ? <p className="mt-3 text-sm text-emerald-600">{promptMessage}</p> : null}
       </section>
     </div>
   );

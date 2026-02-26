@@ -24,6 +24,20 @@ export type DebugChatReply = {
   session_id?: string;
 };
 
+export type PromptTemplateMeta = {
+  name: string;
+  filename?: string;
+  size_bytes?: number;
+  updated_at?: string;
+};
+
+export type PromptTemplatePayload = {
+  status?: string;
+  name?: string;
+  content?: string;
+  meta?: PromptTemplateMeta;
+};
+
 export async function fetchDebugHealth(): Promise<DebugHealthPayload | null> {
   try {
     const response = await fetch(withBase("/v1/health"), {
@@ -84,5 +98,69 @@ export async function sendDebugChatMessage(params: {
     return { ok: true, data: payload, error: "" };
   } catch (error) {
     return { ok: false, data: null, error: String(error || "network error") };
+  }
+}
+
+export async function fetchPromptTemplates(): Promise<{ ok: boolean; prompts: PromptTemplateMeta[]; error: string }> {
+  try {
+    const response = await fetch(withBase("/v1/system/prompts"), {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      return { ok: false, prompts: [], error: `HTTP ${response.status}` };
+    }
+    const payload = (await response.json()) as { status?: string; prompts?: PromptTemplateMeta[] };
+    if (!payload || payload.status !== "success" || !Array.isArray(payload.prompts)) {
+      return { ok: false, prompts: [], error: "invalid response" };
+    }
+    return { ok: true, prompts: payload.prompts, error: "" };
+  } catch (error) {
+    return { ok: false, prompts: [], error: String(error || "network error") };
+  }
+}
+
+export async function fetchPromptTemplate(name: string): Promise<{ ok: boolean; data: PromptTemplatePayload | null; error: string }> {
+  try {
+    const response = await fetch(withBase(`/v1/system/prompts/${encodeURIComponent(name)}`), {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      return { ok: false, data: null, error: `HTTP ${response.status}` };
+    }
+    const payload = (await response.json()) as PromptTemplatePayload;
+    if (!payload || payload.status !== "success") {
+      return { ok: false, data: payload || null, error: "invalid response" };
+    }
+    return { ok: true, data: payload, error: "" };
+  } catch (error) {
+    return { ok: false, data: null, error: String(error || "network error") };
+  }
+}
+
+export async function savePromptTemplate(params: {
+  name: string;
+  content: string;
+}): Promise<{ ok: boolean; error: string }> {
+  try {
+    const response = await fetch(withBase(`/v1/system/prompts/${encodeURIComponent(params.name)}`), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ content: params.content }),
+    });
+    if (!response.ok) {
+      return { ok: false, error: `HTTP ${response.status}` };
+    }
+    const payload = (await response.json()) as { status?: string; message?: string };
+    if (!payload || payload.status !== "success") {
+      return { ok: false, error: "invalid response" };
+    }
+    return { ok: true, error: "" };
+  } catch (error) {
+    return { ok: false, error: String(error || "network error") };
   }
 }

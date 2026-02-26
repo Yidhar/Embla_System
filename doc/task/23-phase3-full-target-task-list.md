@@ -104,6 +104,8 @@
   - 新增 DNA 门禁脚本：`scripts/validate_immutable_dna_gate_ws23_003.py`
   - 接入收口链：`scripts/release_closure_chain_m0_m5.py` (`T0A`)
   - 回归：`tests/test_ws23_003_immutable_dna_gate.py`、`tests/test_release_closure_chain_m0_m5.py`
+  - 新增 manifest 一键同步脚本：`scripts/update_immutable_dna_manifest_ws23_003.py`
+  - 新增回归：`tests/test_update_immutable_dna_manifest_ws23_003.py`
 - `NGA-WS23-004` 已落地可执行导出链路：
   - 新增 OOB 预案导出脚本：`scripts/export_killswitch_oob_bundle_ws23_004.py`
   - 产物包含 freeze plan + health probe plan + 双重校验结果
@@ -259,3 +261,14 @@
     - `scratch/reports/release_phase3_full_signoff_chain_ws27_006_result.json`
   - 新增 runbook：`doc/task/runbooks/release_m12_phase3_full_signoff_onepager_ws27_006.md`
   - 新增回归：`tests/test_ws27_006_phase3_release_report.py`、`tests/test_release_phase3_full_signoff_chain_ws27_006.py`
+
+## 9. 补充进度（2026-02-26）
+
+- Prompt 治理已完成批量重构（`conversation_style / analyzer / dispatch / agentic_tool`），并统一为 `TSP-v1` 排期语义。
+- WS23-003 新增一键 manifest 同步工具：
+  - `scripts/update_immutable_dna_manifest_ws23_003.py`
+  - 报告：`scratch/reports/immutable_dna_manifest_update_ws23_003.json`
+- WS23-003 新增回归：
+  - `tests/test_update_immutable_dna_manifest_ws23_003.py`
+- M8 runbook 已补充推荐执行路径（先同步 manifest，再执行 DNA gate）：
+  - `doc/task/runbooks/release_m8_phase3_closure_onepager_ws23_006.md`
