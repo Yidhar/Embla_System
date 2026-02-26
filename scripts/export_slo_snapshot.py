@@ -732,6 +732,9 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
     readonly_write_tool_exposure_count = 0
     readonly_write_tool_exposed_slice_count = 0
     core_escalation_count = 0
+    route_path_counts: Dict[str, int] = {"path-a": 0, "path-b": 0, "path-c": 0}
+    path_b_budget_escalated_count = 0
+    core_session_created_count = 0
     prefix_cache_hit_count = 0
     tail_hashes: List[str] = []
     contract_upgrade_latencies_ms: List[float] = []
@@ -762,6 +765,10 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
 
         trigger = str(payload.get("trigger") or payload.get("path") or "unknown")
         trigger_counts[trigger] = trigger_counts.get(trigger, 0) + 1
+
+        route_path = str(payload.get("path") or "").strip().lower()
+        if route_path in route_path_counts:
+            route_path_counts[route_path] = int(route_path_counts.get(route_path, 0)) + 1
 
         if bool(payload.get("recovery_hit")):
             recovery_hit_count += 1
@@ -802,6 +809,10 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
                 readonly_write_tool_exposed_slice_count += max(0, readonly_selected_count)
         if bool(payload.get("core_escalation")):
             core_escalation_count += 1
+        if bool(payload.get("path_b_budget_escalated")):
+            path_b_budget_escalated_count += 1
+        if bool(payload.get("core_session_created")):
+            core_session_created_count += 1
 
         prefix_cache_hit = payload.get("prefix_cache_hit")
         if isinstance(prefix_cache_hit, bool):
@@ -837,6 +848,17 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
         readonly_write_tool_exposure_count / readonly_exposure_sample_count
     ) if readonly_exposure_sample_count > 0 else None
     core_escalation_rate = (core_escalation_count / total) if total > 0 else None
+    path_a_route_ratio = (route_path_counts.get("path-a", 0) / total) if total > 0 else None
+    path_b_route_ratio = (route_path_counts.get("path-b", 0) / total) if total > 0 else None
+    path_c_route_ratio = (route_path_counts.get("path-c", 0) / total) if total > 0 else None
+    path_b_budget_escalation_rate = (
+        (path_b_budget_escalated_count / route_path_counts.get("path-b", 0))
+        if route_path_counts.get("path-b", 0) > 0
+        else None
+    )
+    core_session_creation_rate = (
+        (core_session_created_count / core_escalation_count) if core_escalation_count > 0 else None
+    )
     prefix_cache_hit_rate = (prefix_cache_hit_count / total) if total > 0 else None
 
     tail_churn_rate: Optional[float] = None
@@ -890,6 +912,23 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
     )
     if total <= 0:
         core_escalation_status = "unknown"
+    route_distribution_status = "ok" if total > 0 else "unknown"
+    path_b_budget_escalation_status = _classify_numeric(
+        path_b_budget_escalation_rate,
+        warning=0.5,
+        critical=0.8,
+        higher_is_bad=True,
+    )
+    if route_path_counts.get("path-b", 0) <= 0:
+        path_b_budget_escalation_status = "unknown"
+    core_session_creation_status = _classify_numeric(
+        core_session_creation_rate,
+        warning=0.6,
+        critical=0.8,
+        higher_is_bad=True,
+    )
+    if core_escalation_count <= 0:
+        core_session_creation_status = "unknown"
     prefix_cache_status = _classify_numeric(
         prefix_cache_hit_rate,
         warning=0.8,
@@ -1002,6 +1041,43 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
                 "critical": 0.95,
             },
             "status": core_escalation_status,
+        },
+        "chat_route_path_distribution": {
+            "value": float(total) if total > 0 else None,
+            "unit": "count",
+            "sample_count": total,
+            "path_counts": route_path_counts,
+            "path_ratios": {
+                "path-a": path_a_route_ratio,
+                "path-b": path_b_route_ratio,
+                "path-c": path_c_route_ratio,
+            },
+            "source": "prompt_injection_events",
+            "status": route_distribution_status,
+        },
+        "path_b_budget_escalation_rate": {
+            "value": path_b_budget_escalation_rate,
+            "unit": "ratio",
+            "sample_count": route_path_counts.get("path-b", 0),
+            "escalated_count": path_b_budget_escalated_count,
+            "source": "prompt_injection_events",
+            "thresholds": {
+                "warning": 0.5,
+                "critical": 0.8,
+            },
+            "status": path_b_budget_escalation_status,
+        },
+        "core_session_creation_rate": {
+            "value": core_session_creation_rate,
+            "unit": "ratio",
+            "sample_count": core_escalation_count,
+            "created_count": core_session_created_count,
+            "source": "prompt_injection_events",
+            "thresholds": {
+                "warning": 0.6,
+                "critical": 0.8,
+            },
+            "status": core_session_creation_status,
         },
         "prompt_prefix_cache_hit_rate": {
             "value": prefix_cache_hit_rate,

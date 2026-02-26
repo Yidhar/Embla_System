@@ -176,6 +176,24 @@ def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_pa
                     "exposure_count": 1,
                     "status": "warning",
                 },
+                "chat_route_path_distribution": {
+                    "sample_count": 20,
+                    "path_counts": {"path-a": 8, "path-b": 4, "path-c": 8},
+                    "path_ratios": {"path-a": 0.4, "path-b": 0.2, "path-c": 0.4},
+                    "status": "ok",
+                },
+                "path_b_budget_escalation_rate": {
+                    "value": 0.25,
+                    "sample_count": 4,
+                    "escalated_count": 1,
+                    "status": "ok",
+                },
+                "core_session_creation_rate": {
+                    "value": 0.5,
+                    "sample_count": 8,
+                    "created_count": 4,
+                    "status": "warning",
+                },
             },
             "threshold_profile": {"max_error_rate": 0.2},
             "sources": {
@@ -201,5 +219,8 @@ def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_pa
     assert metrics["readonly_write_tool_exposure_rate"]["value"] == 0.03
     assert metrics["readonly_write_tool_exposure_rate"]["sample_count"] == 20
     assert metrics["readonly_write_tool_exposure_rate"]["status"] == "warning"
+    assert metrics["chat_route_path_distribution"]["path_ratios"]["path-b"] == 0.2
+    assert metrics["path_b_budget_escalation_rate"]["value"] == 0.25
+    assert metrics["core_session_creation_rate"]["created_count"] == 4
 
     assert any(path.endswith("ws26_runtime_snapshot_ws26_002.json") for path in payload["source_reports"])

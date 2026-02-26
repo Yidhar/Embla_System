@@ -238,6 +238,9 @@ def test_build_snapshot_schema_and_values() -> None:
             "outer_readonly_hit_rate",
             "readonly_write_tool_exposure_rate",
             "core_escalation_rate",
+            "chat_route_path_distribution",
+            "path_b_budget_escalation_rate",
+            "core_session_creation_rate",
             "prompt_prefix_cache_hit_rate",
             "prompt_tail_churn_rate",
             "contract_upgrade_latency_ms",
@@ -290,6 +293,14 @@ def test_build_snapshot_schema_and_values() -> None:
         assert metrics["readonly_write_tool_exposure_rate"]["exposure_count"] == 0
         assert metrics["readonly_write_tool_exposure_rate"]["status"] == "ok"
         assert metrics["core_escalation_rate"]["value"] == pytest.approx(0.5)
+        assert metrics["chat_route_path_distribution"]["path_counts"]["path-a"] == 1
+        assert metrics["chat_route_path_distribution"]["path_counts"]["path-b"] == 0
+        assert metrics["chat_route_path_distribution"]["path_counts"]["path-c"] == 1
+        assert metrics["chat_route_path_distribution"]["path_ratios"]["path-c"] == pytest.approx(0.5)
+        assert metrics["path_b_budget_escalation_rate"]["sample_count"] == 0
+        assert metrics["path_b_budget_escalation_rate"]["value"] is None
+        assert metrics["core_session_creation_rate"]["sample_count"] == 1
+        assert metrics["core_session_creation_rate"]["value"] == pytest.approx(0.0)
         assert metrics["prompt_prefix_cache_hit_rate"]["value"] == pytest.approx(0.5)
         assert metrics["prompt_tail_churn_rate"]["value"] == pytest.approx(1.0)
         assert metrics["contract_upgrade_latency_ms"]["value"] == pytest.approx(120.0)
