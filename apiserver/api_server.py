@@ -1769,6 +1769,109 @@ def _ops_status_to_severity(status: str) -> str:
     return "unknown"
 
 
+_OPS_STATUS_RANK: Dict[str, int] = {
+    "unknown": 0,
+    "ok": 1,
+    "warning": 2,
+    "critical": 3,
+}
+
+
+def _ops_metric_status(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "unknown"
+    return _ops_status_to_severity(str(value.get("status") or "unknown"))
+
+
+def _ops_max_status(statuses: List[str]) -> str:
+    current = "unknown"
+    current_rank = _OPS_STATUS_RANK[current]
+    for status in statuses:
+        normalized = _ops_status_to_severity(status)
+        rank = _OPS_STATUS_RANK.get(normalized, 0)
+        if rank > current_rank:
+            current = normalized
+            current_rank = rank
+    return current
+
+
+def _ops_build_route_quality_summary(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    outer_readonly = metrics.get("outer_readonly_hit_rate") if isinstance(metrics.get("outer_readonly_hit_rate"), dict) else {}
+    readonly_exposure = (
+        metrics.get("readonly_write_tool_exposure_rate")
+        if isinstance(metrics.get("readonly_write_tool_exposure_rate"), dict)
+        else {}
+    )
+    route_distribution = (
+        metrics.get("chat_route_path_distribution")
+        if isinstance(metrics.get("chat_route_path_distribution"), dict)
+        else {}
+    )
+    path_b_budget_escalation = (
+        metrics.get("path_b_budget_escalation_rate")
+        if isinstance(metrics.get("path_b_budget_escalation_rate"), dict)
+        else {}
+    )
+    core_session_creation = (
+        metrics.get("core_session_creation_rate")
+        if isinstance(metrics.get("core_session_creation_rate"), dict)
+        else {}
+    )
+
+    status_map = {
+        "outer_readonly_hit_rate": _ops_metric_status(outer_readonly),
+        "readonly_write_tool_exposure_rate": _ops_metric_status(readonly_exposure),
+        "chat_route_path_distribution": _ops_metric_status(route_distribution),
+        "path_b_budget_escalation_rate": _ops_metric_status(path_b_budget_escalation),
+        "core_session_creation_rate": _ops_metric_status(core_session_creation),
+    }
+    overall_status = _ops_max_status(list(status_map.values()))
+
+    reason_codes: List[str] = []
+    if status_map["readonly_write_tool_exposure_rate"] == "critical":
+        reason_codes.append("READONLY_WRITE_EXPOSURE_CRITICAL")
+    elif status_map["readonly_write_tool_exposure_rate"] == "warning":
+        reason_codes.append("READONLY_WRITE_EXPOSURE_WARNING")
+
+    if status_map["path_b_budget_escalation_rate"] == "critical":
+        reason_codes.append("PATH_B_BUDGET_ESCALATION_CRITICAL")
+    elif status_map["path_b_budget_escalation_rate"] == "warning":
+        reason_codes.append("PATH_B_BUDGET_ESCALATION_WARNING")
+
+    if status_map["core_session_creation_rate"] == "critical":
+        reason_codes.append("CORE_SESSION_CREATION_CRITICAL")
+    elif status_map["core_session_creation_rate"] == "warning":
+        reason_codes.append("CORE_SESSION_CREATION_WARNING")
+
+    if status_map["outer_readonly_hit_rate"] == "critical":
+        reason_codes.append("OUTER_READONLY_HIT_CRITICAL")
+    elif status_map["outer_readonly_hit_rate"] == "warning":
+        reason_codes.append("OUTER_READONLY_HIT_WARNING")
+
+    if not reason_codes and overall_status == "ok":
+        reason_codes.append("ROUTE_QUALITY_HEALTHY")
+    if not reason_codes and overall_status == "unknown":
+        reason_codes.append("ROUTE_QUALITY_SIGNAL_UNKNOWN")
+
+    reason_text = ""
+    if overall_status == "critical":
+        reason_text = "Route-quality guard is critical; investigate routing drift, exposure, and escalation pressure."
+    elif overall_status == "warning":
+        reason_text = "Route-quality guard is warning; monitor exposure, escalation, and core session churn."
+    elif overall_status == "ok":
+        reason_text = "Route-quality guard is healthy."
+    else:
+        reason_text = "Route-quality signals are insufficient."
+
+    return {
+        "status": overall_status,
+        "reason_codes": reason_codes,
+        "reason_text": reason_text,
+        "signal_status": status_map,
+        "path_ratios": route_distribution.get("path_ratios", {}) if isinstance(route_distribution, dict) else {},
+    }
+
+
 _OPS_REQUIRED_REPORT_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "id": "full_chain_m0_m12",
@@ -1978,6 +2081,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         "summary": {
             "overall_status": overall_status,
             "metric_status": metric_status,
+            "route_quality": _ops_build_route_quality_summary(metrics),
         },
         "metrics": {
             "runtime_rollout": metrics.get("runtime_rollout", {}),
@@ -2481,6 +2585,7 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             "chat_route_path_distribution": chat_route_distribution,
             "path_b_budget_escalation_rate": path_b_budget_escalation,
             "core_session_creation_rate": core_session_creation,
+            "route_quality": _ops_build_route_quality_summary(snapshot_metrics),
         }
     except Exception as exc:
         logger.warning(f"构建 incidents prompt safety 摘要失败（降级为空）: {exc}")

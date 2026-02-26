@@ -159,6 +159,8 @@ def test_ops_incidents_latest_payload_merges_events_and_report_issues(tmp_path, 
     assert runtime_prompt_safety["chat_route_path_distribution"]["path_ratios"]["path-c"] == 0.4
     assert runtime_prompt_safety["path_b_budget_escalation_rate"]["escalated_count"] == 1
     assert runtime_prompt_safety["core_session_creation_rate"]["created_count"] == 3
+    assert runtime_prompt_safety["route_quality"]["status"] == "warning"
+    assert "READONLY_WRITE_EXPOSURE_WARNING" in runtime_prompt_safety["route_quality"]["reason_codes"]
 
 
 def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_path, monkeypatch) -> None:
@@ -243,5 +245,7 @@ def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_pa
     assert metrics["chat_route_path_distribution"]["path_ratios"]["path-b"] == 0.2
     assert metrics["path_b_budget_escalation_rate"]["value"] == 0.25
     assert metrics["core_session_creation_rate"]["created_count"] == 4
+    assert payload["data"]["summary"]["route_quality"]["status"] == "warning"
+    assert "CORE_SESSION_CREATION_WARNING" in payload["data"]["summary"]["route_quality"]["reason_codes"]
 
     assert any(path.endswith("ws26_runtime_snapshot_ws26_002.json") for path in payload["source_reports"])
