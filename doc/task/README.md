@@ -103,6 +103,8 @@
     - M8 发布收口一页清单（T0-T6 执行顺序、放行条件、产物归档）。
 41. `doc/task/runbooks/prompt_task_scheduling_protocol_tsp_v1.md`
     - Prompt 层任务排期协议（TSP-v1）：统一 `T0->T1->T2->T3` 执行语义、证据路径与回退口径。
+42. `doc/task/24-ws-prompt-routing-injection-policy.md`
+    - Prompt 路由注入与多职能 Agent 注入时机设计讨论稿（阶段/风险/证据/失败触发模型）。
 
 ## 4. 任务状态约定
 
