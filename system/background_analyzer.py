@@ -14,10 +14,12 @@ from system.asyncio_offload import offload_blocking
 from system.config import config, logger
 from system.coding_intent import extract_latest_user_message as extract_latest_user_message_shared
 from system.coding_intent import requires_codex_for_messages
+from autonomous.router_engine import RouterRequest, TaskRouterEngine
 
 from system.config import get_prompt
 
 if TYPE_CHECKING:
+    import httpx
     from langchain_openai import ChatOpenAI
 
 
@@ -45,10 +47,65 @@ _CODING_KEYWORDS = (
 _CODEX_SERVICE_ALIASES = {"codex-cli", "codex-mcp"}
 _CODEX_TOOL_ALIASES = {"ask-codex", "brainstorm", "help", "ping"}
 _MUTATING_NATIVE_TOOL_NAMES = {"write_file", "git_checkout_file"}
+_PROMPT_ROUTE_ENGINE = TaskRouterEngine()
 
 
 def _extract_latest_user_message(messages: List[Dict[str, str]]) -> str:
     return extract_latest_user_message_shared(messages)
+
+
+def _infer_analysis_complexity(latest_user_message: str) -> str:
+    size = len(str(latest_user_message or ""))
+    if size >= 320:
+        return "high"
+    if size >= 120:
+        return "medium"
+    return "low"
+
+
+def _infer_analysis_risk_level(messages: List[Dict[str, str]], latest_user_message: str) -> str:
+    latest = str(latest_user_message or "").lower()
+    readonly_markers = (
+        "不要修改",
+        "不要改",
+        "不做修改",
+        "只读",
+        "read only",
+        "read-only",
+        "no write",
+    )
+    if any(marker in latest for marker in readonly_markers):
+        return "read_only"
+    if any(token in latest for token in ("deploy", "发布", "上线", "rollback", "回滚", "secrets", "密钥")):
+        return "deploy"
+    if _looks_like_coding_request(latest_user_message) or requires_codex_for_messages(messages):
+        return "write_repo"
+    return "read_only"
+
+
+def _build_router_request_for_messages(messages: List[Dict[str, str]]) -> RouterRequest:
+    latest_user_message = _extract_latest_user_message(messages)
+    return RouterRequest(
+        task_id="background_analyzer",
+        description=latest_user_message,
+        estimated_complexity=_infer_analysis_complexity(latest_user_message),
+        requested_role="",
+        risk_level=_infer_analysis_risk_level(messages, latest_user_message),
+        budget_remaining=6000,
+        trace_id="background_analyzer",
+        session_id="background_analyzer",
+    )
+
+
+def _derive_prompt_route_metadata(messages: List[Dict[str, str]]) -> Dict[str, str]:
+    request = _build_router_request_for_messages(messages)
+    decision = _PROMPT_ROUTE_ENGINE.route(request)
+    return {
+        "prompt_profile": str(decision.prompt_profile),
+        "injection_mode": str(decision.injection_mode),
+        "delegation_intent": str(decision.delegation_intent),
+        "selected_role": str(decision.selected_role),
+    }
 
 
 def _looks_like_coding_request(text: str) -> bool:
@@ -203,12 +260,24 @@ class ConversationAnalyzer:
         conversation = "\n".join(lines)
 
         available_tools = ""
+        route_meta = _derive_prompt_route_metadata(messages)
+        route_hint = (
+            "\n[ROUTER_HINT]"
+            f" prompt_profile={route_meta.get('prompt_profile', '')}"
+            f" injection_mode={route_meta.get('injection_mode', '')}"
+            f" delegation_intent={route_meta.get('delegation_intent', '')}"
+            f" selected_role={route_meta.get('selected_role', '')}"
+        )
 
         # 加载主分析提示词
         base_prompt = get_prompt(
             "conversation_analyzer_prompt",
             conversation=conversation,
             available_tools=available_tools,
+            prompt_profile=route_meta.get("prompt_profile", ""),
+            injection_mode=route_meta.get("injection_mode", ""),
+            delegation_intent=route_meta.get("delegation_intent", ""),
+            selected_role=route_meta.get("selected_role", ""),
         )
 
         # 加载工具调度提示词（独立文件，拼接到主提示词后面）
@@ -217,11 +286,15 @@ class ConversationAnalyzer:
             tool_dispatch = get_prompt(
                 "tool_dispatch_prompt",
                 available_mcp_tools=available_mcp_tools,
+                prompt_profile=route_meta.get("prompt_profile", ""),
+                injection_mode=route_meta.get("injection_mode", ""),
+                delegation_intent=route_meta.get("delegation_intent", ""),
+                selected_role=route_meta.get("selected_role", ""),
             )
-            return base_prompt + "\n" + tool_dispatch
+            return base_prompt + route_hint + "\n" + tool_dispatch
         except Exception as e:
             logger.debug(f"加载工具调度提示词失败，仅使用基础提示词: {e}")
-            return base_prompt
+            return base_prompt + route_hint
 
     def _get_mcp_tools_description(self) -> str:
         """获取MCP可用工具描述，供提示词注入。自动触发注册（幂等）。"""
