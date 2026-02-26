@@ -5,6 +5,7 @@ NagaAgent API服务器
 """
 
 import asyncio
+import base64
 import json
 import sys
 import traceback
@@ -14,6 +15,7 @@ import time
 import threading
 import subprocess
 import locale
+import uuid
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, AsyncGenerator, Any, Tuple, Literal
 from urllib.request import Request as UrlRequest, urlopen
@@ -35,6 +37,9 @@ from starlette.background import BackgroundTask
 import shutil
 from pathlib import Path
 from system.asyncio_offload import offload_blocking
+from system.coding_intent import contains_direct_coding_signal
+from autonomous.event_log.event_store import EventStore
+from autonomous.router_engine import RouterRequest, TaskRouterEngine
 
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -76,6 +81,212 @@ def _trigger_background_analysis(session_id: str):
 def _save_conversation_and_logs(session_id: str, user_message: str, assistant_response: str):
     """统一保存对话历史与日志 - 委托给message_manager"""
     message_manager.save_conversation_and_logs(session_id, user_message, assistant_response)
+
+
+_CHAT_PATH_ROUTER = TaskRouterEngine()
+_CHAT_ROUTE_EVENT_STORE: Optional[EventStore] = None
+_CHAT_ROUTE_HIGH_RISK_MARKERS = (
+    "deploy",
+    "rollback",
+    "release",
+    "上线",
+    "回滚",
+    "发布",
+    "生产",
+    "权限",
+    "删除",
+    "批量改写",
+)
+_CHAT_ROUTE_READONLY_MARKERS = (
+    "explain",
+    "summary",
+    "summarize",
+    "analysis",
+    "analyse",
+    "read",
+    "check",
+    "状态",
+    "现状",
+    "总结",
+    "解释",
+    "分析",
+    "查看",
+)
+_CHAT_ROUTE_GREETING_MARKERS = (
+    "hello",
+    "hi",
+    "hey",
+    "你好",
+    "嗨",
+)
+_CHAT_ROUTE_FOLLOWUP_MARKERS = (
+    "continue",
+    "go on",
+    "继续",
+    "接着",
+    "然后",
+)
+
+
+def _normalize_chat_text(text: str) -> str:
+    return " ".join(str(text or "").strip().lower().split())
+
+
+def _infer_chat_route_risk_level(message: str) -> str:
+    normalized = _normalize_chat_text(message)
+    if not normalized:
+        return "read_only"
+
+    if len(normalized) <= 24 and any(marker in normalized for marker in _CHAT_ROUTE_FOLLOWUP_MARKERS):
+        return "unknown"
+
+    if contains_direct_coding_signal(message):
+        return "write_repo"
+
+    if any(marker in normalized for marker in _CHAT_ROUTE_HIGH_RISK_MARKERS):
+        return "deploy"
+
+    if any(marker in normalized for marker in _CHAT_ROUTE_GREETING_MARKERS):
+        return "read_only"
+
+    if any(marker in normalized for marker in _CHAT_ROUTE_READONLY_MARKERS):
+        return "read_only"
+
+    if "?" in normalized or "？" in str(message):
+        return "read_only"
+
+    return "unknown"
+
+
+def _infer_chat_route_complexity(message: str) -> str:
+    raw = str(message or "")
+    length = len(raw)
+    if contains_direct_coding_signal(raw) or length >= 220:
+        return "high"
+    if length >= 80:
+        return "medium"
+    return "low"
+
+
+def _resolve_chat_stream_route(message: str, *, session_id: str) -> Dict[str, Any]:
+    normalized_message = str(message or "")
+    risk_level = _infer_chat_route_risk_level(normalized_message)
+    request = RouterRequest(
+        task_id=f"chat_stream_{int(time.time() * 1000)}",
+        description=normalized_message,
+        estimated_complexity=_infer_chat_route_complexity(normalized_message),
+        risk_level=risk_level,
+        trace_id=f"chat_route_{uuid.uuid4().hex[:12]}",
+        session_id=str(session_id or ""),
+    )
+    decision = _CHAT_PATH_ROUTER.route(request)
+    intent = str(decision.delegation_intent or "").strip().lower()
+    if intent == "read_only_exploration":
+        path = "path-a"
+    elif intent in {"core_execution", "explicit_role_delegate"}:
+        path = "path-c"
+    else:
+        path = "path-b"
+
+    return {
+        "path": path,
+        "risk_level": risk_level,
+        "outer_readonly_hit": path == "path-a",
+        "core_escalation": path == "path-c",
+        "router_decision": decision.to_dict(),
+    }
+
+
+def _build_chat_route_prompt_hints(route_meta: Dict[str, Any]) -> str:
+    path = str(route_meta.get("path") or "path-c")
+    decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
+    lines = [
+        "[PromptRouteDecision]",
+        f"path={path}",
+        f"prompt_profile={str(decision.get('prompt_profile') or '')}",
+        f"injection_mode={str(decision.get('injection_mode') or '')}",
+        f"delegation_intent={str(decision.get('delegation_intent') or '')}",
+    ]
+
+    if path == "path-a":
+        lines.append("Route policy: Outer Direct Read-Only. Do not call tools. Reply directly with analysis.")
+    elif path == "path-b":
+        lines.append("Route policy: Outer Clarify. Ask at most one clarifying question before any execution escalation.")
+    else:
+        lines.append("Route policy: Core Execution. You may plan and execute through the tool loop.")
+    return "\n".join(lines)
+
+
+def _get_chat_route_event_store() -> Optional[EventStore]:
+    global _CHAT_ROUTE_EVENT_STORE
+    if _CHAT_ROUTE_EVENT_STORE is not None:
+        return _CHAT_ROUTE_EVENT_STORE
+    try:
+        event_file = Path(__file__).resolve().parent.parent / "logs" / "autonomous" / "events.jsonl"
+        _CHAT_ROUTE_EVENT_STORE = EventStore(file_path=event_file)
+    except Exception as exc:
+        logger.debug(f"初始化 chat route event store 失败: {exc}")
+        return None
+    return _CHAT_ROUTE_EVENT_STORE
+
+
+def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[str, Any]:
+    decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
+    path = str(route_meta.get("path") or "path-c")
+    delegation_intent = str(decision.get("delegation_intent") or "").strip()
+    return {
+        "task_type": str(decision.get("task_type") or ""),
+        "severity": str(route_meta.get("risk_level") or ""),
+        "path": path,
+        "trigger": path,
+        "prompt_profile": str(decision.get("prompt_profile") or ""),
+        "injection_mode": str(decision.get("injection_mode") or ""),
+        "delegation_intent": delegation_intent,
+        "delegation_hit": delegation_intent.lower().startswith("delegate"),
+        "outer_readonly_hit": bool(route_meta.get("outer_readonly_hit")),
+        "core_escalation": bool(route_meta.get("core_escalation")),
+        "readonly_write_tool_exposed": False,
+        "readonly_write_tool_candidate_count": 0,
+        "readonly_write_tool_selected_count": 0,
+        "readonly_write_tool_dropped_count": 0,
+        "readonly_write_tool_selected_slices": [],
+        "readonly_write_tool_dropped_slices": [],
+        "selected_slices": [],
+        "dropped_slices": [],
+        "selected_slice_count": 0,
+        "dropped_slice_count": 0,
+        "dropped_conflict_count": 0,
+        "selected_layers": [],
+        "selected_layer_counts": {},
+        "recovery_hit": False,
+        "prefix_hash": "",
+        "tail_hash": "",
+        "prefix_cache_hit": False,
+        "block1_cache_hit": False,
+        "block2_cache_hit": False,
+        "token_budget_before": 0,
+        "token_budget_after": 0,
+        "model_tier": str(decision.get("selected_model_tier") or ""),
+        "model_id": "",
+    }
+
+
+def _emit_chat_route_prompt_event(route_meta: Dict[str, Any], *, session_id: str) -> None:
+    store = _get_chat_route_event_store()
+    if store is None:
+        return
+
+    payload = _build_chat_route_prompt_event_payload(route_meta)
+    decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
+    payload["session_id"] = str(session_id or "")
+    payload["trace_id"] = str(decision.get("trace_id") or "")
+    payload["workflow_id"] = str(decision.get("task_id") or "")
+    store.emit("PromptInjectionComposed", payload, source="apiserver.chat_stream")
+
+
+def _format_sse_payload_chunk(payload: Dict[str, Any]) -> str:
+    b64 = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode("utf-8")).decode("ascii")
+    return f"data: {b64}\n\n"
 
 
 # 回调工厂类已移除 - 功能已整合到streaming_tool_extractor
@@ -779,8 +990,37 @@ async def chat_stream(request: ChatRequest):
             # 发送会话ID信息
             yield f"data: session_id: {session_id}\n\n"
 
-            # 构建系统提示词（含工具调用指令 + 用户选择的技能）
-            system_prompt = build_system_prompt(include_skills=True, include_tool_instructions=True, skill_name=request.skill)
+            route_meta = _resolve_chat_stream_route(request.message, session_id=session_id)
+            route_decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
+            path = str(route_meta.get("path") or "path-c")
+            _emit_chat_route_prompt_event(route_meta, session_id=session_id)
+            yield _format_sse_payload_chunk(
+                {
+                    "type": "route_decision",
+                    "path": path,
+                    "risk_level": route_meta.get("risk_level"),
+                    "outer_readonly_hit": bool(route_meta.get("outer_readonly_hit")),
+                    "core_escalation": bool(route_meta.get("core_escalation")),
+                    "prompt_profile": route_decision.get("prompt_profile", ""),
+                    "injection_mode": route_decision.get("injection_mode", ""),
+                    "delegation_intent": route_decision.get("delegation_intent", ""),
+                }
+            )
+            logger.info(
+                "[API Server] chat route decided session=%s path=%s intent=%s profile=%s",
+                session_id,
+                path,
+                route_decision.get("delegation_intent", ""),
+                route_decision.get("prompt_profile", ""),
+            )
+
+            # 构建系统提示词（仅 Path-C 注入工具指令，Path-A/B 保持外层只读）
+            include_tool_instructions = path == "path-c"
+            system_prompt = build_system_prompt(
+                include_skills=True,
+                include_tool_instructions=include_tool_instructions,
+                skill_name=request.skill,
+            )
 
             # ====== RAG 记忆召回：在发送 LLM 前检索相关记忆 ======
             try:
@@ -810,6 +1050,7 @@ async def chat_stream(request: ChatRequest):
 
             # 附加知识收尾指令，引导 LLM 回到用户问题
             system_prompt += "\n\n【读完这些附加知识后，回复上一个user prompt，并不要回复这条系统附加的system prompt。以下是回复内容：】"
+            system_prompt += "\n\n" + _build_chat_route_prompt_hints(route_meta)
 
             # 用户消息直接传 LLM，技能上下文完全由 system prompt 承载
             effective_message = request.message
@@ -872,9 +1113,6 @@ async def chat_stream(request: ChatRequest):
             except Exception as e:
                 print(f"流式文本切割器初始化失败: {e}")
 
-            # ====== Agentic Tool Loop ======
-            from .agentic_tool_loop import run_agentic_loop
-
             # 如果本次携带图片，标记此会话为 VLM 会话
             if request.images:
                 _vlm_sessions.add(session_id)
@@ -895,23 +1133,36 @@ async def chat_stream(request: ChatRequest):
             # 记录每轮的content，用于在每轮结束时完成TTS处理
             current_round_text = ""
             is_tool_event = False  # 标记当前是否在处理工具事件（不送TTS）
-            cfg = get_config()
-            loop_cfg = getattr(cfg, "agentic_loop", None)
-            if loop_cfg is not None:
-                loop_max_rounds = int(getattr(loop_cfg, "max_rounds_stream", 500))
-            else:
-                loop_max_rounds = int(cfg.handoff.max_loop_stream)
 
-            async for chunk in run_agentic_loop(
-                messages,
-                session_id,
-                max_rounds=loop_max_rounds,
-                model_override=model_override,
-            ):
+            stream_source: AsyncGenerator[str, None]
+            if path == "path-c":
+                from .agentic_tool_loop import run_agentic_loop
+
+                cfg = get_config()
+                loop_cfg = getattr(cfg, "agentic_loop", None)
+                if loop_cfg is not None:
+                    loop_max_rounds = int(getattr(loop_cfg, "max_rounds_stream", 500))
+                else:
+                    loop_max_rounds = int(cfg.handoff.max_loop_stream)
+
+                stream_source = run_agentic_loop(
+                    messages,
+                    session_id,
+                    max_rounds=loop_max_rounds,
+                    model_override=model_override,
+                )
+            else:
+                llm_service = get_llm_service()
+                stream_source = llm_service.stream_chat_with_context(
+                    messages,
+                    get_config().api.temperature,
+                    model_override=model_override,
+                )
+
+            async for chunk in stream_source:
                 # chunk 格式: "data: <base64_json>\n\n"
                 if chunk.startswith("data: "):
                     try:
-                        import base64
                         import json as json_module
 
                         data_str = chunk[6:].strip()
