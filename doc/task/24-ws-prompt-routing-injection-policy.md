@@ -2,7 +2,37 @@
 
 文档状态：讨论稿（Design Draft）  
 最后更新：2026-02-26  
-适用范围：`SystemAgent / Router / LLM Gateway / Agentic Loop`  
+适用范围：`SystemAgent / Router / LLM Gateway / Agentic Loop / Sub-Agent Runtime`  
+
+---
+
+## 0. 审阅意见采纳结论（本轮）
+
+针对本轮 PR Review（双层常驻代理 + 专家子代理库 + 命中率评估）逐条评估后，采纳结果如下：
+
+1. 背景痛点补充：采纳。
+- 原因：与当前 `/chat`、`/chat/stream`、`agentic_loop` 三条链路并存导致的上下文混叠问题一致。
+
+2. 外部参考中“细分专家代理库”结论：采纳（措辞保守化）。
+- 原因：逆向仓库确有大量细分 prompt，但数量以“数量级 40+”描述，避免写成绝对事实。
+
+3. 分层与优先级调整（新增 `L1.5`，强调 `L3` 硬覆盖 `L2`）：采纳。
+- 原因：与当前项目“工具物理权限优先于角色自我描述”原则一致。
+
+4. 双层常驻模型（Outer Chat + Core Execution）：采纳为目标态，明确“分阶段迁移”。
+- 原因：适配方向正确，但当前代码尚未完成物理双进程隔离，需按阶段落地。
+
+5. `PromptComposeDecision` 增加路由评估字段：采纳。
+- 原因：满足后续离线评估与路由回放需求。
+
+6. `enforcement_mode: shadow|block` 与离线评估管道：采纳。
+- 原因：可先审计后拦截，降低切换风险。
+
+7. 验收指标新增命中率和只读暴露率：采纳。
+- 原因：可量化且可被自动化回归验证。
+
+8. 原“开放讨论问题”闭环为决议：采纳。
+- 原因：进入工程化阶段需要明确约束而非继续悬而未决。
 
 ---
 
@@ -15,6 +45,8 @@
 3. 生命周期不清：临时补救 prompt 未显式 TTL，容易污染后续轮次。
 4. 多职能并发盲写：前后端/Ops 子代理并行时缺注入契约屏障，字段和验收口径容易错位。
 5. 可审计性不足：缺少“本轮最终 prompt 由哪些片段组成”的可回放证据。
+6. 外层闲聊与核心执行上下文混叠：缺少常驻外层代理与核心执行代理的物理隔离，日常闲聊容易污染执行链路。
+7. 多专家路由漂移与 Ping-Pong：专家代理增多后，Router 意图误判会导致错误重试、反复切换和 Token 浪费。
 
 ---
 
@@ -48,6 +80,7 @@
 2. 注入策略缺“阶段触发器”和“失败触发器”。
 3. 子代理 spawn 时缺“最小必要上下文”强约束。
 4. 缺注入冲突消解机制（例如技能指令覆盖安全策略）。
+5. Outer/Core 尚未物理隔离，执行代理仍会间接受到闲聊历史影响。
 
 ---
 
@@ -70,11 +103,15 @@
 4. Task 工具本身有额外注记，约束路径/格式/并行行为。
 - 参考：`agent-prompt-task-tool.md`、`agent-prompt-task-tool-extra-notes.md`
 
+5. 可见大量细分专家 prompt（数量级 40+），角色边界清晰。
+- 典型角色：执行者（Task/Coder）、只读探索者（Explore）、规划者（Plan）、审查/压缩类后台代理。
+
 设计启发：
 
 1. Prompt 不是单一字符串，而是“角色化、阶段化、工具化”的片段集合。
 2. 子代理 prompt 必须角色隔离，且具备硬限制（只读/禁止写）。
 3. 工具策略应作为独立层，而非掺杂在对话风格中。
+4. 核心执行代理不应包揽全部任务，应通过 `spawn_sub_agent` 拉起降权专家代理执行。
 
 ---
 
@@ -85,6 +122,7 @@
 3. 生命周期可控：每个片段有 TTL、drop 条件、冲突策略。
 4. 可审计可回放：每轮输出注入快照（含来源、版本、hash）。
 5. 安全不可被覆盖：安全层优先级高于技能层与任务层。
+6. 工具物理权限优先：模型角色描述不得突破工具层权限隔离。
 
 ---
 
@@ -117,9 +155,9 @@
 
 ---
 
-## 6. Prompt 片段分层与优先级
+## 6. Prompt 分层、优先级与覆盖规则
 
-建议引入五层（与现有 `PromptEnvelope` 对齐）：
+建议引入六层（兼容当前 `PromptEnvelope`，并补上 `L1.5`）：
 
 1. `L0_DNA`（不可变）
 - 来源：`ImmutableDNALoader.inject()`
@@ -128,46 +166,61 @@
 2. `L1_TASK_BASE`
 - 任务目标、验收标准、输出格式。
 
-3. `L2_ROLE`
-- `sys_admin / developer / researcher` 专用约束。
+3. `L1.5_EPISODIC_MEMORY`
+- 任务级长期证据与记忆回注。
+- 绑定任务生命周期，不归入临时补救层。
+
+4. `L2_ROLE`
+- `sys_admin / developer / researcher` 等角色约束。
 - 由 `RouterDecision.selected_role` 触发。
 
-4. `L3_TOOL_POLICY`
-- 与本轮工具/执行模式直接相关的规则（并行、参数完整性、只读模式等）。
+5. `L3_TOOL_POLICY`
+- 与本轮工具/执行模式直接相关的硬规则（并行、参数完整性、只读模式、权限边界）。
 
-5. `L4_RECOVERY`
+6. `L4_RECOVERY`
 - 失败后短期补救策略，必须 TTL 限制。
 
-优先级：`L0 > L3 > L2 > L1 > L4`  
-说明：`L4` 为临时策略，优先级低于安全和工具策略，避免“补救 prompt”破坏安全基线。
+优先级：`L0 > L3 > L2 > L1.5 > L1 > L4`
+
+强覆盖规则：
+
+1. `L3_TOOL_POLICY` 必须硬覆盖 `L2_ROLE`。
+2. 即使 `L2` 声称“可执行任意改动”，当 `L3` 只挂载只读工具时，模型必须服从只读约束。
+3. 禁止“模糊局部覆盖”绕过工具层物理权限。
 
 ---
 
 ## 7. 多职能 Agent 注入时机（关键）
 
-### 7.1 主控 Agent（Router/SystemAgent）
+### 7.1 双层常驻隔离模型（Two-Layer Persistent Model）
 
-1. 路由前：只注入 `L0 + 极简任务上下文`，避免角色偏置影响路由。
-2. 路由后：注入 `L2_ROLE`。
-3. 进入执行前：按工具集合注入 `L3_TOOL_POLICY`（JIT 注入）。
+1. 外层交互代理（Outer Chat Agent）
+- 职能：负责闲聊、需求澄清、生成执行契约（Contract）。
+- 注入包：`L0_DNA + L1_TASK_BASE + L2_ROLE(Chat/Router)`。
+- 工具权限：`ask_user`, `search_kb`, `delegate_to_core`（目标态）。
 
-### 7.2 子代理（Task/SubAgent）
+2. 核心执行代理（Core Execution Agent）
+- 职能：后台无头执行，不直接消费闲聊历史，仅消费 Contract。
+- 注入包：`L0_DNA + L3_TOOL_POLICY + L4_RECOVERY`。
+- 工具权限：系统执行工具 + `spawn_sub_agent`（目标态）。
 
-1. spawn 时只下发最小上下文包：
-- task objective
-- contract/schema
-- target files / boundaries
-- acceptance checks
+3. 迁移说明
+- 当前实现仍以单链路编排为主，本节是目标态结构。
+- 先做逻辑隔离（Contract-only 输入），再做物理隔离（进程/会话隔离）。
 
-2. 不继承父代理完整历史（默认禁用），仅继承可审计摘要引用。
+### 7.2 专家子代理拉起与权限降级（Sub-Agent Spawning & Downgrade）
 
-### 7.3 并行多职能（Frontend/Backend/Ops）
+1. 子代理禁止越权直连用户，必须由 Core Agent 基于 Contract 拉起。
+2. 拉起时必须声明 `delegation_intent`、`target_agent_type`、`contract_checksum`。
+3. 若目标代理为 `Explore` 或 `Security_Review`：
+- LLM Gateway 组装时必须剔除写工具 schema（如 `os_bash` 写命令、`edit_file`、`workspace_txn_apply`）。
+- Prompt 层追加强只读约束（如 `CRITICAL: READ-ONLY MODE`）。
 
-并行前必须经过“契约注入屏障”：
+### 7.3 并行多职能契约屏障（Frontend/Backend/Ops）
 
-1. 先注入并确认共享契约片段（字段名、版本、错误码）。
-2. 生成 `contract_checksum` 写入子任务元数据。
-3. 未通过契约一致性时禁止并行写入（只允许只读探索）。
+1. 并行前先注入共享契约片段（字段名、版本、错误码）。
+2. 生成并广播 `contract_checksum` 到所有子任务元数据。
+3. 未通过契约一致性时，禁止并行写入，只允许只读探索。
 
 ---
 
@@ -177,8 +230,8 @@
 @dataclass(frozen=True)
 class PromptSlice:
     slice_id: str
-    layer: str                   # L0/L1/L2/L3/L4
-    owner: str                   # system/router/role/tool/recovery
+    layer: str                   # L0/L1/L1.5/L2/L3/L4
+    owner: str                   # system/router/role/tool/memory/recovery
     content_ref: str             # prompt repo path or inline key
     source_hash: str
     inject_when: dict[str, Any]  # phase/risk/evidence/failure conditions
@@ -198,28 +251,34 @@ class PromptComposeDecision:
     reasons: list[str]
     token_budget_before: int
     token_budget_after: int
+
+    # 路由评估追踪字段
+    delegation_intent: str       # 预期意图 (e.g., "read_only_exploration")
+    target_agent_type: str       # 实际路由目标 (e.g., "ExploreAgent")
+    contract_checksum: str       # 本轮绑定契约
 ```
 
 ---
 
 ## 9. 组合算法（建议）
 
-1. 收集候选切片：
-- DNA、任务、角色、工具策略、记忆回注、恢复策略
+1. 收集候选切片。
+- DNA、任务、角色、工具策略、记忆回注、恢复策略。
 
-2. 按触发器筛选：
-- 仅保留满足 `inject_when` 的切片
+2. 按触发器筛选。
+- 仅保留满足 `inject_when` 的切片。
 
-3. 冲突消解：
-- 按层级优先级和 `conflicts_with` 规则淘汰
+3. 冲突消解。
+- 按层级优先级和 `conflicts_with` 规则淘汰。
 
-4. 生命周期处理：
-- 先移除已过 TTL 或满足 `drop_when` 的切片
+4. 生命周期处理。
+- 先移除已过 TTL 或满足 `drop_when` 的切片。
 
-5. 预算裁剪：
-- 保留 `L0/L3`，优先裁剪 `L4` 再裁剪低优先级 `L1/L2` 扩展段
+5. 预算裁剪。
+- 固定保留 `L0/L3`。
+- 优先裁剪 `L4`，再裁剪低优先级扩展段。
 
-6. 产出审计事件：
+6. 产出审计事件。
 - `PromptComposeDecisionMade`
 - `PromptSliceInjected`
 - `PromptSliceDropped`
@@ -237,9 +296,14 @@ class PromptComposeDecision:
 2. 在 `autonomous/llm_gateway.py` 增加：
 - `PromptSlice` 输入
 - `compose()` 逻辑与 `PromptComposeDecision` 回执
+- `enforcement_mode: shadow | block`
 
 3. 在 `apiserver/agentic_tool_loop.py`：
-- 将 episodic reinjection 改为标准 `L4` 临时切片（带 TTL）
+- 将 episodic reinjection 迁移为标准 `L1.5` 切片（任务生命周期绑定）
+
+4. 灰度模式要求：
+- `shadow`：仅记录越权/冲突审计，不拦截。
+- `block`：触发即拒绝执行。
 
 ### 10.2 P1（可观测）
 
@@ -249,11 +313,19 @@ class PromptComposeDecision:
 - `injection_trigger_distribution`
 - `recovery_slice_hit_rate`
 - `prompt_conflict_drop_count`
+- `delegation_hit_rate`
 
 ### 10.3 P2（多代理并行保障）
 
 1. 子代理 spawn 前强制 `contract prompt slice` 对齐。
 2. 并行写任务必须带 `contract_checksum`，否则降级为只读探索。
+3. 只读代理注入时，写工具暴露率必须可观测并可审计。
+
+### 10.4 P3（专家路由评估管道）
+
+1. 构建 Ground Truth 评测集（建议 >= 500 标准开发/运维场景）。
+2. 建立 `Routing Evaluator` 离线回放机制，周期评估 Router 派发质量。
+3. 输出 `Precision / Recall / F1 / First-hit-rate`，用于专家代理增删和阈值调优。
 
 ---
 
@@ -263,15 +335,27 @@ class PromptComposeDecision:
 2. `write_intent` 任务安全策略覆盖率 100%。
 3. 恢复切片平均生存轮次 <= 3（避免长期污染）。
 4. 多职能并行场景下，接口字段不一致失败率较当前基线下降 60%+。
+5. 专家子代理路由命中率：标准意图集首次命中准确率 >= 85%。
+6. 权限降级可靠性：只读子代理注入时写权限工具暴露率 = 0%。
 
 ---
 
-## 12. 开放讨论问题
+## 12. 设计决议（本轮闭环）
 
-1. `L2_ROLE` 与技能 prompt 的覆盖关系是否允许“局部覆盖”？
-2. 记忆回注是否应默认放在 `L4`，还是拆分为 `L2.5`（角色相关长期记忆）？
-3. `PromptSlice` 存储位置是配置文件（YAML）还是代码常量（Python）？
-4. 远程测试环境中是否先启用“只审计不拦截”模式进行灰度？
+1. `L2_ROLE` 与技能覆盖关系
+- 结论：不允许覆盖 `L3`。
+- 规则：`L3_TOOL_POLICY` 拥有物理最高解释权。
+
+2. 记忆回注层级
+- 结论：设为 `L1.5_EPISODIC_MEMORY`。
+- 规则：绑定任务生命周期，不属于临时补救层 `L4`。
+
+3. Prompt 存储位置
+- 结论：`Markdown + YAML Frontmatter`。
+- 规则：便于业务编辑与热重载，不写死在 Python 常量。
+
+4. 远程环境灰度策略
+- 结论：先 `enforcement_mode=shadow`，稳定后再切 `block`。
 
 ---
 
