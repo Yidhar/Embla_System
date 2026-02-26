@@ -101,6 +101,8 @@
     - WS23 M8 门禁评估器（报告规则、文档规则、runbook 规则）。
 40. `doc/task/runbooks/release_m8_phase3_closure_onepager_ws23_006.md`
     - M8 发布收口一页清单（T0-T6 执行顺序、放行条件、产物归档）。
+41. `doc/task/runbooks/prompt_task_scheduling_protocol_tsp_v1.md`
+    - Prompt 层任务排期协议（TSP-v1）：统一 `T0->T1->T2->T3` 执行语义、证据路径与回退口径。
 
 ## 4. 任务状态约定
 
