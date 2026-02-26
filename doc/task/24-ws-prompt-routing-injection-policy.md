@@ -778,7 +778,7 @@ status: `done`；锚点：`ff30de5`；回归：`tests/test_run_ws28_outer_core_s
 5. `NGA-WS28-011` 路由桥接可观测性（`/v1/chat/route_bridge/{session_id}` + Debug UI）  
 status: `done`；锚点：`c2c5539`、`26b94ff`；回归：`tests/test_chat_route_bridge_snapshot_ws28_011.py`
 6. `NGA-WS28-012` Route-Quality 运行态治理闭环（warning/critical 强制策略 + guard 事件入总线）  
-status: `done`；锚点：`待本次提交`；回归：`tests/test_chat_route_quality_guard_ws28_012.py`
+status: `done`；锚点：`efda0bc`、`bbaed69`；回归：`tests/test_chat_route_quality_guard_ws28_012.py`
 
 ### 10.8 P0 执行顺序（建议）
 
