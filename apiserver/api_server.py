@@ -2460,9 +2460,27 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             if isinstance(snapshot_metrics.get("readonly_write_tool_exposure_rate"), dict)
             else {}
         )
+        chat_route_distribution = (
+            snapshot_metrics.get("chat_route_path_distribution")
+            if isinstance(snapshot_metrics.get("chat_route_path_distribution"), dict)
+            else {}
+        )
+        path_b_budget_escalation = (
+            snapshot_metrics.get("path_b_budget_escalation_rate")
+            if isinstance(snapshot_metrics.get("path_b_budget_escalation_rate"), dict)
+            else {}
+        )
+        core_session_creation = (
+            snapshot_metrics.get("core_session_creation_rate")
+            if isinstance(snapshot_metrics.get("core_session_creation_rate"), dict)
+            else {}
+        )
         prompt_safety_summary = {
             "outer_readonly_hit_rate": outer_readonly_hit,
             "readonly_write_tool_exposure_rate": readonly_write_exposure,
+            "chat_route_path_distribution": chat_route_distribution,
+            "path_b_budget_escalation_rate": path_b_budget_escalation,
+            "core_session_creation_rate": core_session_creation,
         }
     except Exception as exc:
         logger.warning(f"构建 incidents prompt safety 摘要失败（降级为空）: {exc}")

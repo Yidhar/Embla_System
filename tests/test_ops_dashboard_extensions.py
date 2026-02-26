@@ -117,6 +117,24 @@ def test_ops_incidents_latest_payload_merges_events_and_report_issues(tmp_path, 
                     "exposed_slice_count": 1,
                     "status": "warning",
                 },
+                "chat_route_path_distribution": {
+                    "sample_count": 10,
+                    "path_counts": {"path-a": 4, "path-b": 2, "path-c": 4},
+                    "path_ratios": {"path-a": 0.4, "path-b": 0.2, "path-c": 0.4},
+                    "status": "ok",
+                },
+                "path_b_budget_escalation_rate": {
+                    "value": 0.5,
+                    "sample_count": 2,
+                    "escalated_count": 1,
+                    "status": "warning",
+                },
+                "core_session_creation_rate": {
+                    "value": 0.75,
+                    "sample_count": 4,
+                    "created_count": 3,
+                    "status": "warning",
+                },
             }
         },
     )
@@ -138,6 +156,9 @@ def test_ops_incidents_latest_payload_merges_events_and_report_issues(tmp_path, 
     assert runtime_prompt_safety["outer_readonly_hit_rate"]["value"] == 0.6
     assert runtime_prompt_safety["readonly_write_tool_exposure_rate"]["value"] == 0.1
     assert runtime_prompt_safety["readonly_write_tool_exposure_rate"]["status"] == "warning"
+    assert runtime_prompt_safety["chat_route_path_distribution"]["path_ratios"]["path-c"] == 0.4
+    assert runtime_prompt_safety["path_b_budget_escalation_rate"]["escalated_count"] == 1
+    assert runtime_prompt_safety["core_session_creation_rate"]["created_count"] == 3
 
 
 def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_path, monkeypatch) -> None:
