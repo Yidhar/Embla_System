@@ -70,7 +70,6 @@ def test_subagent_runtime_emits_traceable_lifecycle_events() -> None:
         assert "SubAgentRuntimeStarted" in event_types
         assert "SubTaskDispatching" in event_types
         assert "SubTaskExecutionCompleted" in event_types
-        assert "SubTaskCliExecutionCompleted" in event_types
         assert "SubTaskApproved" in event_types
         assert "SubAgentRuntimeCompleted" in event_types
 

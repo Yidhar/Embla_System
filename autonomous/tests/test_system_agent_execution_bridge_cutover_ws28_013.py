@@ -140,7 +140,17 @@ def test_fail_open_does_not_fallback_to_cli_when_cli_layer_disabled() -> None:
         event_types = [event_type for event_type, _, _ in events]
         assert "SubAgentRuntimeFailOpenBlocked" in event_types
         assert "ReleaseGateRejected" in event_types
-        assert "CliExecutionCompleted" not in event_types
+        assert any(
+            event_type == "TaskExecutionCompleted" and str(payload.get("runtime_mode") or "") == "subagent"
+            for event_type, payload, _ in events
+        )
+        assert all(
+            not (
+                event_type == "TaskExecutionCompleted"
+                and str(payload.get("runtime_mode") or "") == "legacy"
+            )
+            for event_type, payload, _ in events
+        )
         assert "TaskApproved" not in event_types
     finally:
         _cleanup_case_root(case_root)

@@ -87,11 +87,11 @@ def test_event_store_exposes_topic_replay_and_subscription_ws25_001() -> None:
     try:
         store = EventStore(file_path=case_root / "events.jsonl")
         seen_event_types: list[str] = []
-        sub = store.subscribe("tool.*", lambda event: seen_event_types.append(str(event.get("event_type") or "")))
+        sub = store.subscribe("agent.*", lambda event: seen_event_types.append(str(event.get("event_type") or "")))
         try:
             store.emit(
-                "CliExecutionCompleted",
-                {"workflow_id": "wf-tool", "trace_id": "trace-tool", "tool_name": "native_executor"},
+                "TaskExecutionCompleted",
+                {"workflow_id": "wf-tool", "trace_id": "trace-tool", "runtime_mode": "subagent", "success": True},
             )
             store.emit(
                 "WatchdogThresholdExceeded",
@@ -100,13 +100,13 @@ def test_event_store_exposes_topic_replay_and_subscription_ws25_001() -> None:
         finally:
             store.unsubscribe(sub)
 
-        assert "CliExecutionCompleted" in seen_event_types
-        tool_rows = store.replay_by_topic(topic_pattern="tool.*", limit=20)
-        assert len(tool_rows) >= 1
-        assert any(str(item.get("event_type") or "") == "CliExecutionCompleted" for item in tool_rows)
+        assert "TaskExecutionCompleted" in seen_event_types
+        agent_rows = store.replay_by_topic(topic_pattern="agent.*", limit=20)
+        assert len(agent_rows) >= 1
+        assert any(str(item.get("event_type") or "") == "TaskExecutionCompleted" for item in agent_rows)
 
         topics = store.list_topics(limit=20)
-        assert any(topic.startswith("tool.") for topic in topics)
+        assert any(topic.startswith("agent.") for topic in topics)
         assert infer_event_topic("WatchdogThresholdExceeded", {}) == "system.watchdog.threshold.exceeded"
     finally:
         _cleanup_case_root(case_root)

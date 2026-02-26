@@ -450,7 +450,7 @@ class SystemAgent:
                 workflow_id=workflow_id,
                 fencing_epoch=fencing_epoch,
             )
-            command_type = "subagent_execute" if using_subagent else "cli_execute"
+            command_type = "subagent_execute" if using_subagent else "legacy_execute"
             idempotency_key = f"{task.task_id}:{command_type}:{attempt}"
             command_id = self.workflow_store.create_command(
                 workflow_id=workflow_id,
@@ -653,19 +653,17 @@ class SystemAgent:
         dispatch_result = await self.dispatcher.dispatch(task)
         self._ensure_active_epoch(fencing_epoch)
 
-        self._emit(
-            "CliExecutionCompleted",
-            {
-                "workflow_id": workflow_id,
-                "task_id": task.task_id,
-                "attempt": attempt,
-                "cli": dispatch_result.selected_cli,
-                "success": dispatch_result.result.success,
-                "exit_code": dispatch_result.result.exit_code,
-                "duration_seconds": dispatch_result.result.duration_seconds,
-            },
+        self._emit_task_execution_completed(
             workflow_id=workflow_id,
+            task_id=task.task_id,
+            attempt=attempt,
+            runtime_mode="legacy",
+            success=bool(dispatch_result.result.success),
+            duration_seconds=float(dispatch_result.result.duration_seconds),
             fencing_epoch=fencing_epoch,
+            executor="legacy_cli",
+            executor_id=str(dispatch_result.selected_cli or ""),
+            exit_code=dispatch_result.result.exit_code,
         )
 
         self.workflow_store.transition(
@@ -709,6 +707,20 @@ class SystemAgent:
 
         self._ensure_active_epoch(fencing_epoch)
         self._record_subagent_attempt()
+        self._emit_task_execution_completed(
+            workflow_id=workflow_id,
+            task_id=task.task_id,
+            attempt=attempt,
+            runtime_mode="subagent",
+            success=bool(runtime_result.success and runtime_result.approved),
+            duration_seconds=self._sum_subtask_durations(runtime_result),
+            fencing_epoch=fencing_epoch,
+            executor="native_execution_bridge",
+            executor_id=str(runtime_result.runtime_id),
+            gate_failure=str(runtime_result.gate_failure or ""),
+            failed_subtask_count=len(runtime_result.failed_subtasks),
+            fail_open_recommended=bool(runtime_result.fail_open_recommended),
+        )
         if runtime_result.success and runtime_result.approved:
             return TaskAttemptOutcome(
                 approved=True,
@@ -851,6 +863,60 @@ class SystemAgent:
         subtask: RuntimeSubTaskSpec,
     ) -> RuntimeSubTaskResult:
         return self.execution_bridge.execute_subtask(task=task, subtask=subtask)
+
+    def _emit_task_execution_completed(
+        self,
+        *,
+        workflow_id: str,
+        task_id: str,
+        attempt: int,
+        runtime_mode: str,
+        success: bool,
+        duration_seconds: float | None,
+        fencing_epoch: int,
+        executor: str,
+        executor_id: str = "",
+        exit_code: int | None = None,
+        gate_failure: str = "",
+        failed_subtask_count: int | None = None,
+        fail_open_recommended: bool | None = None,
+    ) -> None:
+        payload: Dict[str, Any] = {
+            "workflow_id": workflow_id,
+            "task_id": task_id,
+            "attempt": attempt,
+            "runtime_mode": runtime_mode,
+            "executor": executor,
+            "executor_id": executor_id,
+            "success": bool(success),
+            "duration_seconds": float(duration_seconds or 0.0),
+        }
+        if exit_code is not None:
+            payload["exit_code"] = int(exit_code)
+        if gate_failure:
+            payload["gate_failure"] = gate_failure
+        if failed_subtask_count is not None:
+            payload["failed_subtask_count"] = int(failed_subtask_count)
+        if fail_open_recommended is not None:
+            payload["fail_open_recommended"] = bool(fail_open_recommended)
+        self._emit(
+            "TaskExecutionCompleted",
+            payload,
+            workflow_id=workflow_id,
+            fencing_epoch=fencing_epoch,
+        )
+
+    @staticmethod
+    def _sum_subtask_durations(runtime_result: SubAgentRuntimeResult) -> float:
+        total = 0.0
+        for item in list(runtime_result.subtask_results):
+            try:
+                value = float(item.duration_seconds)
+            except (TypeError, ValueError):
+                continue
+            if value >= 0:
+                total += value
+        return float(total)
 
     def _record_subagent_gate_failure(
         self,

@@ -93,7 +93,7 @@ def test_system_agent_watchdog_critical_action_blocks_dispatch_and_rejects_task(
         task_rejected = [payload for event_type, payload, _ in events if event_type == "TaskRejected"]
         assert len(task_rejected) == 1
         assert "watchdog:pause_dispatch_and_escalate" in task_rejected[0]["reasons"]
-        assert all(event_type != "CliExecutionCompleted" for event_type, _, _ in events)
+        assert all(event_type != "TaskExecutionCompleted" for event_type, _, _ in events)
     finally:
         _cleanup_case_root(case_root)
 

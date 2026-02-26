@@ -78,17 +78,17 @@ def test_build_snapshot_schema_and_values() -> None:
         events = [
             {
                 "timestamp": now_dt.isoformat(),
-                "event_type": "CliExecutionCompleted",
+                "event_type": "TaskExecutionCompleted",
                 "payload": {"success": True, "duration_seconds": 0.2},
             },
             {
                 "timestamp": (now_dt + timedelta(seconds=1)).isoformat(),
-                "event_type": "CliExecutionCompleted",
+                "event_type": "TaskExecutionCompleted",
                 "payload": {"success": False, "duration_seconds": 0.4},
             },
             {
                 "timestamp": (now_dt + timedelta(seconds=2)).isoformat(),
-                "event_type": "CliExecutionCompleted",
+                "event_type": "TaskExecutionCompleted",
                 "payload": {"success": True, "duration_seconds": 0.1},
             },
             {
@@ -247,7 +247,7 @@ def test_build_snapshot_schema_and_values() -> None:
             "recovery_context_survival_rate",
         }
 
-        assert metrics["error_rate"]["source"] == "cli_execution_events"
+        assert metrics["error_rate"]["source"] == "task_execution_events"
         assert metrics["error_rate"]["value"] == pytest.approx(1 / 3)
         assert metrics["error_rate"]["status"] == "critical"
 

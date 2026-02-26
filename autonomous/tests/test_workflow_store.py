@@ -37,8 +37,8 @@ def test_workflow_store_state_and_command():
         command_id = store.create_command(
             workflow_id=workflow_id,
             step_name="implement_verify",
-            command_type="cli_execute",
-            idempotency_key="task-1:cli:1",
+            command_type="legacy_execute",
+            idempotency_key="task-1:legacy:1",
             attempt=1,
             max_attempt=2,
         )
@@ -49,8 +49,8 @@ def test_workflow_store_state_and_command():
         same_command_id = store.create_command(
             workflow_id=workflow_id,
             step_name="implement_verify",
-            command_type="cli_execute",
-            idempotency_key="task-1:cli:1",
+            command_type="legacy_execute",
+            idempotency_key="task-1:legacy:1",
             attempt=1,
             max_attempt=2,
         )

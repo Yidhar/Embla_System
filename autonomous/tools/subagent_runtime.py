@@ -302,12 +302,6 @@ class SubAgentRuntime:
                     "SubTaskExecutionCompleted",
                     **completion_payload,
                 )
-                self._emit(
-                    emit_event,
-                    "SubTaskCliExecutionCompleted",
-                    alias_of="SubTaskExecutionCompleted",
-                    **completion_payload,
-                )
 
                 if result.success:
                     completed.add(subtask.subtask_id)

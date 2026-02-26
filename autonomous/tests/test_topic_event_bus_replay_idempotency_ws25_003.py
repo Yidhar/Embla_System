@@ -69,11 +69,11 @@ def test_replay_dispatch_rewinds_anchor_when_delivery_fails_ws25_003() -> None:
             mirror_file_path=case_root / "events.jsonl",
         )
         bus.publish(
-            "tool.cli.exec",
+            "agent.workflow.execution",
             {"workflow_id": "wf-flaky", "trace_id": "trace-flaky"},
-            event_type="CliExecutionCompleted",
+            event_type="TaskExecutionCompleted",
             source="unit-test",
-            idempotency_key="idem:cli-exec",
+            idempotency_key="idem:task-exec",
         )
 
         state = {"attempts": 0}
@@ -85,18 +85,18 @@ def test_replay_dispatch_rewinds_anchor_when_delivery_fails_ws25_003() -> None:
                 raise RuntimeError("simulated replay delivery failure")
             side_effects.append(str(event.get("event_id") or ""))
 
-        sub = bus.subscribe("tool.*", flaky_handler, max_retries=1)
+        sub = bus.subscribe("agent.*", flaky_handler, max_retries=1)
         try:
             first = bus.replay_dispatch(
                 anchor_id="consumer-tool-b",
-                topic_pattern="tool.*",
+                topic_pattern="agent.*",
                 from_seq=1,
                 limit=20,
             )
             anchor_after_first = bus.get_replay_anchor("consumer-tool-b")
             second = bus.replay_dispatch(
                 anchor_id="consumer-tool-b",
-                topic_pattern="tool.*",
+                topic_pattern="agent.*",
                 limit=20,
             )
         finally:
@@ -117,22 +117,22 @@ def test_event_store_replay_dispatch_anchor_wrappers_ws25_003() -> None:
     try:
         store = EventStore(file_path=case_root / "events.jsonl")
         store.emit(
-            "CliExecutionCompleted",
-            {"workflow_id": "wf-store", "trace_id": "trace-store", "tool_name": "native_executor"},
+            "TaskExecutionCompleted",
+            {"workflow_id": "wf-store", "trace_id": "trace-store", "runtime_mode": "subagent", "success": True},
         )
 
         side_effects: list[str] = []
-        sub = store.subscribe("tool.*", lambda event: side_effects.append(str(event.get("event_id") or "")))
+        sub = store.subscribe("agent.*", lambda event: side_effects.append(str(event.get("event_id") or "")))
         try:
             first = store.replay_dispatch(
                 anchor_id="store-consumer",
-                topic_pattern="tool.*",
+                topic_pattern="agent.*",
                 from_seq=1,
                 limit=20,
             )
             second = store.replay_dispatch(
                 anchor_id="store-consumer",
-                topic_pattern="tool.*",
+                topic_pattern="agent.*",
                 from_seq=1,
                 limit=20,
             )
@@ -140,7 +140,7 @@ def test_event_store_replay_dispatch_anchor_wrappers_ws25_003() -> None:
             reset = store.reset_replay_anchor("store-consumer", last_seq=0, clear_dedupe=True)
             third = store.replay_dispatch(
                 anchor_id="store-consumer",
-                topic_pattern="tool.*",
+                topic_pattern="agent.*",
                 limit=20,
             )
         finally:

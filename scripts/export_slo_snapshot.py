@@ -177,29 +177,29 @@ def _collect_error_latency(
     error_warning = max(0.0, max_error_rate * 0.5)
     latency_warning = max(1.0, max_latency_p95_ms * 0.8)
 
-    cli_successes: List[bool] = []
-    cli_latencies_ms: List[float] = []
+    execution_successes: List[bool] = []
+    execution_latencies_ms: List[float] = []
 
     for row in events:
-        if row.get("event_type") != "CliExecutionCompleted":
+        if row.get("event_type") != "TaskExecutionCompleted":
             continue
         payload = row.get("payload")
         if not isinstance(payload, dict):
             continue
-        cli_successes.append(_to_bool(payload.get("success")))
+        execution_successes.append(_to_bool(payload.get("success")))
         duration_s = _to_float(payload.get("duration_seconds"))
         if duration_s is not None and duration_s >= 0:
-            cli_latencies_ms.append(duration_s * 1000.0)
+            execution_latencies_ms.append(duration_s * 1000.0)
 
-    source = "cli_execution_events"
-    sample_count = len(cli_successes)
+    source = "task_execution_events"
+    sample_count = len(execution_successes)
     error_rate: Optional[float]
     latency_p95_ms: Optional[float]
 
     if sample_count > 0:
-        failures = sum(1 for ok in cli_successes if not ok)
+        failures = sum(1 for ok in execution_successes if not ok)
         error_rate = failures / sample_count
-        latency_p95_ms = _percentile(cli_latencies_ms, 95)
+        latency_p95_ms = _percentile(execution_latencies_ms, 95)
     else:
         source = "canary_evaluated_windows"
         windows: List[Dict[str, Any]] = []

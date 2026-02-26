@@ -180,7 +180,7 @@ def run_ws22_longrun_baseline(
         "TaskApproved": rounds,
         "TaskRejected": 0,
         "SubTaskDispatching": rounds,
-        "SubTaskCliExecutionCompleted": rounds,
+        "SubTaskExecutionCompleted": rounds,
         "SubAgentRuntimeCompleted": rounds,
         "SubAgentRuntimeFailOpen": planned_fail_open_rounds,
         "SubAgentGateMetricUpdated": planned_fail_open_rounds,
