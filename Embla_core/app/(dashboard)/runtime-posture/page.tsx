@@ -29,6 +29,7 @@ const PAGE_COPY: Record<
     cards: {
       runtimeRollout: { title: string; note: string };
       failOpen: { title: string; note: string };
+      readonlyExposure: { title: string; note: string };
       lease: { title: string; note: string };
       queueDepth: { title: string; note: string };
       lockStatus: { title: string; note: string };
@@ -46,6 +47,7 @@ const PAGE_COPY: Record<
     metricLabels: {
       rolloutHitRatio: string;
       failOpenUsage: string;
+      readonlyWriteExposure: string;
       queuePressure: string;
       diskUsage: string;
       evidenceCoverage: string;
@@ -58,6 +60,9 @@ const PAGE_COPY: Record<
       critical: string;
       oldestPendingAge: string;
       gbFree: string;
+      sampleCount: string;
+      exposureCount: string;
+      outerReadonlyHitRate: string;
       eventsScanned: string;
       missing: string;
       failed: string;
@@ -77,6 +82,7 @@ const PAGE_COPY: Record<
     cards: {
       runtimeRollout: { title: "Runtime Rollout", note: "SubAgent decision hit ratio" },
       failOpen: { title: "Fail Open", note: "Current fail-open ratio" },
+      readonlyExposure: { title: "Readonly Write Exposure", note: "Path-A write-tool leakage ratio" },
       lease: { title: "Lease", note: "Global orchestrator lease state" },
       queueDepth: { title: "Queue Depth", note: "Pending outbox events" },
       lockStatus: { title: "Lock Status", note: "Global mutex lock health" },
@@ -94,6 +100,7 @@ const PAGE_COPY: Record<
     metricLabels: {
       rolloutHitRatio: "Rollout Hit Ratio",
       failOpenUsage: "Fail-Open Usage",
+      readonlyWriteExposure: "Readonly Write Exposure",
       queuePressure: "Queue Pressure",
       diskUsage: "Disk Usage",
       evidenceCoverage: "Evidence Coverage",
@@ -106,6 +113,9 @@ const PAGE_COPY: Record<
       critical: "Critical",
       oldestPendingAge: "Oldest pending age",
       gbFree: "GB free",
+      sampleCount: "Sample count",
+      exposureCount: "Exposure count",
+      outerReadonlyHitRate: "Outer readonly hit rate",
       eventsScanned: "events_scanned",
       missing: "Missing",
       failed: "Failed",
@@ -124,6 +134,7 @@ const PAGE_COPY: Record<
     cards: {
       runtimeRollout: { title: "运行分流命中率", note: "SubAgent 决策命中比例" },
       failOpen: { title: "Fail-Open 比例", note: "当前降级放行占比" },
+      readonlyExposure: { title: "只读写工具暴露率", note: "Path-A 写工具泄露占比" },
       lease: { title: "租约状态", note: "全局调度租约健康状态" },
       queueDepth: { title: "队列深度", note: "待处理 outbox 事件数" },
       lockStatus: { title: "锁状态", note: "全局互斥锁健康度" },
@@ -141,6 +152,7 @@ const PAGE_COPY: Record<
     metricLabels: {
       rolloutHitRatio: "分流命中率",
       failOpenUsage: "Fail-Open 使用率",
+      readonlyWriteExposure: "只读写工具暴露率",
       queuePressure: "队列压力",
       diskUsage: "磁盘使用情况",
       evidenceCoverage: "证据覆盖率",
@@ -153,6 +165,9 @@ const PAGE_COPY: Record<
       critical: "严重阈值",
       oldestPendingAge: "最老待处理时长",
       gbFree: "GB 可用空间",
+      sampleCount: "样本数",
+      exposureCount: "暴露次数",
+      outerReadonlyHitRate: "外层只读命中率",
       eventsScanned: "events_scanned",
       missing: "缺失",
       failed: "失败",
@@ -300,6 +315,8 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
   const queueDepth = asRecord(metrics.queue_depth);
   const lockStatus = asRecord(metrics.lock_status);
   const diskWatermark = asRecord(metrics.disk_watermark_ratio);
+  const outerReadonlyHitRate = asRecord(metrics.outer_readonly_hit_rate);
+  const readonlyWriteToolExposure = asRecord(metrics.readonly_write_tool_exposure_rate);
   const sources = asRecord(payload?.data?.sources);
 
   const evidenceSummary = asRecord(evidencePayload?.data?.summary);
@@ -310,6 +327,10 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
   const failOpenValue = asNumber(runtimeFailOpen.value);
   const failOpenBudget = asNumber(runtimeFailOpen.configured_budget_ratio);
   const diskUsage = asNumber(diskWatermark.value);
+  const outerReadonlyHitValue = asNumber(outerReadonlyHitRate.value);
+  const readonlyWriteExposureValue = asNumber(readonlyWriteToolExposure.value);
+  const readonlyWriteExposureSampleCount = asNumber(readonlyWriteToolExposure.sample_count);
+  const readonlyWriteExposureCount = asNumber(readonlyWriteToolExposure.exposure_count);
   const queuePending = asNumber(queueDepth.value);
   const queueCritical = asNumber(asRecord(queueDepth.thresholds).critical);
   const queueRatio = queuePending !== null && queueCritical && queueCritical > 0 ? queuePending / queueCritical : null;
@@ -336,6 +357,12 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
       value: toPercent(failOpenValue, lang),
       note: copy.cards.failOpen.note,
       state: toState(runtimeFailOpen.status),
+    },
+    {
+      title: copy.cards.readonlyExposure.title,
+      value: toPercent(readonlyWriteExposureValue, lang),
+      note: copy.cards.readonlyExposure.note,
+      state: toState(readonlyWriteToolExposure.status),
     },
     {
       title: copy.cards.lease.title,
@@ -400,6 +427,18 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
                 </span>
               }
               hint={`${copy.words.blocked}: ${asText(runtimeFailOpen.fail_open_blocked_count)}`}
+            />
+            <MetricBar
+              label={copy.metricLabels.readonlyWriteExposure}
+              value={toPercent(readonlyWriteExposureValue, lang)}
+              ratio={readonlyWriteExposureValue}
+              tone={toTone(toState(readonlyWriteToolExposure.status))}
+              right={
+                <span>
+                  {copy.words.sampleCount} {toNumber(readonlyWriteExposureSampleCount, lang)}
+                </span>
+              }
+              hint={`${copy.words.exposureCount}: ${toNumber(readonlyWriteExposureCount, lang)} · ${copy.words.outerReadonlyHitRate}: ${toPercent(outerReadonlyHitValue, lang)}`}
             />
             <MetricBar
               label={copy.metricLabels.queuePressure}

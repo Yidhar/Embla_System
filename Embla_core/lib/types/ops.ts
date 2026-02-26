@@ -20,6 +20,9 @@ export interface RuntimePostureMetrics {
   disk_watermark_ratio?: Record<string, unknown>;
   error_rate?: Record<string, unknown>;
   latency_p95_ms?: Record<string, unknown>;
+  prompt_slice_count_by_layer?: Record<string, unknown>;
+  outer_readonly_hit_rate?: Record<string, unknown>;
+  readonly_write_tool_exposure_rate?: Record<string, unknown>;
 }
 
 export interface RuntimePostureData {

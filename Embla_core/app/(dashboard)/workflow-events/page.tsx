@@ -1,8 +1,10 @@
 import { SignalCard, type SignalState } from "@/components/cards/signal-card";
-import { fetchIncidentsLatest, fetchWorkflowEvents } from "@/lib/api/ops";
+import { MetricBar, type MetricBarTone } from "@/components/charts/metric-bar";
+import { fetchIncidentsLatest, fetchRuntimePosture, fetchWorkflowEvents } from "@/lib/api/ops";
 import {
   formatIsoDateTime,
   formatNumber,
+  formatPercentRatio,
   resolveLangFromSearchParams,
   translateSignalState,
   type AppLang,
@@ -31,9 +33,14 @@ const PAGE_COPY: Record<
       recentCriticalEvents: string;
       incidentFeed: string;
       eventPostureSummary: string;
+      runtimeCrossSignals: string;
       incidentCounters: string;
       eventCounters: string;
       logContextStats: string;
+    };
+    metricLabels: {
+      readonlyWriteExposure: string;
+      outerReadonlyHitRate: string;
     };
     columns: {
       time: string;
@@ -51,6 +58,9 @@ const PAGE_COPY: Record<
       noCriticalEvents: string;
       noIncidents: string;
       unknown: string;
+      sampleCount: string;
+      exposureCount: string;
+      hitCount: string;
     };
   }
 > = {
@@ -69,9 +79,14 @@ const PAGE_COPY: Record<
       recentCriticalEvents: "Recent Critical Events",
       incidentFeed: "Incident Feed",
       eventPostureSummary: "Event Posture Summary",
+      runtimeCrossSignals: "Runtime Cross-Page Signals",
       incidentCounters: "Incident Counters",
       eventCounters: "Event Counters",
       logContextStats: "Log Context Stats",
+    },
+    metricLabels: {
+      readonlyWriteExposure: "Readonly Write Exposure",
+      outerReadonlyHitRate: "Outer Readonly Hit Rate",
     },
     columns: {
       time: "Time",
@@ -89,6 +104,9 @@ const PAGE_COPY: Record<
       noCriticalEvents: "No critical events in current scan window.",
       noIncidents: "No incidents in current scan window.",
       unknown: "unknown",
+      sampleCount: "Sample count",
+      exposureCount: "Exposure count",
+      hitCount: "Hit count",
     },
   },
   "zh-CN": {
@@ -106,9 +124,14 @@ const PAGE_COPY: Record<
       recentCriticalEvents: "最近关键事件",
       incidentFeed: "事件流",
       eventPostureSummary: "事件态势摘要",
+      runtimeCrossSignals: "运行态跨页信号",
       incidentCounters: "事件计数器",
       eventCounters: "事件分类计数",
       logContextStats: "日志上下文统计",
+    },
+    metricLabels: {
+      readonlyWriteExposure: "只读写工具暴露率",
+      outerReadonlyHitRate: "外层只读命中率",
     },
     columns: {
       time: "时间",
@@ -126,6 +149,9 @@ const PAGE_COPY: Record<
       noCriticalEvents: "当前扫描窗口内无关键事件。",
       noIncidents: "当前扫描窗口内无事件。",
       unknown: "未知",
+      sampleCount: "样本数",
+      exposureCount: "暴露次数",
+      hitCount: "命中次数",
     },
   },
 };
@@ -152,10 +178,31 @@ function toNumber(value: unknown, lang: AppLang, suffix = ""): string {
   return `${formatted}${suffix}`;
 }
 
+function toPercent(value: unknown, lang: AppLang): string {
+  return formatPercentRatio(value, lang, 1, "--");
+}
+
+function toTone(state: SignalState): MetricBarTone {
+  if (state === "healthy") {
+    return "healthy";
+  }
+  if (state === "warning") {
+    return "warning";
+  }
+  if (state === "critical") {
+    return "critical";
+  }
+  return "unknown";
+}
+
 export default async function WorkflowEventsPage({ searchParams }: WorkflowPageProps) {
   const lang = await resolveLangFromSearchParams(searchParams);
   const copy = PAGE_COPY[lang];
-  const [payload, incidentsPayload] = await Promise.all([fetchWorkflowEvents(), fetchIncidentsLatest()]);
+  const [payload, incidentsPayload, runtimePayload] = await Promise.all([
+    fetchWorkflowEvents(),
+    fetchIncidentsLatest(),
+    fetchRuntimePosture(),
+  ]);
   const summary = payload?.data?.summary;
   const toolStatus = payload?.data?.tool_status || {};
   const eventCounters = payload?.data?.event_counters || {};
@@ -164,12 +211,23 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
 
   const incidentsSummary = incidentsPayload?.data?.summary;
   const incidents = incidentsPayload?.data?.incidents || [];
+  const runtimeMetrics = runtimePayload?.data?.metrics || {};
+  const readonlyExposureMetric =
+    typeof runtimeMetrics.readonly_write_tool_exposure_rate === "object" && runtimeMetrics.readonly_write_tool_exposure_rate
+      ? runtimeMetrics.readonly_write_tool_exposure_rate
+      : {};
+  const outerReadonlyMetric =
+    typeof runtimeMetrics.outer_readonly_hit_rate === "object" && runtimeMetrics.outer_readonly_hit_rate
+      ? runtimeMetrics.outer_readonly_hit_rate
+      : {};
 
   const outboxPending = summary?.outbox_pending;
   const oldestPendingAge = summary?.oldest_pending_age_seconds;
   const leaseLost = Number(eventCounters.LeaseLost || 0);
   const state = toState(payload?.severity || "unknown");
   const incidentsState = toState(incidentsPayload?.severity || "unknown");
+  const readonlyExposureState = toState(String((readonlyExposureMetric as { status?: unknown }).status || "unknown"));
+  const outerReadonlyState = toState(String((outerReadonlyMetric as { status?: unknown }).status || "unknown"));
   const latestIncidentText = formatIsoDateTime(incidentsSummary?.latest_incident_at, lang, "--");
 
   return (
@@ -311,6 +369,38 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
         <article className="glass-card p-6">
           <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.eventPostureSummary}</p>
           <div className="mt-4 space-y-3 text-xs text-gray-700">
+            <div className="rounded-xl bg-white/70 p-3">
+              <p className="font-bold uppercase tracking-[0.2em] text-gray-500">{copy.sections.runtimeCrossSignals}</p>
+              <div className="mt-2 grid grid-cols-1 gap-3">
+                <MetricBar
+                  label={copy.metricLabels.readonlyWriteExposure}
+                  value={toPercent((readonlyExposureMetric as { value?: unknown }).value, lang)}
+                  ratio={
+                    typeof (readonlyExposureMetric as { value?: unknown }).value === "number"
+                      ? ((readonlyExposureMetric as { value?: number }).value ?? null)
+                      : null
+                  }
+                  tone={toTone(readonlyExposureState)}
+                  right={
+                    <span>
+                      {copy.words.sampleCount} {toNumber((readonlyExposureMetric as { sample_count?: unknown }).sample_count, lang)}
+                    </span>
+                  }
+                  hint={`${copy.words.exposureCount}: ${toNumber((readonlyExposureMetric as { exposure_count?: unknown }).exposure_count, lang)}`}
+                />
+                <MetricBar
+                  label={copy.metricLabels.outerReadonlyHitRate}
+                  value={toPercent((outerReadonlyMetric as { value?: unknown }).value, lang)}
+                  ratio={
+                    typeof (outerReadonlyMetric as { value?: unknown }).value === "number"
+                      ? ((outerReadonlyMetric as { value?: number }).value ?? null)
+                      : null
+                  }
+                  tone={toTone(outerReadonlyState)}
+                  hint={`${copy.words.hitCount}: ${toNumber((outerReadonlyMetric as { hit_count?: unknown }).hit_count, lang)}`}
+                />
+              </div>
+            </div>
             <div className="rounded-xl bg-white/70 p-3">
               <p className="font-bold uppercase tracking-[0.2em] text-gray-500">{copy.sections.eventCounters}</p>
               <pre className="mt-2 whitespace-pre-wrap">{JSON.stringify(eventCounters, null, 2)}</pre>
