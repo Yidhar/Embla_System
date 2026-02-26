@@ -1795,7 +1795,134 @@ def _ops_max_status(statuses: List[str]) -> str:
     return current
 
 
-def _ops_build_route_quality_summary(metrics: Dict[str, Any]) -> Dict[str, Any]:
+def _ops_route_event_status(payload: Dict[str, Any]) -> str:
+    outer_readonly = bool(payload.get("outer_readonly_hit"))
+    readonly_exposed = bool(payload.get("readonly_write_tool_exposed"))
+    readonly_selected_count = _ops_safe_int(payload.get("readonly_write_tool_selected_count"), default=0)
+    readonly_exposure_hit = outer_readonly and (readonly_exposed or readonly_selected_count > 0)
+    if readonly_exposure_hit:
+        return "critical"
+    if bool(payload.get("path_b_budget_escalated")):
+        return "warning"
+    if bool(payload.get("core_session_created")):
+        return "warning"
+    return "ok"
+
+
+def _ops_build_route_quality_trend(
+    events_file: Path,
+    *,
+    window_size: int = 20,
+    max_windows: int = 6,
+) -> Dict[str, Any]:
+    step = max(1, int(window_size))
+    max_window_count = max(1, int(max_windows))
+    rows = _ops_read_event_rows(events_file, limit=max(200, step * max_window_count * 8))
+    prompt_rows: List[Dict[str, Any]] = []
+    for row in rows:
+        if str(row.get("event_type") or "").strip() != "PromptInjectionComposed":
+            continue
+        payload = row.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        prompt_rows.append(
+            {
+                "timestamp": str(row.get("timestamp") or ""),
+                "payload": payload,
+            }
+        )
+
+    if not prompt_rows:
+        return {
+            "status": "unknown",
+            "direction": "unknown",
+            "volatility": None,
+            "windows": [],
+            "sample_count": 0,
+            "window_size": step,
+            "reason": "no_prompt_injection_events",
+        }
+
+    capped = prompt_rows[-step * max_window_count :]
+    windows: List[Dict[str, Any]] = []
+    for start in range(0, len(capped), step):
+        segment = capped[start : start + step]
+        if not segment:
+            continue
+        statuses = [_ops_route_event_status(item.get("payload") if isinstance(item.get("payload"), dict) else {}) for item in segment]
+        total = len(statuses)
+        critical_count = sum(1 for status in statuses if status == "critical")
+        warning_count = sum(1 for status in statuses if status == "warning")
+        ok_count = sum(1 for status in statuses if status == "ok")
+        window_status = _ops_max_status(statuses)
+        score = ((ok_count * 1.0) + (warning_count * 0.6) + (critical_count * 0.25)) / float(total)
+        windows.append(
+            {
+                "start_at": str(segment[0].get("timestamp") or ""),
+                "end_at": str(segment[-1].get("timestamp") or ""),
+                "sample_count": total,
+                "status": window_status,
+                "critical_ratio": critical_count / float(total),
+                "warning_ratio": warning_count / float(total),
+                "score": round(score, 4),
+            }
+        )
+
+    if not windows:
+        return {
+            "status": "unknown",
+            "direction": "unknown",
+            "volatility": None,
+            "windows": [],
+            "sample_count": 0,
+            "window_size": step,
+            "reason": "no_window_aggregates",
+        }
+
+    latest = windows[-1]
+    first = windows[0]
+    delta = float(latest.get("score") or 0.0) - float(first.get("score") or 0.0)
+    if delta >= 0.08:
+        direction = "improving"
+    elif delta <= -0.08:
+        direction = "degrading"
+    else:
+        direction = "stable"
+
+    transitions = 0
+    for idx in range(1, len(windows)):
+        prev_status = str(windows[idx - 1].get("status") or "unknown")
+        current_status = str(windows[idx].get("status") or "unknown")
+        if prev_status != current_status:
+            transitions += 1
+    volatility = (transitions / float(len(windows) - 1)) if len(windows) > 1 else 0.0
+
+    latest_status = _ops_status_to_severity(str(latest.get("status") or "unknown"))
+    trend_status = latest_status
+    if latest_status == "ok":
+        if direction == "degrading" and float(latest.get("score") or 0.0) < 0.7:
+            trend_status = "warning"
+        elif volatility >= 0.7:
+            trend_status = "warning"
+    elif latest_status == "warning" and direction == "degrading" and float(latest.get("score") or 0.0) < 0.5:
+        trend_status = "critical"
+
+    return {
+        "status": trend_status,
+        "direction": direction,
+        "volatility": round(volatility, 4),
+        "windows": windows,
+        "sample_count": len(capped),
+        "window_size": step,
+        "latest_window_status": latest_status,
+    }
+
+
+def _ops_build_route_quality_summary(
+    metrics: Dict[str, Any],
+    *,
+    trend: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     outer_readonly = metrics.get("outer_readonly_hit_rate") if isinstance(metrics.get("outer_readonly_hit_rate"), dict) else {}
     readonly_exposure = (
         metrics.get("readonly_write_tool_exposure_rate")
@@ -1825,7 +1952,9 @@ def _ops_build_route_quality_summary(metrics: Dict[str, Any]) -> Dict[str, Any]:
         "path_b_budget_escalation_rate": _ops_metric_status(path_b_budget_escalation),
         "core_session_creation_rate": _ops_metric_status(core_session_creation),
     }
-    overall_status = _ops_max_status(list(status_map.values()))
+    trend_payload = trend if isinstance(trend, dict) else {}
+    trend_status = _ops_status_to_severity(str(trend_payload.get("status") or "unknown"))
+    overall_status = _ops_max_status([*list(status_map.values()), trend_status])
 
     reason_codes: List[str] = []
     if status_map["readonly_write_tool_exposure_rate"] == "critical":
@@ -1848,6 +1977,14 @@ def _ops_build_route_quality_summary(metrics: Dict[str, Any]) -> Dict[str, Any]:
     elif status_map["outer_readonly_hit_rate"] == "warning":
         reason_codes.append("OUTER_READONLY_HIT_WARNING")
 
+    direction = str(trend_payload.get("direction") or "unknown")
+    if trend_status == "critical":
+        reason_codes.append("ROUTE_QUALITY_TREND_CRITICAL")
+    elif trend_status == "warning":
+        reason_codes.append("ROUTE_QUALITY_TREND_WARNING")
+    if direction == "degrading":
+        reason_codes.append("ROUTE_QUALITY_TREND_DEGRADING")
+
     if not reason_codes and overall_status == "ok":
         reason_codes.append("ROUTE_QUALITY_HEALTHY")
     if not reason_codes and overall_status == "unknown":
@@ -1869,6 +2006,7 @@ def _ops_build_route_quality_summary(metrics: Dict[str, Any]) -> Dict[str, Any]:
         "reason_text": reason_text,
         "signal_status": status_map,
         "path_ratios": route_distribution.get("path_ratios", {}) if isinstance(route_distribution, dict) else {},
+        "trend": trend_payload,
     }
 
 
@@ -2053,6 +2191,11 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     summary = snapshot.get("summary") if isinstance(snapshot.get("summary"), dict) else {}
     threshold_profile = snapshot.get("threshold_profile") if isinstance(snapshot.get("threshold_profile"), dict) else {}
     sources = snapshot.get("sources") if isinstance(snapshot.get("sources"), dict) else {}
+    events_file_raw = str(sources.get("events_file") or "").strip()
+    events_file = Path(events_file_raw) if events_file_raw else Path("__missing_events_file__.jsonl")
+    if events_file_raw and not events_file.is_absolute():
+        events_file = _ops_repo_root() / events_file
+    route_quality_trend = _ops_build_route_quality_trend(events_file, window_size=20, max_windows=6)
 
     metric_status = summary.get("metric_status") if isinstance(summary.get("metric_status"), dict) else {}
     overall_status = str(summary.get("overall_status") or "unknown")
@@ -2081,7 +2224,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         "summary": {
             "overall_status": overall_status,
             "metric_status": metric_status,
-            "route_quality": _ops_build_route_quality_summary(metrics),
+            "route_quality": _ops_build_route_quality_summary(metrics, trend=route_quality_trend),
         },
         "metrics": {
             "runtime_rollout": metrics.get("runtime_rollout", {}),
@@ -2548,6 +2691,7 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
     repo_root = _ops_repo_root()
     events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
     event_rows = _ops_read_event_rows(events_file, limit=max(200, int(limit) * 10))
+    route_quality_trend = _ops_build_route_quality_trend(events_file, window_size=20, max_windows=6)
     prompt_safety_summary: Dict[str, Any] = {}
     try:
         from scripts.export_slo_snapshot import build_snapshot
@@ -2585,7 +2729,7 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             "chat_route_path_distribution": chat_route_distribution,
             "path_b_budget_escalation_rate": path_b_budget_escalation,
             "core_session_creation_rate": core_session_creation,
-            "route_quality": _ops_build_route_quality_summary(snapshot_metrics),
+            "route_quality": _ops_build_route_quality_summary(snapshot_metrics, trend=route_quality_trend),
         }
     except Exception as exc:
         logger.warning(f"构建 incidents prompt safety 摘要失败（降级为空）: {exc}")

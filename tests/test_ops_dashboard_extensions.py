@@ -161,6 +161,8 @@ def test_ops_incidents_latest_payload_merges_events_and_report_issues(tmp_path, 
     assert runtime_prompt_safety["core_session_creation_rate"]["created_count"] == 3
     assert runtime_prompt_safety["route_quality"]["status"] == "warning"
     assert "READONLY_WRITE_EXPOSURE_WARNING" in runtime_prompt_safety["route_quality"]["reason_codes"]
+    assert runtime_prompt_safety["route_quality"]["trend"]["status"] == "unknown"
+    assert runtime_prompt_safety["route_quality"]["trend"]["sample_count"] == 0
 
 
 def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_path, monkeypatch) -> None:
@@ -247,5 +249,64 @@ def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_pa
     assert metrics["core_session_creation_rate"]["created_count"] == 4
     assert payload["data"]["summary"]["route_quality"]["status"] == "warning"
     assert "CORE_SESSION_CREATION_WARNING" in payload["data"]["summary"]["route_quality"]["reason_codes"]
+    assert payload["data"]["summary"]["route_quality"]["trend"]["status"] == "unknown"
+    assert payload["data"]["summary"]["route_quality"]["trend"]["windows"] == []
 
     assert any(path.endswith("ws26_runtime_snapshot_ws26_002.json") for path in payload["source_reports"])
+
+
+def test_ops_route_quality_trend_detects_degrading_windows(tmp_path) -> None:
+    repo_root = tmp_path
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    base = datetime(2026, 2, 26, 8, 0, tzinfo=timezone.utc)
+
+    rows: list[dict] = []
+    for idx in range(20):
+        rows.append(
+            {
+                "timestamp": base.replace(minute=idx % 60, second=idx % 50).isoformat(),
+                "event_type": "PromptInjectionComposed",
+                "payload": {
+                    "path": "path-a",
+                    "outer_readonly_hit": True,
+                    "readonly_write_tool_exposed": False,
+                    "readonly_write_tool_selected_count": 0,
+                    "path_b_budget_escalated": False,
+                    "core_session_created": False,
+                },
+            }
+        )
+    for idx in range(20):
+        payload = {
+            "path": "path-c",
+            "outer_readonly_hit": False,
+            "readonly_write_tool_exposed": False,
+            "readonly_write_tool_selected_count": 0,
+            "path_b_budget_escalated": idx < 8,
+            "core_session_created": idx < 6,
+        }
+        if idx in {2, 4, 7}:
+            payload.update(
+                {
+                    "path": "path-a",
+                    "outer_readonly_hit": True,
+                    "readonly_write_tool_exposed": True,
+                    "readonly_write_tool_selected_count": 1,
+                }
+            )
+        rows.append(
+            {
+                "timestamp": base.replace(hour=9, minute=idx % 60, second=idx % 50).isoformat(),
+                "event_type": "PromptInjectionComposed",
+                "payload": payload,
+            }
+        )
+
+    _write_jsonl(events_file, rows)
+    trend = api_server._ops_build_route_quality_trend(events_file, window_size=20, max_windows=2)
+
+    assert trend["status"] in {"warning", "critical"}
+    assert trend["direction"] == "degrading"
+    assert trend["sample_count"] == 40
+    assert trend["window_size"] == 20
+    assert isinstance(trend["windows"], list) and len(trend["windows"]) == 2
