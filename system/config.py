@@ -721,9 +721,10 @@ class PromptManager:
         default_prompts = ["conversation_analyzer_prompt", "conversation_style_prompt"]
 
         for prompt_name in default_prompts:
-            prompt_file = self.prompts_dir / f"{prompt_name}.txt"
+            resolved = resolve_prompt_registry_entry(prompt_name=prompt_name, prompts_dir=self.prompts_dir)
+            prompt_file = Path(resolved["path"])
             if not prompt_file.exists():
-                print(f"警告：提示词文件 {prompt_name}.txt 不存在，请手动创建")
+                print(f"警告：提示词文件 {prompt_file.name} 不存在，请手动创建")
 
     def get_prompt(self, name: str, **kwargs) -> str:
         """获取提示词模板"""
@@ -751,15 +752,18 @@ class PromptManager:
     def save_prompt(self, name: str, content: str):
         """保存提示词到文件"""
         try:
-            prompt_file = self.prompts_dir / f"{name}.txt"
+            resolved = resolve_prompt_registry_entry(prompt_name=name, prompts_dir=self.prompts_dir)
+            canonical_name = str(resolved["canonical_name"])
+            prompt_file = Path(resolved["path"])
+            prompt_file.parent.mkdir(parents=True, exist_ok=True)
             with open(prompt_file, "w", encoding="utf-8") as f:
                 f.write(content)
 
             # 更新缓存
-            self._cache[name] = content
-            self._last_modified[name] = datetime.now()
+            self._cache[canonical_name] = content
+            self._last_modified[canonical_name] = datetime.now()
 
-            print(f"提示词 '{name}' 已保存")
+            print(f"提示词 '{canonical_name}' 已保存")
 
         except Exception as e:
             print(f"错误：保存提示词 '{name}' 失败: {e}")
@@ -767,23 +771,25 @@ class PromptManager:
     def _load_prompt(self, name: str) -> Optional[str]:
         """从文件加载提示词"""
         try:
-            prompt_file = self.prompts_dir / f"{name}.txt"
+            resolved = resolve_prompt_registry_entry(prompt_name=name, prompts_dir=self.prompts_dir)
+            canonical_name = str(resolved["canonical_name"])
+            prompt_file = Path(resolved["path"])
 
             if not prompt_file.exists():
                 return None
 
             # 检查文件是否被修改
             current_mtime = prompt_file.stat().st_mtime
-            if name in self._last_modified and self._last_modified[name].timestamp() >= current_mtime:
-                return self._cache.get(name)
+            if canonical_name in self._last_modified and self._last_modified[canonical_name].timestamp() >= current_mtime:
+                return self._cache.get(canonical_name)
 
             # 读取文件
             with open(prompt_file, "r", encoding="utf-8") as f:
                 content = f.read()
 
             # 更新缓存
-            self._cache[name] = content
-            self._last_modified[name] = datetime.now()
+            self._cache[canonical_name] = content
+            self._last_modified[canonical_name] = datetime.now()
 
             return content
 
@@ -814,13 +820,160 @@ def save_prompt(name: str, content: str):
     get_prompt_manager().save_prompt(name, content)
 
 
+def _resolve_prompts_dir(prompts_dir: Optional[Path] = None) -> Path:
+    if prompts_dir is not None:
+        return Path(prompts_dir)
+    if _prompt_manager is not None:
+        try:
+            return Path(_prompt_manager.prompts_dir)
+        except Exception:
+            pass
+    return Path(__file__).parent / "prompts"
+
+
+_DEFAULT_PROMPT_REGISTRY_SPEC: Dict[str, Any] = {
+    "schema_version": "ws28-prompt-registry-v1",
+    "entries": [
+        {"prompt_name": "conversation_style_prompt", "path": "conversation_style_prompt.txt", "aliases": ["outer_chat_style"]},
+        {"prompt_name": "conversation_analyzer_prompt", "path": "conversation_analyzer_prompt.txt", "aliases": []},
+        {"prompt_name": "tool_dispatch_prompt", "path": "tool_dispatch_prompt.txt", "aliases": []},
+        {"prompt_name": "agentic_tool_prompt", "path": "agentic_tool_prompt.txt", "aliases": []},
+        {"prompt_name": "immutable_dna_manifest", "path": "immutable_dna_manifest.spec", "aliases": ["immutable_dna_manifest_spec"]},
+        {"prompt_name": "prompt_acl", "path": "prompt_acl.spec", "aliases": []},
+    ],
+}
+
+
+def _normalize_prompt_registry_name(name: str) -> str:
+    normalized = str(name or "").strip()
+    lower = normalized.lower()
+    if lower.endswith(".txt"):
+        return normalized[:-4]
+    if lower.endswith(".spec"):
+        return normalized[:-5]
+    return normalized
+
+
+def _normalize_prompt_registry_entry(raw: Dict[str, Any]) -> Dict[str, Any]:
+    prompt_name = _normalize_prompt_registry_name(str(raw.get("prompt_name") or raw.get("name") or ""))
+    if not prompt_name:
+        return {}
+
+    relative_path = str(raw.get("path") or "").strip()
+    if not relative_path:
+        relative_path = f"{prompt_name}.txt"
+
+    aliases: List[str] = []
+    alias_rows = raw.get("aliases")
+    if isinstance(alias_rows, list):
+        for alias_raw in alias_rows:
+            alias = _normalize_prompt_registry_name(str(alias_raw or ""))
+            if not alias or alias == prompt_name or alias in aliases:
+                continue
+            aliases.append(alias)
+
+    return {
+        "prompt_name": prompt_name,
+        "path": relative_path.replace("\\", "/"),
+        "aliases": aliases,
+    }
+
+
+def load_prompt_registry_spec(*, prompts_dir: Optional[Path] = None) -> Dict[str, Any]:
+    resolved_prompts_dir = _resolve_prompts_dir(prompts_dir)
+    candidate_paths = [
+        resolved_prompts_dir / "specs" / "prompt_registry.spec",
+        resolved_prompts_dir / "prompt_registry.spec",
+    ]
+
+    payload: Dict[str, Any] = {}
+    selected_source = ""
+    for candidate in candidate_paths:
+        if not candidate.exists():
+            continue
+        try:
+            loaded = json5.loads(candidate.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                payload = loaded
+                selected_source = str(candidate).replace("\\", "/")
+                break
+        except Exception as e:
+            logging.getLogger(__name__).warning("load prompt_registry.spec failed: %s", e)
+
+    if not payload:
+        payload = dict(_DEFAULT_PROMPT_REGISTRY_SPEC)
+        selected_source = "default"
+
+    raw_entries = payload.get("entries")
+    normalized_entries: List[Dict[str, Any]] = []
+    if isinstance(raw_entries, list):
+        for raw in raw_entries:
+            if not isinstance(raw, dict):
+                continue
+            normalized = _normalize_prompt_registry_entry(raw)
+            if normalized:
+                normalized_entries.append(normalized)
+
+    if not normalized_entries:
+        normalized_entries = list(_DEFAULT_PROMPT_REGISTRY_SPEC["entries"])
+
+    entries_map: Dict[str, Dict[str, Any]] = {}
+    alias_to_name: Dict[str, str] = {}
+    for entry in normalized_entries:
+        prompt_name = str(entry["prompt_name"])
+        if prompt_name in entries_map:
+            continue
+        entries_map[prompt_name] = entry
+        alias_to_name[prompt_name] = prompt_name
+        for alias in entry.get("aliases", []):
+            alias_key = str(alias)
+            if alias_key and alias_key not in alias_to_name:
+                alias_to_name[alias_key] = prompt_name
+
+    return {
+        "schema_version": str(payload.get("schema_version") or "ws28-prompt-registry-v1"),
+        "source": selected_source,
+        "entries": normalized_entries,
+        "entries_map": entries_map,
+        "alias_to_name": alias_to_name,
+    }
+
+
+def resolve_prompt_registry_entry(*, prompt_name: str, prompts_dir: Optional[Path] = None) -> Dict[str, Any]:
+    resolved_prompts_dir = _resolve_prompts_dir(prompts_dir)
+
+    requested_name = _normalize_prompt_registry_name(str(prompt_name or ""))
+    registry = load_prompt_registry_spec(prompts_dir=resolved_prompts_dir)
+    alias_to_name = dict(registry.get("alias_to_name") or {})
+    entries_map = dict(registry.get("entries_map") or {})
+
+    canonical_name = alias_to_name.get(requested_name, requested_name)
+    entry = entries_map.get(canonical_name)
+    if entry is not None:
+        relative_path = str(entry.get("path") or f"{canonical_name}.txt")
+        aliases = list(entry.get("aliases") or [])
+    else:
+        relative_path = f"{canonical_name}.txt"
+        aliases = []
+
+    absolute_path = (resolved_prompts_dir / relative_path).resolve()
+    return {
+        "requested_name": requested_name,
+        "canonical_name": canonical_name,
+        "relative_path": relative_path.replace("\\", "/"),
+        "filename": Path(relative_path).name,
+        "aliases": aliases,
+        "path": absolute_path,
+    }
+
+
 _PROMPT_ACL_LEVELS = {"S0_LOCKED", "S1_CONTROLLED", "S2_FLEXIBLE"}
 
 _DEFAULT_PROMPT_ACL_SPEC: Dict[str, Any] = {
     "enforcement_mode": "block",
     "rules": [
         {
-            "path_pattern": "immutable_dna_manifest.txt",
+            "path_pattern": "immutable_dna_manifest.spec",
             "level": "S0_LOCKED",
             "require_ticket": True,
             "require_manifest_refresh": True,
@@ -893,8 +1046,7 @@ def _normalize_prompt_acl_rule(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def load_prompt_acl_spec(*, prompts_dir: Optional[Path] = None) -> Dict[str, Any]:
-    manager = get_prompt_manager()
-    resolved_prompts_dir = Path(prompts_dir) if prompts_dir is not None else Path(manager.prompts_dir)
+    resolved_prompts_dir = _resolve_prompts_dir(prompts_dir)
     spec_path = resolved_prompts_dir / "prompt_acl.spec"
     if not spec_path.exists():
         return dict(_DEFAULT_PROMPT_ACL_SPEC)
@@ -935,10 +1087,11 @@ def evaluate_prompt_acl(
     change_reason: str = "",
     enforcement_mode_override: str = "",
 ) -> Dict[str, Any]:
-    normalized_name = str(prompt_name or "").strip()
-    if normalized_name.lower().endswith(".txt"):
-        normalized_name = normalized_name[:-4]
-    filename = f"{normalized_name}.txt"
+    requested_name = _normalize_prompt_registry_name(str(prompt_name or ""))
+    resolved = resolve_prompt_registry_entry(prompt_name=requested_name, prompts_dir=prompts_dir)
+    canonical_name = str(resolved["canonical_name"])
+    filename = str(resolved["filename"])
+    relative_path = str(resolved["relative_path"])
 
     spec = load_prompt_acl_spec(prompts_dir=prompts_dir)
     rules = list(spec.get("rules", [])) if isinstance(spec.get("rules"), list) else []
@@ -952,7 +1105,9 @@ def evaluate_prompt_acl(
     }
     for rule in rules:
         path_pattern = str(rule.get("path_pattern") or "").strip()
-        if path_pattern and fnmatch.fnmatch(filename, path_pattern):
+        if path_pattern and (
+            fnmatch.fnmatch(filename, path_pattern) or fnmatch.fnmatch(relative_path, path_pattern)
+        ):
             matched_rule = {
                 "path_pattern": path_pattern,
                 "level": _normalize_prompt_acl_level(str(rule.get("level") or "S2_FLEXIBLE")),
@@ -989,8 +1144,10 @@ def evaluate_prompt_acl(
 
     shadow_blocked = bool(blocked and enforcement_mode == "shadow")
     return {
-        "prompt_name": normalized_name,
+        "prompt_name": canonical_name,
+        "requested_prompt_name": requested_name,
         "filename": filename,
+        "relative_path": relative_path,
         "enforcement_mode": enforcement_mode,
         "matched_rule": matched_rule,
         "approval_ticket_present": bool(approval_text),

@@ -37,6 +37,12 @@ def main() -> int:
         help="WS26-006 M11 chaos report path",
     )
     parser.add_argument(
+        "--brainstem-heartbeat",
+        type=Path,
+        default=Path("scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json"),
+        help="Brainstem control-plane heartbeat path used by M11 gate",
+    )
+    parser.add_argument(
         "--output-json",
         type=Path,
         default=Path("scratch/reports/ws26_m11_closure_gate_result.json"),
@@ -49,6 +55,7 @@ def main() -> int:
         runbook_path=args.runbook,
         runtime_snapshot_report_path=args.runtime_snapshot_report,
         m11_chaos_report_path=args.m11_chaos_report,
+        brainstem_heartbeat_path=args.brainstem_heartbeat,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

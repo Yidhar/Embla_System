@@ -26,6 +26,7 @@ export interface RuntimePostureMetrics {
   chat_route_path_distribution?: Record<string, unknown>;
   path_b_budget_escalation_rate?: Record<string, unknown>;
   core_session_creation_rate?: Record<string, unknown>;
+  brainstem_heartbeat?: Record<string, unknown>;
 }
 
 export interface RuntimePostureData {
@@ -34,6 +35,7 @@ export interface RuntimePostureData {
   threshold_profile?: Record<string, unknown>;
   sources?: Record<string, unknown>;
   ws26_runtime_snapshot_report?: Record<string, unknown>;
+  brainstem_control_plane?: Record<string, unknown>;
 }
 
 export interface McpFabricSummary {

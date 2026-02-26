@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from autonomous.ws26_release_gate import evaluate_ws26_m11_closure_gate
@@ -62,10 +63,37 @@ def _write_runbook(path: Path) -> None:
     )
 
 
+def _write_brainstem_heartbeat(
+    path: Path,
+    *,
+    generated_at: datetime,
+    healthy: bool = True,
+    unhealthy_services: list[str] | None = None,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "generated_at": generated_at.isoformat(),
+        "pid": 42000,
+        "tick": 2,
+        "mode": "daemon",
+        "healthy": bool(healthy),
+        "service_count": 1,
+        "unhealthy_services": list(unhealthy_services or []),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def test_ws26_m11_closure_gate_passes_with_green_inputs() -> None:
     case_root = _make_case_root("test_ws26_release_gate")
     try:
         reports = case_root / "reports"
+        heartbeat = case_root / "runtime" / "brainstem_heartbeat.json"
+        _write_brainstem_heartbeat(
+            heartbeat,
+            generated_at=datetime.now(timezone.utc),
+            healthy=True,
+            unhealthy_services=[],
+        )
         _write_report(
             reports / "ws26_002.json",
             task_id="NGA-WS26-002",
@@ -88,6 +116,7 @@ def test_ws26_m11_closure_gate_passes_with_green_inputs() -> None:
             runbook_path=runbook,
             runtime_snapshot_report_path=reports / "ws26_002.json",
             m11_chaos_report_path=reports / "ws26_006.json",
+            brainstem_heartbeat_path=heartbeat,
         )
         assert result["passed"] is True
         assert result["reasons"] == []
@@ -95,6 +124,7 @@ def test_ws26_m11_closure_gate_passes_with_green_inputs() -> None:
         assert result["checks"]["m11_chaos_gate"] is True
         assert result["checks"]["doc_gate"] is True
         assert result["checks"]["runbook_gate"] is True
+        assert result["checks"]["brainstem_control_plane_gate"] is True
     finally:
         _cleanup_case_root(case_root)
 
@@ -103,6 +133,13 @@ def test_ws26_m11_closure_gate_fails_when_doc_missing_ws26_006_snapshot() -> Non
     case_root = _make_case_root("test_ws26_release_gate")
     try:
         reports = case_root / "reports"
+        heartbeat = case_root / "runtime" / "brainstem_heartbeat.json"
+        _write_brainstem_heartbeat(
+            heartbeat,
+            generated_at=datetime.now(timezone.utc),
+            healthy=True,
+            unhealthy_services=[],
+        )
         _write_report(
             reports / "ws26_002.json",
             task_id="NGA-WS26-002",
@@ -125,9 +162,93 @@ def test_ws26_m11_closure_gate_fails_when_doc_missing_ws26_006_snapshot() -> Non
             runbook_path=runbook,
             runtime_snapshot_report_path=reports / "ws26_002.json",
             m11_chaos_report_path=reports / "ws26_006.json",
+            brainstem_heartbeat_path=heartbeat,
         )
         assert result["passed"] is False
         reasons = list(result["reasons"])
         assert any("doc:ws26_006_snapshot_entry" in item for item in reasons)
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_ws26_m11_closure_gate_fails_when_brainstem_heartbeat_missing() -> None:
+    case_root = _make_case_root("test_ws26_release_gate")
+    try:
+        reports = case_root / "reports"
+        _write_report(
+            reports / "ws26_002.json",
+            task_id="NGA-WS26-002",
+            scenario="runtime_rollout_fail_open_lease_unified_snapshot",
+            passed=True,
+        )
+        _write_report(
+            reports / "ws26_006.json",
+            task_id="NGA-WS26-006",
+            scenario="m11_lock_logrotate_double_fork_chaos_suite",
+            passed=True,
+        )
+        ws26_doc = case_root / "ws26.md"
+        _write_ws26_doc(ws26_doc, include_ws26_006=True)
+        runbook = case_root / "runbook.md"
+        _write_runbook(runbook)
+        missing_heartbeat = case_root / "runtime" / "missing_heartbeat.json"
+
+        result = evaluate_ws26_m11_closure_gate(
+            ws26_doc_path=ws26_doc,
+            runbook_path=runbook,
+            runtime_snapshot_report_path=reports / "ws26_002.json",
+            m11_chaos_report_path=reports / "ws26_006.json",
+            brainstem_heartbeat_path=missing_heartbeat,
+        )
+        assert result["passed"] is False
+        assert result["checks"]["brainstem_control_plane_gate"] is False
+        reasons = list(result["reasons"])
+        assert any("brainstem:heartbeat_missing" in item for item in reasons)
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_ws26_m11_closure_gate_fails_when_brainstem_heartbeat_stale_or_unhealthy() -> None:
+    case_root = _make_case_root("test_ws26_release_gate")
+    try:
+        reports = case_root / "reports"
+        heartbeat = case_root / "runtime" / "brainstem_heartbeat.json"
+        stale_generated_at = datetime(2026, 2, 25, 10, 0, tzinfo=timezone.utc)
+        _write_brainstem_heartbeat(
+            heartbeat,
+            generated_at=stale_generated_at,
+            healthy=False,
+            unhealthy_services=["brainstem-core"],
+        )
+        _write_report(
+            reports / "ws26_002.json",
+            task_id="NGA-WS26-002",
+            scenario="runtime_rollout_fail_open_lease_unified_snapshot",
+            passed=True,
+        )
+        _write_report(
+            reports / "ws26_006.json",
+            task_id="NGA-WS26-006",
+            scenario="m11_lock_logrotate_double_fork_chaos_suite",
+            passed=True,
+        )
+        ws26_doc = case_root / "ws26.md"
+        _write_ws26_doc(ws26_doc, include_ws26_006=True)
+        runbook = case_root / "runbook.md"
+        _write_runbook(runbook)
+
+        result = evaluate_ws26_m11_closure_gate(
+            ws26_doc_path=ws26_doc,
+            runbook_path=runbook,
+            runtime_snapshot_report_path=reports / "ws26_002.json",
+            m11_chaos_report_path=reports / "ws26_006.json",
+            brainstem_heartbeat_path=heartbeat,
+        )
+        assert result["passed"] is False
+        assert result["checks"]["brainstem_control_plane_gate"] is False
+        reasons = list(result["reasons"])
+        assert any("brainstem:heartbeat_stale_critical" in item for item in reasons)
+        assert any("brainstem:healthy_flag_false_or_missing" in item for item in reasons)
+        assert any("brainstem:unhealthy_services_present" in item for item in reasons)
     finally:
         _cleanup_case_root(case_root)

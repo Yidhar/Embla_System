@@ -10,6 +10,36 @@ def _task(task_id: str) -> OptimizationTask:
     return OptimizationTask(task_id=task_id, instruction="role executor test")
 
 
+def test_frontend_role_executor_strict_from_task_contract_policy() -> None:
+    bridge = NativeExecutionBridge(project_root=".")
+    task = OptimizationTask(
+        task_id="task-role-fe-contract-policy",
+        instruction="enforce strict role paths from task contract",
+        metadata={
+            "contract_schema": {
+                "role_executor_policy": {"strict_role_paths": True},
+            }
+        },
+    )
+    subtask = RuntimeSubTaskSpec(
+        subtask_id="fe-contract-1",
+        role="frontend",
+        instruction="must stay in frontend boundary",
+        patches=[ScaffoldPatch(path="autonomous/system_agent.py", content="# forbidden for frontend strict")],
+    )
+
+    result = bridge.execute_subtask(task=task, subtask=subtask)
+
+    assert result.success is False
+    assert result.error == "execution_bridge_role_path_violation:frontend"
+    receipt = result.metadata.get("execution_bridge_receipt")
+    assert isinstance(receipt, dict)
+    policy = receipt.get("role_policy")
+    assert isinstance(policy, dict)
+    assert policy.get("strict_role_paths") is True
+    assert policy.get("policy_source") == "task.contract_schema.role_executor_policy"
+
+
 def test_frontend_role_executor_strict_allows_frontend_paths() -> None:
     bridge = NativeExecutionBridge(project_root=".")
     subtask = RuntimeSubTaskSpec(

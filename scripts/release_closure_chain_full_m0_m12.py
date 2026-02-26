@@ -13,6 +13,7 @@ from typing import Any, Dict
 from autonomous.ws27_longrun_endurance import WS27LongRunConfig, run_ws27_72h_endurance_baseline
 from scripts.export_slo_snapshot import build_snapshot
 from scripts.export_ws26_runtime_snapshot_ws26_002 import _build_ws26_report
+from scripts.manage_brainstem_control_plane_ws28_017 import run_manage_brainstem_control_plane_ws28_017
 from scripts.manage_ws27_subagent_cutover_ws27_002 import run_ws27_subagent_cutover_ws27_002
 from scripts.release_closure_chain_full_m0_m7 import run_release_closure_chain_full_m0_m7
 from scripts.run_ws27_oob_repair_drill_ws27_003 import run_ws27_oob_repair_drill_ws27_003
@@ -35,6 +36,8 @@ DEFAULT_WS27_CUTOVER_STATUS_OUTPUT = Path("scratch/reports/ws27_subagent_cutover
 DEFAULT_WS27_CUTOVER_ROLLBACK_SNAPSHOT = Path("scratch/reports/ws27_subagent_cutover_rollback_snapshot_ws27_002.json")
 DEFAULT_WS27_OOB_OUTPUT = Path("scratch/reports/ws27_oob_repair_drill_ws27_003.json")
 DEFAULT_WS27_OOB_SCRATCH = Path("scratch/ws27_oob_repair_drill")
+DEFAULT_WS28_BRAINSTEM_START_OUTPUT = Path("scratch/reports/ws28_brainstem_control_plane_start_ws28_017.json")
+DEFAULT_WS28_BRAINSTEM_STATUS_OUTPUT = Path("scratch/reports/ws28_brainstem_control_plane_status_ws28_017.json")
 DEFAULT_AUTONOMOUS_CONFIG = Path("autonomous/config/autonomous_config.yaml")
 
 
@@ -116,6 +119,61 @@ def _run_m12_endurance_step(
             "passed": False,
             "checks": {"completed_without_exception": False},
             "output_file": _to_unix_path(output_file),
+            "duration_seconds": round(time.time() - started, 4),
+            "error": f"{type(exc).__name__}:{exc}",
+        }
+
+
+def _run_m12_brainstem_control_plane_step(
+    *,
+    repo_root: Path,
+    start_output: Path,
+    status_output: Path,
+    quick_mode: bool,
+) -> Dict[str, Any]:
+    started = time.time()
+    try:
+        interval_seconds = 1.0 if quick_mode else 5.0
+        start_report = run_manage_brainstem_control_plane_ws28_017(
+            repo_root=repo_root,
+            action="start",
+            output_file=start_output,
+            interval_seconds=interval_seconds,
+            force_restart=False,
+        )
+        status_report = run_manage_brainstem_control_plane_ws28_017(
+            repo_root=repo_root,
+            action="status",
+            output_file=status_output,
+        )
+        status_checks = status_report.get("checks") if isinstance(status_report.get("checks"), dict) else {}
+        checks = {
+            "start_passed": bool(start_report.get("passed")),
+            "status_passed": bool(status_report.get("passed")),
+            "heartbeat_gate": bool(status_checks.get("heartbeat_gate")),
+            "launcher_pid_alive": bool(status_checks.get("launcher_pid_alive")),
+        }
+        return {
+            "step_id": "M12-T0",
+            "name": "ws28_017_brainstem_control_plane_manage",
+            "passed": all(checks.values()),
+            "checks": checks,
+            "outputs": {
+                "start_output": _to_unix_path(start_output),
+                "status_output": _to_unix_path(status_output),
+            },
+            "duration_seconds": round(time.time() - started, 4),
+        }
+    except Exception as exc:  # pragma: no cover - defensive wrapper
+        return {
+            "step_id": "M12-T0",
+            "name": "ws28_017_brainstem_control_plane_manage",
+            "passed": False,
+            "checks": {"completed_without_exception": False},
+            "outputs": {
+                "start_output": _to_unix_path(start_output),
+                "status_output": _to_unix_path(status_output),
+            },
             "duration_seconds": round(time.time() - started, 4),
             "error": f"{type(exc).__name__}:{exc}",
         }
@@ -278,6 +336,8 @@ def run_release_closure_chain_full_m0_m12(
     ws27_cutover_rollback_snapshot: Path = DEFAULT_WS27_CUTOVER_ROLLBACK_SNAPSHOT,
     ws27_oob_output: Path = DEFAULT_WS27_OOB_OUTPUT,
     ws27_oob_scratch_root: Path = DEFAULT_WS27_OOB_SCRATCH,
+    ws28_brainstem_start_output: Path = DEFAULT_WS28_BRAINSTEM_START_OUTPUT,
+    ws28_brainstem_status_output: Path = DEFAULT_WS28_BRAINSTEM_STATUS_OUTPUT,
     config_path: Path = DEFAULT_AUTONOMOUS_CONFIG,
     rollback_window_minutes: int = 180,
     skip_m0_m11: bool = False,
@@ -288,6 +348,7 @@ def run_release_closure_chain_full_m0_m12(
     skip_m10: bool = False,
     skip_m11: bool = False,
     skip_m12: bool = False,
+    skip_m12_brainstem: bool = False,
     skip_m12_endurance: bool = False,
     skip_m12_cutover: bool = False,
     skip_m12_oob: bool = False,
@@ -348,6 +409,32 @@ def run_release_closure_chain_full_m0_m12(
         resolved_config_path = _resolve_path(root, config_path)
         oob_output = _resolve_path(root, ws27_oob_output)
         oob_scratch_root = _resolve_path(root, ws27_oob_scratch_root)
+        brainstem_start_output = _resolve_path(root, ws28_brainstem_start_output)
+        brainstem_status_output = _resolve_path(root, ws28_brainstem_status_output)
+
+        if not skip_m12_brainstem:
+            brainstem_report = _run_m12_brainstem_control_plane_step(
+                repo_root=root,
+                start_output=brainstem_start_output,
+                status_output=brainstem_status_output,
+                quick_mode=bool(quick_mode),
+            )
+            group_results["m12_brainstem_control_plane"] = brainstem_report
+            if not bool(brainstem_report.get("passed")):
+                failed_groups.append("m12_brainstem_control_plane")
+                if not continue_on_failure:
+                    report = {
+                        "scenario": "release_closure_chain_full_m0_m12",
+                        "generated_at": _utc_iso_now(),
+                        "repo_root": _to_unix_path(root),
+                        "elapsed_seconds": round(time.time() - started_at, 4),
+                        "target_scope": "M0-M12",
+                        "passed": False,
+                        "failed_groups": failed_groups,
+                        "group_results": group_results,
+                    }
+                    _write_report(repo_root=root, output_file=output_file, report=report)
+                    return report
 
         if not skip_m12_endurance:
             endurance_report = _run_m12_endurance_step(
@@ -497,6 +584,18 @@ def parse_args() -> argparse.Namespace:
         help="WS27-003 scratch root path",
     )
     parser.add_argument(
+        "--ws28-017-start-output",
+        type=Path,
+        default=DEFAULT_WS28_BRAINSTEM_START_OUTPUT,
+        help="WS28-017 brainstem manage start output JSON report path",
+    )
+    parser.add_argument(
+        "--ws28-017-status-output",
+        type=Path,
+        default=DEFAULT_WS28_BRAINSTEM_STATUS_OUTPUT,
+        help="WS28-017 brainstem manage status output JSON report path",
+    )
+    parser.add_argument(
         "--config",
         type=Path,
         default=DEFAULT_AUTONOMOUS_CONFIG,
@@ -516,6 +615,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-m10", action="store_true", help="Skip M10 group inside M0-M11 base chain")
     parser.add_argument("--skip-m11", action="store_true", help="Skip M11 group inside M0-M11 base chain")
     parser.add_argument("--skip-m12", action="store_true", help="Skip all M12 groups")
+    parser.add_argument("--skip-m12-brainstem", action="store_true", help="Skip WS28-017 brainstem control-plane step")
     parser.add_argument("--skip-m12-endurance", action="store_true", help="Skip WS27-001 endurance step")
     parser.add_argument("--skip-m12-cutover", action="store_true", help="Skip WS27-002 cutover step")
     parser.add_argument("--skip-m12-oob", action="store_true", help="Skip WS27-003 OOB drill step")
@@ -546,6 +646,8 @@ def main() -> int:
         ws27_cutover_rollback_snapshot=args.ws27_002_rollback_snapshot,
         ws27_oob_output=args.ws27_003_output,
         ws27_oob_scratch_root=args.ws27_003_scratch_root,
+        ws28_brainstem_start_output=args.ws28_017_start_output,
+        ws28_brainstem_status_output=args.ws28_017_status_output,
         config_path=args.config,
         rollback_window_minutes=max(15, int(args.rollback_window_minutes)),
         skip_m0_m11=bool(args.skip_m0_m11),
@@ -556,6 +658,7 @@ def main() -> int:
         skip_m10=bool(args.skip_m10),
         skip_m11=bool(args.skip_m11),
         skip_m12=bool(args.skip_m12),
+        skip_m12_brainstem=bool(args.skip_m12_brainstem),
         skip_m12_endurance=bool(args.skip_m12_endurance),
         skip_m12_cutover=bool(args.skip_m12_cutover),
         skip_m12_oob=bool(args.skip_m12_oob),

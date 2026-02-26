@@ -779,6 +779,10 @@ status: `done`；锚点：`ff30de5`；回归：`tests/test_run_ws28_outer_core_s
 status: `done`；锚点：`c2c5539`、`26b94ff`；回归：`tests/test_chat_route_bridge_snapshot_ws28_011.py`
 6. `NGA-WS28-012` Route-Quality 运行态治理闭环（warning/critical 强制策略 + guard 事件入总线）  
 status: `done`；锚点：`efda0bc`、`bbaed69`；回归：`tests/test_chat_route_quality_guard_ws28_012.py`
+7. `NGA-WS28-015` Prompt Registry 兼容迁移层（`prompt_registry.spec` + alias ACL 防绕过）  
+status: `done`；锚点：`system/prompts/specs/prompt_registry.spec`、`system/config.py`；回归：`tests/test_prompt_registry_spec_ws28_015.py`
+8. `NGA-WS28-016` Runtime Posture 脑干心跳接入与聚合 smoke  
+status: `done`；锚点：`apiserver/api_server.py`（`brainstem_control_plane` 聚合）、`scripts/run_ws28_runtime_posture_brainstem_smoke_ws28_016.py`；回归：`tests/test_ops_dashboard_extensions.py`、`tests/test_run_ws28_runtime_posture_brainstem_smoke_ws28_016.py`
 
 ### 10.8 P0 执行顺序（建议）
 

@@ -15,6 +15,7 @@
 - 全量收口入口：`scripts/release_closure_chain_full_m0_m12.py`
 - 基础链（复用）：`scripts/release_closure_chain_full_m0_m7.py`（目标域已到 `M0-M11`）
 - M12 子步骤脚本：
+  - `scripts/manage_brainstem_control_plane_ws28_017.py`
   - `scripts/run_ws27_longrun_endurance_ws27_001.py`
   - `scripts/manage_ws27_subagent_cutover_ws27_002.py`
   - `scripts/run_ws27_oob_repair_drill_ws27_003.py`
@@ -47,20 +48,28 @@
 1. `scratch/reports/release_closure_chain_full_m0_m12_result.json`
 2. `scratch/reports/release_closure_chain_full_m0_m7_result.json`
 3. `scratch/reports/ws27_72h_endurance_ws27_001.json`
-4. `scratch/reports/ws27_subagent_cutover_plan_ws27_002.json`
-5. `scratch/reports/ws27_subagent_cutover_apply_ws27_002.json`
-6. `scratch/reports/ws27_subagent_cutover_status_ws27_002.json`
-7. `scratch/reports/ws27_subagent_cutover_rollback_snapshot_ws27_002.json`
-8. `scratch/reports/ws27_oob_repair_drill_ws27_003.json`
+4. `scratch/reports/ws28_brainstem_control_plane_start_ws28_017.json`
+5. `scratch/reports/ws28_brainstem_control_plane_status_ws28_017.json`
+6. `scratch/reports/ws27_subagent_cutover_plan_ws27_002.json`
+7. `scratch/reports/ws27_subagent_cutover_apply_ws27_002.json`
+8. `scratch/reports/ws27_subagent_cutover_status_ws27_002.json`
+9. `scratch/reports/ws27_subagent_cutover_rollback_snapshot_ws27_002.json`
+10. `scratch/reports/ws27_oob_repair_drill_ws27_003.json`
 
 ## 5. 判定标准
 
 - 主报告 `passed=true` 且 `failed_groups=[]`。
 - `group_results` 至少包含：
   - `m0_m11`（未跳过时）
+  - `m12_brainstem_control_plane`
   - `m12_endurance`
   - `m12_cutover`
   - `m12_oob_repair`
+- `m12_brainstem_control_plane` 检查项必须通过：
+  - `start_passed=true`
+  - `status_passed=true`
+  - `heartbeat_gate=true`
+  - `launcher_pid_alive=true`
 - `m12_cutover` 检查项必须全部通过：
   - `subagent_runtime_enabled=true`
   - `rollout_percent_is_full=true`

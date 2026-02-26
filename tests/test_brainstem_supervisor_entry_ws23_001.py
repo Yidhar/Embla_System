@@ -89,3 +89,32 @@ def test_brainstem_supervisor_entry_health_mode_detects_stopped_service() -> Non
         assert report["health"]["services"][0]["status"] == "stopped"
     finally:
         _cleanup_case_root(case_root)
+
+
+def test_brainstem_supervisor_entry_daemon_mode_writes_heartbeat_snapshot() -> None:
+    case_root = _make_case_root("test_brainstem_supervisor_entry_ws23_001")
+    try:
+        spec_file = _write_spec(case_root)
+        heartbeat_file = case_root / "heartbeat.json"
+        report = run_brainstem_supervisor_entry(
+            state_file=case_root / "state.json",
+            spec_file=spec_file,
+            mode="daemon",
+            dry_run=True,
+            heartbeat_file=heartbeat_file,
+            interval_seconds=0.0,
+            max_ticks=2,
+            output_file=case_root / "daemon.json",
+        )
+        assert report["passed"] is True
+        assert report["mode"] == "daemon"
+        assert report["daemon"]["tick_count"] == 2
+        assert report["health"]["healthy"] is True
+        assert heartbeat_file.exists()
+        heartbeat = json.loads(heartbeat_file.read_text(encoding="utf-8"))
+        assert heartbeat["mode"] == "daemon"
+        assert heartbeat["tick"] == 2
+        assert heartbeat["healthy"] is True
+        assert int(heartbeat["pid"]) > 0
+    finally:
+        _cleanup_case_root(case_root)

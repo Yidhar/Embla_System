@@ -1,6 +1,6 @@
 import { SignalCard, type SignalState } from "@/components/cards/signal-card";
 import { MetricBar, type MetricBarTone } from "@/components/charts/metric-bar";
-import { fetchEvidenceIndex, fetchRuntimePosture } from "@/lib/api/ops";
+import { fetchEvidenceIndex, fetchIncidentsLatest, fetchRuntimePosture } from "@/lib/api/ops";
 import {
   formatIsoDateTime,
   formatNumber,
@@ -31,6 +31,7 @@ const PAGE_COPY: Record<
       failOpen: { title: string; note: string };
       readonlyExposure: { title: string; note: string };
       routeQuality: { title: string; note: string };
+      brainstemControlPlane: { title: string; note: string };
       lease: { title: string; note: string };
       queueDepth: { title: string; note: string };
       lockStatus: { title: string; note: string };
@@ -42,6 +43,7 @@ const PAGE_COPY: Record<
       evidenceGates: string;
       requiredEvidence: string;
       leaseGuard: string;
+      brainstemGate: string;
       summarySnapshot: string;
       recentEvidenceFiles: string;
     };
@@ -86,6 +88,24 @@ const PAGE_COPY: Record<
       secondsToExpiry: string;
       trend: string;
       volatility: string;
+      latestIncident: string;
+      heartbeatAge: string;
+      staleWarning: string;
+      staleCritical: string;
+      healthy: string;
+      serviceCount: string;
+      unhealthyServices: string;
+      reasonCode: string;
+      reasonText: string;
+      tick: string;
+      pid: string;
+      generatedAt: string;
+      noIncidentSignal: string;
+      noBrainstemIncident: string;
+      seconds: string;
+      yes: string;
+      no: string;
+      none: string;
     };
   }
 > = {
@@ -95,6 +115,7 @@ const PAGE_COPY: Record<
       failOpen: { title: "Fail Open", note: "Current fail-open ratio" },
       readonlyExposure: { title: "Readonly Write Exposure", note: "Path-A write-tool leakage ratio" },
       routeQuality: { title: "Route Quality", note: "Unified route-quality guard status" },
+      brainstemControlPlane: { title: "Brainstem Control Plane", note: "Daemon heartbeat and managed hosting gate" },
       lease: { title: "Lease", note: "Global orchestrator lease state" },
       queueDepth: { title: "Queue Depth", note: "Pending outbox events" },
       lockStatus: { title: "Lock Status", note: "Global mutex lock health" },
@@ -106,6 +127,7 @@ const PAGE_COPY: Record<
       evidenceGates: "M12 Evidence Gates",
       requiredEvidence: "Required Evidence Reports",
       leaseGuard: "Lease Guard",
+      brainstemGate: "Brainstem Control-Plane Gate",
       summarySnapshot: "Summary Snapshot",
       recentEvidenceFiles: "Recent Evidence Files",
     },
@@ -150,6 +172,24 @@ const PAGE_COPY: Record<
       secondsToExpiry: "Seconds To Expiry",
       trend: "Trend",
       volatility: "Volatility",
+      latestIncident: "Latest incident",
+      heartbeatAge: "Heartbeat age",
+      staleWarning: "Stale warning",
+      staleCritical: "Stale critical",
+      healthy: "Healthy",
+      serviceCount: "Service count",
+      unhealthyServices: "Unhealthy services",
+      reasonCode: "Reason code",
+      reasonText: "Reason text",
+      tick: "Tick",
+      pid: "PID",
+      generatedAt: "Generated at",
+      noIncidentSignal: "No incident signal detected.",
+      noBrainstemIncident: "No brainstem incident in current window.",
+      seconds: "s",
+      yes: "yes",
+      no: "no",
+      none: "none",
     },
   },
   "zh-CN": {
@@ -158,6 +198,7 @@ const PAGE_COPY: Record<
       failOpen: { title: "Fail-Open 比例", note: "当前降级放行占比" },
       readonlyExposure: { title: "只读写工具暴露率", note: "Path-A 写工具泄露占比" },
       routeQuality: { title: "路由质量", note: "统一路由质量门禁状态" },
+      brainstemControlPlane: { title: "脑干管控面", note: "守护心跳与托管门禁状态" },
       lease: { title: "租约状态", note: "全局调度租约健康状态" },
       queueDepth: { title: "队列深度", note: "待处理 outbox 事件数" },
       lockStatus: { title: "锁状态", note: "全局互斥锁健康度" },
@@ -169,6 +210,7 @@ const PAGE_COPY: Record<
       evidenceGates: "M12 证据门禁",
       requiredEvidence: "必需证据报告",
       leaseGuard: "租约防护",
+      brainstemGate: "脑干管控门禁",
       summarySnapshot: "摘要快照",
       recentEvidenceFiles: "最近证据文件",
     },
@@ -213,6 +255,24 @@ const PAGE_COPY: Record<
       secondsToExpiry: "距过期秒数",
       trend: "趋势",
       volatility: "波动率",
+      latestIncident: "最新事件",
+      heartbeatAge: "心跳年龄",
+      staleWarning: "告警阈值",
+      staleCritical: "严重阈值",
+      healthy: "健康标记",
+      serviceCount: "服务数量",
+      unhealthyServices: "异常服务",
+      reasonCode: "原因码",
+      reasonText: "原因说明",
+      tick: "心跳计数",
+      pid: "进程号",
+      generatedAt: "生成时间",
+      noIncidentSignal: "未检测到事件信号。",
+      noBrainstemIncident: "当前窗口无脑干相关事件。",
+      seconds: "秒",
+      yes: "是",
+      no: "否",
+      none: "无",
     },
   },
 };
@@ -233,6 +293,13 @@ function asArray(value: unknown): Record<string, unknown>[] {
 
 function asNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return null;
+}
+
+function asBoolean(value: unknown): boolean | null {
+  if (typeof value === "boolean") {
     return value;
   }
   return null;
@@ -340,7 +407,11 @@ function reportStatusLabel(status: unknown, lang: AppLang): string {
 export default async function RuntimePosturePage({ searchParams }: RuntimePageProps) {
   const lang = await resolveLangFromSearchParams(searchParams);
   const copy = PAGE_COPY[lang];
-  const [payload, evidencePayload] = await Promise.all([fetchRuntimePosture(), fetchEvidenceIndex()]);
+  const [payload, evidencePayload, incidentsPayload] = await Promise.all([
+    fetchRuntimePosture(),
+    fetchEvidenceIndex(),
+    fetchIncidentsLatest(),
+  ]);
   const metrics = asRecord(payload?.data?.metrics);
   const runtimeRollout = asRecord(metrics.runtime_rollout);
   const runtimeFailOpen = asRecord(metrics.runtime_fail_open);
@@ -355,12 +426,18 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
   const coreSessionCreation = asRecord(metrics.core_session_creation_rate);
   const sources = asRecord(payload?.data?.sources);
   const postureSummary = asRecord(payload?.data?.summary);
+  const brainstemControlPlane = asRecord(payload?.data?.brainstem_control_plane);
+  const brainstemStatus = asText(postureSummary.brainstem_control_plane_status, "unknown");
   const routeQuality = asRecord(postureSummary.route_quality);
   const routeQualityTrend = asRecord(routeQuality.trend);
 
   const evidenceSummary = asRecord(evidencePayload?.data?.summary);
   const requiredReports = asArray(evidencePayload?.data?.required_reports);
   const recentReports = asArray(evidencePayload?.data?.recent_reports);
+  const incidentsSummary = asRecord(incidentsPayload?.data?.summary);
+  const incidents = asArray(incidentsPayload?.data?.incidents);
+  const brainstemIncidents = incidents.filter((item) => String(item.event_type || "").startsWith("Brainstem"));
+  const latestBrainstemIncident = brainstemIncidents[0] || null;
 
   const rolloutValue = asNumber(runtimeRollout.value);
   const failOpenValue = asNumber(runtimeFailOpen.value);
@@ -387,6 +464,25 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
   const queuePending = asNumber(queueDepth.value);
   const queueCritical = asNumber(asRecord(queueDepth.thresholds).critical);
   const queueRatio = queuePending !== null && queueCritical && queueCritical > 0 ? queuePending / queueCritical : null;
+  const brainstemHeartbeatAge = asNumber(brainstemControlPlane.heartbeat_age_seconds);
+  const brainstemStaleWarning = asNumber(brainstemControlPlane.stale_warning_seconds);
+  const brainstemStaleCritical = asNumber(brainstemControlPlane.stale_critical_seconds);
+  const brainstemHealthy = asBoolean(brainstemControlPlane.healthy);
+  const brainstemServiceCount = asNumber(brainstemControlPlane.service_count);
+  const brainstemTick = asNumber(brainstemControlPlane.tick);
+  const brainstemPid = asNumber(brainstemControlPlane.pid);
+  const brainstemGeneratedAtText = formatIsoDateTime(brainstemControlPlane.generated_at, lang, "--");
+  const brainstemReasonCode = asText(brainstemControlPlane.reason_code, "unknown");
+  const brainstemReasonText = asText(brainstemControlPlane.reason_text, copy.cards.brainstemControlPlane.note);
+  const latestBrainstemIncidentAt = formatIsoDateTime(latestBrainstemIncident?.timestamp, lang, "--");
+  const latestIncidentAt = formatIsoDateTime(incidentsSummary.latest_incident_at, lang, "--");
+  const latestBrainstemIncidentSummary = asText(latestBrainstemIncident?.summary, copy.words.noBrainstemIncident);
+  const latestBrainstemIncidentType = asText(latestBrainstemIncident?.event_type, "n/a");
+  const brainstemUnhealthyServices = Array.isArray(brainstemControlPlane.unhealthy_services)
+    ? brainstemControlPlane.unhealthy_services.map((item) => String(item)).filter((item) => item.trim())
+    : [];
+  const brainstemHealthyText =
+    brainstemHealthy === null ? "--" : brainstemHealthy ? copy.words.yes : copy.words.no;
 
   const requiredTotal = asNumber(evidenceSummary.required_total);
   const requiredPresent = asNumber(evidenceSummary.required_present);
@@ -425,6 +521,12 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
           ? `${routeQualityReason} · ${copy.words.trend}: ${routeQualityDirection} · ${copy.words.volatility}: ${toNumber(routeQualityVolatility, lang, 2)}`
           : copy.cards.routeQuality.note,
       state: toState(routeQualityStatusText),
+    },
+    {
+      title: copy.cards.brainstemControlPlane.title,
+      value: brainstemStatus.toUpperCase(),
+      note: `${brainstemReasonCode} · ${copy.words.latestIncident}: ${latestBrainstemIncidentAt}`,
+      state: toState(brainstemStatus),
     },
     {
       title: copy.cards.lease.title,
@@ -467,7 +569,7 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
         ))}
       </section>
 
-      <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+      <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <article className="glass-card p-6">
           <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.runtimeBudget}</p>
           <div className="mt-4 grid grid-cols-1 gap-3">
@@ -656,6 +758,84 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
               {copy.words.secondsToExpiry}: {toNumber(runtimeLease.value, lang)}
             </p>
           </div>
+        </article>
+
+        <article className="glass-card p-6">
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.brainstemGate}</p>
+          <div className="mt-4 grid grid-cols-1 gap-2 text-xs text-gray-700 md:grid-cols-2">
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.state}: <span className="font-bold">{brainstemStatus.toUpperCase()}</span>
+            </p>
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.reasonCode}: <span className="font-bold">{brainstemReasonCode}</span>
+            </p>
+            <p className="rounded-xl bg-white/70 px-3 py-2 md:col-span-2">
+              {copy.words.reasonText}: <span className="font-bold">{brainstemReasonText}</span>
+            </p>
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.heartbeatAge}:{" "}
+              <span className="font-bold">
+                {toNumber(brainstemHeartbeatAge, lang, 2)} {copy.words.seconds}
+              </span>
+            </p>
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.generatedAt}: <span className="font-bold">{brainstemGeneratedAtText}</span>
+            </p>
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.staleWarning}:{" "}
+              <span className="font-bold">
+                {toNumber(brainstemStaleWarning, lang, 0)} {copy.words.seconds}
+              </span>
+            </p>
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.staleCritical}:{" "}
+              <span className="font-bold">
+                {toNumber(brainstemStaleCritical, lang, 0)} {copy.words.seconds}
+              </span>
+            </p>
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.healthy}: <span className="font-bold">{brainstemHealthyText}</span>
+            </p>
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.serviceCount}: <span className="font-bold">{toNumber(brainstemServiceCount, lang)}</span>
+            </p>
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.tick}: <span className="font-bold">{toNumber(brainstemTick, lang)}</span>
+            </p>
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.pid}: <span className="font-bold">{toNumber(brainstemPid, lang)}</span>
+            </p>
+            <p className="rounded-xl bg-white/70 px-3 py-2 md:col-span-2">
+              {copy.words.unhealthyServices}:{" "}
+              <span className="font-bold">
+                {brainstemUnhealthyServices.length > 0 ? brainstemUnhealthyServices.join(", ") : copy.words.none}
+              </span>
+            </p>
+          </div>
+          <div className="mt-4 rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-700">
+            <p>
+              {copy.words.latestIncident}: <span className="font-bold">{latestIncidentAt}</span>
+            </p>
+            <p className="mt-1">
+              <span className="font-bold">{latestBrainstemIncidentType}</span> · {latestBrainstemIncidentAt}
+            </p>
+            <p className="mt-1 text-gray-600">
+              {brainstemIncidents.length > 0 ? latestBrainstemIncidentSummary : copy.words.noBrainstemIncident}
+            </p>
+          </div>
+          <ul className="mt-3 space-y-2 text-xs text-gray-700">
+            {brainstemIncidents.slice(0, 3).map((item) => (
+              <li key={`${String(item.timestamp || "")}:${String(item.event_type || "")}`} className="rounded-xl bg-white/70 px-3 py-2">
+                <p className="font-bold">
+                  {String(item.event_type || "unknown")} · {String(item.severity || "unknown").toUpperCase()}
+                </p>
+                <p className="mt-1 text-gray-600">{String(item.summary || "")}</p>
+              </li>
+            ))}
+            {brainstemIncidents.length === 0 ? (
+              <li className="rounded-xl bg-white/70 px-3 py-2 text-gray-500">{copy.words.noIncidentSignal}</li>
+            ) : null}
+          </ul>
         </article>
 
         <article className="glass-card p-6">

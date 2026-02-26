@@ -165,6 +165,41 @@ def test_ops_incidents_latest_payload_merges_events_and_report_issues(tmp_path, 
     assert runtime_prompt_safety["route_quality"]["trend"]["sample_count"] == 0
 
 
+def test_ops_incidents_latest_payload_includes_brainstem_stale_incident(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    now = datetime(2026, 2, 26, 12, 0, tzinfo=timezone.utc)
+    heartbeat_file = repo_root / "scratch" / "runtime" / "brainstem_control_plane_heartbeat_ws23_001.json"
+    _write_json(
+        heartbeat_file,
+        {
+            "generated_at": datetime(2026, 2, 26, 10, 0, tzinfo=timezone.utc).isoformat(),
+            "pid": 43001,
+            "tick": 8,
+            "mode": "daemon",
+            "healthy": True,
+            "service_count": 2,
+            "unhealthy_services": [],
+        },
+    )
+
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(api_server, "_ops_collect_required_reports", lambda _repo_root: [])
+    monkeypatch.setattr(api_server.time, "time", lambda: now.timestamp())
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", lambda **_kwargs: {"metrics": {}})
+    payload = api_server._ops_build_incidents_latest_payload(limit=30)
+
+    incidents = payload["data"]["incidents"]
+    stale = [item for item in incidents if str(item.get("event_type")) == "BrainstemHeartbeatStale"]
+    assert len(stale) == 1
+    stale_item = stale[0]
+    assert stale_item["source"] == "report"
+    assert stale_item["severity"] == "critical"
+    assert stale_item["payload_excerpt"]["reason_code"] == "BRAINSTEM_HEARTBEAT_STALE_CRITICAL"
+    assert any(path.endswith("brainstem_control_plane_heartbeat_ws23_001.json") for path in payload["source_reports"])
+
+
 def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
     ws26_report = repo_root / "scratch" / "reports" / "ws26_runtime_snapshot_ws26_002.json"
@@ -310,3 +345,103 @@ def test_ops_route_quality_trend_detects_degrading_windows(tmp_path) -> None:
     assert trend["sample_count"] == 40
     assert trend["window_size"] == 20
     assert isinstance(trend["windows"], list) and len(trend["windows"]) == 2
+
+
+def test_ops_runtime_posture_payload_brainstem_heartbeat_healthy_signal(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    heartbeat_file = repo_root / "scratch" / "runtime" / "brainstem_control_plane_heartbeat_ws23_001.json"
+    now = datetime(2026, 2, 26, 12, 0, tzinfo=timezone.utc)
+    _write_json(
+        heartbeat_file,
+        {
+            "generated_at": now.isoformat(),
+            "pid": 41001,
+            "tick": 3,
+            "mode": "daemon",
+            "healthy": True,
+            "service_count": 1,
+            "unhealthy_services": [],
+            "state_file": str((repo_root / "logs" / "autonomous" / "brainstem_supervisor_state.json").resolve()),
+            "spec_file": str((repo_root / "system" / "brainstem_services.spec").resolve()),
+        },
+    )
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "unknown", "metric_status": {}},
+            "metrics": {},
+            "threshold_profile": {},
+            "sources": {
+                "events_file": "logs/autonomous/events.jsonl",
+                "workflow_db": "logs/autonomous/workflow.db",
+                "global_mutex_state": "logs/runtime/global_mutex_lease.json",
+                "autonomous_config": "autonomous/config/autonomous_config.yaml",
+            },
+        }
+
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(api_server.time, "time", lambda: now.timestamp() + 10.0)
+
+    payload = api_server._ops_build_runtime_posture_payload(events_limit=200)
+    assert payload["status"] == "success"
+    assert payload["severity"] == "ok"
+    assert payload["data"]["summary"]["overall_status"] == "ok"
+    assert payload["data"]["summary"]["brainstem_control_plane_status"] == "ok"
+
+    brainstem = payload["data"]["brainstem_control_plane"]
+    assert brainstem["status"] == "ok"
+    assert brainstem["healthy"] is True
+    assert brainstem["tick"] == 3
+    assert isinstance(brainstem["heartbeat_age_seconds"], float)
+    assert any(path.endswith("brainstem_control_plane_heartbeat_ws23_001.json") for path in payload["source_reports"])
+
+    brainstem_metric = payload["data"]["metrics"]["brainstem_heartbeat"]
+    assert brainstem_metric["status"] == "ok"
+    assert brainstem_metric["healthy"] is True
+    assert brainstem_metric["tick"] == 3
+
+
+def test_ops_runtime_posture_payload_escalates_when_brainstem_heartbeat_stale(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    heartbeat_file = repo_root / "scratch" / "runtime" / "brainstem_control_plane_heartbeat_ws23_001.json"
+    now = datetime(2026, 2, 26, 12, 30, tzinfo=timezone.utc)
+    stale = now.replace(hour=11, minute=0)
+    _write_json(
+        heartbeat_file,
+        {
+            "generated_at": stale.isoformat(),
+            "pid": 41001,
+            "tick": 1,
+            "mode": "daemon",
+            "healthy": True,
+            "service_count": 1,
+            "unhealthy_services": [],
+        },
+    )
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "ok", "metric_status": {}},
+            "metrics": {},
+            "threshold_profile": {},
+            "sources": {"events_file": "logs/autonomous/events.jsonl"},
+        }
+
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(api_server.time, "time", lambda: now.timestamp())
+
+    payload = api_server._ops_build_runtime_posture_payload(events_limit=200)
+    assert payload["status"] == "success"
+    assert payload["severity"] == "critical"
+    assert payload["reason_code"] == "BRAINSTEM_CONTROL_PLANE_CRITICAL"
+    assert payload["data"]["summary"]["overall_status"] == "critical"
+
+    brainstem = payload["data"]["brainstem_control_plane"]
+    assert brainstem["status"] == "critical"
+    assert brainstem["reason_code"] == "BRAINSTEM_HEARTBEAT_STALE_CRITICAL"

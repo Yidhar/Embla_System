@@ -5,7 +5,7 @@
   "enforcement_mode": "block",
   "rules": [
     {
-      "path_pattern": "immutable_dna_manifest.txt",
+      "path_pattern": "immutable_dna_manifest.spec",
       "level": "S0_LOCKED",
       "require_ticket": true,
       "require_manifest_refresh": true,

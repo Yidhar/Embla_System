@@ -418,16 +418,32 @@ class NativeExecutionBridge:
     ) -> RoleExecutionPolicy:
         task_meta = task.metadata if isinstance(task.metadata, dict) else {}
         subtask_meta = subtask.metadata if isinstance(subtask.metadata, dict) else {}
+        task_contract_schema = task_meta.get("contract_schema") if isinstance(task_meta.get("contract_schema"), dict) else {}
 
         merged: Dict[str, Any] = {}
         source = "default"
         for candidate, label in (
             (task_meta.get("execution_bridge_policy"), "task.execution_bridge_policy"),
             (task_meta.get("role_executor_policy"), "task.role_executor_policy"),
+            (
+                self._extract_role_executor_policy_from_contract_schema(
+                    task_contract_schema,
+                    role=subtask.role,
+                ),
+                "task.contract_schema.role_executor_policy",
+            ),
+            (
+                self._extract_role_executor_policy_from_contract_schema(
+                    subtask.contract_schema if isinstance(subtask.contract_schema, dict) else {},
+                    role=subtask.role,
+                ),
+                "subtask.contract_schema.role_executor_policy",
+            ),
+            (subtask.role_executor_policy, "subtask.role_executor_policy"),
             (subtask_meta.get("execution_bridge_policy"), "subtask.execution_bridge_policy"),
             (subtask_meta.get("role_executor_policy"), "subtask.role_executor_policy"),
         ):
-            if not isinstance(candidate, dict):
+            if not isinstance(candidate, dict) or not candidate:
                 continue
             merged.update(candidate)
             source = label
@@ -444,6 +460,33 @@ class NativeExecutionBridge:
             allowed_path_prefixes=prefixes,
             policy_source=source,
         )
+
+    @staticmethod
+    def _extract_role_executor_policy_from_contract_schema(
+        contract_schema: Dict[str, Any],
+        *,
+        role: str,
+    ) -> Dict[str, Any]:
+        if not isinstance(contract_schema, dict):
+            return {}
+        merged: Dict[str, Any] = {}
+        direct = contract_schema.get("role_executor_policy")
+        if isinstance(direct, dict):
+            merged.update(direct)
+        execution_policy = contract_schema.get("execution_policy")
+        if isinstance(execution_policy, dict):
+            nested = execution_policy.get("role_executor_policy")
+            if isinstance(nested, dict):
+                merged.update(nested)
+        role_map = contract_schema.get("role_executor_policy_by_role")
+        if isinstance(role_map, dict):
+            normalized_role = RoleSpecializedExecutor._normalize_role(role)
+            for key, value in role_map.items():
+                if not isinstance(value, dict):
+                    continue
+                if RoleSpecializedExecutor._normalize_role(str(key)) == normalized_role:
+                    merged.update(value)
+        return merged
 
     def _collect_patch_intents(self, subtask: RuntimeSubTaskSpec) -> List[ScaffoldPatch]:
         normalized: List[ScaffoldPatch] = []

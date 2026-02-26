@@ -151,3 +151,50 @@ def test_subagent_runtime_respects_dependencies_and_commits_scaffold() -> None:
         assert (repo / "backend.txt").read_text(encoding="utf-8") == "BE_NEW"
     finally:
         _cleanup_case_root(case_root)
+
+
+def test_subagent_runtime_build_subtasks_propagates_role_policy_from_contract_schema() -> None:
+    case_root = _make_case_root("test_subagent_runtime_ws21")
+    try:
+        repo = case_root / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+
+        task = OptimizationTask(
+            task_id="task-ws21-role-policy",
+            instruction="propagate role executor policy",
+            metadata={
+                "contract_schema": {
+                    "role_executor_policy": {"strict_role_paths": True},
+                    "role_executor_policy_by_role": {
+                        "ops": {"strict_role_paths": True, "allowed_path_prefixes": ["scripts/", "doc/"]},
+                    },
+                },
+                "subtasks": [
+                    {
+                        "subtask_id": "be",
+                        "role": "backend",
+                        "instruction": "backend patch",
+                        "contract_schema": {"request": {"id": "string"}},
+                        "patches": [{"path": "autonomous/backend.txt", "content": "BE_NEW"}],
+                    },
+                    {
+                        "subtask_id": "ops",
+                        "role": "ops",
+                        "instruction": "ops patch",
+                        "contract_schema": {"request": {"id": "string"}},
+                        "patches": [{"path": "scripts/ops.sh", "content": "echo ok"}],
+                    },
+                ],
+            },
+        )
+
+        runtime = SubAgentRuntime(project_root=repo, config=SubAgentRuntimeConfig(enabled=True))
+        subtasks = runtime._build_subtasks(task)  # noqa: SLF001
+
+        backend = next(item for item in subtasks if item.subtask_id == "be")
+        ops = next(item for item in subtasks if item.subtask_id == "ops")
+        assert backend.role_executor_policy["strict_role_paths"] is True
+        assert ops.role_executor_policy["strict_role_paths"] is True
+        assert ops.role_executor_policy["allowed_path_prefixes"] == ["scripts/", "doc/"]
+    finally:
+        _cleanup_case_root(case_root)

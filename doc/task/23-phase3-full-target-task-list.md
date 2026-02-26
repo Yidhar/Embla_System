@@ -94,6 +94,7 @@
 
 - `NGA-WS23-001` 已落地第一版：
   - 新增独立入口：`scripts/run_brainstem_supervisor_ws23_001.py`
+  - 入口补齐 `daemon` 模式：支持周期 `heartbeat` 刷新与状态快照落盘（`scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json`）
   - 新增默认服务规范：`system/brainstem_services.spec`
   - 新增健康探针快照：`system/brainstem_supervisor.py::build_health_snapshot`
   - 回归：`tests/test_brainstem_supervisor_entry_ws23_001.py`、`tests/test_brainstem_supervisor_ws18_008.py`

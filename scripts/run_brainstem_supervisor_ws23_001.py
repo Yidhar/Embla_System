@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
+import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List
@@ -65,6 +66,33 @@ def _build_dry_run_launcher() -> Launcher:
     return _launch
 
 
+def _write_heartbeat_snapshot(
+    *,
+    heartbeat_file: Path,
+    tick: int,
+    mode: str,
+    state_file: Path,
+    spec_file: Path,
+    health: Dict[str, Any],
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "generated_at": _utc_iso(),
+        "pid": int(os.getpid()),
+        "tick": int(tick),
+        "mode": str(mode or "daemon"),
+        "state_file": str(state_file).replace("\\", "/"),
+        "spec_file": str(spec_file).replace("\\", "/"),
+        "healthy": bool(health.get("healthy", False)),
+        "service_count": int(health.get("service_count", 0)),
+        "unhealthy_services": list(health.get("unhealthy_services") or []),
+    }
+    target = heartbeat_file if heartbeat_file.is_absolute() else (Path(".").resolve() / heartbeat_file)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload["heartbeat_file"] = str(target).replace("\\", "/")
+    return payload
+
+
 def run_brainstem_supervisor_entry(
     *,
     state_file: Path,
@@ -73,6 +101,9 @@ def run_brainstem_supervisor_entry(
     dry_run: bool = False,
     output_file: Path | None = None,
     launcher: Launcher | None = None,
+    heartbeat_file: Path | None = None,
+    interval_seconds: float = 2.0,
+    max_ticks: int = 1,
 ) -> Dict[str, Any]:
     specs = _load_specs(spec_file)
     run_launcher = launcher or (_build_dry_run_launcher() if dry_run else None)
@@ -86,6 +117,56 @@ def run_brainstem_supervisor_entry(
         for spec in specs:
             action = supervisor.ensure_running(spec.service_name)
             actions.append(action.to_dict())
+    elif normalized_mode == "daemon":
+        interval = max(0.0, float(interval_seconds))
+        ticks = max(1, int(max_ticks))
+        daemon_health: List[Dict[str, Any]] = []
+        last_heartbeat: Dict[str, Any] = {}
+        for tick in range(1, ticks + 1):
+            for spec in specs:
+                action = supervisor.ensure_running(spec.service_name)
+                actions.append(action.to_dict())
+            required_names = [spec.service_name for spec in specs]
+            current_health = supervisor.build_health_snapshot(required_services=required_names)
+            daemon_health.append(current_health)
+            if heartbeat_file is not None:
+                last_heartbeat = _write_heartbeat_snapshot(
+                    heartbeat_file=heartbeat_file,
+                    tick=tick,
+                    mode="daemon",
+                    state_file=state_file,
+                    spec_file=spec_file,
+                    health=current_health,
+                )
+            if tick < ticks and interval > 0.0:
+                time.sleep(interval)
+        final_health = daemon_health[-1]
+        report: Dict[str, Any] = {
+            "task_id": "NGA-WS23-001",
+            "scenario": "brainstem_supervisor_entry",
+            "generated_at": _utc_iso(),
+            "mode": normalized_mode,
+            "dry_run": bool(dry_run),
+            "state_file": str(state_file).replace("\\", "/"),
+            "spec_file": str(spec_file).replace("\\", "/"),
+            "action_count": len(actions),
+            "actions": actions,
+            "health": final_health,
+            "health_history": daemon_health,
+            "daemon": {
+                "tick_count": ticks,
+                "interval_seconds": interval,
+                "heartbeat_file": str(heartbeat_file).replace("\\", "/") if heartbeat_file is not None else "",
+                "last_heartbeat": last_heartbeat,
+            },
+            "passed": all(bool(item.get("healthy", False)) for item in daemon_health),
+        }
+        if output_file is not None:
+            target = output_file if output_file.is_absolute() else (Path(".").resolve() / output_file)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            report["output_file"] = str(target).replace("\\", "/")
+        return report
     elif normalized_mode != "health":
         raise ValueError(f"unsupported mode: {mode}")
 
@@ -118,9 +199,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run WS23-001 brainstem supervisor standalone entry")
     parser.add_argument(
         "--mode",
-        choices=["ensure", "health"],
+        choices=["ensure", "health", "daemon"],
         default="ensure",
-        help="ensure: start required services; health: only evaluate health snapshot",
+        help="ensure: start required services; health: only evaluate health snapshot; daemon: periodic heartbeat run",
     )
     parser.add_argument(
         "--state-file",
@@ -135,6 +216,24 @@ def parse_args() -> argparse.Namespace:
         help="Service spec file (JSON)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Use in-memory PID allocator instead of launching processes")
+    parser.add_argument(
+        "--heartbeat-file",
+        type=Path,
+        default=Path("scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json"),
+        help="Heartbeat snapshot path used in daemon mode",
+    )
+    parser.add_argument(
+        "--interval-seconds",
+        type=float,
+        default=2.0,
+        help="Daemon tick interval in seconds",
+    )
+    parser.add_argument(
+        "--max-ticks",
+        type=int,
+        default=1,
+        help="Daemon max ticks (>=1); use 1 for single-shot heartbeat refresh",
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -152,6 +251,9 @@ def main() -> int:
         mode=args.mode,
         dry_run=bool(args.dry_run),
         output_file=args.output,
+        heartbeat_file=args.heartbeat_file,
+        interval_seconds=float(args.interval_seconds),
+        max_ticks=int(args.max_ticks),
     )
     print(
         json.dumps(

@@ -37,6 +37,7 @@ class RuntimeSubTaskSpec:
     instruction: str
     dependencies: List[str] = field(default_factory=list)
     contract_schema: Dict[str, Any] = field(default_factory=dict)
+    role_executor_policy: Dict[str, Any] = field(default_factory=dict)
     patches: List[ScaffoldPatch] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -496,6 +497,8 @@ class SubAgentRuntime:
     def _build_subtasks(self, task: OptimizationTask) -> List[RuntimeSubTaskSpec]:
         metadata = task.metadata if isinstance(task.metadata, dict) else {}
         raw_subtasks = metadata.get("subtasks") if isinstance(metadata.get("subtasks"), list) else []
+        task_contract_schema = metadata.get("contract_schema") if isinstance(metadata.get("contract_schema"), dict) else {}
+        task_metadata_role_policy = metadata.get("role_executor_policy") if isinstance(metadata.get("role_executor_policy"), dict) else {}
         if not raw_subtasks:
             raw_subtasks = [
                 {
@@ -520,6 +523,12 @@ class SubAgentRuntime:
             patch_payloads = raw.get("patches") if isinstance(raw.get("patches"), list) else []
             patches = [self._to_patch(item) for item in patch_payloads if isinstance(item, dict)]
             contract_schema = raw.get("contract_schema") if isinstance(raw.get("contract_schema"), dict) else {}
+            role_executor_policy = self._merge_policy_dicts(
+                task_metadata_role_policy,
+                self._extract_role_executor_policy_from_contract_schema(task_contract_schema, role=role),
+                self._extract_role_executor_policy_from_contract_schema(contract_schema, role=role),
+                raw.get("role_executor_policy") if isinstance(raw.get("role_executor_policy"), dict) else {},
+            )
             subtask_metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
             subtasks.append(
                 RuntimeSubTaskSpec(
@@ -528,6 +537,7 @@ class SubAgentRuntime:
                     instruction=instruction,
                     dependencies=dependencies,
                     contract_schema=contract_schema,
+                    role_executor_policy=role_executor_policy,
                     patches=patches,
                     metadata=subtask_metadata,
                 )
@@ -619,6 +629,50 @@ class SubAgentRuntime:
                     errors.append(f"missing_dependency:{subtask_id}->{dep_id}")
 
         return sorted(set(errors))
+
+    @staticmethod
+    def _normalize_role(value: str) -> str:
+        return str(value or "").strip().lower().replace("-", "_")
+
+    @classmethod
+    def _extract_role_executor_policy_from_contract_schema(
+        cls,
+        contract_schema: Dict[str, Any],
+        *,
+        role: str,
+    ) -> Dict[str, Any]:
+        if not isinstance(contract_schema, dict):
+            return {}
+
+        normalized_role = cls._normalize_role(role)
+        merged: Dict[str, Any] = {}
+        direct = contract_schema.get("role_executor_policy")
+        if isinstance(direct, dict):
+            merged.update(direct)
+
+        execution_policy = contract_schema.get("execution_policy")
+        if isinstance(execution_policy, dict):
+            nested = execution_policy.get("role_executor_policy")
+            if isinstance(nested, dict):
+                merged.update(nested)
+
+        role_map = contract_schema.get("role_executor_policy_by_role")
+        if isinstance(role_map, dict):
+            for key, value in role_map.items():
+                if not isinstance(value, dict):
+                    continue
+                if cls._normalize_role(str(key)) == normalized_role:
+                    merged.update(value)
+        return merged
+
+    @staticmethod
+    def _merge_policy_dicts(*payloads: Dict[str, Any]) -> Dict[str, Any]:
+        merged: Dict[str, Any] = {}
+        for payload in list(payloads):
+            if not isinstance(payload, dict):
+                continue
+            merged.update(payload)
+        return merged
 
 
 __all__ = [

@@ -55,6 +55,11 @@ def test_full_chain_m0_m12_runs_all_groups_when_green(monkeypatch) -> None:
             "run_ws27_72h_endurance_baseline",
             lambda **kwargs: {"passed": True, "checks": {"virtual_72h_target_reached": True}},
         )
+        monkeypatch.setattr(
+            full_chain,
+            "run_manage_brainstem_control_plane_ws28_017",
+            lambda **kwargs: {"passed": True, "checks": {"heartbeat_gate": True, "launcher_pid_alive": True}},
+        )
 
         def _cutover_stub(**kwargs):
             action = str(kwargs.get("action") or "")
@@ -86,6 +91,7 @@ def test_full_chain_m0_m12_runs_all_groups_when_green(monkeypatch) -> None:
         assert report["passed"] is True
         assert report["failed_groups"] == []
         assert "m0_m11" in report["group_results"]
+        assert "m12_brainstem_control_plane" in report["group_results"]
         assert "m12_endurance" in report["group_results"]
         assert "m12_cutover" in report["group_results"]
         assert "m12_oob_repair" in report["group_results"]
@@ -103,6 +109,11 @@ def test_full_chain_m0_m12_stops_after_cutover_failure_by_default(monkeypatch) -
 
         monkeypatch.setattr(full_chain, "run_release_closure_chain_full_m0_m7", lambda **kwargs: {"passed": True})
         monkeypatch.setattr(full_chain, "run_ws27_72h_endurance_baseline", lambda **kwargs: {"passed": True, "checks": {}})
+        monkeypatch.setattr(
+            full_chain,
+            "run_manage_brainstem_control_plane_ws28_017",
+            lambda **kwargs: {"passed": True, "checks": {"heartbeat_gate": True, "launcher_pid_alive": True}},
+        )
 
         def _cutover_stub(**kwargs):
             action = str(kwargs.get("action") or "")
@@ -135,6 +146,7 @@ def test_full_chain_m0_m12_stops_after_cutover_failure_by_default(monkeypatch) -
         )
         assert report["passed"] is False
         assert report["failed_groups"] == ["m12_cutover"]
+        assert "m12_brainstem_control_plane" in report["group_results"]
         assert "m12_oob_repair" not in report["group_results"]
         assert oob_called["value"] is False
     finally:
@@ -160,6 +172,11 @@ def test_full_chain_m0_m12_quick_mode_forwards_flags(monkeypatch) -> None:
 
         monkeypatch.setattr(full_chain, "run_release_closure_chain_full_m0_m7", _m0_m11_stub)
         monkeypatch.setattr(full_chain, "run_ws27_72h_endurance_baseline", _endurance_stub)
+        monkeypatch.setattr(
+            full_chain,
+            "run_manage_brainstem_control_plane_ws28_017",
+            lambda **kwargs: {"passed": True, "checks": {"heartbeat_gate": True, "launcher_pid_alive": True}},
+        )
         monkeypatch.setattr(
             full_chain,
             "run_ws27_subagent_cutover_ws27_002",
@@ -191,5 +208,46 @@ def test_full_chain_m0_m12_quick_mode_forwards_flags(monkeypatch) -> None:
         assert round(float(endurance_config.target_hours), 4) == 0.02
         assert round(float(endurance_config.virtual_round_seconds), 4) == 6.0
         assert int(endurance_config.max_total_size_mb) == 1
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_full_chain_m0_m12_stops_when_brainstem_control_plane_step_fails(monkeypatch) -> None:
+    case_root = _make_case_root("test_release_closure_chain_full_m0_m12")
+    try:
+        repo_root = case_root / "repo"
+        runtime_snapshot = repo_root / "scratch" / "reports" / "ws26_runtime_snapshot_ws26_002.json"
+        _write_runtime_snapshot(runtime_snapshot)
+
+        monkeypatch.setattr(full_chain, "run_release_closure_chain_full_m0_m7", lambda **kwargs: {"passed": True})
+        monkeypatch.setattr(
+            full_chain,
+            "run_manage_brainstem_control_plane_ws28_017",
+            lambda **kwargs: {
+                "passed": False,
+                "checks": {"heartbeat_gate": False, "launcher_pid_alive": False},
+            },
+        )
+        endurance_called = {"value": False}
+
+        def _endurance_stub(**kwargs):
+            endurance_called["value"] = True
+            return {"passed": True, "checks": {}}
+
+        monkeypatch.setattr(full_chain, "run_ws27_72h_endurance_baseline", _endurance_stub)
+        monkeypatch.setattr(full_chain, "run_ws27_subagent_cutover_ws27_002", lambda **kwargs: {"passed": True})
+        monkeypatch.setattr(full_chain, "run_ws27_oob_repair_drill_ws27_003", lambda **kwargs: {"passed": True})
+
+        report = full_chain.run_release_closure_chain_full_m0_m12(
+            repo_root=repo_root,
+            output_file=Path("scratch/reports/full_m0_m12_brainstem_fail.json"),
+            ws26_runtime_snapshot_report=runtime_snapshot,
+            continue_on_failure=False,
+        )
+        assert report["passed"] is False
+        assert report["failed_groups"] == ["m12_brainstem_control_plane"]
+        assert "m12_brainstem_control_plane" in report["group_results"]
+        assert "m12_endurance" not in report["group_results"]
+        assert endurance_called["value"] is False
     finally:
         _cleanup_case_root(case_root)
