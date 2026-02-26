@@ -788,6 +788,7 @@ status: `done`；锚点：`efda0bc`、`bbaed69`；回归：`tests/test_chat_rout
 - `WS28-005` 依赖 `WS28-003` 的 ACL 审计字段约定，建议串行。
 3. 发布门禁：
 - `WS28-006` 通过前，不应将 Prompt ACL enforcement 从 `shadow` 切换到 `block`。
+- 当前状态（2026-02-26）：`WS28-006` 已通过，`system/prompts/prompt_acl.spec` 已切为 `enforcement_mode=block`；保留回退 `shadow` 作为应急预案。
 
 ---
 
@@ -822,7 +823,7 @@ status: `done`；锚点：`efda0bc`、`bbaed69`；回归：`tests/test_chat_rout
 - 规则：在未完成 registry 迁移前，不强制切换到 Frontmatter；后续专家 prompt 可逐步引入 `Markdown + YAML Frontmatter`。
 
 4. 远程环境灰度策略
-- 结论：先 `enforcement_mode=shadow`，稳定后再切 `block`。
+- 结论：已完成 `shadow -> block` 切换（当前为 `block`）；若误拦截升高，允许临时回退 `shadow` 并要求附变更审计票据。
 
 5. 并发控制策略
 - 结论：不设固定 hard cap。

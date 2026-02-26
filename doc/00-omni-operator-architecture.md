@@ -254,12 +254,12 @@ omni-operator-v2/
 
 | 目标态组件 (Phase 3) | 当前实现（混合态） | 实施阶段 | 状态 |
 |---------------------|-------------------|---------|------|
-| **Sub-Agent Runtime** | `autonomous/tools/subagent_runtime.py` + CLI Adapter | Phase 3 增量 | 🟡 Runtime v1 已实现（依赖调度/契约协商前置/事件回放锚点/原子提交） |
-| Frontend Sub-Agent | Codex CLI（外部黑盒代理桥接） | Phase 0 过渡 | 🟡 中间态：可用但不具备内生子代理进程级可控性 |
-| Backend Sub-Agent | Codex CLI（外部黑盒代理桥接） | Phase 0 过渡 | 🟡 中间态：可用但不具备内生子代理进程级可控性 |
-| Ops Sub-Agent | Codex CLI（外部黑盒代理桥接） | Phase 0 过渡 | 🟡 中间态：可用但不具备内生子代理进程级可控性 |
+| **Sub-Agent Runtime** | `autonomous/tools/subagent_runtime.py` + `NativeExecutionBridge` | Phase 3 增量 | 🟡 Runtime v1.1 已实现（依赖调度/契约协商前置/事件回放锚点/原子提交/内生执行桥） |
+| Frontend Sub-Agent | `NativeExecutionBridge`（patch-intent first） | Phase 3 增量 | 🟡 已去 CLI 黑盒；角色专用执行器仍待深化 |
+| Backend Sub-Agent | `NativeExecutionBridge`（patch-intent first） | Phase 3 增量 | 🟡 已去 CLI 黑盒；角色专用执行器仍待深化 |
+| Ops Sub-Agent | `NativeExecutionBridge`（patch-intent first） | Phase 3 增量 | 🟡 已去 CLI 黑盒；角色专用执行器仍待深化 |
 | **Scaffold Engine** | `autonomous/scaffold_engine.py` | Phase 3 增量 | 🟡 Scaffold v1 已实现（契约门禁 + 可插拔校验链 + 事务回滚） |
-| **Execution Bridge** | CLI Adapter（兼容桥接层） | Phase 0 过渡 | 🟡 中间态：用于兼容接入，目标态需收敛到内建可审计执行桥 |
+| **Execution Bridge** | `autonomous/tools/execution_bridge.py` + `SubTaskExecutionBridgeReceipt` | Phase 3 增量 | 🟡 内建可审计执行桥已落地，旧 CLI 事件仍保留兼容别名窗口 |
 | **Event Bus** | `Topic Event Bus v1` + Event Log 回读兼容 | Phase 3 增量 | 🟢 Topic 化总线已落地（含 Replay/Cron/Alert） |
 | **Meta-Agent** | System Agent | Phase 0 | 🟡 单实例主循环 |
 | **Router** | CLI Selector | Phase 0 | 🟡 CLI 选择策略 |
@@ -269,8 +269,8 @@ omni-operator-v2/
 
 说明：
 
-1. `CLI Adapter/Codex CLI` 在当前文档中一律视为“兼容桥接实现”，不等价于 Phase 3 目标态能力达成。
-2. 目标态要求子代理执行面具备内生进程级可控性、统一契约审计与策略强约束，不能依赖外部黑盒代理作为最终形态。
+1. `CLI Adapter/Codex CLI` 在当前路径中不再作为默认执行层，仅保留历史兼容参考。
+2. 当前执行主路径已切到内生 `NativeExecutionBridge`，后续重点是角色专用执行器和脑干独立化能力补齐。
 
 ### 2.1 当前实现证据矩阵（2026-02-26）
 

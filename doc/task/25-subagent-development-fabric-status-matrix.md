@@ -42,16 +42,16 @@
 | Scaffold 原子提交 | 多文件补丁事务化提交 + verify 失败回滚 | 已具备事务提交、verify pipeline、回滚票据 | `BRIDGE_DONE` | `autonomous/scaffold_engine.py`, `autonomous/scaffold_verify_pipeline.py` | `autonomous/tests/test_scaffold_engine_ws21_001.py`, `autonomous/tests/test_scaffold_verify_pipeline_ws21_005.py`, `tests/test_workspace_txn_e2e_regression.py` |
 | SystemAgent 调度桥接 | 主链可灰度接管 Runtime，失败可回退 | 已具备 `runtime_mode` 决策、`rollout_percent`、fail-open 预算降级 | `BRIDGE_DONE` | `autonomous/system_agent.py` | `autonomous/tests/test_system_agent_subagent_bridge_ws22_001.py`, `autonomous/tests/test_system_agent_subagent_rollout_ws22_006.py`, `autonomous/tests/test_system_agent_fail_open_budget_ws26_003.py` |
 | M12 Full Cutover 运营能力 | 可执行全量切换与回滚窗 | 已具备 `plan/apply/status/rollback` 管理脚本 | `BRIDGE_DONE` | `scripts/manage_ws27_subagent_cutover_ws27_002.py` | `tests/test_manage_ws27_subagent_cutover_ws27_002.py`, `doc/task/implementation/NGA-WS27-002-implementation.md` |
-| FE/BE/Ops 子代理执行面（内生） | 非黑盒的内生子代理进程执行器，具备统一可控审计 | 当前主要通过 `Codex CLI` 桥接；非最终形态 | `TARGET_PENDING` | `autonomous/system_agent.py`, `autonomous/tools/cli_adapter.py` | `doc/00-omni-operator-architecture.md`（映射表中已标注为“Phase 0 过渡”） |
-| Execution Bridge 终态 | 子代理输出到执行动作的内建可审计桥，不依赖外部黑盒 | 当前 `CLI Adapter` 仍为兼容桥接层 | `TARGET_PENDING` | `autonomous/tools/cli_adapter.py`, `autonomous/system_agent.py` | `doc/00-omni-operator-architecture.md`（`Execution Bridge` 行） |
+| FE/BE/Ops 子代理执行面（内生） | 非黑盒的内生子代理进程执行器，具备统一可控审计 | 已切到内生 `NativeExecutionBridge`（patch-intent first）；角色专用执行器仍在后续排期 | `BRIDGE_DONE` | `autonomous/system_agent.py`, `autonomous/tools/execution_bridge.py` | `autonomous/tests/test_execution_bridge_native_ws28_013.py`, `autonomous/tests/test_system_agent_execution_bridge_cutover_ws28_013.py` |
+| Execution Bridge 终态 | 子代理输出到执行动作的内建可审计桥，不依赖外部黑盒 | 已落地 `SubTaskExecutionBridgeReceipt + SubTaskExecutionCompleted`，并保留旧事件别名兼容 | `BRIDGE_DONE` | `autonomous/tools/execution_bridge.py`, `autonomous/tools/subagent_runtime.py`, `autonomous/system_agent.py` | `autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py`, `autonomous/tests/test_execution_bridge_native_ws28_013.py` |
 
 ---
 
 ## 4. 当前明确结论
 
-1. 当前“开发任务子代理”已完成的是：`Runtime + Contract + Scaffold + Rollout` 的桥接执行闭环。
-2. 当前未完成的是：`Frontend/Backend/Ops` 内生执行器与终态 `Execution Bridge`。
-3. 因此“WS21/WS22/WS27 已完成”仅表示桥接闭环完成，不能直接推导为目标态完成。
+1. 当前“开发任务子代理”已完成的是：`Runtime + Contract + Scaffold + Rollout + Native Execution Bridge` 的桥接执行闭环。
+2. 当前未完成的是：`Frontend/Backend/Ops` 的角色专用执行器深化与目标态脑干进程独立化。
+3. 因此“WS21/WS22/WS27 + WS28-013 已完成”代表桥接闭环进一步收敛，不等同于 Phase3 目标态全部达成。
 
 ---
 
@@ -69,17 +69,17 @@
 1. 在 WS22 文档中显式标注“`4/4` 不含扩展项 005/006”。
 2. 统一通过本文件矩阵判断“桥接完成 vs 目标态完成”。
 
-### 5.2 噪音点 B：事件命名历史遗留
+### 5.2 噪音点 B：事件命名历史遗留（已部分收敛）
 
 现状：
 
-1. 事件名仍为 `SubTaskCliExecutionCompleted`。
-2. 当前子任务执行路径已存在 patch-intent/bridge 语义，不完全等同“CLI 执行完成”。
+1. 主事件已切到 `SubTaskExecutionCompleted`。
+2. 兼容事件 `SubTaskCliExecutionCompleted` 仍保留（alias）以避免历史报表断层。
 
 建议：
 
-1. 后续改为更中性的事件名（如 `SubTaskExecutionCompleted`），保留兼容别名一段窗口期。
-2. 在发布门禁脚本中兼容新旧字段，避免统计断层。
+1. 保持 `SubTaskExecutionCompleted` 为主语义，逐步清理“CLI”命名依赖。
+2. 发布门禁脚本继续兼容新旧字段，直到历史统计窗口完成迁移。
 
 ### 5.3 噪音点 C：旧版目标文档时间戳
 
