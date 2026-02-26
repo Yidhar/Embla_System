@@ -1,7 +1,7 @@
 ---
 **文档类型**：🎯 目标态架构设计（Target Architecture）
-**实施状态**：Phase 3 增量落地中（M6-M7 已收口，向全目标态推进）
-**最后更新**：2026-02-25
+**实施状态**：Phase 3 目标态对齐中（当前系统为 Phase 0 + 增量能力混合态）
+**最后更新**：2026-02-26
 **当前替代方案**：见 `00-mvp-architecture-design.md` (CLI Tools + Codex-first)
 **实施路径**：Phase 0 (CLI) → M0-M5 (治理与稳态) → M6-M7 (Phase3 接管) → Phase3 Full（本文档）
 ---
@@ -11,11 +11,11 @@
 > [!IMPORTANT]
 > **文档定位**：本文档描述 **Phase 3 目标态架构**，非当前实现。
 >
-> **当前实现**（截至 2026-02-25）：
+> **当前实现**（截至 2026-02-26）：
 > - 执行模型：CLI Adapter + `SystemAgent` 主循环
 > - 子代理：`Sub-Agent Runtime v1` 已落地并支持灰度接管（WS22）
 > - 脚手架：`Scaffold Engine v1` 已落地（契约门禁 + 事务回滚）
-> - 事件链：`WorkflowStore/EventLog` 已支持事件落盘与回放
+> - 事件链：`Topic Event Bus v1 + WorkflowStore/EventLog` 已支持事件落盘、回放与 topic 化消费
 >
 > **演进路径**：
 > - Phase 0 (✅ 已实现)：CLI Tools + System Agent
@@ -27,6 +27,10 @@
 > - 当前实现：`00-mvp-architecture-design.md`
 > - SDLC 对齐：`07-autonomous-agent-sdlc-architecture.md`
 > - Phase3 Full 任务清单：`doc/task/23-phase3-full-target-task-list.md`
+>
+> **阶段边界说明**：
+> - 全局阶段仅定义 `Phase 0` 到 `Phase 3`。
+> - 文档中 `P4` 或局部 “Phase 4” 如未明确声明“全局阶段”，不等价于全局里程碑。
 
 ---
 
@@ -239,14 +243,14 @@ omni-operator-v2/
 ```
 
 **图例说明**：
-- 🟢 **已实现** (Phase 0)：当前代码可运行
-- 🟡 **部分实现** (Phase 1-2)：骨架存在，功能待增强
-- 🔴 **未实现** (Phase 3)：本文档目标态设计
+- 🟢 **已实现**：当前代码可运行，且有回归证据
+- 🟡 **部分实现**：能力已落地部分或采用过渡实现，与目标态仍有差距
+- 🔴 **目标待落地**：目标态能力在当前系统尚未具备
 - ⚪ **已弃用**：保留兼容但不推荐使用
 
 **Phase 0 → Phase 3 实施路径映射**：
 
-| 目标态组件 (Phase 3) | 当前实现 (Phase 0) | 实施阶段 | 状态 |
+| 目标态组件 (Phase 3) | 当前实现（混合态） | 实施阶段 | 状态 |
 |---------------------|-------------------|---------|------|
 | **Sub-Agent Runtime** | `autonomous/tools/subagent_runtime.py` + CLI Adapter | Phase 3 增量 | 🟡 Runtime v1 已实现（依赖调度/契约协商前置/事件回放锚点/原子提交） |
 | Frontend Sub-Agent | Codex CLI | Phase 0 | 🟢 通过 CLI 调用实现 |
@@ -254,14 +258,14 @@ omni-operator-v2/
 | Ops Sub-Agent | Codex CLI | Phase 0 | 🟢 通过 CLI 调用实现 |
 | **Scaffold Engine** | `autonomous/scaffold_engine.py` | Phase 3 增量 | 🟡 Scaffold v1 已实现（契约门禁 + 可插拔校验链 + 事务回滚） |
 | **Execution Bridge** | CLI Adapter | Phase 0 | 🟢 CLI 适配器实现 |
-| **Event Bus** | 轻量 Event Log | Phase 0 | 🟡 SQLite 事件存储 |
+| **Event Bus** | `Topic Event Bus v1` + Event Log 回读兼容 | Phase 3 增量 | 🟢 Topic 化总线已落地（含 Replay/Cron/Alert） |
 | **Meta-Agent** | System Agent | Phase 0 | 🟡 单实例主循环 |
 | **Router** | CLI Selector | Phase 0 | 🟡 CLI 选择策略 |
 | **Watchdog** | `system/watchdog_daemon.py` + `system/brainstem_supervisor.py` | Phase 2 增量 | 🟡 监控守护已实现（尚未独立进程化托管） |
 | **Immutable DNA** | Prompt 文件 | Phase 0 | 🟡 静态 Prompt |
 | **Security Kernel** | Native Executor | Phase 0 | 🟡 基础沙箱 |
 
-### 2.1 当前实现证据矩阵（2026-02-24）
+### 2.1 当前实现证据矩阵（2026-02-26）
 
 | 目标态能力 | 当前落地状态 | 代码锚点 | 测试证据 | 主要缺口（走向 Phase3 Full） |
 |---|---|---|---|---|
@@ -275,7 +279,7 @@ omni-operator-v2/
 | Immutable DNA | 🟡 已实现校验与审计 | `system/immutable_dna.py`, `system/dna_change_audit.py` | `tests/test_immutable_dna_ws18_006.py`, `tests/test_dna_change_audit_ws18_007.py` | 还需与发布门禁深度联动（审批单自动校验） |
 | Watchdog / Loop-Cost Guard | 🟡 能力已具备 | `system/watchdog_daemon.py`, `system/loop_cost_guard.py`, `system/brainstem_supervisor.py` | `tests/test_watchdog_daemon_ws18_004.py`, `tests/test_loop_cost_guard_ws18_005.py`, `tests/test_brainstem_supervisor_ws18_008.py` | 尚未形成真正“不可变脑干进程”部署形态 |
 | Brain Core（Meta/Router/Memory） | 🟡 主干能力已上线 | `autonomous/meta_agent_runtime.py`, `autonomous/router_engine.py`, `autonomous/working_memory_manager.py`, `system/semantic_graph.py`, `system/episodic_memory.py` | `autonomous/tests/test_meta_agent_runtime_ws19_001.py`, `autonomous/tests/test_router_engine_ws19_002.py`, `autonomous/tests/test_working_memory_manager_ws19_004.py`, `tests/test_semantic_graph.py`, `tests/test_episodic_memory.py` | 还需完成多模型路由经济性与跨任务全局优化 |
-| 发布收口自动化（M0-M11） | 🟢 已接入（新增 M8/M9/M10/M11 门禁链） | `scripts/release_phase3_closure_chain_ws22_004.py`, `scripts/release_closure_chain_m0_m5.py`, `scripts/release_closure_chain_m8_ws23_006.py`, `scripts/release_closure_chain_m9_ws24_006.py`, `scripts/release_closure_chain_m10_ws25_006.py`, `scripts/release_closure_chain_m11_ws26_006.py`, `scripts/release_closure_chain_full_m0_m7.py`, `scripts/validate_m8_closure_gate_ws23_006.py`, `scripts/validate_m9_closure_gate_ws24_006.py`, `scripts/validate_m10_closure_gate_ws25_006.py`, `scripts/validate_m11_closure_gate_ws26_006.py` | `tests/test_release_phase3_closure_chain_ws22_004.py`, `tests/test_release_closure_chain_m0_m5.py`, `tests/test_release_closure_chain_m8_ws23_006.py`, `tests/test_release_closure_chain_m9_ws24_006.py`, `tests/test_release_closure_chain_m10_ws25_006.py`, `tests/test_release_closure_chain_m11_ws26_006.py`, `tests/test_release_closure_chain_full_m0_m7.py` | 需继续扩展到 M12（72h 长稳 + Full cutover + 放行签署） |
+| 发布收口自动化（M0-M12） | 🟢 已接入（M8/M9/M10/M11/M12 门禁链） | `scripts/release_phase3_closure_chain_ws22_004.py`, `scripts/release_closure_chain_m0_m5.py`, `scripts/release_closure_chain_m8_ws23_006.py`, `scripts/release_closure_chain_m9_ws24_006.py`, `scripts/release_closure_chain_m10_ws25_006.py`, `scripts/release_closure_chain_m11_ws26_006.py`, `scripts/release_closure_chain_full_m0_m7.py`, `scripts/release_closure_chain_full_m0_m12.py`, `scripts/validate_m8_closure_gate_ws23_006.py`, `scripts/validate_m9_closure_gate_ws24_006.py`, `scripts/validate_m10_closure_gate_ws25_006.py`, `scripts/validate_m11_closure_gate_ws26_006.py`, `scripts/validate_m12_doc_consistency_ws27_005.py`, `scripts/generate_phase3_full_release_report_ws27_006.py`, `scripts/release_phase3_full_signoff_chain_ws27_006.py` | `tests/test_release_phase3_closure_chain_ws22_004.py`, `tests/test_release_closure_chain_m0_m5.py`, `tests/test_release_closure_chain_m8_ws23_006.py`, `tests/test_release_closure_chain_m9_ws24_006.py`, `tests/test_release_closure_chain_m10_ws25_006.py`, `tests/test_release_closure_chain_m11_ws26_006.py`, `tests/test_release_closure_chain_full_m0_m7.py`, `tests/test_release_closure_chain_full_m0_m12.py`, `tests/test_ws27_005_m12_doc_consistency.py`, `tests/test_ws27_006_phase3_release_report.py`, `tests/test_release_phase3_full_signoff_chain_ws27_006.py` | 严格放行仍依赖真实 72h 墙钟验收报告通过 |
 | `register_new_tool` 隔离插件宿主 | 🟢 第三版已落地（WS24-001~006） | `mcpserver/plugin_worker.py`, `mcpserver/plugin_worker_runtime.py`, `mcpserver/plugin_manifest_policy.py`, `mcpserver/mcp_registry.py`, `mcpserver/mcp_manager.py`, `scripts/run_plugin_isolation_chaos_suite_ws24_005.py`, `autonomous/ws24_release_gate.py` | `tests/test_mcp_plugin_isolation_ws24_001.py`, `tests/test_run_plugin_isolation_chaos_suite_ws24_005.py`, `autonomous/tests/test_ws24_release_gate.py` | 下一阶段转入 WS25：Topic 化 Event Bus 与 Replay 幂等增强 |
 
 ---
@@ -858,7 +862,7 @@ interface PromptEnvelope {
 
 ## 7. 项目落地 8 周敏捷开发排期 (Gantt Chart)
 
-对齐 `07-autonomous-agent-sdlc-architecture.md` 的 Phase 0-4 里程碑，扩展脑干层与自我进化能力。
+对齐 `07-autonomous-agent-sdlc-architecture.md` 的 Phase 0-3 里程碑，扩展脑干层与自我进化能力。
 
 ```mermaid
 gantt
