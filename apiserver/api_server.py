@@ -256,6 +256,38 @@ def _apply_path_b_clarify_budget(route_meta: Dict[str, Any], *, session_id: str)
     return route_meta
 
 
+def _apply_outer_core_session_bridge(route_meta: Dict[str, Any], *, outer_session_id: str) -> Dict[str, Any]:
+    state = _ensure_chat_route_state(outer_session_id)
+    path = str(route_meta.get("path") or "path-c")
+    route_meta["outer_session_id"] = str(outer_session_id or "")
+    route_meta["core_session_id"] = str(state.get("core_session_id") or "")
+    route_meta["execution_session_id"] = str(outer_session_id or "")
+    route_meta["core_session_created"] = False
+
+    if path != "path-c":
+        state["last_execution_session_id"] = str(outer_session_id or "")
+        return route_meta
+
+    core_session_id = str(state.get("core_session_id") or "").strip()
+    core_session_created = False
+    if not core_session_id:
+        core_session_id = f"{str(outer_session_id or '')}__core"
+    if not message_manager.get_session(core_session_id):
+        outer_session = message_manager.get_session(outer_session_id) or {}
+        temporary = bool(outer_session.get("temporary", False))
+        message_manager.create_session(session_id=core_session_id, temporary=temporary)
+        core_session_created = True
+
+    state["core_session_id"] = core_session_id
+    state["last_core_escalation_at_ms"] = int(time.time() * 1000)
+    state["last_execution_session_id"] = core_session_id
+
+    route_meta["core_session_id"] = core_session_id
+    route_meta["execution_session_id"] = core_session_id
+    route_meta["core_session_created"] = core_session_created
+    return route_meta
+
+
 def _build_chat_route_prompt_hints(route_meta: Dict[str, Any]) -> str:
     path = str(route_meta.get("path") or "path-c")
     decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
@@ -402,6 +434,10 @@ def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[s
         "path_b_clarify_limit": int(route_meta.get("path_b_clarify_limit") or _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT),
         "path_b_budget_escalated": bool(route_meta.get("path_b_budget_escalated")),
         "path_b_budget_reason": str(route_meta.get("path_b_budget_reason") or ""),
+        "outer_session_id": str(route_meta.get("outer_session_id") or ""),
+        "core_session_id": str(route_meta.get("core_session_id") or ""),
+        "execution_session_id": str(route_meta.get("execution_session_id") or ""),
+        "core_session_created": bool(route_meta.get("core_session_created")),
     }
 
 
@@ -1126,8 +1162,10 @@ async def chat_stream(request: ChatRequest):
 
             route_meta = _resolve_chat_stream_route(request.message, session_id=session_id)
             route_meta = _apply_path_b_clarify_budget(route_meta, session_id=session_id)
+            route_meta = _apply_outer_core_session_bridge(route_meta, outer_session_id=session_id)
             route_decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
             path = str(route_meta.get("path") or "path-c")
+            execution_session_id = str(route_meta.get("execution_session_id") or session_id)
             _emit_chat_route_prompt_event(route_meta, session_id=session_id)
             yield _format_sse_payload_chunk(
                 {
@@ -1143,11 +1181,16 @@ async def chat_stream(request: ChatRequest):
                     "path_b_clarify_limit": int(route_meta.get("path_b_clarify_limit") or _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT),
                     "path_b_budget_escalated": bool(route_meta.get("path_b_budget_escalated")),
                     "path_b_budget_reason": str(route_meta.get("path_b_budget_reason") or ""),
+                    "outer_session_id": str(route_meta.get("outer_session_id") or ""),
+                    "core_session_id": str(route_meta.get("core_session_id") or ""),
+                    "execution_session_id": execution_session_id,
+                    "core_session_created": bool(route_meta.get("core_session_created")),
                 }
             )
             logger.info(
-                "[API Server] chat route decided session=%s path=%s intent=%s profile=%s",
+                "[API Server] chat route decided outer_session=%s execution_session=%s path=%s intent=%s profile=%s",
                 session_id,
+                execution_session_id,
                 path,
                 route_decision.get("delegation_intent", ""),
                 route_decision.get("prompt_profile", ""),
@@ -1293,7 +1336,7 @@ async def chat_stream(request: ChatRequest):
 
                 stream_source = run_agentic_loop(
                     messages,
-                    session_id,
+                    execution_session_id,
                     max_rounds=loop_max_rounds,
                     model_override=model_override,
                 )

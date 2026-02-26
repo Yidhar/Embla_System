@@ -144,6 +144,60 @@ def test_non_path_b_route_resets_clarify_budget(monkeypatch) -> None:
     assert session[api_server._CHAT_ROUTE_STATE_KEY]["path_b_clarify_turns"] == 0
 
 
+def test_outer_core_session_bridge_creates_core_session_for_path_c() -> None:
+    outer_session_id = api_server.message_manager.create_session(temporary=True)
+    try:
+        route_meta = {
+            "path": "path-c",
+            "outer_readonly_hit": False,
+            "core_escalation": True,
+            "router_decision": {"delegation_intent": "core_execution"},
+        }
+        updated = api_server._apply_outer_core_session_bridge(route_meta, outer_session_id=outer_session_id)
+        assert updated["outer_session_id"] == outer_session_id
+        assert updated["execution_session_id"].endswith("__core")
+        assert updated["core_session_id"] == updated["execution_session_id"]
+        assert updated["core_session_created"] is True
+        assert api_server.message_manager.get_session(updated["core_session_id"]) is not None
+    finally:
+        api_server.message_manager.delete_session(outer_session_id)
+        core_id = f"{outer_session_id}__core"
+        api_server.message_manager.delete_session(core_id)
+
+
+def test_outer_core_session_bridge_reuses_existing_core_session() -> None:
+    outer_session_id = api_server.message_manager.create_session(temporary=True)
+    try:
+        first = api_server._apply_outer_core_session_bridge(
+            {"path": "path-c", "router_decision": {"delegation_intent": "core_execution"}},
+            outer_session_id=outer_session_id,
+        )
+        second = api_server._apply_outer_core_session_bridge(
+            {"path": "path-c", "router_decision": {"delegation_intent": "core_execution"}},
+            outer_session_id=outer_session_id,
+        )
+        assert first["core_session_id"] == second["core_session_id"]
+        assert first["core_session_created"] is True
+        assert second["core_session_created"] is False
+    finally:
+        api_server.message_manager.delete_session(outer_session_id)
+        core_id = f"{outer_session_id}__core"
+        api_server.message_manager.delete_session(core_id)
+
+
+def test_outer_core_session_bridge_keeps_outer_for_non_core_path() -> None:
+    outer_session_id = api_server.message_manager.create_session(temporary=True)
+    try:
+        updated = api_server._apply_outer_core_session_bridge(
+            {"path": "path-a", "router_decision": {"delegation_intent": "read_only_exploration"}},
+            outer_session_id=outer_session_id,
+        )
+        assert updated["execution_session_id"] == outer_session_id
+        assert updated["core_session_created"] is False
+    finally:
+        api_server.message_manager.delete_session(outer_session_id)
+
+
 def test_route_decision_sse_chunk_is_base64_json() -> None:
     chunk = api_server._format_sse_payload_chunk({"type": "route_decision", "path": "path-a"})
     assert chunk.startswith("data: ")
