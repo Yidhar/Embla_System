@@ -22,6 +22,7 @@ DEFAULT_SPEC_FILE = Path("system/brainstem_services.spec")
 DEFAULT_SUPERVISOR_OUTPUT = Path("scratch/reports/brainstem_supervisor_entry_ws23_001.json")
 DEFAULT_MANAGER_LOG = Path("logs/autonomous/brainstem_control_plane_manager_ws28_017.log")
 DEFAULT_OUTPUT = Path("scratch/reports/brainstem_control_plane_manage_ws28_017.json")
+REPORT_SCHEMA_VERSION = "ws28_017_brainstem_control_plane_manage.v1"
 
 _HEARTBEAT_STALE_WARNING_SECONDS = 120.0
 _HEARTBEAT_STALE_CRITICAL_SECONDS = 300.0
@@ -54,6 +55,15 @@ def _read_json(path: Path) -> Dict[str, Any]:
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _finalize_report(*, repo_root: Path, output_file: Path, report: Dict[str, Any]) -> Dict[str, Any]:
+    output_path = _resolve_path(repo_root.resolve(), output_file)
+    finalized = dict(report)
+    finalized["report_schema_version"] = REPORT_SCHEMA_VERSION
+    finalized["output_file"] = _to_unix_path(output_path)
+    _write_json(output_path, finalized)
+    return finalized
 
 
 def _parse_iso_datetime(value: Any) -> float | None:
@@ -243,6 +253,7 @@ def start_brainstem_control_plane(
                 "action": "start",
                 "passed": True,
                 "status": "already_running",
+                "repo_root": _to_unix_path(root),
                 "checks": {
                     "already_running": True,
                     "spawned": False,
@@ -307,6 +318,7 @@ def start_brainstem_control_plane(
         "generated_at": _utc_iso_now(),
         "action": "start",
         "passed": passed,
+        "repo_root": _to_unix_path(root),
         "checks": checks,
         "heartbeat": heartbeat_snapshot,
         "state_file": _to_unix_path(state_path),
@@ -350,6 +362,7 @@ def status_brainstem_control_plane(
         "generated_at": _utc_iso_now(),
         "action": "status",
         "passed": passed,
+        "repo_root": _to_unix_path(root),
         "checks": checks,
         "reasons": reasons,
         "state_file": _to_unix_path(state_path),
@@ -405,6 +418,7 @@ def stop_brainstem_control_plane(
         "generated_at": _utc_iso_now(),
         "action": "stop",
         "passed": passed,
+        "repo_root": _to_unix_path(root),
         "checks": {
             "target_pid_count": len(target_pids),
             "all_pids_stopped": passed,
@@ -463,12 +477,7 @@ def run_manage_brainstem_control_plane_ws28_017(
         )
     else:
         raise ValueError(f"unsupported action: {action}")
-
-    root = repo_root.resolve()
-    output_path = _resolve_path(root, output_file)
-    _write_json(output_path, report)
-    report["output_file"] = _to_unix_path(output_path)
-    return report
+    return _finalize_report(repo_root=repo_root, output_file=output_file, report=report)
 
 
 def parse_args() -> argparse.Namespace:

@@ -43,6 +43,26 @@
   --skip-m0-m11 --quick-mode
 ```
 
+4. 脑干托管入口单独验收（与全链同源脚本）
+
+```bash
+./.venv/bin/python scripts/manage_brainstem_control_plane_ws28_017.py \
+  --action start \
+  --output scratch/reports/ws28_brainstem_control_plane_start_ws28_017.json \
+  --strict
+
+./.venv/bin/python scripts/manage_brainstem_control_plane_ws28_017.py \
+  --action status \
+  --output scratch/reports/ws28_brainstem_control_plane_status_ws28_017.json \
+  --strict
+```
+
+5. 脑干托管入口清理（可选）
+
+```bash
+./.venv/bin/python scripts/manage_brainstem_control_plane_ws28_017.py --action stop
+```
+
 ## 4. 预期产物
 
 1. `scratch/reports/release_closure_chain_full_m0_m12_result.json`
@@ -68,8 +88,12 @@
 - `m12_brainstem_control_plane` 检查项必须通过：
   - `start_passed=true`
   - `status_passed=true`
+  - `start_spawn_or_already_running=true`
   - `heartbeat_gate=true`
   - `launcher_pid_alive=true`
+  - `manager_state_exists=true`
+  - `state_file_consistent=true`
+  - `heartbeat_file_consistent=true`
 - `m12_cutover` 检查项必须全部通过：
   - `subagent_runtime_enabled=true`
   - `rollout_percent_is_full=true`

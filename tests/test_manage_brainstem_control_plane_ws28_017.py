@@ -25,6 +25,10 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def test_manage_brainstem_control_plane_start_status_stop_flow(monkeypatch) -> None:
     case_root = _make_case_root("test_manage_brainstem_control_plane_ws28_017")
     try:
@@ -94,6 +98,11 @@ def test_manage_brainstem_control_plane_start_status_stop_flow(monkeypatch) -> N
         assert start_report["passed"] is True
         assert start_report["checks"]["spawned"] is True
         assert start_report["checks"]["heartbeat_detected"] is True
+        assert start_report["report_schema_version"] == "ws28_017_brainstem_control_plane_manage.v1"
+        assert start_report["output_file"].endswith("manager_report.json")
+        persisted_start = _read_json(output)
+        assert persisted_start["action"] == "start"
+        assert persisted_start["output_file"].endswith("manager_report.json")
 
         status_report = manager.run_manage_brainstem_control_plane_ws28_017(
             repo_root=repo_root,
@@ -105,6 +114,9 @@ def test_manage_brainstem_control_plane_start_status_stop_flow(monkeypatch) -> N
         assert status_report["passed"] is True
         assert status_report["checks"]["heartbeat_gate"] is True
         assert status_report["checks"]["launcher_pid_alive"] is True
+        persisted_status = _read_json(output)
+        assert persisted_status["action"] == "status"
+        assert persisted_status["report_schema_version"] == "ws28_017_brainstem_control_plane_manage.v1"
 
         stop_report = manager.run_manage_brainstem_control_plane_ws28_017(
             repo_root=repo_root,
@@ -117,6 +129,9 @@ def test_manage_brainstem_control_plane_start_status_stop_flow(monkeypatch) -> N
         assert stop_report["passed"] is True
         assert stop_report["checks"]["all_pids_stopped"] is True
         assert stop_report["remaining_pids"] == []
+        persisted_stop = _read_json(output)
+        assert persisted_stop["action"] == "stop"
+        assert persisted_stop["report_schema_version"] == "ws28_017_brainstem_control_plane_manage.v1"
     finally:
         _cleanup_case_root(case_root)
 

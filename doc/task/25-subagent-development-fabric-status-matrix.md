@@ -106,3 +106,49 @@
 5. `doc/task/22-ws-phase3-scheduler-bridge-and-rollout.md`（调度桥接与灰度接管）
 6. `doc/task/implementation/NGA-WS22-005-implementation.md`、`doc/task/implementation/NGA-WS22-006-implementation.md`
 7. `doc/task/implementation/NGA-WS27-002-implementation.md`（M12 full cutover）
+8. `doc/task/implementation/NGA-WS28-019-implementation.md`（脑干守护进程存活探测与自愈重启）
+9. `doc/task/implementation/NGA-WS28-020-implementation.md`（脑干控制面托管入口标准化）
+
+---
+
+## 7. WS28 下一步任务卡（Target Pending 收口）
+
+### NGA-WS28-019 脑干守护进程真实存活探测与自愈重启
+
+- type: `hardening`
+- priority: `P0`
+- status: `done`（2026-02-27）
+- scope: 修复“状态显示 running 但子进程已死”的假存活窗口
+- code anchors:
+  - `system/brainstem_supervisor.py`
+  - `scripts/run_brainstem_supervisor_ws23_001.py`
+- tests:
+  - `tests/test_brainstem_supervisor_ws18_008.py`
+  - `tests/test_brainstem_supervisor_entry_ws23_001.py`
+  - `tests/test_manage_brainstem_control_plane_ws28_017.py`
+  - `tests/test_api_server_brainstem_bootstrap_ws28_018.py`
+
+### NGA-WS28-020 脑干控制面托管入口标准化（启动/停止/状态）
+
+- type: `ops`
+- priority: `P0`
+- status: `done`（2026-02-27）
+- scope: 将托管入口与 runbook/全链验收保持同源，确保新环境首启可重复
+- code anchors:
+  - `scripts/manage_brainstem_control_plane_ws28_017.py`
+  - `scripts/release_closure_chain_full_m0_m12.py`
+  - `doc/task/runbooks/release_m12_full_chain_m0_m12_onepager_ws27_004.md`
+- tests:
+  - `tests/test_manage_brainstem_control_plane_ws28_017.py`
+  - `tests/test_release_closure_chain_full_m0_m12.py`
+
+### NGA-WS28-021 FE/BE/Ops 角色专用执行器 v2（语义级）
+
+- type: `feature`
+- priority: `P1`
+- status: `pending`
+- scope: 在现有路径策略/strict 门禁基础上，补语义级工具链与更细粒度策略
+- expected anchors:
+  - `autonomous/tools/execution_bridge.py`
+  - `autonomous/system_agent.py`
+  - `autonomous/tools/subagent_runtime.py`

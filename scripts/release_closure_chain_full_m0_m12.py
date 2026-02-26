@@ -146,21 +146,55 @@ def _run_m12_brainstem_control_plane_step(
             action="status",
             output_file=status_output,
         )
+        start_checks = start_report.get("checks") if isinstance(start_report.get("checks"), dict) else {}
         status_checks = status_report.get("checks") if isinstance(status_report.get("checks"), dict) else {}
+        heartbeat_checks = (
+            status_report.get("heartbeat", {}).get("checks")
+            if isinstance(status_report.get("heartbeat"), dict)
+            and isinstance(status_report.get("heartbeat", {}).get("checks"), dict)
+            else {}
+        )
+
+        start_state_file = str(start_report.get("state_file") or "")
+        status_state_file = str(status_report.get("state_file") or "")
+        start_heartbeat_file = str(start_report.get("heartbeat_file") or "")
+        status_heartbeat_file = str(status_report.get("heartbeat_file") or "")
+        state_file_consistent = (
+            start_state_file == status_state_file
+            if start_state_file and status_state_file
+            else True
+        )
+        heartbeat_file_consistent = (
+            start_heartbeat_file == status_heartbeat_file
+            if start_heartbeat_file and status_heartbeat_file
+            else True
+        )
+
         checks = {
             "start_passed": bool(start_report.get("passed")),
             "status_passed": bool(status_report.get("passed")),
+            "start_spawn_or_already_running": bool(start_checks.get("spawned")) or bool(start_checks.get("already_running")),
             "heartbeat_gate": bool(status_checks.get("heartbeat_gate")),
             "launcher_pid_alive": bool(status_checks.get("launcher_pid_alive")),
+            "manager_state_exists": bool(status_checks.get("manager_state_exists", True)),
+            "status_heartbeat_exists": bool(heartbeat_checks.get("heartbeat_exists", True)),
+            "state_file_consistent": bool(state_file_consistent),
+            "heartbeat_file_consistent": bool(heartbeat_file_consistent),
         }
         return {
             "step_id": "M12-T0",
             "name": "ws28_017_brainstem_control_plane_manage",
+            "action_sequence": ["start", "status"],
             "passed": all(checks.values()),
             "checks": checks,
             "outputs": {
                 "start_output": _to_unix_path(start_output),
                 "status_output": _to_unix_path(status_output),
+            },
+            "source_contract": {
+                "state_file": status_state_file or start_state_file,
+                "heartbeat_file": status_heartbeat_file or start_heartbeat_file,
+                "manager_log": str(start_report.get("manager_log") or ""),
             },
             "duration_seconds": round(time.time() - started, 4),
         }

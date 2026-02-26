@@ -58,7 +58,18 @@ def test_full_chain_m0_m12_runs_all_groups_when_green(monkeypatch) -> None:
         monkeypatch.setattr(
             full_chain,
             "run_manage_brainstem_control_plane_ws28_017",
-            lambda **kwargs: {"passed": True, "checks": {"heartbeat_gate": True, "launcher_pid_alive": True}},
+            lambda **kwargs: {
+                "passed": True,
+                "checks": {
+                    "spawned": True,
+                    "heartbeat_gate": True,
+                    "launcher_pid_alive": True,
+                    "manager_state_exists": True,
+                },
+                "heartbeat": {"checks": {"heartbeat_exists": True}},
+                "state_file": "scratch/runtime/brainstem_control_plane_manager_ws28_017_state.json",
+                "heartbeat_file": "scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json",
+            },
         )
 
         def _cutover_stub(**kwargs):
@@ -95,6 +106,11 @@ def test_full_chain_m0_m12_runs_all_groups_when_green(monkeypatch) -> None:
         assert "m12_endurance" in report["group_results"]
         assert "m12_cutover" in report["group_results"]
         assert "m12_oob_repair" in report["group_results"]
+        brainstem = report["group_results"]["m12_brainstem_control_plane"]
+        assert brainstem["action_sequence"] == ["start", "status"]
+        assert brainstem["checks"]["state_file_consistent"] is True
+        assert brainstem["checks"]["heartbeat_file_consistent"] is True
+        assert brainstem["checks"]["start_spawn_or_already_running"] is True
         assert output.exists() is True
     finally:
         _cleanup_case_root(case_root)
@@ -112,7 +128,18 @@ def test_full_chain_m0_m12_stops_after_cutover_failure_by_default(monkeypatch) -
         monkeypatch.setattr(
             full_chain,
             "run_manage_brainstem_control_plane_ws28_017",
-            lambda **kwargs: {"passed": True, "checks": {"heartbeat_gate": True, "launcher_pid_alive": True}},
+            lambda **kwargs: {
+                "passed": True,
+                "checks": {
+                    "spawned": True,
+                    "heartbeat_gate": True,
+                    "launcher_pid_alive": True,
+                    "manager_state_exists": True,
+                },
+                "heartbeat": {"checks": {"heartbeat_exists": True}},
+                "state_file": "scratch/runtime/brainstem_control_plane_manager_ws28_017_state.json",
+                "heartbeat_file": "scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json",
+            },
         )
 
         def _cutover_stub(**kwargs):
@@ -175,7 +202,18 @@ def test_full_chain_m0_m12_quick_mode_forwards_flags(monkeypatch) -> None:
         monkeypatch.setattr(
             full_chain,
             "run_manage_brainstem_control_plane_ws28_017",
-            lambda **kwargs: {"passed": True, "checks": {"heartbeat_gate": True, "launcher_pid_alive": True}},
+            lambda **kwargs: {
+                "passed": True,
+                "checks": {
+                    "spawned": True,
+                    "heartbeat_gate": True,
+                    "launcher_pid_alive": True,
+                    "manager_state_exists": True,
+                },
+                "heartbeat": {"checks": {"heartbeat_exists": True}},
+                "state_file": "scratch/runtime/brainstem_control_plane_manager_ws28_017_state.json",
+                "heartbeat_file": "scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json",
+            },
         )
         monkeypatch.setattr(
             full_chain,
@@ -225,7 +263,15 @@ def test_full_chain_m0_m12_stops_when_brainstem_control_plane_step_fails(monkeyp
             "run_manage_brainstem_control_plane_ws28_017",
             lambda **kwargs: {
                 "passed": False,
-                "checks": {"heartbeat_gate": False, "launcher_pid_alive": False},
+                "checks": {
+                    "spawned": True,
+                    "heartbeat_gate": False,
+                    "launcher_pid_alive": False,
+                    "manager_state_exists": True,
+                },
+                "heartbeat": {"checks": {"heartbeat_exists": True}},
+                "state_file": "scratch/runtime/brainstem_control_plane_manager_ws28_017_state.json",
+                "heartbeat_file": "scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json",
             },
         )
         endurance_called = {"value": False}
