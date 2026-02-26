@@ -12,7 +12,7 @@
 > **文档定位**：本文档描述 **Phase 3 目标态架构**，非当前实现。
 >
 > **当前实现**（截至 2026-02-26）：
-> - 执行模型：CLI Adapter + `SystemAgent` 主循环
+> - 执行模型：CLI Adapter + `SystemAgent` 主循环（过渡桥接态，非目标态终局）
 > - 子代理：`Sub-Agent Runtime v1` 已落地并支持灰度接管（WS22）
 > - 脚手架：`Scaffold Engine v1` 已落地（契约门禁 + 事务回滚）
 > - 事件链：`Topic Event Bus v1 + WorkflowStore/EventLog` 已支持事件落盘、回放与 topic 化消费
@@ -232,9 +232,9 @@ omni-operator-v2/
     │   ├── state/workflow_store.py     # 工作流持久化 + Lease/Fencing
     │   ├── tools/
     │   │   ├── cli_adapter.py          # 🟢 CLI 统一适配器 (Phase 0 当前实现)
-    │   │   ├── codex_adapter.py        # 🟢 Codex CLI/MCP 主执行器 (Codex-first v2)
-    │   │   ├── claude_adapter.py       # 🟢 Claude Code 降级备选
-    │   │   └── gemini_adapter.py       # 🟢 Gemini CLI 降级备选
+    │   │   ├── codex_adapter.py        # 🟡 Codex CLI/MCP 过渡执行器（外部黑盒代理桥接）
+    │   │   ├── claude_adapter.py       # 🟡 Claude Code 过渡降级执行器
+    │   │   └── gemini_adapter.py       # 🟡 Gemini CLI 过渡降级执行器
     │   └── tools/subagent_runtime.py   # 🟡 Sub-Agent Runtime v1（依赖调度 + 原子脚手架提交）
     ├── apiserver/                      # API 服务层 (FastAPI)
     ├── mcpserver/                      # MCP 工具注册与调度
@@ -253,17 +253,22 @@ omni-operator-v2/
 | 目标态组件 (Phase 3) | 当前实现（混合态） | 实施阶段 | 状态 |
 |---------------------|-------------------|---------|------|
 | **Sub-Agent Runtime** | `autonomous/tools/subagent_runtime.py` + CLI Adapter | Phase 3 增量 | 🟡 Runtime v1 已实现（依赖调度/契约协商前置/事件回放锚点/原子提交） |
-| Frontend Sub-Agent | Codex CLI | Phase 0 | 🟢 通过 CLI 调用实现 |
-| Backend Sub-Agent | Codex CLI | Phase 0 | 🟢 通过 CLI 调用实现 |
-| Ops Sub-Agent | Codex CLI | Phase 0 | 🟢 通过 CLI 调用实现 |
+| Frontend Sub-Agent | Codex CLI（外部黑盒代理桥接） | Phase 0 过渡 | 🟡 中间态：可用但不具备内生子代理进程级可控性 |
+| Backend Sub-Agent | Codex CLI（外部黑盒代理桥接） | Phase 0 过渡 | 🟡 中间态：可用但不具备内生子代理进程级可控性 |
+| Ops Sub-Agent | Codex CLI（外部黑盒代理桥接） | Phase 0 过渡 | 🟡 中间态：可用但不具备内生子代理进程级可控性 |
 | **Scaffold Engine** | `autonomous/scaffold_engine.py` | Phase 3 增量 | 🟡 Scaffold v1 已实现（契约门禁 + 可插拔校验链 + 事务回滚） |
-| **Execution Bridge** | CLI Adapter | Phase 0 | 🟢 CLI 适配器实现 |
+| **Execution Bridge** | CLI Adapter（兼容桥接层） | Phase 0 过渡 | 🟡 中间态：用于兼容接入，目标态需收敛到内建可审计执行桥 |
 | **Event Bus** | `Topic Event Bus v1` + Event Log 回读兼容 | Phase 3 增量 | 🟢 Topic 化总线已落地（含 Replay/Cron/Alert） |
 | **Meta-Agent** | System Agent | Phase 0 | 🟡 单实例主循环 |
 | **Router** | CLI Selector | Phase 0 | 🟡 CLI 选择策略 |
 | **Watchdog** | `system/watchdog_daemon.py` + `system/brainstem_supervisor.py` | Phase 2 增量 | 🟡 监控守护已实现（尚未独立进程化托管） |
 | **Immutable DNA** | Prompt 文件 | Phase 0 | 🟡 静态 Prompt |
 | **Security Kernel** | Native Executor | Phase 0 | 🟡 基础沙箱 |
+
+说明：
+
+1. `CLI Adapter/Codex CLI` 在当前文档中一律视为“兼容桥接实现”，不等价于 Phase 3 目标态能力达成。
+2. 目标态要求子代理执行面具备内生进程级可控性、统一契约审计与策略强约束，不能依赖外部黑盒代理作为最终形态。
 
 ### 2.1 当前实现证据矩阵（2026-02-26）
 
