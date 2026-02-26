@@ -57,6 +57,9 @@ class RouterDecision:
     selected_role: str
     selected_model_tier: str
     tool_profile: List[str]
+    prompt_profile: str
+    injection_mode: str
+    delegation_intent: str
     risk_level: str
     budget_remaining: Optional[int]
     reasoning: List[str]
@@ -85,14 +88,24 @@ class TaskRouterEngine:
         task_type = self._infer_task_type(request.description)
         role, role_reason = self._select_role(request=request, task_type=task_type)
         model_tier, model_reason = self._select_model_tier(request=request, task_type=task_type)
+        delegation_intent, delegation_reason = self._select_delegation_intent(request=request, task_type=task_type)
+        prompt_profile, prompt_profile_reason = self._select_prompt_profile(
+            task_type=task_type,
+            selected_role=role,
+            delegation_intent=delegation_intent,
+        )
+        injection_mode, injection_mode_reason = self._select_injection_mode(request=request, task_type=task_type)
         tool_profile = list(ROLE_TO_TOOLS.get(role, ROLE_TO_TOOLS[self.fixed_role_fallback]))
-        reasons = [role_reason, model_reason]
+        reasons = [role_reason, model_reason, delegation_reason, prompt_profile_reason, injection_mode_reason]
 
         fingerprint_payload = {
             "task_type": task_type,
             "selected_role": role,
             "selected_model_tier": model_tier,
             "tool_profile": tool_profile,
+            "prompt_profile": prompt_profile,
+            "injection_mode": injection_mode,
+            "delegation_intent": delegation_intent,
             "risk_level": request.risk_level,
             "budget_remaining": request.budget_remaining,
             "description": request.description.strip(),
@@ -109,6 +122,9 @@ class TaskRouterEngine:
             selected_role=role,
             selected_model_tier=model_tier,
             tool_profile=tool_profile,
+            prompt_profile=prompt_profile,
+            injection_mode=injection_mode,
+            delegation_intent=delegation_intent,
             risk_level=request.risk_level,
             budget_remaining=request.budget_remaining,
             reasoning=reasons,
@@ -177,3 +193,55 @@ class TaskRouterEngine:
         if task_type == "research":
             return "secondary", "research task default => secondary tier"
         return "primary", "default => primary tier"
+
+    @staticmethod
+    def _select_delegation_intent(*, request: RouterRequest, task_type: str) -> tuple[str, str]:
+        risk = str(request.risk_level or "").lower()
+        requested_role = str(request.requested_role or "").strip()
+        if requested_role:
+            return "explicit_role_delegate", f"requested_role={requested_role} => explicit_role_delegate"
+        if risk in HIGH_RISK_LEVELS:
+            return "core_execution", f"risk={risk} => core_execution"
+        if risk in {"read_only", "readonly", "low"}:
+            return "read_only_exploration", f"risk={risk} => read_only_exploration"
+        if task_type in {"ops", "development"}:
+            return "core_execution", f"task_type={task_type} => core_execution"
+        if task_type == "research":
+            return "read_only_exploration", "research task => read_only_exploration"
+        return "general_assistance", "default => general_assistance"
+
+    @staticmethod
+    def _select_prompt_profile(
+        *,
+        task_type: str,
+        selected_role: str,
+        delegation_intent: str,
+    ) -> tuple[str, str]:
+        role = str(selected_role or "").strip().lower()
+        intent = str(delegation_intent or "").strip().lower()
+        if intent == "core_execution":
+            if role == "sys_admin":
+                return "core_exec_ops", "core_execution + sys_admin => core_exec_ops"
+            if role == "developer":
+                return "core_exec_dev", "core_execution + developer => core_exec_dev"
+            return "core_exec_general", "core_execution + non-standard role => core_exec_general"
+        if intent == "read_only_exploration":
+            if role == "researcher" or task_type == "research":
+                return "outer_readonly_research", "read_only_exploration + research => outer_readonly_research"
+            return "outer_readonly_general", "read_only_exploration => outer_readonly_general"
+        if intent == "explicit_role_delegate":
+            return "explicit_role_delegate", "explicit_role_delegate => explicit_role_delegate"
+        return "outer_general", "default => outer_general"
+
+    @staticmethod
+    def _select_injection_mode(*, request: RouterRequest, task_type: str) -> tuple[str, str]:
+        risk = str(request.risk_level or "").lower()
+        description = str(request.description or "").lower()
+        recovery_markers = ("recover", "rollback", "repair", "incident", "恢复", "回滚", "修复", "故障")
+        if any(marker in description for marker in recovery_markers):
+            return "recovery", "description has recovery markers => recovery mode"
+        if risk in HIGH_RISK_LEVELS:
+            return "hardened", f"risk level {risk} => hardened mode"
+        if risk in {"read_only", "readonly", "low"}:
+            return "minimal", f"risk={risk} => minimal mode"
+        return "normal", "default => normal mode"

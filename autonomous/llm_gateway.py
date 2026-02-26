@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -26,6 +27,7 @@ class GatewayRouteRequest:
     task_type: str
     severity: str = "medium"
     budget_remaining: Optional[float] = None
+    path: str = "path-c"
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,35 @@ class PromptEnvelopeInput:
     static_header: str
     long_term_summary: str
     dynamic_messages: List[Dict[str, Any]] = field(default_factory=list)
+    prompt_slices: List["PromptSlice"] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PromptSlice:
+    slice_uid: str
+    layer: str
+    text: str
+    owner: str = "system"
+    cache_segment: str = "tail_dynamic"  # prefix_static|prefix_session|tail_dynamic
+    priority: int = 100
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class PromptComposeDecision:
+    path: str
+    selected_slices: List[str]
+    dropped_slices: List[str]
+    reasons: List[str]
+    prefix_hash: str
+    tail_hash: str
+    token_budget_before: int
+    token_budget_after: int
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -92,14 +123,18 @@ class GatewayPlan:
     prompt_envelope: PromptEnvelope
     cache_outcome: PromptCacheOutcome
     metrics: GatewayPlanMetrics
+    compose_decision: Optional[PromptComposeDecision] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload: Dict[str, Any] = {
             "route": self.route.to_dict(),
             "prompt_envelope": self.prompt_envelope.to_dict(),
             "cache_outcome": self.cache_outcome.to_dict(),
             "metrics": self.metrics.to_dict(),
         }
+        if self.compose_decision is not None:
+            payload["compose_decision"] = self.compose_decision.to_dict()
+        return payload
 
 
 class LLMGateway:
@@ -199,6 +234,76 @@ class LLMGateway:
             block3_soft_limit_exceeded=block3_tokens > self.block3_soft_limit_tokens,
         )
 
+    def resolve(self, *, request: GatewayRouteRequest, prompt_input: PromptEnvelopeInput) -> Dict[str, Any]:
+        path = str(request.path or "path-c").strip().lower()
+        raw_slices = self._collect_prompt_slices(prompt_input)
+        selected: List[PromptSlice] = []
+        dropped: List[PromptSlice] = []
+        reasons: List[str] = []
+
+        for slice_item in raw_slices:
+            if self._should_drop_slice_for_path(path=path, slice_item=slice_item):
+                dropped.append(slice_item)
+                reasons.append(f"{slice_item.slice_uid}: dropped for {path} policy")
+                continue
+            selected.append(slice_item)
+
+        # Keep deterministic order for repeatable composition decisions.
+        selected = sorted(selected, key=lambda item: (int(item.priority), str(item.slice_uid)))
+        dropped = sorted(dropped, key=lambda item: (int(item.priority), str(item.slice_uid)))
+        return {
+            "path": path,
+            "selected": selected,
+            "dropped": dropped,
+            "reasons": reasons,
+        }
+
+    def serialize_for_cache(self, *, selected_slices: List[PromptSlice]) -> Dict[str, Any]:
+        prefix_segments: List[str] = []
+        tail_segments: List[str] = []
+        prefix_slice_ids: List[str] = []
+        tail_slice_ids: List[str] = []
+        for item in selected_slices:
+            text = str(item.text or "")
+            segment = str(item.cache_segment or "tail_dynamic").strip().lower()
+            if segment in {"prefix_static", "prefix_session"}:
+                if text:
+                    prefix_segments.append(text)
+                prefix_slice_ids.append(item.slice_uid)
+            else:
+                if text:
+                    tail_segments.append(text)
+                tail_slice_ids.append(item.slice_uid)
+
+        prefix_text = "\n".join(segment for segment in prefix_segments if segment)
+        tail_text = "\n".join(segment for segment in tail_segments if segment)
+        return {
+            "prefix_text": prefix_text,
+            "tail_text": tail_text,
+            "prefix_hash": _stable_hash_text(prefix_text) if prefix_text else "",
+            "tail_hash": _stable_hash_text(tail_text) if tail_text else "",
+            "prefix_slice_ids": prefix_slice_ids,
+            "tail_slice_ids": tail_slice_ids,
+        }
+
+    def compose(self, *, request: GatewayRouteRequest, prompt_input: PromptEnvelopeInput) -> PromptComposeDecision:
+        resolved = self.resolve(request=request, prompt_input=prompt_input)
+        selected: List[PromptSlice] = list(resolved["selected"])
+        dropped: List[PromptSlice] = list(resolved["dropped"])
+        serialized = self.serialize_for_cache(selected_slices=selected)
+        tokens_before = sum(_estimate_tokens(str(item.text or "")) for item in self._collect_prompt_slices(prompt_input))
+        tokens_after = sum(_estimate_tokens(str(item.text or "")) for item in selected)
+        return PromptComposeDecision(
+            path=str(resolved["path"]),
+            selected_slices=[item.slice_uid for item in selected],
+            dropped_slices=[item.slice_uid for item in dropped],
+            reasons=list(resolved["reasons"]),
+            prefix_hash=str(serialized["prefix_hash"]),
+            tail_hash=str(serialized["tail_hash"]),
+            token_budget_before=tokens_before,
+            token_budget_after=tokens_after,
+        )
+
     def apply_prompt_cache(self, envelope: PromptEnvelope) -> PromptCacheOutcome:
         now = float(self._now_fn())
         block1_key = _stable_hash_text(envelope.block1_text) if envelope.block1_text else ""
@@ -236,7 +341,40 @@ class LLMGateway:
 
     def build_plan(self, *, request: GatewayRouteRequest, prompt_input: PromptEnvelopeInput) -> GatewayPlan:
         route = self.route(request)
+        compose_decision = self.compose(request=request, prompt_input=prompt_input)
         envelope = self.build_prompt_envelope(prompt_input)
+
+        # When prompt slices are provided by caller, honor resolve/serialize result directly.
+        request_path = str(request.path or "").strip().lower()
+        if prompt_input.prompt_slices or request_path in {"path-a", "path_a", "outer_readonly"}:
+            resolved = self.resolve(request=request, prompt_input=prompt_input)
+            selected = list(resolved["selected"])
+            serialized = self.serialize_for_cache(selected_slices=selected)
+            selected_ids = set(compose_decision.selected_slices)
+            filtered_messages: List[Dict[str, str]] = []
+            for index, message in enumerate(prompt_input.dynamic_messages):
+                slice_uid = f"legacy_dynamic_message_{index}"
+                if slice_uid in selected_ids:
+                    filtered_messages.append(
+                        {
+                            "role": str(message.get("role") or "user"),
+                            "content": str(message.get("content") or ""),
+                        }
+                    )
+            filtered_block3_tokens = sum(
+                _estimate_tokens(str(item.get("role") or "")) + _estimate_tokens(str(item.get("content") or ""))
+                for item in filtered_messages
+            )
+            envelope = PromptEnvelope(
+                block1_text=str(serialized["prefix_text"]),
+                block2_text=str(serialized["tail_text"]),
+                block3_messages=filtered_messages,
+                block3_soft_limit_tokens=self.block3_soft_limit_tokens,
+                block1_tokens=_estimate_tokens(str(serialized["prefix_text"])),
+                block2_tokens=_estimate_tokens(str(serialized["tail_text"])),
+                block3_tokens=filtered_block3_tokens,
+                block3_soft_limit_exceeded=filtered_block3_tokens > self.block3_soft_limit_tokens,
+            )
 
         if envelope.block3_soft_limit_exceeded and route.model_tier == "primary":
             route = GatewayRouteDecision(
@@ -247,7 +385,13 @@ class LLMGateway:
 
         cache_outcome = self.apply_prompt_cache(envelope)
         metrics = self.estimate_metrics(route=route, envelope=envelope, cache_outcome=cache_outcome)
-        return GatewayPlan(route=route, prompt_envelope=envelope, cache_outcome=cache_outcome, metrics=metrics)
+        return GatewayPlan(
+            route=route,
+            prompt_envelope=envelope,
+            cache_outcome=cache_outcome,
+            metrics=metrics,
+            compose_decision=compose_decision,
+        )
 
     def estimate_metrics(
         self,
@@ -281,3 +425,61 @@ class LLMGateway:
         if stored_at is None:
             return False
         return (now - stored_at) <= float(ttl_seconds)
+
+    @staticmethod
+    def _collect_prompt_slices(prompt_input: PromptEnvelopeInput) -> List[PromptSlice]:
+        if prompt_input.prompt_slices:
+            return list(prompt_input.prompt_slices)
+
+        slices: List[PromptSlice] = []
+        if prompt_input.static_header:
+            slices.append(
+                PromptSlice(
+                    slice_uid="legacy_block1",
+                    layer="L0_DNA",
+                    text=str(prompt_input.static_header),
+                    owner="system",
+                    cache_segment="prefix_static",
+                    priority=10,
+                )
+            )
+        if prompt_input.long_term_summary:
+            slices.append(
+                PromptSlice(
+                    slice_uid="legacy_block2",
+                    layer="L1_5_EPISODIC_MEMORY",
+                    text=str(prompt_input.long_term_summary),
+                    owner="memory",
+                    cache_segment="prefix_session",
+                    priority=20,
+                )
+            )
+        for index, message in enumerate(prompt_input.dynamic_messages):
+            role = str(message.get("role") or "user")
+            content = str(message.get("content") or "")
+            message_text = json.dumps({"role": role, "content": content}, ensure_ascii=False, sort_keys=True)
+            slices.append(
+                PromptSlice(
+                    slice_uid=f"legacy_dynamic_message_{index}",
+                    layer="L4_RECOVERY",
+                    text=message_text,
+                    owner="conversation",
+                    cache_segment="tail_dynamic",
+                    priority=100 + index,
+                )
+            )
+        return slices
+
+    @staticmethod
+    def _should_drop_slice_for_path(*, path: str, slice_item: PromptSlice) -> bool:
+        normalized_path = str(path or "").strip().lower()
+        if normalized_path not in {"path-a", "path_a", "outer_readonly"}:
+            return False
+
+        layer = str(slice_item.layer or "").strip().upper()
+        owner = str(slice_item.owner or "").strip().lower()
+        if layer.startswith("L3") or layer.startswith("L4"):
+            return True
+        if owner in {"tool_policy", "execution", "recovery"}:
+            return True
+        return False
