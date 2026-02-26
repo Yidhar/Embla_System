@@ -48,6 +48,9 @@ const PAGE_COPY: Record<
       rolloutHitRatio: string;
       failOpenUsage: string;
       readonlyWriteExposure: string;
+      pathCRouteShare: string;
+      pathBBudgetEscalation: string;
+      coreSessionCreation: string;
       queuePressure: string;
       diskUsage: string;
       evidenceCoverage: string;
@@ -62,7 +65,12 @@ const PAGE_COPY: Record<
       gbFree: string;
       sampleCount: string;
       exposureCount: string;
+      escalatedCount: string;
+      createdCount: string;
       outerReadonlyHitRate: string;
+      pathARatio: string;
+      pathBRatio: string;
+      pathCRatio: string;
       eventsScanned: string;
       missing: string;
       failed: string;
@@ -101,6 +109,9 @@ const PAGE_COPY: Record<
       rolloutHitRatio: "Rollout Hit Ratio",
       failOpenUsage: "Fail-Open Usage",
       readonlyWriteExposure: "Readonly Write Exposure",
+      pathCRouteShare: "Path-C Route Share",
+      pathBBudgetEscalation: "Path-B Budget Escalation",
+      coreSessionCreation: "Core Session Creation",
       queuePressure: "Queue Pressure",
       diskUsage: "Disk Usage",
       evidenceCoverage: "Evidence Coverage",
@@ -115,7 +126,12 @@ const PAGE_COPY: Record<
       gbFree: "GB free",
       sampleCount: "Sample count",
       exposureCount: "Exposure count",
+      escalatedCount: "Escalated count",
+      createdCount: "Created count",
       outerReadonlyHitRate: "Outer readonly hit rate",
+      pathARatio: "Path-A",
+      pathBRatio: "Path-B",
+      pathCRatio: "Path-C",
       eventsScanned: "events_scanned",
       missing: "Missing",
       failed: "Failed",
@@ -153,6 +169,9 @@ const PAGE_COPY: Record<
       rolloutHitRatio: "分流命中率",
       failOpenUsage: "Fail-Open 使用率",
       readonlyWriteExposure: "只读写工具暴露率",
+      pathCRouteShare: "Path-C 路由占比",
+      pathBBudgetEscalation: "Path-B 预算升级率",
+      coreSessionCreation: "Core 会话新建率",
       queuePressure: "队列压力",
       diskUsage: "磁盘使用情况",
       evidenceCoverage: "证据覆盖率",
@@ -167,7 +186,12 @@ const PAGE_COPY: Record<
       gbFree: "GB 可用空间",
       sampleCount: "样本数",
       exposureCount: "暴露次数",
+      escalatedCount: "升级次数",
+      createdCount: "新建次数",
       outerReadonlyHitRate: "外层只读命中率",
+      pathARatio: "Path-A",
+      pathBRatio: "Path-B",
+      pathCRatio: "Path-C",
       eventsScanned: "events_scanned",
       missing: "缺失",
       failed: "失败",
@@ -317,6 +341,9 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
   const diskWatermark = asRecord(metrics.disk_watermark_ratio);
   const outerReadonlyHitRate = asRecord(metrics.outer_readonly_hit_rate);
   const readonlyWriteToolExposure = asRecord(metrics.readonly_write_tool_exposure_rate);
+  const chatRoutePathDistribution = asRecord(metrics.chat_route_path_distribution);
+  const pathBBudgetEscalation = asRecord(metrics.path_b_budget_escalation_rate);
+  const coreSessionCreation = asRecord(metrics.core_session_creation_rate);
   const sources = asRecord(payload?.data?.sources);
 
   const evidenceSummary = asRecord(evidencePayload?.data?.summary);
@@ -331,6 +358,16 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
   const readonlyWriteExposureValue = asNumber(readonlyWriteToolExposure.value);
   const readonlyWriteExposureSampleCount = asNumber(readonlyWriteToolExposure.sample_count);
   const readonlyWriteExposureCount = asNumber(readonlyWriteToolExposure.exposure_count);
+  const pathRatios = asRecord(chatRoutePathDistribution.path_ratios);
+  const pathARatio = asNumber(pathRatios["path-a"]);
+  const pathBRatio = asNumber(pathRatios["path-b"]);
+  const pathCRatio = asNumber(pathRatios["path-c"]);
+  const pathBBudgetEscalationValue = asNumber(pathBBudgetEscalation.value);
+  const pathBBudgetEscalatedCount = asNumber(pathBBudgetEscalation.escalated_count);
+  const pathBBudgetSampleCount = asNumber(pathBBudgetEscalation.sample_count);
+  const coreSessionCreationValue = asNumber(coreSessionCreation.value);
+  const coreSessionCreatedCount = asNumber(coreSessionCreation.created_count);
+  const coreSessionSampleCount = asNumber(coreSessionCreation.sample_count);
   const queuePending = asNumber(queueDepth.value);
   const queueCritical = asNumber(asRecord(queueDepth.thresholds).critical);
   const queueRatio = queuePending !== null && queueCritical && queueCritical > 0 ? queuePending / queueCritical : null;
@@ -439,6 +476,37 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
                 </span>
               }
               hint={`${copy.words.exposureCount}: ${toNumber(readonlyWriteExposureCount, lang)} · ${copy.words.outerReadonlyHitRate}: ${toPercent(outerReadonlyHitValue, lang)}`}
+            />
+            <MetricBar
+              label={copy.metricLabels.pathCRouteShare}
+              value={toPercent(pathCRatio, lang)}
+              ratio={pathCRatio}
+              tone={toTone(toState(chatRoutePathDistribution.status))}
+              hint={`${copy.words.pathARatio}: ${toPercent(pathARatio, lang)} · ${copy.words.pathBRatio}: ${toPercent(pathBRatio, lang)} · ${copy.words.pathCRatio}: ${toPercent(pathCRatio, lang)}`}
+            />
+            <MetricBar
+              label={copy.metricLabels.pathBBudgetEscalation}
+              value={toPercent(pathBBudgetEscalationValue, lang)}
+              ratio={pathBBudgetEscalationValue}
+              tone={toTone(toState(pathBBudgetEscalation.status))}
+              right={
+                <span>
+                  {copy.words.sampleCount} {toNumber(pathBBudgetSampleCount, lang)}
+                </span>
+              }
+              hint={`${copy.words.escalatedCount}: ${toNumber(pathBBudgetEscalatedCount, lang)}`}
+            />
+            <MetricBar
+              label={copy.metricLabels.coreSessionCreation}
+              value={toPercent(coreSessionCreationValue, lang)}
+              ratio={coreSessionCreationValue}
+              tone={toTone(toState(coreSessionCreation.status))}
+              right={
+                <span>
+                  {copy.words.sampleCount} {toNumber(coreSessionSampleCount, lang)}
+                </span>
+              }
+              hint={`${copy.words.createdCount}: ${toNumber(coreSessionCreatedCount, lang)}`}
             />
             <MetricBar
               label={copy.metricLabels.queuePressure}

@@ -23,6 +23,9 @@ export interface RuntimePostureMetrics {
   prompt_slice_count_by_layer?: Record<string, unknown>;
   outer_readonly_hit_rate?: Record<string, unknown>;
   readonly_write_tool_exposure_rate?: Record<string, unknown>;
+  chat_route_path_distribution?: Record<string, unknown>;
+  path_b_budget_escalation_rate?: Record<string, unknown>;
+  core_session_creation_rate?: Record<string, unknown>;
 }
 
 export interface RuntimePostureData {
