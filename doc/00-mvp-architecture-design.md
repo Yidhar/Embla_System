@@ -381,7 +381,7 @@ sequenceDiagram
         deactivate Adapter
         Adapter-->>SA: CliTaskResult{success, snapshots[]}
 
-        SA->>EL: emit(CliExecutionCompleted, {task_id, cli, duration})
+        SA->>EL: emit(TaskExecutionCompleted, {task_id, runtime_mode, executor, duration_seconds, success})
 
         Note over Timer,EL: === 阶段四：评审与验证 ===
 
