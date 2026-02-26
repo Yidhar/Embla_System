@@ -87,6 +87,8 @@ _CHAT_PATH_ROUTER = TaskRouterEngine()
 _CHAT_ROUTE_EVENT_STORE: Optional[EventStore] = None
 _CHAT_ROUTE_STATE_KEY = "_chat_route_state"
 _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT = 1
+_CHAT_ROUTE_GUARD_CACHE_TTL_MS = 5_000
+_CHAT_ROUTE_GUARD_CACHE: Dict[str, Any] = {"expires_at_ms": 0, "summary": {}}
 _CHAT_ROUTE_HIGH_RISK_MARKERS = (
     "deploy",
     "rollback",
@@ -218,13 +220,179 @@ def _ensure_chat_route_state(session_id: str) -> Dict[str, Any]:
     return state
 
 
+def _sanitize_route_quality_reason_codes(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    cleaned: List[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text and text not in cleaned:
+            cleaned.append(text)
+    return cleaned
+
+
+def _merge_route_quality_reason_codes(existing: Any, extra: List[str]) -> List[str]:
+    merged = _sanitize_route_quality_reason_codes(existing)
+    for code in extra:
+        text = str(code or "").strip()
+        if text and text not in merged:
+            merged.append(text)
+    return merged
+
+
+def _build_chat_route_quality_guard_summary() -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "status": "unknown",
+        "reason_codes": ["ROUTE_QUALITY_SIGNAL_UNKNOWN"],
+        "reason_text": "Route-quality signals are insufficient.",
+        "trend": {},
+    }
+    try:
+        from scripts.export_slo_snapshot import build_snapshot
+
+        repo_root = _ops_repo_root()
+        events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+        route_quality_trend = _ops_build_route_quality_trend(events_file, window_size=20, max_windows=6)
+        snapshot = build_snapshot(repo_root=repo_root, events_limit=4000)
+        snapshot_metrics = snapshot.get("metrics") if isinstance(snapshot.get("metrics"), dict) else {}
+        summary = _ops_build_route_quality_summary(snapshot_metrics, trend=route_quality_trend)
+    except Exception as exc:
+        logger.debug(f"构建 chat route quality guard summary 失败，降级 unknown: {exc}")
+
+    summary["evaluated_at"] = _ops_utc_iso_now()
+    summary["cache_ttl_ms"] = int(_CHAT_ROUTE_GUARD_CACHE_TTL_MS)
+    summary["reason_codes"] = _sanitize_route_quality_reason_codes(summary.get("reason_codes"))
+    if not summary["reason_codes"]:
+        summary["reason_codes"] = ["ROUTE_QUALITY_SIGNAL_UNKNOWN"]
+    summary["status"] = _ops_status_to_severity(str(summary.get("status") or "unknown"))
+    summary["reason_text"] = str(summary.get("reason_text") or "")
+    trend = summary.get("trend") if isinstance(summary.get("trend"), dict) else {}
+    summary["trend"] = {
+        "status": _ops_status_to_severity(str(trend.get("status") or "unknown")),
+        "direction": str(trend.get("direction") or "unknown"),
+        "sample_count": int(trend.get("sample_count") or 0),
+    }
+    return summary
+
+
+def _get_chat_route_quality_guard_summary(*, force_refresh: bool = False) -> Dict[str, Any]:
+    now_ms = int(time.time() * 1000)
+    cached = _CHAT_ROUTE_GUARD_CACHE
+    expires_at = int(cached.get("expires_at_ms") or 0)
+    cached_summary = cached.get("summary") if isinstance(cached.get("summary"), dict) else {}
+    if not force_refresh and now_ms < expires_at and cached_summary:
+        return dict(cached_summary)
+
+    summary = _build_chat_route_quality_guard_summary()
+    _CHAT_ROUTE_GUARD_CACHE["expires_at_ms"] = now_ms + int(_CHAT_ROUTE_GUARD_CACHE_TTL_MS)
+    _CHAT_ROUTE_GUARD_CACHE["summary"] = dict(summary)
+    return summary
+
+
+def _force_route_to_core_execution(route_meta: Dict[str, Any], *, reason: str) -> Dict[str, Any]:
+    decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
+    effective_decision = dict(decision)
+    effective_decision["delegation_intent"] = "core_execution"
+    prompt_profile = str(effective_decision.get("prompt_profile") or "").strip()
+    if not prompt_profile.startswith("core_exec"):
+        effective_decision["prompt_profile"] = "core_exec_general"
+    injection_mode = str(effective_decision.get("injection_mode") or "").strip().lower()
+    if injection_mode in {"", "minimal"}:
+        effective_decision["injection_mode"] = "normal"
+
+    route_meta["path"] = "path-c"
+    route_meta["outer_readonly_hit"] = False
+    route_meta["core_escalation"] = True
+    route_meta["router_decision"] = effective_decision
+    route_meta["route_forced_to_core_reason"] = str(reason or "")
+    return route_meta
+
+
+def _apply_chat_route_quality_guard(route_meta: Dict[str, Any]) -> Dict[str, Any]:
+    summary = _get_chat_route_quality_guard_summary()
+    guard_status = _ops_status_to_severity(str(summary.get("status") or "unknown"))
+    reason_codes = _sanitize_route_quality_reason_codes(summary.get("reason_codes"))
+    reason_text = str(summary.get("reason_text") or "")
+    trend = summary.get("trend") if isinstance(summary.get("trend"), dict) else {}
+    guard_path_before = str(route_meta.get("path") or "path-c")
+
+    route_meta["route_quality_guard_status"] = guard_status
+    route_meta["route_quality_guard_reason_codes"] = reason_codes
+    route_meta["route_quality_guard_reason"] = reason_text
+    route_meta["route_quality_guard_applied"] = False
+    route_meta["route_quality_guard_action"] = "none"
+    route_meta["route_quality_guard_path_before"] = guard_path_before
+    route_meta["route_quality_guard_path_after"] = guard_path_before
+    route_meta["route_quality_guard_evaluated_at"] = str(summary.get("evaluated_at") or "")
+    route_meta["route_quality_guard_trend_status"] = _ops_status_to_severity(str(trend.get("status") or "unknown"))
+    route_meta["route_quality_guard_trend_direction"] = str(trend.get("direction") or "unknown")
+    route_meta["route_quality_guard_trend_sample_count"] = int(trend.get("sample_count") or 0)
+
+    if guard_status == "warning" and guard_path_before == "path-b":
+        route_meta["path_b_clarify_limit_override"] = 0
+        route_meta["route_quality_guard_applied"] = True
+        route_meta["route_quality_guard_action"] = "tighten_path_b_clarify_limit_zero"
+        route_meta["route_quality_guard_reason"] = "route_quality_warning_tighten_path_b_budget"
+        route_meta["route_quality_guard_reason_codes"] = _merge_route_quality_reason_codes(
+            reason_codes,
+            ["ROUTE_QUALITY_WARNING_PATH_B_LIMIT_ZERO"],
+        )
+    elif guard_status == "critical":
+        risk_level = str(route_meta.get("risk_level") or "").strip().lower()
+        path = str(route_meta.get("path") or "path-c")
+        reason_code_set = set(reason_codes)
+        suspicious_path_a = path == "path-a" and (
+            risk_level in {"write_repo", "deploy"}
+            or "READONLY_WRITE_EXPOSURE_CRITICAL" in reason_code_set
+            or "ROUTE_QUALITY_TREND_CRITICAL" in reason_code_set
+        )
+        high_risk_non_core = path in {"path-a", "path-b"} and risk_level in {"write_repo", "deploy"}
+        if suspicious_path_a or high_risk_non_core:
+            route_meta = _force_route_to_core_execution(
+                route_meta,
+                reason="route_quality_guard_critical_auto_escalate_core",
+            )
+            route_meta["route_quality_guard_applied"] = True
+            route_meta["route_quality_guard_action"] = "force_core_path"
+            route_meta["route_quality_guard_reason"] = "route_quality_critical_force_core"
+            route_meta["route_quality_guard_reason_codes"] = _merge_route_quality_reason_codes(
+                reason_codes,
+                [
+                    "ROUTE_QUALITY_CRITICAL_FORCE_CORE",
+                    "ROUTE_QUALITY_CRITICAL_HIGH_RISK_NON_CORE" if high_risk_non_core else "",
+                    "ROUTE_QUALITY_CRITICAL_SUSPICIOUS_PATH_A" if suspicious_path_a else "",
+                ],
+            )
+        elif path == "path-b":
+            route_meta["path_b_clarify_limit_override"] = 0
+            route_meta["route_quality_guard_applied"] = True
+            route_meta["route_quality_guard_action"] = "force_path_b_zero_budget"
+            route_meta["route_quality_guard_reason"] = "route_quality_critical_force_path_b_zero_budget"
+            route_meta["route_quality_guard_reason_codes"] = _merge_route_quality_reason_codes(
+                reason_codes,
+                ["ROUTE_QUALITY_CRITICAL_PATH_B_LIMIT_ZERO"],
+            )
+
+    route_meta["route_quality_guard_path_after"] = str(route_meta.get("path") or guard_path_before)
+    return route_meta
+
+
 def _apply_path_b_clarify_budget(route_meta: Dict[str, Any], *, session_id: str) -> Dict[str, Any]:
     state = _ensure_chat_route_state(session_id)
     path = str(route_meta.get("path") or "path-c")
     clarify_turns = max(0, int(state.get("path_b_clarify_turns", 0)))
+    limit_override: Optional[int] = None
+    if route_meta.get("path_b_clarify_limit_override") is not None:
+        try:
+            limit_override = max(0, int(route_meta.get("path_b_clarify_limit_override")))
+        except Exception:
+            limit_override = 0
+    clarify_limit = limit_override if limit_override is not None else _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT
 
-    route_meta["path_b_clarify_limit"] = _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT
+    route_meta["path_b_clarify_limit"] = clarify_limit
+    route_meta["path_b_clarify_limit_override"] = limit_override
     route_meta["path_b_budget_escalated"] = False
+    route_meta["path_b_budget_reason"] = ""
     route_meta["path_b_clarify_turns"] = clarify_turns
 
     if path != "path-b":
@@ -232,21 +400,13 @@ def _apply_path_b_clarify_budget(route_meta: Dict[str, Any], *, session_id: str)
         route_meta["path_b_clarify_turns"] = 0
         return route_meta
 
-    if clarify_turns >= _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT:
-        decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
-        effective_decision = dict(decision)
-        effective_decision["delegation_intent"] = "core_execution"
-        effective_decision["prompt_profile"] = "core_exec_general"
-        injection_mode = str(effective_decision.get("injection_mode") or "").strip().lower()
-        if injection_mode in {"", "minimal"}:
-            effective_decision["injection_mode"] = "normal"
-
-        route_meta["path"] = "path-c"
-        route_meta["outer_readonly_hit"] = False
-        route_meta["core_escalation"] = True
-        route_meta["router_decision"] = effective_decision
+    if clarify_turns >= clarify_limit:
+        budget_reason = "clarify_budget_exceeded_auto_escalate_core"
+        if limit_override is not None:
+            budget_reason = "clarify_budget_guard_override_auto_escalate_core"
+        route_meta = _force_route_to_core_execution(route_meta, reason=budget_reason)
         route_meta["path_b_budget_escalated"] = True
-        route_meta["path_b_budget_reason"] = "clarify_budget_exceeded_auto_escalate_core"
+        route_meta["path_b_budget_reason"] = budget_reason
         route_meta["path_b_clarify_turns"] = clarify_turns
         state["path_b_clarify_turns"] = 0
         return route_meta
@@ -298,6 +458,12 @@ def _build_chat_route_prompt_hints(route_meta: Dict[str, Any]) -> str:
         f"injection_mode={str(decision.get('injection_mode') or '')}",
         f"delegation_intent={str(decision.get('delegation_intent') or '')}",
     ]
+    if bool(route_meta.get("route_quality_guard_applied")):
+        lines.append(
+            "route_quality_guard="
+            f"{_ops_status_to_severity(str(route_meta.get('route_quality_guard_status') or 'unknown'))}:"
+            f"{str(route_meta.get('route_quality_guard_action') or 'none')}"
+        )
 
     if path == "path-a":
         lines.append("Route policy: Outer Direct Read-Only. Do not call tools. Reply directly with analysis.")
@@ -432,8 +598,24 @@ def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[s
         "model_id": "",
         "path_b_clarify_turns": int(route_meta.get("path_b_clarify_turns") or 0),
         "path_b_clarify_limit": int(route_meta.get("path_b_clarify_limit") or _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT),
+        "path_b_clarify_limit_override": route_meta.get("path_b_clarify_limit_override"),
         "path_b_budget_escalated": bool(route_meta.get("path_b_budget_escalated")),
         "path_b_budget_reason": str(route_meta.get("path_b_budget_reason") or ""),
+        "route_quality_guard_status": _ops_status_to_severity(str(route_meta.get("route_quality_guard_status") or "unknown")),
+        "route_quality_guard_applied": bool(route_meta.get("route_quality_guard_applied")),
+        "route_quality_guard_action": str(route_meta.get("route_quality_guard_action") or ""),
+        "route_quality_guard_reason": str(route_meta.get("route_quality_guard_reason") or ""),
+        "route_quality_guard_reason_codes": _sanitize_route_quality_reason_codes(
+            route_meta.get("route_quality_guard_reason_codes")
+        ),
+        "route_quality_guard_path_before": str(route_meta.get("route_quality_guard_path_before") or ""),
+        "route_quality_guard_path_after": str(route_meta.get("route_quality_guard_path_after") or ""),
+        "route_quality_guard_evaluated_at": str(route_meta.get("route_quality_guard_evaluated_at") or ""),
+        "route_quality_guard_trend_status": _ops_status_to_severity(
+            str(route_meta.get("route_quality_guard_trend_status") or "unknown")
+        ),
+        "route_quality_guard_trend_direction": str(route_meta.get("route_quality_guard_trend_direction") or "unknown"),
+        "route_quality_guard_trend_sample_count": int(route_meta.get("route_quality_guard_trend_sample_count") or 0),
         "outer_session_id": str(route_meta.get("outer_session_id") or ""),
         "core_session_id": str(route_meta.get("core_session_id") or ""),
         "execution_session_id": str(route_meta.get("execution_session_id") or ""),
@@ -452,6 +634,45 @@ def _emit_chat_route_prompt_event(route_meta: Dict[str, Any], *, session_id: str
     payload["trace_id"] = str(decision.get("trace_id") or "")
     payload["workflow_id"] = str(decision.get("task_id") or "")
     store.emit("PromptInjectionComposed", payload, source="apiserver.chat_stream")
+
+
+def _emit_chat_route_guard_event(route_meta: Dict[str, Any], *, session_id: str) -> None:
+    if not bool(route_meta.get("route_quality_guard_applied")):
+        return
+
+    store = _get_chat_route_event_store()
+    if store is None:
+        return
+
+    guard_status = _ops_status_to_severity(str(route_meta.get("route_quality_guard_status") or "unknown"))
+    if guard_status == "critical":
+        event_type = "RouteQualityGuardEscalatedCritical"
+    elif guard_status == "warning":
+        event_type = "RouteQualityGuardEscalatedWarning"
+    else:
+        return
+
+    decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
+    payload = {
+        "session_id": str(session_id or ""),
+        "trace_id": str(decision.get("trace_id") or ""),
+        "workflow_id": str(decision.get("task_id") or ""),
+        "path_before": str(route_meta.get("route_quality_guard_path_before") or ""),
+        "path_after": str(route_meta.get("route_quality_guard_path_after") or route_meta.get("path") or ""),
+        "final_path": str(route_meta.get("path") or ""),
+        "risk_level": str(route_meta.get("risk_level") or ""),
+        "route_quality_guard_status": guard_status,
+        "route_quality_guard_action": str(route_meta.get("route_quality_guard_action") or ""),
+        "route_quality_guard_reason": str(route_meta.get("route_quality_guard_reason") or ""),
+        "route_quality_guard_reason_codes": _sanitize_route_quality_reason_codes(
+            route_meta.get("route_quality_guard_reason_codes")
+        ),
+        "route_quality_guard_evaluated_at": str(route_meta.get("route_quality_guard_evaluated_at") or ""),
+        "outer_session_id": str(route_meta.get("outer_session_id") or ""),
+        "core_session_id": str(route_meta.get("core_session_id") or ""),
+        "execution_session_id": str(route_meta.get("execution_session_id") or ""),
+    }
+    store.emit(event_type, payload, source="apiserver.chat_stream")
 
 
 def _read_chat_route_event_rows(*, limit: int = 2000) -> List[Dict[str, Any]]:
@@ -514,6 +735,18 @@ def _collect_chat_route_bridge_events(*, session_ids: List[str], limit: int = 20
                 "path_b_budget_reason": str(payload.get("path_b_budget_reason") or ""),
                 "path_b_clarify_turns": int(payload.get("path_b_clarify_turns") or 0),
                 "path_b_clarify_limit": int(payload.get("path_b_clarify_limit") or _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT),
+                "path_b_clarify_limit_override": payload.get("path_b_clarify_limit_override"),
+                "route_quality_guard_status": _ops_status_to_severity(
+                    str(payload.get("route_quality_guard_status") or "unknown")
+                ),
+                "route_quality_guard_applied": bool(payload.get("route_quality_guard_applied")),
+                "route_quality_guard_action": str(payload.get("route_quality_guard_action") or ""),
+                "route_quality_guard_reason": str(payload.get("route_quality_guard_reason") or ""),
+                "route_quality_guard_reason_codes": _sanitize_route_quality_reason_codes(
+                    payload.get("route_quality_guard_reason_codes")
+                ),
+                "route_quality_guard_path_before": str(payload.get("route_quality_guard_path_before") or ""),
+                "route_quality_guard_path_after": str(payload.get("route_quality_guard_path_after") or ""),
                 "core_session_created": bool(payload.get("core_session_created")),
                 "source": str(row.get("source") or ""),
             }
@@ -1261,12 +1494,14 @@ async def chat_stream(request: ChatRequest):
             yield f"data: session_id: {session_id}\n\n"
 
             route_meta = _resolve_chat_stream_route(request.message, session_id=session_id)
+            route_meta = _apply_chat_route_quality_guard(route_meta)
             route_meta = _apply_path_b_clarify_budget(route_meta, session_id=session_id)
             route_meta = _apply_outer_core_session_bridge(route_meta, outer_session_id=session_id)
             route_decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
             path = str(route_meta.get("path") or "path-c")
             execution_session_id = str(route_meta.get("execution_session_id") or session_id)
             _emit_chat_route_prompt_event(route_meta, session_id=session_id)
+            _emit_chat_route_guard_event(route_meta, session_id=session_id)
             yield _format_sse_payload_chunk(
                 {
                     "type": "route_decision",
@@ -1279,8 +1514,20 @@ async def chat_stream(request: ChatRequest):
                     "delegation_intent": route_decision.get("delegation_intent", ""),
                     "path_b_clarify_turns": int(route_meta.get("path_b_clarify_turns") or 0),
                     "path_b_clarify_limit": int(route_meta.get("path_b_clarify_limit") or _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT),
+                    "path_b_clarify_limit_override": route_meta.get("path_b_clarify_limit_override"),
                     "path_b_budget_escalated": bool(route_meta.get("path_b_budget_escalated")),
                     "path_b_budget_reason": str(route_meta.get("path_b_budget_reason") or ""),
+                    "route_quality_guard_status": _ops_status_to_severity(
+                        str(route_meta.get("route_quality_guard_status") or "unknown")
+                    ),
+                    "route_quality_guard_applied": bool(route_meta.get("route_quality_guard_applied")),
+                    "route_quality_guard_action": str(route_meta.get("route_quality_guard_action") or ""),
+                    "route_quality_guard_reason": str(route_meta.get("route_quality_guard_reason") or ""),
+                    "route_quality_guard_reason_codes": _sanitize_route_quality_reason_codes(
+                        route_meta.get("route_quality_guard_reason_codes")
+                    ),
+                    "route_quality_guard_path_before": str(route_meta.get("route_quality_guard_path_before") or ""),
+                    "route_quality_guard_path_after": str(route_meta.get("route_quality_guard_path_after") or ""),
                     "outer_session_id": str(route_meta.get("outer_session_id") or ""),
                     "core_session_id": str(route_meta.get("core_session_id") or ""),
                     "execution_session_id": execution_session_id,
@@ -1288,12 +1535,14 @@ async def chat_stream(request: ChatRequest):
                 }
             )
             logger.info(
-                "[API Server] chat route decided outer_session=%s execution_session=%s path=%s intent=%s profile=%s",
+                "[API Server] chat route decided outer_session=%s execution_session=%s path=%s intent=%s profile=%s guard=%s action=%s",
                 session_id,
                 execution_session_id,
                 path,
                 route_decision.get("delegation_intent", ""),
                 route_decision.get("prompt_profile", ""),
+                route_meta.get("route_quality_guard_status", "unknown"),
+                route_meta.get("route_quality_guard_action", ""),
             )
 
             # 构建系统提示词（仅 Path-C 注入工具指令，Path-A/B 保持外层只读）
@@ -1800,9 +2049,14 @@ def _ops_route_event_status(payload: Dict[str, Any]) -> str:
     readonly_exposed = bool(payload.get("readonly_write_tool_exposed"))
     readonly_selected_count = _ops_safe_int(payload.get("readonly_write_tool_selected_count"), default=0)
     readonly_exposure_hit = outer_readonly and (readonly_exposed or readonly_selected_count > 0)
+    guard_status = _ops_status_to_severity(str(payload.get("route_quality_guard_status") or "unknown"))
     if readonly_exposure_hit:
         return "critical"
+    if guard_status == "critical":
+        return "critical"
     if bool(payload.get("path_b_budget_escalated")):
+        return "warning"
+    if guard_status == "warning" and bool(payload.get("route_quality_guard_applied")):
         return "warning"
     if bool(payload.get("core_session_created")):
         return "warning"
@@ -2059,8 +2313,10 @@ _OPS_INCIDENT_EVENT_SEVERITY: Dict[str, str] = {
     "IncidentOpened": "critical",
     "SubAgentRuntimeAutoDegraded": "critical",
     "LeaseLost": "critical",
+    "RouteQualityGuardEscalatedCritical": "critical",
     "SubAgentRuntimeFailOpenBlocked": "warning",
     "SubAgentRuntimeFailOpen": "warning",
+    "RouteQualityGuardEscalatedWarning": "warning",
 }
 
 
