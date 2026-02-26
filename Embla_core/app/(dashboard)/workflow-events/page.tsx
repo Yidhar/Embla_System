@@ -42,6 +42,9 @@ const PAGE_COPY: Record<
     metricLabels: {
       readonlyWriteExposure: string;
       outerReadonlyHitRate: string;
+      pathCRouteShare: string;
+      pathBBudgetEscalation: string;
+      coreSessionCreation: string;
     };
     columns: {
       time: string;
@@ -62,6 +65,11 @@ const PAGE_COPY: Record<
       sampleCount: string;
       exposureCount: string;
       hitCount: string;
+      escalatedCount: string;
+      createdCount: string;
+      pathARatio: string;
+      pathBRatio: string;
+      pathCRatio: string;
     };
   }
 > = {
@@ -89,6 +97,9 @@ const PAGE_COPY: Record<
     metricLabels: {
       readonlyWriteExposure: "Readonly Write Exposure",
       outerReadonlyHitRate: "Outer Readonly Hit Rate",
+      pathCRouteShare: "Path-C Route Share",
+      pathBBudgetEscalation: "Path-B Budget Escalation",
+      coreSessionCreation: "Core Session Creation",
     },
     columns: {
       time: "Time",
@@ -109,6 +120,11 @@ const PAGE_COPY: Record<
       sampleCount: "Sample count",
       exposureCount: "Exposure count",
       hitCount: "Hit count",
+      escalatedCount: "Escalated count",
+      createdCount: "Created count",
+      pathARatio: "Path-A",
+      pathBRatio: "Path-B",
+      pathCRatio: "Path-C",
     },
   },
   "zh-CN": {
@@ -135,6 +151,9 @@ const PAGE_COPY: Record<
     metricLabels: {
       readonlyWriteExposure: "只读写工具暴露率",
       outerReadonlyHitRate: "外层只读命中率",
+      pathCRouteShare: "Path-C 路由占比",
+      pathBBudgetEscalation: "Path-B 预算升级率",
+      coreSessionCreation: "Core 会话新建率",
     },
     columns: {
       time: "时间",
@@ -155,6 +174,11 @@ const PAGE_COPY: Record<
       sampleCount: "样本数",
       exposureCount: "暴露次数",
       hitCount: "命中次数",
+      escalatedCount: "升级次数",
+      createdCount: "新建次数",
+      pathARatio: "Path-A",
+      pathBRatio: "Path-B",
+      pathCRatio: "Path-C",
     },
   },
 };
@@ -237,9 +261,24 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
     typeof runtimeMetrics.outer_readonly_hit_rate === "object" && runtimeMetrics.outer_readonly_hit_rate
       ? runtimeMetrics.outer_readonly_hit_rate
       : {};
+  const routeDistributionMetric =
+    typeof runtimeMetrics.chat_route_path_distribution === "object" && runtimeMetrics.chat_route_path_distribution
+      ? runtimeMetrics.chat_route_path_distribution
+      : {};
+  const pathBBudgetEscalationMetric =
+    typeof runtimeMetrics.path_b_budget_escalation_rate === "object" && runtimeMetrics.path_b_budget_escalation_rate
+      ? runtimeMetrics.path_b_budget_escalation_rate
+      : {};
+  const coreSessionCreationMetric =
+    typeof runtimeMetrics.core_session_creation_rate === "object" && runtimeMetrics.core_session_creation_rate
+      ? runtimeMetrics.core_session_creation_rate
+      : {};
   const incidentPromptSafety = asRecord(incidentsSummary?.runtime_prompt_safety);
   const incidentReadonlyExposure = asRecord(incidentPromptSafety.readonly_write_tool_exposure_rate);
   const incidentOuterReadonlyHit = asRecord(incidentPromptSafety.outer_readonly_hit_rate);
+  const incidentRouteDistribution = asRecord(incidentPromptSafety.chat_route_path_distribution);
+  const incidentPathBBudgetEscalation = asRecord(incidentPromptSafety.path_b_budget_escalation_rate);
+  const incidentCoreSessionCreation = asRecord(incidentPromptSafety.core_session_creation_rate);
 
   const outboxPending = summary?.outbox_pending;
   const oldestPendingAge = summary?.oldest_pending_age_seconds;
@@ -248,6 +287,11 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
   const incidentsState = toState(incidentsPayload?.severity || "unknown");
   const readonlyExposureState = toState(String((readonlyExposureMetric as { status?: unknown }).status || "unknown"));
   const outerReadonlyState = toState(String((outerReadonlyMetric as { status?: unknown }).status || "unknown"));
+  const routeDistributionState = toState(String((routeDistributionMetric as { status?: unknown }).status || "unknown"));
+  const pathBBudgetEscalationState = toState(
+    String((pathBBudgetEscalationMetric as { status?: unknown }).status || "unknown"),
+  );
+  const coreSessionCreationState = toState(String((coreSessionCreationMetric as { status?: unknown }).status || "unknown"));
   const latestIncidentText = formatIsoDateTime(incidentsSummary?.latest_incident_at, lang, "--");
 
   return (
@@ -419,6 +463,42 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
                   tone={toTone(outerReadonlyState)}
                   hint={`${copy.words.hitCount}: ${toNumber((outerReadonlyMetric as { hit_count?: unknown }).hit_count, lang)}`}
                 />
+                <MetricBar
+                  label={copy.metricLabels.pathCRouteShare}
+                  value={toPercent(asRecord((routeDistributionMetric as { path_ratios?: unknown }).path_ratios)["path-c"], lang)}
+                  ratio={toRatio(asRecord((routeDistributionMetric as { path_ratios?: unknown }).path_ratios)["path-c"])}
+                  tone={toTone(routeDistributionState)}
+                  right={
+                    <span>
+                      {copy.words.sampleCount} {toNumber((routeDistributionMetric as { sample_count?: unknown }).sample_count, lang)}
+                    </span>
+                  }
+                  hint={`${copy.words.pathARatio}: ${toPercent(asRecord((routeDistributionMetric as { path_ratios?: unknown }).path_ratios)["path-a"], lang)} · ${copy.words.pathBRatio}: ${toPercent(asRecord((routeDistributionMetric as { path_ratios?: unknown }).path_ratios)["path-b"], lang)} · ${copy.words.pathCRatio}: ${toPercent(asRecord((routeDistributionMetric as { path_ratios?: unknown }).path_ratios)["path-c"], lang)}`}
+                />
+                <MetricBar
+                  label={copy.metricLabels.pathBBudgetEscalation}
+                  value={toPercent((pathBBudgetEscalationMetric as { value?: unknown }).value, lang)}
+                  ratio={toRatio((pathBBudgetEscalationMetric as { value?: unknown }).value)}
+                  tone={toTone(pathBBudgetEscalationState)}
+                  right={
+                    <span>
+                      {copy.words.sampleCount} {toNumber((pathBBudgetEscalationMetric as { sample_count?: unknown }).sample_count, lang)}
+                    </span>
+                  }
+                  hint={`${copy.words.escalatedCount}: ${toNumber((pathBBudgetEscalationMetric as { escalated_count?: unknown }).escalated_count, lang)}`}
+                />
+                <MetricBar
+                  label={copy.metricLabels.coreSessionCreation}
+                  value={toPercent((coreSessionCreationMetric as { value?: unknown }).value, lang)}
+                  ratio={toRatio((coreSessionCreationMetric as { value?: unknown }).value)}
+                  tone={toTone(coreSessionCreationState)}
+                  right={
+                    <span>
+                      {copy.words.sampleCount} {toNumber((coreSessionCreationMetric as { sample_count?: unknown }).sample_count, lang)}
+                    </span>
+                  }
+                  hint={`${copy.words.createdCount}: ${toNumber((coreSessionCreationMetric as { created_count?: unknown }).created_count, lang)}`}
+                />
               </div>
             </div>
             <div className="rounded-xl bg-white/70 p-3">
@@ -456,6 +536,42 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
                   ratio={toRatio(incidentOuterReadonlyHit.value)}
                   tone={toTone(toState(String(incidentOuterReadonlyHit.status || "unknown")))}
                   hint={`${copy.words.hitCount}: ${toNumber(incidentOuterReadonlyHit.hit_count, lang)}`}
+                />
+                <MetricBar
+                  label={copy.metricLabels.pathCRouteShare}
+                  value={toPercent(asRecord(incidentRouteDistribution.path_ratios)["path-c"], lang)}
+                  ratio={toRatio(asRecord(incidentRouteDistribution.path_ratios)["path-c"])}
+                  tone={toTone(toState(String(incidentRouteDistribution.status || "unknown")))}
+                  right={
+                    <span>
+                      {copy.words.sampleCount} {toNumber(incidentRouteDistribution.sample_count, lang)}
+                    </span>
+                  }
+                  hint={`${copy.words.pathARatio}: ${toPercent(asRecord(incidentRouteDistribution.path_ratios)["path-a"], lang)} · ${copy.words.pathBRatio}: ${toPercent(asRecord(incidentRouteDistribution.path_ratios)["path-b"], lang)} · ${copy.words.pathCRatio}: ${toPercent(asRecord(incidentRouteDistribution.path_ratios)["path-c"], lang)}`}
+                />
+                <MetricBar
+                  label={copy.metricLabels.pathBBudgetEscalation}
+                  value={toPercent(incidentPathBBudgetEscalation.value, lang)}
+                  ratio={toRatio(incidentPathBBudgetEscalation.value)}
+                  tone={toTone(toState(String(incidentPathBBudgetEscalation.status || "unknown")))}
+                  right={
+                    <span>
+                      {copy.words.sampleCount} {toNumber(incidentPathBBudgetEscalation.sample_count, lang)}
+                    </span>
+                  }
+                  hint={`${copy.words.escalatedCount}: ${toNumber(incidentPathBBudgetEscalation.escalated_count, lang)}`}
+                />
+                <MetricBar
+                  label={copy.metricLabels.coreSessionCreation}
+                  value={toPercent(incidentCoreSessionCreation.value, lang)}
+                  ratio={toRatio(incidentCoreSessionCreation.value)}
+                  tone={toTone(toState(String(incidentCoreSessionCreation.status || "unknown")))}
+                  right={
+                    <span>
+                      {copy.words.sampleCount} {toNumber(incidentCoreSessionCreation.sample_count, lang)}
+                    </span>
+                  }
+                  hint={`${copy.words.createdCount}: ${toNumber(incidentCoreSessionCreation.created_count, lang)}`}
                 />
               </div>
             </div>
