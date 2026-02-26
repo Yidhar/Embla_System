@@ -85,6 +85,8 @@ def _save_conversation_and_logs(session_id: str, user_message: str, assistant_re
 
 _CHAT_PATH_ROUTER = TaskRouterEngine()
 _CHAT_ROUTE_EVENT_STORE: Optional[EventStore] = None
+_CHAT_ROUTE_STATE_KEY = "_chat_route_state"
+_CHAT_ROUTE_PATH_B_CLARIFY_LIMIT = 1
 _CHAT_ROUTE_HIGH_RISK_MARKERS = (
     "deploy",
     "rollback",
@@ -199,6 +201,59 @@ def _resolve_chat_stream_route(message: str, *, session_id: str) -> Dict[str, An
         "core_escalation": path == "path-c",
         "router_decision": decision.to_dict(),
     }
+
+
+def _ensure_chat_route_state(session_id: str) -> Dict[str, Any]:
+    session = message_manager.get_session(session_id)
+    if not isinstance(session, dict):
+        return {"path_b_clarify_turns": 0}
+    state = session.get(_CHAT_ROUTE_STATE_KEY)
+    if not isinstance(state, dict):
+        state = {"path_b_clarify_turns": 0}
+        session[_CHAT_ROUTE_STATE_KEY] = state
+    try:
+        state["path_b_clarify_turns"] = max(0, int(state.get("path_b_clarify_turns", 0)))
+    except Exception:
+        state["path_b_clarify_turns"] = 0
+    return state
+
+
+def _apply_path_b_clarify_budget(route_meta: Dict[str, Any], *, session_id: str) -> Dict[str, Any]:
+    state = _ensure_chat_route_state(session_id)
+    path = str(route_meta.get("path") or "path-c")
+    clarify_turns = max(0, int(state.get("path_b_clarify_turns", 0)))
+
+    route_meta["path_b_clarify_limit"] = _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT
+    route_meta["path_b_budget_escalated"] = False
+    route_meta["path_b_clarify_turns"] = clarify_turns
+
+    if path != "path-b":
+        state["path_b_clarify_turns"] = 0
+        route_meta["path_b_clarify_turns"] = 0
+        return route_meta
+
+    if clarify_turns >= _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT:
+        decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
+        effective_decision = dict(decision)
+        effective_decision["delegation_intent"] = "core_execution"
+        effective_decision["prompt_profile"] = "core_exec_general"
+        injection_mode = str(effective_decision.get("injection_mode") or "").strip().lower()
+        if injection_mode in {"", "minimal"}:
+            effective_decision["injection_mode"] = "normal"
+
+        route_meta["path"] = "path-c"
+        route_meta["outer_readonly_hit"] = False
+        route_meta["core_escalation"] = True
+        route_meta["router_decision"] = effective_decision
+        route_meta["path_b_budget_escalated"] = True
+        route_meta["path_b_budget_reason"] = "clarify_budget_exceeded_auto_escalate_core"
+        route_meta["path_b_clarify_turns"] = clarify_turns
+        state["path_b_clarify_turns"] = 0
+        return route_meta
+
+    state["path_b_clarify_turns"] = clarify_turns + 1
+    route_meta["path_b_clarify_turns"] = int(state["path_b_clarify_turns"])
+    return route_meta
 
 
 def _build_chat_route_prompt_hints(route_meta: Dict[str, Any]) -> str:
@@ -343,6 +398,10 @@ def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[s
         "token_budget_after": 0,
         "model_tier": str(decision.get("selected_model_tier") or ""),
         "model_id": "",
+        "path_b_clarify_turns": int(route_meta.get("path_b_clarify_turns") or 0),
+        "path_b_clarify_limit": int(route_meta.get("path_b_clarify_limit") or _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT),
+        "path_b_budget_escalated": bool(route_meta.get("path_b_budget_escalated")),
+        "path_b_budget_reason": str(route_meta.get("path_b_budget_reason") or ""),
     }
 
 
@@ -1066,6 +1125,7 @@ async def chat_stream(request: ChatRequest):
             yield f"data: session_id: {session_id}\n\n"
 
             route_meta = _resolve_chat_stream_route(request.message, session_id=session_id)
+            route_meta = _apply_path_b_clarify_budget(route_meta, session_id=session_id)
             route_decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
             path = str(route_meta.get("path") or "path-c")
             _emit_chat_route_prompt_event(route_meta, session_id=session_id)
@@ -1079,6 +1139,10 @@ async def chat_stream(request: ChatRequest):
                     "prompt_profile": route_decision.get("prompt_profile", ""),
                     "injection_mode": route_decision.get("injection_mode", ""),
                     "delegation_intent": route_decision.get("delegation_intent", ""),
+                    "path_b_clarify_turns": int(route_meta.get("path_b_clarify_turns") or 0),
+                    "path_b_clarify_limit": int(route_meta.get("path_b_clarify_limit") or _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT),
+                    "path_b_budget_escalated": bool(route_meta.get("path_b_budget_escalated")),
+                    "path_b_budget_reason": str(route_meta.get("path_b_budget_reason") or ""),
                 }
             )
             logger.info(

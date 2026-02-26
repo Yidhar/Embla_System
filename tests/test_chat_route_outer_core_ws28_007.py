@@ -74,6 +74,76 @@ def test_chat_route_prompt_event_payload_keeps_outer_core_observability_fields()
     assert core_payload["core_escalation"] is True
 
 
+def test_path_b_clarify_budget_first_round_keeps_path_b(monkeypatch) -> None:
+    session = {"messages": []}
+    monkeypatch.setattr(api_server.message_manager, "get_session", lambda _sid: session)
+
+    route_meta = {
+        "path": "path-b",
+        "outer_readonly_hit": False,
+        "core_escalation": False,
+        "router_decision": {
+            "delegation_intent": "general_assistance",
+            "prompt_profile": "outer_general",
+            "injection_mode": "normal",
+        },
+    }
+    updated = api_server._apply_path_b_clarify_budget(route_meta, session_id="sess-budget-a")
+
+    assert updated["path"] == "path-b"
+    assert updated["path_b_budget_escalated"] is False
+    assert updated["path_b_clarify_turns"] == 1
+    assert session[api_server._CHAT_ROUTE_STATE_KEY]["path_b_clarify_turns"] == 1
+
+
+def test_path_b_clarify_budget_second_round_escalates_to_core(monkeypatch) -> None:
+    session = {
+        "messages": [],
+        api_server._CHAT_ROUTE_STATE_KEY: {"path_b_clarify_turns": 1},
+    }
+    monkeypatch.setattr(api_server.message_manager, "get_session", lambda _sid: session)
+
+    route_meta = {
+        "path": "path-b",
+        "outer_readonly_hit": False,
+        "core_escalation": False,
+        "router_decision": {
+            "delegation_intent": "general_assistance",
+            "prompt_profile": "outer_general",
+            "injection_mode": "minimal",
+        },
+    }
+    updated = api_server._apply_path_b_clarify_budget(route_meta, session_id="sess-budget-b")
+
+    assert updated["path"] == "path-c"
+    assert updated["core_escalation"] is True
+    assert updated["path_b_budget_escalated"] is True
+    assert updated["path_b_budget_reason"] == "clarify_budget_exceeded_auto_escalate_core"
+    assert updated["router_decision"]["delegation_intent"] == "core_execution"
+    assert updated["router_decision"]["prompt_profile"] == "core_exec_general"
+    assert session[api_server._CHAT_ROUTE_STATE_KEY]["path_b_clarify_turns"] == 0
+
+
+def test_non_path_b_route_resets_clarify_budget(monkeypatch) -> None:
+    session = {
+        "messages": [],
+        api_server._CHAT_ROUTE_STATE_KEY: {"path_b_clarify_turns": 1},
+    }
+    monkeypatch.setattr(api_server.message_manager, "get_session", lambda _sid: session)
+
+    route_meta = {
+        "path": "path-a",
+        "outer_readonly_hit": True,
+        "core_escalation": False,
+        "router_decision": {"delegation_intent": "read_only_exploration"},
+    }
+    updated = api_server._apply_path_b_clarify_budget(route_meta, session_id="sess-budget-c")
+
+    assert updated["path"] == "path-a"
+    assert updated["path_b_clarify_turns"] == 0
+    assert session[api_server._CHAT_ROUTE_STATE_KEY]["path_b_clarify_turns"] == 0
+
+
 def test_route_decision_sse_chunk_is_base64_json() -> None:
     chunk = api_server._format_sse_payload_chunk({"type": "route_decision", "path": "path-a"})
     assert chunk.startswith("data: ")
