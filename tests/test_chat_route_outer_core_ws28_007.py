@@ -45,6 +45,19 @@ def test_chat_route_path_b_selected_for_followup_ambiguous_message() -> None:
     assert decision["delegation_intent"] == "general_assistance"
 
 
+def test_chat_route_followup_with_recent_coding_context_escalates_to_core(monkeypatch) -> None:
+    monkeypatch.setattr(
+        api_server.message_manager,
+        "get_recent_messages",
+        lambda _session_id, count=10: [{"role": "user", "content": "请修复 bug 并补测试"}],
+    )
+    route = api_server._resolve_chat_stream_route("继续", session_id="sess-followup-coding")
+
+    assert route["path"] == "path-c"
+    assert route["core_escalation"] is True
+    assert route["router_decision"]["delegation_intent"] == "core_execution"
+
+
 def test_chat_route_prompt_event_payload_keeps_outer_core_observability_fields() -> None:
     outer_route = api_server._resolve_chat_stream_route("请总结最近异常", session_id="sess-obs-a")
     core_route = api_server._resolve_chat_stream_route("请修复 bug 并提交补丁", session_id="sess-obs-c")

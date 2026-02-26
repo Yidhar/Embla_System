@@ -37,7 +37,7 @@ from starlette.background import BackgroundTask
 import shutil
 from pathlib import Path
 from system.asyncio_offload import offload_blocking
-from system.coding_intent import contains_direct_coding_signal
+from system.coding_intent import contains_direct_coding_signal, has_recent_coding_context, is_coding_followup
 from autonomous.event_log.event_store import EventStore
 from autonomous.router_engine import RouterRequest, TaskRouterEngine
 
@@ -132,16 +132,19 @@ def _normalize_chat_text(text: str) -> str:
     return " ".join(str(text or "").strip().lower().split())
 
 
-def _infer_chat_route_risk_level(message: str) -> str:
+def _infer_chat_route_risk_level(message: str, *, recent_messages: Optional[List[Dict[str, Any]]] = None) -> str:
     normalized = _normalize_chat_text(message)
     if not normalized:
         return "read_only"
 
-    if len(normalized) <= 24 and any(marker in normalized for marker in _CHAT_ROUTE_FOLLOWUP_MARKERS):
-        return "unknown"
-
     if contains_direct_coding_signal(message):
         return "write_repo"
+
+    if recent_messages and is_coding_followup(message) and has_recent_coding_context(recent_messages):
+        return "write_repo"
+
+    if len(normalized) <= 24 and any(marker in normalized for marker in _CHAT_ROUTE_FOLLOWUP_MARKERS):
+        return "unknown"
 
     if any(marker in normalized for marker in _CHAT_ROUTE_HIGH_RISK_MARKERS):
         return "deploy"
@@ -170,7 +173,8 @@ def _infer_chat_route_complexity(message: str) -> str:
 
 def _resolve_chat_stream_route(message: str, *, session_id: str) -> Dict[str, Any]:
     normalized_message = str(message or "")
-    risk_level = _infer_chat_route_risk_level(normalized_message)
+    recent_messages = message_manager.get_recent_messages(session_id, count=10)
+    risk_level = _infer_chat_route_risk_level(normalized_message, recent_messages=recent_messages)
     request = RouterRequest(
         task_id=f"chat_stream_{int(time.time() * 1000)}",
         description=normalized_message,
