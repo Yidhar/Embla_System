@@ -38,6 +38,7 @@ class RuntimeSubTaskSpec:
     dependencies: List[str] = field(default_factory=list)
     contract_schema: Dict[str, Any] = field(default_factory=dict)
     role_executor_policy: Dict[str, Any] = field(default_factory=dict)
+    role_executor_policy_source: str = ""
     patches: List[ScaffoldPatch] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -257,6 +258,8 @@ class SubAgentRuntime:
                     subtask_id=subtask.subtask_id,
                     role=subtask.role,
                     dependencies=list(subtask.dependencies),
+                    role_executor_policy=dict(subtask.role_executor_policy),
+                    role_executor_policy_source=str(subtask.role_executor_policy_source or ""),
                 )
 
                 started = time.monotonic()
@@ -297,6 +300,8 @@ class SubAgentRuntime:
                     success=result.success,
                     duration_seconds=round(result.duration_seconds, 4),
                     patch_count=len(result.patches),
+                    role_executor_policy=dict(subtask.role_executor_policy),
+                    role_executor_policy_source=str(subtask.role_executor_policy_source or ""),
                 )
                 self._emit(
                     emit_event,
@@ -523,11 +528,20 @@ class SubAgentRuntime:
             patch_payloads = raw.get("patches") if isinstance(raw.get("patches"), list) else []
             patches = [self._to_patch(item) for item in patch_payloads if isinstance(item, dict)]
             contract_schema = raw.get("contract_schema") if isinstance(raw.get("contract_schema"), dict) else {}
-            role_executor_policy = self._merge_policy_dicts(
-                task_metadata_role_policy,
-                self._extract_role_executor_policy_from_contract_schema(task_contract_schema, role=role),
-                self._extract_role_executor_policy_from_contract_schema(contract_schema, role=role),
-                raw.get("role_executor_policy") if isinstance(raw.get("role_executor_policy"), dict) else {},
+            role_executor_policy, role_executor_policy_source = self._merge_policy_sources(
+                (task_metadata_role_policy, "task.role_executor_policy"),
+                (
+                    self._extract_role_executor_policy_from_contract_schema(task_contract_schema, role=role),
+                    "task.contract_schema.role_executor_policy",
+                ),
+                (
+                    self._extract_role_executor_policy_from_contract_schema(contract_schema, role=role),
+                    "subtask.contract_schema.role_executor_policy",
+                ),
+                (
+                    raw.get("role_executor_policy") if isinstance(raw.get("role_executor_policy"), dict) else {},
+                    "subtask.role_executor_policy",
+                ),
             )
             subtask_metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
             subtasks.append(
@@ -538,6 +552,7 @@ class SubAgentRuntime:
                     dependencies=dependencies,
                     contract_schema=contract_schema,
                     role_executor_policy=role_executor_policy,
+                    role_executor_policy_source=role_executor_policy_source,
                     patches=patches,
                     metadata=subtask_metadata,
                 )
@@ -673,6 +688,17 @@ class SubAgentRuntime:
                 continue
             merged.update(payload)
         return merged
+
+    @classmethod
+    def _merge_policy_sources(cls, *candidates: tuple[Dict[str, Any], str]) -> tuple[Dict[str, Any], str]:
+        merged: Dict[str, Any] = {}
+        source = ""
+        for payload, label in list(candidates):
+            if not isinstance(payload, dict) or not payload:
+                continue
+            merged = cls._merge_policy_dicts(merged, payload)
+            source = str(label or "").strip()
+        return merged, source
 
 
 __all__ = [

@@ -146,9 +146,11 @@
 
 - type: `feature`
 - priority: `P1`
-- status: `pending`
+- status: `in_progress`（2026-02-27）
 - scope: 在现有路径策略/strict 门禁基础上，补语义级工具链与更细粒度策略
 - expected anchors:
   - `autonomous/tools/execution_bridge.py`
   - `autonomous/system_agent.py`
   - `autonomous/tools/subagent_runtime.py`
+- progress snapshot:
+  - 已完成 Phase A：`role_executor_policy` 从任务 contract 侧透传为标准事件字段（`SubTaskDispatching` / `SubTaskExecutionCompleted`），不再依赖手填 metadata。

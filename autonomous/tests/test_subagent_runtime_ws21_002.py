@@ -194,7 +194,9 @@ def test_subagent_runtime_build_subtasks_propagates_role_policy_from_contract_sc
         backend = next(item for item in subtasks if item.subtask_id == "be")
         ops = next(item for item in subtasks if item.subtask_id == "ops")
         assert backend.role_executor_policy["strict_role_paths"] is True
+        assert backend.role_executor_policy_source == "task.contract_schema.role_executor_policy"
         assert ops.role_executor_policy["strict_role_paths"] is True
         assert ops.role_executor_policy["allowed_path_prefixes"] == ["scripts/", "doc/"]
+        assert ops.role_executor_policy_source == "task.contract_schema.role_executor_policy"
     finally:
         _cleanup_case_root(case_root)

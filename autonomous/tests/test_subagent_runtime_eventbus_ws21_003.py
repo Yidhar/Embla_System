@@ -35,7 +35,10 @@ def test_subagent_runtime_emits_traceable_lifecycle_events() -> None:
                     "contract_schema": {"request": {"id": "string"}},
                     "patches": [{"path": "a.txt", "content": "A_NEW"}],
                 }
-            ]
+            ],
+            "contract_schema": {
+                "role_executor_policy": {"strict_role_paths": True, "allowed_path_prefixes": ["autonomous/"]},
+            },
         },
     )
 
@@ -77,5 +80,18 @@ def test_subagent_runtime_emits_traceable_lifecycle_events() -> None:
             assert payload.get("workflow_id") == "wf-eventbus"
             assert payload.get("trace_id") == "trace-eventbus"
             assert payload.get("session_id") == "sess-eventbus"
+
+        dispatch_payloads = [payload for name, payload in events if name == "SubTaskDispatching"]
+        assert len(dispatch_payloads) == 1
+        dispatch_payload = dispatch_payloads[0]
+        assert dispatch_payload["role_executor_policy"]["strict_role_paths"] is True
+        assert dispatch_payload["role_executor_policy"]["allowed_path_prefixes"] == ["autonomous/"]
+        assert dispatch_payload["role_executor_policy_source"] == "task.contract_schema.role_executor_policy"
+
+        completed_payloads = [payload for name, payload in events if name == "SubTaskExecutionCompleted"]
+        assert len(completed_payloads) == 1
+        completed_payload = completed_payloads[0]
+        assert completed_payload["role_executor_policy"]["strict_role_paths"] is True
+        assert completed_payload["role_executor_policy_source"] == "task.contract_schema.role_executor_policy"
     finally:
         _cleanup_case_root(case_root)
