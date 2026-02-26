@@ -200,6 +200,123 @@ def test_ops_incidents_latest_payload_includes_brainstem_stale_incident(tmp_path
     assert any(path.endswith("brainstem_control_plane_heartbeat_ws23_001.json") for path in payload["source_reports"])
 
 
+def test_ops_runtime_posture_payload_includes_execution_bridge_governance(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    _write_jsonl(
+        events_file,
+        [
+            {
+                "timestamp": "2026-02-27T09:00:00+00:00",
+                "event_type": "SubTaskExecutionCompleted",
+                "payload": {
+                    "task_id": "task-gov-1",
+                    "subtask_id": "be-1",
+                    "role": "backend",
+                    "success": False,
+                    "execution_bridge_governance": {
+                        "status": "critical",
+                        "severity": "critical",
+                        "category": "semantic_toolchain",
+                        "reason_code": "SEMANTIC_TOOLCHAIN_VIOLATION",
+                        "reason": "execution_bridge_semantic_toolchain_violation:backend",
+                        "executor": "backend",
+                        "policy_source": "task.contract_schema.role_executor_policy",
+                        "violation_count": 1,
+                        "violations": ["scripts/deploy_release.sh::ops"],
+                    },
+                },
+            }
+        ],
+    )
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "ok", "metric_status": {}},
+            "metrics": {},
+            "threshold_profile": {},
+            "sources": {"events_file": "logs/autonomous/events.jsonl"},
+        }
+
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+
+    payload = api_server._ops_build_runtime_posture_payload(events_limit=200)
+    assert payload["status"] == "success"
+    assert payload["severity"] == "critical"
+    assert payload["reason_code"] == "EXECUTION_BRIDGE_GOVERNANCE_CRITICAL"
+
+    summary = payload["data"]["summary"]
+    assert summary["execution_bridge_governance_status"] == "critical"
+    assert "SEMANTIC_TOOLCHAIN_VIOLATION" in summary["execution_bridge_governance_reason_codes"]
+
+    governance = payload["data"]["execution_bridge_governance"]
+    assert governance["status"] == "critical"
+    assert governance["subtask_total"] == 1
+    assert governance["subtask_rejected"] == 1
+    assert governance["rejection_ratio"] == 1.0
+
+    metrics = payload["data"]["metrics"]
+    assert metrics["execution_bridge_rejection_ratio"]["value"] == 1.0
+    assert metrics["execution_bridge_governance_warning_ratio"]["value"] == 1.0
+
+
+def test_ops_incidents_latest_payload_includes_execution_bridge_governance_issue(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    _write_jsonl(
+        events_file,
+        [
+            {
+                "timestamp": "2026-02-27T10:00:00+00:00",
+                "event_type": "SubTaskRejected",
+                "payload": {
+                    "task_id": "task-gov-2",
+                    "subtask_id": "ops-1",
+                    "role": "ops",
+                    "error": "execution_bridge_ops_ticket_required",
+                    "execution_bridge_governance": {
+                        "status": "critical",
+                        "severity": "critical",
+                        "category": "change_control",
+                        "reason_code": "OPS_CHANGE_TICKET_REQUIRED",
+                        "reason": "execution_bridge_ops_ticket_required",
+                        "executor": "ops",
+                        "policy_source": "task.contract_schema.role_executor_policy",
+                        "violation_count": 0,
+                        "violations": [],
+                    },
+                },
+            }
+        ],
+    )
+
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(api_server, "_ops_collect_required_reports", lambda _repo_root: [])
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", lambda **_kwargs: {"metrics": {}})
+
+    payload = api_server._ops_build_incidents_latest_payload(limit=30)
+    assert payload["status"] == "success"
+    assert payload["severity"] == "critical"
+    assert payload["data"]["event_counters"]["ExecutionBridgeGovernanceIssue"] == 1
+
+    summary = payload["data"]["summary"]
+    assert summary["execution_bridge_governance"]["status"] == "critical"
+    assert summary["runtime_prompt_safety"]["execution_bridge_governance"]["status"] == "critical"
+
+    incidents = payload["data"]["incidents"]
+    governance_incidents = [item for item in incidents if str(item.get("event_type")) == "ExecutionBridgeGovernanceIssue"]
+    assert len(governance_incidents) == 1
+    item = governance_incidents[0]
+    assert item["severity"] == "critical"
+    assert item["payload_excerpt"]["reason_code"] == "OPS_CHANGE_TICKET_REQUIRED"
+    assert item["payload_excerpt"]["category"] == "change_control"
+
+
 def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
     ws26_report = repo_root / "scratch" / "reports" / "ws26_runtime_snapshot_ws26_002.json"

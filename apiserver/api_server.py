@@ -2702,6 +2702,12 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     if events_file_raw and not events_file.is_absolute():
         events_file = _ops_repo_root() / events_file
     route_quality_trend = _ops_build_route_quality_trend(events_file, window_size=20, max_windows=6)
+    execution_bridge_governance = _ops_build_execution_bridge_governance_summary(
+        events_file=events_file,
+        limit=max(200, int(events_limit)),
+        issues_limit=20,
+    )
+    execution_bridge_governance_status = _ops_status_to_severity(str(execution_bridge_governance.get("status") or "unknown"))
 
     repo_root = _ops_repo_root()
     brainstem_control_plane = _ops_build_brainstem_control_plane_summary(repo_root)
@@ -2709,7 +2715,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
 
     metric_status = summary.get("metric_status") if isinstance(summary.get("metric_status"), dict) else {}
     snapshot_overall_status = str(summary.get("overall_status") or "unknown")
-    overall_status = _ops_max_status([snapshot_overall_status, brainstem_status])
+    overall_status = _ops_max_status([snapshot_overall_status, brainstem_status, execution_bridge_governance_status])
     severity = _ops_status_to_severity(overall_status)
 
     ws26_runtime_report = repo_root / "scratch" / "reports" / "ws26_runtime_snapshot_ws26_002.json"
@@ -2739,6 +2745,8 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "metric_status": metric_status,
             "route_quality": _ops_build_route_quality_summary(metrics, trend=route_quality_trend),
             "brainstem_control_plane_status": brainstem_status,
+            "execution_bridge_governance_status": execution_bridge_governance_status,
+            "execution_bridge_governance_reason_codes": list(execution_bridge_governance.get("reason_codes") or []),
         },
         "metrics": {
             "runtime_rollout": metrics.get("runtime_rollout", {}),
@@ -2764,10 +2772,24 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
                 "stale_critical_seconds": brainstem_control_plane.get("stale_critical_seconds"),
                 "tick": brainstem_control_plane.get("tick"),
             },
+            "execution_bridge_rejection_ratio": {
+                "status": execution_bridge_governance_status,
+                "value": execution_bridge_governance.get("rejection_ratio"),
+                "subtask_total": execution_bridge_governance.get("subtask_total"),
+                "subtask_rejected": execution_bridge_governance.get("subtask_rejected"),
+            },
+            "execution_bridge_governance_warning_ratio": {
+                "status": execution_bridge_governance_status,
+                "value": execution_bridge_governance.get("governed_warning_ratio"),
+                "governed_rows_count": execution_bridge_governance.get("governed_rows_count"),
+                "governed_warning_count": execution_bridge_governance.get("governed_warning_count"),
+                "governed_critical_count": execution_bridge_governance.get("governed_critical_count"),
+            },
         },
         "threshold_profile": threshold_profile,
         "sources": sources,
         "brainstem_control_plane": brainstem_control_plane,
+        "execution_bridge_governance": execution_bridge_governance,
     }
     if ws26_runtime_report_payload:
         response_data["ws26_runtime_snapshot_report"] = ws26_runtime_report_payload
@@ -2777,9 +2799,15 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     if brainstem_status == "critical":
         reason_code = "BRAINSTEM_CONTROL_PLANE_CRITICAL"
         reason_text = str(brainstem_control_plane.get("reason_text") or "Brainstem control-plane is unhealthy.")
+    elif execution_bridge_governance_status == "critical":
+        reason_code = "EXECUTION_BRIDGE_GOVERNANCE_CRITICAL"
+        reason_text = "Execution bridge governance has critical rejections; check role guards and policy contracts."
     elif brainstem_status == "warning":
         reason_code = "BRAINSTEM_CONTROL_PLANE_WARNING"
         reason_text = str(brainstem_control_plane.get("reason_text") or "Brainstem control-plane requires attention.")
+    elif execution_bridge_governance_status == "warning":
+        reason_code = "EXECUTION_BRIDGE_GOVERNANCE_WARNING"
+        reason_text = "Execution bridge governance has warning signals; review semantic/path guard drift."
     elif severity == "unknown":
         reason_code = "RUNTIME_SIGNAL_UNKNOWN"
         reason_text = "Runtime posture lacks enough signal coverage; verify events/workflow inputs."
@@ -2920,6 +2948,244 @@ def _ops_compact_event_payload(payload: Any) -> Dict[str, Any]:
                 if isinstance(nested_value, (str, int, float, bool)) or nested_value is None:
                     compact[f"{key}.{nested_key}"] = nested_value
     return compact
+
+
+def _ops_extract_execution_bridge_governance(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    governance: Dict[str, Any] = {}
+    for candidate in (
+        payload.get("execution_bridge_governance"),
+        payload.get("bridge_receipt", {}).get("governance")
+        if isinstance(payload.get("bridge_receipt"), dict)
+        else {},
+        payload.get("execution_bridge_receipt", {}).get("governance")
+        if isinstance(payload.get("execution_bridge_receipt"), dict)
+        else {},
+    ):
+        if isinstance(candidate, dict) and candidate:
+            governance = dict(candidate)
+            break
+
+    if not governance:
+        raw_reason = str(payload.get("error") or payload.get("reason") or "").strip()
+        if raw_reason.startswith("execution_bridge_"):
+            reason_code = "EXECUTION_BRIDGE_REJECTED"
+            category = "execution_bridge"
+            if raw_reason.startswith("execution_bridge_role_path_violation"):
+                reason_code = "ROLE_PATH_VIOLATION"
+                category = "path_policy"
+            elif raw_reason.startswith("execution_bridge_semantic_toolchain_violation"):
+                reason_code = "SEMANTIC_TOOLCHAIN_VIOLATION"
+                category = "semantic_toolchain"
+            elif raw_reason == "execution_bridge_ops_ticket_required":
+                reason_code = "OPS_CHANGE_TICKET_REQUIRED"
+                category = "change_control"
+            elif raw_reason == "execution_bridge_missing_patch_intent":
+                reason_code = "MISSING_PATCH_INTENT"
+                category = "patch_intent"
+            governance = {
+                "status": "critical",
+                "severity": "critical",
+                "category": category,
+                "reason_code": reason_code,
+                "reason": raw_reason,
+                "executor": str(payload.get("role") or ""),
+                "policy_source": str(payload.get("role_executor_policy_source") or ""),
+                "violation_count": 0,
+                "violations": [],
+            }
+
+    if not governance:
+        return {}
+
+    violations: List[str] = []
+    raw_violations = governance.get("violations")
+    if isinstance(raw_violations, list):
+        violations = [str(item) for item in raw_violations if str(item).strip()]
+    violation_count = _ops_safe_int(governance.get("violation_count"), default=len(violations))
+    status = _ops_status_to_severity(str(governance.get("severity") or governance.get("status") or "unknown"))
+
+    return {
+        "status": status,
+        "severity": status,
+        "category": str(governance.get("category") or ""),
+        "reason_code": str(governance.get("reason_code") or ""),
+        "reason": str(governance.get("reason") or ""),
+        "executor": str(governance.get("executor") or ""),
+        "policy_source": str(
+            governance.get("policy_source") or payload.get("role_executor_policy_source") or ""
+        ),
+        "strict_role_paths": bool(governance.get("strict_role_paths", False)),
+        "strict_semantic_guard": bool(governance.get("strict_semantic_guard", False)),
+        "violation_count": max(0, int(violation_count)),
+        "violations": violations,
+    }
+
+
+def _ops_build_execution_bridge_governance_summary(
+    *,
+    events_file: Path,
+    limit: int = 5000,
+    issues_limit: int = 20,
+) -> Dict[str, Any]:
+    rows = _ops_read_event_rows(events_file, limit=max(200, int(limit)))
+    completed_total = 0
+    completed_rejected = 0
+    completed_governance_rows: List[Dict[str, Any]] = []
+    rejected_governance_rows: List[Dict[str, Any]] = []
+
+    for row in rows:
+        event_type = str(row.get("event_type") or "").strip()
+        payload = row.get("payload")
+        payload_dict = payload if isinstance(payload, dict) else {}
+
+        if event_type == "SubTaskExecutionCompleted":
+            completed_total += 1
+            if payload_dict.get("success") is False:
+                completed_rejected += 1
+            governance = _ops_extract_execution_bridge_governance(payload_dict)
+            if governance:
+                completed_governance_rows.append(
+                    {
+                        "timestamp": str(row.get("timestamp") or ""),
+                        "event_type": event_type,
+                        "subtask_id": str(payload_dict.get("subtask_id") or ""),
+                        "task_id": str(payload_dict.get("task_id") or ""),
+                        "role": str(payload_dict.get("role") or ""),
+                        "success": bool(payload_dict.get("success")),
+                        "governance": governance,
+                    }
+                )
+            continue
+
+        if event_type == "SubTaskRejected":
+            governance = _ops_extract_execution_bridge_governance(payload_dict)
+            if governance:
+                rejected_governance_rows.append(
+                    {
+                        "timestamp": str(row.get("timestamp") or ""),
+                        "event_type": event_type,
+                        "subtask_id": str(payload_dict.get("subtask_id") or ""),
+                        "task_id": str(payload_dict.get("task_id") or ""),
+                        "role": str(payload_dict.get("role") or ""),
+                        "error": str(payload_dict.get("error") or ""),
+                        "governance": governance,
+                    }
+                )
+
+    reference_rows = completed_governance_rows if completed_governance_rows else rejected_governance_rows
+    status_counts: Dict[str, int] = {"ok": 0, "warning": 0, "critical": 0, "unknown": 0}
+    reason_code_counts: Dict[str, int] = {}
+    category_counts: Dict[str, int] = {}
+    executor_counts: Dict[str, int] = {}
+    policy_source_counts: Dict[str, int] = {}
+    governance_warning_count = 0
+    governance_critical_count = 0
+    latest_issue_at = ""
+
+    for row in reference_rows:
+        governance = row.get("governance")
+        if not isinstance(governance, dict):
+            continue
+        status = _ops_status_to_severity(str(governance.get("status") or "unknown"))
+        status_counts[status] = int(status_counts.get(status, 0)) + 1
+        if status == "warning":
+            governance_warning_count += 1
+        elif status == "critical":
+            governance_critical_count += 1
+        if status in {"warning", "critical"}:
+            ts = str(row.get("timestamp") or "")
+            if (_ops_parse_iso_datetime(ts) or 0.0) >= (_ops_parse_iso_datetime(latest_issue_at) or 0.0):
+                latest_issue_at = ts
+
+        reason_code = str(governance.get("reason_code") or "")
+        if reason_code:
+            reason_code_counts[reason_code] = int(reason_code_counts.get(reason_code, 0)) + 1
+        category = str(governance.get("category") or "")
+        if category:
+            category_counts[category] = int(category_counts.get(category, 0)) + 1
+        executor = str(governance.get("executor") or "")
+        if executor:
+            executor_counts[executor] = int(executor_counts.get(executor, 0)) + 1
+        policy_source = str(governance.get("policy_source") or "")
+        if policy_source:
+            policy_source_counts[policy_source] = int(policy_source_counts.get(policy_source, 0)) + 1
+
+    if governance_critical_count > 0:
+        status = "critical"
+    elif governance_warning_count > 0:
+        status = "warning"
+    elif completed_total > 0 or bool(reference_rows):
+        status = "ok"
+    else:
+        status = "unknown"
+
+    rejection_ratio = (completed_rejected / float(completed_total)) if completed_total > 0 else None
+    governed_rows_count = len(reference_rows)
+    governed_warning_ratio = (
+        (governance_warning_count + governance_critical_count) / float(governed_rows_count)
+        if governed_rows_count > 0
+        else None
+    )
+
+    issue_rows = rejected_governance_rows if rejected_governance_rows else [
+        item
+        for item in completed_governance_rows
+        if _ops_status_to_severity(str(item.get("governance", {}).get("status") or "unknown")) in {"warning", "critical"}
+    ]
+    issue_rows.sort(key=lambda row: _ops_parse_iso_datetime(row.get("timestamp")) or 0.0, reverse=True)
+    recent_issues: List[Dict[str, Any]] = []
+    for row in issue_rows[: max(1, int(issues_limit))]:
+        governance = row.get("governance")
+        if not isinstance(governance, dict):
+            continue
+        recent_issues.append(
+            {
+                "timestamp": str(row.get("timestamp") or ""),
+                "event_type": str(row.get("event_type") or ""),
+                "task_id": str(row.get("task_id") or ""),
+                "subtask_id": str(row.get("subtask_id") or ""),
+                "role": str(row.get("role") or ""),
+                "severity": _ops_status_to_severity(str(governance.get("status") or "unknown")),
+                "reason_code": str(governance.get("reason_code") or ""),
+                "reason": str(governance.get("reason") or ""),
+                "category": str(governance.get("category") or ""),
+                "executor": str(governance.get("executor") or ""),
+                "policy_source": str(governance.get("policy_source") or ""),
+                "violation_count": _ops_safe_int(governance.get("violation_count"), default=0),
+                "violations": list(governance.get("violations") or []),
+                "error": str(row.get("error") or ""),
+            }
+        )
+
+    reason_codes_sorted = [
+        key
+        for key, _ in sorted(reason_code_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    if status == "ok" and not reason_codes_sorted:
+        reason_codes_sorted = ["EXECUTION_BRIDGE_GOVERNANCE_OK"]
+    elif status == "unknown" and not reason_codes_sorted:
+        reason_codes_sorted = ["EXECUTION_BRIDGE_GOVERNANCE_UNKNOWN"]
+
+    return {
+        "status": status,
+        "reason_codes": reason_codes_sorted,
+        "reason_code_counts": reason_code_counts,
+        "category_counts": category_counts,
+        "executor_counts": executor_counts,
+        "policy_source_counts": policy_source_counts,
+        "subtask_total": completed_total,
+        "subtask_rejected": completed_rejected,
+        "rejection_ratio": rejection_ratio,
+        "governed_rows_count": governed_rows_count,
+        "governed_warning_count": governance_warning_count,
+        "governed_critical_count": governance_critical_count,
+        "governed_warning_ratio": governed_warning_ratio,
+        "latest_issue_at": latest_issue_at,
+        "recent_issues": recent_issues,
+    }
 
 
 def _ops_build_workflow_events_payload(
@@ -3222,6 +3488,11 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
     events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
     event_rows = _ops_read_event_rows(events_file, limit=max(200, int(limit) * 10))
     route_quality_trend = _ops_build_route_quality_trend(events_file, window_size=20, max_windows=6)
+    execution_bridge_governance = _ops_build_execution_bridge_governance_summary(
+        events_file=events_file,
+        limit=max(200, int(limit) * 10),
+        issues_limit=max(10, int(limit)),
+    )
     prompt_safety_summary: Dict[str, Any] = {}
     try:
         from scripts.export_slo_snapshot import build_snapshot
@@ -3260,12 +3531,16 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             "path_b_budget_escalation_rate": path_b_budget_escalation,
             "core_session_creation_rate": core_session_creation,
             "route_quality": _ops_build_route_quality_summary(snapshot_metrics, trend=route_quality_trend),
+            "execution_bridge_governance": execution_bridge_governance,
         }
     except Exception as exc:
         logger.warning(f"构建 incidents prompt safety 摘要失败（降级为空）: {exc}")
+    if "execution_bridge_governance" not in prompt_safety_summary:
+        prompt_safety_summary["execution_bridge_governance"] = execution_bridge_governance
 
     incidents: List[Dict[str, Any]] = []
     event_counters: Dict[str, int] = {key: 0 for key in sorted(_OPS_INCIDENT_EVENT_SEVERITY.keys())}
+    event_counters["ExecutionBridgeGovernanceIssue"] = 0
 
     for row in event_rows:
         event_type = str(row.get("event_type") or "").strip()
@@ -3345,6 +3620,40 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             }
         )
 
+    governance_issues = execution_bridge_governance.get("recent_issues")
+    if isinstance(governance_issues, list):
+        for issue in governance_issues:
+            if not isinstance(issue, dict):
+                continue
+            issue_severity = _ops_status_to_severity(str(issue.get("severity") or "unknown"))
+            if issue_severity not in {"warning", "critical"}:
+                continue
+            event_counters["ExecutionBridgeGovernanceIssue"] = int(event_counters.get("ExecutionBridgeGovernanceIssue", 0)) + 1
+            reason_code = str(issue.get("reason_code") or "EXECUTION_BRIDGE_GOVERNANCE_ISSUE")
+            incidents.append(
+                {
+                    "source": "events",
+                    "severity": issue_severity,
+                    "timestamp": str(issue.get("timestamp") or ""),
+                    "event_type": "ExecutionBridgeGovernanceIssue",
+                    "summary": str(
+                        issue.get("reason")
+                        or f"Execution bridge governance issue detected: {reason_code}"
+                    ),
+                    "payload_excerpt": {
+                        "reason_code": reason_code,
+                        "category": str(issue.get("category") or ""),
+                        "executor": str(issue.get("executor") or ""),
+                        "policy_source": str(issue.get("policy_source") or ""),
+                        "violation_count": _ops_safe_int(issue.get("violation_count"), default=0),
+                        "task_id": str(issue.get("task_id") or ""),
+                        "subtask_id": str(issue.get("subtask_id") or ""),
+                    },
+                    "report_path": _ops_unix_path(events_file) if events_file.exists() else "",
+                    "gate_level": "runtime",
+                }
+            )
+
     incidents.sort(
         key=lambda row: _ops_parse_iso_datetime(row.get("timestamp")) or 0.0,
         reverse=True,
@@ -3389,6 +3698,7 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             "warning_incidents": warning_count,
             "latest_incident_at": latest_incident_at,
             "runtime_prompt_safety": prompt_safety_summary,
+            "execution_bridge_governance": execution_bridge_governance,
         },
         "event_counters": event_counters,
         "events_scanned": len(event_rows),

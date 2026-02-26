@@ -108,6 +108,7 @@
 7. `doc/task/implementation/NGA-WS27-002-implementation.md`（M12 full cutover）
 8. `doc/task/implementation/NGA-WS28-019-implementation.md`（脑干守护进程存活探测与自愈重启）
 9. `doc/task/implementation/NGA-WS28-020-implementation.md`（脑干控制面托管入口标准化）
+10. `doc/task/implementation/NGA-WS28-021-phaseb-implementation.md`（语义工具链守卫与治理可观测）
 
 ---
 
@@ -154,3 +155,4 @@
   - `autonomous/tools/subagent_runtime.py`
 - progress snapshot:
   - 已完成 Phase A：`role_executor_policy` 从任务 contract 侧透传为标准事件字段（`SubTaskDispatching` / `SubTaskExecutionCompleted`），不再依赖手填 metadata。
+  - 已完成 Phase B：执行桥新增 FE/BE/Ops 语义工具链守卫（semantic toolchain guard），并将结构化拒绝原因（`reason_code/category/severity/violations/policy_source`）接入 `SubTaskExecutionCompleted/SubTaskRejected` 事件与 `/v1/ops/runtime/posture`、`/v1/ops/incidents/latest` 聚合视图。

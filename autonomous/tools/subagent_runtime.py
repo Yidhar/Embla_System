@@ -274,6 +274,15 @@ class SubAgentRuntime:
                     if isinstance(result.metadata, dict)
                     else None
                 )
+                bridge_governance = (
+                    result.metadata.get("execution_bridge_governance")
+                    if isinstance(result.metadata, dict)
+                    else None
+                )
+                governance_payload = bridge_governance if isinstance(bridge_governance, dict) else {}
+                governance_reason_code = str(governance_payload.get("reason_code") or "")
+                governance_category = str(governance_payload.get("category") or "")
+                governance_severity = str(governance_payload.get("severity") or governance_payload.get("status") or "")
                 if isinstance(bridge_receipt, dict):
                     self._emit(
                         emit_event,
@@ -286,6 +295,10 @@ class SubAgentRuntime:
                         subtask_id=subtask.subtask_id,
                         role=subtask.role,
                         bridge_receipt=dict(bridge_receipt),
+                        execution_bridge_governance=dict(governance_payload),
+                        execution_bridge_governance_reason_code=governance_reason_code,
+                        execution_bridge_governance_category=governance_category,
+                        execution_bridge_governance_severity=governance_severity,
                     )
 
                 subtask_results.append(result)
@@ -302,6 +315,10 @@ class SubAgentRuntime:
                     patch_count=len(result.patches),
                     role_executor_policy=dict(subtask.role_executor_policy),
                     role_executor_policy_source=str(subtask.role_executor_policy_source or ""),
+                    execution_bridge_governance=dict(governance_payload),
+                    execution_bridge_governance_reason_code=governance_reason_code,
+                    execution_bridge_governance_category=governance_category,
+                    execution_bridge_governance_severity=governance_severity,
                 )
                 self._emit(
                     emit_event,
@@ -336,6 +353,12 @@ class SubAgentRuntime:
                         subtask_id=subtask.subtask_id,
                         role=subtask.role,
                         error=result.error or result.summary or "subtask_failed",
+                        role_executor_policy=dict(subtask.role_executor_policy),
+                        role_executor_policy_source=str(subtask.role_executor_policy_source or ""),
+                        execution_bridge_governance=dict(governance_payload),
+                        execution_bridge_governance_reason_code=governance_reason_code,
+                        execution_bridge_governance_category=governance_category,
+                        execution_bridge_governance_severity=governance_severity,
                     )
                     if self.config.fail_fast_on_subtask_error:
                         reason = result.error or result.summary or "subtask_failed"

@@ -32,8 +32,15 @@ def test_frontend_role_executor_strict_from_task_contract_policy() -> None:
 
     assert result.success is False
     assert result.error == "execution_bridge_role_path_violation:frontend"
+    governance = result.metadata.get("execution_bridge_governance")
+    assert isinstance(governance, dict)
+    assert governance.get("reason_code") == "ROLE_PATH_VIOLATION"
+    assert governance.get("category") == "path_policy"
+    assert governance.get("severity") == "critical"
     receipt = result.metadata.get("execution_bridge_receipt")
     assert isinstance(receipt, dict)
+    assert isinstance(receipt.get("governance"), dict)
+    assert receipt["governance"]["reason_code"] == "ROLE_PATH_VIOLATION"
     policy = receipt.get("role_policy")
     assert isinstance(policy, dict)
     assert policy.get("strict_role_paths") is True
@@ -97,6 +104,11 @@ def test_ops_role_executor_strict_requires_change_ticket() -> None:
 
     assert result.success is False
     assert result.error == "execution_bridge_ops_ticket_required"
+    governance = result.metadata.get("execution_bridge_governance")
+    assert isinstance(governance, dict)
+    assert governance.get("reason_code") == "OPS_CHANGE_TICKET_REQUIRED"
+    assert governance.get("category") == "change_control"
+    assert governance.get("severity") == "critical"
 
 
 def test_ops_role_alias_devops_routes_to_ops_executor() -> None:
@@ -133,3 +145,30 @@ def test_backend_role_executor_non_strict_records_cross_domain_warning() -> None
     warnings = result.metadata.get("execution_bridge_role_warnings")
     assert isinstance(warnings, list)
     assert any(str(item).startswith("role_executor_path_violation:backend:") for item in warnings)
+    governance = result.metadata.get("execution_bridge_governance")
+    assert isinstance(governance, dict)
+    assert governance.get("severity") == "warning"
+    assert governance.get("reason_code") == "ROLE_EXECUTOR_GUARD_WARNING"
+
+
+def test_backend_role_executor_strict_semantic_toolchain_blocks_ops_patch() -> None:
+    bridge = NativeExecutionBridge(project_root=".")
+    subtask = RuntimeSubTaskSpec(
+        subtask_id="be-2",
+        role="backend",
+        instruction="backend task should not emit frontend test payload in strict semantic mode",
+        patches=[ScaffoldPatch(path="tests/frontend/widget.test.tsx", content="export const x = 1;")],
+        metadata={"role_executor_policy": {"strict_role_paths": True, "strict_semantic_guard": True}},
+    )
+
+    result = bridge.execute_subtask(task=_task("task-role-be-semantic"), subtask=subtask)
+
+    assert result.success is False
+    assert result.error == "execution_bridge_semantic_toolchain_violation:backend"
+    governance = result.metadata.get("execution_bridge_governance")
+    assert isinstance(governance, dict)
+    assert governance.get("reason_code") == "SEMANTIC_TOOLCHAIN_VIOLATION"
+    assert governance.get("category") == "semantic_toolchain"
+    violations = governance.get("violations")
+    assert isinstance(violations, list)
+    assert any(str(item).endswith("::test_frontend") for item in violations)

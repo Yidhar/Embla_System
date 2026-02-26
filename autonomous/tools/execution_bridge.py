@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
@@ -21,12 +21,16 @@ def _utc_now_iso() -> str:
 class RoleExecutionPolicy:
     strict_role_paths: bool
     allowed_path_prefixes: List[str]
+    strict_semantic_guard: bool
+    allowed_semantic_toolchains: List[str]
     policy_source: str
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "strict_role_paths": bool(self.strict_role_paths),
             "allowed_path_prefixes": list(self.allowed_path_prefixes),
+            "strict_semantic_guard": bool(self.strict_semantic_guard),
+            "allowed_semantic_toolchains": list(self.allowed_semantic_toolchains),
             "policy_source": str(self.policy_source),
         }
 
@@ -37,6 +41,7 @@ class RoleExecutionDecision:
     reason: str
     patches: List[ScaffoldPatch]
     warnings: List[str]
+    governance: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,7 @@ class ExecutionBridgeReceipt:
     role_executor: str = "general"
     role_policy: Dict[str, Any] | None = None
     warnings: List[str] | None = None
+    governance: Dict[str, Any] | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -69,6 +75,7 @@ class ExecutionBridgeReceipt:
             "role_executor": str(self.role_executor or "general"),
             "role_policy": dict(self.role_policy or {}),
             "warnings": list(self.warnings or []),
+            "governance": dict(self.governance or {}),
             "generated_at": self.generated_at,
         }
 
@@ -82,10 +89,12 @@ class RoleSpecializedExecutor:
         name: str,
         aliases: Sequence[str],
         allowed_path_prefixes: Sequence[str],
+        default_semantic_toolchains: Sequence[str],
     ) -> None:
         self.name = str(name).strip().lower() or "general"
         self.aliases = {self._normalize_role(value) for value in list(aliases)}
         self.allowed_path_prefixes = self._normalize_prefixes(list(allowed_path_prefixes))
+        self.default_semantic_toolchains = self._normalize_semantic_toolchains(list(default_semantic_toolchains))
 
     def supports(self, role: str) -> bool:
         normalized = self._normalize_role(role)
@@ -111,24 +120,79 @@ class RoleSpecializedExecutor:
                     reason=f"execution_bridge_role_path_violation:{self.name}",
                     patches=[],
                     warnings=[f"path_violations={len(violations)}"],
+                    governance=self._build_governance(
+                        status="critical",
+                        category="path_policy",
+                        reason_code="ROLE_PATH_VIOLATION",
+                        reason=f"execution_bridge_role_path_violation:{self.name}",
+                        policy=policy,
+                        violations=violations,
+                    ),
                 )
             warnings.append(f"role_executor_path_violation:{self.name}:{len(violations)}")
             warnings.extend([f"path:{value}" for value in violations[:5]])
 
+        semantic_violations = self._find_semantic_toolchain_violations(
+            patches=patches,
+            allowed_semantic_toolchains=policy.allowed_semantic_toolchains,
+        )
+        if semantic_violations:
+            if policy.strict_semantic_guard:
+                return RoleExecutionDecision(
+                    success=False,
+                    reason=f"execution_bridge_semantic_toolchain_violation:{self.name}",
+                    patches=[],
+                    warnings=warnings,
+                    governance=self._build_governance(
+                        status="critical",
+                        category="semantic_toolchain",
+                        reason_code="SEMANTIC_TOOLCHAIN_VIOLATION",
+                        reason=f"execution_bridge_semantic_toolchain_violation:{self.name}",
+                        policy=policy,
+                        violations=semantic_violations,
+                    ),
+                )
+            warnings.append(f"semantic_toolchain_violation:{self.name}:{len(semantic_violations)}")
+            warnings.extend([f"toolchain:{value}" for value in semantic_violations[:5]])
+
         extra_reason = self._validate_extra(task=task, subtask=subtask, policy=policy)
         if extra_reason:
+            reason_code, category = self._map_extra_reason(extra_reason)
             return RoleExecutionDecision(
                 success=False,
                 reason=extra_reason,
                 patches=[],
                 warnings=warnings,
+                governance=self._build_governance(
+                    status="critical",
+                    category=category,
+                    reason_code=reason_code,
+                    reason=extra_reason,
+                    policy=policy,
+                    violations=[],
+                ),
             )
 
+        governance_status = "warning" if warnings else "ok"
+        governance_reason_code = "ROLE_EXECUTOR_GUARD_WARNING" if warnings else "ROLE_EXECUTOR_GUARD_OK"
+        governance_reason = (
+            f"execution_bridge_role_executor_guard_warning:{self.name}"
+            if warnings
+            else f"execution_bridge_role_executor_guard_ok:{self.name}"
+        )
         return RoleExecutionDecision(
             success=True,
             reason=f"execution_bridge_role_executor_materialized:{self.name}",
             patches=list(patches),
             warnings=warnings,
+            governance=self._build_governance(
+                status=governance_status,
+                category="role_executor_guard",
+                reason_code=governance_reason_code,
+                reason=governance_reason,
+                policy=policy,
+                violations=[],
+            ),
         )
 
     def _validate_extra(
@@ -158,6 +222,33 @@ class RoleSpecializedExecutor:
         return violations
 
     @staticmethod
+    def _find_semantic_toolchain_violations(
+        *,
+        patches: List[ScaffoldPatch],
+        allowed_semantic_toolchains: List[str],
+    ) -> List[str]:
+        if not allowed_semantic_toolchains:
+            return []
+        allowed = {
+            RoleSpecializedExecutor._normalize_semantic_toolchain(value)
+            for value in list(allowed_semantic_toolchains)
+            if RoleSpecializedExecutor._normalize_semantic_toolchain(value)
+        }
+        if not allowed:
+            return []
+
+        violations: List[str] = []
+        for patch in list(patches):
+            path = RoleSpecializedExecutor._normalize_path(str(patch.path or ""))
+            if not path:
+                continue
+            semantic_toolchain = RoleSpecializedExecutor._classify_semantic_toolchain(path)
+            if semantic_toolchain in allowed:
+                continue
+            violations.append(f"{path}::{semantic_toolchain}")
+        return violations
+
+    @staticmethod
     def _is_path_allowed(path: str, prefixes: List[str]) -> bool:
         candidate = RoleSpecializedExecutor._normalize_path(path)
         if not candidate:
@@ -184,6 +275,22 @@ class RoleSpecializedExecutor:
     def _normalize_prefix(value: str) -> str:
         return RoleSpecializedExecutor._normalize_path(str(value or "")).rstrip("/")
 
+    @staticmethod
+    def _normalize_semantic_toolchain(value: str) -> str:
+        return str(value or "").strip().lower().replace("-", "_")
+
+    @classmethod
+    def _normalize_semantic_toolchains(cls, values: List[str]) -> List[str]:
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for value in list(values):
+            semantic_toolchain = cls._normalize_semantic_toolchain(value)
+            if not semantic_toolchain or semantic_toolchain in seen:
+                continue
+            seen.add(semantic_toolchain)
+            normalized.append(semantic_toolchain)
+        return normalized
+
     @classmethod
     def _normalize_prefixes(cls, values: List[str]) -> List[str]:
         normalized: List[str] = []
@@ -195,6 +302,95 @@ class RoleSpecializedExecutor:
             seen.add(prefix)
             normalized.append(prefix)
         return normalized
+
+    @staticmethod
+    def _classify_semantic_toolchain(path: str) -> str:
+        normalized = RoleSpecializedExecutor._normalize_path(path)
+        lower = normalized.lower()
+        suffix = Path(lower).suffix
+
+        frontend_prefixes = (
+            "embla_core/",
+            "frontend/",
+            "web/",
+            "ui/",
+            "public/",
+            "styles/",
+            "assets/",
+            "app/",
+            "components/",
+        )
+        backend_prefixes = ("apiserver/", "autonomous/", "system/", "mcpserver/")
+        ops_prefixes = ("scripts/", "ops/", "infra/", "policy/")
+        docs_prefixes = ("doc/",)
+        config_prefixes = ("autonomous/config/", "config/")
+
+        frontend_suffixes = {".ts", ".tsx", ".js", ".jsx", ".css", ".scss", ".less", ".sass", ".html", ".svg"}
+        backend_suffixes = {".py", ".sql"}
+        ops_suffixes = {".sh", ".service", ".timer", ".conf", ".ini"}
+        docs_suffixes = {".md", ".rst", ".txt"}
+        config_suffixes = {".yaml", ".yml", ".json", ".toml", ".ini"}
+
+        if lower.startswith(docs_prefixes) or suffix in docs_suffixes:
+            return "docs"
+        if lower.startswith(config_prefixes):
+            return "config"
+        if lower.startswith(frontend_prefixes):
+            return "frontend"
+        if lower.startswith(backend_prefixes):
+            return "backend"
+        if lower.startswith(ops_prefixes):
+            return "ops"
+        if lower.startswith("tests/"):
+            if "/frontend" in lower or "/ui" in lower or "/web" in lower or "/embla_core" in lower:
+                return "test_frontend"
+            if "/ops" in lower or "/infra" in lower or "/release" in lower:
+                return "test_ops"
+            return "test_backend"
+        if suffix in frontend_suffixes:
+            return "frontend"
+        if suffix in backend_suffixes:
+            return "backend"
+        if suffix in ops_suffixes:
+            return "ops"
+        if suffix in config_suffixes:
+            return "config"
+        return "unknown"
+
+    def _build_governance(
+        self,
+        *,
+        status: str,
+        category: str,
+        reason_code: str,
+        reason: str,
+        policy: RoleExecutionPolicy,
+        violations: List[str],
+    ) -> Dict[str, Any]:
+        return {
+            "status": str(status or "unknown"),
+            "severity": str(status or "unknown"),
+            "category": str(category or ""),
+            "reason_code": str(reason_code or ""),
+            "reason": str(reason or ""),
+            "executor": self.name,
+            "strict_role_paths": bool(policy.strict_role_paths),
+            "strict_semantic_guard": bool(policy.strict_semantic_guard),
+            "policy_source": str(policy.policy_source or ""),
+            "allowed_path_prefixes": list(policy.allowed_path_prefixes),
+            "allowed_semantic_toolchains": list(policy.allowed_semantic_toolchains),
+            "violation_count": len(list(violations)),
+            "violations": list(violations),
+        }
+
+    @staticmethod
+    def _map_extra_reason(reason: str) -> tuple[str, str]:
+        normalized = str(reason or "").strip().lower()
+        if normalized == "execution_bridge_ops_ticket_required":
+            return "OPS_CHANGE_TICKET_REQUIRED", "change_control"
+        if normalized.startswith("execution_bridge_"):
+            return "ROLE_SPECIFIC_GUARD_REJECTED", "role_specific_guard"
+        return "ROLE_SPECIFIC_GUARD_REJECTED", "role_specific_guard"
 
 
 class FrontendRoleExecutor(RoleSpecializedExecutor):
@@ -213,6 +409,7 @@ class FrontendRoleExecutor(RoleSpecializedExecutor):
                 "app/",
                 "components/",
             ),
+            default_semantic_toolchains=("frontend", "docs", "config", "test_frontend"),
         )
 
 
@@ -232,6 +429,7 @@ class BackendRoleExecutor(RoleSpecializedExecutor):
                 "config/",
                 "doc/",
             ),
+            default_semantic_toolchains=("backend", "docs", "config", "test_backend", "ops"),
         )
 
 
@@ -250,6 +448,7 @@ class OpsRoleExecutor(RoleSpecializedExecutor):
                 "ops/",
                 "infra/",
             ),
+            default_semantic_toolchains=("ops", "docs", "config", "test_ops"),
         )
 
     def _validate_extra(
@@ -290,6 +489,7 @@ class NativeExecutionBridge:
             name="general",
             aliases=("worker", "general", "misc"),
             allowed_path_prefixes=(),
+            default_semantic_toolchains=(),
         )
 
     def execute_subtask(self, *, task: OptimizationTask, subtask: RuntimeSubTaskSpec) -> RuntimeSubTaskResult:
@@ -298,6 +498,17 @@ class NativeExecutionBridge:
         role_policy = self._resolve_role_policy(task=task, subtask=subtask, executor=executor)
         if bool(metadata.get("force_error")):
             reason = str(metadata.get("error") or "forced_subtask_error")
+            governance = {
+                "status": "critical",
+                "severity": "critical",
+                "category": "forced_error",
+                "reason_code": "FORCED_SUBTASK_ERROR",
+                "reason": reason,
+                "executor": executor.name,
+                "policy_source": role_policy.policy_source,
+                "violation_count": 0,
+                "violations": [],
+            }
             receipt = self._build_receipt(
                 task=task,
                 subtask=subtask,
@@ -306,6 +517,7 @@ class NativeExecutionBridge:
                 patches=[],
                 role_executor=executor.name,
                 role_policy=role_policy,
+                governance=governance,
             )
             return RuntimeSubTaskResult(
                 subtask_id=subtask.subtask_id,
@@ -314,6 +526,7 @@ class NativeExecutionBridge:
                 error=reason,
                 metadata={
                     "execution_bridge_mode": self.mode,
+                    "execution_bridge_governance": governance,
                     "execution_bridge_receipt": receipt.to_dict(),
                     "source": "execution_bridge.force_error",
                 },
@@ -322,6 +535,17 @@ class NativeExecutionBridge:
         patches = self._collect_patch_intents(subtask)
         if not patches:
             reason = "execution_bridge_missing_patch_intent"
+            governance = {
+                "status": "critical",
+                "severity": "critical",
+                "category": "patch_intent",
+                "reason_code": "MISSING_PATCH_INTENT",
+                "reason": reason,
+                "executor": executor.name,
+                "policy_source": role_policy.policy_source,
+                "violation_count": 0,
+                "violations": [],
+            }
             receipt = self._build_receipt(
                 task=task,
                 subtask=subtask,
@@ -330,6 +554,7 @@ class NativeExecutionBridge:
                 patches=[],
                 role_executor=executor.name,
                 role_policy=role_policy,
+                governance=governance,
             )
             return RuntimeSubTaskResult(
                 subtask_id=subtask.subtask_id,
@@ -339,6 +564,7 @@ class NativeExecutionBridge:
                 metadata={
                     "task_id": task.task_id,
                     "execution_bridge_mode": self.mode,
+                    "execution_bridge_governance": governance,
                     "execution_bridge_receipt": receipt.to_dict(),
                 },
             )
@@ -359,6 +585,7 @@ class NativeExecutionBridge:
                 role_executor=executor.name,
                 role_policy=role_policy,
                 warnings=role_decision.warnings,
+                governance=role_decision.governance,
             )
             return RuntimeSubTaskResult(
                 subtask_id=subtask.subtask_id,
@@ -372,6 +599,7 @@ class NativeExecutionBridge:
                     "execution_bridge_role_executor": executor.name,
                     "execution_bridge_role_policy": role_policy.to_dict(),
                     "execution_bridge_role_warnings": list(role_decision.warnings),
+                    "execution_bridge_governance": dict(role_decision.governance),
                     "execution_bridge_receipt": receipt.to_dict(),
                 },
             )
@@ -385,6 +613,7 @@ class NativeExecutionBridge:
             role_executor=executor.name,
             role_policy=role_policy,
             warnings=role_decision.warnings,
+            governance=role_decision.governance,
         )
         return RuntimeSubTaskResult(
             subtask_id=subtask.subtask_id,
@@ -398,6 +627,7 @@ class NativeExecutionBridge:
                 "execution_bridge_role_executor": executor.name,
                 "execution_bridge_role_policy": role_policy.to_dict(),
                 "execution_bridge_role_warnings": list(role_decision.warnings),
+                "execution_bridge_governance": dict(role_decision.governance),
                 "execution_bridge_receipt": receipt.to_dict(),
             },
         )
@@ -449,15 +679,25 @@ class NativeExecutionBridge:
             source = label
 
         strict_role_paths = bool(merged.get("strict_role_paths", False))
+        strict_semantic_guard = bool(merged.get("strict_semantic_guard", strict_role_paths))
         prefixes_raw = merged.get("allowed_path_prefixes")
         if isinstance(prefixes_raw, list):
             prefixes = RoleSpecializedExecutor._normalize_prefixes([str(item) for item in prefixes_raw])
         else:
             prefixes = list(executor.allowed_path_prefixes)
+        semantic_toolchains_raw = merged.get("allowed_semantic_toolchains")
+        if isinstance(semantic_toolchains_raw, list):
+            semantic_toolchains = RoleSpecializedExecutor._normalize_semantic_toolchains(
+                [str(item) for item in semantic_toolchains_raw]
+            )
+        else:
+            semantic_toolchains = list(executor.default_semantic_toolchains)
 
         return RoleExecutionPolicy(
             strict_role_paths=strict_role_paths,
             allowed_path_prefixes=prefixes,
+            strict_semantic_guard=strict_semantic_guard,
+            allowed_semantic_toolchains=semantic_toolchains,
             policy_source=source,
         )
 
@@ -526,6 +766,7 @@ class NativeExecutionBridge:
         role_executor: str,
         role_policy: RoleExecutionPolicy,
         warnings: List[str] | None = None,
+        governance: Dict[str, Any] | None = None,
     ) -> ExecutionBridgeReceipt:
         changed_paths = [str(item.path).replace("\\", "/").strip() for item in patches if str(item.path).strip()]
         return ExecutionBridgeReceipt(
@@ -541,6 +782,7 @@ class NativeExecutionBridge:
             role_executor=str(role_executor or "general"),
             role_policy=role_policy.to_dict(),
             warnings=list(warnings or []),
+            governance=dict(governance or {}),
             generated_at=_utc_now_iso(),
         )
 

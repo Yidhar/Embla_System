@@ -1,0 +1,93 @@
+# NGA-WS28-021 Phase B 实施记录（语义工具链守卫 + 治理可观测）
+
+最后更新：2026-02-27  
+任务状态：`in_progress`（Phase B done）  
+优先级：`P1`  
+类型：`feature`
+
+## 1. 目标
+
+在已完成的路径策略守卫（path policy）基础上，补齐两件事情：
+
+1. FE/BE/Ops 执行器引入语义工具链守卫（semantic toolchain guard）。
+2. 将拒绝原因结构化为治理字段，并接入 Runtime/Incident 聚合接口。
+
+## 2. 代码改动
+
+1. `autonomous/tools/execution_bridge.py`
+- 扩展 `RoleExecutionPolicy`：
+  - `strict_semantic_guard`
+  - `allowed_semantic_toolchains`
+- 为 FE/BE/Ops 执行器增加默认语义工具链白名单。
+- 新增语义分类器（`_classify_semantic_toolchain`）与违规判定。
+- 引入结构化治理载荷（`execution_bridge_governance`），包含：
+  - `reason_code`
+  - `category`
+  - `severity/status`
+  - `violations`
+  - `policy_source`
+  - `executor`
+- `ExecutionBridgeReceipt` 增加 `governance` 字段，保证审计同源。
+
+2. `autonomous/tools/subagent_runtime.py`
+- 将治理字段透传到标准事件：
+  - `SubTaskExecutionBridgeReceipt`
+  - `SubTaskExecutionCompleted`
+  - `SubTaskRejected`
+- 新增标准字段：
+  - `execution_bridge_governance`
+  - `execution_bridge_governance_reason_code`
+  - `execution_bridge_governance_category`
+  - `execution_bridge_governance_severity`
+
+3. `apiserver/api_server.py`
+- 新增 `_ops_build_execution_bridge_governance_summary()`，从事件流聚合治理信号。
+- `/v1/ops/runtime/posture` 接入：
+  - `summary.execution_bridge_governance_status`
+  - `summary.execution_bridge_governance_reason_codes`
+  - `metrics.execution_bridge_rejection_ratio`
+  - `metrics.execution_bridge_governance_warning_ratio`
+  - `data.execution_bridge_governance`
+- `/v1/ops/incidents/latest` 接入：
+  - `summary.execution_bridge_governance`
+  - `summary.runtime_prompt_safety.execution_bridge_governance`
+  - 新增 `ExecutionBridgeGovernanceIssue` incident 类型。
+
+## 3. 测试更新
+
+1. `autonomous/tests/test_execution_bridge_role_executors_ws28_014.py`
+- 新增语义守卫阻断断言。
+- 新增结构化治理字段断言（path violation / ops ticket / warning）。
+
+2. `autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py`
+- 新增治理字段透传断言（completed/receipt/rejected）。
+
+3. `tests/test_ops_dashboard_extensions.py`
+- 新增 Runtime posture 聚合 execution governance 的断言。
+- 新增 incidents 聚合 `ExecutionBridgeGovernanceIssue` 的断言。
+
+## 4. 回归命令（本次执行）
+
+```bash
+.venv/bin/ruff check \
+  autonomous/tools/execution_bridge.py \
+  autonomous/tools/subagent_runtime.py \
+  autonomous/tests/test_execution_bridge_role_executors_ws28_014.py \
+  autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py \
+  tests/test_ops_dashboard_extensions.py
+
+.venv/bin/pytest -q \
+  autonomous/tests/test_execution_bridge_role_executors_ws28_014.py \
+  autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py \
+  autonomous/tests/test_subagent_runtime_ws21_002.py \
+  autonomous/tests/test_execution_bridge_native_ws28_013.py \
+  autonomous/tests/test_system_agent_execution_bridge_cutover_ws28_013.py \
+  tests/test_ops_dashboard_extensions.py
+```
+
+结果：通过。
+
+## 5. 下一步建议（WS28-021 后续）
+
+1. 将 semantic toolchain 白名单升级为外置 `.spec`（按角色可热更新并受 ACL 审计）。
+2. 将治理 reason_code 进入发布门禁（例如 M12 gate 新增 hard/soft 策略分层）。
