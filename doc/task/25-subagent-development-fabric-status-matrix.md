@@ -1,0 +1,106 @@
+# 25 子代理开发执行面分层状态矩阵（Target vs Bridge）
+
+文档状态：执行对齐（Consistency Baseline）  
+最后更新：2026-02-26  
+适用范围：`Sub-Agent Runtime / Scaffold Engine / Execution Bridge / SystemAgent rollout`
+
+---
+
+## 1. 目标
+
+解决以下口径混淆：
+
+1. “子代理能力可用”与“目标态子代理完成”不是同一件事。
+2. `CLI Adapter/Codex CLI` 属于兼容桥接，不应被解读为目标态完成。
+3. `WS21/WS22/WS27` 的实施完成记录与 `00` 蓝图中的目标态描述，需要统一判定语义。
+
+---
+
+## 2. 判定语义（强制）
+
+本文统一使用三类状态：
+
+1. `TARGET_DONE`
+- 含义：达到 `doc/00-omni-operator-architecture.md` 与 `doc/12-limbs-layer-modules.md` 的目标态定义。
+- 必要条件：执行面内生可控（进程级/契约级/审计级），不依赖外部黑盒代理作为最终执行核心。
+
+2. `BRIDGE_DONE`
+- 含义：桥接/过渡方案已工程化可运行，具备回归与门禁证据。
+- 说明：可上线运行，不等价于目标态完成。
+
+3. `TARGET_PENDING`
+- 含义：目标态尚未达成，可能仅有设计或局部实现。
+
+---
+
+## 3. 子代理能力分层矩阵（2026-02-26）
+
+| 能力项 | 目标态定义（预定设定） | 当前实现 | 状态 | 代码锚点 | 验证证据 |
+|---|---|---|---|---|---|
+| Sub-Agent Runtime 依赖调度 | FE/BE/Ops 子任务依赖感知编排 + 统一执行门禁 | 已具备依赖调度、子任务规范校验、fail-fast | `BRIDGE_DONE` | `autonomous/tools/subagent_runtime.py` | `autonomous/tests/test_subagent_runtime_ws21_002.py`, `autonomous/tests/test_subagent_runtime_spec_validation_ws22_005.py` |
+| Contract Gate（协商前置） | FE/BE 并行前冻结 `contract_id + checksum` | 已具备协商前置与 mismatch 拒绝链 | `BRIDGE_DONE` | `autonomous/tools/subagent_runtime.py`, `autonomous/contract_negotiation.py` | `autonomous/tests/test_contract_negotiation_ws21_004.py`, `autonomous/tests/test_subagent_runtime_ws21_002.py` |
+| Scaffold 原子提交 | 多文件补丁事务化提交 + verify 失败回滚 | 已具备事务提交、verify pipeline、回滚票据 | `BRIDGE_DONE` | `autonomous/scaffold_engine.py`, `autonomous/scaffold_verify_pipeline.py` | `autonomous/tests/test_scaffold_engine_ws21_001.py`, `autonomous/tests/test_scaffold_verify_pipeline_ws21_005.py`, `tests/test_workspace_txn_e2e_regression.py` |
+| SystemAgent 调度桥接 | 主链可灰度接管 Runtime，失败可回退 | 已具备 `runtime_mode` 决策、`rollout_percent`、fail-open 预算降级 | `BRIDGE_DONE` | `autonomous/system_agent.py` | `autonomous/tests/test_system_agent_subagent_bridge_ws22_001.py`, `autonomous/tests/test_system_agent_subagent_rollout_ws22_006.py`, `autonomous/tests/test_system_agent_fail_open_budget_ws26_003.py` |
+| M12 Full Cutover 运营能力 | 可执行全量切换与回滚窗 | 已具备 `plan/apply/status/rollback` 管理脚本 | `BRIDGE_DONE` | `scripts/manage_ws27_subagent_cutover_ws27_002.py` | `tests/test_manage_ws27_subagent_cutover_ws27_002.py`, `doc/task/implementation/NGA-WS27-002-implementation.md` |
+| FE/BE/Ops 子代理执行面（内生） | 非黑盒的内生子代理进程执行器，具备统一可控审计 | 当前主要通过 `Codex CLI` 桥接；非最终形态 | `TARGET_PENDING` | `autonomous/system_agent.py`, `autonomous/tools/cli_adapter.py` | `doc/00-omni-operator-architecture.md`（映射表中已标注为“Phase 0 过渡”） |
+| Execution Bridge 终态 | 子代理输出到执行动作的内建可审计桥，不依赖外部黑盒 | 当前 `CLI Adapter` 仍为兼容桥接层 | `TARGET_PENDING` | `autonomous/tools/cli_adapter.py`, `autonomous/system_agent.py` | `doc/00-omni-operator-architecture.md`（`Execution Bridge` 行） |
+
+---
+
+## 4. 当前明确结论
+
+1. 当前“开发任务子代理”已完成的是：`Runtime + Contract + Scaffold + Rollout` 的桥接执行闭环。
+2. 当前未完成的是：`Frontend/Backend/Ops` 内生执行器与终态 `Execution Bridge`。
+3. 因此“WS21/WS22/WS27 已完成”仅表示桥接闭环完成，不能直接推导为目标态完成。
+
+---
+
+## 5. 主要文档噪音与修订建议
+
+### 5.1 噪音点 A：WS22 进度读法
+
+现状：
+
+1. `doc/task/22-ws-phase3-scheduler-bridge-and-rollout.md` 写 `4/4` 完成，指的是该文档内的 `001~004` 主任务。
+2. `NGA-WS22-005/006` 属于后续扩展补齐，记录在 `doc/task/implementation/`。
+
+建议：
+
+1. 在 WS22 文档中显式标注“`4/4` 不含扩展项 005/006”。
+2. 统一通过本文件矩阵判断“桥接完成 vs 目标态完成”。
+
+### 5.2 噪音点 B：事件命名历史遗留
+
+现状：
+
+1. 事件名仍为 `SubTaskCliExecutionCompleted`。
+2. 当前子任务执行路径已存在 patch-intent/bridge 语义，不完全等同“CLI 执行完成”。
+
+建议：
+
+1. 后续改为更中性的事件名（如 `SubTaskExecutionCompleted`），保留兼容别名一段窗口期。
+2. 在发布门禁脚本中兼容新旧字段，避免统计断层。
+
+### 5.3 噪音点 C：旧版目标文档时间戳
+
+现状：
+
+1. `doc/11-brain-layer-modules.md` 与 `doc/12-limbs-layer-modules.md` 仍为 2026-02-22 口径。
+2. 部分 “当前实现映射” 已与最新实现快照存在偏差。
+
+建议：
+
+1. 后续做一次 `11/12` 文档的 As-Is 对齐刷新，确保与 `doc/00` 矩阵同源。
+
+---
+
+## 6. 关联文档（单一阅读路径）
+
+建议按以下顺序阅读，避免交叉误读：
+
+1. `doc/00-omni-operator-architecture.md`（总蓝图与阶段边界）
+2. `doc/task/25-subagent-development-fabric-status-matrix.md`（本文，状态判定基线）
+3. `doc/task/21-ws-phase3-subagent-runtime-and-scaffold.md`（Runtime/Scaffold 主任务）
+4. `doc/task/22-ws-phase3-scheduler-bridge-and-rollout.md`（调度桥接与灰度接管）
+5. `doc/task/implementation/NGA-WS22-005-implementation.md`、`doc/task/implementation/NGA-WS22-006-implementation.md`
+6. `doc/task/implementation/NGA-WS27-002-implementation.md`（M12 full cutover）

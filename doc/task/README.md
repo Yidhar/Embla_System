@@ -107,6 +107,8 @@
     - Prompt 路由注入与多职能 Agent 注入时机设计讨论稿（阶段/风险/证据/失败触发模型）。
 43. `scripts/update_immutable_dna_manifest_ws23_003.py`
     - WS23-003 DNA manifest 一键同步工具（更新 manifest + 可选 gate 复验 + 报告落盘）。
+44. `doc/task/25-subagent-development-fabric-status-matrix.md`
+    - 子代理开发执行面分层状态矩阵（区分 `BRIDGE_DONE` 与 `TARGET_DONE`，并标注文档噪音与统一判定口径）。
 
 ## 4. 任务状态约定
 

@@ -27,6 +27,7 @@
 > - 当前实现：`00-mvp-architecture-design.md`
 > - SDLC 对齐：`07-autonomous-agent-sdlc-architecture.md`
 > - Phase3 Full 任务清单：`doc/task/23-phase3-full-target-task-list.md`
+> - 子代理分层状态矩阵：`doc/task/25-subagent-development-fabric-status-matrix.md`
 >
 > **阶段边界说明**：
 > - 全局阶段仅定义 `Phase 0` 到 `Phase 3`。

@@ -76,5 +76,6 @@
 ## 当前进度快照（2026-02-24）
 
 - 已完成：4/4（NGA-WS22-001, NGA-WS22-002, NGA-WS22-003, NGA-WS22-004）
+- 口径说明：上述 `4/4` 仅覆盖本文件主任务；`NGA-WS22-005/006` 为后续扩展补齐项，实施记录见 `doc/task/implementation/NGA-WS22-005-implementation.md` 与 `doc/task/implementation/NGA-WS22-006-implementation.md`。
 - 进行中：无
 - 下一步重点：M7 收口验证与发布门禁联调
