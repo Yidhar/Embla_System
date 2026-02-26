@@ -50,11 +50,17 @@ def test_v1_system_prompts_update(monkeypatch, tmp_path: Path) -> None:
     payload = _run(
         update_system_prompt_template_v1(
             "conversation_style_prompt",
-            payload={"content": "STYLE_V2"},
+            payload={
+                "content": "STYLE_V2",
+                "approval_ticket": "TICKET-WS28-003",
+                "change_reason": "refine style for ws28 controlled update",
+            },
         )
     )
     assert payload.get("status") == "success"
     assert payload.get("name") == "conversation_style_prompt"
+    assert isinstance(payload.get("acl"), dict)
+    assert payload["acl"]["matched_rule"]["level"] == "S1_CONTROLLED"
 
     detail = _run(get_system_prompt_template_v1("conversation_style_prompt.txt"))
     assert detail.get("content") == "STYLE_V2"

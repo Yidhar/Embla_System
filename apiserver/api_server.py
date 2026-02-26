@@ -520,10 +520,30 @@ async def update_system_prompt(payload: Dict[str, Any]):
         content = payload.get("content")
         if not content:
             raise HTTPException(status_code=400, detail="缺少content参数")
-        from system.config import save_prompt
+        from system.config import save_prompt, evaluate_prompt_acl
 
+        approval_ticket = str(payload.get("approval_ticket") or "").strip()
+        change_reason = str(payload.get("change_reason") or "").strip()
+        acl_decision = evaluate_prompt_acl(
+            prompt_name="conversation_style_prompt",
+            approval_ticket=approval_ticket,
+            change_reason=change_reason,
+        )
+        if bool(acl_decision.get("blocked")):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": acl_decision.get("reason_code"),
+                    "message": acl_decision.get("reason"),
+                    "acl": acl_decision,
+                },
+            )
         save_prompt("conversation_style_prompt", content)
-        return {"status": "success", "message": "提示词更新成功"}
+        return {
+            "status": "success",
+            "message": "提示词更新成功",
+            "acl": acl_decision,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -619,14 +639,35 @@ async def get_system_prompt_template_v1(name: str):
 @app.post("/system/prompts/{name}")
 async def update_system_prompt_template(name: str, payload: Dict[str, Any]):
     try:
-        from system.config import save_prompt
+        from system.config import save_prompt, evaluate_prompt_acl
 
         normalized = _normalize_prompt_template_name(name)
         content = payload.get("content")
         if not isinstance(content, str):
             raise HTTPException(status_code=400, detail="缺少content参数或类型错误")
+        approval_ticket = str(payload.get("approval_ticket") or "").strip()
+        change_reason = str(payload.get("change_reason") or "").strip()
+        acl_decision = evaluate_prompt_acl(
+            prompt_name=normalized,
+            approval_ticket=approval_ticket,
+            change_reason=change_reason,
+        )
+        if bool(acl_decision.get("blocked")):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": acl_decision.get("reason_code"),
+                    "message": acl_decision.get("reason"),
+                    "acl": acl_decision,
+                },
+            )
         save_prompt(normalized, content)
-        return {"status": "success", "message": "提示词更新成功", "name": normalized}
+        return {
+            "status": "success",
+            "message": "提示词更新成功",
+            "name": normalized,
+            "acl": acl_decision,
+        }
     except HTTPException:
         raise
     except Exception as e:

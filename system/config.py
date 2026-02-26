@@ -7,6 +7,7 @@ NagaAgent 配置系统 - 基于Pydantic实现类型安全和验证
 import os
 import json
 import logging
+import fnmatch
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime
@@ -811,6 +812,195 @@ def get_prompt(name: str, **kwargs) -> str:
 def save_prompt(name: str, content: str):
     """便捷函数：保存提示词"""
     get_prompt_manager().save_prompt(name, content)
+
+
+_PROMPT_ACL_LEVELS = {"S0_LOCKED", "S1_CONTROLLED", "S2_FLEXIBLE"}
+
+_DEFAULT_PROMPT_ACL_SPEC: Dict[str, Any] = {
+    "enforcement_mode": "block",
+    "rules": [
+        {
+            "path_pattern": "immutable_dna_manifest.txt",
+            "level": "S0_LOCKED",
+            "require_ticket": True,
+            "require_manifest_refresh": True,
+            "require_gate_verify": True,
+            "allow_ai_direct_write": False,
+        },
+        {
+            "path_pattern": "conversation_style_prompt.txt",
+            "level": "S1_CONTROLLED",
+            "require_ticket": True,
+            "require_manifest_refresh": True,
+            "require_gate_verify": True,
+            "allow_ai_direct_write": False,
+        },
+        {
+            "path_pattern": "conversation_analyzer_prompt.txt",
+            "level": "S1_CONTROLLED",
+            "require_ticket": True,
+            "require_manifest_refresh": True,
+            "require_gate_verify": True,
+            "allow_ai_direct_write": False,
+        },
+        {
+            "path_pattern": "tool_dispatch_prompt.txt",
+            "level": "S1_CONTROLLED",
+            "require_ticket": True,
+            "require_manifest_refresh": True,
+            "require_gate_verify": True,
+            "allow_ai_direct_write": False,
+        },
+        {
+            "path_pattern": "agentic_tool_prompt.txt",
+            "level": "S1_CONTROLLED",
+            "require_ticket": True,
+            "require_manifest_refresh": True,
+            "require_gate_verify": True,
+            "allow_ai_direct_write": False,
+        },
+        {
+            "path_pattern": "*.txt",
+            "level": "S2_FLEXIBLE",
+            "require_ticket": False,
+            "require_manifest_refresh": False,
+            "require_gate_verify": False,
+            "allow_ai_direct_write": True,
+        },
+    ],
+}
+
+
+def _normalize_prompt_acl_level(level: str) -> str:
+    normalized = str(level or "").strip().upper()
+    if normalized in _PROMPT_ACL_LEVELS:
+        return normalized
+    return "S2_FLEXIBLE"
+
+
+def _normalize_prompt_acl_rule(raw: Dict[str, Any]) -> Dict[str, Any]:
+    path_pattern = str(raw.get("path_pattern") or "").strip()
+    if not path_pattern:
+        return {}
+    return {
+        "path_pattern": path_pattern,
+        "level": _normalize_prompt_acl_level(str(raw.get("level") or "S2_FLEXIBLE")),
+        "require_ticket": bool(raw.get("require_ticket")),
+        "require_manifest_refresh": bool(raw.get("require_manifest_refresh")),
+        "require_gate_verify": bool(raw.get("require_gate_verify")),
+        "allow_ai_direct_write": bool(raw.get("allow_ai_direct_write", True)),
+    }
+
+
+def load_prompt_acl_spec(*, prompts_dir: Optional[Path] = None) -> Dict[str, Any]:
+    manager = get_prompt_manager()
+    resolved_prompts_dir = Path(prompts_dir) if prompts_dir is not None else Path(manager.prompts_dir)
+    spec_path = resolved_prompts_dir / "prompt_acl.spec"
+    if not spec_path.exists():
+        return dict(_DEFAULT_PROMPT_ACL_SPEC)
+
+    try:
+        payload = json5.loads(spec_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return dict(_DEFAULT_PROMPT_ACL_SPEC)
+    except Exception as e:
+        logging.getLogger(__name__).warning("load prompt_acl.spec failed: %s", e)
+        return dict(_DEFAULT_PROMPT_ACL_SPEC)
+
+    rules = []
+    for raw in payload.get("rules", []) if isinstance(payload.get("rules"), list) else []:
+        if not isinstance(raw, dict):
+            continue
+        normalized = _normalize_prompt_acl_rule(raw)
+        if normalized:
+            rules.append(normalized)
+
+    if not rules:
+        rules = list(_DEFAULT_PROMPT_ACL_SPEC["rules"])
+
+    enforcement_mode = str(payload.get("enforcement_mode") or "block").strip().lower()
+    if enforcement_mode not in {"shadow", "block"}:
+        enforcement_mode = "block"
+    return {
+        "enforcement_mode": enforcement_mode,
+        "rules": rules,
+    }
+
+
+def evaluate_prompt_acl(
+    *,
+    prompt_name: str,
+    prompts_dir: Optional[Path] = None,
+    approval_ticket: str = "",
+    change_reason: str = "",
+    enforcement_mode_override: str = "",
+) -> Dict[str, Any]:
+    normalized_name = str(prompt_name or "").strip()
+    if normalized_name.lower().endswith(".txt"):
+        normalized_name = normalized_name[:-4]
+    filename = f"{normalized_name}.txt"
+
+    spec = load_prompt_acl_spec(prompts_dir=prompts_dir)
+    rules = list(spec.get("rules", [])) if isinstance(spec.get("rules"), list) else []
+    matched_rule = {
+        "path_pattern": "*.txt",
+        "level": "S2_FLEXIBLE",
+        "require_ticket": False,
+        "require_manifest_refresh": False,
+        "require_gate_verify": False,
+        "allow_ai_direct_write": True,
+    }
+    for rule in rules:
+        path_pattern = str(rule.get("path_pattern") or "").strip()
+        if path_pattern and fnmatch.fnmatch(filename, path_pattern):
+            matched_rule = {
+                "path_pattern": path_pattern,
+                "level": _normalize_prompt_acl_level(str(rule.get("level") or "S2_FLEXIBLE")),
+                "require_ticket": bool(rule.get("require_ticket")),
+                "require_manifest_refresh": bool(rule.get("require_manifest_refresh")),
+                "require_gate_verify": bool(rule.get("require_gate_verify")),
+                "allow_ai_direct_write": bool(rule.get("allow_ai_direct_write", True)),
+            }
+            break
+
+    enforcement_mode = str(enforcement_mode_override or spec.get("enforcement_mode") or "block").strip().lower()
+    if enforcement_mode not in {"shadow", "block"}:
+        enforcement_mode = "block"
+
+    approval_text = str(approval_ticket or "").strip()
+    reason_text = str(change_reason or "").strip()
+    level = str(matched_rule["level"])
+    blocked = False
+    reason_code = "OK"
+    reason = "allowed"
+
+    if level == "S0_LOCKED":
+        blocked = True
+        reason_code = "PROMPT_ACL_S0_LOCKED"
+        reason = "S0_LOCKED prompt cannot be updated via API"
+    elif bool(matched_rule["require_ticket"]) and not approval_text:
+        blocked = True
+        reason_code = "PROMPT_ACL_APPROVAL_TICKET_REQUIRED"
+        reason = "approval_ticket is required for this prompt"
+    elif level == "S1_CONTROLLED" and not reason_text:
+        blocked = True
+        reason_code = "PROMPT_ACL_CHANGE_REASON_REQUIRED"
+        reason = "change_reason is required for S1_CONTROLLED prompt"
+
+    shadow_blocked = bool(blocked and enforcement_mode == "shadow")
+    return {
+        "prompt_name": normalized_name,
+        "filename": filename,
+        "enforcement_mode": enforcement_mode,
+        "matched_rule": matched_rule,
+        "approval_ticket_present": bool(approval_text),
+        "change_reason_present": bool(reason_text),
+        "blocked": bool(blocked and enforcement_mode == "block"),
+        "shadow_blocked": shadow_blocked,
+        "allowed": not bool(blocked and enforcement_mode == "block"),
+        "reason_code": reason_code,
+        "reason": reason,
+    }
 
 
 def build_system_prompt(
