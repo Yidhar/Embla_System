@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 from scripts.validate_m12_doc_consistency_ws27_005 import (
+    DEFAULT_BACKLOG,
     CORE_DOC_PATHS,
     DEFAULT_BOARD,
     DEFAULT_PHASE3_BOARD,
@@ -67,6 +68,7 @@ def _bootstrap_repo(
         _write_text(root / relative, f"# {relative.name}\n")
 
     _write_board_csv(root / DEFAULT_BOARD)
+    _write_board_csv(root / DEFAULT_BACKLOG)
     _write_board_csv(root / DEFAULT_PHASE3_BOARD)
 
 
@@ -89,6 +91,9 @@ def test_validate_m12_doc_consistency_passes_when_all_required_docs_exist() -> N
         assert checks["ws27_implementation_docs_present"] is True
         assert checks["ws27_runbooks_present"] is True
         assert checks["phase3_snapshot_markers_present"] is True
+        assert checks["legacy_board_backlog_status_aligned"] is True
+        assert checks["legacy_done_has_dated_verification"] is True
+        assert checks["legacy_ws_docs_status_synced_with_board"] is True
         board_summary = report["board_consistency_summary"]
         assert board_summary["legacy_board"]["error_count"] == 0
         assert board_summary["phase3_board"]["error_count"] == 0
@@ -112,6 +117,9 @@ def test_validate_m12_doc_consistency_reports_missing_marker_and_runbook() -> No
         assert checks["execution_board_has_no_errors"] is True
         assert checks["ws27_runbooks_present"] is False
         assert checks["phase3_snapshot_markers_present"] is False
+        assert checks["legacy_board_backlog_status_aligned"] is True
+        assert checks["legacy_done_has_dated_verification"] is True
+        assert checks["legacy_ws_docs_status_synced_with_board"] is True
         missing_items = report["missing_items"]
         assert len(missing_items["ws27_runbooks"]) >= 1
         assert len(missing_items["phase3_snapshot_markers"]) >= 1

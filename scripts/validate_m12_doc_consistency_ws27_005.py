@@ -9,11 +9,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Sequence
 
+from scripts.audit_task_status_drift import run_audit
 from system.doc_consistency import validate_execution_board_consistency
 
 
 DEFAULT_OUTPUT = Path("scratch/reports/ws27_m12_doc_consistency_ws27_005.json")
 DEFAULT_BOARD = Path("doc/task/09-execution-board.csv")
+DEFAULT_BACKLOG = Path("doc/task/99-task-backlog.csv")
 DEFAULT_PHASE3_BOARD = Path("doc/task/23-phase3-full-execution-board.csv")
 DEFAULT_RISK_LEDGER = Path("doc/task/08-risk-closure-ledger.md")
 DEFAULT_PHASE3_TASK_LIST = Path("doc/task/23-phase3-full-target-task-list.md")
@@ -81,6 +83,7 @@ def run_validate_m12_doc_consistency_ws27_005(
     *,
     repo_root: Path,
     board_file: Path = DEFAULT_BOARD,
+    backlog_file: Path = DEFAULT_BACKLOG,
     phase3_board_file: Path = DEFAULT_PHASE3_BOARD,
     risk_ledger_file: Path = DEFAULT_RISK_LEDGER,
     phase3_task_list: Path = DEFAULT_PHASE3_TASK_LIST,
@@ -107,6 +110,37 @@ def run_validate_m12_doc_consistency_ws27_005(
         phase3_task_list=phase3_task_list,
         markers=PHASE3_REQUIRED_MARKERS,
     )
+    status_audit_error = ""
+    status_audit_summary: Dict[str, int] = {}
+    status_audit_samples: Dict[str, Any] = {}
+    legacy_board_backlog_status_aligned = False
+    legacy_done_has_dated_verification = False
+    legacy_ws_docs_status_synced_with_board = False
+    resolved_backlog = _resolve_path(root, backlog_file)
+    if resolved_backlog.exists():
+        status_audit_report = run_audit(
+            board_file=_resolve_path(root, board_file),
+            backlog_file=resolved_backlog,
+            ws_doc_glob="doc/task/[1-2][0-9]-ws-*.md",
+            demote_undated_done=False,
+            apply=False,
+        )
+        summary_payload = status_audit_report.get("summary")
+        if isinstance(summary_payload, dict):
+            status_audit_summary = {str(k): int(v) for k, v in summary_payload.items()}
+        legacy_board_backlog_status_aligned = (
+            int(status_audit_summary.get("board_vs_backlog_mismatch_count", 0)) == 0
+            and int(status_audit_summary.get("missing_in_backlog_count", 0)) == 0
+        )
+        legacy_done_has_dated_verification = int(status_audit_summary.get("done_without_dated_note_count", 0)) == 0
+        legacy_ws_docs_status_synced_with_board = int(status_audit_summary.get("ws_doc_drift_count", 0)) == 0
+        status_audit_samples = {
+            "board_vs_backlog_mismatch_sample": list(status_audit_report.get("board_vs_backlog_mismatch", [])[:20]),
+            "done_without_dated_note_sample": list(status_audit_report.get("done_without_dated_note", [])[:20]),
+            "ws_doc_drift_sample": list(status_audit_report.get("ws_doc_drift", [])[:20]),
+        }
+    else:
+        status_audit_error = f"missing file: {_to_unix_path(resolved_backlog)}"
 
     checks = {
         "execution_board_has_no_errors": (
@@ -118,6 +152,9 @@ def run_validate_m12_doc_consistency_ws27_005(
         "ws27_implementation_docs_present": len(missing_impl_docs) == 0,
         "ws27_runbooks_present": len(missing_runbooks) == 0,
         "phase3_snapshot_markers_present": len(missing_phase3_markers) == 0,
+        "legacy_board_backlog_status_aligned": legacy_board_backlog_status_aligned,
+        "legacy_done_has_dated_verification": legacy_done_has_dated_verification,
+        "legacy_ws_docs_status_synced_with_board": legacy_ws_docs_status_synced_with_board,
     }
     passed = all(checks.values())
 
@@ -133,6 +170,7 @@ def run_validate_m12_doc_consistency_ws27_005(
             "ws27_implementation_docs": missing_impl_docs,
             "ws27_runbooks": missing_runbooks,
             "phase3_snapshot_markers": missing_phase3_markers,
+            "legacy_backlog_file": ([] if resolved_backlog.exists() else [_to_unix_path(backlog_file)]),
         },
         "board_consistency_summary": {
             "legacy_board": {
@@ -158,6 +196,11 @@ def run_validate_m12_doc_consistency_ws27_005(
                 "warn_count": int(legacy_board_report.warn_count + phase3_board_report.warn_count),
             },
         },
+        "status_audit": {
+            "error": status_audit_error,
+            "summary": status_audit_summary,
+            "samples": status_audit_samples,
+        },
     }
 
     output = _resolve_path(root, output_file)
@@ -171,6 +214,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate WS27-005 M12 doc consistency closure")
     parser.add_argument("--repo-root", type=Path, default=Path("."), help="Repository root")
     parser.add_argument("--board", type=Path, default=DEFAULT_BOARD, help="Execution board CSV path")
+    parser.add_argument("--backlog", type=Path, default=DEFAULT_BACKLOG, help="Task backlog CSV path")
     parser.add_argument(
         "--phase3-board",
         type=Path,
@@ -194,6 +238,7 @@ def main() -> int:
     report = run_validate_m12_doc_consistency_ws27_005(
         repo_root=args.repo_root,
         board_file=args.board,
+        backlog_file=args.backlog,
         phase3_board_file=args.phase3_board,
         risk_ledger_file=args.risk_ledger,
         phase3_task_list=args.phase3_task_list,
