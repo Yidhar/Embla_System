@@ -101,6 +101,8 @@
     - WS23 M8 门禁评估器（报告规则、文档规则、runbook 规则）。
 40. `doc/task/runbooks/release_m8_phase3_closure_onepager_ws23_006.md`
     - M8 发布收口一页清单（T0-T6 执行顺序、放行条件、产物归档）。
+41. `doc/task/24-ws-prompt-routing-injection-policy.md`
+    - Prompt 路由注入与多职能 Agent 注入时机设计讨论稿（阶段/风险/证据/失败触发模型）。
 
 ## 4. 任务状态约定
 
