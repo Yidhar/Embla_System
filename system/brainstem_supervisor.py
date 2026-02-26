@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -376,11 +378,38 @@ class BrainstemSupervisor:
         return spec
 
     @staticmethod
+    def _resolve_command(command: List[str]) -> List[str]:
+        if not command:
+            return []
+        executable = str(command[0]).strip()
+        if not executable:
+            return list(command)
+        if os.path.sep in executable or (os.path.altsep and os.path.altsep in executable):
+            return list(command)
+
+        resolved = shutil.which(executable)
+        if resolved:
+            updated = list(command)
+            updated[0] = str(resolved)
+            return updated
+
+        if executable.lower() in {"python", "python3"}:
+            candidates = [sys.executable, shutil.which("python3"), shutil.which("python")]
+            for candidate in candidates:
+                if candidate:
+                    updated = list(command)
+                    updated[0] = str(candidate)
+                    return updated
+
+        return list(command)
+
+    @staticmethod
     def _default_launcher(spec: BrainstemServiceSpec) -> int:
         env = os.environ.copy()
         env.update(spec.env or {})
+        command = BrainstemSupervisor._resolve_command(spec.command)
         proc = subprocess.Popen(  # noqa: S603
-            spec.command,
+            command,
             cwd=spec.working_dir or None,
             env=env,
             stdout=subprocess.DEVNULL,

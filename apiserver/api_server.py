@@ -17,7 +17,7 @@ import subprocess
 import locale
 import uuid
 from contextlib import asynccontextmanager
-from typing import Dict, List, Optional, AsyncGenerator, Any, Tuple, Literal
+from typing import Dict, List, Optional, AsyncGenerator, Any, Tuple, Literal, Callable
 from urllib.request import Request as UrlRequest, urlopen
 from urllib.error import URLError
 
@@ -130,6 +130,168 @@ _CHAT_ROUTE_FOLLOWUP_MARKERS = (
     "接着",
     "然后",
 )
+
+_BRAINSTEM_AUTOSTART_ENV = "NAGA_BRAINSTEM_AUTOSTART"
+_BRAINSTEM_AUTOSTOP_ENV = "NAGA_BRAINSTEM_AUTOSTOP_ON_API_SHUTDOWN"
+_BRAINSTEM_AUTOSTART_TIMEOUT_ENV = "NAGA_BRAINSTEM_AUTOSTART_TIMEOUT_SECONDS"
+_BRAINSTEM_AUTOSTART_DEFAULT = True
+_BRAINSTEM_AUTOSTART_OUTPUT = Path("scratch/reports/brainstem_control_plane_autostart_ws28_017.json")
+_BRAINSTEM_AUTOSTOP_OUTPUT = Path("scratch/reports/brainstem_control_plane_autostop_ws28_017.json")
+_GLOBAL_MUTEX_BOOTSTRAP_TTL_SECONDS = 10.0
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(str(name))
+    if raw is None:
+        return bool(default)
+    normalized = str(raw).strip().lower()
+    if not normalized:
+        return bool(default)
+    return normalized in {"1", "true", "yes", "on", "y"}
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(str(name))
+    if raw is None:
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _should_bootstrap_brainstem_control_plane() -> tuple[bool, str]:
+    explicit = os.environ.get(_BRAINSTEM_AUTOSTART_ENV)
+    if explicit is None and os.environ.get("PYTEST_CURRENT_TEST"):
+        return False, "pytest_default_skip"
+    enabled = _env_flag(_BRAINSTEM_AUTOSTART_ENV, _BRAINSTEM_AUTOSTART_DEFAULT)
+    if not enabled:
+        return False, "env_disabled"
+    return True, "enabled"
+
+
+def _bootstrap_brainstem_control_plane_startup(
+    *,
+    manager: Optional[Callable[..., Dict[str, Any]]] = None,
+    repo_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    enabled, reason = _should_bootstrap_brainstem_control_plane()
+    root = (repo_root or _ops_repo_root()).resolve()
+    report: Dict[str, Any] = {
+        "enabled": enabled,
+        "reason": reason,
+        "repo_root": str(root).replace("\\", "/"),
+        "env": {
+            "autostart_env": _BRAINSTEM_AUTOSTART_ENV,
+            "autostop_env": _BRAINSTEM_AUTOSTOP_ENV,
+            "autostart_timeout_env": _BRAINSTEM_AUTOSTART_TIMEOUT_ENV,
+        },
+    }
+    if not enabled:
+        return report
+
+    run_manager = manager
+    if run_manager is None:
+        from scripts.manage_brainstem_control_plane_ws28_017 import run_manage_brainstem_control_plane_ws28_017
+
+        run_manager = run_manage_brainstem_control_plane_ws28_017
+
+    timeout_seconds = max(2.0, _env_float(_BRAINSTEM_AUTOSTART_TIMEOUT_ENV, 8.0))
+    try:
+        startup_report = run_manager(
+            repo_root=root,
+            action="start",
+            output_file=_BRAINSTEM_AUTOSTART_OUTPUT,
+            start_timeout_seconds=timeout_seconds,
+            force_restart=False,
+        )
+        report["passed"] = bool(startup_report.get("passed"))
+        report["startup_report"] = startup_report
+        if bool(startup_report.get("passed")):
+            logger.info("[brainstem_bootstrap] control plane startup ensured")
+        else:
+            logger.warning("[brainstem_bootstrap] control plane startup failed")
+    except Exception as exc:
+        report["passed"] = False
+        report["error"] = f"{type(exc).__name__}:{exc}"
+        logger.error(f"[brainstem_bootstrap] startup error: {exc}")
+    return report
+
+
+def _bootstrap_brainstem_control_plane_shutdown(
+    *,
+    manager: Optional[Callable[..., Dict[str, Any]]] = None,
+    repo_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    enabled = _env_flag(_BRAINSTEM_AUTOSTOP_ENV, False)
+    root = (repo_root or _ops_repo_root()).resolve()
+    report: Dict[str, Any] = {
+        "enabled": enabled,
+        "repo_root": str(root).replace("\\", "/"),
+        "env": {
+            "autostop_env": _BRAINSTEM_AUTOSTOP_ENV,
+        },
+    }
+    if not enabled:
+        report["reason"] = "env_disabled"
+        return report
+
+    run_manager = manager
+    if run_manager is None:
+        from scripts.manage_brainstem_control_plane_ws28_017 import run_manage_brainstem_control_plane_ws28_017
+
+        run_manager = run_manage_brainstem_control_plane_ws28_017
+
+    try:
+        shutdown_report = run_manager(
+            repo_root=root,
+            action="stop",
+            output_file=_BRAINSTEM_AUTOSTOP_OUTPUT,
+        )
+        report["passed"] = bool(shutdown_report.get("passed"))
+        report["shutdown_report"] = shutdown_report
+        if bool(shutdown_report.get("passed")):
+            logger.info("[brainstem_bootstrap] control plane stop completed")
+        else:
+            logger.warning("[brainstem_bootstrap] control plane stop reported failures")
+    except Exception as exc:
+        report["passed"] = False
+        report["error"] = f"{type(exc).__name__}:{exc}"
+        logger.error(f"[brainstem_bootstrap] shutdown error: {exc}")
+    return report
+
+
+def _bootstrap_global_mutex_lease_state(
+    *,
+    manager_factory: Optional[Callable[[], Any]] = None,
+) -> Dict[str, Any]:
+    report: Dict[str, Any] = {
+        "enabled": True,
+        "ttl_seconds": float(_GLOBAL_MUTEX_BOOTSTRAP_TTL_SECONDS),
+    }
+    try:
+        if manager_factory is None:
+            from system.global_mutex import get_global_mutex_manager
+
+            manager = get_global_mutex_manager()
+        else:
+            manager = manager_factory()
+
+        state = manager.ensure_initialized(ttl_seconds=float(_GLOBAL_MUTEX_BOOTSTRAP_TTL_SECONDS))
+        state_file = Path(str(getattr(manager, "state_file", "") or "")).resolve()
+        report["state_file"] = str(state_file).replace("\\", "/")
+        report["state"] = str(state.get("lease_state") or state.get("state") or "")
+        report["fencing_epoch"] = int(state.get("fencing_epoch") or 0)
+        report["passed"] = state_file.exists()
+        if report["passed"]:
+            logger.info("[global_mutex_bootstrap] lease state initialized")
+        else:
+            logger.warning("[global_mutex_bootstrap] state file missing after bootstrap")
+    except Exception as exc:
+        report["passed"] = False
+        report["error"] = f"{type(exc).__name__}:{exc}"
+        logger.error(f"[global_mutex_bootstrap] bootstrap error: {exc}")
+    return report
 
 
 def _normalize_chat_text(text: str) -> str:
@@ -800,7 +962,15 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     try:
         print("[INFO] 正在初始化API服务器...")
+        mutex_bootstrap = _bootstrap_global_mutex_lease_state()
+        app.state.global_mutex_bootstrap = mutex_bootstrap
+        if not bool(mutex_bootstrap.get("passed", False)):
+            print("[WARN] Global mutex 启动初始化未通过，锁状态可能显示 missing/unknown")
         # 对话核心功能已集成到apiserver
+        brainstem_bootstrap = _bootstrap_brainstem_control_plane_startup()
+        app.state.brainstem_bootstrap = brainstem_bootstrap
+        if bool(brainstem_bootstrap.get("enabled")) and not bool(brainstem_bootstrap.get("passed", True)):
+            print("[WARN] Brainstem 控制面自动托管未通过，运行态势可能显示 unknown/missing")
         print("[SUCCESS] API服务器初始化完成")
         yield
     except Exception as e:
@@ -810,6 +980,7 @@ async def lifespan(app: FastAPI):
     finally:
         print("[INFO] 正在清理资源...")
         # MCP服务现在由mcpserver独立管理，无需清理
+        app.state.brainstem_shutdown = _bootstrap_brainstem_control_plane_shutdown()
 
 
 # 创建FastAPI应用
@@ -2319,6 +2490,10 @@ _OPS_INCIDENT_EVENT_SEVERITY: Dict[str, str] = {
     "RouteQualityGuardEscalatedWarning": "warning",
 }
 
+_OPS_BRAINSTEM_HEARTBEAT_RELATIVE_PATH = Path("scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json")
+_OPS_BRAINSTEM_HEARTBEAT_STALE_WARNING_SECONDS = 120.0
+_OPS_BRAINSTEM_HEARTBEAT_STALE_CRITICAL_SECONDS = 300.0
+
 
 def _ops_read_json_file(path: Path) -> Dict[str, Any]:
     if not path.exists():
@@ -2357,6 +2532,81 @@ def _ops_extract_failed_checks(payload: Dict[str, Any]) -> List[str]:
         if value is False:
             failed.append(str(key))
     return failed
+
+
+def _ops_build_brainstem_control_plane_summary(repo_root: Path) -> Dict[str, Any]:
+    heartbeat_file = repo_root / _OPS_BRAINSTEM_HEARTBEAT_RELATIVE_PATH
+    heartbeat_payload = _ops_read_json_file(heartbeat_file)
+    generated_at = str(heartbeat_payload.get("generated_at") or "")
+    generated_ts = _ops_parse_iso_datetime(generated_at)
+    now_ts = time.time()
+    heartbeat_age_seconds: Optional[float] = None
+    if generated_ts is not None:
+        heartbeat_age_seconds = max(0.0, round(now_ts - generated_ts, 3))
+
+    raw_unhealthy_services = heartbeat_payload.get("unhealthy_services")
+    unhealthy_services: List[str] = []
+    if isinstance(raw_unhealthy_services, list):
+        unhealthy_services = [str(item) for item in raw_unhealthy_services if str(item).strip()]
+
+    healthy_value = heartbeat_payload.get("healthy")
+    healthy: Optional[bool]
+    if isinstance(healthy_value, bool):
+        healthy = healthy_value
+    else:
+        healthy = None
+
+    status = "unknown"
+    reason_code = "BRAINSTEM_HEARTBEAT_MISSING"
+    reason_text = "Brainstem control-plane heartbeat file is missing."
+    if heartbeat_file.exists():
+        status = "unknown"
+        reason_code = "BRAINSTEM_HEARTBEAT_NO_SIGNAL"
+        reason_text = "Brainstem heartbeat file exists but lacks valid health signal."
+        if generated_ts is None:
+            status = "warning"
+            reason_code = "BRAINSTEM_HEARTBEAT_TIMESTAMP_INVALID"
+            reason_text = "Brainstem heartbeat timestamp is missing or invalid."
+        elif heartbeat_age_seconds is not None and heartbeat_age_seconds > float(_OPS_BRAINSTEM_HEARTBEAT_STALE_CRITICAL_SECONDS):
+            status = "critical"
+            reason_code = "BRAINSTEM_HEARTBEAT_STALE_CRITICAL"
+            reason_text = "Brainstem heartbeat is stale beyond critical threshold."
+        elif heartbeat_age_seconds is not None and heartbeat_age_seconds > float(_OPS_BRAINSTEM_HEARTBEAT_STALE_WARNING_SECONDS):
+            status = "warning"
+            reason_code = "BRAINSTEM_HEARTBEAT_STALE_WARNING"
+            reason_text = "Brainstem heartbeat is stale beyond warning threshold."
+        elif healthy is False or unhealthy_services:
+            status = "critical"
+            reason_code = "BRAINSTEM_HEALTH_UNHEALTHY"
+            reason_text = "Brainstem daemon reports unhealthy services."
+        elif healthy is True:
+            status = "ok"
+            reason_code = "OK"
+            reason_text = "Brainstem daemon heartbeat is healthy."
+        else:
+            status = "warning"
+            reason_code = "BRAINSTEM_HEALTH_UNKNOWN"
+            reason_text = "Brainstem heartbeat is fresh but healthy flag is missing."
+
+    return {
+        "status": _ops_status_to_severity(status),
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "heartbeat_file": _ops_unix_path(heartbeat_file),
+        "exists": heartbeat_file.exists(),
+        "generated_at": generated_at,
+        "heartbeat_age_seconds": heartbeat_age_seconds,
+        "stale_warning_seconds": float(_OPS_BRAINSTEM_HEARTBEAT_STALE_WARNING_SECONDS),
+        "stale_critical_seconds": float(_OPS_BRAINSTEM_HEARTBEAT_STALE_CRITICAL_SECONDS),
+        "healthy": healthy,
+        "service_count": _ops_safe_int(heartbeat_payload.get("service_count"), default=0),
+        "tick": _ops_safe_int(heartbeat_payload.get("tick"), default=0),
+        "mode": str(heartbeat_payload.get("mode") or ""),
+        "pid": _ops_safe_int(heartbeat_payload.get("pid"), default=0),
+        "state_file": str(heartbeat_payload.get("state_file") or ""),
+        "spec_file": str(heartbeat_payload.get("spec_file") or ""),
+        "unhealthy_services": unhealthy_services,
+    }
 
 
 def _ops_collect_required_reports(repo_root: Path) -> List[Dict[str, Any]]:
@@ -2453,11 +2703,15 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         events_file = _ops_repo_root() / events_file
     route_quality_trend = _ops_build_route_quality_trend(events_file, window_size=20, max_windows=6)
 
+    repo_root = _ops_repo_root()
+    brainstem_control_plane = _ops_build_brainstem_control_plane_summary(repo_root)
+    brainstem_status = _ops_status_to_severity(str(brainstem_control_plane.get("status") or "unknown"))
+
     metric_status = summary.get("metric_status") if isinstance(summary.get("metric_status"), dict) else {}
-    overall_status = str(summary.get("overall_status") or "unknown")
+    snapshot_overall_status = str(summary.get("overall_status") or "unknown")
+    overall_status = _ops_max_status([snapshot_overall_status, brainstem_status])
     severity = _ops_status_to_severity(overall_status)
 
-    repo_root = _ops_repo_root()
     ws26_runtime_report = repo_root / "scratch" / "reports" / "ws26_runtime_snapshot_ws26_002.json"
     source_reports: List[str] = []
     ws26_runtime_report_payload: Dict[str, Any] = {}
@@ -2476,11 +2730,15 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         if isinstance(path_value, str) and path_value.strip():
             source_reports.append(path_value.replace("\\", "/"))
 
+    if bool(brainstem_control_plane.get("exists")):
+        source_reports.append(str(brainstem_control_plane.get("heartbeat_file") or ""))
+
     response_data: Dict[str, Any] = {
         "summary": {
             "overall_status": overall_status,
             "metric_status": metric_status,
             "route_quality": _ops_build_route_quality_summary(metrics, trend=route_quality_trend),
+            "brainstem_control_plane_status": brainstem_status,
         },
         "metrics": {
             "runtime_rollout": metrics.get("runtime_rollout", {}),
@@ -2497,16 +2755,32 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "chat_route_path_distribution": metrics.get("chat_route_path_distribution", {}),
             "path_b_budget_escalation_rate": metrics.get("path_b_budget_escalation_rate", {}),
             "core_session_creation_rate": metrics.get("core_session_creation_rate", {}),
+            "brainstem_heartbeat": {
+                "status": brainstem_status,
+                "value": brainstem_control_plane.get("heartbeat_age_seconds"),
+                "healthy": brainstem_control_plane.get("healthy"),
+                "service_count": brainstem_control_plane.get("service_count"),
+                "stale_warning_seconds": brainstem_control_plane.get("stale_warning_seconds"),
+                "stale_critical_seconds": brainstem_control_plane.get("stale_critical_seconds"),
+                "tick": brainstem_control_plane.get("tick"),
+            },
         },
         "threshold_profile": threshold_profile,
         "sources": sources,
+        "brainstem_control_plane": brainstem_control_plane,
     }
     if ws26_runtime_report_payload:
         response_data["ws26_runtime_snapshot_report"] = ws26_runtime_report_payload
 
     reason_code: Optional[str] = None
     reason_text: Optional[str] = None
-    if severity == "unknown":
+    if brainstem_status == "critical":
+        reason_code = "BRAINSTEM_CONTROL_PLANE_CRITICAL"
+        reason_text = str(brainstem_control_plane.get("reason_text") or "Brainstem control-plane is unhealthy.")
+    elif brainstem_status == "warning":
+        reason_code = "BRAINSTEM_CONTROL_PLANE_WARNING"
+        reason_text = str(brainstem_control_plane.get("reason_text") or "Brainstem control-plane requires attention.")
+    elif severity == "unknown":
         reason_code = "RUNTIME_SIGNAL_UNKNOWN"
         reason_text = "Runtime posture lacks enough signal coverage; verify events/workflow inputs."
 
@@ -3034,6 +3308,40 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
                 "payload_excerpt": {"status": status, "report_id": report["id"]},
                 "report_path": str(report.get("path") or ""),
                 "gate_level": gate_level,
+            }
+        )
+
+    brainstem_summary = _ops_build_brainstem_control_plane_summary(repo_root)
+    brainstem_status = str(brainstem_summary.get("status") or "")
+    if brainstem_status in {"warning", "critical"}:
+        reason_code = str(brainstem_summary.get("reason_code") or "")
+        brainstem_event_type = "BrainstemControlPlaneIssue"
+        if reason_code == "BRAINSTEM_HEARTBEAT_MISSING":
+            brainstem_event_type = "BrainstemHeartbeatMissing"
+        elif reason_code in {"BRAINSTEM_HEARTBEAT_STALE_WARNING", "BRAINSTEM_HEARTBEAT_STALE_CRITICAL"}:
+            brainstem_event_type = "BrainstemHeartbeatStale"
+        elif reason_code == "BRAINSTEM_HEALTH_UNHEALTHY":
+            brainstem_event_type = "BrainstemDaemonUnhealthy"
+        elif reason_code in {"BRAINSTEM_HEARTBEAT_TIMESTAMP_INVALID", "BRAINSTEM_HEARTBEAT_NO_SIGNAL"}:
+            brainstem_event_type = "BrainstemHeartbeatInvalid"
+        incidents.append(
+            {
+                "source": "report",
+                "severity": brainstem_status,
+                "timestamp": str(brainstem_summary.get("generated_at") or ""),
+                "event_type": brainstem_event_type,
+                "summary": str(brainstem_summary.get("reason_text") or "Brainstem control-plane issue detected."),
+                "payload_excerpt": {
+                    "reason_code": reason_code,
+                    "healthy": brainstem_summary.get("healthy"),
+                    "heartbeat_age_seconds": brainstem_summary.get("heartbeat_age_seconds"),
+                    "stale_warning_seconds": brainstem_summary.get("stale_warning_seconds"),
+                    "stale_critical_seconds": brainstem_summary.get("stale_critical_seconds"),
+                    "unhealthy_services": list(brainstem_summary.get("unhealthy_services") or []),
+                    "tick": brainstem_summary.get("tick"),
+                },
+                "report_path": str(brainstem_summary.get("heartbeat_file") or ""),
+                "gate_level": "hard",
             }
         )
 

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import shutil
+import sys
 import uuid
 from pathlib import Path
 
+import system.brainstem_supervisor as brainstem_supervisor_module
 from system.brainstem_supervisor import BrainstemServiceSpec, BrainstemSupervisor
 
 
@@ -156,3 +158,31 @@ def test_brainstem_supervisor_health_snapshot_marks_missing_and_stopped_services
         assert rows["brainstem-watchdog"]["status"] == "missing"
     finally:
         _cleanup_case_root(case_root)
+
+
+def test_brainstem_supervisor_default_launcher_resolves_python_from_current_runtime(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _DummyProcess:
+        pid = 88991
+
+    def _fake_which(name: str) -> str | None:
+        if name in {"python", "python3"}:
+            return None
+        return f"/usr/bin/{name}"
+
+    def _fake_popen(command, cwd, env, stdout, stderr):  # noqa: ANN001, ARG001
+        captured["command"] = list(command)
+        return _DummyProcess()
+
+    monkeypatch.setattr(brainstem_supervisor_module.shutil, "which", _fake_which)
+    monkeypatch.setattr(brainstem_supervisor_module.subprocess, "Popen", _fake_popen)
+
+    pid = BrainstemSupervisor._default_launcher(
+        BrainstemServiceSpec(
+            service_name="brainstem-core",
+            command=["python", "main.py", "--headless"],
+        )
+    )
+    assert pid == 88991
+    assert captured["command"] == [sys.executable, "main.py", "--headless"]

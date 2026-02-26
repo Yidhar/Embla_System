@@ -453,6 +453,26 @@ def _collect_lock_status(
             "status": "unknown",
         }
 
+    lease_state = str(payload.get("lease_state") or payload.get("state") or "").strip().lower()
+    if lease_state == "idle":
+        ttl_seconds = _to_float(payload.get("ttl_seconds"), lease_ttl_hint_seconds) or lease_ttl_hint_seconds
+        return {
+            "value": None,
+            "unit": "seconds_to_expiry",
+            "state": "idle",
+            "lease_id": str(payload.get("lease_id") or ""),
+            "owner_id": str(payload.get("owner_id") or ""),
+            "job_id": str(payload.get("job_id") or ""),
+            "fencing_epoch": _to_int(payload.get("fencing_epoch"), 0),
+            "ttl_seconds": ttl_seconds,
+            "source": "global_mutex_state_idle",
+            "thresholds": {
+                "warning_seconds_to_expiry": max(2.0, ttl_seconds * 0.2),
+                "critical_seconds_to_expiry": 0.0,
+            },
+            "status": "ok",
+        }
+
     ttl_seconds = _to_float(payload.get("ttl_seconds"), lease_ttl_hint_seconds) or lease_ttl_hint_seconds
     expires_at = _to_float(payload.get("expires_at"), now_ts)
     seconds_to_expiry = expires_at - now_ts if expires_at is not None else None

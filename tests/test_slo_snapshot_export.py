@@ -371,3 +371,44 @@ def test_build_snapshot_fallback_to_canary_windows() -> None:
         assert latency["status"] == "warning"
     finally:
         _cleanup_repo_root(repo_root)
+
+
+def test_build_snapshot_lock_status_idle_state_is_ok() -> None:
+    repo_root = _make_repo_root()
+    now_dt = datetime.now(timezone.utc)
+    try:
+        _write_autonomous_config(
+            repo_root / "autonomous" / "config" / "autonomous_config.yaml",
+            max_error_rate=0.2,
+            max_latency_p95_ms=300.0,
+            batch_size=5,
+        )
+        _write_jsonl(repo_root / "logs" / "autonomous" / "events.jsonl", [])
+
+        lock_file = repo_root / "logs" / "runtime" / "global_mutex_lease.json"
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        lock_file.write_text(
+            json.dumps(
+                {
+                    "lease_state": "idle",
+                    "state": "idle",
+                    "lease_id": "",
+                    "owner_id": "",
+                    "job_id": "",
+                    "fencing_epoch": 3,
+                    "ttl_seconds": 10.0,
+                    "issued_at": now_dt.timestamp(),
+                    "expires_at": now_dt.timestamp() + 10.0,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        snapshot = build_snapshot(repo_root=repo_root, now=now_dt)
+        lock_status = snapshot["metrics"]["lock_status"]
+        assert lock_status["state"] == "idle"
+        assert lock_status["status"] == "ok"
+        assert lock_status["source"] == "global_mutex_state_idle"
+    finally:
+        _cleanup_repo_root(repo_root)

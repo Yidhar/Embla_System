@@ -40,6 +40,46 @@ class GlobalMutexManager:
         self.audit_file = audit_file or (runtime_dir / "global_mutex_events.jsonl")
         self._io_lock = asyncio.Lock()
 
+    @staticmethod
+    def _is_idle_state(state: Dict[str, Any]) -> bool:
+        marker = str(state.get("lease_state") or state.get("state") or "").strip().lower()
+        return marker == "idle"
+
+    @staticmethod
+    def _build_idle_state(*, now_ts: float, fencing_epoch: int = 0, ttl_seconds: float = 10.0) -> Dict[str, Any]:
+        ttl = max(1.0, float(ttl_seconds))
+        return {
+            "lease_state": "idle",
+            "state": "idle",
+            "lease_id": "",
+            "owner_id": "",
+            "job_id": "",
+            "fencing_epoch": max(0, int(fencing_epoch)),
+            "issued_at": float(now_ts),
+            "expires_at": float(now_ts + ttl),
+            "ttl_seconds": ttl,
+            "initialized_at": float(now_ts),
+        }
+
+    def ensure_initialized(self, *, ttl_seconds: float = 10.0) -> Dict[str, Any]:
+        """
+        Ensure lock state file exists even when no lease is held.
+        This avoids dashboard showing a permanent "missing" state after bootstrap.
+        """
+        state = self._read_state()
+        if isinstance(state, dict) and state:
+            return state
+        now_ts = time.time()
+        idle_state = self._build_idle_state(now_ts=now_ts, ttl_seconds=ttl_seconds)
+        self._write_state(idle_state)
+        self._append_audit_event(
+            {
+                "event": "bootstrap_idle_state_initialized",
+                "fencing_epoch": int(idle_state.get("fencing_epoch") or 0),
+            }
+        )
+        return idle_state
+
     def _read_state(self) -> Optional[Dict[str, Any]]:
         if not self.state_file.exists():
             return None
@@ -108,11 +148,13 @@ class GlobalMutexManager:
             now_ts = time.time()
             async with self._io_lock:
                 state = self._read_state()
+                idle_state = bool(state and self._is_idle_state(state))
 
                 # No lease, expired lease, or lease for same owner+job -> claim/renew.
-                can_claim = state is None or self._is_expired(state, now_ts)
+                can_claim = state is None or idle_state or self._is_expired(state, now_ts)
                 same_holder = (
                     state is not None
+                    and not idle_state
                     and str(state.get("owner_id") or "") == owner
                     and str(state.get("job_id") or "") == job
                 )
@@ -153,6 +195,8 @@ class GlobalMutexManager:
             state = self._read_state()
             if state is None:
                 raise TimeoutError("lease lost: no state")
+            if self._is_idle_state(state):
+                raise TimeoutError("lease lost: idle state")
             if str(state.get("lease_id") or "") != handle.lease_id:
                 raise TimeoutError("lease lost: lease_id mismatch")
             if str(state.get("owner_id") or "") != handle.owner_id:
@@ -173,12 +217,27 @@ class GlobalMutexManager:
         async with self._io_lock:
             state = self._read_state()
             if state is None:
+                self._write_state(
+                    self._build_idle_state(
+                        now_ts=time.time(),
+                        fencing_epoch=int(handle.fencing_epoch),
+                        ttl_seconds=float(handle.ttl_seconds),
+                    )
+                )
+                return True
+            if self._is_idle_state(state):
                 return True
             if str(state.get("lease_id") or "") != handle.lease_id:
                 return False
             if str(state.get("owner_id") or "") != handle.owner_id:
                 return False
-            self._delete_state()
+            self._write_state(
+                self._build_idle_state(
+                    now_ts=time.time(),
+                    fencing_epoch=int(state.get("fencing_epoch") or handle.fencing_epoch),
+                    ttl_seconds=float(state.get("ttl_seconds") or handle.ttl_seconds),
+                )
+            )
             return True
 
     async def reap_expired(self) -> bool:
@@ -203,7 +262,7 @@ class GlobalMutexManager:
 
         async with self._io_lock:
             state = self._read_state()
-            if not state:
+            if not state or self._is_idle_state(state):
                 report["skip_reason"] = "no_lease"
             elif not self._is_expired(state, now_ts):
                 report["skip_reason"] = "lease_active"
@@ -213,7 +272,13 @@ class GlobalMutexManager:
                 except Exception:
                     epoch = None
                 report["fencing_epoch"] = epoch if epoch is not None and epoch > 0 else None
-                self._delete_state()
+                self._write_state(
+                    self._build_idle_state(
+                        now_ts=now_ts,
+                        fencing_epoch=int(report["fencing_epoch"] or 0),
+                        ttl_seconds=float(state.get("ttl_seconds") or 10.0),
+                    )
+                )
                 report["reclaimed_count"] = 1
 
         if int(report["reclaimed_count"]) > 0:
@@ -244,7 +309,7 @@ class GlobalMutexManager:
     async def inspect(self) -> Optional[LeaseHandle]:
         async with self._io_lock:
             state = self._read_state()
-            if not state:
+            if not state or self._is_idle_state(state):
                 return None
             return self._state_to_handle(state)
 

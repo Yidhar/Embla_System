@@ -151,3 +151,38 @@ def test_global_mutex_scavenger_keeps_active_lease(monkeypatch):
     assert registry.calls == 0
     assert current is not None
     assert current.lease_id == lease.lease_id
+
+
+def test_global_mutex_bootstrap_idle_state_persists_and_stays_claimable():
+    base = Path("scratch/test_global_mutex")
+    base.mkdir(parents=True, exist_ok=True)
+    state_file = base / "lease_bootstrap_idle.json"
+    if state_file.exists():
+        state_file.unlink()
+
+    manager = GlobalMutexManager(state_file=state_file)
+    initialized = manager.ensure_initialized(ttl_seconds=12.0)
+
+    assert initialized["lease_state"] == "idle"
+    assert state_file.exists()
+    assert asyncio.run(manager.inspect()) is None
+
+    lease = asyncio.run(
+        manager.acquire(
+            owner_id="owner-bootstrap",
+            job_id="job-bootstrap",
+            ttl_seconds=1.0,
+            wait_timeout_seconds=1.0,
+        )
+    )
+    released = asyncio.run(manager.release(lease))
+    assert released is True
+    assert asyncio.run(manager.inspect()) is None
+
+    payload = json.loads(state_file.read_text(encoding="utf-8"))
+    assert payload["lease_state"] == "idle"
+    assert int(payload["fencing_epoch"]) >= int(lease.fencing_epoch)
+
+    report = asyncio.run(manager.scan_and_reap_expired(reason="unit_test_idle_state"))
+    assert report["reclaimed_count"] == 0
+    assert report["skip_reason"] == "no_lease"
