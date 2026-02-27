@@ -252,8 +252,6 @@ def _iter_port_candidates(payload: Dict[str, Any]) -> Iterable[tuple[str, Any]]:
         "api_server": [("api_server", "port")],
         "agent_server": [("agentserver", "port"), ("agent_server", "port")],
         "mcp_server": [("mcpserver", "port"), ("mcp_server", "port")],
-        "tts_server": [("tts", "port")],
-        "asr_server": [("asr", "port")],
     }
 
     for target_key, sources in candidates.items():

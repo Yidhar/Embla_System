@@ -30,13 +30,6 @@ class ServerPortsConfig(BaseModel):
     # MCP工具服务器
     mcp_server: int = Field(default=8003, ge=1, le=65535, description="MCP工具服务器端口")
 
-    # TTS语音合成服务器
-    tts_server: int = Field(default=5048, ge=1, le=65535, description="TTS语音合成服务器端口")
-
-    # ASR语音识别服务器
-    asr_server: int = Field(default=5060, ge=1, le=65535, description="ASR语音识别服务器端口")
-
-
 # 全局服务器端口配置实例
 server_ports = ServerPortsConfig()
 
@@ -52,8 +45,6 @@ def get_all_server_ports() -> Dict[str, int]:
         "api_server": server_ports.api_server,
         "agent_server": server_ports.agent_server,
         "mcp_server": server_ports.mcp_server,
-        "tts_server": server_ports.tts_server,
-        "asr_server": server_ports.asr_server,
     }
 
 
@@ -88,14 +79,6 @@ def _sync_server_ports_from_config_data(config_data: Dict[str, Any]) -> None:
             config_data.get("mcpserver", {}).get("port"),
             config_data.get("mcp_server", {}).get("port"),
             config_data.get("server_ports", {}).get("mcp_server"),
-        ),
-        "tts_server": (
-            config_data.get("tts", {}).get("port"),
-            config_data.get("server_ports", {}).get("tts_server"),
-        ),
-        "asr_server": (
-            config_data.get("asr", {}).get("port"),
-            config_data.get("server_ports", {}).get("asr_server"),
         ),
     }
 
@@ -197,7 +180,6 @@ class SystemConfig(BaseModel):
     ai_name: str = Field(default="娜迦", description="AI助手名称")
     base_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent, description="项目根目录")
     log_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "logs", description="日志目录")
-    voice_enabled: bool = Field(default=True, description="是否启用语音功能")
     stream_mode: bool = Field(default=True, description="是否启用流式响应")
     debug: bool = Field(default=False, description="是否启用调试模式")
     log_level: str = Field(default="INFO", description="日志级别")
@@ -430,39 +412,6 @@ class BrowserConfig(BaseModel):
     )
 
 
-class TTSConfig(BaseModel):
-    """TTS服务配置"""
-
-    api_key: str = Field(default="", description="TTS服务API密钥")
-    port: int = Field(default_factory=lambda: server_ports.tts_server, description="TTS服务端口")
-    default_voice: str = Field(default="zh-CN-XiaoxiaoNeural", description="默认语音")
-    default_format: str = Field(default="mp3", description="默认音频格式")
-    default_speed: float = Field(default=1.0, ge=0.1, le=3.0, description="默认语速")
-    default_language: str = Field(default="zh-CN", description="默认语言")
-    remove_filter: bool = Field(default=False, description="是否移除过滤")
-    expand_api: bool = Field(default=True, description="是否扩展API")
-    require_api_key: bool = Field(default=False, description="是否需要API密钥")
-
-
-class ASRConfig(BaseModel):
-    """ASR输入服务配置"""
-
-    port: int = Field(default_factory=lambda: server_ports.asr_server, description="ASR服务端口")
-    device_index: int | None = Field(default=None, description="麦克风设备序号")
-    sample_rate_in: int = Field(default=48000, description="输入采样率")
-    frame_ms: int = Field(default=30, description="分帧时长ms")
-    resample_to: int = Field(default=16000, description="重采样目标采样率")
-    vad_threshold: float = Field(default=0.7, ge=0.0, le=1.0, description="VAD阈值")
-    silence_ms: int = Field(default=420, description="静音结束阈值ms")
-    noise_reduce: bool = Field(default=True, description="是否降噪")
-    engine: str = Field(default="local_funasr", description="ASR引擎，仅支持local_funasr")
-    local_model_path: str = Field(default="./utilss/models/SenseVoiceSmall", description="本地FunASR模型路径")
-    vad_model_path: str = Field(default="silero_vad.onnx", description="VAD模型路径")
-    api_key_required: bool = Field(default=False, description="是否需要API密钥")
-    callback_url: str | None = Field(default=None, description="识别结果回调地址")
-    ws_broadcast: bool = Field(default=False, description="是否WS广播结果")
-
-
 class FilterConfig(BaseModel):
     """输出过滤配置"""
 
@@ -597,9 +546,9 @@ class Live2DConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="是否启用Live2D功能")
     model_path: str = Field(
-        default="ui/live2d_local/live2d_models/kasane_teto/kasane_teto.model3.json", description="Live2D模型文件路径"
+        default="", description="Live2D模型文件路径（archived Electron 路径按需填写）"
     )
-    fallback_image: str = Field(default="ui/img/standby.png", description="回退图片路径")
+    fallback_image: str = Field(default="", description="回退图片路径（可选）")
     auto_switch: bool = Field(default=True, description="是否自动切换模式")
     animation_enabled: bool = Field(default=True, description="是否启用动画")
     touch_interaction: bool = Field(default=True, description="是否启用触摸交互")
@@ -617,41 +566,6 @@ class Live2DConfig(BaseModel):
 class FloatingConfig(BaseModel):
     """悬浮球模式配置"""
     enabled: bool = Field(default=False, description="是否启用悬浮球模式")
-
-class VoiceRealtimeConfig(BaseModel):
-    """实时语音配置"""
-
-    enabled: bool = Field(default=False, description="是否启用实时语音功能")
-    provider: str = Field(default="qwen", description="语音服务提供商 (qwen/openai/local)")
-    api_key: str = Field(default="", description="语音服务API密钥")
-    model: str = Field(default="qwen3-omni-flash-realtime", description="语音模型名称")
-    tts_model: str = Field(default="qwen-tts-realtime", description="TTS模型名称")
-    asr_model: str = Field(default="qwen3-asr-realtime", description="ASR模型名称")
-    voice: str = Field(default="Cherry", description="语音角色")
-    input_sample_rate: int = Field(default=16000, description="输入采样率")
-    output_sample_rate: int = Field(default=24000, description="输出采样率")
-    chunk_size_ms: int = Field(default=200, description="音频块大小（毫秒）")
-    vad_threshold: float = Field(default=0.02, ge=0.0, le=1.0, description="静音检测阈值")
-    echo_suppression: bool = Field(default=True, description="回声抑制")
-    min_user_interval: float = Field(default=2.0, ge=0.5, le=10.0, description="用户输入最小间隔（秒）")
-    cooldown_duration: float = Field(default=1.0, ge=0.5, le=5.0, description="冷却期时长（秒）")
-    max_user_speech: float = Field(default=30.0, ge=5.0, le=120.0, description="最大说话时长（秒）")
-    debug: bool = Field(default=False, description="是否启用调试模式")
-    integrate_with_memory: bool = Field(default=True, description="是否集成到记忆系统")
-    show_in_chat: bool = Field(default=True, description="是否在聊天界面显示对话内容")
-    use_api_server: bool = Field(default=False, description="是否通过API Server处理（支持MCP调用）")
-    voice_mode: str = Field(
-        default="auto", description="语音模式：auto/local/end2end/hybrid（auto会根据provider自动选择）"
-    )
-    asr_host: str = Field(default="localhost", description="本地ASR服务地址")
-    asr_port: int = Field(default=5000, description="本地ASR服务端口")
-    record_duration: int = Field(default=10, ge=5, le=60, description="本地模式最大录音时长（秒）")
-    tts_voice: str = Field(default="zh-CN-XiaoyiNeural", description="TTS语音选择（本地/混合模式）")
-    tts_host: str = Field(default="localhost", description="TTS服务地址")
-    tts_port: int = Field(default=5061, ge=1, le=65535, description="TTS服务端口")
-    auto_play: bool = Field(default=True, description="AI回复后自动播放语音")
-    interrupt_playback: bool = Field(default=True, description="用户说话时自动打断AI语音播放")
-
 
 class NagaPortalConfig(BaseModel):
     """娜迦官网账户配置"""
@@ -1258,8 +1172,6 @@ class NagaConfig(BaseModel):
     tool_contract_rollout: ToolContractRolloutConfig = Field(default_factory=ToolContractRolloutConfig)
     autonomous: AutonomousConfig = Field(default_factory=AutonomousConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
-    tts: TTSConfig = Field(default_factory=TTSConfig)
-    asr: ASRConfig = Field(default_factory=ASRConfig)  # ASR输入服务配置 #
     filter: FilterConfig = Field(default_factory=FilterConfig)
     difficulty: DifficultyConfig = Field(default_factory=DifficultyConfig)
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
@@ -1269,7 +1181,6 @@ class NagaConfig(BaseModel):
     ui: UIConfig = Field(default_factory=UIConfig)
     live2d: Live2DConfig = Field(default_factory=Live2DConfig)
     floating: FloatingConfig = Field(default_factory=FloatingConfig)
-    voice_realtime: VoiceRealtimeConfig = Field(default_factory=VoiceRealtimeConfig)  # 实时语音配置
     naga_portal: NagaPortalConfig = Field(default_factory=NagaPortalConfig)
     online_search: OnlineSearchConfig = Field(default_factory=OnlineSearchConfig)
     system_check: SystemCheckConfig = Field(default_factory=SystemCheckConfig)

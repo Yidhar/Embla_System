@@ -62,8 +62,6 @@ def test_migrate_payload_optionally_projects_server_ports() -> None:
         "api_server": {"port": 8100},
         "agentserver": {"port": "8101"},
         "mcpserver": {"port": 8103},
-        "tts": {"port": 5048},
-        "asr": {"port": "not-a-port"},
         "server_ports": {"api_server": 9000, "custom_port_key": 42},
     }
 
@@ -73,8 +71,6 @@ def test_migrate_payload_optionally_projects_server_ports() -> None:
     assert migrated["server_ports"]["api_server"] == 9000
     assert migrated["server_ports"]["agent_server"] == 8101
     assert migrated["server_ports"]["mcp_server"] == 8103
-    assert migrated["server_ports"]["tts_server"] == 5048
-    assert "asr_server" not in migrated["server_ports"]
     assert migrated["server_ports"]["custom_port_key"] == 42
 
 

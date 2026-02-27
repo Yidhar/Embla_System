@@ -37,7 +37,6 @@ class SystemChecker:
             all_ports["api_server"],
             all_ports["agent_server"], 
             all_ports["mcp_server"],
-            all_ports["tts_server"]
         ]
         
         # 镜像源配置
@@ -62,9 +61,6 @@ class SystemChecker:
         # 重要可选依赖
         self.optional_dependencies = [
             ("onnxruntime", "语音处理"),
-            ("sounddevice", "音频设备"),
-            ("pyaudio", "音频录制"),
-            ("edge_tts", "TTS语音合成"),
             ("playwright", "浏览器自动化"),
             ("crawl4ai", "网页爬取"),
             ("pyautogui", "屏幕控制"),
@@ -204,8 +200,6 @@ class SystemChecker:
                 module_name = "cv2"
             elif dep == "pydantic":
                 module_name = "pydantic"
-            elif dep == "edge_tts":
-                module_name = "edge_tts"
 
             try:
                 importlib.import_module(module_name)
@@ -230,8 +224,6 @@ class SystemChecker:
             module_name = dep
             if dep == "opencv_python":
                 module_name = "cv2"
-            elif dep == "edge_tts":
-                module_name = "edge_tts"
             elif dep == "live2d":
                 module_name = "live2d"
             elif dep == "bilibili_api":
@@ -278,12 +270,11 @@ class SystemChecker:
     def check_directory_structure(self) -> bool:
         """检测目录结构"""
         required_dirs = [
-            ("frontend", "前端界面"),
+            ("Embla_core", "Next.js运维面板"),
             ("apiserver", "API服务器"),
             ("agentserver", "Agent服务器"),
             ("mcpserver", "MCP服务器"),
             ("summer_memory", "记忆系统"),
-            ("voice", "语音模块"),
             ("system", "系统核心")
         ]
 
@@ -393,7 +384,6 @@ class SystemChecker:
 
                     # 尝试导入neo4j包并连接
                     try:
-                        from neo4j import GraphDatabase
                         # 只测试连接，不进行实际查询
                         print(f"   Neo4j配置: {uri} (用户: {user})")
                         print("   ✅ Neo4j包已安装，配置已启用")
@@ -584,7 +574,7 @@ class SystemChecker:
             memory = psutil.virtual_memory()
             info["总内存"] = f"{memory.total / (1024**3):.1f} GB"
             info["CPU核心数"] = str(psutil.cpu_count())
-        except:
+        except Exception:
             pass
 
         return info

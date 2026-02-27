@@ -4,7 +4,7 @@ name = "nagaagent"
 
 version = "5.0.0"
 
-description = "NagaAgent 5.0 - 智能对话助手，支持多MCP服务、流式语音交互、GRAG知识图谱记忆系统、RESTful API接口、控制台托盘功能"
+description = "NagaAgent 5.0 - 智能对话助手，支持多MCP服务、GRAG知识图谱记忆系统、RESTful API接口"
 
 authors = [
 
@@ -84,12 +84,6 @@ dependencies = [
 
     "watchfiles>=1.0.0",
 
-    # ---------- 语音 / 音频 ----------
-
-    "edge-tts>=7.0.0",
-
-    "sounddevice>=0.5.0",
-
     # ---------- Web 服务 / 兼容层 ----------
 
     "Flask>=3.1.0",
@@ -126,7 +120,6 @@ include = [
     "mcpserver",
     "summer_memory",
     "system",
-    "voice",
 ]
 
 
@@ -170,9 +163,6 @@ norecursedirs = [
   ".pytest_cache",
   "build",
   "dist",
-  "frontend/backend-dist",
-  "frontend/release",
-  "frontend/node_modules",
   "node_modules",
 ]
 

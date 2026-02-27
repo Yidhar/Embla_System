@@ -266,7 +266,6 @@ class ConfigManager:
             "grag": {"enabled": False},
             "handoff": {"max_loop_stream": 5},
             "browser": {"playwright_headless": False},
-            "tts": {"port": 5048},
             "weather": {"api_key": ""},
             "mqtt": {"enabled": False},
             "ui": {"user_name": "用户"},
@@ -298,10 +297,9 @@ def register_module_reload(module_name: str):
     """注册模块重新加载
     
     Args:
-        module_name: 模块名称，如 "voice.voice_integration"
+        module_name: 模块名称，如 "apiserver.api_server"
         
     Example:
-        >>> register_module_reload("voice.voice_integration")
         >>> register_module_reload("apiserver.api_server")
     """
     config_manager.register_module_reload(module_name)

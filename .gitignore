@@ -98,6 +98,9 @@ desktop.ini
 *.backup
 *.old
 ~$*
+.tmp*/
+tmp_ws15/
+zz_tmp_dir/
 
 # API Keys and Secrets (never commit these!)
 *api_key*

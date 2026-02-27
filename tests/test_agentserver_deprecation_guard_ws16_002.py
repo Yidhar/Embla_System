@@ -20,7 +20,6 @@ def _iter_python_files() -> Iterable[Path]:
         ROOT / "autonomous",
         ROOT / "mcpserver",
         ROOT / "system",
-        ROOT / "voice",
         ROOT / "guide_engine",
         ROOT / "scripts",
     ]

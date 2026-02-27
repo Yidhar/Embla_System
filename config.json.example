@@ -3,7 +3,6 @@
     "version": "5.0.0",  // 系统版本号
     "config_schema_version": 1, // 配置结构版本号
     "ai_name": "娜迦", // AI助手名称
-    "voice_enabled": true, // 是否启用语音功能
     "stream_mode": true, // 是否启用流式响应
     "debug": false, // 是否启用调试模式
     "log_level": "INFO", // 日志级别: DEBUG, INFO, WARNING, ERROR
@@ -129,43 +128,9 @@
   "browser": {
     "playwright_headless": false // Playwright是否无头模式
   },
-  "tts": {
-    "api_key": "", // TTS API密钥
-    "port": 5048, // TTS服务端口
-    "default_voice": "zh-CN-XiaoxiaoNeural", // 默认语音
-    "default_format": "mp3", // 默认音频格式
-    "default_speed": 1.0, // 默认语速
-    "default_language": "zh-CN", // 默认语言
-    "remove_filter": false, // 是否移除过滤器
-    "expand_api": true, // 是否扩展API
-    "require_api_key": false // 是否需要API密钥
-  },
   "game": {
     "enabled": false, // 是否启用游戏功能
     "skip_on_error": true // 出错时是否跳过
-  },
-  "voice_realtime": {
-    "enabled": false, // 是否启用实时语音
-    "provider": "qwen", // 语音提供商
-    "api_key": "your-dashscope-api-key-here", // DashScope API密钥
-    "model": "qwen3-omni-flash-realtime", // 实时语音模型
-    "tts_model": "qwen-tts-realtime", // TTS模型
-    "asr_model": "qwen3-asr-realtime", // ASR模型
-    "voice": "Cherry", // 语音名称
-    "voice_mode": "auto", // 语音模式
-    "tts_voice": "zh-CN-XiaoyiNeural", // TTS语音
-    "input_sample_rate": 16000, // 输入采样率
-    "output_sample_rate": 24000, // 输出采样率
-    "chunk_size_ms": 200, // 音频块大小(毫秒)
-    "vad_threshold": 0.02, // 语音活动检测阈值
-    "echo_suppression": true, // 是否启用回声抑制
-    "min_user_interval": 2.0, // 最小用户间隔(秒)
-    "cooldown_duration": 1.0, // 冷却持续时间(秒)
-    "max_user_speech": 30.0, // 最大用户语音时长(秒)
-    "debug": false, // 是否启用调试
-    "integrate_with_memory": true, // 是否与记忆集成
-    "show_in_chat": true, // 是否在聊天中显示
-    "use_api_server": true // 是否使用API服务器
   },
   "weather": {
     "api_key": "your-weather-api-key-or-leave-empty" // 天气API密钥
@@ -251,8 +216,8 @@
   },
   "live2d": {
     "enabled": false, // 是否启用Live2D
-    "model_path": "ui/live2d_local/live2d_models/重音テト/重音テト.model3.json", // Live2D模型路径
-    "fallback_image": "ui/img/standby.png", // 备用图片
+    "model_path": "", // Live2D模型路径（archived Electron 路径按需填写）
+    "fallback_image": "", // 备用图片（可选）
     "auto_switch": true, // 是否自动切换
     "animation_enabled": true, // 是否启用动画
     "touch_interaction": true // 是否启用触摸交互
