@@ -8,7 +8,7 @@
 - 在远程环境演练“SubAgent cutover 后异常”场景下的 OOB 抢修路径。
 - 验证三条恢复链路均可执行、可回退、可审计：
   - 快照恢复回退闭环
-  - 快照缺失时强制降级 legacy
+  - 快照缺失时重置到安全基线
   - OOB bundle 导出与验证
 
 ## 2. 关键脚本
@@ -43,7 +43,7 @@
 
 - `passed=true`
 - `checks.snapshot_recovery_path=true`
-- `checks.force_legacy_fallback_path=true`
+- `checks.safe_baseline_without_snapshot_path=true`
 - `checks.oob_bundle_validation_path=true`
 
 ## 4. 预期产物
@@ -52,7 +52,7 @@
 2. `scratch/ws27_oob_repair_drill/*/case_snapshot_recovery/repo/scratch/reports/ws27_drill_case1_plan.json`
 3. `scratch/ws27_oob_repair_drill/*/case_snapshot_recovery/repo/scratch/reports/ws27_drill_case1_apply.json`
 4. `scratch/ws27_oob_repair_drill/*/case_snapshot_recovery/repo/scratch/reports/ws27_drill_case1_rollback.json`
-5. `scratch/ws27_oob_repair_drill/*/case_force_legacy_fallback/repo/scratch/reports/ws27_drill_case2_rollback.json`
+5. `scratch/ws27_oob_repair_drill/*/case_safe_baseline_without_snapshot/repo/scratch/reports/ws27_drill_case2_rollback.json`
 6. `scratch/ws27_oob_repair_drill/*/case_oob_bundle_export/ws27_drill_oob_bundle.json`
 
 ## 5. 判定标准
@@ -60,7 +60,7 @@
 - 主报告 `passed=true` 且三项 `checks` 全部为 `true`。
 - `case_results` 中 `C1/C2/C3` 均 `passed=true`：
   - `C1`：回滚后配置应恢复到 apply 前快照。
-  - `C2`：无快照回滚时 `rollback_mode=force_legacy_without_snapshot`。
+  - `C2`：无快照回滚时 `rollback_mode=safe_baseline_without_snapshot`。
   - `C3`：`freeze_plan.validation_ok=true` 且 `probe_plan.validation_ok=true`。
 
 ## 6. 风险与说明

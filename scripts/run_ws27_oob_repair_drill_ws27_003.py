@@ -163,7 +163,7 @@ def _run_case_snapshot_recovery(*, case_root: Path, rollback_window_minutes: int
         )
 
 
-def _run_case_force_legacy_fallback(*, case_root: Path) -> DrillCaseResult:
+def _run_case_safe_baseline_without_snapshot(*, case_root: Path) -> DrillCaseResult:
     started = time.time()
     repo_root = case_root / "repo"
     config_rel = Path("autonomous/config/autonomous_config.yaml")
@@ -189,8 +189,9 @@ def _run_case_force_legacy_fallback(*, case_root: Path) -> DrillCaseResult:
         current = _read_runtime_config(repo_root / config_rel)
         checks = {
             "rollback_completed": bool(rollback_report.get("passed")),
-            "rollback_mode_force_legacy": str(rollback_report.get("rollback_mode")) == "force_legacy_without_snapshot",
-            "runtime_config_forced_legacy": current.get("enabled") is False and int(current.get("rollout_percent", 1)) == 0,
+            "rollback_mode_safe_baseline": str(rollback_report.get("rollback_mode")) == "safe_baseline_without_snapshot",
+            "runtime_config_reset_to_safe_baseline": current.get("enabled") is False
+            and int(current.get("rollout_percent", 1)) == 0,
         }
         passed = all(checks.values())
         details: Dict[str, Any] = {
@@ -200,7 +201,7 @@ def _run_case_force_legacy_fallback(*, case_root: Path) -> DrillCaseResult:
         }
         return DrillCaseResult(
             case_id="C2",
-            name="force_legacy_fallback_without_snapshot",
+            name="safe_baseline_without_snapshot",
             passed=passed,
             checks=checks,
             details=details,
@@ -209,7 +210,7 @@ def _run_case_force_legacy_fallback(*, case_root: Path) -> DrillCaseResult:
     except Exception as exc:  # pragma: no cover - defensive wrapper
         return DrillCaseResult(
             case_id="C2",
-            name="force_legacy_fallback_without_snapshot",
+            name="safe_baseline_without_snapshot",
             passed=False,
             checks={"case_completed_without_exception": False},
             details={"repo_root": _to_unix_path(repo_root)},
@@ -282,7 +283,7 @@ def run_ws27_oob_repair_drill_ws27_003(
             case_root=case_root / "case_snapshot_recovery",
             rollback_window_minutes=max(15, int(rollback_window_minutes)),
         ),
-        _run_case_force_legacy_fallback(case_root=case_root / "case_force_legacy_fallback"),
+        _run_case_safe_baseline_without_snapshot(case_root=case_root / "case_safe_baseline_without_snapshot"),
         _run_case_oob_bundle_export(
             case_root=case_root / "case_oob_bundle_export",
             oob_allowlist=list(oob_allowlist),
@@ -292,7 +293,7 @@ def run_ws27_oob_repair_drill_ws27_003(
 
     checks = {
         "snapshot_recovery_path": bool(cases[0].passed),
-        "force_legacy_fallback_path": bool(cases[1].passed),
+        "safe_baseline_without_snapshot_path": bool(cases[1].passed),
         "oob_bundle_validation_path": bool(cases[2].passed),
     }
     passed = all(checks.values())

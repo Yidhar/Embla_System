@@ -138,7 +138,7 @@ def test_cutover_apply_and_rollback_restore_previous_runtime_config() -> None:
         _cleanup_case_root(case_root)
 
 
-def test_cutover_rollback_without_snapshot_forces_legacy_safe_mode() -> None:
+def test_cutover_rollback_without_snapshot_uses_safe_baseline_mode() -> None:
     case_root = _make_case_root("test_manage_ws27_subagent_cutover_ws27_002")
     try:
         repo_root = case_root / "repo"
@@ -157,7 +157,7 @@ def test_cutover_rollback_without_snapshot_forces_legacy_safe_mode() -> None:
             output_file=output.relative_to(repo_root),
         )
         assert report["passed"] is True
-        assert report["rollback_mode"] == "force_legacy_without_snapshot"
+        assert report["rollback_mode"] == "safe_baseline_without_snapshot"
         updated = report["updated_runtime_config"]
         assert updated["enabled"] is False
         assert updated["rollout_percent"] == 0

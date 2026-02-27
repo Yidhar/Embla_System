@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manage WS27-002 Legacy -> SubAgent full cutover and rollback window."""
+"""Manage WS27-002 SubAgent full cutover and rollback window."""
 
 from __future__ import annotations
 
@@ -170,11 +170,13 @@ def _normalized_runtime_config(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _runtime_mode_hint(*, enabled: bool, rollout_percent: int) -> str:
-    if not enabled or rollout_percent <= 0:
-        return "legacy"
+    if not enabled:
+        return "subagent_disabled_guarded"
+    if rollout_percent <= 0:
+        return "subagent_rollout_zero_guarded"
     if rollout_percent >= 100:
         return "subagent_full"
-    return "hybrid_rollout"
+    return "subagent_gradual_rollout"
 
 
 def _load_runtime_snapshot_readiness(path: Path) -> Dict[str, Any]:
@@ -290,7 +292,7 @@ def run_ws27_subagent_cutover_ws27_002(
 
     report: Dict[str, Any] = {
         "task_id": "NGA-WS27-002",
-        "scenario": "legacy_to_subagent_full_cutover_and_rollback_window",
+        "scenario": "subagent_full_cutover_and_rollback_window",
         "generated_at": _utc_iso_now(),
         "action": normalized_action,
         "repo_root": _to_unix_path(root),
@@ -354,7 +356,7 @@ def run_ws27_subagent_cutover_ws27_002(
             }
         )
     elif normalized_action == "rollback":
-        rollback_mode = "force_legacy_without_snapshot"
+        rollback_mode = "safe_baseline_without_snapshot"
         if rollback_snapshot_file.exists():
             snapshot_payload = json.loads(rollback_snapshot_file.read_text(encoding="utf-8"))
             previous = (
@@ -405,7 +407,7 @@ def run_ws27_subagent_cutover_ws27_002(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Manage WS27-002 Legacy -> SubAgent full cutover")
+    parser = argparse.ArgumentParser(description="Manage WS27-002 SubAgent full cutover")
     parser.add_argument(
         "--action",
         choices=("plan", "apply", "rollback", "status"),

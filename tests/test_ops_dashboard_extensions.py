@@ -35,7 +35,7 @@ def test_ops_evidence_index_payload_flags_hard_gate_failures(tmp_path, monkeypat
     _write_json(
         reports_dir / "ws27_subagent_cutover_status_ws27_002.json",
         {
-            "scenario": "legacy_to_subagent_full_cutover_and_rollback_window",
+            "scenario": "subagent_full_cutover_and_rollback_window",
             "generated_at": "2026-02-25T10:05:00+00:00",
             "passed": False,
             "checks": {"subagent_runtime_enabled": False},

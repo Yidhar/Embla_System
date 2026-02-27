@@ -37,7 +37,7 @@ def test_run_ws27_oob_repair_drill_function_path_generates_report() -> None:
         assert report["case_count_executed"] == 3
         checks = report["checks"]
         assert checks["snapshot_recovery_path"] is True
-        assert checks["force_legacy_fallback_path"] is True
+        assert checks["safe_baseline_without_snapshot_path"] is True
         assert checks["oob_bundle_validation_path"] is True
         case_results = report["case_results"]
         assert len(case_results) == 3

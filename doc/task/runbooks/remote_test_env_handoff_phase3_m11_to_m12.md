@@ -43,15 +43,15 @@
 - 执行入口：`scripts/run_ws27_longrun_endurance_ws27_001.py`
 - 说明：当前为“虚拟 72h 等效执行”基线，远程环境仍需补真实墙钟验收记录
 
-8. `NGA-WS27-002` Legacy -> SubAgent Full cutover + 回滚窗（首版已落地）
+8. `NGA-WS27-002` SubAgent Full cutover + 回滚窗（首版已落地）
 - cutover 管理脚本：`scripts/manage_ws27_subagent_cutover_ws27_002.py`
 - runbook：`doc/task/runbooks/release_m12_cutover_rollback_onepager_ws27_002.md`
-- 特性：支持 `plan/apply/rollback/status`，且 `rollback` 在快照缺失时可强制安全回退到 legacy
+- 特性：支持 `plan/apply/rollback/status`，且 `rollback` 在快照缺失时重置到安全基线
 
 9. `NGA-WS27-003` OOB 抢修 runbook 演练（首版已落地）
 - OOB 演练脚本：`scripts/run_ws27_oob_repair_drill_ws27_003.py`
 - runbook：`doc/task/runbooks/release_m12_oob_repair_drill_onepager_ws27_003.md`
-- 特性：覆盖快照恢复回滚、快照缺失强制 legacy 降级、OOB bundle 导出校验三条路径
+- 特性：覆盖快照恢复回滚、快照缺失安全基线回滚、OOB bundle 导出校验三条路径
 
 10. `NGA-WS27-004` M0-M12 全量收口链（首版已落地）
 - 全量收口脚本：`scripts/release_closure_chain_full_m0_m12.py`
@@ -168,14 +168,14 @@ uv sync
 12. `scratch/ws27_oob_repair_drill/*/case_snapshot_recovery/repo/scratch/reports/ws27_drill_case1_plan.json`
 13. `scratch/ws27_oob_repair_drill/*/case_snapshot_recovery/repo/scratch/reports/ws27_drill_case1_apply.json`
 14. `scratch/ws27_oob_repair_drill/*/case_snapshot_recovery/repo/scratch/reports/ws27_drill_case1_rollback.json`
-15. `scratch/ws27_oob_repair_drill/*/case_force_legacy_fallback/repo/scratch/reports/ws27_drill_case2_rollback.json`
+15. `scratch/ws27_oob_repair_drill/*/case_safe_baseline_without_snapshot/repo/scratch/reports/ws27_drill_case2_rollback.json`
 16. `scratch/ws27_oob_repair_drill/*/case_oob_bundle_export/ws27_drill_oob_bundle.json`
 17. `scratch/reports/release_closure_chain_full_m0_m12_result.json`
 
 ## 6. 当前缺口与下一阶段任务（M12）
 
 1. `NGA-WS27-001` 72h 长稳耐久脚本与磁盘配额压测（首版已落地；待补“真实 72h 墙钟”验收记录）
-2. `NGA-WS27-002` Legacy -> SubAgent Full cutover + 回滚窗（首版已落地；待补远程灰度放量演练记录）
+2. `NGA-WS27-002` SubAgent Full cutover + 回滚窗（首版已落地；待补远程灰度放量演练记录）
 3. `NGA-WS27-003` OOB 抢修 runbook 演练（首版已落地；待补远程环境演练留痕与操作录像）
 4. `NGA-WS27-004` `release_closure_chain_full_m0_m12.py`（首版已落地；已完成本机全链通过，待补远程执行记录）
 5. `NGA-WS27-005` 文档一致性收口（M12）（已落地；`--strict` 可通过）
