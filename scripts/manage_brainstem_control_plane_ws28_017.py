@@ -12,7 +12,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set
 
 from system.watchdog_daemon import WatchdogDaemon
 
@@ -196,6 +196,120 @@ def _terminate_pid(pid: int, *, timeout_seconds: float) -> bool:
     except (AttributeError, ProcessLookupError, PermissionError):
         return not _pid_alive(target_pid)
     return not _pid_alive(target_pid)
+
+
+def _list_pid_ppid_map() -> Dict[int, int]:
+    """Best-effort snapshot of pid->ppid mapping."""
+    pid_ppid: Dict[int, int] = {}
+    proc_root = Path("/proc")
+    if proc_root.exists():
+        for entry in proc_root.iterdir():
+            if not entry.is_dir() or not entry.name.isdigit():
+                continue
+            try:
+                pid = int(entry.name)
+            except ValueError:
+                continue
+            status_path = entry / "status"
+            try:
+                content = status_path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            ppid = 0
+            for line in content.splitlines():
+                if line.startswith("PPid:"):
+                    try:
+                        ppid = int(line.split(":", 1)[1].strip())
+                    except (ValueError, IndexError):
+                        ppid = 0
+                    break
+            pid_ppid[pid] = ppid
+        return pid_ppid
+
+    try:
+        output = subprocess.check_output(  # noqa: S603
+            ["ps", "-eo", "pid=", "ppid="],
+            text=True,
+        )
+    except Exception:
+        return pid_ppid
+
+    for raw in output.splitlines():
+        parts = raw.strip().split()
+        if len(parts) != 2:
+            continue
+        try:
+            pid = int(parts[0])
+            ppid = int(parts[1])
+        except ValueError:
+            continue
+        pid_ppid[pid] = ppid
+    return pid_ppid
+
+
+def _collect_descendant_pids(seed_pids: List[int]) -> List[int]:
+    """Collect descendants for a set of parent PIDs from process snapshot."""
+    parents: Set[int] = {int(pid) for pid in seed_pids if int(pid) > 0}
+    if not parents:
+        return []
+
+    pid_ppid = _list_pid_ppid_map()
+    children_map: Dict[int, List[int]] = {}
+    for pid, ppid in pid_ppid.items():
+        children_map.setdefault(ppid, []).append(pid)
+
+    queue = list(parents)
+    descendants: Set[int] = set()
+    while queue:
+        parent = queue.pop(0)
+        for child in children_map.get(parent, []):
+            if child in descendants or child in parents:
+                continue
+            descendants.add(child)
+            queue.append(child)
+    return sorted(descendants)
+
+
+def _list_pid_cmdline_map() -> Dict[int, str]:
+    """Best-effort snapshot of pid->cmdline."""
+    pid_cmdline: Dict[int, str] = {}
+    try:
+        output = subprocess.check_output(  # noqa: S603
+            ["ps", "-eo", "pid=", "args="],
+            text=True,
+        )
+    except Exception:
+        return pid_cmdline
+
+    for raw in output.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split(maxsplit=1)
+        if not parts:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        cmdline = parts[1] if len(parts) > 1 else ""
+        pid_cmdline[pid] = cmdline
+    return pid_cmdline
+
+
+def _find_repo_orphan_backend_pids(repo_root: Path) -> List[int]:
+    """Fallback cleanup for orphaned backend main process outside tracked state."""
+    root_text = _to_unix_path(repo_root.resolve())
+    markers = (
+        f"{root_text}/.venv/bin/python main.py --headless",
+        f"{root_text}/.venv/bin/python main.py --lightweight",
+    )
+    matched: List[int] = []
+    for pid, cmdline in _list_pid_cmdline_map().items():
+        normalized_cmd = str(cmdline).replace("\\", "/")
+        if any(marker in normalized_cmd for marker in markers):
+            matched.append(int(pid))
+    return sorted(set(matched))
 
 
 def _build_daemon_command(
@@ -611,16 +725,16 @@ def stop_brainstem_control_plane(
     heartbeat_payload = _read_json(heartbeat_path)
     watchdog_payload = _read_json(watchdog_state_path)
 
-    target_pids = sorted(
-        {
-            int(state_payload.get("launcher_pid") or 0),
-            int(heartbeat_payload.get("pid") or 0),
-            int(state_payload.get("watchdog_launcher_pid") or 0),
-            int(state_payload.get("watchdog_daemon_pid") or 0),
-            int(watchdog_payload.get("pid") or 0),
-        }
-        - {0}
-    )
+    seed_pids = {
+        int(state_payload.get("launcher_pid") or 0),
+        int(heartbeat_payload.get("pid") or 0),
+        int(state_payload.get("watchdog_launcher_pid") or 0),
+        int(state_payload.get("watchdog_daemon_pid") or 0),
+        int(watchdog_payload.get("pid") or 0),
+    } - {0}
+    descendant_pids = set(_collect_descendant_pids(list(seed_pids)))
+    orphan_backend_pids = set(_find_repo_orphan_backend_pids(root))
+    target_pids = sorted(seed_pids | descendant_pids | orphan_backend_pids)
     termination_results: Dict[str, bool] = {}
     for pid in target_pids:
         termination_results[str(pid)] = _terminate_pid(pid, timeout_seconds=stop_timeout_seconds)

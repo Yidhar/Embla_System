@@ -207,3 +207,49 @@ def test_manage_brainstem_control_plane_status_fails_on_stale_heartbeat(monkeypa
         assert any(item == "heartbeat:heartbeat_stale_critical" for item in reasons)
     finally:
         _cleanup_case_root(case_root)
+
+
+def test_manage_brainstem_stop_collects_descendants_and_orphan_backend(monkeypatch) -> None:
+    case_root = _make_case_root("test_manage_brainstem_control_plane_ws28_017")
+    try:
+        repo_root = case_root / "repo"
+        heartbeat = repo_root / "scratch" / "runtime" / "heartbeat.json"
+        state_file = repo_root / "scratch" / "runtime" / "manager_state.json"
+        watchdog_state = repo_root / "scratch" / "runtime" / "watchdog.json"
+        output = repo_root / "scratch" / "reports" / "manager_report.json"
+
+        _write_json(state_file, {"launcher_pid": 77001, "watchdog_launcher_pid": 77002, "watchdog_daemon_pid": 77003})
+        _write_json(heartbeat, {"pid": 77001, "generated_at": datetime.now(timezone.utc).isoformat()})
+        _write_json(watchdog_state, {"pid": 77003})
+
+        alive_pids = {77001, 77002, 77003, 77011, 77012}
+
+        def _fake_kill(pid, sig):
+            target = int(pid)
+            if sig == 0:
+                if target in alive_pids:
+                    return None
+                raise ProcessLookupError
+            if sig in {signal.SIGTERM, signal.SIGKILL}:
+                alive_pids.discard(target)
+                return None
+            return None
+
+        monkeypatch.setattr(manager.os, "kill", _fake_kill)
+        monkeypatch.setattr(manager, "_collect_descendant_pids", lambda seed: [77011])
+        monkeypatch.setattr(manager, "_find_repo_orphan_backend_pids", lambda root: [77012])
+
+        report = manager.run_manage_brainstem_control_plane_ws28_017(
+            repo_root=repo_root,
+            action="stop",
+            heartbeat_file=heartbeat.relative_to(repo_root),
+            state_file=state_file.relative_to(repo_root),
+            watchdog_state_file=watchdog_state.relative_to(repo_root),
+            output_file=output.relative_to(repo_root),
+            stop_timeout_seconds=0.2,
+        )
+        assert report["passed"] is True
+        assert report["checks"]["target_pid_count"] == 5
+        assert set(int(pid) for pid in report["termination_results"].keys()) == {77001, 77002, 77003, 77011, 77012}
+    finally:
+        _cleanup_case_root(case_root)
