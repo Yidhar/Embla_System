@@ -4,7 +4,7 @@
 
 **Four-Service AI Desktop Assistant — Streaming Tool Calls · Knowledge Graph Memory · Live2D · Voice**
 
-[简体中文](README.md) | [繁體中文](README_tw.md) | [English](README_en.md)
+[简体中文](README.md) | [English](README_en.md)
 
 ![NagaAgent](https://img.shields.io/badge/NagaAgent-5.0.0-blue?style=for-the-badge&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-green?style=for-the-badge)
@@ -16,8 +16,6 @@
 [![Issues](https://img.shields.io/github/issues/Xxiii8322766509/NagaAgent)](https://github.com/Xxiii8322766509/NagaAgent/issues)
 
 **[QQ Bot Integration: Undefined QQbot](https://github.com/69gg/Undefined/)**
-
-![UI Preview](ui/img/README.jpg)
 
 </div>
 
@@ -132,19 +130,19 @@ Source: [`summer_memory/`](summer_memory/)
 
 A pluggable tool architecture based on the [Model Context Protocol](https://modelcontextprotocol.io/), with each tool running as an independent agent.
 
-**Built-in agents**:
+**Built-in agents** (repo verification: 2026-02-27):
 
-| Agent | Directory | Function |
-|-------|-----------|----------|
-| `weather_time` | `mcpserver/agent_weather_time/` | Weather queries/forecasts, system time, auto city/IP detection |
-| `open_launcher` | `mcpserver/agent_open_launcher/` | Scan installed apps, launch programs via natural language |
-| `game_guide` | `mcpserver/agent_game_guide/` | Game strategy Q&A, damage calculation, team building, auto-screenshot injection |
-| `online_search` | `mcpserver/agent_online_search/` | Web search via SearXNG |
-| `crawl4ai` | `mcpserver/agent_crawl4ai/` | Web content extraction via Crawl4AI |
-| `playwright_master` | `mcpserver/agent_playwright_master/` | Browser automation via Playwright |
-| `vision` | `mcpserver/agent_vision/` | Screenshot analysis and visual Q&A |
-| `mqtt_tool` | `mcpserver/agent_mqtt_tool/` | IoT device control via MQTT |
-| `office_doc` | `mcpserver/agent_office_doc/` | docx/xlsx content extraction |
+| Agent | Directory | Function | Status |
+|-------|-----------|----------|--------|
+| `weather_time` | `mcpserver/agent_weather_time/` | Weather queries/forecasts, system time, auto city/IP detection | `available` |
+| `open_launcher` | `mcpserver/agent_open_launcher/` | Scan installed apps, launch programs via natural language | `available` |
+| `game_guide` | `mcpserver/agent_game_guide/` | Game strategy Q&A, damage calculation, team building, auto-screenshot injection | `available` |
+| `online_search` | `mcpserver/agent_online_search/` | Web search via SearXNG | `missing` (directory absent) |
+| `crawl4ai` | `mcpserver/agent_crawl4ai/` | Web content extraction via Crawl4AI | `missing` (directory absent) |
+| `playwright_master` | `mcpserver/agent_playwright_master/` | Browser automation via Playwright | `missing` (directory absent) |
+| `vision` | `mcpserver/agent_vision/` | Screenshot analysis and visual Q&A | `missing` (directory absent) |
+| `mqtt_tool` | `mcpserver/agent_mqtt_tool/` | IoT device control via MQTT | `missing` (directory absent) |
+| `office_doc` | `mcpserver/agent_office_doc/` | docx/xlsx content extraction | `missing` (directory absent) |
 
 **Registration & discovery**:
 
@@ -152,10 +150,13 @@ A pluggable tool architecture based on the [Model Context Protocol](https://mode
 mcpserver/
 ├── agent_weather_time/
 │   ├── agent-manifest.json    ← Declares name, entryPoint.module/class, capabilities
-│   └── weather_time_agent.py
-├── agent_online_search/
+│   └── agent_weather_time.py
+├── agent_open_launcher/
 │   ├── agent-manifest.json
-│   └── ...
+│   └── agent_app_launcher.py
+├── agent_game_guide/
+│   ├── agent-manifest.json
+│   └── agent_game_guide.py
 └── mcp_registry.py            ← scan_and_register_mcp_agents() globs **/agent-manifest.json
                                    importlib.import_module(module).ClassName() dynamic instantiation
 ```
@@ -326,12 +327,7 @@ NagaAgent/
 │   ├── agent_weather_time/
 │   ├── agent_open_launcher/
 │   ├── agent_game_guide/
-│   ├── agent_online_search/
-│   ├── agent_crawl4ai/
-│   ├── agent_playwright_master/
-│   ├── agent_vision/
-│   ├── agent_mqtt_tool/
-│   └── agent_office_doc/
+│   └── (other agents are extension slots)
 ├── summer_memory/        # GRAG knowledge graph
 │   ├── quintuple_extractor.py  #   Quintuple extraction (structured output + JSON fallback)
 │   ├── quintuple_graph.py      #   Neo4j + file dual storage
@@ -351,7 +347,6 @@ NagaAgent/
 │       ├── components/   #     Live2dModel / SplashScreen / LoginDialog / ...
 │       ├── composables/  #     useAuth / useStartupProgress / useVersionCheck / useToolStatus
 │       └── utils/        #     live2dController (4-channel animation) / encoding / session
-├── ui/                   # PyQt5 GUI (MVC)
 ├── system/               # Config loader, env checker, system prompts, background analyzer
 ├── main.py               # Unified entry point, orchestrates all services
 ├── config.json           # Runtime config (copy from config.json.example)
@@ -374,15 +369,13 @@ NagaAgent/
 git clone https://github.com/Xxiii8322766509/NagaAgent.git
 cd NagaAgent
 
-# Option 1: Setup script (auto-detects env, creates venv, installs deps)
-python setup.py
-
-# Option 2: Using uv
+# Option 1: Using uv (recommended)
 uv sync
 
-# Option 3: Manual
+# Option 2: Manual pip
 python -m venv .venv
 source .venv/bin/activate  # Windows: .\.venv\Scripts\activate
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
@@ -543,7 +536,8 @@ Electron frontend Live2D config:
 ## Updating
 
 ```bash
-python update.py  # Auto git pull + dependency sync
+git pull --ff-only
+uv sync
 ```
 
 ---
@@ -567,7 +561,7 @@ python main.py --quick-check              # Quick check
 ## Building
 
 ```bash
-python build.py  # Build Windows one-click runner package, output to dist/
+python scripts/build-win.py  # Build Windows one-click runner package, output to dist/
 ```
 
 ---

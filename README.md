@@ -17,8 +17,6 @@
 
  **[QQ 机器人联动：Undefined QQbot](https://github.com/69gg/Undefined/)**
 
-![UI 预览](ui/img/README.jpg)
-
 </div>
 
 ---
@@ -132,19 +130,19 @@ GRAG（Graph-RAG）从对话中自动提取五元组 `(主体, 主体类型, 谓
 
 基于 [Model Context Protocol](https://modelcontextprotocol.io/) 的可插拔工具架构，每个工具以独立 Agent 形式运行。
 
-**内置 Agent**：
+**内置 Agent**（仓库核验：2026-02-27）：
 
-| Agent | 目录 | 功能 |
-|-------|------|------|
-| `weather_time` | `mcpserver/agent_weather_time/` | 天气查询/预报、系统时间、自动城市/IP 检测 |
-| `open_launcher` | `mcpserver/agent_open_launcher/` | 扫描系统已安装应用，自然语言启动程序 |
-| `game_guide` | `mcpserver/agent_game_guide/` | 游戏策略问答、伤害计算、配队推荐、自动截图注入 |
-| `online_search` | `mcpserver/agent_online_search/` | 基于 SearXNG 的网络搜索 |
-| `crawl4ai` | `mcpserver/agent_crawl4ai/` | 基于 Crawl4AI 的网页内容提取 |
-| `playwright_master` | `mcpserver/agent_playwright_master/` | 基于 Playwright 的浏览器自动化 |
-| `vision` | `mcpserver/agent_vision/` | 截图分析与视觉问答 |
-| `mqtt_tool` | `mcpserver/agent_mqtt_tool/` | MQTT 协议 IoT 设备控制 |
-| `office_doc` | `mcpserver/agent_office_doc/` | docx/xlsx 内容提取 |
+| Agent | 目录 | 功能 | 状态 |
+|-------|------|------|------|
+| `weather_time` | `mcpserver/agent_weather_time/` | 天气查询/预报、系统时间、自动城市/IP 检测 | `available` |
+| `open_launcher` | `mcpserver/agent_open_launcher/` | 扫描系统已安装应用，自然语言启动程序 | `available` |
+| `game_guide` | `mcpserver/agent_game_guide/` | 游戏策略问答、伤害计算、配队推荐、自动截图注入 | `available` |
+| `online_search` | `mcpserver/agent_online_search/` | 基于 SearXNG 的网络搜索 | `missing`（目录缺失） |
+| `crawl4ai` | `mcpserver/agent_crawl4ai/` | 基于 Crawl4AI 的网页内容提取 | `missing`（目录缺失） |
+| `playwright_master` | `mcpserver/agent_playwright_master/` | 基于 Playwright 的浏览器自动化 | `missing`（目录缺失） |
+| `vision` | `mcpserver/agent_vision/` | 截图分析与视觉问答 | `missing`（目录缺失） |
+| `mqtt_tool` | `mcpserver/agent_mqtt_tool/` | MQTT 协议 IoT 设备控制 | `missing`（目录缺失） |
+| `office_doc` | `mcpserver/agent_office_doc/` | docx/xlsx 内容提取 | `missing`（目录缺失） |
 
 **注册与发现**：
 
@@ -152,10 +150,13 @@ GRAG（Graph-RAG）从对话中自动提取五元组 `(主体, 主体类型, 谓
 mcpserver/
 ├── agent_weather_time/
 │   ├── agent-manifest.json    ← 声明 name, entryPoint.module/class, capabilities
-│   └── weather_time_agent.py
-├── agent_online_search/
+│   └── agent_weather_time.py
+├── agent_open_launcher/
 │   ├── agent-manifest.json
-│   └── ...
+│   └── agent_app_launcher.py
+├── agent_game_guide/
+│   ├── agent-manifest.json
+│   └── agent_game_guide.py
 └── mcp_registry.py            ← scan_and_register_mcp_agents() glob 扫描 **/agent-manifest.json
                                    importlib.import_module(module).ClassName() 动态实例化
 ```
@@ -325,12 +326,7 @@ NagaAgent/
 │   ├── agent_weather_time/
 │   ├── agent_open_launcher/
 │   ├── agent_game_guide/
-│   ├── agent_online_search/
-│   ├── agent_crawl4ai/
-│   ├── agent_playwright_master/
-│   ├── agent_vision/
-│   ├── agent_mqtt_tool/
-│   └── agent_office_doc/
+│   └── (其余 Agent 按需扩展)
 ├── summer_memory/        # GRAG 知识图谱
 │   ├── quintuple_extractor.py  #   五元组提取（结构化输出 + JSON 兜底）
 │   ├── quintuple_graph.py      #   Neo4j + 文件双重存储
@@ -350,7 +346,6 @@ NagaAgent/
 │       ├── components/   #     Live2dModel / SplashScreen / LoginDialog / ...
 │       ├── composables/  #     useAuth / useStartupProgress / useVersionCheck / useToolStatus
 │       └── utils/        #     live2dController (4通道动画) / encoding / session
-├── ui/                   # PyQt5 GUI (MVC)
 ├── system/               # 配置加载、环境检测、系统提示词、后台分析器
 ├── main.py               # 统一入口，编排所有服务
 ├── config.json           # 运行时配置（从 config.json.example 复制）
@@ -373,15 +368,13 @@ NagaAgent/
 git clone https://github.com/Xxiii8322766509/NagaAgent.git
 cd NagaAgent
 
-# 方式一：setup 脚本（自动检测环境、创建虚拟环境、安装依赖）
-python setup.py
-
-# 方式二：uv
+# 方式一：uv（推荐）
 uv sync
 
-# 方式三：手动
+# 方式二：手动 pip
 python -m venv .venv
 source .venv/bin/activate  # Windows: .\.venv\Scripts\activate
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
@@ -542,7 +535,8 @@ Electron 前端 Live2D 配置：
 ## 更新
 
 ```bash
-python update.py  # 自动 git pull + 依赖同步
+git pull --ff-only
+uv sync
 ```
 
 ---
@@ -566,7 +560,7 @@ python main.py --quick-check              # 快速检查
 ## 构建
 
 ```bash
-python build.py  # 构建 Windows 一键运行整合包，输出到 dist/
+python scripts/build-win.py  # 构建 Windows 一键运行整合包，输出到 dist/
 ```
 
 ---
