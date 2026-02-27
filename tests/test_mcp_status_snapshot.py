@@ -10,21 +10,21 @@ def test_build_mcp_runtime_snapshot_counts_builtin_and_external_services() -> No
             "cached_manifests": 2,
             "service_names": ["weather-time", "game-guide"],
         },
-        external_services=["codex-cli", "weather-time"],
+        external_services=["external-ci", "weather-time"],
     )
 
     assert snapshot["server"] == "online"
     assert snapshot["tasks"]["total"] == 3
     assert snapshot["tasks"]["completed"] == 2
     assert snapshot["registry"]["service_names"] == ["weather-time", "game-guide"]
-    assert snapshot["registry"]["external_service_names"] == ["codex-cli"]
+    assert snapshot["registry"]["external_service_names"] == ["external-ci"]
 
 
 def test_build_mcp_task_snapshot_supports_status_filter() -> None:
     snapshot = {
         "registry": {
             "service_names": ["weather-time"],
-            "external_service_names": ["codex-cli"],
+            "external_service_names": ["external-ci"],
         }
     }
 
@@ -38,4 +38,3 @@ def test_build_mcp_task_snapshot_supports_status_filter() -> None:
     assert registered["tasks"][0]["source"] == "builtin"
     assert configured["total"] == 1
     assert configured["tasks"][0]["source"] == "mcporter"
-

@@ -1,5 +1,13 @@
 # NagaAgent 迁移资产清单与依赖盘点
 
+> 文档状态：Historical Archive（M0 快照）
+> 
+> 本文档用于保留 WS16 初期盘点证据，其中包含 Voice/Frontend/CLI 等历史阶段信息，不代表当前系统默认架构。
+> 当前统一口径请优先参考：
+> - `doc/00-omni-operator-architecture.md`
+> - `doc/task/25-subagent-development-fabric-status-matrix.md`
+> - `doc/task/runbooks/subagent_runtime_native_bridge_sequence_and_gate_runbook.md`
+
 ## 任务信息
 - **任务ID**: NGA-WS16-001
 - **标题**: 迁移资产清单与依赖盘点

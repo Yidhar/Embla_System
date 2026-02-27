@@ -189,8 +189,8 @@ mcpserver/
 取代它的是一套强一致、全自动化的自研 SDLC (Software Development Life Cycle) 架构，专门面向深度的全栈工程执行：
 
 - **Single Active Lease (选主协议)**：使用强一致 DB 锁(`workflow.db`)和 Fencing 时代纪元，确保全局有且仅有单个 Active Orchestrator 在操作仓库。
-- **阶段流转状态机**：拥有极强事务原子性(Idempotency-key 机制)，保证代码变更任务从 `GoalAccepted` -> `PlanDrafted` -> `Implementing`（利用 Claude/Codex 适配器） -> `Verifying` 的顺滑无双写推演。
-- **测评修复（Evaluator & Reworker）**：验证环节不过关？如果 CLI Native 环境测试不通过，主动通过 Codex MCP(`ask-codex`) 发起结构化纠偏而非无规律重试。
+- **阶段流转状态机**：拥有极强事务原子性(Idempotency-key 机制)，保证代码变更任务从 `GoalAccepted` -> `PlanDrafted` -> `Implementing`（SubAgent + NativeExecutionBridge） -> `Verifying` 的顺滑无双写推演。
+- **测评修复（Evaluator & Reworker）**：验证环节不过关时走内生治理闭环（contract gate / scaffold gate / risk gate / incident），而非外部黑盒代理降级重试。
 - **发布灰度监控（Release Controller）**：变更完成后不是立即 commit 到生产，而是先注入灰度池（Canary Deploy），依据 P95 延迟与 Error Rate 监控，由大模型判定发布 / 晋升 (Promote) / 或者硬回滚 (Auto-Rollback)。
 
 这使得 Naga 真正演变成了一台能在无人干预下持续运转多日的智能研发服务器。

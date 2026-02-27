@@ -1,16 +1,16 @@
 ---
 **文档类型**：As-Is + Target-Aligned（混合文档）
-**实施状态**：Phase 0 已实现 + Phase 1-3 规划
-**最后更新**：2026-02-22
-**Codex 策略版本**：v2 (Codex-first 主执行路径)
-**当前实现**：agentic_tool_loop + native_executor + mcp_manager
-**目标态参考**：00-omni-operator-architecture.md (Tool Contract 全字段强校验)
+**实施状态**：Phase 3 桥接主链已落地 + Phase 3 Full 收口
+**最后更新**：2026-02-27
+**执行策略版本**：v3 (Sub-Agent Runtime + NativeExecutionBridge 主路径)
+**当前实现**：agentic_tool_loop + SystemAgent + subagent_runtime + execution_bridge + mcp_manager
+**目标态参考**：`doc/00-omni-operator-architecture.md` + `doc/task/25-subagent-development-fabric-status-matrix.md`
 ---
 
 # 09 工具调用与任务执行规范（Omni-Operator 对齐版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
-最后更新：2026-02-22
+最后更新：2026-02-27
 
 ## 1. 目标
 
@@ -30,19 +30,21 @@
 2. 优先本地可控执行，外部调用走受控网关。
 3. 所有高风险动作必须可追踪、可回放、可拒绝。
 4. 结果必须回流到统一事件通道（SSE/事件日志）。
-5. **Codex-first 策略**（v2, 2026-02-22）：编码任务优先路由到 Codex CLI/MCP。
+5. **执行主链优先策略**（v3, 2026-02-27）：编码任务优先进入 `SystemAgent -> Sub-Agent Runtime -> NativeExecutionBridge`，legacy CLI 仅历史兼容参考。
 
 ## 3. 当前执行链路（As-Is）
 
-1. LLM 产出 `tool_calls`。
-2. `agentic_tool_loop` 校验并分类：`native_call` / `mcp_call`。
-3. 执行层：
+1. LLM 产出结构化 `tool_calls` 或子任务契约（`task contract`）。
+2. 交互链路由 `agentic_tool_loop` 校验并分类：`native_call` / `mcp_call`。
+3. 自治链路由 `SystemAgent` 决策 `runtime_mode=subagent` 后进入：
+   - `subagent_runtime`（依赖调度、契约校验、事件编排）
+   - `execution_bridge`（补丁意图执行、角色门禁、审计回执）
+4. 执行层：
    - Native：`native_tools -> native_executor`
    - MCP：`mcp_manager`（本地注册优先，外部 mcporter 兜底）
-   - **Codex 路由**（v2, 2026-02-22）：编码任务自动路由到 `codex-cli/ask-codex`
-4. 返回层：输出 `tool_results` 与 `tool_stage` 到前端。
+5. 返回层：输出 `tool_results` / `tool_stage` / `SubTaskExecutionBridgeReceipt` 到前端与事件通道。
 
-### 3.1 Codex-first 路由策略（新增）
+### 3.1 Sub-Agent Runtime + NativeExecutionBridge 路由策略（当前）
 
 **触发条件**：
 - 检测到编码意图（代码生成、重构、修复）
@@ -50,24 +52,25 @@
 - 文件写入操作（`write_file`、`git_checkout_file`）
 
 **路由规则**：
-1. **强制 Codex 优先**：
-   - 编码任务使用 `tool_choice=required` 直到 Codex 工具被调用
-   - 阻断未经 Codex 的直接文件写入
-   - 无工具重试时强制注入 `mcp_call` 到 `codex-cli/ask-codex`
+1. **强制执行桥优先**：
+   - 编码任务优先进入 `subagent_runtime + execution_bridge` 路径。
+   - 子任务写入必须提供 `patch_intents` / `patches`，缺失时拒绝执行。
+   - `role_executor_policy` 与 `role_executor_semantic_guard.spec` 生效后才允许落盘。
 
-2. **自动参数注入**：
-   - 缺失 `service_name` 时自动解析为 `codex-cli`
-   - 自动注入 `sandboxMode=workspace-write` + `approvalPolicy=on-failure`
+2. **治理字段注入**：
+   - 写入执行回执中统一输出 `execution_bridge_governance_*` 字段。
+   - 拒绝原因结构化为 `reason_code/category/severity` 并写入 Runtime/Incident 聚合。
 
-3. **降级场景**：
-   - Codex 不可用：降级到 Claude Code
-   - Claude 不可用：降级到 Gemini CLI
-   - 所有不可用：返回错误
+3. **降级策略（切换后）**：
+   - legacy CLI 回退已退役，fail-open 不再切回外部 CLI。
+   - fail-open 推荐场景统一走 `SubAgentRuntimeFailOpenBlocked + ReleaseGateRejected` 并进入治理告警。
 
 **实现位置**：
-- `apiserver/agentic_tool_loop.py`：主循环路由守卫
-- `system/background_analyzer.py`：意图分析与路由强制
-- `mcpserver/mcp_manager.py`：Codex 服务解析与参数规范化
+- `autonomous/system_agent.py`：主循环路由与 `runtime_mode` 决策
+- `autonomous/tools/subagent_runtime.py`：子任务调度与契约门禁
+- `autonomous/tools/execution_bridge.py`：内生执行桥与治理回执
+- `policy/role_executor_semantic_guard.spec`：语义级门禁策略
+- `autonomous/config/autonomous_config.yaml`：`disable_legacy_cli_fallback` 等运行策略
 
 ## 4. Tool Contract（统一契约）
 
@@ -117,7 +120,7 @@ MCP 路径（`mcp_manager`）已具备：
 
 - 服务名与工具名规范化
 - 本地注册优先
-- codex 相关调用的专门降级处理
+- 外部调用的受控降级与结构化错误回执
 
 ## 7. 失败与降级策略
 
@@ -127,13 +130,12 @@ MCP 路径（`mcp_manager`）已具备：
 2. 将错误摘要进入 `tool_results`。
 3. 按策略决定是否重试或终止当前轮次。
 
-### 7.2 Verifying 阶段 CLI 降级
+### 7.2 Legacy CLI 兼容入口（已退役）
 
-自治流程中可启用 Codex MCP 降级：
+自治流程已切到 subagent-only，不再执行 legacy CLI 兼容降级：
 
-- 触发条件：主 CLI 不可用或重试耗尽。
-- 降级范围：以审阅/诊断为主，不替代主执行链路。
-- 结果要求：结构化输出并纳入二次验证。
+- fail-open 不再触发 CLI 回退，而是产生结构化拒绝与预算告警。
+- `verification_fallback` 配置块已从当前主配置移除；不再驱动任何运行时降级。
 
 ## 8. 回执与审计模板
 

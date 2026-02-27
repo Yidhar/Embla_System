@@ -190,8 +190,8 @@ The Agent Server (`BackgroundAnalyzer`) now focuses on background intent analysi
 This supersedes legacy routing with a robust, highly-automated SDLC (Software Development Life Cycle) architecture tailored for complex software engineering:
 
 - **Single Active Lease**: Utilizes a highly consistent DB lock (`workflow.db`) and Fencing epochs, guaranteeing exactly one Active Orchestrator modifies the codebase at a time.
-- **State Machine Engine**: Robust idempotency mechanisms that drive modification tasks through a flawless loop: `GoalAccepted` -> `PlanDrafted` -> `Implementing` (utilizing Claude/Codex adapters) -> `Verifying`.
-- **Evaluator & Reworker**: Fails verification? If CLI Native tests fail, the system proactively uses Codex MCP (`ask-codex`) to formulate structured code remediation instead of blind retries.
+- **State Machine Engine**: Robust idempotency mechanisms drive tasks through `GoalAccepted` -> `PlanDrafted` -> `Implementing` (SubAgent + NativeExecutionBridge) -> `Verifying`.
+- **Evaluator & Reworker**: Verification failures are handled by native governance loops (contract/scaffold/risk/incident) instead of black-box external fallback agents.
 - **Release Controller (Gray Release)**: Updates aren't directly applied to prod. They enter a Canary execution pool. AI dictates if a release is Promoted or trigger Auto-Rollback based strictly on P95 latency and runtime Error Rate.
 
 This transforms Naga from an assistant into a smart development server capable of unsupervised marathon execution.

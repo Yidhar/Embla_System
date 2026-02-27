@@ -16,10 +16,3 @@ gates:
   secrets:
     require_short_lived_token: true
     require_audit_log: true
-
-  verification_fallback:
-    codex_mcp:
-      enabled: true
-      service_name: codex-cli
-      tool_name: ask-codex
-      sandbox_mode: read-only

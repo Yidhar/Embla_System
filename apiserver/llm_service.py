@@ -338,7 +338,7 @@ class LLMService:
         Normalize OpenAI-compatible params for model-specific constraints.
 
         Notes:
-        - GPT-5 family (including gpt-5-codex) currently supports only temperature=1.
+        - GPT-5 family currently supports only temperature=1.
         - Enable LiteLLM drop_params for this family to avoid hard failures on other
           unsupported optional params forwarded by wrappers.
         """

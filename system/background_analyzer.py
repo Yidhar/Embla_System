@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from system.asyncio_offload import offload_blocking
 from system.config import config, logger
 from system.coding_intent import extract_latest_user_message as extract_latest_user_message_shared
-from system.coding_intent import requires_codex_for_messages
+from system.coding_intent import requires_core_execution_for_messages
 from autonomous.router_engine import RouterRequest, TaskRouterEngine
 
 from system.config import get_prompt
@@ -44,8 +44,6 @@ _CODING_KEYWORDS = (
     "repo",
     "repository",
 )
-_CODEX_SERVICE_ALIASES = {"codex-cli", "codex-mcp"}
-_CODEX_TOOL_ALIASES = {"ask-codex", "brainstorm", "help", "ping"}
 _MUTATING_NATIVE_TOOL_NAMES = {"write_file", "git_checkout_file"}
 _PROMPT_ROUTE_ENGINE = TaskRouterEngine()
 
@@ -78,7 +76,7 @@ def _infer_analysis_risk_level(messages: List[Dict[str, str]], latest_user_messa
         return "read_only"
     if any(token in latest for token in ("deploy", "发布", "上线", "rollback", "回滚", "secrets", "密钥")):
         return "deploy"
-    if _looks_like_coding_request(latest_user_message) or requires_codex_for_messages(messages):
+    if _looks_like_coding_request(latest_user_message) or requires_core_execution_for_messages(messages):
         return "write_repo"
     return "read_only"
 
@@ -112,17 +110,7 @@ def _looks_like_coding_request(text: str) -> bool:
     lowered = (text or "").lower()
     if any(keyword in lowered for keyword in _CODING_KEYWORDS):
         return True
-    return requires_codex_for_messages([{"role": "user", "content": text or ""}])
-
-
-def _is_codex_mcp_call(call: Dict[str, Any]) -> bool:
-    if str(call.get("agentType", "")).strip().lower() != "mcp":
-        return False
-    service = str(call.get("service_name", "")).strip().lower()
-    tool = str(call.get("tool_name", "")).strip().lower()
-    if tool in _CODEX_TOOL_ALIASES and (not service or service in _CODEX_SERVICE_ALIASES):
-        return True
-    return service in _CODEX_SERVICE_ALIASES
+    return requires_core_execution_for_messages([{"role": "user", "content": text or ""}])
 
 
 def _is_mutating_native_call(call: Dict[str, Any]) -> bool:
@@ -139,31 +127,12 @@ def _shorten_for_log(value: Any, limit: int = 300) -> str:
     return text[:limit] + "..."
 
 
-def _normalize_codex_mcp_call_payload(call: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_mcp_call_payload(call: Dict[str, Any]) -> Dict[str, Any]:
     normalized = dict(call or {})
-    tool_name = str(normalized.get("tool_name", "")).strip()
-    if tool_name != "ask-codex":
-        return normalized
-
     nested_args = normalized.get("arguments")
-    prompt = normalized.get("prompt")
-    message = normalized.get("message")
-
-    if (prompt is None or prompt == "") and isinstance(message, str) and message.strip():
-        normalized["prompt"] = message
-        prompt = message
-
-    if (prompt is None or prompt == "") and isinstance(nested_args, dict):
-        nested_prompt = nested_args.get("prompt")
-        nested_message = nested_args.get("message")
-        if isinstance(nested_prompt, str) and nested_prompt.strip():
-            normalized["prompt"] = nested_prompt
-        elif isinstance(nested_message, str) and nested_message.strip():
-            normalized["prompt"] = nested_message
-
-    normalized.pop("message", None)
-    normalized.setdefault("sandboxMode", "workspace-write")
-    normalized.setdefault("approvalPolicy", "on-failure")
+    if isinstance(nested_args, dict):
+        for key, value in nested_args.items():
+            normalized.setdefault(key, value)
     return normalized
 
 
@@ -487,42 +456,13 @@ class BackgroundAnalyzer:
             self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(timeout=150.0, connect=10.0))
         return self._http_client
 
-    def _enforce_coding_codex_route(
+    def _enforce_coding_route(
         self,
         tool_calls: List[Dict[str, Any]],
         messages: List[Dict[str, str]],
     ) -> List[Dict[str, Any]]:
-        latest_user_request = _extract_latest_user_message(messages)
-        if not (_looks_like_coding_request(latest_user_request) or requires_codex_for_messages(messages)):
-            return tool_calls
-
-        normalized_calls = list(tool_calls)
-        has_codex = any(_is_codex_mcp_call(call) for call in normalized_calls)
-        if has_codex:
-            return normalized_calls
-
-        dropped_mutating = 0
-        passthrough_calls: List[Dict[str, Any]] = []
-        for call in normalized_calls:
-            if _is_mutating_native_call(call):
-                dropped_mutating += 1
-                continue
-            passthrough_calls.append(call)
-
-        codex_call = {
-            "agentType": "mcp",
-            "service_name": "codex-cli",
-            "tool_name": "ask-codex",
-            "message": latest_user_request or "Complete the pending coding task in current repository.",
-            "sandboxMode": "workspace-write",
-            "approvalPolicy": "on-failure",
-        }
-        rewritten = [codex_call, *passthrough_calls]
-        logger.info(
-            "[BackgroundAnalyzer] coding request routed to codex first; inserted ask-codex call, dropped_mutating=%s",
-            dropped_mutating,
-        )
-        return rewritten
+        # Coding-route force injection has been retired; keep original plan intact.
+        return list(tool_calls)
 
     async def analyze_intent_async(self, messages: List[Dict[str, str]], session_id: str):
         """异步意图分析 - 基于博弈论的背景分析机制"""
@@ -572,7 +512,7 @@ class BackgroundAnalyzer:
             tasks = analysis.get("tasks", []) if isinstance(analysis, dict) else []
             tool_calls = analysis.get("tool_calls", []) if isinstance(analysis, dict) else []
             if isinstance(tool_calls, list):
-                tool_calls = self._enforce_coding_codex_route(tool_calls, messages)
+                tool_calls = self._enforce_coding_route(tool_calls, messages)
 
             if not tasks and not tool_calls:
                 await self._notify_ui_tool_status(
@@ -687,7 +627,7 @@ class BackgroundAnalyzer:
             manager = get_mcp_manager()
 
             async def _execute_one(call: Dict[str, Any]):
-                call = _normalize_codex_mcp_call_payload(call)
+                call = _normalize_mcp_call_payload(call)
                 service_name = call.get("service_name", "")
                 tool_name = call.get("tool_name", "")
                 call_id = str(call.get("_tool_call_id") or f"bg_mcp_{tool_name or 'unknown'}")
@@ -701,25 +641,15 @@ class BackgroundAnalyzer:
                     service_name = "game_guide"
                     call["service_name"] = service_name
 
-                if not service_name and tool_name in {"ask-codex", "brainstorm", "help", "ping"}:
-                    service_name = "codex-cli"
-                    call["service_name"] = service_name
-
-                if tool_name == "ask-codex":
-                    call.setdefault("sandboxMode", "workspace-write")
-                    call.setdefault("approvalPolicy", "on-failure")
-
                 if not service_name and not tool_name:
                     logger.warning("[MCP] 工具调用缺少service_name和tool_name，跳过: %s", call)
                     return
                 try:
-                    prompt_len = len(str(call.get("prompt") or "")) if tool_name == "ask-codex" else 0
                     logger.info(
-                        "[MCP] 调用开始 id=%s service=%s tool=%s prompt_len=%s payload_keys=%s",
+                        "[MCP] 调用开始 id=%s service=%s tool=%s payload_keys=%s",
                         call_id,
                         service_name or "<missing>",
                         tool_name or "<missing>",
-                        prompt_len,
                         sorted(call.keys()),
                     )
                     result = await manager.unified_call(service_name, call)

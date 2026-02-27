@@ -35,15 +35,6 @@ class LeaseLostError(RuntimeError):
 
 
 @dataclass
-class VerificationFallbackConfig:
-    enable_codex_mcp: bool = False
-    mcp_service_name: str = "codex-mcp"
-    mcp_tool_name: str = "ask-codex"
-    sandbox_mode: str = "read-only"
-    approval_policy: str = "on-failure"
-
-
-@dataclass
 class LeaseConfig:
     enabled: bool = True
     lease_name: str = "global_orchestrator"
@@ -93,12 +84,11 @@ class WatchdogRuntimeConfig:
 class SystemAgentConfig:
     enabled: bool = False
     cycle_interval_seconds: int = 3600
-    preferred_cli: str = "codex"
+    preferred_cli: str = "claude"
     fallback_order: tuple[str, ...] = ("claude", "gemini")
     max_retries: int = 2
     run_quality_checks: bool = False
     default_timeout_seconds: int = 3600
-    verification_fallback: VerificationFallbackConfig = field(default_factory=VerificationFallbackConfig)
     lease: LeaseConfig = field(default_factory=LeaseConfig)
     outbox_dispatch: OutboxDispatchConfig = field(default_factory=OutboxDispatchConfig)
     release: ReleaseAutomationConfig = field(default_factory=ReleaseAutomationConfig)
@@ -116,21 +106,11 @@ class SystemAgentConfig:
             return getattr(container, key, default)
 
         cli_tools = pick(source, "cli_tools", {})
-        verification = pick(source, "verification_fallback", {})
         lease = pick(source, "lease", {})
         outbox_dispatch = pick(source, "outbox_dispatch", {})
         release = pick(source, "release", {})
         watchdog = pick(source, "watchdog", {})
         subagent_runtime = pick(source, "subagent_runtime", {})
-
-        fallback_cfg = VerificationFallbackConfig(
-            # Native bridge cutover: verification fallback over codex MCP is retired.
-            enable_codex_mcp=False,
-            mcp_service_name=pick(verification, "mcp_server_name", pick(verification, "mcp_service_name", "codex-mcp")),
-            mcp_tool_name=pick(verification, "tool_name", "ask-codex"),
-            sandbox_mode=pick(verification, "sandbox_mode", "read-only"),
-            approval_policy=pick(verification, "approval_policy", "on-failure"),
-        )
         lease_cfg = LeaseConfig(
             enabled=bool(pick(lease, "enabled", True)),
             lease_name=str(pick(lease, "lease_name", "global_orchestrator")),
@@ -194,12 +174,11 @@ class SystemAgentConfig:
         return cls(
             enabled=pick(source, "enabled", False),
             cycle_interval_seconds=max(60, int(pick(source, "cycle_interval_seconds", 3600))),
-            preferred_cli=pick(cli_tools, "preferred", "codex"),
+            preferred_cli=pick(cli_tools, "preferred", "claude"),
             fallback_order=tuple(pick(cli_tools, "fallback_order", ["claude", "gemini"])),
             max_retries=max(0, int(pick(cli_tools, "max_retries", 2))),
             run_quality_checks=bool(pick(source, "run_quality_checks", False)),
             default_timeout_seconds=max(60, int(pick(source, "fixed_timeout_seconds", 3600))),
-            verification_fallback=fallback_cfg,
             lease=lease_cfg,
             outbox_dispatch=outbox_cfg,
             release=release_cfg,

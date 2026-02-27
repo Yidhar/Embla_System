@@ -60,7 +60,7 @@ Omni-Operator 在当前项目的集成层由三块组成：
   - lease/fencing 单活控制
   - outbox/inbox 去重分发
   - canary 判定与自动回滚
-  - Verifying 阶段 Codex MCP 降级
+  - Verifying 阶段统一结构化门禁与重试决策（legacy 外部降级已退役）
 - 关键文件：
   - `autonomous/system_agent.py`
   - `autonomous/state/workflow_store.py`

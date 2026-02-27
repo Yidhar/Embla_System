@@ -5,10 +5,9 @@ import shutil
 import uuid
 from pathlib import Path
 
-from autonomous.dispatcher import DispatchResult
 from autonomous.system_agent import SystemAgent
-from autonomous.tools.cli_adapter import CliTaskResult
-from autonomous.types import EvaluationReport, OptimizationTask
+from autonomous.tools.subagent_runtime import SubAgentRuntimeResult
+from autonomous.types import OptimizationTask
 
 
 def _write_policy(path: Path) -> None:
@@ -34,23 +33,6 @@ def _make_case_root(prefix: str) -> Path:
 
 def _cleanup_case_root(root: Path) -> None:
     shutil.rmtree(root, ignore_errors=True)
-
-
-def _build_dispatch_result(task_id: str) -> DispatchResult:
-    return DispatchResult(
-        selected_cli="codex",
-        result=CliTaskResult(
-            task_id=task_id,
-            cli_name="codex",
-            exit_code=0,
-            stdout="ok",
-            stderr="",
-            files_changed=[],
-            duration_seconds=0.1,
-            success=True,
-            execution_snapshots=[],
-        ),
-    )
 
 
 def test_write_task_forced_legacy_is_overridden_to_subagent_when_enforced() -> None:
@@ -104,12 +86,12 @@ def test_write_task_forced_legacy_is_overridden_to_subagent_when_enforced() -> N
         assert approved[0].get("runtime_mode") == "subagent"
         decisions = [payload for event_type, payload, _ in events if event_type == "SubAgentRuntimeRolloutDecision"]
         assert decisions
-        assert decisions[-1].get("decision_reason") == "write_path_enforced"
+        assert decisions[-1].get("decision_reason") == "legacy_mode_ignored_subagent_only"
     finally:
         _cleanup_case_root(case_root)
 
 
-def test_write_task_is_rejected_when_subagent_disabled_under_write_path_enforcement() -> None:
+def test_write_task_disabled_flag_still_runs_subagent_under_cutover() -> None:
     case_root = _make_case_root("test_system_agent_write_path_ws26_001")
     try:
         repo = case_root / "repo"
@@ -129,14 +111,25 @@ def test_write_task_is_rejected_when_subagent_disabled_under_write_path_enforcem
             repo_dir=str(repo),
         )
 
-        dispatch_called = {"count": 0}
+        runtime_called = {"count": 0}
 
-        async def _dispatch_should_not_run(task: OptimizationTask) -> DispatchResult:
-            dispatch_called["count"] += 1
-            return _build_dispatch_result(task.task_id)
+        async def _runtime_fail(**kwargs):
+            runtime_called["count"] += 1
+            task = kwargs["task"]
+            return SubAgentRuntimeResult(
+                runtime_id="sar-subagent-disabled-cutover",
+                workflow_id=kwargs["workflow_id"],
+                task_id=task.task_id,
+                trace_id=kwargs["trace_id"],
+                session_id=kwargs["session_id"],
+                success=False,
+                approved=False,
+                gate_failure="runtime",
+                reasons=["runtime_disabled_flag_in_config"],
+                fail_open_recommended=False,
+            )
 
-        agent.dispatcher.dispatch = _dispatch_should_not_run  # type: ignore[method-assign]
-        agent.evaluator.evaluate = lambda task, result: EvaluationReport(approved=True)  # type: ignore[method-assign]
+        agent.subagent_runtime.run = _runtime_fail  # type: ignore[method-assign]
 
         events: list[tuple[str, dict, dict]] = []
         agent._emit = lambda event_type, payload, **kwargs: events.append((event_type, dict(payload), dict(kwargs)))  # type: ignore[method-assign]
@@ -149,13 +142,11 @@ def test_write_task_is_rejected_when_subagent_disabled_under_write_path_enforcem
         )
         asyncio.run(agent._run_task(task, fencing_epoch=1))
 
-        assert dispatch_called["count"] == 0
+        assert runtime_called["count"] == 1
         assert any(event_type == "TaskRejected" for event_type, _, _ in events)
-        write_gate_events = [
-            payload for event_type, payload, _ in events if event_type == "ReleaseGateRejected" and payload.get("gate") == "write_path"
-        ]
-        assert write_gate_events
-        assert any("write_path:write_path_subagent_disabled" in " ".join(payload.get("reasons", [])) for payload in write_gate_events)
+        decisions = [payload for event_type, payload, _ in events if event_type == "SubAgentRuntimeRolloutDecision"]
+        assert decisions
+        assert decisions[-1].get("decision_reason") == "subagent_disabled_but_cutover_forced"
         assert not any(event_type == "TaskApproved" for event_type, _, _ in events)
     finally:
         _cleanup_case_root(case_root)
@@ -183,15 +174,6 @@ def test_write_task_fail_open_is_blocked_by_default() -> None:
             repo_dir=str(repo),
         )
 
-        dispatch_called = {"count": 0}
-
-        async def _dispatch_should_not_run(task: OptimizationTask) -> DispatchResult:
-            dispatch_called["count"] += 1
-            return _build_dispatch_result(task.task_id)
-
-        agent.dispatcher.dispatch = _dispatch_should_not_run  # type: ignore[method-assign]
-        agent.evaluator.evaluate = lambda task, result: EvaluationReport(approved=True)  # type: ignore[method-assign]
-
         events: list[tuple[str, dict, dict]] = []
         agent._emit = lambda event_type, payload, **kwargs: events.append((event_type, dict(payload), dict(kwargs)))  # type: ignore[method-assign]
 
@@ -212,16 +194,20 @@ def test_write_task_fail_open_is_blocked_by_default() -> None:
         )
         asyncio.run(agent._run_task(task, fencing_epoch=1))
 
-        assert dispatch_called["count"] == 0
         assert any(event_type == "SubAgentRuntimeFailOpenBlocked" for event_type, _, _ in events)
         assert not any(event_type == "SubAgentRuntimeFailOpen" for event_type, _, _ in events)
+        write_gate_events = [
+            payload for event_type, payload, _ in events if event_type == "ReleaseGateRejected" and payload.get("gate") == "write_path"
+        ]
+        assert write_gate_events
+        assert any(str(payload.get("decision_reason") or "") == "subagent_fail_open_blocked" for payload in write_gate_events)
         assert any(event_type == "TaskRejected" for event_type, _, _ in events)
         assert not any(event_type == "TaskApproved" for event_type, _, _ in events)
     finally:
         _cleanup_case_root(case_root)
 
 
-def test_write_task_fail_open_can_fallback_when_explicitly_enabled() -> None:
+def test_write_task_fail_open_still_blocked_when_legacy_override_flag_is_set() -> None:
     case_root = _make_case_root("test_system_agent_write_path_ws26_001")
     try:
         repo = case_root / "repo"
@@ -243,15 +229,6 @@ def test_write_task_fail_open_can_fallback_when_explicitly_enabled() -> None:
             repo_dir=str(repo),
         )
 
-        dispatch_called = {"count": 0}
-
-        async def _dispatch_ok(task: OptimizationTask) -> DispatchResult:
-            dispatch_called["count"] += 1
-            return _build_dispatch_result(task.task_id)
-
-        agent.dispatcher.dispatch = _dispatch_ok  # type: ignore[method-assign]
-        agent.evaluator.evaluate = lambda task, result: EvaluationReport(approved=True)  # type: ignore[method-assign]
-
         events: list[tuple[str, dict, dict]] = []
         agent._emit = lambda event_type, payload, **kwargs: events.append((event_type, dict(payload), dict(kwargs)))  # type: ignore[method-assign]
 
@@ -272,9 +249,9 @@ def test_write_task_fail_open_can_fallback_when_explicitly_enabled() -> None:
         )
         asyncio.run(agent._run_task(task, fencing_epoch=1))
 
-        assert dispatch_called["count"] == 1
-        assert any(event_type == "SubAgentRuntimeFailOpen" for event_type, _, _ in events)
-        assert not any(event_type == "SubAgentRuntimeFailOpenBlocked" for event_type, _, _ in events)
-        assert any(event_type == "TaskApproved" for event_type, _, _ in events)
+        assert any(event_type == "SubAgentRuntimeFailOpenBlocked" for event_type, _, _ in events)
+        assert not any(event_type == "SubAgentRuntimeFailOpen" for event_type, _, _ in events)
+        assert any(event_type == "TaskRejected" for event_type, _, _ in events)
+        assert not any(event_type == "TaskApproved" for event_type, _, _ in events)
     finally:
         _cleanup_case_root(case_root)

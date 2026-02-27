@@ -56,8 +56,6 @@ _FOLLOWUP_MARKERS = (
 )
 
 _CODING_CONTEXT_MARKERS = (
-    "codex-cli",
-    "ask-codex",
     "mcp_call",
     "native_call",
     "git diff",
@@ -144,7 +142,7 @@ def has_recent_coding_context(messages: Sequence[Mapping[str, Any]], lookback: i
     return False
 
 
-def requires_codex_for_messages(messages: Sequence[Mapping[str, Any]]) -> bool:
+def requires_core_execution_for_messages(messages: Sequence[Mapping[str, Any]]) -> bool:
     latest_user = extract_latest_user_message(messages)
     if contains_direct_coding_signal(latest_user):
         return True

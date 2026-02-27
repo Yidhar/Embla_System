@@ -11,7 +11,6 @@ from autonomous.monitor import ExecutionMonitor
 from autonomous.tools.claude_adapter import ClaudeAdapter
 from autonomous.tools.cli_adapter import AgentCliAdapter, CliTaskResult, CliTaskSpec
 from autonomous.tools.cli_selector import CliSelectionStrategy
-from autonomous.tools.codex_adapter import CodexAdapter
 from autonomous.tools.gemini_adapter import GeminiAdapter
 from autonomous.types import OptimizationTask
 
@@ -28,14 +27,13 @@ class Dispatcher:
     def __init__(
         self,
         repo_dir: str,
-        preferred_cli: str = "codex",
+        preferred_cli: str = "claude",
         fallback_order: List[str] | None = None,
         default_timeout_seconds: int = 3600,
     ) -> None:
         self.repo_dir = Path(repo_dir)
         self.selector = CliSelectionStrategy(preferred=preferred_cli, fallback_order=fallback_order or ["claude", "gemini"])
         self.adapters: Dict[str, AgentCliAdapter] = {
-            "codex": CodexAdapter(default_timeout_seconds=default_timeout_seconds),
             "claude": ClaudeAdapter(default_timeout_seconds=default_timeout_seconds),
             "gemini": GeminiAdapter(default_timeout_seconds=default_timeout_seconds),
         }

@@ -35,7 +35,7 @@ def _cleanup_case_root(root: Path) -> None:
     shutil.rmtree(root, ignore_errors=True)
 
 
-def test_resolve_runtime_mode_forced_legacy_is_overridden_when_cli_layer_disabled() -> None:
+def test_resolve_runtime_mode_forced_legacy_is_ignored_in_subagent_only_cutover() -> None:
     case_root = _make_case_root("test_system_agent_execution_bridge_cutover")
     try:
         repo = case_root / "repo"
@@ -68,7 +68,7 @@ def test_resolve_runtime_mode_forced_legacy_is_overridden_when_cli_layer_disable
         )
 
         assert mode == "subagent"
-        assert context["reason"] == "legacy_cli_layer_disabled"
+        assert context["reason"] == "legacy_mode_ignored_subagent_only"
     finally:
         _cleanup_case_root(case_root)
 
@@ -120,11 +120,7 @@ def test_fail_open_does_not_fallback_to_cli_when_cli_layer_disabled() -> None:
                 fail_open_recommended=True,
             )
 
-        async def _dispatch_should_not_run(_task):  # type: ignore[no-untyped-def]
-            raise AssertionError("legacy cli dispatch should not be called when cli layer disabled")
-
         agent.subagent_runtime.run = _runtime_fail_open  # type: ignore[method-assign]
-        agent.dispatcher.dispatch = _dispatch_should_not_run  # type: ignore[method-assign]
 
         task = OptimizationTask(
             task_id="task-bridge-no-cli-fallback",
@@ -140,6 +136,8 @@ def test_fail_open_does_not_fallback_to_cli_when_cli_layer_disabled() -> None:
         event_types = [event_type for event_type, _, _ in events]
         assert "SubAgentRuntimeFailOpenBlocked" in event_types
         assert "ReleaseGateRejected" in event_types
+        rejected = [payload for event_type, payload, _ in events if event_type == "ReleaseGateRejected"]
+        assert any(str(payload.get("decision_reason") or "") == "subagent_fail_open_blocked" for payload in rejected)
         assert any(
             event_type == "TaskExecutionCompleted" and str(payload.get("runtime_mode") or "") == "subagent"
             for event_type, payload, _ in events

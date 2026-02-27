@@ -213,7 +213,7 @@ def test_cutover_apply_preserves_non_runtime_yaml_layout() -> None:
                     "  enabled: false",
                     "",
                     "  cli_tools:",
-                    '    preferred: "codex"',
+                    '    preferred: "claude"',
                     '    fallback_order: ["claude", "gemini"]',
                     "",
                     "  subagent_runtime:",
@@ -245,7 +245,7 @@ def test_cutover_apply_preserves_non_runtime_yaml_layout() -> None:
         )
         assert report["passed"] is True
         content = config_path.read_text(encoding="utf-8")
-        assert 'preferred: "codex"' in content
+        assert 'preferred: "claude"' in content
         assert 'fallback_order: ["claude", "gemini"]' in content
         assert "    enabled: true" in content
         assert "    rollout_percent: 100" in content

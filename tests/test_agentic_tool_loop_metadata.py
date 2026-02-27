@@ -18,8 +18,8 @@ def test_convert_structured_tool_calls_injects_context_metadata() -> None:
             "id": "call_mcp_1",
             "name": "mcp_call",
             "arguments": {
-                "tool_name": "ask-codex",
-                "message": "explain current plan",
+                "tool_name": "ping",
+                "message": "hello",
             },
         },
     ]
@@ -50,8 +50,8 @@ def test_convert_structured_tool_calls_injects_context_metadata() -> None:
     assert native_call["_requires_global_mutex"] is False
 
     assert mcp_call["_tool_call_id"] == "call_mcp_1"
-    assert mcp_call["prompt"] == "explain current plan"
-    assert mcp_call["service_name"] == "codex-cli"
+    assert mcp_call["message"] == "hello"
+    assert "service_name" not in mcp_call
 
 
 def test_convert_structured_tool_calls_generates_trace_when_missing() -> None:

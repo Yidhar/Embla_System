@@ -2,7 +2,7 @@
 
 最后更新：2026-02-27  
 适用范围：`modifier/naga` 分支当前实现（WS22/WS28 增量）  
-目标：用于排障与 onboarding，快速回答“当前子代理是怎么跑的、在哪个 gate 被拒绝、为什么没有回落到 CLI”。
+目标：用于排障与 onboarding，快速回答“当前子代理是怎么跑的、在哪个 gate 被拒绝、为什么不会再回落到 CLI”。
 
 ## 1. 代码锚点
 
@@ -10,8 +10,8 @@
 - 运行时编排：`autonomous/tools/subagent_runtime.py:93`
 - 内生执行桥：`autonomous/tools/execution_bridge.py:48`
 - 运行模式决策：`autonomous/system_agent.py:1033`
-- 旧 CLI 执行路径（兼容）：`autonomous/system_agent.py:645`
-- 当前配置（默认禁用 legacy 回退）：`autonomous/config/autonomous_config.yaml:54`
+- fail-open 预算与阻断：`autonomous/system_agent.py:1083`
+- 当前配置（subagent-only）：`autonomous/config/autonomous_config.yaml:54`
 
 ## 2. 事件时序图（主链路）
 
@@ -24,83 +24,68 @@ sequenceDiagram
     participant EB as NativeExecutionBridge
     participant SE as ScaffoldEngine
     participant EV as EventStore(EventBus)
-    participant LG as Legacy Dispatcher
 
     SA->>SA: _resolve_runtime_mode(task)
-    alt runtime_mode = subagent
-        SA->>SR: run(task, worker=execution_bridge, emit_event, lease_guard)
-        SR->>EV: SubAgentRuntimeStarted
-        SR->>SR: build_subtasks + validate_specs
-        alt spec invalid
-            SR->>EV: SubAgentRuntimeRejected
-            SR-->>SA: SubAgentRuntimeResult(failed, gate=runtime)
-        else spec valid
-            SR->>SR: contract negotiation
-            alt contract gate failed
-                SR->>EV: SubAgentContractGateFailed
-                SR->>EV: SubAgentRuntimeCompleted(success=false, gate=contract)
-                SR-->>SA: failed + fail_open_recommended
-            else contract agreed
-                loop ready subtasks
-                    SR->>EV: SubTaskDispatching
-                    SR->>EB: execute_subtask(subtask)
-                    EB->>EB: collect/normalize patch intents
-                    alt patch intents missing
-                        EB-->>SR: RuntimeSubTaskResult(success=false, error=missing_patch_intent, receipt)
-                    else patch intents valid
-                        EB-->>SR: RuntimeSubTaskResult(success=true, patches, receipt)
-                    end
-                    SR->>EV: SubTaskExecutionBridgeReceipt
-                    SR->>EV: SubTaskExecutionCompleted
-                    alt subtask success
-                        SR->>EV: SubTaskApproved
-                    else subtask failed
-                        SR->>EV: SubTaskRejected
-                    end
+    SA->>SR: run(task, worker=execution_bridge, emit_event, lease_guard)
+    SR->>EV: SubAgentRuntimeStarted
+    SR->>SR: build_subtasks + validate_specs
+    alt spec invalid
+        SR->>EV: SubAgentRuntimeRejected
+        SR-->>SA: SubAgentRuntimeResult(failed, gate=runtime)
+    else spec valid
+        SR->>SR: contract negotiation
+        alt contract gate failed
+            SR->>EV: SubAgentContractGateFailed
+            SR->>EV: SubAgentRuntimeCompleted(success=false, gate=contract)
+            SR-->>SA: failed + fail_open_recommended
+        else contract agreed
+            loop ready subtasks
+                SR->>EV: SubTaskDispatching
+                SR->>EB: execute_subtask(subtask)
+                EB->>EB: collect/normalize patch intents
+                alt patch intents missing
+                    EB-->>SR: RuntimeSubTaskResult(success=false, error=missing_patch_intent, receipt)
+                else patch intents valid
+                    EB-->>SR: RuntimeSubTaskResult(success=true, patches, receipt)
                 end
+                SR->>EV: SubTaskExecutionBridgeReceipt
+                SR->>EV: SubTaskExecutionCompleted
+                alt subtask success
+                    SR->>EV: SubTaskApproved
+                else subtask failed
+                    SR->>EV: SubTaskRejected
+                end
+            end
 
-                alt require_scaffold_patch and no patches
+            alt require_scaffold_patch and no patches
+                SR->>EV: SubAgentScaffoldGateFailed
+                SR->>EV: SubAgentRuntimeCompleted(success=false, gate=scaffold)
+                SR-->>SA: failed + fail_open_recommended
+            else patches present
+                SR->>SE: apply(patches, contract_id, checksum, trace_id)
+                alt scaffold commit failed
+                    SE-->>SR: committed=false
                     SR->>EV: SubAgentScaffoldGateFailed
                     SR->>EV: SubAgentRuntimeCompleted(success=false, gate=scaffold)
                     SR-->>SA: failed + fail_open_recommended
-                else patches present
-                    SR->>SE: apply(patches, contract_id, checksum, trace_id)
-                    alt scaffold commit failed
-                        SE-->>SR: committed=false
-                        SR->>EV: SubAgentScaffoldGateFailed
-                        SR->>EV: SubAgentRuntimeCompleted(success=false, gate=scaffold)
-                        SR-->>SA: failed + fail_open_recommended
-                    else scaffold committed
-                        SE-->>SR: committed=true
-                        SR->>EV: SubAgentRuntimeCompleted(success=true)
-                        SR-->>SA: SubAgentRuntimeResult(success=true, approved=true)
-                    end
+                else scaffold committed
+                    SE-->>SR: committed=true
+                    SR->>EV: SubAgentRuntimeCompleted(success=true)
+                    SR-->>SA: SubAgentRuntimeResult(success=true, approved=true)
                 end
             end
         end
+    end
 
-        alt runtime success + approved
-            SA->>WS: transition -> ReleaseCandidate
-            SA->>EV: TaskApproved
-        else runtime failed and fail_open_recommended and fail_open=true
-            alt disable_legacy_cli_fallback=true
-                SA->>EV: SubAgentRuntimeFailOpenBlocked
-                SA->>EV: ReleaseGateRejected(gate=execution_bridge)
-                SA->>EV: TaskRejected
-            else allow legacy fallback
-                SA->>LG: dispatch(task)
-                LG-->>SA: DispatchResult
-                SA->>EV: TaskExecutionCompleted(runtime_mode=legacy)
-                SA->>EV: TaskApproved or TaskRejected
-            end
-        else runtime failed without fail_open
-            SA->>EV: TaskRejected
-        end
-    else runtime_mode = legacy
-        SA->>LG: dispatch(task)
-        LG-->>SA: DispatchResult
-        SA->>EV: TaskExecutionCompleted(runtime_mode=legacy)
-        SA->>EV: TaskApproved or TaskRejected
+    alt runtime success + approved
+        SA->>WS: transition -> ReleaseCandidate
+        SA->>EV: TaskApproved
+    else runtime failed and fail_open_recommended and fail_open=true
+        SA->>EV: SubAgentRuntimeFailOpenBlocked
+        SA->>EV: ReleaseGateRejected(gate=execution_bridge|write_path)
+        SA->>EV: TaskRejected
+    else runtime failed without fail_open
+        SA->>EV: TaskRejected
     end
 ```
 
@@ -110,33 +95,22 @@ sequenceDiagram
 flowchart TD
     A[run_task attempt] --> B{_resolve_runtime_mode}
 
-    B -->|disable_legacy_cli_fallback=true| C[subagent\nreason=legacy_cli_layer_disabled]
-    B -->|write_path_enforced=true| C
-    B -->|rollout/forced mode => legacy| D[legacy]
-    B -->|rollout/forced mode => subagent| C
-
-    D --> E{write path required?}
-    E -->|yes| F[ReleaseGateRejected\n gate=write_path]
-    E -->|no| G[_execute_legacy_attempt]
-    G --> H[TaskExecutionCompleted + evaluator]
-    H --> I{approved?}
-    I -->|yes| J[TaskApproved]
-    I -->|no| K[TaskRejected]
-
-    C --> L[_execute_subagent_attempt]
-    L --> M{runtime success & approved?}
-    M -->|yes| J
-    M -->|no| N[record gate metric\ncontract/scaffold/runtime]
-    N --> O{fail_open_recommended && fail_open?}
-    O -->|no| K
-    O -->|yes| P{disable_legacy_cli_fallback?}
-    P -->|yes| Q[SubAgentRuntimeFailOpenBlocked\nReleaseGateRejected gate=execution_bridge]
-    Q --> K
-    P -->|no| R{write path && !allow_legacy_fail_open_for_write?}
-    R -->|yes| S[SubAgentRuntimeFailOpenBlocked\nReleaseGateRejected gate=write_path]
-    S --> K
-    R -->|no| T[record fail_open budget\nmaybe auto_degrade]
-    T --> G
+    B --> C[subagent-only\nreason=subagent_only_cutover/...]
+    C --> D[_execute_subagent_attempt]
+    D --> E{runtime success & approved?}
+    E -->|yes| F[TaskApproved]
+    E -->|no| G[record gate metric\ncontract/scaffold/runtime]
+    G --> H{fail_open_recommended && fail_open?}
+    H -->|no| I[TaskRejected]
+    H -->|yes| J{write path task?}
+    J -->|yes| K[SubAgentRuntimeFailOpenBlocked\nReleaseGateRejected gate=write_path]
+    J -->|no| L[SubAgentRuntimeFailOpenBlocked\nReleaseGateRejected gate=execution_bridge]
+    K --> M[record fail_open budget]
+    L --> M
+    M --> N{budget exhausted?}
+    N -->|yes| O[SubAgentFailOpenBudgetExceeded\nAlertRaised]
+    N -->|no| I
+    O --> I
 ```
 
 ## 4. 事件对照（排障优先看）
@@ -158,10 +132,10 @@ flowchart TD
 rg -n "SubTaskExecutionBridgeReceipt|SubTaskExecutionCompleted|TaskExecutionCompleted|SubAgentScaffoldGateFailed|SubAgentRuntimeFailOpenBlocked|ReleaseGateRejected" logs/autonomous/events.jsonl
 ```
 
-2. 若出现 `SubAgentRuntimeFailOpenBlocked`，检查是否因禁用 legacy 回退：
+2. 若出现 `SubAgentRuntimeFailOpenBlocked`，检查是否因子任务缺补丁或执行桥策略拒绝：
 
 ```bash
-rg -n "disable_legacy_cli_fallback" autonomous/config/autonomous_config.yaml autonomous/system_agent.py
+rg -n "SubAgentRuntimeFailOpenBlocked|legacy_runtime_retired|subagent_fail_open_blocked|execution_bridge_missing_patch_intent" logs/autonomous/events.jsonl autonomous/system_agent.py
 ```
 
 3. 若出现 `missing_scaffold_patch_intents` 或 `execution_bridge_missing_patch_intent`，检查任务 `metadata.subtasks[*].patches` 或 `metadata.patch_intents` 是否存在。

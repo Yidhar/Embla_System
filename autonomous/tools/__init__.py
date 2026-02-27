@@ -1,6 +1,5 @@
 """Execution tools for autonomous runtime."""
 
-from autonomous.tools.codex_mcp_adapter import CodexMcpVerifier
 from autonomous.tools.execution_bridge import NativeExecutionBridge
 from autonomous.tools.subagent_runtime import (
     RuntimeSubTaskResult,
@@ -11,7 +10,6 @@ from autonomous.tools.subagent_runtime import (
 )
 
 __all__ = [
-    "CodexMcpVerifier",
     "NativeExecutionBridge",
     "SubAgentRuntimeConfig",
     "RuntimeSubTaskSpec",

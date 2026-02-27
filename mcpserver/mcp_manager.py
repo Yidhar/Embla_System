@@ -23,8 +23,6 @@ _TOOL_CALL_INTERNAL_KEYS = {
     "mcp_tool_timeout_ms",
     "mcpToolTimeoutMs",
 }
-_CODEX_MCP_SERVICES = {"codex-cli", "codex-mcp"}
-_CODEX_MCP_TOOLS = {"ask-codex", "brainstorm", "help", "ping"}
 _DEFAULT_MCP_TOOL_TIMEOUT_MS = 36_000_000
 
 
@@ -38,10 +36,7 @@ class MCPManager:
             self._mcporter_config_path = Path(env_config_path).expanduser()
         else:
             self._mcporter_config_path = Path.home() / ".mcporter" / "config.json"
-        self._service_aliases: Dict[str, List[str]] = {
-            "codex-cli": ["codex-cli", "codex-mcp"],
-            "codex-mcp": ["codex-mcp", "codex-cli"],
-        }
+        self._service_aliases: Dict[str, List[str]] = {}
 
     async def unified_call(self, service_name: str, tool_call: Dict[str, Any]) -> str:
         """Unified MCP call entrypoint."""
@@ -85,27 +80,20 @@ class MCPManager:
                     tool_name,
                     exc,
                 )
-                if not self._is_codex_route(normalized_service, tool_name):
-                    self._log_call_finish(
-                        call_id=call_id,
-                        service_name=normalized_service,
-                        tool_name=tool_name,
-                        route="local",
-                        started=started,
-                        raw_result=f"call failed: {exc}",
-                        ok=False,
-                    )
-                    return self._json_error(
-                        f"call failed: {exc}",
-                        service_name=normalized_service,
-                        tool_name=tool_name,
-                        call_id=call_id,
-                    )
-                logger.info(
-                    "[MCPManager] codex local route failed, degrade to mcporter id=%s service=%s tool=%s",
-                    call_id,
-                    normalized_service,
-                    tool_name,
+                self._log_call_finish(
+                    call_id=call_id,
+                    service_name=normalized_service,
+                    tool_name=tool_name,
+                    route="local",
+                    started=started,
+                    raw_result=f"call failed: {exc}",
+                    ok=False,
+                )
+                return self._json_error(
+                    f"call failed: {exc}",
+                    service_name=normalized_service,
+                    tool_name=tool_name,
+                    call_id=call_id,
                 )
 
         external_result = await self._call_external_mcporter_service(normalized_service, normalized_call)
@@ -234,9 +222,6 @@ class MCPManager:
         normalized_service = str(service_name or tool_call.get("service_name") or "").strip()
         if normalized_service:
             return normalized_service
-        tool_name = str(tool_call.get("tool_name", "")).strip()
-        if tool_name in _CODEX_MCP_TOOLS:
-            return "codex-cli"
         return ""
 
     def _normalize_tool_call(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
@@ -246,37 +231,7 @@ class MCPManager:
             for key, value in nested_args.items():
                 normalized.setdefault(key, value)
 
-        tool_name = str(normalized.get("tool_name", "")).strip()
-        if tool_name == "ask-codex":
-            prompt = normalized.get("prompt")
-            message = normalized.get("message")
-
-            if (prompt is None or prompt == "") and isinstance(message, str) and message.strip():
-                normalized["prompt"] = message
-                prompt = message
-
-            if (prompt is None or prompt == "") and isinstance(nested_args, dict):
-                nested_prompt = nested_args.get("prompt")
-                nested_message = nested_args.get("message")
-                if isinstance(nested_prompt, str) and nested_prompt.strip():
-                    normalized["prompt"] = nested_prompt
-                elif isinstance(nested_message, str) and nested_message.strip():
-                    normalized["prompt"] = nested_message
-
-            normalized.pop("message", None)
-            if isinstance(normalized.get("arguments"), dict):
-                normalized["arguments"].pop("message", None)
-                if "prompt" in normalized and "prompt" not in normalized["arguments"]:
-                    normalized["arguments"]["prompt"] = normalized["prompt"]
-
-            normalized.setdefault("sandboxMode", "workspace-write")
-            normalized.setdefault("approvalPolicy", "on-failure")
-
         return normalized
-
-    @staticmethod
-    def _is_codex_route(service_name: str, tool_name: str) -> bool:
-        return service_name in _CODEX_MCP_SERVICES or tool_name in _CODEX_MCP_TOOLS
 
     async def _call_external_mcporter_service(self, service_name: str, tool_call: Dict[str, Any]) -> str | None:
         """Call an external MCP service configured in ~/.mcporter/config.json."""
@@ -288,7 +243,7 @@ class MCPManager:
         if not external_services:
             return None
 
-        resolved_service = self._resolve_external_service_name(service_name, tool_name, external_services)
+        resolved_service = self._resolve_external_service_name(service_name, external_services)
         if not resolved_service:
             return None
 
@@ -309,12 +264,7 @@ class MCPManager:
             "--args",
             json.dumps(payload, ensure_ascii=False),
         ]
-        process_env = self._build_external_env(
-            service_name=service_name,
-            resolved_service=resolved_service,
-            tool_name=tool_name,
-            tool_call=tool_call,
-        )
+        process_env = self._build_external_env(tool_call=tool_call)
 
         logger.info(
             "[MCPManager] external call start service=%s resolved_service=%s tool=%s cmd=%s",
@@ -374,30 +324,15 @@ class MCPManager:
                 if key not in payload:
                     payload[key] = value
 
-        if tool_name == "ask-codex":
-            prompt = payload.get("prompt")
-            message = payload.get("message")
-            if (prompt is None or prompt == "") and isinstance(message, str) and message.strip():
-                payload["prompt"] = message
-            payload.pop("message", None)
-            payload.setdefault("sandboxMode", "workspace-write")
-            payload.setdefault("approvalPolicy", "on-failure")
         return payload
 
     def _resolve_external_service_name(
         self,
         service_name: str,
-        tool_name: str,
         services: Dict[str, Any],
     ) -> str | None:
         requested = str(service_name or "").strip()
         lowered_lookup = {name.lower(): name for name in services.keys()}
-
-        if self._is_codex_route(requested, tool_name):
-            # Prefer codex-cli if present; codex-mcp remains fallback alias.
-            preferred = lowered_lookup.get("codex-cli")
-            if preferred:
-                return preferred
 
         if requested in services:
             return requested
@@ -425,23 +360,13 @@ class MCPManager:
         servers = raw.get("mcpServers", {})
         return servers if isinstance(servers, dict) else {}
 
-    def _build_external_env(
-        self,
-        *,
-        service_name: str,
-        resolved_service: str,
-        tool_name: str,
-        tool_call: Dict[str, Any],
-    ) -> Dict[str, str] | None:
-        if not self._is_codex_route(service_name, tool_name) and not self._is_codex_route(resolved_service, tool_name):
-            return None
-
+    def _build_external_env(self, *, tool_call: Dict[str, Any]) -> Dict[str, str] | None:
         env = os.environ.copy()
-        env["MCP_TOOL_TIMEOUT"] = self._resolve_codex_timeout_ms(tool_call, env)
+        env["MCP_TOOL_TIMEOUT"] = self._resolve_mcp_timeout_ms(tool_call, env)
         return env
 
     @staticmethod
-    def _resolve_codex_timeout_ms(tool_call: Dict[str, Any], env: Dict[str, str]) -> str:
+    def _resolve_mcp_timeout_ms(tool_call: Dict[str, Any], env: Dict[str, str]) -> str:
         for key in ("mcp_tool_timeout_ms", "mcpToolTimeoutMs"):
             normalized = MCPManager._normalize_timeout_ms(tool_call.get(key))
             if normalized:

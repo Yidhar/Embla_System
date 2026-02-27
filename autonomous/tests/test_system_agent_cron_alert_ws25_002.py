@@ -101,7 +101,7 @@ def test_watchdog_gate_publishes_alert_topic_event_ws25_002() -> None:
             task=OptimizationTask(task_id="task-alert", instruction="watchdog alert"),
             workflow_id="wf-alert",
             attempt=1,
-            runtime_mode="legacy",
+            runtime_mode="subagent",
             fencing_epoch=1,
         )
         assert outcome is not None

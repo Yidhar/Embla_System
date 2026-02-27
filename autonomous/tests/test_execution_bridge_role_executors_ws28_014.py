@@ -132,7 +132,7 @@ def test_ops_role_alias_devops_routes_to_ops_executor() -> None:
     assert result.metadata.get("execution_bridge_role_executor") == "ops"
 
 
-def test_backend_role_executor_non_strict_records_cross_domain_warning() -> None:
+def test_backend_role_executor_default_semantic_guard_blocks_cross_domain_patch() -> None:
     bridge = NativeExecutionBridge(project_root=".")
     subtask = RuntimeSubTaskSpec(
         subtask_id="be-1",
@@ -143,14 +143,12 @@ def test_backend_role_executor_non_strict_records_cross_domain_warning() -> None
 
     result = bridge.execute_subtask(task=_task("task-role-be-warning"), subtask=subtask)
 
-    assert result.success is True
-    warnings = result.metadata.get("execution_bridge_role_warnings")
-    assert isinstance(warnings, list)
-    assert any(str(item).startswith("role_executor_path_violation:backend:") for item in warnings)
+    assert result.success is False
+    assert result.error == "execution_bridge_semantic_toolchain_violation:backend"
     governance = result.metadata.get("execution_bridge_governance")
     assert isinstance(governance, dict)
-    assert governance.get("severity") == "warning"
-    assert governance.get("reason_code") == "ROLE_EXECUTOR_GUARD_WARNING"
+    assert governance.get("severity") == "critical"
+    assert governance.get("reason_code") == "SEMANTIC_TOOLCHAIN_VIOLATION"
 
 
 def test_backend_role_executor_strict_semantic_toolchain_blocks_ops_patch() -> None:

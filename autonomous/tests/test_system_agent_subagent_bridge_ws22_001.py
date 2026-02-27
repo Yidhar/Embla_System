@@ -5,10 +5,8 @@ import shutil
 import uuid
 from pathlib import Path
 
-from autonomous.dispatcher import DispatchResult
 from autonomous.system_agent import SystemAgent
-from autonomous.tools.cli_adapter import CliTaskResult
-from autonomous.types import EvaluationReport, OptimizationTask
+from autonomous.types import OptimizationTask
 
 
 def _write_policy(path: Path) -> None:
@@ -98,7 +96,7 @@ def test_system_agent_subagent_bridge_approves_task_via_scaffold_runtime() -> No
         _cleanup_case_root(case_root)
 
 
-def test_system_agent_subagent_fail_open_falls_back_to_legacy_attempt() -> None:
+def test_system_agent_subagent_fail_open_is_blocked_without_legacy_fallback() -> None:
     case_root = _make_case_root("test_system_agent_subagent_bridge")
     try:
         repo = case_root / "repo"
@@ -131,29 +129,10 @@ def test_system_agent_subagent_fail_open_falls_back_to_legacy_attempt() -> None:
 
         agent._emit = _capture  # type: ignore[method-assign]
 
-        async def _dispatch_ok(_task: OptimizationTask) -> DispatchResult:
-            return DispatchResult(
-                selected_cli="codex",
-                result=CliTaskResult(
-                    task_id=_task.task_id,
-                    cli_name="codex",
-                    exit_code=0,
-                    stdout="ok",
-                    stderr="",
-                    files_changed=[],
-                    duration_seconds=0.1,
-                    success=True,
-                    execution_snapshots=[],
-                ),
-            )
-
-        agent.dispatcher.dispatch = _dispatch_ok  # type: ignore[method-assign]
-        agent.evaluator.evaluate = lambda task, result: EvaluationReport(approved=True)  # type: ignore[method-assign]
-
-        # No patches -> scaffold gate fail -> fail_open -> legacy success
+        # No patches -> scaffold gate fail -> fail_open blocked under subagent-only cutover.
         task = OptimizationTask(
             task_id="task-ws22-fail-open",
-            instruction="fallback to legacy",
+            instruction="fail-open blocked under cutover",
             metadata={
                 "subtasks": [
                     {
@@ -169,8 +148,9 @@ def test_system_agent_subagent_fail_open_falls_back_to_legacy_attempt() -> None:
 
         asyncio.run(agent._run_task(task, fencing_epoch=1))
 
-        assert any(event_type == "SubAgentRuntimeFailOpen" for event_type, _, _ in events)
+        assert any(event_type == "SubAgentRuntimeFailOpenBlocked" for event_type, _, _ in events)
         assert any(event_type == "SubAgentGateMetricUpdated" for event_type, _, _ in events)
-        assert any(event_type == "TaskApproved" for event_type, _, _ in events)
+        assert any(event_type == "TaskRejected" for event_type, _, _ in events)
+        assert not any(event_type == "TaskApproved" for event_type, _, _ in events)
     finally:
         _cleanup_case_root(case_root)

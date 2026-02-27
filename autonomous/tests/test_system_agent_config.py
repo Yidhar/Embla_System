@@ -4,10 +4,8 @@ from autonomous.system_agent import SystemAgentConfig
 def test_system_agent_config_from_source_defaults():
     cfg = SystemAgentConfig.from_source(None)
     assert cfg.enabled is False
-    assert cfg.preferred_cli == "codex"
+    assert cfg.preferred_cli == "claude"
     assert cfg.fallback_order == ("claude", "gemini")
-    assert cfg.verification_fallback.enable_codex_mcp is True
-    assert cfg.verification_fallback.mcp_service_name == "codex-cli"
     assert cfg.lease.enabled is True
     assert cfg.outbox_dispatch.enabled is True
     assert cfg.release.enabled is True
@@ -18,14 +16,14 @@ def test_system_agent_config_from_source_defaults():
     assert cfg.watchdog.daemon_state_stale_warning_seconds == 120.0
     assert cfg.watchdog.daemon_state_stale_critical_seconds == 300.0
     assert cfg.watchdog.fail_closed_on_daemon_state_stale is False
-    assert cfg.subagent_runtime.enabled is False
+    assert cfg.subagent_runtime.enabled is True
     assert cfg.subagent_runtime.fail_open is True
     assert cfg.subagent_runtime.fail_open_budget_ratio == 0.15
     assert cfg.subagent_runtime.max_subtasks == 16
     assert cfg.subagent_runtime.rollout_percent == 100
     assert cfg.subagent_runtime.enforce_scaffold_txn_for_write is True
     assert cfg.subagent_runtime.allow_legacy_fail_open_for_write is False
-    assert cfg.subagent_runtime.disable_legacy_cli_fallback is False
+    assert cfg.subagent_runtime.disable_legacy_cli_fallback is True
 
 
 def test_system_agent_config_from_dict():
@@ -33,16 +31,9 @@ def test_system_agent_config_from_dict():
         "enabled": True,
         "cycle_interval_seconds": 600,
         "cli_tools": {
-            "preferred": "codex",
+            "preferred": "claude",
             "fallback_order": ["gemini"],
             "max_retries": 3,
-        },
-        "verification_fallback": {
-            "enable_codex_mcp": True,
-            "mcp_server_name": "codex-cli",
-            "tool_name": "ask-codex",
-            "sandbox_mode": "read-only",
-            "approval_policy": "on-failure",
         },
         "lease": {
             "enabled": True,
@@ -99,7 +90,7 @@ def test_system_agent_config_from_dict():
     cfg = SystemAgentConfig.from_source(source)
     assert cfg.enabled is True
     assert cfg.cycle_interval_seconds == 600
-    assert cfg.preferred_cli == "codex"
+    assert cfg.preferred_cli == "claude"
     assert cfg.fallback_order == ("gemini",)
     assert cfg.max_retries == 3
     assert cfg.lease.owner_id == "agent-a"

@@ -2,19 +2,13 @@ autonomous:
   enabled: false
   cycle_interval_seconds: 3600
   cli_tools:
-    preferred: codex
+    preferred: claude
     fallback_order:
     - claude
     - gemini
     max_retries: 2
   run_quality_checks: false
   fixed_timeout_seconds: 3600
-  verification_fallback:
-    enable_codex_mcp: true
-    mcp_server_name: codex-cli
-    tool_name: ask-codex
-    sandbox_mode: read-only
-    approval_policy: on-failure
   lease:
     enabled: true
     lease_name: global_orchestrator

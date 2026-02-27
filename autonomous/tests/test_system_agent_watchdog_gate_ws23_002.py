@@ -6,10 +6,9 @@ import shutil
 import uuid
 from pathlib import Path
 
-from autonomous.dispatcher import DispatchResult
 from autonomous.system_agent import SystemAgent
-from autonomous.tools.cli_adapter import CliTaskResult
-from autonomous.types import EvaluationReport, OptimizationTask
+from autonomous.tools.subagent_runtime import SubAgentRuntimeResult
+from autonomous.types import OptimizationTask
 
 
 def _write_policy(path: Path) -> None:
@@ -74,11 +73,6 @@ def test_system_agent_watchdog_critical_action_blocks_dispatch_and_rejects_task(
             "cost_per_hour": 2.0,
         }
 
-        async def _dispatch_should_not_run(_task: OptimizationTask) -> DispatchResult:
-            raise AssertionError("dispatch should not run when watchdog blocks")
-
-        agent.dispatcher.dispatch = _dispatch_should_not_run  # type: ignore[method-assign]
-
         events: list[tuple[str, dict, dict]] = []
         agent._emit = lambda event_type, payload, **kwargs: events.append((event_type, dict(payload), dict(kwargs)))  # type: ignore[method-assign]
 
@@ -136,27 +130,22 @@ def test_system_agent_watchdog_warn_only_emits_alert_but_keeps_dispatch() -> Non
             "cost_per_hour": 1.2,
         }
 
-        dispatch_called = {"value": False}
+        runtime_called = {"value": False}
 
-        async def _dispatch_ok(task: OptimizationTask) -> DispatchResult:
-            dispatch_called["value"] = True
-            return DispatchResult(
-                selected_cli="codex",
-                result=CliTaskResult(
-                    task_id=task.task_id,
-                    cli_name="codex",
-                    exit_code=0,
-                    stdout="ok",
-                    stderr="",
-                    files_changed=[],
-                    duration_seconds=0.1,
-                    success=True,
-                    execution_snapshots=[],
-                ),
+        async def _runtime_ok(**kwargs):
+            runtime_called["value"] = True
+            task = kwargs["task"]
+            return SubAgentRuntimeResult(
+                runtime_id="sar-watchdog-warn-only",
+                workflow_id=kwargs["workflow_id"],
+                task_id=task.task_id,
+                trace_id=kwargs["trace_id"],
+                session_id=kwargs["session_id"],
+                success=True,
+                approved=True,
             )
 
-        agent.dispatcher.dispatch = _dispatch_ok  # type: ignore[method-assign]
-        agent.evaluator.evaluate = lambda task, result: EvaluationReport(approved=True)  # type: ignore[method-assign]
+        agent.subagent_runtime.run = _runtime_ok  # type: ignore[method-assign]
 
         events: list[tuple[str, dict, dict]] = []
         agent._emit = lambda event_type, payload, **kwargs: events.append((event_type, dict(payload), dict(kwargs)))  # type: ignore[method-assign]
@@ -164,7 +153,7 @@ def test_system_agent_watchdog_warn_only_emits_alert_but_keeps_dispatch() -> Non
         task = OptimizationTask(task_id="task-ws23-watchdog-warn-only", instruction="watchdog warn only")
         asyncio.run(agent._run_task(task, fencing_epoch=1))
 
-        assert dispatch_called["value"] is True
+        assert runtime_called["value"] is True
         assert any(event_type == "WatchdogThresholdExceeded" for event_type, _, _ in events)
         assert any(event_type == "TaskApproved" for event_type, _, _ in events)
         assert all(
@@ -225,11 +214,6 @@ def test_system_agent_watchdog_consumes_daemon_state_file_and_blocks_without_run
 
         assert agent.watchdog_daemon is not None
         agent.watchdog_daemon.run_once = lambda: (_ for _ in ()).throw(AssertionError("run_once should not be called"))  # type: ignore[method-assign]
-
-        async def _dispatch_should_not_run(_task: OptimizationTask) -> DispatchResult:
-            raise AssertionError("dispatch should not run when watchdog daemon state blocks")
-
-        agent.dispatcher.dispatch = _dispatch_should_not_run  # type: ignore[method-assign]
 
         events: list[tuple[str, dict, dict]] = []
         agent._emit = lambda event_type, payload, **kwargs: events.append((event_type, dict(payload), dict(kwargs)))  # type: ignore[method-assign]

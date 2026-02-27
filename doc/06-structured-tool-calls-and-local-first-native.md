@@ -46,7 +46,7 @@ SSE 关键事件：
 
 1. 先查本地已注册 MCP 服务。
 2. 本地失败后可按策略回退到 mcporter 外部服务。
-3. 针对 codex 服务有专门规范化与降级逻辑。
+3. 外部 MCP 调用走统一服务名规范化与结构化错误回执，不再有供应商特化分支。
 
 ## 4. Omni-Operator 安全层管线（当前落地）
 
@@ -57,7 +57,7 @@ SSE 关键事件：
 - 工具名必填校验
 - 参数类型校验
 - legacy 协议违规检测
-- coding intent 的 codex-first 约束
+- coding intent 的内生执行桥优先约束（Sub-Agent Runtime + NativeExecutionBridge）
 
 ### 4.2 Native 执行边界
 

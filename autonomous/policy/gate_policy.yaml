@@ -10,10 +10,3 @@ gates:
     canary_window_min: 15
     min_sample_count: 200
     burn_rate_windows: [5m, 30m]
-
-  verification_fallback:
-    codex_mcp:
-      enabled: true
-      service_name: codex-cli
-      tool_name: ask-codex
-      sandbox_mode: read-only

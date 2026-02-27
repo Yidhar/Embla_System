@@ -276,11 +276,11 @@ class ToolContractRolloutConfig(BaseModel):
     """工具契约双栈灰度与下线门禁配置。"""
 
     mode: str = Field(
-        default="dual_stack",
-        description="工具契约模式：legacy_only/dual_stack/new_stack_only",
+        default="new_stack_only",
+        description="工具契约模式（已切换到 new_stack_only；legacy/dual 配置会被自动归一化）",
     )
     decommission_legacy_gate: bool = Field(
-        default=False,
+        default=True,
         description="旧契约下线门禁；开启后将阻断 legacy-only 输出",
     )
     emit_observability_metadata: bool = Field(
@@ -293,12 +293,12 @@ class ToolContractRolloutConfig(BaseModel):
     def validate_mode(cls, value: str) -> str:
         normalized = str(value or "").strip().lower()
         aliases = {
-            "legacy": "legacy_only",
-            "legacy_stack": "legacy_only",
-            "old_stack": "legacy_only",
-            "dual": "dual_stack",
-            "compat": "dual_stack",
-            "both": "dual_stack",
+            "legacy": "new_stack_only",
+            "legacy_stack": "new_stack_only",
+            "old_stack": "new_stack_only",
+            "dual": "new_stack_only",
+            "compat": "new_stack_only",
+            "both": "new_stack_only",
             "new": "new_stack_only",
             "new_stack": "new_stack_only",
             "v2_only": "new_stack_only",
@@ -307,6 +307,8 @@ class ToolContractRolloutConfig(BaseModel):
         valid_modes = {"legacy_only", "dual_stack", "new_stack_only"}
         if normalized not in valid_modes:
             raise ValueError(f"mode 必须是以下之一: {sorted(valid_modes)}")
+        if normalized in {"legacy_only", "dual_stack"}:
+            return "new_stack_only"
         return normalized
 
     @property
@@ -332,20 +334,9 @@ class ToolContractRolloutConfig(BaseModel):
 class AutonomousCliToolsConfig(BaseModel):
     """CLI tool preferences for system agent."""
 
-    preferred: str = Field(default="codex", description="首选CLI")
+    preferred: str = Field(default="claude", description="首选CLI")
     fallback_order: List[str] = Field(default_factory=lambda: ["claude", "gemini"], description="CLI降级顺序")
     max_retries: int = Field(default=2, ge=0, le=10, description="CLI重试次数")
-
-
-class AutonomousVerificationFallbackConfig(BaseModel):
-    """Verification-stage fallback policy."""
-
-    enable_codex_mcp: bool = Field(default=True, description="是否启用Codex MCP降级")
-    mcp_server_name: str = Field(default="codex-cli", description="Codex MCP服务名")
-    tool_name: str = Field(default="ask-codex", description="Codex MCP工具名")
-    sandbox_mode: str = Field(default="read-only", description="MCP执行沙箱模式")
-    approval_policy: str = Field(default="on-failure", description="MCP审批策略")
-
 
 class AutonomousLeaseConfig(BaseModel):
     """Single-active lease and fencing policy."""
@@ -387,9 +378,6 @@ class AutonomousConfig(BaseModel):
     cli_tools: AutonomousCliToolsConfig = Field(default_factory=AutonomousCliToolsConfig)
     run_quality_checks: bool = Field(default=False, description="是否在评估阶段运行lint/test")
     fixed_timeout_seconds: int = Field(default=3600, ge=60, le=14400, description="CLI执行超时（秒）")
-    verification_fallback: AutonomousVerificationFallbackConfig = Field(
-        default_factory=AutonomousVerificationFallbackConfig
-    )
     lease: AutonomousLeaseConfig = Field(default_factory=AutonomousLeaseConfig)
     outbox_dispatch: AutonomousOutboxDispatchConfig = Field(default_factory=AutonomousOutboxDispatchConfig)
     release: AutonomousReleaseConfig = Field(default_factory=AutonomousReleaseConfig)

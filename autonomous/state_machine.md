@@ -18,8 +18,8 @@
 ## Transition Rules (Implemented Skeleton)
 
 1. `GoalAccepted -> PlanDrafted` when planner produced task.
-2. `PlanDrafted -> Implementing` before first CLI dispatch.
-3. `Implementing -> Verifying` after each CLI execution.
+2. `PlanDrafted -> Implementing` before first execution bridge dispatch.
+3. `Implementing -> Verifying` after each execution bridge step.
 4. `Verifying -> ReleaseCandidate` when evaluator approves.
 5. `ReleaseCandidate -> CanaryRunning` when outbox consumer starts canary evaluation.
 6. `CanaryRunning -> Promoted` when canary decision is promote.
@@ -27,8 +27,8 @@
 8. `Verifying -> Reworking` when evaluator rejects and retry remains.
 9. `Reworking -> Implementing` on retry dispatch.
 10. `Verifying -> FailedExhausted` when retries are exhausted.
-11. `FailedExhausted -> Reworking` when Codex MCP fallback provides usable suggestion.
-12. `FailedExhausted -> FailedHard` when Codex MCP fallback fails.
+11. `FailedExhausted -> Reworking` when operator/strategy explicitly schedules another attempt.
+12. `FailedExhausted -> FailedHard` when no override is provided and workflow is terminated.
 
 ## Durable Persistence
 

@@ -1,15 +1,15 @@
 ---
 **文档类型**：As-Is + Target-Aligned（混合文档）
-**实施状态**：Phase 0 已实现 + Phase 1-3 规划
-**最后更新**：2026-02-22
-**当前实现**：autonomous/ 模块（System Agent + Workflow Store + Lease/Fencing）
+**实施状态**：Phase 3 桥接主链已落地（Sub-Agent + NativeExecutionBridge），Phase 3 Full 持续收口
+**最后更新**：2026-02-27
+**当前实现**：autonomous/ 模块（System Agent + Sub-Agent Runtime + NativeExecutionBridge + Workflow Store + Lease/Fencing）
 **目标态参考**：00-omni-operator-architecture.md (Phase 3)
 ---
 
 # 07 Autonomous Agent SDLC 架构（开发预备对齐版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
-最后更新：2026-02-22
+最后更新：2026-02-27
 
 ## 1. 文档定位
 
@@ -18,6 +18,7 @@
 - `As-Is`：当前 `autonomous/` 已落地能力（可运行）。
 - `Target`：Omni-Operator 目标架构（`00-omni-operator-architecture.md` + 10/11/12）。
 - `Gap`：从当前到目标态的实施差距。
+- `状态判定`：是否属于 `BRIDGE_DONE` / `TARGET_DONE` 以 `doc/task/25-subagent-development-fabric-status-matrix.md` 为准。
 
 ## 1.1 autonomous/ 模块统一定位
 
@@ -31,7 +32,7 @@
 - 属于 **Brainstem 层**（控制与接入）
 - 与 apiserver 平级，独立后台运行
 - 通过 Event Bus 与其他模块通信（目标态）
-- 当前通过 CLI Adapter 调用外部工具（Phase 0）
+- 当前默认执行链：`Sub-Agent Runtime + NativeExecutionBridge`；CLI Adapter 仅历史兼容入口
 
 **运行模式**：
 - **Phase 0（当前）**：单实例常驻，按配置周期执行
@@ -39,19 +40,13 @@
 - **Phase 3**：完整 Event Bus 驱动
 
 **执行模型演进路径**：
-- **Phase 0（✅ 已实现）**：CLI Adapter + Codex MCP
-  - 通过 subprocess 调用 Codex CLI/Claude Code/Gemini CLI
-  - Codex-first 策略（v2, 2026-02-22）
-  - 实现文件：`autonomous/tools/cli_adapter.py`, `codex_adapter.py`
-- **Phase 1-2（🟡 规划中）**：增强监控与降级
-  - 实时停滞检测
-  - 自适应超时
-  - 多 CLI 负载均衡
-- **Phase 3（🔴 目标态）**：Sub-Agent Runtime + Scaffold Engine
-  - 独立子代理进程（Frontend/Backend/Ops）
-  - 脚手架模板生成
-  - 执行桥接层
-  - 参考：`00-omni-operator-architecture.md` §2 工程目录树
+- **Phase 0（历史基线）**：CLI Adapter + 外部 CLI 执行
+  - 仅保留兼容参考，不作为当前默认执行层
+- **Phase 1-2（✅ 已完成）**：Sub-Agent Runtime 桥接接管
+  - Runtime/Contract/Scaffold/Rollout 主链收敛
+- **Phase 3（🟡 进行中）**：NativeExecutionBridge 治理闭环 + 角色语义执行器深化
+  - 现状：内生执行桥为默认主路径（已去 CLI 黑盒）
+  - 参考：`00-omni-operator-architecture.md`、`doc/task/25-subagent-development-fabric-status-matrix.md`
 
 ## 2. 当前已实现能力（As-Is）
 
@@ -60,17 +55,19 @@
 核心实现：`autonomous/system_agent.py`
 
 - 按配置周期执行自治循环。
-- 支持 CLI 执行器选择（**codex（主路径）** / claude / gemini）。
-- 支持 Verifying 阶段 Codex MCP 降级（历史兼容，当前 Codex 已升级为主路径）。
+- 默认通过 `runtime_mode=subagent` 进入 `Sub-Agent Runtime + NativeExecutionBridge`。
+- legacy CLI 回退路径已从主流程退役（subagent-only cutover）。
+- Verifying 阶段 legacy 外部执行降级已从主流程退役（不再作为运行时可选分支）。
 
-**执行策略更新**（2026-02-22）：
-- **v1 (旧)**：Codex MCP 仅用于验证降级
-- **v2 (当前)**：Codex CLI/MCP 作为主执行路径，Claude/Gemini 作为降级备选
+**执行策略更新**（2026-02-27）：
+- **v1 (历史)**：验证阶段存在外部降级分支
+- **v2 (历史)**：外部 CLI 作为主执行路径
+- **v3 (当前)**：内生执行桥主路径（Sub-Agent Runtime + NativeExecutionBridge），外部 CLI 仅历史参考
 
 说明：
 - 上述为当前代码 `As-Is` 能力，不代表目标态设计。
 - 目标态开发任务编排已在 `00-omni-operator-architecture.md + 10/11/12` 中切换为"子代理 + 脚手架"方案，不再以 CLI 节点作为主执行设计。
-- **演进路径**：Phase 0 (CLI Tools) → Phase 1-2 (增强监控) → Phase 3 (Sub-Agent Runtime)
+- **演进路径**：Phase 0 (CLI Tools, historical) → Phase 1-2 (bridge cutover) → Phase 3 (governance & full target closure)
 
 ### 2.2 状态机与工作流持久化
 

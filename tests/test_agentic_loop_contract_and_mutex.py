@@ -138,6 +138,8 @@ def test_global_mutex_pre_acquire_scavenger_runs_and_attaches_report(monkeypatch
             "service_name": "native",
             "tool_name": "run_cmd",
             "result": "ok",
+            "narrative_summary": "ok",
+            "display_preview": "ok",
         }
 
     monkeypatch.setattr(tool_loop, "get_global_mutex_manager", lambda: manager)
@@ -204,6 +206,8 @@ def test_global_mutex_pre_acquire_scavenger_scan_error_is_non_blocking(monkeypat
             "service_name": "native",
             "tool_name": "run_cmd",
             "result": "ok",
+            "narrative_summary": "ok",
+            "display_preview": "ok",
         }
 
     monkeypatch.setattr(tool_loop, "get_global_mutex_manager", lambda: manager)
@@ -234,15 +238,18 @@ def test_global_mutex_pre_acquire_scavenger_scan_error_is_non_blocking(monkeypat
 
 
 def _workspace_conflict_result(ticket: str) -> dict:
+    detail = (
+        "workspace transaction failed "
+        f"(clean_state=False, recovery_ticket=rcv-1, conflict_ticket={ticket}, backoff_ms=120): "
+        "conflict detected"
+    )
     return {
         "status": "error",
         "service_name": "native",
         "tool_name": "workspace_txn_apply",
-        "result": (
-            "workspace transaction failed "
-            f"(clean_state=False, recovery_ticket=rcv-1, conflict_ticket={ticket}, backoff_ms=120): "
-            "conflict detected"
-        ),
+        "result": detail,
+        "narrative_summary": detail,
+        "display_preview": detail,
     }
 
 
@@ -295,6 +302,8 @@ def test_workspace_conflict_below_threshold_still_retries_normally(monkeypatch):
             "service_name": "native",
             "tool_name": "workspace_txn_apply",
             "result": "ok",
+            "narrative_summary": "ok",
+            "display_preview": "ok",
         }
 
     monkeypatch.setattr(tool_loop, "_execute_single_tool_call", _conflict_then_success)
@@ -333,6 +342,8 @@ def test_non_conflict_error_does_not_trigger_router_arbiter(monkeypatch):
             "service_name": "native",
             "tool_name": "workspace_txn_apply",
             "result": "workspace transaction failed (clean_state=False): permission denied",
+            "narrative_summary": "workspace transaction failed (clean_state=False): permission denied",
+            "display_preview": "workspace transaction failed (clean_state=False): permission denied",
         }
 
     monkeypatch.setattr(tool_loop, "_execute_single_tool_call", _generic_error)
@@ -388,7 +399,6 @@ def test_seed_contract_upgrades_to_execution_and_binds_mutating_calls():
     contract_state = tool_loop._build_seed_contract_state(
         session_id="sess-core-contract",
         latest_user_request="请修改 API 并补回归测试",
-        requires_codex=True,
     )
     assert isinstance(contract_state, dict)
     assert contract_state["stage"] == "seed"

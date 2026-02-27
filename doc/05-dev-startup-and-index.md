@@ -88,21 +88,21 @@ uvicorn mcpserver.mcp_server:app --host 0.0.0.0 --port 8003
 
 ```json
 {
-  "autonomous": {
-    "enabled": true,
-    "cycle_interval_seconds": 3600,
-    "cli_tools": {
-      "preferred": "codex",
+    "autonomous": {
+      "enabled": true,
+      "cycle_interval_seconds": 3600,
+      "cli_tools": {
+      "preferred": "claude",
       "fallback_order": ["claude", "gemini"]
+      }
     }
-  }
 }
 ```
 
 建议同时确认：
 
 - `autonomous.release.gate_policy_path` 路径存在
-- `autonomous.verification_fallback.enable_codex_mcp` 按实际环境配置
+- `autonomous.disable_legacy_cli_fallback=true`（确保仅走 subagent 主链）
 
 ## 6. Omni-Operator 开发环境建议
 
@@ -111,7 +111,7 @@ uvicorn mcpserver.mcp_server:app --host 0.0.0.0 --port 8003
 1. Python 依赖：`uv sync`
 2. Node 依赖（主链）：`cd Embla_core && npm install`
 3. Git 可用（Native/Git 工具依赖）
-4. 可选：安装 `mcporter` 与 Codex MCP 以测试降级链路
+4. 可选：安装 `mcporter` 以验证外部 MCP 托管链路
 
 ## 7. 健康检查
 

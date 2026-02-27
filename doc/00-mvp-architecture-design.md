@@ -1,18 +1,16 @@
 ﻿# NagaAgent 多Agent自治架构设计文档（修订版）
 
 ---
-**文档类型**：Phase 0 实施记录 + 目标态草案（Mixed）
-**实施状态**：✅ Phase 0 已实现（autonomous/ 模块）；⚠️ 含目标态设计片段
-**最后校准**：2026-02-22
-**Codex 策略版本**：v2 (Codex-first 主执行路径)
-**目标态参考**：`00-omni-operator-architecture.md` (Sub-Agent Runtime, Phase 3)
+**文档类型**：Phase 0 历史实施记录（Historical Archive）
+**实施状态**：⚪ 历史归档（仅用于回溯 Phase 0 设计与实现背景）
+**最后校准**：2026-02-27
+**历史策略版本**：v2 (Codex-first 主执行路径，已退役)
+**当前主链参考**：`00-omni-operator-architecture.md` + `doc/task/25-subagent-development-fabric-status-matrix.md`
 ---
 
-> **核心变更**：MVP 阶段采用 **单 System Agent + 外部 Agent CLI 工具** 模型。
-> 编码工作由 System Agent 通过 **Codex CLI / Codex MCP（主路径）** + Claude Code / Gemini CLI（降级备选）以工具调用形式完成。
-> **文档定位**：本文是 `doc/07-autonomous-agent-sdlc-architecture.md` 的 Phase 0（MVP）实施稿，目标态约束以 07 文档为准。
-> **演进路径**：Phase 0 (CLI Tools) → Phase 1-2 (增强监控) → Phase 3 (Sub-Agent Runtime)
-> **阅读提示**：凡标注“目标态/规划中”的段落均非当前默认行为；当前可执行基线以 `config.json.example`、`system/config.py` 与 `autonomous/` 代码为准。
+> **历史说明**：本文记录的是 Phase 0 的 CLI 时代实现，不代表当前默认执行路径。
+> **当前统一口径**：开发执行主链为 `Sub-Agent Runtime + NativeExecutionBridge`，CLI Adapter 仅历史兼容参考。
+> **文档定位**：仅用于复盘早期设计取舍；现网与当前开发请以 `doc/00-omni-operator-architecture.md`、`doc/task/25-subagent-development-fabric-status-matrix.md`、`doc/task/runbooks/subagent_runtime_native_bridge_sequence_and_gate_runbook.md` 为准。
 
 ---
 

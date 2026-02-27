@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from system.config import get_config
-from system.coding_intent import contains_direct_coding_signal, extract_latest_user_message, requires_codex_for_messages
+from system.coding_intent import contains_direct_coding_signal, extract_latest_user_message
 from system.episodic_memory import archive_tool_results_for_session, build_reinjection_context
 from system.gc_budget_guard import GCBudgetGuard, GCBudgetGuardConfig
 from system.gc_memory_card import build_gc_memory_index_card
@@ -77,8 +77,8 @@ class AgenticLoopRuntimeState:
 class ToolContractRolloutRuntime:
     """工具契约灰度运行态（由配置解析得到）。"""
 
-    mode: str = "dual_stack"
-    decommission_legacy_gate: bool = False
+    mode: str = "new_stack_only"
+    decommission_legacy_gate: bool = True
     emit_observability_metadata: bool = True
 
     @property
@@ -116,12 +116,12 @@ class ParallelContractGateDecision:
 
 _TOOL_CONTRACT_ROLLOUT_MODES = {"legacy_only", "dual_stack", "new_stack_only"}
 _TOOL_CONTRACT_MODE_ALIASES = {
-    "legacy": "legacy_only",
-    "legacy_stack": "legacy_only",
-    "old_stack": "legacy_only",
-    "dual": "dual_stack",
-    "compat": "dual_stack",
-    "both": "dual_stack",
+    "legacy": "new_stack_only",
+    "legacy_stack": "new_stack_only",
+    "old_stack": "new_stack_only",
+    "dual": "new_stack_only",
+    "compat": "new_stack_only",
+    "both": "new_stack_only",
     "new": "new_stack_only",
     "new_stack": "new_stack_only",
     "v2_only": "new_stack_only",
@@ -203,9 +203,11 @@ def _resolve_agentic_loop_policy(max_rounds_override: Optional[int]) -> AgenticL
 def _normalize_tool_contract_rollout_mode(value: Any) -> str:
     normalized = str(value or "").strip().lower()
     normalized = _TOOL_CONTRACT_MODE_ALIASES.get(normalized, normalized)
+    if normalized in {"legacy_only", "dual_stack"}:
+        return "new_stack_only"
     if normalized in _TOOL_CONTRACT_ROLLOUT_MODES:
         return normalized
-    return "dual_stack"
+    return "new_stack_only"
 
 
 def _resolve_tool_contract_rollout_runtime() -> ToolContractRolloutRuntime:
@@ -214,8 +216,8 @@ def _resolve_tool_contract_rollout_runtime() -> ToolContractRolloutRuntime:
     if rollout_cfg is None:
         return ToolContractRolloutRuntime()
 
-    mode = _normalize_tool_contract_rollout_mode(getattr(rollout_cfg, "mode", "dual_stack"))
-    decommission_gate = bool(getattr(rollout_cfg, "decommission_legacy_gate", False))
+    mode = _normalize_tool_contract_rollout_mode(getattr(rollout_cfg, "mode", "new_stack_only"))
+    decommission_gate = bool(getattr(rollout_cfg, "decommission_legacy_gate", True))
     emit_metadata = bool(getattr(rollout_cfg, "emit_observability_metadata", True))
     return ToolContractRolloutRuntime(
         mode=mode,
@@ -738,8 +740,6 @@ _CODING_KEYWORDS = (
     "repo",
     "repository",
 )
-_CODEX_SERVICE_ALIASES = {"codex-cli", "codex-mcp"}
-_CODEX_TOOL_NAMES = {"ask-codex", "brainstorm", "help", "ping"}
 _MUTATING_NATIVE_TOOL_NAMES = {"write_file", "git_checkout_file", "workspace_txn_apply"}
 _SCHEMA_ERR_INPUT_INVALID = "E_SCHEMA_INPUT_INVALID"
 _SCHEMA_ERR_OUTPUT_INVALID = "E_SCHEMA_OUTPUT_INVALID"
@@ -1051,18 +1051,18 @@ def _build_seed_contract_state(
     *,
     session_id: str,
     latest_user_request: str,
-    requires_codex: bool,
 ) -> Optional[Dict[str, Any]]:
     normalized_request = str(latest_user_request or "").strip()
     if not _should_seed_contract(normalized_request):
         return None
 
+    requires_coding_intent = _looks_like_coding_request(normalized_request)
     requires_write_intent = _looks_like_write_intent(normalized_request)
     seed_contract = {
         "session_id": str(session_id or ""),
         "intent_summary": normalized_request[:500],
         "requires_write_intent": bool(requires_write_intent),
-        "requires_core_escalation": bool(requires_codex or requires_write_intent),
+        "requires_core_escalation": bool(requires_coding_intent or requires_write_intent),
         "acceptance_hint": "提供可验证证据路径（例如 scratch/reports/...）",
         "evidence_path_hint": "scratch/reports/",
         "created_at_ms": int(time.time() * 1000),
@@ -1253,16 +1253,6 @@ def _inject_ephemeral_system_context(messages: List[Dict[str, Any]], content: st
     return True
 
 
-def _is_codex_mcp_call(call: Dict[str, Any]) -> bool:
-    if str(call.get("agentType", "")).strip().lower() != "mcp":
-        return False
-    service = str(call.get("service_name", "")).strip().lower()
-    tool = str(call.get("tool_name", "")).strip().lower()
-    if tool in _CODEX_TOOL_NAMES and (not service or service in _CODEX_SERVICE_ALIASES):
-        return True
-    return service in _CODEX_SERVICE_ALIASES
-
-
 def _is_mutating_native_call(call: Dict[str, Any]) -> bool:
     if str(call.get("agentType", "")).strip().lower() != "native":
         return False
@@ -1405,47 +1395,14 @@ def _apply_parallel_contract_gate(actionable_calls: List[Dict[str, Any]]) -> Par
     )
 
 
-def _build_forced_codex_call(user_request: str, round_num: int) -> Dict[str, Any]:
-    prompt = user_request.strip() if user_request else ""
-    if not prompt:
-        prompt = "Complete the pending coding task in current repository."
-
-    return {
-        "agentType": "mcp",
-        "service_name": "codex-cli",
-        "tool_name": "ask-codex",
-        "message": prompt,
-        "sandboxMode": "workspace-write",
-        "approvalPolicy": "on-failure",
-        "_tool_call_id": f"forced_codex_round_{round_num}",
-    }
-
-
-def _apply_codex_first_guard(
+def _apply_coding_route_guard(
     actionable_calls: List[Dict[str, Any]],
     *,
-    requires_codex: bool,
-    codex_engaged: bool,
     latest_user_request: str,
-    round_num: int,
-) -> Tuple[List[Dict[str, Any]], bool, int]:
-    """Ensure coding tasks route through codex before mutating local native tools."""
-    if not requires_codex or codex_engaged:
-        return actionable_calls, codex_engaged, 0
-
-    if any(_is_codex_mcp_call(call) for call in actionable_calls):
-        return actionable_calls, True, 0
-
-    blocked_mutating = 0
-    passthrough_calls: List[Dict[str, Any]] = []
-    for call in actionable_calls:
-        if _is_mutating_native_call(call):
-            blocked_mutating += 1
-            continue
-        passthrough_calls.append(call)
-
-    forced_calls = [_build_forced_codex_call(latest_user_request, round_num), *passthrough_calls]
-    return forced_calls, True, blocked_mutating
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Coding-route force injection has been retired from execution path."""
+    _ = latest_user_request
+    return actionable_calls, 0
 
 
 _WORKFLOW_PHASES = {"plan", "execute", "verify", "repair"}
@@ -1543,31 +1500,13 @@ def _shorten_for_log(value: Any, limit: int = 300) -> str:
     return text[:limit] + "..."
 
 
-def _normalize_codex_mcp_call_payload(call: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_mcp_call_payload(call: Dict[str, Any]) -> Dict[str, Any]:
     normalized = dict(call or {})
-    tool_name = str(normalized.get("tool_name", "")).strip()
-    if tool_name != "ask-codex":
-        return normalized
 
     nested_args = normalized.get("arguments")
-    prompt = normalized.get("prompt")
-    message = normalized.get("message")
-
-    if (prompt is None or prompt == "") and isinstance(message, str) and message.strip():
-        normalized["prompt"] = message
-        prompt = message
-
-    if (prompt is None or prompt == "") and isinstance(nested_args, dict):
-        nested_prompt = nested_args.get("prompt")
-        nested_message = nested_args.get("message")
-        if isinstance(nested_prompt, str) and nested_prompt.strip():
-            normalized["prompt"] = nested_prompt
-        elif isinstance(nested_message, str) and nested_message.strip():
-            normalized["prompt"] = nested_message
-
-    normalized.pop("message", None)
-    normalized.setdefault("sandboxMode", "workspace-write")
-    normalized.setdefault("approvalPolicy", "on-failure")
+    if isinstance(nested_args, dict):
+        for key, value in nested_args.items():
+            normalized.setdefault(key, value)
     return normalized
 
 
@@ -1599,7 +1538,7 @@ def _extract_mcp_call_status(raw_result: Any) -> Tuple[str, str]:
 
 async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
     """执行单个MCP调用"""
-    call = _normalize_codex_mcp_call_payload(call)
+    call = _normalize_mcp_call_payload(call)
     service_name = call.get("service_name", "")
     tool_name = call.get("tool_name", "")
     call_id = str(call.get("_tool_call_id") or f"mcp_call_{tool_name or 'unknown'}")
@@ -1613,22 +1552,11 @@ async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
         service_name = "game_guide"
         call["service_name"] = service_name
 
-    # Coding tasks via Codex MCP: allow omission of service_name in call payload.
-    if not service_name and tool_name in {"ask-codex", "brainstorm", "help", "ping"}:
-        service_name = "codex-cli"
-        call["service_name"] = service_name
-
-    if tool_name == "ask-codex":
-        call.setdefault("sandboxMode", "workspace-write")
-        call.setdefault("approvalPolicy", "on-failure")
-
-    prompt_len = len(str(call.get("prompt") or "")) if tool_name == "ask-codex" else 0
     logger.info(
-        "[AgenticLoop] MCP tool start id=%s service=%s tool=%s prompt_len=%s payload_keys=%s",
+        "[AgenticLoop] MCP tool start id=%s service=%s tool=%s payload_keys=%s",
         call_id,
         service_name or "<missing>",
         tool_name or "<missing>",
-        prompt_len,
         sorted(call.keys()),
     )
 
@@ -2351,8 +2279,6 @@ def _convert_structured_tool_calls(
                 "tool_name": mcp_tool_name,
             }
             service_name = str(args.get("service_name") or "").strip()
-            if not service_name and mcp_tool_name in {"ask-codex", "brainstorm", "help", "ping"}:
-                service_name = "codex-cli"
             if service_name:
                 merged_call["service_name"] = service_name
 
@@ -2362,33 +2288,11 @@ def _convert_structured_tool_calls(
                     _schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "mcp_call.arguments 必须是对象")
                 )
                 continue
-            if mcp_tool_name == "ask-codex":
-                prompt = arg_payload.get("prompt")
-                if (
-                    (prompt is None or prompt == "")
-                    and isinstance(args.get("prompt"), str)
-                    and args.get("prompt", "").strip()
-                ):
-                    arg_payload["prompt"] = args.get("prompt", "")
-                    prompt = arg_payload["prompt"]
-                if (prompt is None or prompt == "") and isinstance(arg_payload.get("message"), str):
-                    msg = arg_payload.get("message", "").strip()
-                    if msg:
-                        arg_payload["prompt"] = msg
-                        prompt = msg
-                if (prompt is None or prompt == "") and isinstance(args.get("message"), str):
-                    top_msg = args.get("message", "").strip()
-                    if top_msg:
-                        arg_payload["prompt"] = top_msg
-                        prompt = top_msg
-                arg_payload.pop("message", None)
-                if prompt is None or str(prompt).strip() == "":
-                    validation_errors.append(
-                        _schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "mcp_call ask-codex 缺少 prompt/message")
-                    )
+            # Keep compatibility with flattened mcp_call arguments while preferring nested `arguments`.
+            for key, value in args.items():
+                if key in {"tool_name", "service_name", "arguments"}:
                     continue
-                arg_payload.setdefault("sandboxMode", "workspace-write")
-                arg_payload.setdefault("approvalPolicy", "on-failure")
+                arg_payload.setdefault(key, value)
             merged_call.update(arg_payload)
             _inject_call_context_metadata(
                 merged_call,
@@ -2483,17 +2387,11 @@ async def run_agentic_loop(
             )
         )
     latest_user_request = _extract_latest_user_message(messages)
-    requires_codex = _looks_like_coding_request(latest_user_request) or requires_codex_for_messages(messages)
-    codex_engaged = False
     loop_start_monotonic = time.monotonic()
     contract_state = _build_seed_contract_state(
         session_id=session_id,
         latest_user_request=latest_user_request,
-        requires_codex=requires_codex,
     )
-
-    if requires_codex:
-        logger.info("[AgenticLoop] coding request detected, enabling codex-first guard")
 
     if contract_rollout.emit_observability_metadata:
         yield _format_sse_event("contract_rollout_snapshot", {"snapshot": contract_rollout.snapshot()})
@@ -2599,7 +2497,7 @@ async def run_agentic_loop(
 
             return drained_sanitized
 
-        round_tool_choice = "required" if requires_codex and not codex_engaged else "auto"
+        round_tool_choice = "auto"
 
         async for chunk in llm_service.stream_chat_with_context(
             messages,
@@ -2720,16 +2618,13 @@ async def run_agentic_loop(
         if legacy_protocol_error:
             validation_errors.append(legacy_protocol_error)
 
-        actionable_calls, codex_engaged, blocked_mutating_calls = _apply_codex_first_guard(
+        actionable_calls, blocked_mutating_calls = _apply_coding_route_guard(
             actionable_calls,
-            requires_codex=requires_codex,
-            codex_engaged=codex_engaged,
             latest_user_request=latest_user_request,
-            round_num=round_num,
         )
-        if requires_codex and blocked_mutating_calls > 0:
+        if blocked_mutating_calls > 0:
             logger.info(
-                "[AgenticLoop] round %s blocked %s mutating native call(s) before codex handoff",
+                "[AgenticLoop] round %s blocked %s mutating native call(s) before route guard",
                 round_num,
                 blocked_mutating_calls,
             )
@@ -2759,7 +2654,6 @@ async def run_agentic_loop(
                 contract_state = _build_seed_contract_state(
                     session_id=session_id,
                     latest_user_request=latest_user_request,
-                    requires_codex=requires_codex,
                 )
                 if contract_rollout.emit_observability_metadata and isinstance(contract_state, dict):
                     yield _format_sse_event(
@@ -2804,10 +2698,6 @@ async def run_agentic_loop(
         if not actionable_calls and not validation_results:
             pending_tool_intent = _looks_like_pending_tool_intent(complete_text)
             explicit_no_tool_completion = _is_explicit_no_tool_completion(complete_text)
-
-            if requires_codex and not codex_engaged:
-                pending_tool_intent = True
-                explicit_no_tool_completion = False
 
         def _build_round_model_output_event(*, fallback_text: str) -> str:
             output_text = complete_text if isinstance(complete_text, str) else str(complete_text)
@@ -3066,9 +2956,8 @@ async def run_agentic_loop(
                 yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
                 break
 
-            codex_retry_required = requires_codex and not codex_engaged
             should_retry_no_tool = (
-                (codex_retry_required or pending_tool_intent or policy.inject_no_tool_feedback)
+                (pending_tool_intent or policy.inject_no_tool_feedback)
                 and runtime.consecutive_no_tool_rounds < policy.max_consecutive_no_tool_rounds
                 and round_num < policy.max_rounds
             )
@@ -3091,15 +2980,7 @@ async def run_agentic_loop(
                 )
                 if repair_start_event:
                     yield repair_start_event
-                if codex_retry_required:
-                    feedback_text = (
-                        "[系统反馈] 当前请求属于代码开发任务，必须先调用 Codex MCP 工具。"
-                        "请直接发起 mcp_call，参数示例："
-                        "service_name='codex-cli', tool_name='ask-codex', "
-                        "arguments={'prompt':'<实现任务>', 'sandboxMode':'workspace-write', 'approvalPolicy':'on-failure'}。"
-                        "不要直接输出最终答案。"
-                    )
-                elif pending_tool_intent:
+                if pending_tool_intent:
                     feedback_text = (
                         "[系统反馈] 你上一轮表示将使用工具，但没有实际发起函数调用。"
                         "请立即调用合适函数继续执行；只有在无需任何工具且任务已完成时才直接给最终答案，"

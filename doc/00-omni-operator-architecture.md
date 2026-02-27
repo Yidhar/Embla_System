@@ -2,7 +2,7 @@
 **文档类型**：🎯 目标态架构设计（Target Architecture）
 **实施状态**：Phase 3 目标态对齐中（当前系统为 Phase 0 + 增量能力混合态）
 **最后更新**：2026-02-26
-**当前替代方案**：见 `00-mvp-architecture-design.md` (CLI Tools + Codex-first)
+**当前桥接主链**：`SystemAgent + Sub-Agent Runtime + NativeExecutionBridge`（CLI 仅历史兼容）
 **实施路径**：Phase 0 (CLI) → M0-M5 (治理与稳态) → M6-M7 (Phase3 接管) → Phase3 Full（本文档）
 ---
 
@@ -24,7 +24,7 @@
 > - Phase3 Full (🟡 进行中)：补齐脑干层独立化与插件隔离等目标态能力
 >
 > **参考文档**：
-> - 当前实现：`00-mvp-architecture-design.md`
+> - 当前实现主口径：`doc/task/25-subagent-development-fabric-status-matrix.md`
 > - SDLC 对齐：`07-autonomous-agent-sdlc-architecture.md`
 > - Phase3 Full 任务清单：`doc/task/23-phase3-full-target-task-list.md`
 > - Phase3 Full 执行板：`doc/task/23-phase3-full-execution-board.csv`
@@ -233,10 +233,10 @@ omni-operator-v2/
     │   ├── release/controller.py       # 发布灰度控制器
     │   ├── state/workflow_store.py     # 工作流持久化 + Lease/Fencing
     │   ├── tools/
-    │   │   ├── cli_adapter.py          # 🟢 CLI 统一适配器 (Phase 0 当前实现)
-    │   │   ├── codex_adapter.py        # 🟡 Codex CLI/MCP 过渡执行器（外部黑盒代理桥接）
-    │   │   ├── claude_adapter.py       # 🟡 Claude Code 过渡降级执行器
-    │   │   └── gemini_adapter.py       # 🟡 Gemini CLI 过渡降级执行器
+    │   │   ├── execution_bridge.py     # 🟢 内建可审计执行桥（主执行层）
+    │   │   ├── subagent_runtime.py     # 🟢 子代理依赖调度与契约编排
+    │   │   ├── claude_adapter.py       # ⚪ 历史兼容结构（不在主链执行）
+    │   │   └── cli_selector.py         # ⚪ 历史兼容结构（不在主链执行）
     │   └── tools/subagent_runtime.py   # 🟡 Sub-Agent Runtime v1（依赖调度 + 原子脚手架提交）
     ├── apiserver/                      # API 服务层 (FastAPI)
     ├── mcpserver/                      # MCP 工具注册与调度
@@ -259,7 +259,7 @@ omni-operator-v2/
 | Backend Sub-Agent | `NativeExecutionBridge`（patch-intent first） | Phase 3 增量 | 🟡 已去 CLI 黑盒；角色专用执行器 v1 已落地（路径策略 + strict 门禁），语义级仍待深化 |
 | Ops Sub-Agent | `NativeExecutionBridge`（patch-intent first） | Phase 3 增量 | 🟡 已去 CLI 黑盒；角色专用执行器 v1 已落地（路径策略 + strict 门禁），语义级仍待深化 |
 | **Scaffold Engine** | `autonomous/scaffold_engine.py` | Phase 3 增量 | 🟡 Scaffold v1 已实现（契约门禁 + 可插拔校验链 + 事务回滚） |
-| **Execution Bridge** | `autonomous/tools/execution_bridge.py` + `SubTaskExecutionBridgeReceipt` | Phase 3 增量 | 🟡 内建可审计执行桥已落地，旧 CLI 事件仍保留兼容别名窗口 |
+| **Execution Bridge** | `autonomous/tools/execution_bridge.py` + `SubTaskExecutionBridgeReceipt` | Phase 3 增量 | 🟡 内建可审计执行桥已落地，旧 CLI 事件别名已退役 |
 | **Event Bus** | `Topic Event Bus v1` + Event Log 回读兼容 | Phase 3 增量 | 🟢 Topic 化总线已落地（含 Replay/Cron/Alert） |
 | **Meta-Agent** | System Agent | Phase 0 | 🟡 单实例主循环 |
 | **Router** | CLI Selector | Phase 0 | 🟡 CLI 选择策略 |
@@ -269,7 +269,7 @@ omni-operator-v2/
 
 说明：
 
-1. `CLI Adapter/Codex CLI` 在当前路径中不再作为默认执行层，仅保留历史兼容参考。
+1. `CLI Adapter` 不再作为默认执行层；主链统一以 `Sub-Agent Runtime + NativeExecutionBridge` 为准。
 2. 当前执行主路径已切到内生 `NativeExecutionBridge`，后续重点是角色专用执行器和脑干独立化能力补齐。
 
 ### 2.1 当前实现证据矩阵（2026-02-26）

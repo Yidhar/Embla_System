@@ -12,10 +12,9 @@ import traceback
 import os
 import logging
 import time
-import subprocess
 import uuid
 from contextlib import asynccontextmanager
-from typing import Dict, List, Optional, AsyncGenerator, Any, Tuple, Literal, Callable
+from typing import Dict, List, Optional, AsyncGenerator, Any, Callable
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -318,9 +317,6 @@ def _infer_chat_route_risk_level(message: str, *, recent_messages: Optional[List
     if not normalized:
         return "read_only"
 
-    if contains_direct_coding_signal(message):
-        return "write_repo"
-
     if recent_messages and is_coding_followup(message) and has_recent_coding_context(recent_messages):
         return "write_repo"
 
@@ -335,6 +331,9 @@ def _infer_chat_route_risk_level(message: str, *, recent_messages: Optional[List
 
     if any(marker in normalized for marker in _CHAT_ROUTE_READONLY_MARKERS):
         return "read_only"
+
+    if contains_direct_coding_signal(message):
+        return "write_repo"
 
     if "?" in normalized or "？" in str(message):
         return "read_only"
@@ -521,7 +520,6 @@ def _apply_chat_route_quality_guard(route_meta: Dict[str, Any]) -> Dict[str, Any
         suspicious_path_a = path == "path-a" and (
             risk_level in {"write_repo", "deploy"}
             or "READONLY_WRITE_EXPOSURE_CRITICAL" in reason_code_set
-            or "ROUTE_QUALITY_TREND_CRITICAL" in reason_code_set
         )
         high_risk_non_core = path in {"path-a", "path-b"} and risk_level in {"write_repo", "deploy"}
         if suspicious_path_a or high_risk_non_core:
@@ -3652,88 +3650,6 @@ def _save_mcporter_config(mcporter_config: Dict[str, Any]) -> Path:
     return MCPORTER_CONFIG_PATH
 
 
-def _resolve_executable(candidates: List[str]) -> Optional[str]:
-    for name in candidates:
-        binary = shutil.which(name)
-        if binary:
-            return binary
-    return None
-
-
-def _resolve_mcporter_invoker() -> List[str]:
-    mcporter_bin = _resolve_executable(["mcporter", "mcporter.cmd"])
-    if mcporter_bin:
-        return [mcporter_bin]
-    npx_bin = _resolve_executable(["npx", "npx.cmd"])
-    if npx_bin:
-        return [npx_bin, "-y", "mcporter@latest"]
-    return []
-
-
-def _run_command(cmd: List[str], *, timeout: int) -> Tuple[int, str, str]:
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
-    return result.returncode, result.stdout, result.stderr
-
-
-def _mcporter_call(
-    server_name: str,
-    tool_name: str,
-    arguments: Dict[str, Any],
-    timeout_seconds: int,
-) -> Tuple[bool, str, str, int, List[str]]:
-    invoker = _resolve_mcporter_invoker()
-    if not invoker:
-        return False, "", "mcporter_not_found", -1, []
-
-    cmd = [
-        *invoker,
-        "call",
-        "--config",
-        str(MCPORTER_CONFIG_PATH),
-        f"{server_name}.{tool_name}",
-        "--output",
-        "text",
-        "--args",
-        json.dumps(arguments, ensure_ascii=False),
-    ]
-    try:
-        code, stdout, stderr = _run_command(cmd, timeout=max(5, int(timeout_seconds)))
-    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as exc:
-        return False, "", str(exc), -1, cmd
-    return code == 0, stdout, stderr, code, cmd
-
-
-def _upsert_mcporter_servers(
-    entries: Dict[str, Dict[str, Any]],
-    *,
-    force_overwrite: bool,
-) -> Tuple[Path, List[str], List[str]]:
-    mcporter_config = _load_mcporter_config()
-    servers = mcporter_config.get("mcpServers")
-    if not isinstance(servers, dict):
-        servers = {}
-
-    written: List[str] = []
-    skipped: List[str] = []
-    for name, cfg in entries.items():
-        exists = isinstance(servers.get(name), dict)
-        if exists and not force_overwrite:
-            skipped.append(name)
-            continue
-        servers[name] = cfg
-        written.append(name)
-
-    mcporter_config["mcpServers"] = servers
-    path = _save_mcporter_config(mcporter_config)
-    return path, written, skipped
-
-
 def _check_agent_available(manifest: Dict[str, Any]) -> bool:
     """检查内置 agent 模块是否可导入"""
     entry = manifest.get("entryPoint", {})
@@ -3873,147 +3789,6 @@ async def import_mcp_config(request: McpImportRequest):
         json.dumps(mcporter_config, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return {"status": "success", "message": f"已添加 MCP 服务: {request.name}"}
-
-
-class CodexMcpSetupRequest(BaseModel):
-    server_name: str = "codex-cli"
-    package_name: str = "@cexll/codex-mcp-server"
-    install_mode: Literal["npx", "global"] = "npx"
-    write_compat_aliases: bool = True
-    force_overwrite: bool = True
-    validate_connection: bool = True
-    validate_with_ask_codex: bool = False
-    ask_codex_prompt: str = "Reply with exactly: MCP_OK"
-    timeout_seconds: int = 120
-
-
-@app.post("/mcp/codex/setup")
-def setup_codex_mcp(request: CodexMcpSetupRequest):
-    """
-    一键接入 codex-mcp-server：
-    1) 自动安装（可选 global）
-    2) 自动写入 ~/.mcporter/config.json
-    3) 可选连通性校验（ping / ask-codex）
-    """
-    server_name = request.server_name.strip() or "codex-cli"
-    package_name = request.package_name.strip() or "@cexll/codex-mcp-server"
-    timeout_seconds = max(10, int(request.timeout_seconds))
-
-    checks: Dict[str, Any] = {
-        "npm_found": bool(_resolve_executable(["npm", "npm.cmd"])),
-        "npx_found": bool(_resolve_executable(["npx", "npx.cmd"])),
-        "codex_found": bool(_resolve_executable(["codex", "codex.cmd"])),
-        "mcporter_invoker": _resolve_mcporter_invoker(),
-    }
-    warnings: List[str] = []
-    install_log: Dict[str, Any] = {"mode": request.install_mode, "ran": False}
-
-    npx_entry: Dict[str, Any] = {"command": "npx", "args": ["-y", package_name]}
-    selected_entry: Dict[str, Any] = dict(npx_entry)
-
-    if request.install_mode == "global":
-        npm_bin = _resolve_executable(["npm", "npm.cmd"])
-        if not npm_bin:
-            raise HTTPException(status_code=400, detail="npm not found in PATH; cannot run global install")
-        install_log["ran"] = True
-        cmd = [npm_bin, "install", "-g", package_name]
-        install_log["command"] = cmd
-        try:
-            code, stdout, stderr = _run_command(cmd, timeout=timeout_seconds)
-        except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as exc:
-            raise HTTPException(status_code=500, detail=f"global install failed: {exc}")
-        install_log.update({"exit_code": code, "stdout": stdout, "stderr": stderr})
-        if code != 0:
-            raise HTTPException(status_code=500, detail=stderr or stdout or "global install failed")
-
-        codex_mcp_bin = _resolve_executable(["codex-mcp", "codex-mcp.cmd"])
-        if codex_mcp_bin:
-            selected_entry = {"command": "codex-mcp"}
-            checks["codex_mcp_found"] = True
-        else:
-            checks["codex_mcp_found"] = False
-            warnings.append("Global install succeeded but `codex-mcp` not found in PATH, fallback to npx entry.")
-
-    if request.install_mode == "npx" and not checks["npx_found"]:
-        raise HTTPException(status_code=400, detail="npx not found in PATH; cannot configure npx mode")
-
-    target_names: List[str] = [server_name]
-    if request.write_compat_aliases:
-        for alias in ("codex-cli", "codex-mcp"):
-            if alias not in target_names:
-                target_names.append(alias)
-
-    entries = {name: dict(selected_entry) for name in target_names}
-    config_path, written, skipped = _upsert_mcporter_servers(entries, force_overwrite=request.force_overwrite)
-
-    validation: Dict[str, Any] = {"checked": False}
-    if request.validate_connection:
-        validation = {
-            "checked": True,
-            "ping": {"ok": False},
-            "ask_codex": {"checked": False},
-        }
-
-        ping_ok, ping_stdout, ping_stderr, ping_code, ping_cmd = _mcporter_call(
-            server_name=server_name,
-            tool_name="ping",
-            arguments={"message": "hello from NagaAgent"},
-            timeout_seconds=timeout_seconds,
-        )
-        validation["ping"] = {
-            "ok": ping_ok,
-            "exit_code": ping_code,
-            "stdout": ping_stdout,
-            "stderr": ping_stderr,
-            "command": ping_cmd,
-        }
-
-        if request.validate_with_ask_codex:
-            validation["ask_codex"]["checked"] = True
-            ask_ok, ask_stdout, ask_stderr, ask_code, ask_cmd = _mcporter_call(
-                server_name=server_name,
-                tool_name="ask-codex",
-                arguments={
-                    "prompt": request.ask_codex_prompt,
-                    "sandboxMode": "read-only",
-                    "approvalPolicy": "on-failure",
-                },
-                timeout_seconds=timeout_seconds,
-            )
-            validation["ask_codex"] = {
-                "checked": True,
-                "ok": ask_ok,
-                "exit_code": ask_code,
-                "stdout": ask_stdout,
-                "stderr": ask_stderr,
-                "command": ask_cmd,
-            }
-            if not ask_ok:
-                warnings.append(
-                    "ask-codex validation failed. Check Codex CLI auth and ensure codex is available in PATH."
-                )
-
-        if not ping_ok:
-            warnings.append("ping validation failed. Check mcporter/npx availability and server entry.")
-
-    status = "success"
-    if request.validate_connection and not validation.get("ping", {}).get("ok", False):
-        status = "partial_success"
-    if request.validate_with_ask_codex and not validation.get("ask_codex", {}).get("ok", False):
-        status = "partial_success"
-
-    return {
-        "status": status,
-        "server_name": server_name,
-        "written_servers": written,
-        "skipped_servers": skipped,
-        "entry": selected_entry,
-        "config_path": str(config_path),
-        "checks": checks,
-        "install": install_log,
-        "validation": validation,
-        "warnings": warnings,
-    }
 
 
 class SkillImportRequest(BaseModel):

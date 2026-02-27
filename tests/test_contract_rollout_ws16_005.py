@@ -43,10 +43,10 @@ def _legacy_result_payload() -> Dict[str, Any]:
 
 def test_tool_contract_rollout_config_defaults() -> None:
     cfg = ToolContractRolloutConfig()
-    assert cfg.mode == "dual_stack"
-    assert cfg.legacy_contract_enabled is True
+    assert cfg.mode == "new_stack_only"
+    assert cfg.legacy_contract_enabled is False
     assert cfg.new_contract_enabled is True
-    assert cfg.snapshot()["decommission_legacy_gate"] is False
+    assert cfg.snapshot()["decommission_legacy_gate"] is True
 
 
 def test_tool_contract_rollout_mode_aliases_normalize() -> None:
@@ -54,12 +54,12 @@ def test_tool_contract_rollout_mode_aliases_normalize() -> None:
     dual_cfg = ToolContractRolloutConfig(mode="dual")
     new_cfg = ToolContractRolloutConfig(mode="new")
 
-    assert legacy_cfg.mode == "legacy_only"
-    assert dual_cfg.mode == "dual_stack"
+    assert legacy_cfg.mode == "new_stack_only"
+    assert dual_cfg.mode == "new_stack_only"
     assert new_cfg.mode == "new_stack_only"
 
 
-def test_dual_stack_backfills_new_contract_fields(monkeypatch) -> None:
+def test_dual_stack_legacy_payload_is_blocked_after_subagent_cutover(monkeypatch) -> None:
     _set_rollout(monkeypatch, mode="dual_stack", gate=False)
     enforced = tool_loop._enforce_tool_result_schema(
         _legacy_result_payload(),
@@ -69,13 +69,11 @@ def test_dual_stack_backfills_new_contract_fields(monkeypatch) -> None:
         default_tool_name="read_file",
     )
 
-    assert enforced["status"] == "success"
-    assert enforced["result"] == "legacy-ok"
-    assert enforced["narrative_summary"] == "legacy-ok"
-    assert enforced["display_preview"] == "legacy-ok"
+    assert enforced["status"] == "error"
+    assert enforced["error_code"] == "E_LEGACY_CONTRACT_DECOMMISSIONED"
     assert enforced["_contract_rollout"]["used_legacy"] is True
-    assert enforced["_contract_rollout"]["used_new"] is True
-    assert enforced["_contract_rollout"]["legacy_blocked"] is False
+    assert enforced["_contract_rollout"]["used_new"] is False
+    assert enforced["_contract_rollout"]["legacy_blocked"] is True
 
 
 def test_new_stack_only_blocks_legacy_only_result(monkeypatch) -> None:
@@ -205,12 +203,12 @@ def test_agentic_loop_emits_rollout_snapshot_and_tool_results_metadata(monkeypat
 
     snapshot_events = [event for event in events if event.get("type") == "contract_rollout_snapshot"]
     assert snapshot_events
-    assert snapshot_events[0]["snapshot"]["mode"] == "dual_stack"
+    assert snapshot_events[0]["snapshot"]["mode"] == "new_stack_only"
 
     tool_result_events = [event for event in events if event.get("type") == "tool_results"]
     assert tool_result_events
     metadata = tool_result_events[0].get("metadata", {})
-    assert metadata["contract_rollout"]["snapshot"]["mode"] == "dual_stack"
+    assert metadata["contract_rollout"]["snapshot"]["mode"] == "new_stack_only"
     assert metadata["contract_rollout"]["stats"]["legacy_payload_count"] >= 1
 
 

@@ -5,7 +5,7 @@
 ## 文档清单
 
 1. `doc/00-mvp-architecture-design.md`
-   - Phase 0 实施记录（含部分目标态草案，需按文中状态标记阅读）。
+   - Phase 0 历史归档（CLI 时代设计回溯，不作为当前实现依据）。
 2. `doc/00-omni-operator-architecture.md`
    - Omni-Operator 目标态总蓝图（Phase 3 参考，不等价当前实现）。
 3. `doc/01-module-overview.md`
@@ -35,9 +35,20 @@
 15. `doc/13-security-blindspots-and-hardening.md`
     - 安全盲区审计与强制加固基线（覆盖命令混淆、插件隔离、锁泄漏、评测毒化等）。
 16. `doc/task-autonomous-skeleton.md`
-    - 自治骨架实施任务追踪与历史记录。
+    - 自治骨架早期实施追踪（历史归档，不作为当前执行链依据）。
 17. `doc/task/README.md`
     - 迁移与增量开发任务拆解总览（结构化工作流 + CSV backlog）。
+
+## 当前口径优先级（执行主链）
+
+1. `doc/00-omni-operator-architecture.md`
+   - 目标态蓝图与“当前主链”对齐总口径。
+2. `doc/task/25-subagent-development-fabric-status-matrix.md`
+   - `TARGET_DONE / BRIDGE_DONE / TARGET_PENDING` 强制判定语义。
+3. `doc/task/runbooks/subagent_runtime_native_bridge_sequence_and_gate_runbook.md`
+   - 内生执行链路、gate 决策和排障路径。
+4. `doc/frontend-refactor-plan.md`
+   - 数据面板优先（Runtime/MCP/Memory/Workflow）和聚合接口规范。
 
 ## 建议阅读路径
 

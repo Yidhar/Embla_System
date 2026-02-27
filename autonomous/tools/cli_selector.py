@@ -10,7 +10,7 @@ from autonomous.types import OptimizationTask
 class CliSelectionStrategy:
     """Pick one CLI based on preference, task shape, and availability."""
 
-    def __init__(self, preferred: str = "codex", fallback_order: Sequence[str] | None = None) -> None:
+    def __init__(self, preferred: str = "claude", fallback_order: Sequence[str] | None = None) -> None:
         self.preferred = preferred
         self.fallback_order = list(fallback_order or ["claude", "gemini"])
 
@@ -21,8 +21,6 @@ class CliSelectionStrategy:
         if self.preferred in available:
             return self.preferred
 
-        if task.complexity in {"high", "epic"} and "codex" in available:
-            return "codex"
         if task.complexity in {"low", "medium"} and "claude" in available:
             return "claude"
 

@@ -80,27 +80,20 @@
     "retry_backoff_seconds": 0.8 // 重试退避时间（秒）
   },
   "tool_contract_rollout": {
-    "mode": "dual_stack", // 契约模式：legacy_only / dual_stack / new_stack_only
-    "decommission_legacy_gate": false, // 是否阻断 legacy-only 工具结果
+    "mode": "new_stack_only", // 契约模式：已切换至 new_stack_only（legacy/dual 会自动归一）
+    "decommission_legacy_gate": true, // 是否阻断 legacy-only 工具结果
     "emit_observability_metadata": true // 是否输出 rollout snapshot/metadata
   },
   "autonomous": {
     "enabled": false, // 是否启用 System Agent 自治循环
     "cycle_interval_seconds": 3600, // 自治循环周期（秒）
     "cli_tools": {
-      "preferred": "codex", // 首选 CLI
+      "preferred": "claude", // 首选 CLI
       "fallback_order": ["claude", "gemini"], // 降级顺序
       "max_retries": 2 // CLI 重试次数
     },
     "run_quality_checks": false, // 评估阶段是否运行 lint/test
     "fixed_timeout_seconds": 3600, // CLI 执行超时（秒）
-    "verification_fallback": {
-      "enable_codex_mcp": true, // 验证阶段启用 Codex MCP 降级
-      "mcp_server_name": "codex-cli", // MCP 服务名
-      "tool_name": "ask-codex", // MCP 工具名
-      "sandbox_mode": "read-only", // MCP 沙箱模式
-      "approval_policy": "on-failure" // MCP 审批策略
-    },
     "lease": {
       "enabled": true, // 是否启用 Single Active lease/fencing
       "lease_name": "global_orchestrator", // 单活 lease 名称

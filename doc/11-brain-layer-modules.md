@@ -1,8 +1,8 @@
 ---
 **文档类型**：🎯 目标态架构设计（Target Architecture - Phase 3）
 **实施状态**：Phase 3 目标态对齐中（当前为 Phase 0 + 增量桥接混合态）
-**最后更新**：2026-02-26
-**当前替代方案**：System Agent (autonomous/system_agent.py) + Router/Memory 增量实现 + CLI Bridge
+**最后更新**：2026-02-27
+**当前替代方案**：System Agent (autonomous/system_agent.py) + Router/Memory 增量实现 + Sub-Agent Runtime / NativeExecutionBridge
 **实施路径**：Phase 0 (System Agent) → Phase 1-2 (增强) → Phase 3 (本文档)
 ---
 
@@ -11,18 +11,18 @@
 > **定位**：大脑层是 Omni-Operator 的认知中枢，负责推理、记忆、路由和状态管理。属于工作空间层中的高级逻辑区域。
 >
 > **实施状态**：
-> - 🟢 **Phase 0 已实现**：System Agent 主循环、CLI Selector、Workflow Store
+> - 🟢 **Phase 0 已实现**：System Agent 主循环、Workflow Store
 > - 🟡 **Phase 1-2 规划**：增强记忆系统、Token 经济学、GC Engine
 > - 🔴 **Phase 3 目标态**：Meta-Agent、Router、完整三维记忆（本文档）
 >
 > **当前实现映射**：
 > - Meta-Agent → `autonomous/meta_agent_runtime.py` + `autonomous/system_agent.py`（桥接）
-> - Router → `autonomous/router_engine.py`（主）+ `autonomous/tools/cli_selector.py`（兼容）
+> - Router → `autonomous/router_engine.py`（主）+ `autonomous/tools/cli_selector.py`（历史兼容）
 > - Working Memory → `autonomous/working_memory_manager.py` + 对话上下文（`apiserver/llm_service.py`）
 > - Episodic Memory → `system/episodic_memory.py`（增量）
 > - Semantic Graph → `system/semantic_graph.py`（增量）
 >
-> **一致性口径（2026-02-26）**：
+> **一致性口径（2026-02-27）**：
 > - 阶段与目标态判定以 `doc/00-omni-operator-architecture.md` 为主。
 > - 子代理“桥接完成 vs 目标态完成”判定以 `doc/task/25-subagent-development-fabric-status-matrix.md` 为主。
 

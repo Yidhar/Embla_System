@@ -99,7 +99,7 @@ def test_build_snapshot_schema_and_values() -> None:
             {
                 "timestamp": (now_dt + timedelta(seconds=4)).isoformat(),
                 "event_type": "SubAgentRuntimeRolloutDecision",
-                "payload": {"runtime_mode": "legacy", "decision_reason": "rollout_bucket_miss"},
+                "payload": {"runtime_mode": "subagent", "decision_reason": "rollout_bucket_miss_subagent_only"},
             },
             {
                 "timestamp": (now_dt + timedelta(seconds=5)).isoformat(),
@@ -264,9 +264,9 @@ def test_build_snapshot_schema_and_values() -> None:
         assert metrics["lock_status"]["status"] == "warning"
 
         assert metrics["runtime_rollout"]["total_decisions"] == 2
-        assert metrics["runtime_rollout"]["subagent_decisions"] == 1
-        assert metrics["runtime_rollout"]["legacy_decisions"] == 1
-        assert metrics["runtime_rollout"]["value"] == pytest.approx(0.5)
+        assert metrics["runtime_rollout"]["subagent_decisions"] == 2
+        assert metrics["runtime_rollout"]["legacy_decisions"] == 0
+        assert metrics["runtime_rollout"]["value"] == pytest.approx(1.0)
 
         assert metrics["runtime_fail_open"]["subagent_attempt_count"] == 2
         assert metrics["runtime_fail_open"]["fail_open_count"] == 1

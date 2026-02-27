@@ -34,6 +34,18 @@ def test_chat_route_outer_path_selected_for_readonly_summary() -> None:
     assert decision["prompt_profile"].startswith("outer_")
 
 
+def test_chat_route_readonly_request_with_code_reference_stays_outer_path() -> None:
+    route = api_server._resolve_chat_stream_route(
+        "请解释 apiserver/api_server.py 里的路由守卫逻辑，不要改代码",
+        session_id="sess-outer-readonly-code",
+    )
+
+    assert route["path"] == "path-a"
+    assert route["outer_readonly_hit"] is True
+    assert route["core_escalation"] is False
+    assert route["router_decision"]["delegation_intent"] == "read_only_exploration"
+
+
 def test_chat_route_path_b_selected_for_followup_ambiguous_message() -> None:
     route = api_server._resolve_chat_stream_route("继续", session_id="sess-followup")
 

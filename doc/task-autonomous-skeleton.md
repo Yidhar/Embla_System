@@ -1,5 +1,12 @@
 # Autonomous Skeleton Task Tracker
 
+> 历史归档说明（M0-M1）：
+> 本文档记录的是自治骨架早期实现过程，包含 CLI/Codex 路由等阶段性方案，不作为当前执行主链依据。
+> 当前权威口径请以以下文档为准：
+> - `doc/00-omni-operator-architecture.md`
+> - `doc/task/25-subagent-development-fabric-status-matrix.md`
+> - `doc/task/runbooks/subagent_runtime_native_bridge_sequence_and_gate_runbook.md`
+
 Last updated: 2026-02-20
 Owner: Codex
 Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal runtime entry points.
@@ -167,4 +174,3 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
 2. Add explicit gate enforcement for `write_repo/deploy/secrets` against `policy/gate_policy.yaml`.
 3. Add MCP availability probe + fallback error taxonomy.
 4. Add observability counters for lease ownership churn, outbox lag, and rollback rate.
-

@@ -1,7 +1,7 @@
 {
   "schema_version": "ws28-role-executor-semantic-guard-v1",
   "defaults": {
-    "strict_semantic_guard": false
+    "strict_semantic_guard": true
   },
   "roles": {
     "frontend": {

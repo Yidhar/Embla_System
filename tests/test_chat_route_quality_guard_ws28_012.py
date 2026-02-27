@@ -93,6 +93,40 @@ def test_route_quality_critical_guard_forces_suspicious_path_a_to_core(monkeypat
     assert "ROUTE_QUALITY_CRITICAL_FORCE_CORE" in guarded["route_quality_guard_reason_codes"]
 
 
+def test_route_quality_critical_guard_keeps_readonly_path_a_when_only_trend_critical(monkeypatch) -> None:
+    monkeypatch.setattr(
+        api_server,
+        "_get_chat_route_quality_guard_summary",
+        lambda force_refresh=False: {
+            "status": "critical",
+            "reason_codes": ["PATH_B_BUDGET_ESCALATION_CRITICAL", "ROUTE_QUALITY_TREND_CRITICAL"],
+            "reason_text": "critical",
+            "trend": {"status": "critical", "direction": "stable", "sample_count": 42},
+            "evaluated_at": "2026-02-27T00:00:00+00:00",
+        },
+    )
+
+    route_meta = {
+        "path": "path-a",
+        "risk_level": "read_only",
+        "outer_readonly_hit": True,
+        "core_escalation": False,
+        "router_decision": {
+            "delegation_intent": "read_only_exploration",
+            "prompt_profile": "outer_readonly_summary",
+            "injection_mode": "minimal",
+        },
+    }
+
+    guarded = api_server._apply_chat_route_quality_guard(dict(route_meta))
+
+    assert guarded["path"] == "path-a"
+    assert guarded["outer_readonly_hit"] is True
+    assert guarded["core_escalation"] is False
+    assert guarded["route_quality_guard_applied"] is False
+    assert guarded["route_quality_guard_action"] == "none"
+
+
 def test_emit_chat_route_guard_event_uses_warning_event_type() -> None:
     original_store = api_server._CHAT_ROUTE_EVENT_STORE
     capture = _CaptureStore()

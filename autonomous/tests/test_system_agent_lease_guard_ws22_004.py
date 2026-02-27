@@ -5,11 +5,9 @@ import shutil
 import uuid
 from pathlib import Path
 
-from autonomous.dispatcher import DispatchResult
 from autonomous.system_agent import SystemAgent
-from autonomous.tools.cli_adapter import CliTaskResult
 from autonomous.tools.subagent_runtime import SubAgentRuntimeResult
-from autonomous.types import EvaluationReport, OptimizationTask
+from autonomous.types import OptimizationTask
 
 
 def _write_policy(path: Path) -> None:
@@ -133,7 +131,7 @@ def test_system_agent_subagent_guardrail_rejects_too_many_subtasks() -> None:
         _cleanup_case_root(case_root)
 
 
-def test_system_agent_lease_loss_like_runtime_failure_can_fail_open_to_legacy() -> None:
+def test_system_agent_lease_loss_like_runtime_failure_is_fail_open_blocked_under_cutover() -> None:
     case_root = _make_case_root("test_system_agent_lease_guard")
     try:
         repo = case_root / "repo"
@@ -170,32 +168,14 @@ def test_system_agent_lease_loss_like_runtime_failure_can_fail_open_to_legacy() 
 
         agent.subagent_runtime.run = _runtime_fail  # type: ignore[method-assign]
 
-        async def _dispatch_ok(task: OptimizationTask) -> DispatchResult:
-            return DispatchResult(
-                selected_cli="codex",
-                result=CliTaskResult(
-                    task_id=task.task_id,
-                    cli_name="codex",
-                    exit_code=0,
-                    stdout="ok",
-                    stderr="",
-                    files_changed=[],
-                    duration_seconds=0.1,
-                    success=True,
-                    execution_snapshots=[],
-                ),
-            )
-
-        agent.dispatcher.dispatch = _dispatch_ok  # type: ignore[method-assign]
-        agent.evaluator.evaluate = lambda task, result: EvaluationReport(approved=True)  # type: ignore[method-assign]
-
         events: list[tuple[str, dict, dict]] = []
         agent._emit = lambda event_type, payload, **kwargs: events.append((event_type, dict(payload), dict(kwargs)))  # type: ignore[method-assign]
 
         task = OptimizationTask(task_id="task-ws22-lease-fail-open", instruction="lease-fail-open")
         asyncio.run(agent._run_task(task, fencing_epoch=1))
 
-        assert any(event_type == "SubAgentRuntimeFailOpen" for event_type, _, _ in events)
-        assert any(event_type == "TaskApproved" for event_type, _, _ in events)
+        assert any(event_type == "SubAgentRuntimeFailOpenBlocked" for event_type, _, _ in events)
+        assert any(event_type == "TaskRejected" for event_type, _, _ in events)
+        assert not any(event_type == "TaskApproved" for event_type, _, _ in events)
     finally:
         _cleanup_case_root(case_root)
