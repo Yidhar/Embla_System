@@ -31,7 +31,7 @@ NagaAgent 由三个独立微服务组成：
 | **Agent Server** | 8001 | 后台意图分析、任务调度与压缩记忆 |
 | **MCP Server** | 8003 | MCP 工具注册/发现/并行调度 |
 
-`main.py` 统一编排启动，所有服务以 daemon thread 运行。当前前端主链为 `Embla_core`（Next.js 运维面板）；`frontend/`（Electron + Vue 3）为 `archived` 历史兼容路径。
+`main.py` 统一编排启动，所有服务以 daemon thread 运行。当前前端主链为 `Embla_core`（Next.js 运维面板）。
 
 ---
 
@@ -168,49 +168,9 @@ mcpserver/
 
 ---
 
-### Electron 桌面端
+### Legacy Desktop Lane (Retired)
 
-基于 Electron + Vue 3 + Vite + UnoCSS + PrimeVue 的桌面客户端。
-
-#### Live2D 渲染与动画
-
-使用 **pixi-live2d-display** + **PixiJS WebGL** 渲染 Cubism Live2D 模型。SSAA 超采样抗锯齿：Canvas 按 `width * ssaa` 渲染，CSS `transform: scale(1/ssaa)` 缩放。
-
-**4 通道正交动画系统**（`live2dController.ts`）：
-
-| 通道 | 说明 | 参数 |
-|------|------|------|
-| **体态 (State)** | 关键帧循环动画（idle/thinking/talking），hermite 平滑插值 | 从 `naga-actions.json` 加载 |
-| **动作 (Action)** | 队列式头部动作（点头/摇头），FIFO 单一执行 | AngleX/Y, EyeBallX/Y |
-| **表情 (Emotion)** | `.exp3.json` 表情文件，三种混合模式（Add/Multiply/Overwrite） | 指数衰减过渡 |
-| **追踪 (Tracking)** | 鼠标指针跟随视线，可配延迟启动（`tracking_hold_delay_ms`） | Angle ±30, EyeBall ±1, BodyAngle ±10 |
-
-合并顺序：体态 → 嘴形 → 动作 → 手动覆盖 → 表情混合 → 追踪混合。
-
-#### 意识海可视化（MindView）
-
-Canvas 2D + 手写 3D 投影（非 WebGL/SVG），球面坐标相机 `(theta, phi, distance)`，透视除法 `700 / depth`。
-
-**7 层渲染**：背景渐变 → 地面网格 → 水面平面 → 体积光（3 束光柱） → 粒子系统（3 层 125 颗） → 生物荧光浮游生物（10 个带拖尾） → 知识图谱节点与边（深度排序 painter's algorithm）。
-
-五元组到图的映射：`subject`/`object` → 节点，`predicate` → 有向边，度中心性 → 节点高度权重（高权节点上浮），100 节点上限。
-
-交互：单击拖拽旋转、中键/Shift+拖拽平移、滚轮缩放、节点拖拽/点选、关键词搜索过滤、触屏手势。
-
-#### 悬浮球模式
-
-4 状态动画窗口系统：`classic`（正常）→ `ball`（100×100 圆球）→ `compact`（420×100 折叠）→ `full`（420×N 展开）。
-
-easeOutCubic 缓动（`1 - (1 - t)^3`），160ms / 60FPS 过渡。智能定位：从球位置向右展开，自动贴合屏幕边界。
-
-#### 启动动画
-
-1. **标题阶段**：黑色遮罩 + 40 颗金色上升粒子 + 标题图片 2.4s CSS keyframe（渐入 → 停留 → 渐出）
-2. **进度阶段**：Neural Network 粒子背景 + Live2D 透出框 + 金色进度条（`requestAnimationFrame` 插值，最低速度 0.5 兜底）
-3. **停滞检测**：3 秒无进度变化显示重启提示，25% 后每秒轮询后端 `/health` 防止信号丢失
-4. **唤醒**：进度 100% 后显示"点击唤醒"脉冲提示
-
-源码（archived）：[`frontend/`](frontend/)
+旧 Electron + Vue 客户端已从仓库移除，不再参与发布与回归门禁。
 
 ---
 
@@ -309,13 +269,6 @@ NagaAgent/
 │   └── memory_client.py        #   NagaMemory 远程客户端
 ├── guide_engine/         # 游戏攻略引擎 — 云端 RAG 服务
 ├── Embla_core/           # Next.js 运行态势面板（主链）
-├── frontend/             # Electron + Vue 3 前端（archived 历史兼容）
-│   ├── electron/         #   主进程（窗口管理、悬浮球、后端管理、热键）
-│   └── src/              #   Vue 3 应用
-│       ├── views/        #     MessageView / MindView / SkillView / ModelView / MemoryView / ConfigView
-│       ├── components/   #     Live2dModel / SplashScreen / LoginDialog / ...
-│       ├── composables/  #     useAuth / useStartupProgress / useVersionCheck / useToolStatus
-│       └── utils/        #     live2dController (4通道动画) / encoding / session
 ├── system/               # 配置加载、环境检测、系统提示词、后台分析器
 ├── main.py               # 统一入口，编排所有服务
 ├── config.json           # 运行时配置（从 config.json.example 复制）
@@ -388,17 +341,6 @@ npm run dev    # Next.js 开发模式
 npm run build  # Next.js 生产构建
 ```
 
-### Electron 前端开发（archived 历史兼容）
-
-```bash
-cd frontend
-npm install
-npm run dev    # 开发模式（Vite + Electron）
-npm run build  # 构建生产包
-```
-
----
-
 ## 可选配置
 
 <details>
@@ -430,23 +372,6 @@ npm run build  # 构建生产包
 }
 ```
 
-Electron 前端 Live2D 配置：
-
-```json
-{
-  "web_live2d": {
-    "ssaa": 2,
-    "model": {
-      "source": "./models/your-model/model.model3.json",
-      "x": 0.5,
-      "y": 1.3,
-      "size": 6800
-    },
-    "face_y_ratio": 0.13,
-    "tracking_hold_delay_ms": 100
-  }
-}
-```
 </details>
 
 <details>
@@ -493,7 +418,7 @@ uv sync
 | Python 版本不兼容 | 使用 Python 3.11；或使用 uv（自动管理 Python 版本） |
 | 端口被占用 | 检查 8000、8001、8003 是否可用 |
 | Neo4j 连接失败 | 确认 Neo4j 服务已启动，检查 config.json 中的连接参数 |
-| 启动卡在进度条 | 检查 API Key 是否配置正确；3 秒后出现重启提示；Electron 会自动轮询后端健康状态 |
+| 启动卡在进度条 | 检查 API Key 是否配置正确；3 秒后出现重启提示；启动器会自动轮询后端健康状态 |
 
 ```bash
 python main.py --check-env --force-check  # 环境诊断

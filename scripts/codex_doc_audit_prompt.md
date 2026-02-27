@@ -6,7 +6,7 @@
 - 顶层：README.md、README_en.md、AGENTS.md、build.md、LICENSE、config.json.example
 - doc/ 下所有文档
 - runbooks/ 下运维文档
-- 各子模块 README：agentserver/README.md、apiserver/README.md、frontend/README.md、system/README.md、logs/**/README.md、summer_memory/readme.md 等
+- 各子模块 README：agentserver/README.md、apiserver/README.md、Embla_core/README.md、system/README.md、logs/**/README.md、summer_memory/readme.md 等
 - 代码内文档：Python/TS 关键入口与公共 API 的 docstring、注释、类型信息
 
 ## 重点关注

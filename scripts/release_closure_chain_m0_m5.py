@@ -34,9 +34,6 @@ T2_TEST_TARGETS: tuple[str, ...] = (
 )
 
 T3_TEST_TARGETS: tuple[str, ...] = (
-    "tests/test_api_contract_ws20_001.py",
-    "tests/test_sse_event_protocol_ws20_002.py",
-    "tests/test_frontend_bff_regression_ws20_005.py",
     "tests/test_mcp_status_snapshot.py",
     "tests/test_contract_rollout_ws16_005.py",
     "tests/test_doc_consistency_ws16_006.py",
@@ -110,7 +107,6 @@ def _build_steps(
     skip_t3: bool,
     skip_t4: bool,
     skip_t5: bool,
-    strict_legacy_desktop_gate: bool,
 ) -> List[ChainStep]:
     steps: List[ChainStep] = []
     if not skip_t0:
@@ -148,7 +144,7 @@ def _build_steps(
         steps.append(
             ChainStep(
                 step_id="T3",
-                description="API/BFF and migration regression suite",
+                description="API and migration regression suite",
                 command=[python_exe, "-m", "pytest", "-q", *T3_TEST_TARGETS, "-p", "no:tmpdir"],
             )
         )
@@ -178,14 +174,6 @@ def _build_steps(
         steps.append(
             ChainStep(
                 step_id="T5C",
-                description="Desktop (Electron + Vue) legacy compatibility gate",
-                command=[python_exe, "scripts/desktop_release_compat_ws20_006.py", "--strict"],
-                blocking=bool(strict_legacy_desktop_gate),
-            )
-        )
-        steps.append(
-            ChainStep(
-                step_id="T5D",
                 description="Canary rollback drill dry-run",
                 command=[python_exe, "scripts/canary_rollback_drill.py", "--dry-run"],
             )
@@ -203,7 +191,6 @@ def run_release_closure_chain_m0_m5(
     skip_t3: bool = False,
     skip_t4: bool = False,
     skip_t5: bool = False,
-    strict_legacy_desktop_gate: bool = False,
     continue_on_failure: bool = False,
     timeout_seconds: int = 2400,
     runner: Runner | None = None,
@@ -220,7 +207,6 @@ def run_release_closure_chain_m0_m5(
         skip_t3=skip_t3,
         skip_t4=skip_t4,
         skip_t5=skip_t5,
-        strict_legacy_desktop_gate=bool(strict_legacy_desktop_gate),
     )
 
     step_results: List[ChainStepResult] = []
@@ -283,14 +269,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-t0", action="store_true", help="Skip T0 preflight gates (DNA + doc consistency)")
     parser.add_argument("--skip-t1", action="store_true", help="Skip T1 runtime regression suite")
     parser.add_argument("--skip-t2", action="store_true", help="Skip T2 contract/evidence regression suite")
-    parser.add_argument("--skip-t3", action="store_true", help="Skip T3 API/BFF regression suite")
+    parser.add_argument("--skip-t3", action="store_true", help="Skip T3 API regression suite")
     parser.add_argument("--skip-t4", action="store_true", help="Skip T4 autonomous core regression suite")
     parser.add_argument("--skip-t5", action="store_true", help="Skip T5 release work-order artifact steps")
-    parser.add_argument(
-        "--strict-legacy-desktop-gate",
-        action="store_true",
-        help="Treat legacy Electron desktop compatibility gate failure as blocking",
-    )
     parser.add_argument("--continue-on-failure", action="store_true", help="Continue remaining steps after failure")
     parser.add_argument("--timeout-seconds", type=int, default=2400, help="Per-step timeout")
     return parser.parse_args()
@@ -307,7 +288,6 @@ def main() -> int:
         skip_t3=bool(args.skip_t3),
         skip_t4=bool(args.skip_t4),
         skip_t5=bool(args.skip_t5),
-        strict_legacy_desktop_gate=bool(args.strict_legacy_desktop_gate),
         continue_on_failure=bool(args.continue_on_failure),
         timeout_seconds=max(30, int(args.timeout_seconds)),
     )

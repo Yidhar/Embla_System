@@ -32,14 +32,8 @@ norecursedirs = [
   ".pytest_cache",
   "build",
   "dist",
-  "frontend/backend-dist",
-  "frontend/release",
-  "frontend/node_modules",
   "node_modules",
 ]
-
-# Exclude integration / manual scripts that are not pytest-ready.
-addopts = "-q"
 """.strip("\n")
 
     # Replace existing table if present, else append.

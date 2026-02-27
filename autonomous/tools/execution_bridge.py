@@ -316,7 +316,6 @@ class RoleSpecializedExecutor:
 
         frontend_prefixes = (
             "embla_core/",
-            "frontend/",
             "web/",
             "ui/",
             "public/",
@@ -405,7 +404,6 @@ class FrontendRoleExecutor(RoleSpecializedExecutor):
             aliases=("fe", "ui", "web", "client"),
             allowed_path_prefixes=(
                 "Embla_core/",
-                "frontend/",
                 "web/",
                 "ui/",
                 "public/",

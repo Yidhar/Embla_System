@@ -17,7 +17,7 @@ def _configure_windows_console_streams():
             continue
         try:
             is_tty = bool(getattr(stream, "isatty", lambda: False)())
-            # Pipe output (Electron child process): force UTF-8 to avoid mojibake in renderer logs.
+            # Pipe output: force UTF-8 to avoid mojibake in downstream logs.
             target_encoding = "utf-8" if not is_tty else (getattr(stream, "encoding", None) or locale.getpreferredencoding(False) or "utf-8")
             if hasattr(stream, "reconfigure"):
                 stream.reconfigure(encoding=target_encoding, errors="replace")
@@ -92,13 +92,6 @@ setup_logging()
 logger = logging.getLogger("summer_memory")
 logger.setLevel(logging.INFO)
 
-# 优化Live2D相关日志输出，减少启动时的信息噪音
-logging.getLogger("live2d").setLevel(logging.WARNING)
-logging.getLogger("live2d.renderer").setLevel(logging.WARNING)
-logging.getLogger("live2d.animator").setLevel(logging.WARNING)
-logging.getLogger("live2d.widget").setLevel(logging.WARNING)
-logging.getLogger("live2d.config").setLevel(logging.WARNING)
-logging.getLogger("live2d.config_dialog").setLevel(logging.WARNING)
 logging.getLogger("OpenGL").setLevel(logging.WARNING)
 logging.getLogger("OpenGL.acceleratesupport").setLevel(logging.WARNING)
 
@@ -111,7 +104,7 @@ _BRAINSTEM_MAIN_STARTUP_OUTPUT = Path("scratch/reports/brainstem_control_plane_m
 
 
 def _emit_progress(percent: int, phase: str):
-    """向 stdout 发送结构化进度信号，供 Electron 主进程解析"""
+    """向 stdout 发送结构化进度信号，供上游启动器解析"""
     payload = {'percent': percent, 'phase': phase}
 
     try:

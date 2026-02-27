@@ -31,7 +31,7 @@ NagaAgent consists of three independent microservices:
 | **Agent Server** | 8001 | Background intent analysis, task scheduling with compressed memory |
 | **MCP Server** | 8003 | MCP tool registration / discovery / parallel dispatch |
 
-`main.py` orchestrates all services as daemon threads. The active frontend is `Embla_core` (Next.js ops dashboard); `frontend/` (Electron + Vue 3) is an `archived` compatibility lane.
+`main.py` orchestrates all services as daemon threads. The active frontend is `Embla_core` (Next.js ops dashboard).
 
 ---
 
@@ -168,49 +168,9 @@ Source: [`mcpserver/`](mcpserver/)
 
 ---
 
-### Electron Desktop
+### Legacy Desktop Lane (Retired)
 
-Built with Electron + Vue 3 + Vite + UnoCSS + PrimeVue.
-
-#### Live2D Rendering & Animation
-
-Uses **pixi-live2d-display** + **PixiJS WebGL** to render Cubism Live2D models. SSAA super-sampling: Canvas rendered at `width * ssaa`, CSS `transform: scale(1/ssaa)` for sharper output.
-
-**4-channel orthogonal animation system** (`live2dController.ts`):
-
-| Channel | Description | Parameters |
-|---------|-------------|------------|
-| **Body State** | Keyframe loop animation (idle/thinking/talking), hermite-smooth interpolation | Loaded from `naga-actions.json` |
-| **Actions** | Queue-based head actions (nod/shake), FIFO single execution | AngleX/Y, EyeBallX/Y |
-| **Emotions** | `.exp3.json` expression files, three blend modes (Add/Multiply/Overwrite) | Exponential decay transitions |
-| **Tracking** | Pointer-following gaze, configurable start delay (`tracking_hold_delay_ms`) | Angle ±30, EyeBall ±1, BodyAngle ±10 |
-
-Merge order: body state → mouth → actions → manual override → emotion blend → tracking blend.
-
-#### Mind Sea Visualization (MindView)
-
-Canvas 2D with hand-rolled 3D projection (not WebGL/SVG). Spherical coordinate camera `(theta, phi, distance)`, perspective division `700 / depth`.
-
-**7-layer rendering**: Background gradient → floor grid → water surface → volumetric light (3 god rays) → particle system (3 layers, 125 particles) → bioluminescent plankton (10 with trails) → knowledge graph nodes and edges (depth-sorted painter's algorithm).
-
-Quintuple-to-graph mapping: `subject`/`object` → nodes, `predicate` → directed edges, degree centrality → node height weight (high-degree nodes float higher), 100-node limit.
-
-Interactions: click-drag to orbit, middle/shift-drag to pan, scroll to zoom, node drag/select, keyword search, touch gestures.
-
-#### Floating Ball Mode
-
-4-state animated window system: `classic` (normal) → `ball` (100×100 circle) → `compact` (420×100 collapsed) → `full` (420×N expanded).
-
-easeOutCubic easing (`1 - (1 - t)^3`), 160ms / 60FPS transitions. Smart positioning: expands rightward from ball position, auto-clamps to screen bounds.
-
-#### Splash Animation
-
-1. **Title phase**: Black overlay + 40 golden rising particles + title image 2.4s CSS keyframe (fade in → hold → fade out)
-2. **Progress phase**: Neural network particle background + Live2D cutout frame + gold progress bar (`requestAnimationFrame` interpolation, minimum speed 0.5 floor)
-3. **Stall detection**: 3 seconds with no progress change shows restart hint, health polling every 1s after 25% to prevent signal loss
-4. **Awaken**: Progress 100% shows pulsing "Click to Awaken" prompt
-
-Source (archived): [`frontend/`](frontend/)
+The old Electron + Vue frontend has been removed from this repository and is no longer part of release gates.
 
 ---
 
@@ -311,13 +271,6 @@ NagaAgent/
 │   └── memory_client.py        #   NagaMemory remote client
 ├── guide_engine/         # Game guide engine — cloud RAG service
 ├── Embla_core/           # Next.js runtime posture dashboard (active)
-├── frontend/             # Electron + Vue 3 frontend (archived compatibility lane)
-│   ├── electron/         #   Main process (window mgmt, floating ball, backend, hotkeys)
-│   └── src/              #   Vue 3 app
-│       ├── views/        #     MessageView / MindView / SkillView / ModelView / MemoryView / ConfigView
-│       ├── components/   #     Live2dModel / SplashScreen / LoginDialog / ...
-│       ├── composables/  #     useAuth / useStartupProgress / useVersionCheck / useToolStatus
-│       └── utils/        #     live2dController (4-channel animation) / encoding / session
 ├── system/               # Config loader, env checker, system prompts, background analyzer
 ├── main.py               # Unified entry point, orchestrates all services
 ├── config.json           # Runtime config (copy from config.json.example)
@@ -390,17 +343,6 @@ npm run dev    # Next.js dev mode
 npm run build  # Next.js production build
 ```
 
-### Electron Frontend Development (Archived Compatibility)
-
-```bash
-cd frontend
-npm install
-npm run dev    # Dev mode (Vite + Electron)
-npm run build  # Production build
-```
-
----
-
 ## Optional Configuration
 
 <details>
@@ -432,23 +374,6 @@ Install Neo4j ([Docker](https://hub.docker.com/_/neo4j) or [Neo4j Desktop](https
 }
 ```
 
-Electron frontend Live2D config:
-
-```json
-{
-  "web_live2d": {
-    "ssaa": 2,
-    "model": {
-      "source": "./models/your-model/model.model3.json",
-      "x": 0.5,
-      "y": 1.3,
-      "size": 6800
-    },
-    "face_y_ratio": 0.13,
-    "tracking_hold_delay_ms": 100
-  }
-}
-```
 </details>
 
 <details>
@@ -495,7 +420,7 @@ uv sync
 | Python version mismatch | Use Python 3.11, or use uv (manages Python versions automatically) |
 | Port in use | Check if ports 8000, 8001, 8003 are available |
 | Neo4j connection failed | Ensure Neo4j is running, verify config.json connection parameters |
-| Progress bar stuck | Check API key config; restart hint appears after 3s; Electron auto-polls backend health |
+| Progress bar stuck | Check API key config; restart hint appears after 3s; the launcher auto-polls backend health |
 
 ```bash
 python main.py --check-env --force-check  # Environment diagnostics
