@@ -188,6 +188,43 @@ def test_execute_tool_call_with_retry_upgrades_legacy_payload_before_decommissio
     assert row["_contract_rollout"]["legacy_blocked"] is False
 
 
+def test_execute_tool_call_with_retry_upgrades_empty_legacy_payload_before_decommission_gate(monkeypatch) -> None:
+    _set_rollout(monkeypatch, mode="new_stack_only", gate=True)
+
+    async def _fake_execute_single_tool_call(call: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+        _ = (call, session_id)
+        return {
+            "status": "success",
+            "service_name": "mcp",
+            "tool_name": "dummy_tool",
+            "result": None,
+        }
+
+    monkeypatch.setattr(tool_loop, "_execute_single_tool_call", _fake_execute_single_tool_call)
+
+    async def _run_once() -> Dict[str, Any]:
+        return await tool_loop._execute_tool_call_with_retry(
+            {
+                "agentType": "mcp",
+                "service_name": "dummy",
+                "tool_name": "dummy_tool",
+                "_tool_call_id": "call_retry_upgrade_empty_1",
+            },
+            "sess_retry_upgrade_empty",
+            semaphore=asyncio.Semaphore(1),
+            retry_failed=False,
+            max_retries=0,
+            retry_backoff_seconds=0.0,
+        )
+
+    row = asyncio.run(_run_once())
+    assert row["status"] == "success"
+    assert row.get("error_code") is None
+    assert row["_contract_rollout"]["legacy_blocked"] is False
+    assert row["narrative_summary"]
+    assert row["display_preview"]
+
+
 def test_execute_mcp_call_emits_new_contract_fields(monkeypatch) -> None:
     class _FakeManager:
         async def unified_call(self, service_name: str, call: Dict[str, Any]) -> str:
@@ -221,6 +258,16 @@ def test_execute_mcp_call_emits_new_contract_fields(monkeypatch) -> None:
     assert row["display_preview"] == "mcp completed"
     assert row["forensic_artifact_ref"] == "artifact_mcp_001"
     assert row["raw_result_ref"] == "artifact_mcp_001"
+
+
+def test_extract_mcp_call_status_supports_none_and_dict_payloads() -> None:
+    status, detail = tool_loop._extract_mcp_call_status(None)
+    assert status == "ok"
+    assert "empty mcp response" in detail
+
+    status2, detail2 = tool_loop._extract_mcp_call_status({"status": "error", "message": "boom"})
+    assert status2 == "error"
+    assert detail2 == "boom"
 
 
 def test_agentic_loop_emits_rollout_snapshot_and_tool_results_metadata(monkeypatch) -> None:

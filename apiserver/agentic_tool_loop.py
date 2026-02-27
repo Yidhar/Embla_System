@@ -438,6 +438,7 @@ def _extract_result_text_preview(result_payload: Any) -> str:
 def _upgrade_tool_result_contract_payload(result: Dict[str, Any]) -> Dict[str, Any]:
     normalized = dict(result or {})
     result_payload = normalized.get("result")
+    has_legacy_payload = "result" in normalized
     result_preview = _extract_result_text_preview(result_payload)
     tagged = _parse_tagged_tool_result_sections(result_preview)
     parsed_result_payload: Dict[str, Any] = {}
@@ -471,6 +472,22 @@ def _upgrade_tool_result_contract_payload(result: Dict[str, Any]) -> Dict[str, A
         or narrative_summary
         or ""
     ).strip()
+
+    # Some MCP/local tool paths may legally return empty/None payloads.
+    # In new-stack-only mode this should still be upgraded into new-contract fields
+    # instead of being treated as legacy-only output.
+    if has_legacy_payload and not narrative_summary and not display_preview:
+        status = str(normalized.get("status") or "").strip().lower()
+        service_name = str(normalized.get("service_name") or "").strip()
+        tool_name = str(normalized.get("tool_name") or "").strip()
+        status_text = "tool call returned empty payload"
+        if status == "success":
+            status_text = "tool call completed without output payload"
+        elif status == "error":
+            status_text = "tool call failed without error detail"
+        scope = " / ".join(part for part in (service_name, tool_name) if part)
+        narrative_summary = f"{status_text} ({scope})" if scope else status_text
+        display_preview = narrative_summary
 
     if narrative_summary:
         normalized.setdefault("narrative_summary", narrative_summary)
@@ -1727,6 +1744,17 @@ def _normalize_mcp_call_payload(call: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _extract_mcp_call_status(raw_result: Any) -> Tuple[str, str]:
+    if raw_result is None:
+        return "ok", "(empty mcp response)"
+    if isinstance(raw_result, dict):
+        status = str(raw_result.get("status", "ok"))
+        if "message" in raw_result:
+            detail = raw_result.get("message", "")
+        elif "result" in raw_result:
+            detail = raw_result.get("result", "")
+        else:
+            detail = raw_result
+        return status, _shorten_for_log(detail)
     if not isinstance(raw_result, str):
         return "ok", _shorten_for_log(raw_result)
     try:
