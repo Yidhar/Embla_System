@@ -219,3 +219,4 @@ AGENTS.md
 *.lock
 *.log
 scratch/
+Embla_System/logs/
