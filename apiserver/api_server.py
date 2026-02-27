@@ -30,7 +30,6 @@ from autonomous.llm_gateway import (
     GatewayRouteRequest,
     LLMGateway,
     PromptEnvelopeInput,
-    PromptSlice,
 )
 
 # 添加项目根目录到Python路径
@@ -140,6 +139,7 @@ _BRAINSTEM_AUTOSTART_DEFAULT = True
 _BRAINSTEM_AUTOSTART_OUTPUT = Path("scratch/reports/brainstem_control_plane_autostart_ws28_017.json")
 _BRAINSTEM_AUTOSTOP_OUTPUT = Path("scratch/reports/brainstem_control_plane_autostop_ws28_017.json")
 _GLOBAL_MUTEX_BOOTSTRAP_TTL_SECONDS = 10.0
+_IMMUTABLE_DNA_PREFLIGHT_REQUIRED_ENV = "NAGA_IMMUTABLE_DNA_PREFLIGHT_REQUIRED"
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -315,6 +315,28 @@ def _bootstrap_global_mutex_lease_state(
         report["passed"] = False
         report["error"] = f"{type(exc).__name__}:{exc}"
         logger.error(f"[global_mutex_bootstrap] bootstrap error: {exc}")
+    return report
+
+
+def _bootstrap_immutable_dna_preflight() -> Dict[str, Any]:
+    report: Dict[str, Any] = {
+        "enabled": True,
+        "required": _env_flag(_IMMUTABLE_DNA_PREFLIGHT_REQUIRED_ENV, True),
+    }
+    try:
+        llm = get_llm_service()
+        preflight = llm.immutable_dna_preflight()
+        report.update(preflight if isinstance(preflight, dict) else {})
+        report["passed"] = bool(report.get("passed", False))
+        if bool(report.get("passed", False)):
+            logger.info("[immutable_dna_bootstrap] preflight passed")
+        else:
+            logger.error("[immutable_dna_bootstrap] preflight failed: %s", report.get("reason", "unknown"))
+    except Exception as exc:
+        report["passed"] = False
+        report["reason"] = "immutable_dna_preflight_exception"
+        report["error"] = f"{type(exc).__name__}:{exc}"
+        logger.error("[immutable_dna_bootstrap] preflight exception: %s", exc)
     return report
 
 
@@ -1010,6 +1032,16 @@ async def lifespan(app: FastAPI):
         app.state.global_mutex_bootstrap = mutex_bootstrap
         if not bool(mutex_bootstrap.get("passed", False)):
             print("[WARN] Global mutex 启动初始化未通过，锁状态可能显示 missing/unknown")
+        immutable_dna_preflight = _bootstrap_immutable_dna_preflight()
+        app.state.immutable_dna_preflight = immutable_dna_preflight
+        immutable_dna_required = bool(immutable_dna_preflight.get("required", True))
+        immutable_dna_enabled = bool(immutable_dna_preflight.get("enabled", True))
+        immutable_dna_passed = bool(immutable_dna_preflight.get("passed", False))
+        if immutable_dna_required and immutable_dna_enabled and not immutable_dna_passed:
+            raise RuntimeError(
+                "Immutable DNA startup preflight failed: "
+                f"{str(immutable_dna_preflight.get('reason') or 'unknown')}"
+            )
         # 对话核心功能已集成到apiserver
         brainstem_bootstrap = _bootstrap_brainstem_control_plane_startup()
         app.state.brainstem_bootstrap = brainstem_bootstrap
@@ -2516,6 +2548,63 @@ def _ops_build_watchdog_daemon_summary(repo_root: Path) -> Dict[str, Any]:
     }
 
 
+def _ops_build_immutable_dna_summary() -> Dict[str, Any]:
+    preflight = getattr(app.state, "immutable_dna_preflight", None)
+    if not isinstance(preflight, dict):
+        return {
+            "status": "unknown",
+            "reason_code": "IMMUTABLE_DNA_PREFLIGHT_MISSING",
+            "reason_text": "Immutable DNA startup preflight is missing.",
+            "enabled": True,
+            "required": True,
+            "passed": False,
+            "exists": False,
+            "manifest_path": "",
+            "audit_file": "",
+            "verify": {},
+        }
+
+    enabled = bool(preflight.get("enabled", True))
+    required = bool(preflight.get("required", True))
+    passed = bool(preflight.get("passed", False))
+    reason = str(preflight.get("reason") or "")
+    manifest_path = str(preflight.get("manifest_path") or "")
+    audit_file = str(preflight.get("audit_file") or "")
+    verify = preflight.get("verify") if isinstance(preflight.get("verify"), dict) else {}
+    manifest_hash = str(preflight.get("manifest_hash") or verify.get("manifest_hash") or "")
+
+    if not enabled:
+        status = "warning"
+        reason_code = "IMMUTABLE_DNA_RUNTIME_DISABLED"
+        reason_text = "Immutable DNA runtime injection is disabled."
+    elif passed:
+        status = "ok"
+        reason_code = "OK"
+        reason_text = "Immutable DNA preflight passed."
+    elif required:
+        status = "critical"
+        reason_code = "IMMUTABLE_DNA_PREFLIGHT_FAILED"
+        reason_text = f"Immutable DNA preflight failed: {reason or 'unknown'}"
+    else:
+        status = "warning"
+        reason_code = "IMMUTABLE_DNA_PREFLIGHT_FAILED_OPTIONAL"
+        reason_text = f"Immutable DNA preflight failed (non-blocking): {reason or 'unknown'}"
+
+    return {
+        "status": _ops_status_to_severity(status),
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "enabled": enabled,
+        "required": required,
+        "passed": passed,
+        "exists": bool(preflight),
+        "manifest_path": manifest_path,
+        "audit_file": audit_file,
+        "manifest_hash": manifest_hash,
+        "verify": verify,
+    }
+
+
 def _ops_collect_required_reports(repo_root: Path) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for spec in _OPS_REQUIRED_REPORT_DEFINITIONS:
@@ -2621,11 +2710,19 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     brainstem_status = _ops_status_to_severity(str(brainstem_control_plane.get("status") or "unknown"))
     watchdog_daemon = _ops_build_watchdog_daemon_summary(repo_root)
     watchdog_daemon_status = _ops_status_to_severity(str(watchdog_daemon.get("status") or "unknown"))
+    immutable_dna = _ops_build_immutable_dna_summary()
+    immutable_dna_status = _ops_status_to_severity(str(immutable_dna.get("status") or "unknown"))
 
     metric_status = summary.get("metric_status") if isinstance(summary.get("metric_status"), dict) else {}
     snapshot_overall_status = str(summary.get("overall_status") or "unknown")
     overall_status = _ops_max_status(
-        [snapshot_overall_status, brainstem_status, watchdog_daemon_status, execution_bridge_governance_status]
+        [
+            snapshot_overall_status,
+            brainstem_status,
+            watchdog_daemon_status,
+            immutable_dna_status,
+            execution_bridge_governance_status,
+        ]
     )
     severity = _ops_status_to_severity(overall_status)
 
@@ -2651,6 +2748,10 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         source_reports.append(str(brainstem_control_plane.get("heartbeat_file") or ""))
     if bool(watchdog_daemon.get("exists")):
         source_reports.append(str(watchdog_daemon.get("state_file") or ""))
+    if str(immutable_dna.get("manifest_path") or "").strip():
+        source_reports.append(str(immutable_dna.get("manifest_path") or ""))
+    if str(immutable_dna.get("audit_file") or "").strip():
+        source_reports.append(str(immutable_dna.get("audit_file") or ""))
 
     response_data: Dict[str, Any] = {
         "summary": {
@@ -2659,6 +2760,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "route_quality": _ops_build_route_quality_summary(metrics, trend=route_quality_trend),
             "brainstem_control_plane_status": brainstem_status,
             "watchdog_daemon_status": watchdog_daemon_status,
+            "immutable_dna_status": immutable_dna_status,
             "execution_bridge_governance_status": execution_bridge_governance_status,
             "execution_bridge_governance_reason_codes": list(execution_bridge_governance.get("reason_codes") or []),
         },
@@ -2696,6 +2798,14 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
                 "stale_critical_seconds": watchdog_daemon.get("stale_critical_seconds"),
                 "reason_code": watchdog_daemon.get("reason_code"),
             },
+            "immutable_dna": {
+                "status": immutable_dna_status,
+                "enabled": immutable_dna.get("enabled"),
+                "required": immutable_dna.get("required"),
+                "passed": immutable_dna.get("passed"),
+                "reason_code": immutable_dna.get("reason_code"),
+                "manifest_hash": immutable_dna.get("manifest_hash"),
+            },
             "execution_bridge_rejection_ratio": {
                 "status": execution_bridge_governance_status,
                 "value": execution_bridge_governance.get("rejection_ratio"),
@@ -2714,6 +2824,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         "sources": sources,
         "brainstem_control_plane": brainstem_control_plane,
         "watchdog_daemon": watchdog_daemon,
+        "immutable_dna": immutable_dna,
         "execution_bridge_governance": execution_bridge_governance,
     }
     if ws26_runtime_report_payload:
@@ -2727,6 +2838,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     elif watchdog_daemon_status == "critical":
         reason_code = "WATCHDOG_DAEMON_CRITICAL"
         reason_text = str(watchdog_daemon.get("reason_text") or "Watchdog daemon reports critical state.")
+    elif immutable_dna_status == "critical":
+        reason_code = "IMMUTABLE_DNA_CRITICAL"
+        reason_text = str(immutable_dna.get("reason_text") or "Immutable DNA preflight failed.")
     elif execution_bridge_governance_status == "critical":
         reason_code = "EXECUTION_BRIDGE_GOVERNANCE_CRITICAL"
         reason_text = "Execution bridge governance has critical rejections; check role guards and policy contracts."
@@ -2736,6 +2850,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     elif watchdog_daemon_status == "warning":
         reason_code = "WATCHDOG_DAEMON_WARNING"
         reason_text = str(watchdog_daemon.get("reason_text") or "Watchdog daemon requires attention.")
+    elif immutable_dna_status == "warning":
+        reason_code = "IMMUTABLE_DNA_WARNING"
+        reason_text = str(immutable_dna.get("reason_text") or "Immutable DNA preflight requires attention.")
     elif execution_bridge_governance_status == "warning":
         reason_code = "EXECUTION_BRIDGE_GOVERNANCE_WARNING"
         reason_text = "Execution bridge governance has warning signals; review semantic/path guard drift."

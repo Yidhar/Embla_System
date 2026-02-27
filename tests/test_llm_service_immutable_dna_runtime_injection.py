@@ -138,3 +138,62 @@ def test_llm_service_blocks_chat_when_immutable_dna_verification_fails(monkeypat
         assert "dna_hash_mismatch" in str(response.content)
     finally:
         _cleanup_case_root(case_root)
+
+
+def test_llm_service_immutable_dna_preflight_reports_pass(monkeypatch) -> None:
+    case_root = _make_case_root("test_llm_service_immutable_dna_preflight")
+    try:
+        prompts_root = case_root / "prompts"
+        prompts_root.mkdir(parents=True, exist_ok=True)
+        manifest_path = prompts_root / "immutable_dna_manifest.spec"
+        audit_path = case_root / "immutable_dna_runtime_injection_audit.jsonl"
+        _write_required_prompts(prompts_root)
+        _bootstrap_manifest(prompts_root, manifest_path, audit_path)
+
+        monkeypatch.setenv(llm_service_module.LLMService.DNA_RUNTIME_ENABLED_ENV, "1")
+        monkeypatch.setenv(llm_service_module.LLMService.DNA_PROMPTS_ROOT_ENV, str(prompts_root))
+        monkeypatch.setenv(llm_service_module.LLMService.DNA_MANIFEST_PATH_ENV, str(manifest_path))
+        monkeypatch.setenv(llm_service_module.LLMService.DNA_AUDIT_PATH_ENV, str(audit_path))
+
+        service = llm_service_module.LLMService()
+        report = service.immutable_dna_preflight()
+
+        assert report["enabled"] is True
+        assert report["passed"] is True
+        assert report["reason"] == "ok"
+        assert str(report.get("manifest_path") or "").endswith("immutable_dna_manifest.spec")
+        verify = report.get("verify")
+        assert isinstance(verify, dict)
+        assert verify.get("ok") is True
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_llm_service_immutable_dna_preflight_reports_failure_on_mismatch(monkeypatch) -> None:
+    case_root = _make_case_root("test_llm_service_immutable_dna_preflight")
+    try:
+        prompts_root = case_root / "prompts"
+        prompts_root.mkdir(parents=True, exist_ok=True)
+        manifest_path = prompts_root / "immutable_dna_manifest.spec"
+        audit_path = case_root / "immutable_dna_runtime_injection_audit.jsonl"
+        _write_required_prompts(prompts_root)
+        _bootstrap_manifest(prompts_root, manifest_path, audit_path)
+        (prompts_root / "agentic_tool_prompt.txt").write_text("AGENTIC_PROMPT_TAMPERED", encoding="utf-8")
+
+        monkeypatch.setenv(llm_service_module.LLMService.DNA_RUNTIME_ENABLED_ENV, "1")
+        monkeypatch.setenv(llm_service_module.LLMService.DNA_PROMPTS_ROOT_ENV, str(prompts_root))
+        monkeypatch.setenv(llm_service_module.LLMService.DNA_MANIFEST_PATH_ENV, str(manifest_path))
+        monkeypatch.setenv(llm_service_module.LLMService.DNA_AUDIT_PATH_ENV, str(audit_path))
+
+        service = llm_service_module.LLMService()
+        report = service.immutable_dna_preflight()
+
+        assert report["enabled"] is True
+        assert report["passed"] is False
+        assert report["reason"] == "dna_hash_mismatch"
+        verify = report.get("verify")
+        assert isinstance(verify, dict)
+        assert verify.get("ok") is False
+        assert "agentic_tool_prompt.txt" in list(verify.get("mismatch_files") or [])
+    finally:
+        _cleanup_case_root(case_root)

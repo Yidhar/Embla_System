@@ -300,6 +300,98 @@ def test_ops_runtime_posture_payload_includes_execution_bridge_governance(tmp_pa
     assert metrics["execution_bridge_governance_warning_ratio"]["value"] == 1.0
 
 
+def test_ops_runtime_posture_payload_includes_immutable_dna_preflight(monkeypatch, tmp_path) -> None:
+    repo_root = tmp_path
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "ok", "metric_status": {}},
+            "metrics": {},
+            "threshold_profile": {},
+            "sources": {"events_file": "logs/autonomous/events.jsonl"},
+        }
+
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+
+    previous_preflight = getattr(api_server.app.state, "immutable_dna_preflight", None)
+    api_server.app.state.immutable_dna_preflight = {
+        "enabled": True,
+        "required": True,
+        "passed": True,
+        "reason": "ok",
+        "manifest_path": str(repo_root / "system" / "prompts" / "immutable_dna_manifest.spec"),
+        "audit_file": str(repo_root / "scratch" / "reports" / "immutable_dna_runtime_injection_audit.jsonl"),
+        "manifest_hash": "abc123",
+        "verify": {"ok": True, "reason": "ok"},
+    }
+    try:
+        payload = api_server._ops_build_runtime_posture_payload(events_limit=200)
+    finally:
+        if previous_preflight is None:
+            try:
+                delattr(api_server.app.state, "immutable_dna_preflight")
+            except AttributeError:
+                pass
+        else:
+            api_server.app.state.immutable_dna_preflight = previous_preflight
+
+    assert payload["status"] == "success"
+    assert payload["data"]["summary"]["immutable_dna_status"] == "ok"
+    immutable_dna = payload["data"]["immutable_dna"]
+    assert immutable_dna["passed"] is True
+    assert immutable_dna["status"] == "ok"
+    assert payload["data"]["metrics"]["immutable_dna"]["manifest_hash"] == "abc123"
+
+
+def test_ops_runtime_posture_payload_marks_immutable_dna_failure_as_critical(monkeypatch, tmp_path) -> None:
+    repo_root = tmp_path
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "ok", "metric_status": {}},
+            "metrics": {},
+            "threshold_profile": {},
+            "sources": {"events_file": "logs/autonomous/events.jsonl"},
+        }
+
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+
+    previous_preflight = getattr(api_server.app.state, "immutable_dna_preflight", None)
+    api_server.app.state.immutable_dna_preflight = {
+        "enabled": True,
+        "required": True,
+        "passed": False,
+        "reason": "dna_hash_mismatch",
+        "manifest_path": str(repo_root / "system" / "prompts" / "immutable_dna_manifest.spec"),
+        "audit_file": str(repo_root / "scratch" / "reports" / "immutable_dna_runtime_injection_audit.jsonl"),
+        "verify": {"ok": False, "reason": "dna_hash_mismatch"},
+    }
+    try:
+        payload = api_server._ops_build_runtime_posture_payload(events_limit=200)
+    finally:
+        if previous_preflight is None:
+            try:
+                delattr(api_server.app.state, "immutable_dna_preflight")
+            except AttributeError:
+                pass
+        else:
+            api_server.app.state.immutable_dna_preflight = previous_preflight
+
+    assert payload["status"] == "success"
+    assert payload["severity"] == "critical"
+    assert payload["reason_code"] == "IMMUTABLE_DNA_CRITICAL"
+    assert payload["data"]["summary"]["immutable_dna_status"] == "critical"
+    immutable_dna = payload["data"]["immutable_dna"]
+    assert immutable_dna["passed"] is False
+    assert immutable_dna["reason_code"] == "IMMUTABLE_DNA_PREFLIGHT_FAILED"
+
+
 def test_ops_incidents_latest_payload_includes_execution_bridge_governance_issue(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
     events_file = repo_root / "logs" / "autonomous" / "events.jsonl"

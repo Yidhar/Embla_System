@@ -114,6 +114,35 @@ class LLMService:
             self._immutable_dna_loader = self._build_immutable_dna_loader()
         return self._immutable_dna_loader
 
+    def immutable_dna_preflight(self) -> Dict[str, Any]:
+        """Run startup-time immutable DNA verification for fail-fast bootstrap."""
+        enabled = bool(self._immutable_dna_enabled)
+        report: Dict[str, Any] = {
+            "enabled": enabled,
+            "passed": False,
+            "reason": "uninitialized",
+        }
+        if not enabled:
+            report["passed"] = True
+            report["reason"] = "immutable_dna_runtime_disabled"
+            return report
+
+        loader = self._ensure_immutable_dna_loader()
+        if loader is None:
+            report["reason"] = "immutable_dna_loader_unavailable"
+            return report
+
+        report["manifest_path"] = str(loader.manifest_path)
+        report["audit_file"] = str(loader.audit_file)
+        verify = loader.verify()
+        verify_payload = verify.to_dict()
+        report["verify"] = verify_payload
+        report["passed"] = bool(verify.ok)
+        report["reason"] = str(verify.reason or ("ok" if verify.ok else "verify_failed"))
+        if verify_payload.get("manifest_hash"):
+            report["manifest_hash"] = str(verify_payload["manifest_hash"])
+        return report
+
     def _is_dna_runtime_system_message(self, message: Dict[str, Any]) -> bool:
         if str(message.get("role") or "") != "system":
             return False
