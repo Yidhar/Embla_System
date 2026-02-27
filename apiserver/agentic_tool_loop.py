@@ -2068,6 +2068,14 @@ async def _execute_tool_call_with_retry(
         "service_name": "unknown",
         "tool_name": "unknown",
     }
+    fallback_row = _upgrade_tool_result_contract_payload(fallback_row)
+    fallback_row = _enforce_tool_result_schema(
+        fallback_row,
+        call=call,
+        call_id=call_id,
+        default_service_name=service_name or "tool_protocol",
+        default_tool_name=tool_name or "validation",
+    )
     _attach_tool_receipt(call, fallback_row)
     return fallback_row
 
@@ -2113,6 +2121,14 @@ async def execute_tool_calls(
                 "service_name": "unknown",
                 "tool_name": "unknown",
             }
+            row = _upgrade_tool_result_contract_payload(row)
+            row = _enforce_tool_result_schema(
+                row,
+                call=failed_call,
+                call_id=str(failed_call.get("_tool_call_id") or f"tool_error_{idx + 1}"),
+                default_service_name="tool_protocol",
+                default_tool_name=str(failed_call.get("tool_name") or "validation"),
+            )
             _attach_tool_receipt(failed_call, row)
             final.append(row)
         else:
@@ -2136,6 +2152,7 @@ def _build_gc_reader_suggestion_result(reason: str, suggestion: str, error_text:
         "service_name": "gc_reader_bridge",
         "tool_name": "artifact_reader_suggestion",
     }
+    row = _upgrade_tool_result_contract_payload(row)
     _attach_tool_receipt(row["tool_call"], row)
     return row
 
