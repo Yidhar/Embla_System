@@ -22,9 +22,11 @@ from system.gc_budget_guard import GCBudgetGuard, GCBudgetGuardConfig
 from system.gc_memory_card import build_gc_memory_index_card
 from system.gc_reader_bridge import build_gc_reader_followup_plan
 from system.global_mutex import LeaseHandle, get_global_mutex_manager
+from system.loop_cost_guard import LoopCostGuard, LoopCostThresholds
 from system.router_arbiter import MAX_DELEGATE_TURNS, evaluate_workspace_conflict_retry
 from system.semantic_graph import update_semantic_graph_from_records
 from system.tool_contract import ToolCallEnvelope
+from system.watchdog_daemon import WatchdogDaemon, WatchdogThresholds
 from .native_tools import get_native_tool_executor
 
 logger = logging.getLogger(__name__)
@@ -198,6 +200,110 @@ def _resolve_agentic_loop_policy(max_rounds_override: Optional[int]) -> AgenticL
         gc_budget_repeat_threshold=_clamp_int(getattr(loop_cfg, "gc_budget_repeat_threshold", 3), 3, 2, 10),
         gc_budget_window_size=_clamp_int(getattr(loop_cfg, "gc_budget_window_size", 6), 6, 2, 30),
     )
+
+
+def _build_agentic_loop_watchdog() -> Optional[WatchdogDaemon]:
+    cfg = get_config()
+    loop_cfg = getattr(cfg, "agentic_loop", None)
+    enabled = bool(getattr(loop_cfg, "watchdog_guard_enabled", True)) if loop_cfg is not None else True
+    if not enabled:
+        return None
+
+    warn_only = bool(getattr(loop_cfg, "watchdog_warn_only", True)) if loop_cfg is not None else True
+    consecutive_error_limit = _clamp_int(
+        getattr(loop_cfg, "watchdog_consecutive_error_limit", 5) if loop_cfg is not None else 5,
+        5,
+        1,
+        200,
+    )
+    tool_call_limit_per_minute = _clamp_int(
+        getattr(loop_cfg, "watchdog_tool_call_limit_per_minute", 10) if loop_cfg is not None else 10,
+        10,
+        1,
+        2000,
+    )
+    loop_window_seconds = _clamp_int(
+        getattr(loop_cfg, "watchdog_loop_window_seconds", 60) if loop_cfg is not None else 60,
+        60,
+        1,
+        3600,
+    )
+    task_cost_limit = float(
+        getattr(loop_cfg, "watchdog_task_cost_limit", 5.0) if loop_cfg is not None else 5.0
+    )
+    daily_cost_limit = float(
+        getattr(loop_cfg, "watchdog_daily_cost_limit", 50.0) if loop_cfg is not None else 50.0
+    )
+    loop_cost_guard = LoopCostGuard(
+        thresholds=LoopCostThresholds(
+            consecutive_error_limit=consecutive_error_limit,
+            tool_call_limit_per_minute=tool_call_limit_per_minute,
+            task_cost_limit=max(0.0, task_cost_limit),
+            daily_cost_limit=max(0.0, daily_cost_limit),
+            loop_window_seconds=loop_window_seconds,
+        )
+    )
+    return WatchdogDaemon(
+        thresholds=WatchdogThresholds(),
+        warn_only=warn_only,
+        loop_cost_guard=loop_cost_guard,
+    )
+
+
+def _extract_tool_call_cost(result: Dict[str, Any]) -> float:
+    for key in ("call_cost", "tool_call_cost", "cost", "estimated_cost"):
+        value = result.get(key)
+        try:
+            amount = float(value)
+        except (TypeError, ValueError):
+            continue
+        if amount >= 0:
+            return amount
+
+    usage = result.get("usage")
+    if isinstance(usage, dict):
+        for key in ("total_cost", "estimated_cost"):
+            value = usage.get(key)
+            try:
+                amount = float(value)
+            except (TypeError, ValueError):
+                continue
+            if amount >= 0:
+                return amount
+    return 0.0
+
+
+def _build_watchdog_guardrail_payload(
+    *,
+    signal: Dict[str, Any],
+    source: str,
+    round_num: int,
+) -> Dict[str, Any]:
+    payload = {
+        "guard_type": "watchdog_loop_guard",
+        "source": source,
+        "round": int(round_num),
+    }
+    payload.update(signal)
+    return payload
+
+
+def _resolve_watchdog_stop_reason(signal: Dict[str, Any]) -> str:
+    reason = str(signal.get("reason") or signal.get("reason_code") or "").strip().lower()
+    if reason:
+        normalized = reason.replace(" ", "_").replace("-", "_")
+        return f"watchdog_{normalized}"
+    return "watchdog_guard_hit"
+
+
+def _should_stop_on_watchdog_signal(signal: Dict[str, Any]) -> bool:
+    action = str(signal.get("action") or "").strip().lower()
+    level = str(signal.get("level") or "").strip().lower()
+    if action in {"kill_agent_loop", "terminate_task_budget_exceeded", "pause_dispatch_and_escalate"}:
+        return True
+    if level == "critical" and action not in {"", "alert_only", "throttle_new_workloads"}:
+        return True
+    return False
 
 
 def _normalize_tool_contract_rollout_mode(value: Any) -> str:
@@ -2320,6 +2426,11 @@ async def run_agentic_loop(
     runtime = AgenticLoopRuntimeState()
     needs_summary = False
     gc_budget_guard: Optional[GCBudgetGuard] = None
+    loop_watchdog = _build_agentic_loop_watchdog()
+    loop_cfg = getattr(get_config(), "agentic_loop", None)
+    watchdog_sample_per_round = (
+        bool(getattr(loop_cfg, "watchdog_sample_per_round", True)) if loop_cfg is not None else True
+    )
     if policy.gc_budget_guard_enabled:
         gc_budget_guard = GCBudgetGuard(
             GCBudgetGuardConfig(
@@ -2894,6 +3005,80 @@ async def run_agentic_loop(
         except Exception as exc:
             logger.warning("[AgenticLoop] episodic archive skipped in round %s: %s", round_num, exc)
 
+        success_count = sum(1 for r in primary_results if r.get("status") == "success")
+        error_count = sum(1 for r in primary_results if r.get("status") == "error")
+        runtime.total_tool_calls += len(actionable_calls)
+        runtime.total_tool_success += success_count
+        runtime.total_tool_errors += error_count
+
+        watchdog_signals: List[Dict[str, Any]] = []
+        if loop_watchdog is not None:
+            for row in executed_results:
+                if not isinstance(row, dict):
+                    continue
+                tool_name = str(row.get("tool_name") or row.get("service_name") or "unknown_tool")
+                success = str(row.get("status") or "").strip().lower() == "success"
+                signal = loop_watchdog.observe_tool_call(
+                    task_id=session_id,
+                    tool_name=tool_name,
+                    success=success,
+                    call_cost=_extract_tool_call_cost(row),
+                )
+                if isinstance(signal, dict):
+                    watchdog_signals.append(signal)
+            if watchdog_sample_per_round:
+                try:
+                    snapshot = loop_watchdog.sample()
+                    resource_action = loop_watchdog.evaluate(snapshot)
+                    if resource_action is not None:
+                        watchdog_signals.append(resource_action.to_dict())
+                except Exception as exc:
+                    logger.warning("[AgenticLoop] watchdog sample/evaluate skipped in round %s: %s", round_num, exc)
+
+        for signal in watchdog_signals:
+            yield _format_sse_event(
+                "guardrail",
+                _build_watchdog_guardrail_payload(
+                    signal=signal,
+                    source="loop_cost_guard" if "reason" in signal else "resource_watchdog",
+                    round_num=round_num,
+                ),
+            )
+
+        blocking_watchdog_signal = next(
+            (signal for signal in watchdog_signals if _should_stop_on_watchdog_signal(signal)),
+            None,
+        )
+        if isinstance(blocking_watchdog_signal, dict):
+            runtime.stop_reason = _resolve_watchdog_stop_reason(blocking_watchdog_signal)
+            logger.warning(
+                "[AgenticLoop] watchdog guard hit in round %s: reason=%s action=%s level=%s",
+                round_num,
+                runtime.stop_reason,
+                blocking_watchdog_signal.get("action", ""),
+                blocking_watchdog_signal.get("level", ""),
+            )
+            watchdog_details = dict(blocking_watchdog_signal)
+            if "reason" in watchdog_details and "watchdog_reason" not in watchdog_details:
+                watchdog_details["watchdog_reason"] = watchdog_details.pop("reason")
+            verify_error_event = _format_workflow_stage_event(
+                round_num,
+                "verify",
+                "error",
+                policy=policy,
+                reason=runtime.stop_reason,
+                decision="summary" if policy.enable_summary_round else "stop",
+                details=watchdog_details,
+            )
+            if verify_error_event:
+                yield verify_error_event
+            if policy.enable_summary_round:
+                needs_summary = True
+                yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
+            else:
+                yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+            break
+
         results = validation_results + executed_results
         gc_guard_signal = gc_budget_guard.observe_round(executed_results) if gc_budget_guard is not None else None
         gc_guard_snapshot = gc_budget_guard.snapshot() if gc_budget_guard is not None else {}
@@ -2901,12 +3086,6 @@ async def run_agentic_loop(
         runtime.gc_guard_error_total = _clamp_int(gc_guard_snapshot.get("gc_error_total", 0), 0, 0, 999999)
         runtime.gc_guard_success_total = _clamp_int(gc_guard_snapshot.get("gc_success_total", 0), 0, 0, 999999)
         runtime.gc_guard_hit_total = _clamp_int(gc_guard_snapshot.get("gc_guard_hits", 0), 0, 0, 999999)
-
-        runtime.total_tool_calls += len(actionable_calls)
-        success_count = sum(1 for r in primary_results if r.get("status") == "success")
-        error_count = sum(1 for r in primary_results if r.get("status") == "error")
-        runtime.total_tool_success += success_count
-        runtime.total_tool_errors += error_count
 
         all_failed = bool(primary_results) and success_count == 0
         if all_failed:

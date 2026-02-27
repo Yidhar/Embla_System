@@ -77,7 +77,15 @@
     "max_parallel_tool_calls": 8, // 单轮最大并行工具调用数
     "retry_failed_tool_calls": true, // 是否自动重试失败工具
     "max_tool_retries": 1, // 失败工具最大重试次数
-    "retry_backoff_seconds": 0.8 // 重试退避时间（秒）
+    "retry_backoff_seconds": 0.8, // 重试退避时间（秒）
+    "watchdog_guard_enabled": true, // 是否启用 agentic loop watchdog 观测/门禁
+    "watchdog_warn_only": true, // watchdog 是否仅告警不阻断
+    "watchdog_sample_per_round": true, // 每轮执行后是否采样资源并评估阈值
+    "watchdog_consecutive_error_limit": 5, // 连续错误工具调用阈值
+    "watchdog_tool_call_limit_per_minute": 10, // 每分钟工具调用阈值
+    "watchdog_task_cost_limit": 5.0, // 单任务成本阈值
+    "watchdog_daily_cost_limit": 50.0, // 日成本阈值
+    "watchdog_loop_window_seconds": 60 // 循环检测时间窗口（秒）
   },
   "tool_contract_rollout": {
     "mode": "new_stack_only", // 契约模式：已切换至 new_stack_only（legacy/dual 会自动归一）

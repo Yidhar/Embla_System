@@ -270,6 +270,14 @@ class AgenticLoopConfig(BaseModel):
     retry_failed_tool_calls: bool = Field(default=True, description="是否自动重试失败工具调用")
     max_tool_retries: int = Field(default=1, ge=0, le=5, description="失败工具调用最大重试次数")
     retry_backoff_seconds: float = Field(default=0.8, ge=0.0, le=10.0, description="重试退避秒数")
+    watchdog_guard_enabled: bool = Field(default=True, description="是否启用 agentic loop watchdog 观测/门禁")
+    watchdog_warn_only: bool = Field(default=True, description="watchdog 是否仅告警不阻断")
+    watchdog_sample_per_round: bool = Field(default=True, description="每轮执行后是否采样资源并评估阈值")
+    watchdog_consecutive_error_limit: int = Field(default=5, ge=1, le=200, description="连续错误工具调用阈值")
+    watchdog_tool_call_limit_per_minute: int = Field(default=10, ge=1, le=2000, description="每分钟工具调用阈值")
+    watchdog_task_cost_limit: float = Field(default=5.0, ge=0.0, le=100000.0, description="单任务成本阈值")
+    watchdog_daily_cost_limit: float = Field(default=50.0, ge=0.0, le=1000000.0, description="日成本阈值")
+    watchdog_loop_window_seconds: int = Field(default=60, ge=1, le=3600, description="循环检测时间窗口（秒）")
 
 
 class ToolContractRolloutConfig(BaseModel):
