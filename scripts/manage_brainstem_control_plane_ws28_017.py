@@ -226,12 +226,23 @@ def _list_pid_ppid_map() -> Dict[int, int]:
             pid_ppid[pid] = ppid
         return pid_ppid
 
-    try:
-        output = subprocess.check_output(  # noqa: S603
-            ["ps", "-eo", "pid=", "ppid="],
-            text=True,
-        )
-    except Exception:
+    output = ""
+    ps_candidates = (
+        ["ps", "-eo", "pid=", "ppid="],
+        ["ps", "-o", "pid=", "-o", "ppid="],
+        ["ps", "-A", "-o", "pid=", "-o", "ppid="],
+    )
+    for command in ps_candidates:
+        try:
+            output = subprocess.check_output(  # noqa: S603
+                command,
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            break
+        except Exception:
+            continue
+    if not output:
         return pid_ppid
 
     for raw in output.splitlines():
@@ -273,12 +284,45 @@ def _collect_descendant_pids(seed_pids: List[int]) -> List[int]:
 def _list_pid_cmdline_map() -> Dict[int, str]:
     """Best-effort snapshot of pid->cmdline."""
     pid_cmdline: Dict[int, str] = {}
-    try:
-        output = subprocess.check_output(  # noqa: S603
-            ["ps", "-eo", "pid=", "args="],
-            text=True,
-        )
-    except Exception:
+    proc_root = Path("/proc")
+    if proc_root.exists():
+        for entry in proc_root.iterdir():
+            if not entry.is_dir() or not entry.name.isdigit():
+                continue
+            try:
+                pid = int(entry.name)
+            except ValueError:
+                continue
+            cmdline_path = entry / "cmdline"
+            try:
+                raw = cmdline_path.read_bytes()
+            except OSError:
+                continue
+            if not raw:
+                continue
+            text = raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore").strip()
+            if text:
+                pid_cmdline[pid] = text
+        if pid_cmdline:
+            return pid_cmdline
+
+    output = ""
+    ps_candidates = (
+        ["ps", "-eo", "pid=", "args="],
+        ["ps", "-o", "pid=", "-o", "args="],
+        ["ps", "-A", "-o", "pid=", "-o", "args="],
+    )
+    for command in ps_candidates:
+        try:
+            output = subprocess.check_output(  # noqa: S603
+                command,
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            break
+        except Exception:
+            continue
+    if not output:
         return pid_cmdline
 
     for raw in output.splitlines():
