@@ -853,8 +853,9 @@ def _build_core_execution_contract_payload(
 def _build_core_execution_messages(
     *,
     session_id: str,
-    core_system_prompt: str,
     current_message: str,
+    core_system_prompt: Optional[str] = None,
+    system_prompt: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """构建 Core 执行代理的消息列表。
 
@@ -865,6 +866,10 @@ def _build_core_execution_messages(
 
     不注入 Outer 闲聊历史，实现上下文隔离。
     """
+    resolved_system_prompt = _trim_contract_text(core_system_prompt or system_prompt)
+    if not resolved_system_prompt:
+        raise ValueError("core_system_prompt/system_prompt 不能为空")
+
     recent_messages = message_manager.get_recent_messages(session_id, count=10)
     contract_payload = _build_core_execution_contract_payload(
         session_id=session_id,
@@ -873,7 +878,7 @@ def _build_core_execution_messages(
     )
     contract_text = "[ExecutionContractInput]\n" + json.dumps(contract_payload, ensure_ascii=False, sort_keys=True)
     return [
-        {"role": "system", "content": core_system_prompt},
+        {"role": "system", "content": resolved_system_prompt},
         {"role": "system", "content": contract_text},
         {"role": "user", "content": current_message},
     ]
@@ -1336,37 +1341,6 @@ async def inject_api_contract_headers(request: Request, call_next):
 # ============ 内部服务代理 ============
 
 
-async def _call_agentserver(
-    method: str,
-    path: str,
-    params: Optional[Dict[str, Any]] = None,
-    json_body: Optional[Dict[str, Any]] = None,
-    timeout_seconds: float = 15.0,
-) -> Any:
-    """调用 agentserver 内部接口"""
-    import httpx
-    from system.config import get_server_port
-
-    port = get_server_port("agent_server")
-    url = f"http://127.0.0.1:{port}{path}"
-    try:
-        async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
-            resp = await client.request(method, url, params=params, json=json_body)
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"agentserver 不可达: {e}")
-    if resp.status_code >= 400:
-        detail = resp.text
-        try:
-            detail = resp.json()
-        except Exception:
-            pass
-        raise HTTPException(status_code=resp.status_code, detail=detail)
-    try:
-        return resp.json()
-    except Exception:
-        return resp.text
-
-
 # [已禁用] MCP Server 已从 main.py 启动流程中移除，此代理函数不再有效，调用必定 503
 # async def _call_mcpserver(
 #     method: str,
@@ -1407,8 +1381,54 @@ MCPORTER_DIR = Path.home() / ".mcporter"
 MCPORTER_CONFIG_PATH = MCPORTER_DIR / "config.json"
 
 
+def _is_path_within_root(path: Path, root: Path) -> bool:
+    try:
+        root_s = os.path.normcase(os.path.abspath(str(root)))
+        path_s = os.path.normcase(os.path.abspath(str(path)))
+        return os.path.commonpath([root_s, path_s]) == root_s
+    except Exception:
+        return False
+
+
+def _resolve_child_path_within_root(root: Path, child: str, *, field_label: str) -> Path:
+    root_resolved = root.resolve(strict=False)
+    candidate = (root_resolved / child).resolve(strict=False)
+    if not _is_path_within_root(candidate, root_resolved):
+        raise HTTPException(status_code=400, detail=f"{field_label} 非法，路径越界")
+    return candidate
+
+
+def _normalize_skill_name(skill_name: str) -> str:
+    normalized = str(skill_name or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="技能名称不能为空")
+    if len(normalized) > 128:
+        raise HTTPException(status_code=400, detail="技能名称过长")
+    if not all(ch.isalnum() or ch in {"_", "-"} for ch in normalized):
+        raise HTTPException(status_code=400, detail="技能名称仅允许字母、数字、下划线、中划线")
+    return normalized
+
+
+def _normalize_uploaded_filename(filename: Optional[str]) -> str:
+    raw = str(filename or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="文件名不能为空")
+
+    # 浏览器可能携带 fakepath，统一只保留基名，避免目录逃逸。
+    normalized = raw.replace("\\", "/")
+    safe_name = Path(normalized).name.strip()
+    if not safe_name or safe_name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="文件名不合法")
+    if "\x00" in safe_name:
+        raise HTTPException(status_code=400, detail="文件名包含非法字符")
+    if len(safe_name) > 255:
+        raise HTTPException(status_code=400, detail="文件名过长")
+    return safe_name
+
+
 def _write_skill_file(skill_name: str, content: str) -> Path:
-    skill_dir = LOCAL_SKILLS_DIR / skill_name
+    safe_skill_name = _normalize_skill_name(skill_name)
+    skill_dir = _resolve_child_path_within_root(LOCAL_SKILLS_DIR, safe_skill_name, field_label="技能名称")
     skill_dir.mkdir(parents=True, exist_ok=True)
     skill_path = skill_dir / "SKILL.md"
     skill_path.write_text(content, encoding="utf-8")
@@ -4191,8 +4211,9 @@ class SkillImportRequest(BaseModel):
 @app.post("/skills/import")
 async def import_custom_skill(request: SkillImportRequest):
     """创建自定义技能 SKILL.md"""
+    safe_skill_name = _normalize_skill_name(request.name)
     skill_content = f"""---
-name: {request.name}
+name: {safe_skill_name}
 description: 用户自定义技能
 version: 1.0.0
 author: User
@@ -4203,7 +4224,7 @@ enabled: true
 
 {request.content}
 """
-    skill_path = _write_skill_file(request.name, skill_content)
+    skill_path = _write_skill_file(safe_skill_name, skill_content)
     return {"status": "success", "message": f"技能已创建: {skill_path}"}
 
 
@@ -4383,12 +4404,12 @@ async def upload_document(file: UploadFile = File(...), description: str = Form(
     """上传文档接口"""
     try:
         # 确保上传目录存在
-        upload_dir = Path("uploaded_documents")
-        upload_dir.mkdir(exist_ok=True)
+        upload_dir = (_ops_repo_root() / "uploaded_documents").resolve(strict=False)
+        upload_dir.mkdir(parents=True, exist_ok=True)
 
-        # 使用原始文件名
-        filename = file.filename
-        file_path = upload_dir / filename
+        # 统一保留安全文件名，拒绝空名与非法名。
+        filename = _normalize_uploaded_filename(file.filename)
+        file_path = _resolve_child_path_within_root(upload_dir, filename, field_label="文件名")
 
         # 保存文件
         with open(file_path, "wb") as buffer:
@@ -4404,6 +4425,8 @@ async def upload_document(file: UploadFile = File(...), description: str = Form(
             file_type=file_path.suffix,
             upload_time=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"文件上传失败: {e}")
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
@@ -4511,21 +4534,10 @@ async def load_log_context(days: int = 3, max_messages: int = None):
 # Web前端工具状态轮询存储
 _tool_status_store: Dict[str, Dict] = {"current": {"message": "", "visible": False}}
 
-# Web前端 AgentServer 回复存储（轮询获取）
-_clawdbot_replies: list = []
-
 @app.get("/tool_status")
 async def get_tool_status():
     """获取当前工具调用状态（供Web前端轮询）"""
     return _tool_status_store.get("current", {"message": "", "visible": False})
-
-
-@app.get("/clawdbot/replies")
-async def get_clawdbot_replies():
-    """获取并清空 AgentServer 待显示回复（供Web前端轮询）"""
-    replies = list(_clawdbot_replies)
-    _clawdbot_replies.clear()
-    return {"replies": replies}
 
 
 @app.post("/tool_notification")
@@ -4639,9 +4651,7 @@ async def tool_result_callback(payload: Dict[str, Any]):
         message_manager.save_conversation_log(original_user_message, response_text, dev_mode=False)
         logger.info("[工具回调] 对话日志已保存")
 
-        # 通过UI通知接口将AI回复发送给UI
-        logger.info("[工具回调] 开始发送AI回复到UI...")
-        await _notify_ui_refresh(session_id, response_text)
+        # 工具结果后回复已写入会话历史，前端应通过标准会话读取链路更新。
         _hide_tool_status_in_ui()
 
         logger.info("[工具回调] 工具结果处理完成，回复已发送到UI")
@@ -4674,10 +4684,9 @@ async def tool_result(payload: Dict[str, Any]):
 
         logger.info(f"工具执行结果: {result}")
 
-        # 如果是工具完成后的AI回复，存储到ClawdBot回复队列供前端轮询
+        # AgentServer 轮询队列已退役：仅记录结果，不再排队推送旧前端通道。
         if notification_type == "tool_completed_with_ai_response" and ai_response:
-            _clawdbot_replies.append(ai_response)
-            logger.info(f"[UI] AI回复已存储到队列，长度: {len(ai_response)}")
+            logger.info(f"[UI] 收到 tool_completed_with_ai_response（legacy queue retired），长度: {len(ai_response)}")
 
         return {"success": True, "message": "工具结果已接收", "result": result, "session_id": session_id}
 
@@ -4722,7 +4731,6 @@ async def ui_notification(payload: Dict[str, Any]):
     try:
         session_id = payload.get("session_id")
         action = payload.get("action", "")
-        ai_response = payload.get("ai_response", "")
         status_text = payload.get("status_text", "")
         auto_hide_ms_raw = payload.get("auto_hide_ms", 0)
 
@@ -4735,18 +4743,6 @@ async def ui_notification(payload: Dict[str, Any]):
             raise HTTPException(400, "缺少session_id")
 
         logger.info(f"UI通知: {action}, 会话: {session_id}")
-
-        # 处理显示工具AI回复的动作
-        if action == "show_tool_ai_response" and ai_response:
-            _clawdbot_replies.append(ai_response)
-            logger.info(f"[UI通知] 工具AI回复已存储到队列，长度: {len(ai_response)}")
-            return {"success": True, "message": "AI回复已存储"}
-
-        # 处理显示 AgentServer 回复的动作
-        if action == "show_clawdbot_response" and ai_response:
-            _clawdbot_replies.append(ai_response)
-            logger.info(f"[UI通知] AgentServer 回复已存储到队列，长度: {len(ai_response)}")
-            return {"success": True, "message": "AgentServer 回复已存储"}
 
         if action == "show_tool_status" and status_text:
             _emit_tool_status_to_ui(status_text, auto_hide_ms)
@@ -4802,33 +4798,6 @@ async def _trigger_chat_stream_no_intent(session_id: str, response_text: str):
 
     except Exception as e:
         logger.error(f"[UI发送] 触发聊天流式响应失败: {e}")
-
-
-async def _notify_ui_refresh(session_id: str, response_text: str):
-    """通知UI刷新会话历史"""
-    try:
-        import httpx
-
-        # 通过UI通知接口直接显示AI回复
-        ui_notification_payload = {
-            "session_id": session_id,
-            "action": "show_tool_ai_response",
-            "ai_response": response_text,
-        }
-
-        from system.config import get_server_port
-
-        api_url = f"http://localhost:{get_server_port('api_server')}/ui_notification"
-
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.post(api_url, json=ui_notification_payload)
-            if response.status_code == 200:
-                logger.info(f"[UI通知] AI回复显示通知发送成功: {session_id}")
-            else:
-                logger.error(f"[UI通知] AI回复显示通知失败: {response.status_code}")
-
-    except Exception as e:
-        logger.error(f"[UI通知] 通知UI刷新失败: {e}")
 
 
 def _emit_tool_status_to_ui(status_text: str, auto_hide_ms: int = 0) -> None:

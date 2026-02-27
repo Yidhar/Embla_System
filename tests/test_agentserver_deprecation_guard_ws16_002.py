@@ -9,8 +9,8 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parents[1]
 DIRECT_IMPORT_PATTERN = re.compile(r"^\s*(from\s+agentserver(?:\.|\s)|import\s+agentserver(?:\.|\s|$))")
 
-# Transitional allowlist: legacy bootstrap keeps dynamic import in main.py.
-ALLOWED_DIRECT_IMPORT_FILES = {"main.py"}
+# AgentServer 已完成退役，不再允许任何直接导入。
+ALLOWED_DIRECT_IMPORT_FILES: set[str] = set()
 
 
 def _iter_python_files() -> Iterable[Path]:

@@ -35,7 +35,6 @@ class SystemChecker:
         all_ports = get_all_server_ports()
         self.required_ports = [
             all_ports["api_server"],
-            all_ports["agent_server"], 
             all_ports["mcp_server"],
         ]
         
@@ -269,7 +268,6 @@ class SystemChecker:
         required_dirs = [
             ("Embla_core", "Next.js运维面板"),
             ("apiserver", "API服务器"),
-            ("agentserver", "Agent服务器"),
             ("mcpserver", "MCP服务器"),
             ("summer_memory", "记忆系统"),
             ("system", "系统核心")

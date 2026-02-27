@@ -181,13 +181,13 @@ The current repository no longer ships built-in TTS/ASR services.
 
 ---
 
-### Agent Server & Autonomous (The Rise of the SDLC Agent)
+### Autonomous (Primary Execution Path)
 
-**Background Context**:
-The Agent Server (`BackgroundAnalyzer`) now focuses on background intent analysis and task scheduling. Execution is unified through structured `tool_calls` with native/MCP dispatch.
+**Current state**:
+The legacy `agentserver/` pipeline is retired. Runtime execution and governance are now unified on `apiserver` + `autonomous` + `mcpserver`.
 
-**Brand-New Autonomous Module** (Located in `autonomous/`):
-This supersedes legacy routing with a robust, highly-automated SDLC (Software Development Life Cycle) architecture tailored for complex software engineering:
+**Autonomous Module** (Located in `autonomous/`):
+The system uses a robust, highly-automated SDLC (Software Development Life Cycle) architecture tailored for complex software engineering:
 
 - **Single Active Lease**: Utilizes a highly consistent DB lock (`workflow.db`) and Fencing epochs, guaranteeing exactly one Active Orchestrator modifies the codebase at a time.
 - **State Machine Engine**: Robust idempotency mechanisms drive tasks through `GoalAccepted` -> `PlanDrafted` -> `Implementing` (SubAgent + NativeExecutionBridge) -> `Verifying`.
@@ -205,35 +205,28 @@ Source: [`autonomous/`](autonomous/)
 ```
 ┌──────────────────────────────────────────────────────┐
 │                Embla_core (Next.js Frontend)        │
-└────────────┬────────────┬────────────────────────────┘
-             │            │
-     ┌───────▼──────┐ ┌──▼──────────┐
-     │  API Server  │ │ AgentServer │
-     │   :8000      │ │   :8001     │
-     │ - Chat / SSE │ │ - Task Mgmt │
-     │ - Native Ops │ │ - Memory    │
-     │ - Auth Proxy │ └──┬──────────┘
-     │ - Config API │    │
-     └──────┬───────┘ ┌──▼──────────┐
-            │         │ Autonomous  │
-     ┌──────▼──────┐  │ Subsystem   │
-     │ MCP Server  │  │   (SDLC)    │
-     │   :8003     │  └─────────────┘
-     │ - Registry  │
-     │ - Discovery │
-     │ - Dispatch  │
-     └──────┬──────┘
-            │
-    ┌───────▼──────────────────────┐
-    │   MCP Agents (Pluggable)     │
-    └──────────────────────────────┘
-            │
-     ┌──────▼──────┐
-     │   Neo4j     │
-     │   :7687     │
-     │  Knowledge  │
-     │   Graph     │
-     └─────────────┘
+└────────────┬─────────────────────────────────────────┘
+             │
+     ┌───────▼──────────┐      ┌─────────────────────┐
+     │    API Server    │─────►│ Autonomous Subsystem│
+     │      :8000       │      │       (SDLC)        │
+     │ - Chat / SSE     │      └─────────────────────┘
+     │ - Native Ops     │
+     │ - Auth Proxy     │      ┌─────────────────────┐
+     │ - Config API     │─────►│     MCP Server      │
+     └──────────────────┘      │        :8003        │
+                                │ - Registry/Dispatch │
+                                └─────────┬───────────┘
+                                          │
+                                ┌─────────▼───────────┐
+                                │ MCP Agents          │
+                                │ (Pluggable)         │
+                                └─────────┬───────────┘
+                                          │
+                                ┌─────────▼───────────┐
+                                │ Neo4j :7687         │
+                                │ Knowledge Graph     │
+                                └─────────────────────┘
 ```
 
 ### Directory Structure
@@ -245,14 +238,9 @@ NagaAgent/
 │   ├── agentic_tool_loop.py  #   Multi-round native tool call loop
 │   ├── native_tools.py   #   Local-First interception tools
 │   └── llm_service.py    #   LiteLLM Unified Caller & tool_calls stream
-├── agentserver/          # Agent Server — Legacy Compatibility layer
-│   ├── agent_server.py   #   FastAPI Main App
-│   └── task_scheduler.py #   Task orchestration + Compression memory
 ├── autonomous/           # All-new Autonomous SDLC Agent
 │   ├── system_agent.py   #   Single Active Orchestrator
 │   ├── planner.py        #   Strategy decomposition
-│   ├── dispatcher.py     #   CLI Exec Wrapper
-│   ├── evaluator.py      #   Scoring Verification System
 │   └── release/          #   Fallback and Canary Releases
 ├── mcpserver/            # MCP Server — Tool reg & dispatchration & dispatch
 │   ├── mcp_server.py     #   FastAPI main app
@@ -322,7 +310,7 @@ Works with any OpenAI-compatible API (DeepSeek, Qwen, OpenAI, Ollama, etc.).
 ### Launch
 
 ```bash
-python main.py             # Full launch (API + Agent + MCP + GUI)
+python main.py             # Full launch (API + MCP + autonomous backend + GUI)
 uv run main.py             # Using uv
 python main.py --headless  # Headless mode (for web/remote frontend)
 ```
@@ -331,7 +319,7 @@ All services are orchestrated by `main.py`. For development, each can be started
 
 ```bash
 uvicorn apiserver.api_server:app --host 127.0.0.1 --port 8000 --reload
-uvicorn agentserver.agent_server:app --host 0.0.0.0 --port 8001
+uvicorn mcpserver.mcp_server:app --host 127.0.0.1 --port 8003 --reload
 ```
 
 ### Embla_core Frontend Development (Active)

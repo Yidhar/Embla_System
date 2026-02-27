@@ -71,7 +71,6 @@ def _sync_server_ports_from_config_data(config_data: Dict[str, Any]) -> None:
             config_data.get("server_ports", {}).get("api_server"),
         ),
         "agent_server": (
-            config_data.get("agentserver", {}).get("port"),
             config_data.get("agent_server", {}).get("port"),
             config_data.get("server_ports", {}).get("agent_server"),
         ),

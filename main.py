@@ -114,14 +114,6 @@ def _emit_progress(percent: int, phase: str):
     except Exception:
         pass
 
-    try:
-        from system.config import get_server_port
-        agent_port = int(get_server_port('agent_server'))
-        if 1 <= agent_port <= 65535:
-            payload['agentPort'] = agent_port
-    except Exception:
-        pass
-
     print(f"##PROGRESS##{_json.dumps(payload)}", flush=True)
 
 
@@ -133,7 +125,6 @@ class ServiceManager:
         self.loop = asyncio.new_event_loop()
         self.bg_thread = None
         self.api_thread = None
-        self.agent_thread = None
         self.system_agent = None
         self._autonomous_task = None
         self._services_ready = False  # 服务就绪状态
@@ -337,9 +328,6 @@ class ServiceManager:
                 print(f"⚠️  MCP服务器: 端口 {get_server_port('mcp_server')} 已被占用，跳过启动")
                 service_status['MCP'] = "端口占用"
 
-            # Agent Server 服务不再随主进程自动启动
-            service_status['AgentServer'] = "已禁用自动启动"
-            
             # 显示服务启动计划
             print("\n📋 服务启动计划:")
             for service, status in service_status.items():
@@ -639,28 +627,6 @@ class ServiceManager:
             print(f"   ❌ MCP服务器启动失败: {e}", flush=True)
             traceback.print_exc()
 
-    def _start_agent_server(self):
-        """内部Agent服务器启动方法"""
-        try:
-            import uvicorn
-            from agentserver.agent_server import app
-            from system.config import get_server_port
-
-            uvicorn.run(
-                app,
-                host="127.0.0.1",
-                port=get_server_port("agent_server"),
-                log_level="error",
-                access_log=False,
-                reload=False,
-                ws_ping_interval=None,  # 禁用WebSocket ping
-                ws_ping_timeout=None    # 禁用WebSocket ping超时
-            )
-        except Exception as e:
-            import traceback
-            print(f"   ❌ Agent服务器启动失败: {e}", flush=True)
-            traceback.print_exc()
-    
     def _init_memory_system(self):
         """初始化记忆系统"""
         try:

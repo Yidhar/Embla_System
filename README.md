@@ -180,13 +180,13 @@ mcpserver/
 
 ---
 
-### Agent Server 与 Autonomous (自治系统的崛起)
+### Autonomous（自治系统主链）
 
-**背景分析**：
-当前 Agent Server (`BackgroundAnalyzer`) 负责后台意图分析与任务调度。工具执行主链路已统一为结构化 `tool_calls` + `native`/MCP 调度。
+**现状**：
+`agentserver/` 旧管线已退役，任务执行与治理统一收敛到 `apiserver` + `autonomous` + `mcpserver` 主链。
 
-**全新 Autonomous 自治模块**（位于 `autonomous/` 目录）：
-取代它的是一套强一致、全自动化的自研 SDLC (Software Development Life Cycle) 架构，专门面向深度的全栈工程执行：
+**Autonomous 自治模块**（位于 `autonomous/` 目录）：
+系统采用强一致、全自动化的自研 SDLC (Software Development Life Cycle) 架构，面向深度全栈工程执行：
 
 - **Single Active Lease (选主协议)**：使用强一致 DB 锁(`workflow.db`)和 Fencing 时代纪元，确保全局有且仅有单个 Active Orchestrator 在操作仓库。
 - **阶段流转状态机**：拥有极强事务原子性(Idempotency-key 机制)，保证代码变更任务从 `GoalAccepted` -> `PlanDrafted` -> `Implementing`（SubAgent + NativeExecutionBridge） -> `Verifying` 的顺滑无双写推演。
@@ -204,34 +204,27 @@ mcpserver/
 ```
 ┌──────────────────────────────────────────────────────┐
 │                Embla_core (Next.js 前端)            │
-└────────────┬────────────┬────────────────────────────┘
-             │            │
-     ┌───────▼──────┐ ┌──▼──────────┐
-     │  API Server  │ │ AgentServer │
-     │   :8000      │ │   :8001     │
-     │ - 对话/SSE   │ │ - 任务编排  │
-     │ - Native调用 │ │ - 记忆压缩  │
-     │ - 认证代理   │ └──┬──────────┘
-     │ - 配置管理   │    │
-     └──────┬───────┘ ┌──▼──────────┐
-            │         │ Autonomous  │
-     ┌──────▼──────┐  │ Subsystem   │
-     │ MCP Server  │  │   (SDLC)    │
-     │   :8003     │  └─────────────┘
-     │ - 工具注册  │
-     │ - Agent发现 │
-     │ - 并行调度  │
-     └──────┬──────┘
-            │
-    ┌───────▼──────────────────────┐
-    │   MCP Agents (可插拔工具)     │
-    └──────────────────────────────┘
-            │
-     ┌──────▼──────┐
-     │   Neo4j     │
-     │   :7687     │
-     │  知识图谱   │
-     └─────────────┘
+└────────────┬─────────────────────────────────────────┘
+             │
+     ┌───────▼──────────┐      ┌─────────────────────┐
+     │   API Server     │─────►│ Autonomous Subsystem│
+     │      :8000       │      │       (SDLC)        │
+     │ - 对话/SSE       │      └─────────────────────┘
+     │ - Native调用     │
+     │ - 认证代理       │      ┌─────────────────────┐
+     │ - 配置管理       │─────►│     MCP Server      │
+     └──────────────────┘      │        :8003        │
+                                │ - 工具注册/调度     │
+                                └─────────┬───────────┘
+                                          │
+                                ┌─────────▼───────────┐
+                                │ MCP Agents (可插拔) │
+                                └─────────┬───────────┘
+                                          │
+                                ┌─────────▼───────────┐
+                                │   Neo4j :7687       │
+                                │     知识图谱         │
+                                └─────────────────────┘
 ```
 
 ### 目录结构
@@ -243,14 +236,9 @@ NagaAgent/
 │   ├── agentic_tool_loop.py  #   多轮工具(原生)调用循环
 │   ├── native_tools.py   #   Local-First 拦截下放
 │   └── llm_service.py    #   LiteLLM 统一 LLM 和 tool_calls
-├── agentserver/          # Agent Server — 旧管线兼容层
-│   ├── agent_server.py   #   FastAPI 主应用
-│   └── task_scheduler.py #   任务编排 + 压缩记忆
 ├── autonomous/           # 全新自治系统 (SDLC Agent)
 │   ├── system_agent.py   #   Single Active 编排守护态
 │   ├── planner.py        #   策略分解
-│   ├── dispatcher.py     #   CLI 命令执行包裹
-│   ├── evaluator.py      #   评测打分体系
 │   └── release/          #   降级与金丝雀放量
 ├── mcpserver/            # MCP Server — 工具注册与调度
 │   ├── mcp_server.py     #   FastAPI 主应用
@@ -320,7 +308,7 @@ pip install -r requirements.txt
 ### 启动
 
 ```bash
-python main.py             # 完整启动（API + Agent + MCP + GUI）
+python main.py             # 完整启动（API + MCP + 自治后台 + GUI）
 uv run main.py             # 使用 uv
 python main.py --headless  # 无 GUI 模式（配合 Web/远程前端）
 ```
@@ -329,7 +317,7 @@ python main.py --headless  # 无 GUI 模式（配合 Web/远程前端）
 
 ```bash
 uvicorn apiserver.api_server:app --host 127.0.0.1 --port 8000 --reload
-uvicorn agentserver.agent_server:app --host 0.0.0.0 --port 8001
+uvicorn mcpserver.mcp_server:app --host 127.0.0.1 --port 8003 --reload
 ```
 
 ### Embla_core 前端开发（主链）

@@ -33,12 +33,6 @@
     "auto_start": true, // 是否自动启动
     "docs_enabled": true // 是否启用API文档
   },
-  "agentserver": {
-    "enabled": true, // 是否启用代理服务器
-    "host": "127.0.0.1", // 代理服务器主机
-    "port": 8001, // 代理服务器端口
-    "auto_start": true // 是否自动启动
-  },
   "mcpserver": {
     "enabled": true, // 是否启用MCP服务器
     "host": "127.0.0.1", // MCP服务器主机
