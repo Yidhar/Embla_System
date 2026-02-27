@@ -48,7 +48,7 @@ def test_build_core_execution_messages_contract_only_shape(monkeypatch) -> None:
 
     messages = api_server._build_core_execution_messages(
         session_id="sess-core-only",
-        system_prompt="SYSTEM_PROMPT",
+        core_system_prompt="SYSTEM_PROMPT",
         current_message="请修复当前失败用例",
     )
 
@@ -62,3 +62,16 @@ def test_build_core_execution_messages_contract_only_shape(monkeypatch) -> None:
     payload = json.loads(contract_blob.split("\n", 1)[1])
     assert payload["goal"] == "请修复当前失败用例"
     assert payload["recent_user_history"] == ["昨天我们在讨论部署"]
+
+
+def test_build_core_execution_messages_accepts_legacy_system_prompt_alias(monkeypatch) -> None:
+    monkeypatch.setattr(api_server.message_manager, "get_recent_messages", lambda _session_id, count=10: [])
+
+    messages = api_server._build_core_execution_messages(
+        session_id="sess-core-legacy-alias",
+        system_prompt="LEGACY_SYSTEM_PROMPT",
+        current_message="继续推进",
+    )
+
+    assert len(messages) == 3
+    assert messages[0] == {"role": "system", "content": "LEGACY_SYSTEM_PROMPT"}

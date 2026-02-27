@@ -48,7 +48,7 @@ def run_ws28_core_contract_input_ws28_008(
     )
     messages = _build_core_execution_messages(
         session_id="ws28-008",
-        system_prompt="SYSTEM_PROMPT",
+        core_system_prompt="SYSTEM_PROMPT",
         current_message="请修复 API 错误并补齐回归",
     )
 

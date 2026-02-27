@@ -268,7 +268,7 @@ class NativeExecutor:
         fencing_epoch: int | None = None,
     ) -> CommandResult:
         """
-        Execute a shell command using cmd.exe and asyncio.create_subprocess_exec.
+        Execute a shell command using platform shell launcher and asyncio subprocess.
         """
         self._validate_command_string(command)
 
@@ -283,12 +283,17 @@ class NativeExecutor:
             merged_env = os.environ.copy()
             merged_env.update({str(k): str(v) for k, v in env.items()})
 
+        if os.name == "nt":
+            shell_argv = ["cmd.exe", "/d", "/s", "/c", command]
+        else:
+            bash_path = Path("/bin/bash")
+            if bash_path.exists():
+                shell_argv = [str(bash_path), "-lc", command]
+            else:
+                shell_argv = ["/bin/sh", "-c", command]
+
         process = await asyncio.create_subprocess_exec(
-            "cmd.exe",
-            "/d",
-            "/s",
-            "/c",
-            command,
+            *shell_argv,
             cwd=str(safe_cwd),
             env=merged_env,
             stdout=asyncio.subprocess.PIPE,
@@ -356,7 +361,7 @@ class NativeExecutor:
         """
         General async command runner.
 
-        - str input -> shell execution via cmd.exe /c
+        - str input -> shell execution via platform launcher
         - sequence input -> direct argv exec with guard checks
         """
         if isinstance(cmd, str):

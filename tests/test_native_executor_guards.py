@@ -75,6 +75,13 @@ def test_safe_command_still_allowed():
     assert ex.is_safe_command("echo hello") is True
 
 
+def test_execute_shell_echo_runs_cross_platform():
+    ex = NativeExecutor()
+    result = asyncio.run(ex.execute_shell("echo native-executor-smoke"))
+    assert result.returncode == 0
+    assert "native-executor-smoke" in result.stdout.lower()
+
+
 def test_oob_health_probe_plan_valid_with_marker_and_allowlist():
     plan = build_oob_health_probe_plan(
         oob_allowlist=["10.0.0.0/24", "bastion.example.com"],
