@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Compatibility wrapper for legacy desktop release gate entrypoint.
+"""Compatibility wrapper for Embla_core release gate entrypoint.
 
-Canonical implementation moved to:
-`scripts/gates/legacy/desktop_release_compat_ws20_006.py`.
+Canonical implementation lives in:
+`scripts/gates/embla_core/embla_core_release_compat_gate.py`.
 """
 
 from __future__ import annotations
 
-from scripts.gates.legacy.desktop_release_compat_ws20_006 import (
+from scripts.gates.embla_core.embla_core_release_compat_gate import (
     build_release_compat_report,
     main,
     write_report,

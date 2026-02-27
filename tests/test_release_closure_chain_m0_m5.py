@@ -33,8 +33,9 @@ def test_release_closure_chain_runs_all_steps_with_green_runner() -> None:
         )
         assert report["passed"] is True
         assert report["failed_steps"] == []
-        assert report["step_count_planned"] == 9
-        assert report["step_count_executed"] == 9
+        assert report["warning_steps"] == []
+        assert report["step_count_planned"] == 10
+        assert report["step_count_executed"] == 10
         assert "validate_immutable_dna_gate_ws23_003.py" in " ".join(seen_commands[0])
         assert "validate_doc_consistency_ws16_006.py" in " ".join(seen_commands[1])
         assert "test_native_executor_guards.py" in " ".join(seen_commands[2])
@@ -42,8 +43,9 @@ def test_release_closure_chain_runs_all_steps_with_green_runner() -> None:
         assert "test_api_contract_ws20_001.py" in " ".join(seen_commands[4])
         assert "test_event_store_ws18_001.py" in " ".join(seen_commands[5])
         assert "export_slo_snapshot.py" in " ".join(seen_commands[6])
-        assert "desktop_release_compat_ws20_006.py" in " ".join(seen_commands[7])
-        assert "canary_rollback_drill.py" in " ".join(seen_commands[8])
+        assert "embla_core_release_compat_gate.py" in " ".join(seen_commands[7])
+        assert "desktop_release_compat_ws20_006.py" in " ".join(seen_commands[8])
+        assert "canary_rollback_drill.py" in " ".join(seen_commands[9])
     finally:
         _cleanup_case_root(case_root)
 
@@ -66,5 +68,48 @@ def test_release_closure_chain_stops_on_first_failure_by_default() -> None:
         assert report["passed"] is False
         assert report["failed_steps"] == ["T2"]
         assert report["step_count_executed"] == 4
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_release_closure_chain_legacy_desktop_gate_is_non_blocking_by_default() -> None:
+    case_root = _make_case_root("test_release_closure_chain_m0_m5")
+    try:
+        def _runner(command, cwd, timeout):
+            text = " ".join(command)
+            if "desktop_release_compat_ws20_006.py" in text:
+                return 1, "", "legacy desktop gate failed"
+            return 0, "ok", ""
+
+        report = run_release_closure_chain_m0_m5(
+            repo_root=Path("."),
+            output_file=case_root / "report.json",
+            runner=_runner,
+        )
+        assert report["passed"] is True
+        assert report["failed_steps"] == []
+        assert report["warning_steps"] == ["T5C"]
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_release_closure_chain_legacy_desktop_gate_can_be_strict() -> None:
+    case_root = _make_case_root("test_release_closure_chain_m0_m5")
+    try:
+        def _runner(command, cwd, timeout):
+            text = " ".join(command)
+            if "desktop_release_compat_ws20_006.py" in text:
+                return 1, "", "legacy desktop gate failed"
+            return 0, "ok", ""
+
+        report = run_release_closure_chain_m0_m5(
+            repo_root=Path("."),
+            output_file=case_root / "report.json",
+            runner=_runner,
+            strict_legacy_desktop_gate=True,
+        )
+        assert report["passed"] is False
+        assert report["failed_steps"] == ["T5C"]
+        assert report["warning_steps"] == []
     finally:
         _cleanup_case_root(case_root)

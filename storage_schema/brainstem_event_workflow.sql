@@ -1,8 +1,4 @@
--- Compatibility schema path.
--- Canonical source moved to:
---   storage_schema/brainstem_event_workflow.sql
--- Keep this file for legacy tooling that still references memory/schema.sql.
--- Schema content below is intentionally kept in sync with the canonical file.
+-- Canonical core event and workflow schema for autonomous SDLC.
 
 CREATE TABLE IF NOT EXISTS event_log (
   tenant_id         TEXT NOT NULL,

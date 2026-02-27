@@ -85,6 +85,7 @@ $requiredFiles = @(
   "doc/07-autonomous-agent-sdlc-architecture.md",
   "autonomous/state_machine.md",
   "memory/schema.sql",
+  "storage_schema/brainstem_event_workflow.sql",
   "policy/gate_policy.yaml",
   "policy/slot_policy.yaml",
   "config/retrieval_budget.yaml",
@@ -97,9 +98,10 @@ foreach ($f in $requiredFiles) {
   Assert-FileExists $f
 }
 
-Assert-FileContains "memory/schema.sql" "tenant_id"
-Assert-FileContains "memory/schema.sql" "project_id"
-Assert-FileContains "memory/schema.sql" "event_seq"
+Assert-FileContains "storage_schema/brainstem_event_workflow.sql" "tenant_id"
+Assert-FileContains "storage_schema/brainstem_event_workflow.sql" "project_id"
+Assert-FileContains "storage_schema/brainstem_event_workflow.sql" "event_seq"
+Assert-FileContains "memory/schema.sql" "storage_schema/brainstem_event_workflow.sql"
 Assert-FileContains "autonomous/state_machine.md" "FailedExhausted"
 Assert-FileContains "autonomous/state_machine.md" "FailedHard"
 Assert-FileContains "autonomous/state_machine.md" "Killed"
