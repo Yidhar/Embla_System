@@ -4,6 +4,7 @@ import base64
 import json
 
 import apiserver.api_server as api_server
+from autonomous.router_arbiter_guard import RouterArbiterGuard
 
 
 def test_chat_route_core_path_selected_for_coding_intent() -> None:
@@ -154,6 +155,135 @@ def test_non_path_b_route_resets_clarify_budget(monkeypatch) -> None:
     assert updated["path"] == "path-a"
     assert updated["path_b_clarify_turns"] == 0
     assert session[api_server._CHAT_ROUTE_STATE_KEY]["path_b_clarify_turns"] == 0
+
+
+def test_chat_route_router_arbiter_escalates_ping_pong_and_freezes_to_core(monkeypatch) -> None:
+    session = {"messages": []}
+    monkeypatch.setattr(api_server.message_manager, "get_session", lambda _sid: session)
+    monkeypatch.setattr(api_server, "_CHAT_ROUTE_ARBITER_GUARD", RouterArbiterGuard(max_delegate_turns=2))
+
+    first = api_server._apply_chat_route_router_arbiter_guard(
+        {
+            "path": "path-a",
+            "outer_readonly_hit": True,
+            "core_escalation": False,
+            "router_decision": {"delegation_intent": "read_only_exploration"},
+        },
+        session_id="sess-arbiter-a",
+    )
+    assert first["path"] == "path-a"
+    assert first["router_arbiter_status"] == "ok"
+
+    second = api_server._apply_chat_route_router_arbiter_guard(
+        {
+            "path": "path-c",
+            "outer_readonly_hit": False,
+            "core_escalation": True,
+            "router_decision": {"delegation_intent": "core_execution"},
+        },
+        session_id="sess-arbiter-a",
+    )
+    assert second["path"] == "path-c"
+    assert second["router_arbiter_status"] == "warning"
+    assert second["router_arbiter_delegate_turns"] == 1
+    assert second["router_arbiter_escalated"] is False
+
+    third = api_server._apply_chat_route_router_arbiter_guard(
+        {
+            "path": "path-a",
+            "outer_readonly_hit": True,
+            "core_escalation": False,
+            "router_decision": {"delegation_intent": "read_only_exploration"},
+        },
+        session_id="sess-arbiter-a",
+    )
+    assert third["path"] == "path-c"
+    assert third["core_escalation"] is True
+    assert third["router_arbiter_status"] == "critical"
+    assert third["router_arbiter_applied"] is True
+    assert third["router_arbiter_action"] == "freeze_to_core"
+    assert "ROUTER_ARBITER_PING_PONG_FREEZE_CORE" in third["router_arbiter_reason_codes"]
+    assert third["router_arbiter_delegate_turns"] == 2
+    assert third["router_arbiter_escalated"] is True
+
+
+def test_route_prompt_event_payload_contains_router_arbiter_fields() -> None:
+    payload = api_server._build_chat_route_prompt_event_payload(
+        {
+            "path": "path-c",
+            "risk_level": "write_repo",
+            "outer_readonly_hit": False,
+            "core_escalation": True,
+            "router_arbiter_status": "critical",
+            "router_arbiter_applied": True,
+            "router_arbiter_action": "freeze_to_core",
+            "router_arbiter_reason": "router_arbiter_ping_pong_freeze_core",
+            "router_arbiter_reason_codes": ["ROUTER_ARBITER_PING_PONG_FREEZE_CORE"],
+            "router_arbiter_path_before": "path-a",
+            "router_arbiter_path_after": "path-c",
+            "router_arbiter_delegate_turns": 3,
+            "router_arbiter_max_delegate_turns": 3,
+            "router_arbiter_conflict_ticket": "chat_route_ping_pong::path-a|path-c",
+            "router_arbiter_freeze": True,
+            "router_arbiter_hitl": True,
+            "router_arbiter_escalated": True,
+            "router_decision": {
+                "delegation_intent": "core_execution",
+                "prompt_profile": "core_exec_general",
+                "injection_mode": "normal",
+            },
+        }
+    )
+
+    assert payload["router_arbiter_status"] == "critical"
+    assert payload["router_arbiter_applied"] is True
+    assert payload["router_arbiter_action"] == "freeze_to_core"
+    assert payload["router_arbiter_delegate_turns"] == 3
+    assert payload["router_arbiter_conflict_ticket"] == "chat_route_ping_pong::path-a|path-c"
+    assert payload["router_arbiter_escalated"] is True
+
+
+def test_emit_chat_route_arbiter_event_emits_critical_row() -> None:
+    class _CaptureStore:
+        def __init__(self) -> None:
+            self.rows = []
+
+        def emit(self, event_type, payload, source=""):
+            self.rows.append({"event_type": event_type, "payload": dict(payload), "source": source})
+
+    original_store = api_server._CHAT_ROUTE_EVENT_STORE
+    capture = _CaptureStore()
+    api_server._CHAT_ROUTE_EVENT_STORE = capture
+    try:
+        route_meta = {
+            "path": "path-c",
+            "risk_level": "write_repo",
+            "router_arbiter_status": "critical",
+            "router_arbiter_applied": True,
+            "router_arbiter_action": "freeze_to_core",
+            "router_arbiter_reason": "router_arbiter_ping_pong_freeze_core",
+            "router_arbiter_reason_codes": ["ROUTER_ARBITER_PING_PONG_FREEZE_CORE"],
+            "router_arbiter_path_before": "path-a",
+            "router_arbiter_path_after": "path-c",
+            "router_arbiter_delegate_turns": 3,
+            "router_arbiter_max_delegate_turns": 3,
+            "router_arbiter_conflict_ticket": "chat_route_ping_pong::path-a|path-c",
+            "router_arbiter_freeze": True,
+            "router_arbiter_hitl": True,
+            "router_arbiter_escalated": True,
+            "outer_session_id": "outer-a",
+            "core_session_id": "outer-a__core",
+            "execution_session_id": "outer-a__core",
+            "router_decision": {"trace_id": "trace-a", "task_id": "task-a"},
+        }
+        api_server._emit_chat_route_arbiter_event(route_meta, session_id="outer-a")
+        assert len(capture.rows) == 1
+        row = capture.rows[0]
+        assert row["event_type"] == "RouteArbiterGuardEscalatedCritical"
+        assert row["payload"]["router_arbiter_delegate_turns"] == 3
+        assert row["payload"]["router_arbiter_escalated"] is True
+    finally:
+        api_server._CHAT_ROUTE_EVENT_STORE = original_store
 
 
 def test_outer_core_session_bridge_creates_core_session_for_path_c() -> None:

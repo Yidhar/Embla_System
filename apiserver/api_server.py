@@ -26,6 +26,7 @@ from system.coding_intent import contains_direct_coding_signal, has_recent_codin
 from system.watchdog_daemon import WatchdogDaemon
 from autonomous.event_log.event_store import EventStore
 from autonomous.router_engine import RouterRequest, TaskRouterEngine
+from autonomous.router_arbiter_guard import RouterArbiterGuard
 from autonomous.llm_gateway import (
     GatewayRouteRequest,
     LLMGateway,
@@ -88,6 +89,7 @@ _CHAT_ROUTE_STATE_KEY = "_chat_route_state"
 _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT = 1
 _CHAT_ROUTE_GUARD_CACHE_TTL_MS = 5_000
 _CHAT_ROUTE_GUARD_CACHE: Dict[str, Any] = {"expires_at_ms": 0, "summary": {}}
+_CHAT_ROUTE_ARBITER_GUARD = RouterArbiterGuard(max_delegate_turns=3)
 _CHAT_ROUTE_HIGH_RISK_MARKERS = (
     "deploy",
     "rollback",
@@ -448,6 +450,17 @@ def _merge_route_quality_reason_codes(existing: Any, extra: List[str]) -> List[s
     return merged
 
 
+def _sanitize_router_arbiter_reason_codes(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    cleaned: List[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text and text not in cleaned:
+            cleaned.append(text)
+    return cleaned
+
+
 def _build_chat_route_quality_guard_summary() -> Dict[str, Any]:
     summary: Dict[str, Any] = {
         "status": "unknown",
@@ -623,6 +636,93 @@ def _apply_path_b_clarify_budget(route_meta: Dict[str, Any], *, session_id: str)
     return route_meta
 
 
+def _apply_chat_route_router_arbiter_guard(route_meta: Dict[str, Any], *, session_id: str) -> Dict[str, Any]:
+    state = _ensure_chat_route_state(session_id)
+    current_path = str(route_meta.get("path") or "path-c")
+    previous_path = str(state.get("last_router_path") or "").strip()
+
+    route_meta["router_arbiter_status"] = "ok"
+    route_meta["router_arbiter_applied"] = False
+    route_meta["router_arbiter_action"] = "none"
+    route_meta["router_arbiter_reason"] = ""
+    route_meta["router_arbiter_reason_codes"] = []
+    route_meta["router_arbiter_path_before"] = previous_path
+    route_meta["router_arbiter_path_after"] = current_path
+    route_meta["router_arbiter_delegate_turns"] = 0
+    route_meta["router_arbiter_max_delegate_turns"] = int(_CHAT_ROUTE_ARBITER_GUARD.max_delegate_turns)
+    route_meta["router_arbiter_conflict_ticket"] = ""
+    route_meta["router_arbiter_freeze"] = False
+    route_meta["router_arbiter_hitl"] = False
+    route_meta["router_arbiter_escalated"] = False
+
+    guard = _CHAT_ROUTE_ARBITER_GUARD
+    if guard is None:
+        state["last_router_path"] = str(route_meta.get("path") or current_path)
+        return route_meta
+
+    summary_before = guard.build_conflict_summary(session_id)
+    frozen_before = bool(summary_before.get("freeze"))
+    if frozen_before and current_path != "path-c":
+        route_meta = _force_route_to_core_execution(route_meta, reason="router_arbiter_frozen_to_core")
+        route_meta["router_arbiter_status"] = "critical"
+        route_meta["router_arbiter_applied"] = True
+        route_meta["router_arbiter_action"] = "freeze_to_core_latched"
+        route_meta["router_arbiter_reason"] = "router_arbiter_frozen_to_core"
+        route_meta["router_arbiter_reason_codes"] = ["ROUTER_ARBITER_FREEZE_LATCHED"]
+        route_meta["router_arbiter_path_after"] = str(route_meta.get("path") or "path-c")
+        route_meta["router_arbiter_delegate_turns"] = int(summary_before.get("delegate_turns") or 0)
+        route_meta["router_arbiter_max_delegate_turns"] = int(guard.max_delegate_turns)
+        route_meta["router_arbiter_conflict_ticket"] = str(summary_before.get("conflict_ticket") or "")
+        route_meta["router_arbiter_freeze"] = True
+        route_meta["router_arbiter_hitl"] = bool(summary_before.get("hitl"))
+        route_meta["router_arbiter_escalated"] = True
+        state["last_router_path"] = str(route_meta.get("path") or "path-c")
+        return route_meta
+
+    if previous_path and previous_path != current_path:
+        transition_pair = "|".join(sorted([previous_path, current_path]))
+        decision = guard.register_delegate_turn(
+            task_id=session_id,
+            from_agent=previous_path,
+            to_agent=current_path,
+            reason="chat_route_path_switch",
+            conflict_ticket=f"chat_route_ping_pong::{transition_pair}",
+            candidate_decisions=[previous_path, current_path],
+        )
+        decision_payload = decision.to_dict()
+        route_meta["router_arbiter"] = decision_payload
+        route_meta["router_arbiter_delegate_turns"] = int(decision.delegate_turns)
+        route_meta["router_arbiter_max_delegate_turns"] = int(decision.max_delegate_turns)
+        route_meta["router_arbiter_conflict_ticket"] = str(decision.conflict_ticket or "")
+        route_meta["router_arbiter_freeze"] = bool(decision.freeze)
+        route_meta["router_arbiter_hitl"] = bool(decision.hitl)
+        route_meta["router_arbiter_escalated"] = bool(decision.escalated)
+
+        if decision.escalated or decision.freeze:
+            route_meta = _force_route_to_core_execution(route_meta, reason="router_arbiter_ping_pong_freeze_core")
+            route_meta["router_arbiter_status"] = "critical"
+            route_meta["router_arbiter_applied"] = True
+            route_meta["router_arbiter_action"] = "freeze_to_core"
+            route_meta["router_arbiter_reason"] = "router_arbiter_ping_pong_freeze_core"
+            route_meta["router_arbiter_reason_codes"] = [
+                "ROUTER_ARBITER_PING_PONG_FREEZE_CORE",
+                "ROUTER_ARBITER_HITL_REQUIRED" if bool(decision.hitl) else "",
+            ]
+            route_meta["router_arbiter_path_after"] = str(route_meta.get("path") or "path-c")
+        else:
+            route_meta["router_arbiter_status"] = "warning"
+            route_meta["router_arbiter_action"] = "observe_ping_pong"
+            route_meta["router_arbiter_reason"] = "router_arbiter_path_switch_observed"
+            route_meta["router_arbiter_reason_codes"] = ["ROUTER_ARBITER_PATH_SWITCH_OBSERVED"]
+
+    route_meta["router_arbiter_reason_codes"] = _sanitize_router_arbiter_reason_codes(
+        route_meta.get("router_arbiter_reason_codes")
+    )
+    route_meta["router_arbiter_path_after"] = str(route_meta.get("path") or current_path)
+    state["last_router_path"] = str(route_meta.get("path") or current_path)
+    return route_meta
+
+
 def _apply_outer_core_session_bridge(route_meta: Dict[str, Any], *, outer_session_id: str) -> Dict[str, Any]:
     state = _ensure_chat_route_state(outer_session_id)
     path = str(route_meta.get("path") or "path-c")
@@ -670,6 +770,12 @@ def _build_chat_route_prompt_hints(route_meta: Dict[str, Any]) -> str:
             "route_quality_guard="
             f"{_ops_status_to_severity(str(route_meta.get('route_quality_guard_status') or 'unknown'))}:"
             f"{str(route_meta.get('route_quality_guard_action') or 'none')}"
+        )
+    router_arbiter_status = _ops_status_to_severity(str(route_meta.get("router_arbiter_status") or "unknown"))
+    if router_arbiter_status in {"warning", "critical"}:
+        lines.append(
+            "router_arbiter_guard="
+            f"{router_arbiter_status}:{str(route_meta.get('router_arbiter_action') or 'none')}"
         )
 
     if path == "path-a":
@@ -844,6 +950,23 @@ def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[s
         ),
         "route_quality_guard_trend_direction": str(route_meta.get("route_quality_guard_trend_direction") or "unknown"),
         "route_quality_guard_trend_sample_count": int(route_meta.get("route_quality_guard_trend_sample_count") or 0),
+        "router_arbiter_status": _ops_status_to_severity(str(route_meta.get("router_arbiter_status") or "unknown")),
+        "router_arbiter_applied": bool(route_meta.get("router_arbiter_applied")),
+        "router_arbiter_action": str(route_meta.get("router_arbiter_action") or ""),
+        "router_arbiter_reason": str(route_meta.get("router_arbiter_reason") or ""),
+        "router_arbiter_reason_codes": _sanitize_router_arbiter_reason_codes(
+            route_meta.get("router_arbiter_reason_codes")
+        ),
+        "router_arbiter_path_before": str(route_meta.get("router_arbiter_path_before") or ""),
+        "router_arbiter_path_after": str(route_meta.get("router_arbiter_path_after") or ""),
+        "router_arbiter_delegate_turns": int(route_meta.get("router_arbiter_delegate_turns") or 0),
+        "router_arbiter_max_delegate_turns": int(
+            route_meta.get("router_arbiter_max_delegate_turns") or _CHAT_ROUTE_ARBITER_GUARD.max_delegate_turns
+        ),
+        "router_arbiter_conflict_ticket": str(route_meta.get("router_arbiter_conflict_ticket") or ""),
+        "router_arbiter_freeze": bool(route_meta.get("router_arbiter_freeze")),
+        "router_arbiter_hitl": bool(route_meta.get("router_arbiter_hitl")),
+        "router_arbiter_escalated": bool(route_meta.get("router_arbiter_escalated")),
         "outer_session_id": str(route_meta.get("outer_session_id") or ""),
         "core_session_id": str(route_meta.get("core_session_id") or ""),
         "execution_session_id": str(route_meta.get("execution_session_id") or ""),
@@ -896,6 +1019,52 @@ def _emit_chat_route_guard_event(route_meta: Dict[str, Any], *, session_id: str)
             route_meta.get("route_quality_guard_reason_codes")
         ),
         "route_quality_guard_evaluated_at": str(route_meta.get("route_quality_guard_evaluated_at") or ""),
+        "outer_session_id": str(route_meta.get("outer_session_id") or ""),
+        "core_session_id": str(route_meta.get("core_session_id") or ""),
+        "execution_session_id": str(route_meta.get("execution_session_id") or ""),
+    }
+    store.emit(event_type, payload, source="apiserver.chat_stream")
+
+
+def _emit_chat_route_arbiter_event(route_meta: Dict[str, Any], *, session_id: str) -> None:
+    if not bool(route_meta.get("router_arbiter_applied")):
+        return
+
+    store = _get_chat_route_event_store()
+    if store is None:
+        return
+
+    arbiter_status = _ops_status_to_severity(str(route_meta.get("router_arbiter_status") or "unknown"))
+    if arbiter_status == "critical":
+        event_type = "RouteArbiterGuardEscalatedCritical"
+    elif arbiter_status == "warning":
+        event_type = "RouteArbiterGuardEscalatedWarning"
+    else:
+        return
+
+    decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
+    payload = {
+        "session_id": str(session_id or ""),
+        "trace_id": str(decision.get("trace_id") or ""),
+        "workflow_id": str(decision.get("task_id") or ""),
+        "path_before": str(route_meta.get("router_arbiter_path_before") or ""),
+        "path_after": str(route_meta.get("router_arbiter_path_after") or route_meta.get("path") or ""),
+        "final_path": str(route_meta.get("path") or ""),
+        "risk_level": str(route_meta.get("risk_level") or ""),
+        "router_arbiter_status": arbiter_status,
+        "router_arbiter_action": str(route_meta.get("router_arbiter_action") or ""),
+        "router_arbiter_reason": str(route_meta.get("router_arbiter_reason") or ""),
+        "router_arbiter_reason_codes": _sanitize_router_arbiter_reason_codes(
+            route_meta.get("router_arbiter_reason_codes")
+        ),
+        "router_arbiter_conflict_ticket": str(route_meta.get("router_arbiter_conflict_ticket") or ""),
+        "router_arbiter_delegate_turns": int(route_meta.get("router_arbiter_delegate_turns") or 0),
+        "router_arbiter_max_delegate_turns": int(
+            route_meta.get("router_arbiter_max_delegate_turns") or _CHAT_ROUTE_ARBITER_GUARD.max_delegate_turns
+        ),
+        "router_arbiter_freeze": bool(route_meta.get("router_arbiter_freeze")),
+        "router_arbiter_hitl": bool(route_meta.get("router_arbiter_hitl")),
+        "router_arbiter_escalated": bool(route_meta.get("router_arbiter_escalated")),
         "outer_session_id": str(route_meta.get("outer_session_id") or ""),
         "core_session_id": str(route_meta.get("core_session_id") or ""),
         "execution_session_id": str(route_meta.get("execution_session_id") or ""),
@@ -975,6 +1144,25 @@ def _collect_chat_route_bridge_events(*, session_ids: List[str], limit: int = 20
                 ),
                 "route_quality_guard_path_before": str(payload.get("route_quality_guard_path_before") or ""),
                 "route_quality_guard_path_after": str(payload.get("route_quality_guard_path_after") or ""),
+                "router_arbiter_status": _ops_status_to_severity(
+                    str(payload.get("router_arbiter_status") or "unknown")
+                ),
+                "router_arbiter_applied": bool(payload.get("router_arbiter_applied")),
+                "router_arbiter_action": str(payload.get("router_arbiter_action") or ""),
+                "router_arbiter_reason": str(payload.get("router_arbiter_reason") or ""),
+                "router_arbiter_reason_codes": _sanitize_router_arbiter_reason_codes(
+                    payload.get("router_arbiter_reason_codes")
+                ),
+                "router_arbiter_path_before": str(payload.get("router_arbiter_path_before") or ""),
+                "router_arbiter_path_after": str(payload.get("router_arbiter_path_after") or ""),
+                "router_arbiter_delegate_turns": int(payload.get("router_arbiter_delegate_turns") or 0),
+                "router_arbiter_max_delegate_turns": int(
+                    payload.get("router_arbiter_max_delegate_turns") or _CHAT_ROUTE_ARBITER_GUARD.max_delegate_turns
+                ),
+                "router_arbiter_conflict_ticket": str(payload.get("router_arbiter_conflict_ticket") or ""),
+                "router_arbiter_freeze": bool(payload.get("router_arbiter_freeze")),
+                "router_arbiter_hitl": bool(payload.get("router_arbiter_hitl")),
+                "router_arbiter_escalated": bool(payload.get("router_arbiter_escalated")),
                 "core_session_created": bool(payload.get("core_session_created")),
                 "source": str(row.get("source") or ""),
             }
@@ -1673,6 +1861,7 @@ async def chat_stream(request: ChatRequest):
             route_meta = _resolve_chat_stream_route(request.message, session_id=session_id)
             route_meta = _apply_chat_route_quality_guard(route_meta)
             route_meta = _apply_path_b_clarify_budget(route_meta, session_id=session_id)
+            route_meta = _apply_chat_route_router_arbiter_guard(route_meta, session_id=session_id)
             route_meta = _apply_outer_core_session_bridge(route_meta, outer_session_id=session_id)
             route_decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
             path = str(route_meta.get("path") or "path-c")
@@ -1707,6 +1896,7 @@ async def chat_stream(request: ChatRequest):
 
             _emit_chat_route_prompt_event(route_meta, session_id=session_id)
             _emit_chat_route_guard_event(route_meta, session_id=session_id)
+            _emit_chat_route_arbiter_event(route_meta, session_id=session_id)
             yield _format_sse_payload_chunk(
                 {
                     "type": "route_decision",
@@ -1733,6 +1923,25 @@ async def chat_stream(request: ChatRequest):
                     ),
                     "route_quality_guard_path_before": str(route_meta.get("route_quality_guard_path_before") or ""),
                     "route_quality_guard_path_after": str(route_meta.get("route_quality_guard_path_after") or ""),
+                    "router_arbiter_status": _ops_status_to_severity(
+                        str(route_meta.get("router_arbiter_status") or "unknown")
+                    ),
+                    "router_arbiter_applied": bool(route_meta.get("router_arbiter_applied")),
+                    "router_arbiter_action": str(route_meta.get("router_arbiter_action") or ""),
+                    "router_arbiter_reason": str(route_meta.get("router_arbiter_reason") or ""),
+                    "router_arbiter_reason_codes": _sanitize_router_arbiter_reason_codes(
+                        route_meta.get("router_arbiter_reason_codes")
+                    ),
+                    "router_arbiter_path_before": str(route_meta.get("router_arbiter_path_before") or ""),
+                    "router_arbiter_path_after": str(route_meta.get("router_arbiter_path_after") or ""),
+                    "router_arbiter_delegate_turns": int(route_meta.get("router_arbiter_delegate_turns") or 0),
+                    "router_arbiter_max_delegate_turns": int(
+                        route_meta.get("router_arbiter_max_delegate_turns") or _CHAT_ROUTE_ARBITER_GUARD.max_delegate_turns
+                    ),
+                    "router_arbiter_conflict_ticket": str(route_meta.get("router_arbiter_conflict_ticket") or ""),
+                    "router_arbiter_freeze": bool(route_meta.get("router_arbiter_freeze")),
+                    "router_arbiter_hitl": bool(route_meta.get("router_arbiter_hitl")),
+                    "router_arbiter_escalated": bool(route_meta.get("router_arbiter_escalated")),
                     "outer_session_id": str(route_meta.get("outer_session_id") or ""),
                     "core_session_id": str(route_meta.get("core_session_id") or ""),
                     "execution_session_id": execution_session_id,
@@ -1744,7 +1953,7 @@ async def chat_stream(request: ChatRequest):
                 }
             )
             logger.info(
-                "[API Server] chat route decided outer_session=%s execution_session=%s path=%s intent=%s profile=%s guard=%s action=%s",
+                "[API Server] chat route decided outer_session=%s execution_session=%s path=%s intent=%s profile=%s guard=%s action=%s arbiter=%s arbiter_action=%s",
                 session_id,
                 execution_session_id,
                 path,
@@ -1752,6 +1961,8 @@ async def chat_stream(request: ChatRequest):
                 route_decision.get("prompt_profile", ""),
                 route_meta.get("route_quality_guard_status", "unknown"),
                 route_meta.get("route_quality_guard_action", ""),
+                route_meta.get("router_arbiter_status", "unknown"),
+                route_meta.get("router_arbiter_action", ""),
             )
 
             # 构建系统提示词（按路径裁剪：Path-A/B 只读风格，Path-C Core 执行风格）
@@ -2389,9 +2600,11 @@ _OPS_INCIDENT_EVENT_SEVERITY: Dict[str, str] = {
     "SubAgentRuntimeAutoDegraded": "critical",
     "LeaseLost": "critical",
     "RouteQualityGuardEscalatedCritical": "critical",
+    "RouteArbiterGuardEscalatedCritical": "critical",
     "SubAgentRuntimeFailOpenBlocked": "warning",
     "SubAgentRuntimeFailOpen": "warning",
     "RouteQualityGuardEscalatedWarning": "warning",
+    "RouteArbiterGuardEscalatedWarning": "warning",
 }
 
 _OPS_BRAINSTEM_HEARTBEAT_RELATIVE_PATH = Path("scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json")
