@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
 import os
 import uuid
@@ -13,14 +12,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
 
-from autonomous.dispatcher import DispatchResult, Dispatcher
 from autonomous.event_log import AlertEventProducer, CronEventProducer, EventStore
-from autonomous.evaluator import Evaluator
 from autonomous.planner import Planner
 from autonomous.release import CanaryThresholds, ReleaseController
 from autonomous.sensor import Sensor
 from autonomous.state import WorkflowStore
-from autonomous.tools.codex_mcp_adapter import CodexMcpVerifier
 from autonomous.tools.execution_bridge import NativeExecutionBridge
 from autonomous.tools.subagent_runtime import (
     RuntimeSubTaskResult,
@@ -40,8 +36,8 @@ class LeaseLostError(RuntimeError):
 
 @dataclass
 class VerificationFallbackConfig:
-    enable_codex_mcp: bool = True
-    mcp_service_name: str = "codex-cli"
+    enable_codex_mcp: bool = False
+    mcp_service_name: str = "codex-mcp"
     mcp_tool_name: str = "ask-codex"
     sandbox_mode: str = "read-only"
     approval_policy: str = "on-failure"
@@ -128,8 +124,9 @@ class SystemAgentConfig:
         subagent_runtime = pick(source, "subagent_runtime", {})
 
         fallback_cfg = VerificationFallbackConfig(
-            enable_codex_mcp=pick(verification, "enable_codex_mcp", True),
-            mcp_service_name=pick(verification, "mcp_server_name", pick(verification, "mcp_service_name", "codex-cli")),
+            # Native bridge cutover: verification fallback over codex MCP is retired.
+            enable_codex_mcp=False,
+            mcp_service_name=pick(verification, "mcp_server_name", pick(verification, "mcp_service_name", "codex-mcp")),
             mcp_tool_name=pick(verification, "tool_name", "ask-codex"),
             sandbox_mode=pick(verification, "sandbox_mode", "read-only"),
             approval_policy=pick(verification, "approval_policy", "on-failure"),
@@ -181,14 +178,14 @@ class SystemAgentConfig:
             fail_closed_on_daemon_state_stale=bool(pick(watchdog, "fail_closed_on_daemon_state_stale", False)),
         )
         subagent_cfg = SubAgentRuntimeConfig(
-            enabled=bool(pick(subagent_runtime, "enabled", False)),
+            enabled=bool(pick(subagent_runtime, "enabled", True)),
             max_subtasks=max(1, int(pick(subagent_runtime, "max_subtasks", 16))),
             rollout_percent=max(0, min(100, int(pick(subagent_runtime, "rollout_percent", 100)))),
             fail_open=bool(pick(subagent_runtime, "fail_open", True)),
             fail_open_budget_ratio=max(0.0, min(1.0, float(pick(subagent_runtime, "fail_open_budget_ratio", 0.15)))),
             enforce_scaffold_txn_for_write=bool(pick(subagent_runtime, "enforce_scaffold_txn_for_write", True)),
             allow_legacy_fail_open_for_write=bool(pick(subagent_runtime, "allow_legacy_fail_open_for_write", False)),
-            disable_legacy_cli_fallback=bool(pick(subagent_runtime, "disable_legacy_cli_fallback", False)),
+            disable_legacy_cli_fallback=bool(pick(subagent_runtime, "disable_legacy_cli_fallback", True)),
             require_contract_negotiation=bool(pick(subagent_runtime, "require_contract_negotiation", True)),
             require_scaffold_patch=bool(pick(subagent_runtime, "require_scaffold_patch", True)),
             fail_fast_on_subtask_error=bool(pick(subagent_runtime, "fail_fast_on_subtask_error", True)),
@@ -215,7 +212,6 @@ class SystemAgentConfig:
 class TaskAttemptOutcome:
     approved: bool
     reasons: List[str] = field(default_factory=list)
-    dispatch_result: DispatchResult | None = None
     subagent_runtime_result: SubAgentRuntimeResult | None = None
     used_fail_open: bool = False
 
@@ -262,19 +258,6 @@ class SystemAgent:
 
         self.sensor = Sensor(str(self.repo_dir))
         self.planner = Planner()
-        self.dispatcher = Dispatcher(
-            repo_dir=str(self.repo_dir),
-            preferred_cli=self.config.preferred_cli,
-            fallback_order=list(self.config.fallback_order),
-            default_timeout_seconds=self.config.default_timeout_seconds,
-        )
-        self.evaluator = Evaluator(str(self.repo_dir), run_quality_checks=self.config.run_quality_checks)
-        self.fallback_verifier = CodexMcpVerifier(
-            service_name=self.config.verification_fallback.mcp_service_name,
-            tool_name=self.config.verification_fallback.mcp_tool_name,
-            sandbox_mode=self.config.verification_fallback.sandbox_mode,
-            approval_policy=self.config.verification_fallback.approval_policy,
-        )
 
         policy_path = Path(self.config.release.gate_policy_path)
         if not policy_path.is_absolute():
@@ -326,8 +309,8 @@ class SystemAgent:
             "fail_open_count": 0,
             "fail_open_ratio": 0.0,
             "budget_ratio": float(self.config.subagent_runtime.fail_open_budget_ratio),
-            "degraded_to_legacy": False,
-            "degrade_reason": "",
+            "budget_exhausted": False,
+            "budget_exhausted_reason": "",
         }
 
     @staticmethod
@@ -444,14 +427,12 @@ class SystemAgent:
             fencing_epoch=fencing_epoch,
         )
 
-        last_dispatch: DispatchResult | None = None
         last_reasons: list[str] = []
         max_attempt = self.config.max_retries + 1
 
         for attempt in range(1, max_attempt + 1):
             self._ensure_active_epoch(fencing_epoch)
             runtime_mode, rollout_context = self._resolve_runtime_mode(task=task)
-            using_subagent = runtime_mode == "subagent"
             self._emit(
                 "SubAgentRuntimeRolloutDecision",
                 {
@@ -464,12 +445,12 @@ class SystemAgent:
                     "decision_reason": rollout_context.get("reason", "unknown"),
                     "fail_open_budget_ratio": self._subagent_fail_open_budget.get("budget_ratio"),
                     "fail_open_ratio": self._subagent_fail_open_budget.get("fail_open_ratio"),
-                    "auto_degraded_to_legacy": bool(self._subagent_fail_open_budget.get("degraded_to_legacy")),
+                    "budget_exhausted": bool(self._subagent_fail_open_budget.get("budget_exhausted")),
                 },
                 workflow_id=workflow_id,
                 fencing_epoch=fencing_epoch,
             )
-            command_type = "subagent_execute" if using_subagent else "legacy_execute"
+            command_type = "subagent_execute"
             idempotency_key = f"{task.task_id}:{command_type}:{attempt}"
             command_id = self.workflow_store.create_command(
                 workflow_id=workflow_id,
@@ -485,14 +466,14 @@ class SystemAgent:
                 task=task,
                 workflow_id=workflow_id,
                 attempt=attempt,
-                runtime_mode="subagent" if using_subagent else "legacy",
+                runtime_mode=runtime_mode,
                 fencing_epoch=fencing_epoch,
             )
             write_path_block = self._evaluate_write_path_gate(
                 task=task,
                 workflow_id=workflow_id,
                 attempt=attempt,
-                runtime_mode="subagent" if using_subagent else "legacy",
+                runtime_mode=runtime_mode,
                 rollout_context=rollout_context,
                 fencing_epoch=fencing_epoch,
             )
@@ -500,30 +481,20 @@ class SystemAgent:
                 outcome = write_path_block
             elif watchdog_block is not None:
                 outcome = watchdog_block
-            elif using_subagent:
+            else:
                 outcome = await self._execute_subagent_attempt(
                     task=task,
                     workflow_id=workflow_id,
                     attempt=attempt,
                     fencing_epoch=fencing_epoch,
                 )
-            else:
-                outcome = await self._execute_legacy_attempt(
-                    task=task,
-                    workflow_id=workflow_id,
-                    attempt=attempt,
-                    fencing_epoch=fencing_epoch,
-                )
-
             self._ensure_active_epoch(fencing_epoch)
-            if outcome.dispatch_result is not None:
-                last_dispatch = outcome.dispatch_result
 
             if outcome.approved:
                 self.workflow_store.update_command(command_id, status="succeeded")
                 release_payload: Dict[str, Any] = {
                     "attempt": attempt,
-                    "runtime_mode": "subagent" if using_subagent else "legacy",
+                    "runtime_mode": runtime_mode,
                     "used_fail_open": outcome.used_fail_open,
                 }
                 if outcome.subagent_runtime_result is not None:
@@ -540,7 +511,7 @@ class SystemAgent:
                     "workflow_id": workflow_id,
                     "task_id": task.task_id,
                     "attempt": attempt,
-                    "runtime_mode": "subagent" if using_subagent else "legacy",
+                    "runtime_mode": runtime_mode,
                     "used_fail_open": outcome.used_fail_open,
                 }
                 if outcome.subagent_runtime_result is not None:
@@ -562,7 +533,7 @@ class SystemAgent:
                 "task_id": task.task_id,
                 "attempt": attempt,
                 "reasons": last_reasons,
-                "runtime_mode": "subagent" if using_subagent else "legacy",
+                "runtime_mode": runtime_mode,
                 "used_fail_open": outcome.used_fail_open,
             }
             if outcome.subagent_runtime_result is not None:
@@ -590,15 +561,6 @@ class SystemAgent:
                 "FailedExhausted",
                 reason="checks_failed_retry_exhausted",
                 payload={"attempt": attempt, "max_attempt": max_attempt},
-                )
-
-        if last_dispatch is not None:
-            await self._attempt_verification_fallback(
-                task=task,
-                workflow_id=workflow_id,
-                dispatch_result=last_dispatch,
-                reasons=last_reasons,
-                fencing_epoch=fencing_epoch,
             )
 
     def _evaluate_watchdog_gate(
@@ -723,43 +685,6 @@ class SystemAgent:
         )
         return TaskAttemptOutcome(approved=False, reasons=reasons)
 
-    async def _execute_legacy_attempt(
-        self,
-        *,
-        task: OptimizationTask,
-        workflow_id: str,
-        attempt: int,
-        fencing_epoch: int,
-    ) -> TaskAttemptOutcome:
-        dispatch_result = await self.dispatcher.dispatch(task)
-        self._ensure_active_epoch(fencing_epoch)
-
-        self._emit_task_execution_completed(
-            workflow_id=workflow_id,
-            task_id=task.task_id,
-            attempt=attempt,
-            runtime_mode="legacy",
-            success=bool(dispatch_result.result.success),
-            duration_seconds=float(dispatch_result.result.duration_seconds),
-            fencing_epoch=fencing_epoch,
-            executor="legacy_cli",
-            executor_id=str(dispatch_result.selected_cli or ""),
-            exit_code=dispatch_result.result.exit_code,
-        )
-
-        self.workflow_store.transition(
-            workflow_id,
-            "Verifying",
-            reason="verification_started",
-            payload={"attempt": attempt},
-        )
-        report = self.evaluator.evaluate(task, dispatch_result.result)
-        return TaskAttemptOutcome(
-            approved=report.approved,
-            reasons=list(report.reasons),
-            dispatch_result=dispatch_result,
-        )
-
     async def _execute_subagent_attempt(
         self,
         *,
@@ -819,117 +744,60 @@ class SystemAgent:
             )
 
         if runtime_result.fail_open_recommended and self.config.subagent_runtime.fail_open:
-            if bool(self.config.subagent_runtime.disable_legacy_cli_fallback):
-                reasons = list(runtime_result.reasons)
-                blocked_reason = "execution_bridge:legacy_cli_layer_disabled"
-                if blocked_reason not in reasons:
-                    reasons.append(blocked_reason)
-                self._emit(
-                    "SubAgentRuntimeFailOpenBlocked",
-                    {
-                        "workflow_id": workflow_id,
-                        "task_id": task.task_id,
-                        "attempt": attempt,
-                        "runtime_id": runtime_result.runtime_id,
-                        "gate_failure": runtime_result.gate_failure,
-                        "reasons": reasons,
-                    },
-                    workflow_id=workflow_id,
-                    fencing_epoch=fencing_epoch,
-                )
-                self._emit(
-                    "ReleaseGateRejected",
-                    {
-                        "workflow_id": workflow_id,
-                        "task_id": task.task_id,
-                        "gate": "execution_bridge",
-                        "attempt": attempt,
-                        "runtime_mode": "subagent",
-                        "decision_reason": "legacy_cli_layer_disabled",
-                        "reasons": reasons,
-                    },
-                    workflow_id=workflow_id,
-                    fencing_epoch=fencing_epoch,
-                )
-                return TaskAttemptOutcome(
-                    approved=False,
-                    reasons=reasons,
-                    subagent_runtime_result=runtime_result,
-                )
-            if self._task_requires_scaffold_txn(task=task) and not bool(
-                self.config.subagent_runtime.allow_legacy_fail_open_for_write
-            ):
-                reasons = list(runtime_result.reasons)
-                blocked_reason = "write_path:legacy_fail_open_blocked"
-                if blocked_reason not in reasons:
-                    reasons.append(blocked_reason)
-                self._emit(
-                    "SubAgentRuntimeFailOpenBlocked",
-                    {
-                        "workflow_id": workflow_id,
-                        "task_id": task.task_id,
-                        "attempt": attempt,
-                        "runtime_id": runtime_result.runtime_id,
-                        "gate_failure": runtime_result.gate_failure,
-                        "reasons": reasons,
-                    },
-                    workflow_id=workflow_id,
-                    fencing_epoch=fencing_epoch,
-                )
-                self._emit(
-                    "ReleaseGateRejected",
-                    {
-                        "workflow_id": workflow_id,
-                        "task_id": task.task_id,
-                        "gate": "write_path",
-                        "attempt": attempt,
-                        "runtime_mode": "subagent",
-                        "decision_reason": "legacy_fail_open_blocked",
-                        "reasons": reasons,
-                    },
-                    workflow_id=workflow_id,
-                    fencing_epoch=fencing_epoch,
-                )
-                return TaskAttemptOutcome(
-                    approved=False,
-                    reasons=reasons,
-                    subagent_runtime_result=runtime_result,
-                )
-            self._record_fail_open_and_maybe_degrade(
+            reasons = list(runtime_result.reasons)
+            if self._task_requires_scaffold_txn(task=task):
+                blocked_reason = "write_path:subagent_fail_open_blocked"
+                gate = "write_path"
+                decision_reason = "subagent_fail_open_blocked"
+            else:
+                blocked_reason = "execution_bridge:legacy_runtime_retired"
+                gate = "execution_bridge"
+                decision_reason = "legacy_runtime_retired"
+            if blocked_reason not in reasons:
+                reasons.append(blocked_reason)
+
+            self._record_fail_open_budget_state(
                 workflow_id=workflow_id,
                 task_id=task.task_id,
                 attempt=attempt,
                 runtime_id=runtime_result.runtime_id,
                 gate_failure=runtime_result.gate_failure,
-                reasons=list(runtime_result.reasons),
+                reasons=list(reasons),
                 fencing_epoch=fencing_epoch,
             )
             self._emit(
-                "SubAgentRuntimeFailOpen",
+                "SubAgentRuntimeFailOpenBlocked",
                 {
                     "workflow_id": workflow_id,
                     "task_id": task.task_id,
                     "attempt": attempt,
                     "runtime_id": runtime_result.runtime_id,
                     "gate_failure": runtime_result.gate_failure,
-                    "reasons": runtime_result.reasons,
+                    "reasons": reasons,
                 },
                 workflow_id=workflow_id,
                 fencing_epoch=fencing_epoch,
             )
-            legacy_outcome = await self._execute_legacy_attempt(
-                task=task,
+            self._emit(
+                "ReleaseGateRejected",
+                {
+                    "workflow_id": workflow_id,
+                    "task_id": task.task_id,
+                    "gate": gate,
+                    "attempt": attempt,
+                    "runtime_mode": "subagent",
+                    "decision_reason": decision_reason,
+                    "reasons": reasons,
+                },
                 workflow_id=workflow_id,
-                attempt=attempt,
                 fencing_epoch=fencing_epoch,
             )
-            legacy_outcome.used_fail_open = True
-            legacy_outcome.subagent_runtime_result = runtime_result
-            if not legacy_outcome.approved:
-                merged_reasons = list(runtime_result.reasons)
-                merged_reasons.extend([item for item in legacy_outcome.reasons if item not in merged_reasons])
-                legacy_outcome.reasons = merged_reasons
-            return legacy_outcome
+            return TaskAttemptOutcome(
+                approved=False,
+                reasons=reasons,
+                subagent_runtime_result=runtime_result,
+                used_fail_open=True,
+            )
 
         reasons = list(runtime_result.reasons) or ["subagent_runtime_failed"]
         return TaskAttemptOutcome(
@@ -1080,7 +948,7 @@ class SystemAgent:
         self._subagent_fail_open_budget["subagent_attempt_count"] = attempts
         self._subagent_fail_open_budget["fail_open_ratio"] = float(ratio)
 
-    def _record_fail_open_and_maybe_degrade(
+    def _record_fail_open_budget_state(
         self,
         *,
         workflow_id: str,
@@ -1116,15 +984,15 @@ class SystemAgent:
             fencing_epoch=fencing_epoch,
         )
 
-        if bool(self._subagent_fail_open_budget.get("degraded_to_legacy")):
+        if bool(self._subagent_fail_open_budget.get("budget_exhausted")):
             return
         if ratio <= budget:
             return
 
-        self._subagent_fail_open_budget["degraded_to_legacy"] = True
-        self._subagent_fail_open_budget["degrade_reason"] = "fail_open_budget_exhausted"
+        self._subagent_fail_open_budget["budget_exhausted"] = True
+        self._subagent_fail_open_budget["budget_exhausted_reason"] = "fail_open_budget_exhausted"
         self._emit(
-            "SubAgentRuntimeAutoDegraded",
+            "SubAgentFailOpenBudgetExceeded",
             {
                 "workflow_id": workflow_id,
                 "task_id": task_id,
@@ -1171,7 +1039,7 @@ class SystemAgent:
                     "subagent_attempt_count": attempts,
                     "fail_open_ratio": ratio,
                     "budget_ratio": budget,
-                    "action": "degrade_to_legacy",
+                    "action": "fail_open_blocked_no_legacy_fallback",
                 },
             )
         except Exception:
@@ -1181,62 +1049,39 @@ class SystemAgent:
         metadata = task.metadata if isinstance(task.metadata, dict) else {}
         enforce_write_path = self._task_requires_scaffold_txn(task=task)
         rollout_percent = max(0, min(100, int(self.config.subagent_runtime.rollout_percent)))
-        if bool(self.config.subagent_runtime.disable_legacy_cli_fallback):
-            return "subagent", {
-                "reason": "legacy_cli_layer_disabled",
-                "rollout_percent": rollout_percent,
-                "write_path_enforced": enforce_write_path,
-                "subagent_enabled": bool(self.config.subagent_runtime.enabled),
-            }
-        if bool(self._subagent_fail_open_budget.get("degraded_to_legacy")) and not enforce_write_path:
-            return "legacy", {
-                "reason": "fail_open_budget_exhausted_auto_degrade",
-                "rollout_percent": 0,
-                "fail_open_ratio": float(self._subagent_fail_open_budget.get("fail_open_ratio", 0.0)),
-                "budget_ratio": float(self._subagent_fail_open_budget.get("budget_ratio", 0.0)),
-            }
         forced_mode = str(
             metadata.get("runtime_mode")
             or metadata.get("force_runtime_mode")
             or metadata.get("execution_mode")
             or ""
         ).strip().lower()
+        reason = "subagent_only_cutover"
+        if forced_mode == "legacy":
+            reason = "legacy_mode_ignored_subagent_only"
+        elif forced_mode == "subagent":
+            reason = "task_forced_subagent"
+        elif not bool(self.config.subagent_runtime.enabled):
+            reason = "subagent_disabled_but_cutover_forced"
+        elif enforce_write_path:
+            reason = "write_path_enforced"
+        elif rollout_percent <= 0:
+            reason = "rollout_zero_but_subagent_only"
+        elif rollout_percent >= 100:
+            reason = "rollout_full"
 
-        if forced_mode in {"subagent", "legacy"}:
-            if forced_mode == "legacy" and enforce_write_path and bool(self.config.subagent_runtime.enabled):
-                return "subagent", {
-                    "reason": "write_path_enforced",
-                    "requested_mode": "legacy",
-                    "rollout_percent": self.config.subagent_runtime.rollout_percent,
-                    "write_path_enforced": True,
-                }
-            return forced_mode, {
-                "reason": "task_forced_mode",
-                "rollout_percent": self.config.subagent_runtime.rollout_percent,
-                "write_path_enforced": enforce_write_path,
-            }
-
-        if not bool(self.config.subagent_runtime.enabled):
-            reason = "write_path_subagent_disabled" if enforce_write_path else "subagent_disabled"
-            return "legacy", {"reason": reason, "rollout_percent": 0, "write_path_enforced": enforce_write_path}
-
-        if enforce_write_path:
-            return "subagent", {
-                "reason": "write_path_enforced",
-                "rollout_percent": rollout_percent,
-                "write_path_enforced": True,
-            }
-
-        if rollout_percent <= 0:
-            return "legacy", {"reason": "rollout_zero", "rollout_percent": rollout_percent}
-        if rollout_percent >= 100:
-            return "subagent", {"reason": "rollout_full", "rollout_percent": rollout_percent}
-
-        token = f"{task.task_id}:{str(task.instruction or '').strip()}"
-        bucket = int(hashlib.sha256(token.encode("utf-8")).hexdigest()[:8], 16) % 100
-        if bucket < rollout_percent:
-            return "subagent", {"reason": "rollout_bucket_hit", "rollout_percent": rollout_percent, "rollout_bucket": bucket}
-        return "legacy", {"reason": "rollout_bucket_miss", "rollout_percent": rollout_percent, "rollout_bucket": bucket}
+        context: Dict[str, Any] = {
+            "reason": reason,
+            "rollout_percent": rollout_percent,
+            "write_path_enforced": enforce_write_path,
+            "subagent_enabled": bool(self.config.subagent_runtime.enabled),
+        }
+        if 0 < rollout_percent < 100:
+            token = f"{task.task_id}:{str(task.instruction or '').strip()}"
+            # Keep rollout bucket telemetry for observability during subagent-only cutover.
+            bucket = int(hashlib.sha256(token.encode("utf-8")).hexdigest()[:8], 16) % 100
+            context["rollout_bucket"] = bucket
+            context["rollout_bucket_hit"] = bucket < rollout_percent
+        return "subagent", context
 
     def _evaluate_write_path_gate(
         self,
@@ -1270,72 +1115,6 @@ class SystemAgent:
             fencing_epoch=fencing_epoch,
         )
         return TaskAttemptOutcome(approved=False, reasons=reasons)
-
-    async def _attempt_verification_fallback(
-        self,
-        task: OptimizationTask,
-        workflow_id: str,
-        dispatch_result: DispatchResult,
-        reasons: list[str],
-        *,
-        fencing_epoch: int,
-    ) -> None:
-        self._ensure_active_epoch(fencing_epoch)
-        if not self.config.verification_fallback.enable_codex_mcp:
-            self._emit(
-                "VerificationFallbackSkipped",
-                {"workflow_id": workflow_id, "task_id": task.task_id, "reason": "disabled"},
-                workflow_id=workflow_id,
-                fencing_epoch=fencing_epoch,
-            )
-            return
-
-        self._emit(
-            "VerificationDegradedToCodexMCP",
-            {
-                "workflow_id": workflow_id,
-                "task_id": task.task_id,
-                "from_cli": dispatch_result.selected_cli,
-                "reasons": reasons,
-            },
-            workflow_id=workflow_id,
-            enqueue_outbox=True,
-            fencing_epoch=fencing_epoch,
-        )
-
-        prompt = self._build_mcp_prompt(task, dispatch_result, reasons, workflow_id=workflow_id)
-        response = await self.fallback_verifier.ask(prompt, context={"task_id": task.task_id, "workflow_id": workflow_id})
-
-        status = str(response.get("status", "unknown"))
-        if status == "error":
-            self.workflow_store.transition(
-                workflow_id,
-                "FailedHard",
-                reason="codex_mcp_fallback_failed",
-                payload={"response": response},
-            )
-        else:
-            self.workflow_store.transition(
-                workflow_id,
-                "Reworking",
-                reason="codex_mcp_suggestion_available",
-                payload={"response": response},
-            )
-
-        self._emit(
-            "VerificationFallbackResult",
-            {
-                "workflow_id": workflow_id,
-                "task_id": task.task_id,
-                "service_name": self.fallback_verifier.service_name,
-                "tool_name": self.fallback_verifier.tool_name,
-                "status": status,
-                "response": response,
-            },
-            workflow_id=workflow_id,
-            enqueue_outbox=True,
-            fencing_epoch=fencing_epoch,
-        )
 
     async def _outbox_dispatch_loop(self) -> None:
         consumer = self.config.outbox_dispatch.consumer_name
@@ -1603,29 +1382,6 @@ class SystemAgent:
             {"workflow_id": workflow_id, "task_id": task_id, "decision": decision_payload},
             workflow_id=workflow_id,
             fencing_epoch=fencing_epoch,
-        )
-
-    def _build_mcp_prompt(
-        self,
-        task: OptimizationTask,
-        dispatch_result: DispatchResult,
-        reasons: list[str],
-        workflow_id: str,
-    ) -> str:
-        payload = {
-            "workflow_id": workflow_id,
-            "task_id": task.task_id,
-            "instruction": task.instruction,
-            "selected_cli": dispatch_result.selected_cli,
-            "exit_code": dispatch_result.result.exit_code,
-            "stderr": dispatch_result.result.stderr,
-            "changed_files": dispatch_result.result.files_changed,
-            "reasons": reasons,
-        }
-        return (
-            "You are in verification fallback mode. "
-            "Analyze the failed autonomous coding task and provide actionable fixes as JSON.\n"
-            f"{json.dumps(payload, ensure_ascii=False)}"
         )
 
     async def _wait_next_cycle(self) -> None:

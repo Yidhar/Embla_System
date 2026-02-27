@@ -23,8 +23,9 @@ def test_ws22_longrun_equivalent_baseline_report() -> None:
     metrics = report["metrics"]
     assert report["passed"] is True
     assert metrics["virtual_elapsed_seconds"] >= 600
-    assert metrics["task_approved_count"] == 120
-    assert metrics["task_rejected_count"] == 0
+    assert metrics["task_approved_count"] == 112
+    assert metrics["task_rejected_count"] == 8
+    assert metrics["failed_exhausted_count"] == 8
     assert metrics["event_mismatch_count"] == 0
     assert metrics["unhandled_exception_count"] == 0
     assert metrics["service_value_matches_expected"] is True

@@ -11,10 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
 
-from autonomous.dispatcher import DispatchResult
 from autonomous.system_agent import SystemAgent
-from autonomous.tools.cli_adapter import CliTaskResult
-from autonomous.types import EvaluationReport, OptimizationTask
+from autonomous.tools.subagent_runtime import RuntimeSubTaskResult, RuntimeSubTaskSpec
+from autonomous.types import OptimizationTask
 
 
 @dataclass(frozen=True)
@@ -51,23 +50,6 @@ def _count_workflow_states(agent: SystemAgent) -> Dict[str, int]:
             """
         ).fetchall()
     return {str(row["current_state"]): int(row["cnt"]) for row in rows}
-
-
-def _build_fake_dispatch() -> DispatchResult:
-    return DispatchResult(
-        selected_cli="codex",
-        result=CliTaskResult(
-            task_id="legacy-fail-open",
-            cli_name="codex",
-            exit_code=0,
-            stdout="ok",
-            stderr="",
-            files_changed=[],
-            duration_seconds=0.01,
-            success=True,
-            execution_snapshots=[],
-        ),
-    )
 
 
 def run_ws22_longrun_baseline(
@@ -112,11 +94,26 @@ def run_ws22_longrun_baseline(
         repo_dir=str(repo),
     )
 
-    async def _dispatch_ok(_task: OptimizationTask) -> DispatchResult:
-        return _build_fake_dispatch()
+    async def _subagent_worker(_task: OptimizationTask, subtask: RuntimeSubTaskSpec) -> RuntimeSubTaskResult:
+        # Simulate write-path fail-open rounds by returning a rejected subtask when no patch exists.
+        if not list(subtask.patches):
+            return RuntimeSubTaskResult(
+                subtask_id=subtask.subtask_id,
+                role=subtask.role,
+                success=False,
+                error="missing_patch_for_longrun_round",
+                patches=[],
+            )
+        return RuntimeSubTaskResult(
+            subtask_id=subtask.subtask_id,
+            role=subtask.role,
+            success=True,
+            summary="simulated_subagent_worker_ok",
+            patches=list(subtask.patches),
+            metadata={"worker": "ws22_longrun_baseline_stub"},
+        )
 
-    agent.dispatcher.dispatch = _dispatch_ok  # type: ignore[method-assign]
-    agent.evaluator.evaluate = lambda task, result: EvaluationReport(approved=True, reasons=[])  # type: ignore[method-assign]
+    agent._materialize_subtask_worker_result = _subagent_worker  # type: ignore[method-assign]
 
     captured_events: list[tuple[str, Dict[str, Any]]] = []
     original_emit = agent._emit
@@ -176,15 +173,18 @@ def run_ws22_longrun_baseline(
 
     event_counter = Counter([event_type for event_type, _ in captured_events])
     planned_fail_open_rounds = len([idx for idx in range(1, rounds + 1) if idx % fail_open_every == 0])
+    planned_approved_rounds = rounds - planned_fail_open_rounds
     expectations = {
-        "TaskApproved": rounds,
-        "TaskRejected": 0,
+        "TaskApproved": planned_approved_rounds,
+        "TaskRejected": planned_fail_open_rounds,
         "SubTaskDispatching": rounds,
         "SubTaskExecutionCompleted": rounds,
         "SubAgentRuntimeCompleted": rounds,
-        "SubAgentRuntimeFailOpen": planned_fail_open_rounds,
+        "SubTaskRejected": planned_fail_open_rounds,
+        "SubAgentRuntimeFailOpenBlocked": planned_fail_open_rounds,
+        "SubAgentFailOpenBudgetUpdated": planned_fail_open_rounds,
         "SubAgentGateMetricUpdated": planned_fail_open_rounds,
-        "ReleaseGateRejected": planned_fail_open_rounds,
+        "ReleaseGateRejected": planned_fail_open_rounds * 2,
     }
 
     event_mismatches: Dict[str, Dict[str, int]] = {}
@@ -197,8 +197,9 @@ def run_ws22_longrun_baseline(
     failed_states = {
         name: value
         for name, value in workflow_states.items()
-        if name not in {"ReleaseCandidate"} and value > 0
+        if name not in {"ReleaseCandidate", "FailedExhausted"} and value > 0
     }
+    failed_exhausted_count = int(workflow_states.get("FailedExhausted", 0))
 
     current_service_value = target_file.read_text(encoding="utf-8")
     expected_last_success_round = rounds
@@ -223,16 +224,19 @@ def run_ws22_longrun_baseline(
         "event_mismatch_count": len(event_mismatches),
         "unhandled_exception_count": len(unhandled_errors),
         "failed_workflow_state_count": int(sum(failed_states.values())),
+        "failed_exhausted_count": failed_exhausted_count,
         "workflow_total": int(sum(workflow_states.values())),
         "service_value_matches_expected": bool(current_service_value == expected_last_value),
     }
 
     passed = (
         metrics["virtual_elapsed_seconds"] >= metrics["virtual_target_seconds"]
-        and metrics["task_rejected_count"] == 0
+        and metrics["task_approved_count"] == planned_approved_rounds
+        and metrics["task_rejected_count"] == planned_fail_open_rounds
         and metrics["event_mismatch_count"] == 0
         and metrics["unhandled_exception_count"] == 0
         and metrics["failed_workflow_state_count"] == 0
+        and metrics["failed_exhausted_count"] == planned_fail_open_rounds
         and metrics["service_value_matches_expected"] is True
     )
 
