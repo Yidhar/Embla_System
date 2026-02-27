@@ -34,7 +34,7 @@ NagaAgent consists of four independent microservices:
 | **MCP Server** | 8003 | MCP tool registration / discovery / parallel dispatch |
 | **Voice Service** | 5048 | TTS (Edge-TTS) + ASR (FunASR) + Realtime voice (Qwen Omni) |
 
-`main.py` orchestrates all services as daemon threads. The active frontend is `Embla_core` (Next.js ops dashboard); `frontend/` (Electron + Vue 3) is retained as a legacy compatibility lane.
+`main.py` orchestrates all services as daemon threads. The active frontend is `Embla_core` (Next.js ops dashboard); `frontend/` (Electron + Vue 3) is an `archived` compatibility lane.
 
 ---
 
@@ -210,7 +210,7 @@ easeOutCubic easing (`1 - (1 - t)^3`), 160ms / 60FPS transitions. Smart position
 3. **Stall detection**: 3 seconds with no progress change shows restart hint, health polling every 1s after 25% to prevent signal loss
 4. **Awaken**: Progress 100% shows pulsing "Click to Awaken" prompt
 
-Source (legacy): [`frontend/`](frontend/)
+Source (archived): [`frontend/`](frontend/)
 
 ---
 
@@ -344,7 +344,7 @@ NagaAgent/
 │   └── input/            #   ASR (FunASR) + realtime voice (Qwen Omni)
 ├── guide_engine/         # Game guide engine — cloud RAG service
 ├── Embla_core/           # Next.js runtime posture dashboard (active)
-├── frontend/             # Electron + Vue 3 frontend (legacy compatibility)
+├── frontend/             # Electron + Vue 3 frontend (archived compatibility lane)
 │   ├── electron/         #   Main process (window mgmt, floating ball, backend, hotkeys)
 │   └── src/              #   Vue 3 app
 │       ├── views/        #     MessageView / MindView / SkillView / ModelView / MemoryView / ConfigView
@@ -426,7 +426,7 @@ npm run dev    # Next.js dev mode
 npm run build  # Next.js production build
 ```
 
-### Electron Frontend Development (Legacy Compatibility)
+### Electron Frontend Development (Archived Compatibility)
 
 ```bash
 cd frontend

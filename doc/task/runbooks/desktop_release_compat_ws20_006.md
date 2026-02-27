@@ -1,5 +1,9 @@
 # WS20-006 桌面端发布兼容性验证 Runbook
 
+文档状态：`archived_legacy_runbook`  
+归档日期：`2026-02-27`  
+替代入口：`python scripts/embla_core_release_compat_gate.py --strict`
+
 ## 目标
 在发布前验证 Electron 桌面包在不同配置与网络场景下可稳定运行，并形成可审计报告。
 

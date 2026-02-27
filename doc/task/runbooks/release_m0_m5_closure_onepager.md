@@ -19,7 +19,7 @@
 | M2 | file_ast 并发治理、Sub-Agent 契约门禁、Double-Fork 回收 | `WS12-*`、`WS13-*`、`WS14-006` done；`tests/test_agentic_loop_contract_and_mutex.py`、`tests/test_workspace_txn_e2e_regression.py`、`tests/test_process_lineage.py` 通过 | 通过 |
 | M3 | GC 证据链与预算守门生效 | `WS15-*`、`WS19-001..006/008` done；`tests/test_gc_*`、`autonomous/tests/test_working_memory_manager_ws19_004.py`、`autonomous/tests/test_router_arbiter_guard_ws19_008.py` 通过 | 通过 |
 | M4 | 迁移收尾、兼容回退窗口、弃用路径审计 | `WS16-001..006` done；`WS20-004` done；`WS18-008` done；`tests/test_contract_rollout_ws16_005.py`、`tests/test_agentserver_deprecation_guard_ws16_002.py`、`tests/test_mcp_status_snapshot.py` 通过 | 通过 |
-| M5 | 混沌演练、Canary 回滚、SLO/Runbook 完整 | `WS17-*`、`WS20-006` done；`tests/test_chaos_lock_failover.py`、`tests/test_chaos_sleep_watch.py`、`tests/test_chaos_runtime_storage.py`、`tests/test_canary_rollback_drill.py`、`tests/test_slo_snapshot_export.py`、`tests/test_desktop_release_compat_ws20_006.py` 通过 | 通过 |
+| M5 | 混沌演练、Canary 回滚、SLO/Runbook 完整 | `WS17-*` done；`WS20-006` archived（legacy 非阻断）；`tests/test_chaos_lock_failover.py`、`tests/test_chaos_sleep_watch.py`、`tests/test_chaos_runtime_storage.py`、`tests/test_canary_rollback_drill.py`、`tests/test_slo_snapshot_export.py`、`tests/test_embla_core_release_compat_gate.py` 通过 | 通过 |
 
 ## 3. 发布前执行顺序（T0-T5）
 
@@ -46,7 +46,8 @@ CI 摘要产物：`scratch/reports/release_closure_summary.md`（并写入 `GITH
    `python -m pytest -q autonomous/tests/test_event_store_ws18_001.py autonomous/tests/test_workflow_store.py autonomous/tests/test_meta_agent_runtime_ws19_001.py autonomous/tests/test_router_engine_ws19_002.py autonomous/tests/test_llm_gateway_ws19_003.py autonomous/tests/test_working_memory_manager_ws19_004.py autonomous/tests/test_daily_checkpoint_ws19_007.py autonomous/tests/test_router_arbiter_guard_ws19_008.py autonomous/tests/test_event_replay_tool_ws18_003.py autonomous/tests/test_system_agent_release_flow.py -p no:tmpdir`
 6. T5 发布运行工单产物  
    `python scripts/export_slo_snapshot.py`  
-   `python scripts/desktop_release_compat_ws20_006.py --strict`  
+   `python scripts/embla_core_release_compat_gate.py --strict`  
+   `python scripts/desktop_release_compat_ws20_006.py --strict`（archived/legacy，默认非阻断）  
    `python scripts/canary_rollback_drill.py --dry-run`
 
 ## 4. 非阻断项与注意事项

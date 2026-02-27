@@ -44,7 +44,7 @@ npm install
 npm run dev
 ```
 
-### 2.4 legacy Electron 前端（仅兼容）
+### 2.4 archived Electron 前端（历史兼容）
 
 ```powershell
 cd E:\Programs\NagaAgent\frontend
@@ -137,7 +137,7 @@ curl http://127.0.0.1:8001/health
 - `guide_engine/`：领域问答与计算。
 - `voice/`：语音 I/O。
 - `Embla_core/`：Next.js 运行态势面板（主链）。
-- `frontend/`：Electron + Vue（legacy 兼容）。
+- `frontend/`：Electron + Vue（archived 历史兼容）。
 - `system/`：配置、日志与底层安全能力。
 
 ## 9. 常见排障清单

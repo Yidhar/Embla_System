@@ -70,8 +70,9 @@
     - 可直接执行/流转的任务看板数据（已将 W1 任务置为 `in_progress`）。
 24. `doc/task/implementation/`
     - 各任务波次实施记录与验证证据归档（按任务 ID 命名）。
-25. `doc/task/runbooks/`
-    - 运行手册与故障恢复步骤（按任务场景维护）。
+25. `doc/task/runbooks/INDEX.md`
+    - runbook 主索引（active）。
+    - archived 索引：`doc/task/runbooks/ARCHIVED.md`。
 26. `doc/task/runbooks/release_m0_m5_closure_onepager.md`
     - 发布收口一页清单（M0-M5 门禁、执行顺序、放行判定）。
 27. `doc/task/21-ws-phase3-subagent-runtime-and-scaffold.md`
