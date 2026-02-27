@@ -22,14 +22,9 @@ def test_convert_structured_tool_calls_injects_context_metadata() -> None:
                 "message": "explain current plan",
             },
         },
-        {
-            "id": "call_live2d_1",
-            "name": "live2d_action",
-            "arguments": {"action": "happy"},
-        },
     ]
 
-    actionable_calls, live2d_calls, validation_errors = _convert_structured_tool_calls(
+    actionable_calls, validation_errors = _convert_structured_tool_calls(
         structured_calls,
         session_id="sess_meta_1",
         trace_id="trace_meta_1",
@@ -37,9 +32,8 @@ def test_convert_structured_tool_calls_injects_context_metadata() -> None:
 
     assert validation_errors == []
     assert len(actionable_calls) == 2
-    assert len(live2d_calls) == 1
 
-    for call in [*actionable_calls, *live2d_calls]:
+    for call in actionable_calls:
         assert call["_trace_id"] == "trace_meta_1"
         assert call["_session_id"] == "sess_meta_1"
         assert call.get("_risk_level")
@@ -49,7 +43,6 @@ def test_convert_structured_tool_calls_injects_context_metadata() -> None:
 
     native_call = next(call for call in actionable_calls if call.get("agentType") == "native")
     mcp_call = next(call for call in actionable_calls if call.get("agentType") == "mcp")
-    live2d_call = live2d_calls[0]
 
     assert native_call["_tool_call_id"] == "call_native_1"
     assert native_call["_risk_level"] == "write_repo"
@@ -59,9 +52,6 @@ def test_convert_structured_tool_calls_injects_context_metadata() -> None:
     assert mcp_call["_tool_call_id"] == "call_mcp_1"
     assert mcp_call["prompt"] == "explain current plan"
     assert mcp_call["service_name"] == "codex-cli"
-
-    assert live2d_call["_tool_call_id"] == "call_live2d_1"
-    assert live2d_call["tool_name"] == "live2d_action"
 
 
 def test_convert_structured_tool_calls_generates_trace_when_missing() -> None:
@@ -75,14 +65,13 @@ def test_convert_structured_tool_calls_generates_trace_when_missing() -> None:
         }
     ]
 
-    actionable_calls, live2d_calls, validation_errors = _convert_structured_tool_calls(
+    actionable_calls, validation_errors = _convert_structured_tool_calls(
         structured_calls,
         session_id="sess_meta_2",
         trace_id=None,
     )
 
     assert validation_errors == []
-    assert live2d_calls == []
     assert len(actionable_calls) == 1
 
     dispatched = actionable_calls[0]
@@ -103,14 +92,13 @@ def test_convert_structured_tool_calls_keeps_metadata_on_validation_error() -> N
         {"id": "bad_call", "name": "native_call", "arguments": "not-a-dict"},
     ]
 
-    actionable_calls, live2d_calls, validation_errors = _convert_structured_tool_calls(
+    actionable_calls, validation_errors = _convert_structured_tool_calls(
         structured_calls,
         session_id="sess_meta_3",
         trace_id="trace_meta_3",
     )
 
     assert actionable_calls == []
-    assert live2d_calls == []
     assert validation_errors
     assert "arguments必须是对象" in validation_errors[0]
 
@@ -119,3 +107,22 @@ def test_convert_structured_tool_calls_keeps_metadata_on_validation_error() -> N
     assert failed_call["_trace_id"] == "trace_meta_3"
     assert failed_call["_session_id"] == "sess_meta_3"
 
+
+def test_convert_structured_tool_calls_rejects_retired_live2d_action() -> None:
+    structured_calls = [
+        {
+            "id": "retired_live2d_1",
+            "name": "live2d_action",
+            "arguments": {"action": "happy"},
+        }
+    ]
+
+    actionable_calls, validation_errors = _convert_structured_tool_calls(
+        structured_calls,
+        session_id="sess_meta_4",
+        trace_id="trace_meta_4",
+    )
+
+    assert actionable_calls == []
+    assert validation_errors
+    assert "未知函数调用: name=live2d_action" in validation_errors[0]

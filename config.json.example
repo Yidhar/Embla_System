@@ -214,14 +214,6 @@
     "viewport_width": 1280, // 视口宽度
     "viewport_height": 720 // 视口高度
   },
-  "live2d": {
-    "enabled": false, // 是否启用Live2D
-    "model_path": "", // Live2D模型路径（archived Electron 路径按需填写）
-    "fallback_image": "", // 备用图片（可选）
-    "auto_switch": true, // 是否自动切换
-    "animation_enabled": true, // 是否启用动画
-    "touch_interaction": true // 是否启用触摸交互
-  },
   "system_check": {
     "passed": false, // 系统检查是否通过
     "timestamp": "", // 检查时间戳

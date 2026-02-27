@@ -113,7 +113,7 @@ def validate_tool_call(tool_call: Dict[str, Any]) -> bool:
     if lower_agent_type == "mcp":
         return bool(tool_call.get("tool_name") or tool_call.get("service_name"))
     if lower_agent_type == "live2d":
-        return True
+        return False
 
     # Unknown agent types are retained to keep parser forward-compatible.
     return True

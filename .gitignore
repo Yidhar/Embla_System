@@ -7,8 +7,6 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-!frontend/build/
-frontend/backend-dist/
 eggs/
 .eggs/
 lib/
@@ -41,15 +39,6 @@ logs/**/*.log
 logs/knowledge_graph/quintuples.json
 logs/knowledge_graph/graph.html
 logs/.auth_session
-
-# Audio temporary files
-logs/audio_temp/*.mp3
-logs/audio_temp/*.wav
-logs/audio_temp/*.m4a
-logs/audio_temp/*.opus
-logs/audio_temp/*.ogg
-logs/audio_temp/*.flac
-!logs/audio_temp/README.md
 
 # Session and history
 sessions/

@@ -1812,7 +1812,7 @@ async def chat_stream(request: ChatRequest):
             # Agentic loop 模式下跳过后台意图分析（工具调用已在loop中处理）
             # 仅在非 agentic 模式或明确需要时触发后台分析
             if not request.skip_intent_analysis:
-                # 后台分析仍可用于 Live2D 检测等辅助功能
+                # 预留后台分析入口（当前流式主链不在此处分发额外UI动作）
                 pass
 
             # [DONE] 信号已由 llm_service.stream_chat_with_context 发送，无需重复
@@ -4347,10 +4347,6 @@ _tool_status_store: Dict[str, Dict] = {"current": {"message": "", "visible": Fal
 # Web前端 AgentServer 回复存储（轮询获取）
 _clawdbot_replies: list = []
 
-# Web前端 Live2D 动作队列（轮询获取）
-_live2d_actions: list = []
-
-
 @app.get("/tool_status")
 async def get_tool_status():
     """获取当前工具调用状态（供Web前端轮询）"""
@@ -4363,14 +4359,6 @@ async def get_clawdbot_replies():
     replies = list(_clawdbot_replies)
     _clawdbot_replies.clear()
     return {"replies": replies}
-
-
-@app.get("/live2d/actions")
-async def get_live2d_actions():
-    """获取并清空 Live2D 动作队列（供Web前端轮询）"""
-    actions = list(_live2d_actions)
-    _live2d_actions.clear()
-    return {"actions": actions}
 
 
 @app.post("/tool_notification")
@@ -4592,14 +4580,6 @@ async def ui_notification(payload: Dict[str, Any]):
             _clawdbot_replies.append(ai_response)
             logger.info(f"[UI通知] AgentServer 回复已存储到队列，长度: {len(ai_response)}")
             return {"success": True, "message": "AgentServer 回复已存储"}
-
-        # 处理 Live2D 动作
-        if action == "live2d_action":
-            action_name = payload.get("action_name", "")
-            if action_name:
-                _live2d_actions.append(action_name)
-                logger.info(f"[UI通知] Live2D 动作已入队: {action_name}")
-                return {"success": True, "message": f"Live2D 动作 {action_name} 已入队"}
 
         if action == "show_tool_status" and status_text:
             _emit_tool_status_to_ui(status_text, auto_hide_ms)

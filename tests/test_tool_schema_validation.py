@@ -15,14 +15,13 @@ def test_native_input_schema_rejects_missing_run_cmd_command() -> None:
         }
     ]
 
-    actionable_calls, live2d_calls, validation_errors = _convert_structured_tool_calls(
+    actionable_calls, validation_errors = _convert_structured_tool_calls(
         calls,
         session_id="schema_sess_1",
         trace_id="schema_trace_1",
     )
 
     assert actionable_calls == []
-    assert live2d_calls == []
     assert validation_errors
     assert "[E_SCHEMA_INPUT_INVALID]" in validation_errors[0]
     assert "run_cmd 缺少 command/cmd" in validation_errors[0]
@@ -37,7 +36,7 @@ def test_native_input_schema_normalizes_alias_tool_name() -> None:
         }
     ]
 
-    actionable_calls, _, validation_errors = _convert_structured_tool_calls(
+    actionable_calls, validation_errors = _convert_structured_tool_calls(
         calls,
         session_id="schema_sess_2",
         trace_id="schema_trace_2",
@@ -62,7 +61,7 @@ def test_native_input_schema_accepts_artifact_reader_forensic_ref() -> None:
         }
     ]
 
-    actionable_calls, _, validation_errors = _convert_structured_tool_calls(
+    actionable_calls, validation_errors = _convert_structured_tool_calls(
         calls,
         session_id="schema_sess_3",
         trace_id="schema_trace_3",

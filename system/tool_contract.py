@@ -40,7 +40,7 @@ class ToolCallEnvelope:
     """
     统一工具调用契约封装
 
-    所有工具调用（native/mcp/live2d）必须携带的治理字段。
+    所有工具调用（native/mcp）必须携带的治理字段。
     """
 
     # === 调用标识 ===
@@ -563,25 +563,48 @@ def _summarize_structured(
     *,
     critical_evidence: Optional[Dict[str, list[str]]] = None,
 ) -> str:
-    """
-    生成结构化数据摘要
-
-    TODO: 实现智能摘要（schema/keys/sample rows）
-    """
-    base_summary = f"Structured data ({content_type})\n[Use artifact_reader to access full content]"
+    """生成结构化数据摘要（schema/keys/sample 级别）。"""
+    artifact_hint = "[Use artifact_reader to access full content]"
+    base_summary = f"Structured data ({content_type})\n{artifact_hint}"
     if content_type == "application/json":
         try:
             import json
+
             data = json.loads(content)
             if isinstance(data, dict):
                 keys = list(data.keys())[:10]
-                base_summary = f"JSON object with keys: {keys}\n[Use artifact_reader to access full content]"
+                sample_types = [f"{k}:{type(data.get(k)).__name__}" for k in keys[:3]]
+                sample_text = f"; sample_types={sample_types}" if sample_types else ""
+                base_summary = (
+                    f"JSON object with keys: {keys} (total={len(data)}){sample_text}\n{artifact_hint}"
+                )
                 return _append_critical_evidence_summary(base_summary, critical_evidence or {})
-            elif isinstance(data, list):
-                base_summary = f"JSON array with {len(data)} items\n[Use artifact_reader to access full content]"
+            if isinstance(data, list):
+                sample_suffix = ""
+                if data:
+                    first_item = data[0]
+                    if isinstance(first_item, dict):
+                        sample_suffix = f"; sample_item_keys={list(first_item.keys())[:8]}"
+                    else:
+                        sample_suffix = f"; sample_item_type={type(first_item).__name__}"
+                base_summary = f"JSON array with {len(data)} items{sample_suffix}\n{artifact_hint}"
                 return _append_critical_evidence_summary(base_summary, critical_evidence or {})
+            base_summary = f"JSON scalar ({type(data).__name__})\n{artifact_hint}"
+            return _append_critical_evidence_summary(base_summary, critical_evidence or {})
         except Exception:
             pass
+
+    if content_type in {"text/csv", "text/tsv"}:
+        delimiter = "," if content_type == "text/csv" else "\t"
+        lines = [line for line in content.splitlines() if line.strip()]
+        if lines:
+            header = [item.strip() for item in lines[0].split(delimiter)]
+            row_count = max(len(lines) - 1, 0)
+            sample_row = ""
+            if row_count > 0:
+                sample_cells = [item.strip() for item in lines[1].split(delimiter)[: min(len(header), 6)]]
+                sample_row = f"; sample_row={sample_cells}"
+            base_summary = f"{content_type} with {row_count} rows and columns={header[:10]}{sample_row}\n{artifact_hint}"
 
     return _append_critical_evidence_summary(base_summary, critical_evidence or {})
 

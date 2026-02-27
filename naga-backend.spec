@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
 NagaAgent Headless Backend - PyInstaller Spec
-编译后端为独立二进制，供 Electron 前端打包使用。
+编译后端为独立二进制，供统一启动链部署使用。
 排除 PyQt5 及 UI 相关模块。
 """
 
@@ -28,7 +28,6 @@ datas = [
     ('apiserver', 'apiserver'),
     ('system', 'system'),
     ('summer_memory', 'summer_memory'),
-    ('voice', 'voice'),
     # ('mqtt_tool', 'mqtt_tool'),  # 已禁用
     ('skills', 'skills'),
 ]

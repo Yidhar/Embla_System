@@ -11,7 +11,6 @@
 
 - `native_call`
 - `mcp_call`
-- `live2d_action`
 
 不允许：
 
@@ -25,7 +24,6 @@
 3. 按调用类型分发：
    - Native：`apiserver/native_tools.py`
    - MCP：`mcpserver/mcp_manager.py`
-   - Live2D：UI action 通知
 4. 将结果通过 SSE 事件回推到前端。
 
 SSE 关键事件：

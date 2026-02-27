@@ -60,7 +60,6 @@
 3. `apiserver/agentic_tool_loop.py` 只接受结构化函数调用：
    - `native_call`
    - `mcp_call`
-   - `live2d_action`
 4. 工具执行分发：
    - Native -> `apiserver/native_tools.py` -> `system/native_executor.py`
    - MCP -> `mcpserver/mcp_manager.py`（本地注册优先，外部 mcporter 兜底）

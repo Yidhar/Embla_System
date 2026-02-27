@@ -56,7 +56,7 @@
 - 复合任务按 `T0->T1->T2->T3` 顺序拆分数组。
 
 3. `tool_dispatch_prompt`
-- 决策 native/mcp/live2d 的路由。
+- 决策 native/mcp 的路由。
 - 强化“先发现再实施再验证再证据”的调度规则。
 
 4. `agentic_tool_prompt`

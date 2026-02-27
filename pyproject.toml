@@ -40,7 +40,7 @@ dependencies = [
 
     "sse-starlette>=2.3.0",
 
-    "httpx>=0.28.0",
+    "httpx[socks]>=0.28.0",
 
     "httpcore",
 

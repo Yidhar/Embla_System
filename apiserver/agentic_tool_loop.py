@@ -15,7 +15,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
-from system.config import get_config, get_server_port
+from system.config import get_config
 from system.coding_intent import contains_direct_coding_signal, extract_latest_user_message, requires_codex_for_messages
 from system.episodic_memory import archive_tool_results_for_session, build_reinjection_context
 from system.gc_budget_guard import GCBudgetGuard, GCBudgetGuardConfig
@@ -746,7 +746,6 @@ _SCHEMA_ERR_OUTPUT_INVALID = "E_SCHEMA_OUTPUT_INVALID"
 _SCHEMA_ERR_LEGACY_DECOMMISSIONED = "E_LEGACY_CONTRACT_DECOMMISSIONED"
 _RISK_ERR_APPROVAL_REQUIRED = "E_RISK_APPROVAL_REQUIRED"
 _RISK_ERR_POLICY_BLOCKED = "E_RISK_POLICY_BLOCKED"
-_LIVE2D_ACTIONS = {"normal", "happy", "enjoy", "sad", "surprise"}
 _NATIVE_TOOL_ALIASES = {
     "read": "read_file",
     "write": "write_file",
@@ -1696,33 +1695,6 @@ async def _execute_native_call(call: Dict[str, Any], session_id: str) -> Dict[st
     return await executor.execute(call, session_id=session_id)
 
 
-async def _send_live2d_actions(live2d_calls: List[Dict[str, Any]], session_id: str):
-    """Fire-and-forget发送Live2D动作到UI"""
-    import httpx
-
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout=5.0)) as client:
-            for call in live2d_calls:
-                action_name = call.get("action", "")
-                logger.info(f"[AgenticLoop] 发送 Live2D 动作: {action_name}, 完整调用: {call}")
-                if not action_name:
-                    continue
-                payload = {
-                    "session_id": session_id,
-                    "action": "live2d_action",
-                    "action_name": action_name,
-                }
-                try:
-                    await client.post(
-                        f"http://localhost:{get_server_port('api_server')}/ui_notification",
-                        json=payload,
-                    )
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.debug(f"[AgenticLoop] Live2D动作发送失败: {e}")
-
-
 async def _execute_single_tool_call(call: Dict[str, Any], session_id: str) -> Dict[str, Any]:
     agent_type = call.get("agentType", "")
     if agent_type == "mcp":
@@ -1963,7 +1935,7 @@ async def execute_tool_calls(
     max_retries: int = 1,
     retry_backoff_seconds: float = 0.8,
 ) -> List[Dict[str, Any]]:
-    """并发执行工具调用（不包含 live2d），支持重试与并发控制。"""
+    """并发执行工具调用，支持重试与并发控制。"""
     if not tool_calls:
         return []
 
@@ -2297,24 +2269,6 @@ def get_agentic_tool_definitions() -> List[Dict[str, Any]]:
                 },
             },
         },
-        {
-            "type": "function",
-            "function": {
-                "name": "live2d_action",
-                "description": "Trigger Live2D UI action.",
-                "parameters": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "action": {
-                            "type": "string",
-                            "enum": ["normal", "happy", "enjoy", "sad", "surprise"],
-                        }
-                    },
-                    "required": ["action"],
-                },
-            },
-        },
     ]
 
 
@@ -2322,14 +2276,13 @@ def _convert_structured_tool_calls(
     structured_calls: List[Dict[str, Any]],
     session_id: Optional[str] = None,
     trace_id: Optional[str] = None,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+) -> Tuple[List[Dict[str, Any]], List[str]]:
     """
     转换结构化工具调用，注入上下文元数据
 
     NGA-WS10-002: 注入 call_id/trace_id/session_id 等上下文元数据
     """
     actionable_calls: List[Dict[str, Any]] = []
-    live2d_calls: List[Dict[str, Any]] = []
     validation_errors: List[str] = []
 
     # 生成 trace_id（如果未提供）
@@ -2446,37 +2399,9 @@ def _convert_structured_tool_calls(
             actionable_calls.append(merged_call)
             continue
 
-        if tool_name == "live2d_action":
-            action = str(args.get("action") or "").strip()
-            if not action:
-                validation_errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "live2d_action 缺少 action"))
-                continue
-            if action not in _LIVE2D_ACTIONS:
-                validation_errors.append(
-                    _schema_error(
-                        _SCHEMA_ERR_INPUT_INVALID,
-                        call_id,
-                        f"live2d_action action 非法: {action}",
-                    )
-                )
-                continue
-            live2d_call = {
-                "agentType": "live2d",
-                "tool_name": "live2d_action",
-                "action": action,
-            }
-            _inject_call_context_metadata(
-                live2d_call,
-                call_id=call_id,
-                trace_id=trace_id,
-                session_id=session_id,
-            )
-            live2d_calls.append(live2d_call)
-            continue
-
         validation_errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, f"未知函数调用: name={tool_name}"))
 
-    return actionable_calls, live2d_calls, validation_errors
+    return actionable_calls, validation_errors
 
 
 def _build_validation_results(errors: List[str]) -> List[Dict[str, Any]]:
@@ -2786,7 +2711,7 @@ async def run_agentic_loop(
             yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
             break
 
-        actionable_calls, live2d_calls, validation_errors = _convert_structured_tool_calls(
+        actionable_calls, validation_errors = _convert_structured_tool_calls(
             structured_tool_calls,
             session_id=session_id,
             trace_id=None,  # 自动生成
@@ -2915,7 +2840,6 @@ async def run_agentic_loop(
                 reason="end_marker",
                 details={
                     "actionable_calls": len(actionable_calls),
-                    "live2d_calls": len(live2d_calls),
                     "validation_errors": len(validation_results),
                 },
             )
@@ -2944,9 +2868,6 @@ async def run_agentic_loop(
             yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
             break
 
-        if live2d_calls:
-            asyncio.create_task(_send_live2d_actions(live2d_calls, session_id))
-
         if actionable_calls:
             yield _build_round_model_output_event(fallback_text="（本轮模型未返回正文，直接发起工具调用）")
             for buffered_chunk in _drain_buffered_round_chunks():
@@ -2958,7 +2879,6 @@ async def run_agentic_loop(
                 policy=policy,
                 details={
                     "actionable_calls": len(actionable_calls),
-                    "live2d_calls": len(live2d_calls),
                     "validation_errors": len(validation_results),
                 },
             )
@@ -2991,7 +2911,6 @@ async def run_agentic_loop(
                 reason=no_action_reason,
                 details={
                     "actionable_calls": 0,
-                    "live2d_calls": len(live2d_calls),
                     "validation_errors": 0,
                 },
             )

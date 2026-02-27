@@ -2,7 +2,7 @@
 
 # NagaAgent
 
-**三服务协同的 AI 桌面助手 — 流式工具调用 · 知识图谱记忆 · Live2D**
+**三服务协同的 AI 桌面助手 — 流式工具调用 · 知识图谱记忆 · 运维看板**
 
 [简体中文](README.md)  | [English](README_en.md)
 
@@ -39,6 +39,7 @@ NagaAgent 由三个独立微服务组成：
 
 | 日期 | 内容 |
 |------|------|
+| **2026-02-27** | 退役 Live2D 运行时链路：移除 `live2d_action` 工具分发、`/live2d/actions` API 与相关配置项，统一收敛为 `native/mcp` 工具执行 |
 | **2026-02-19** | 重构核心架构：引入基于 SDLC 的 Autonomous 自动化开发自治框架 (含 Lease/Fencing); 原生结构化 tool_calls 全面接管执行链路 |
 | **2026-02-14** | 5.0.0 发布：远程记忆微服务（NagaMemory 云端 + 本地 GRAG 回退）、意识海 3D 重写、启动标题动画与粒子效果、进度条停滞检测与健康轮询、版本更新检查弹窗、用户使用协议 |
 | **2026-02-14** | Captcha 验证码集成、注册流程（用户名 + 邮箱 + 验证码）、CAS 会话失效弹窗、语音输入按钮、文件解析按钮、IME 中文输入法回车误发修复 |
@@ -76,7 +77,6 @@ LLM 流式输出(content/reasoning) ──SSE──▶ 前端实时显示
 AgenticLoop 将 calls 转换为 actionable execution 并行派发（受限并发调度）
     ├─ mcp      → MCPManager.unified_call()
     ├─ native   → Local-first NativeToolExecutor (拦截如 cd 为 get_cwd，严守项目沙盒级安全边界)
-    └─ live2d   → UI Fire-and-forget 通知
             │
             ▼
  工具结果并入 message 列表触发下一轮推理
@@ -358,20 +358,6 @@ npm run build  # Next.js 生产构建
   }
 }
 ```
-</details>
-
-<details>
-<summary><b>Live2D 虚拟形象</b></summary>
-
-```json
-{
-  "live2d": {
-    "enabled": true,
-    "model_path": "path/to/your/model.model3.json"
-  }
-}
-```
-
 </details>
 
 <details>

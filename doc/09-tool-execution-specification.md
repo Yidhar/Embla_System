@@ -35,7 +35,7 @@
 ## 3. 当前执行链路（As-Is）
 
 1. LLM 产出 `tool_calls`。
-2. `agentic_tool_loop` 校验并分类：`native_call` / `mcp_call` / `live2d_action`。
+2. `agentic_tool_loop` 校验并分类：`native_call` / `mcp_call`。
 3. 执行层：
    - Native：`native_tools -> native_executor`
    - MCP：`mcp_manager`（本地注册优先，外部 mcporter 兜底）
@@ -141,7 +141,7 @@ MCP 路径（`mcp_manager`）已具备：
 
 ```text
 【执行状态】
-- 调用类型：native/mcp/live2d
+- 调用类型：native/mcp
 - 风险等级：read_only/write_repo/deploy/secrets
 - 是否落盘：是/否
 

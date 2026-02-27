@@ -1,4 +1,4 @@
-# NagaAgent 依赖（一键打包 build.py 与 PyInstaller 均使用此文件）
+# NagaAgent 依赖（一键打包 scripts/build-win.py 与 PyInstaller 均使用此文件）
 # Python 建议 3.11
 
 # ---------- 核心 / 配置 ----------
@@ -7,7 +7,7 @@ json5>=0.9.0
 PyYAML>=6.0.2
 pydantic>=2.11.0
 requests>=2.32.0
-python-multipart
+python-multipart>=0.0.22
 
 # ---------- Web 服务 ----------
 fastapi>=0.115.0
@@ -40,12 +40,9 @@ cryptography>=46.0.0
 setproctitle>=1.3.5
 watchfiles>=1.0.0
 
-# ---------- 语音 / 音频 ----------
-
 # ---------- 知识图谱 GRAG / Neo4j（可选，启用 grag 时需要） ----------
-py2neo>=2021.2.3
+py2neo>=2021.2.4
 neo4j>=5.0.0
-chromadb>=0.5.0
 mss>=10.1.0
 
 # ---------- 兼容层 ----------
@@ -69,5 +66,5 @@ gevent>=25.0.0
 # ---------- MQTT（已禁用：main 不再启动 mqtt_tool） ----------
 # paho-mqtt>=2.1.0
 
-# ---------- 打包用（执行 python build.py 或 pyinstaller 时需安装） ----------
+# ---------- 打包用（执行 python scripts/build-win.py 或 pyinstaller 时需安装） ----------
 # pyinstaller>=6.0.0

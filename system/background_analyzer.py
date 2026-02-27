@@ -671,46 +671,13 @@ class BackgroundAnalyzer:
     ):
         """将工具调用分发到不同服务"""
         try:
-            live2d_calls = [tc for tc in tool_calls if tc.get("agentType") == "live2d"]
             mcp_calls = [tc for tc in tool_calls if tc.get("agentType") == "mcp"]
-
-            if live2d_calls:
-                await self._send_live2d_actions(live2d_calls, session_id)
 
             if mcp_calls:
                 await self._send_to_mcp(mcp_calls, session_id)
 
         except Exception as e:
             logger.error(f"工具调用分发失败: {e}")
-    async def _send_live2d_actions(self, live2d_calls: List[Dict[str, Any]], session_id: str):
-        """将 Live2D 动作发送到 UI"""
-        try:
-            from system.config import get_server_port
-
-            client = self._get_http_client()
-
-            for call in live2d_calls:
-                action_name = call.get("action", "")
-                if not action_name:
-                    continue
-
-                payload = {
-                    "session_id": session_id,
-                    "action": "live2d_action",
-                    "action_name": action_name,
-                }
-
-                response = await client.post(
-                    f"http://localhost:{get_server_port('api_server')}/ui_notification",
-                    json=payload,
-                )
-                if response.status_code == 200:
-                    logger.info(f"[Live2D] 动作已发送到 UI: {action_name}")
-                else:
-                    logger.error(f"[Live2D] 动作发送失败: {response.status_code}")
-
-        except Exception as e:
-            logger.error(f"[Live2D] 发送动作到 UI 失败: {e}")
 
     async def _send_to_mcp(self, mcp_calls: List[Dict[str, Any]], session_id: str):
         """将MCP工具调用直接 in-process 路由到 MCPManager（多个调用并行执行）"""

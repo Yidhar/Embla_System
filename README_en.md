@@ -39,6 +39,7 @@ NagaAgent consists of three independent microservices:
 
 | Date | Changes |
 |------|---------|
+| **2026-02-27** | Retired Live2D runtime path: removed `live2d_action` dispatch, `/live2d/actions` API, and related config fields; tool execution now converges on `native/mcp` only |
 | **2026-02-19** | Core Architecture Refactoring: Introduced Autonomous SDLC framework (with Lease/Fencing); Native structured tool_calls fully take over the execution layer |
 | **2026-02-14** | 5.0.0 Release: Remote memory microservice (NagaMemory Cloud + Local GRAG fallback), MindView 3D rewrite, startup title animation |
 | **2026-02-14** | Captcha integration, registration flow (username + email + captcha), CAS session expiration dialog, voice input button, file parsing button |
@@ -76,7 +77,6 @@ LLM Stream Output (content/reasoning) ──SSE──▶ Real-time Frontend Disp
 AgenticLoop converts calls into actionable execution arrays (with concurrency limits)
     ├─ mcp      → MCPManager.unified_call()
     ├─ native   → Local-first NativeToolExecutor (Intercepts e.g., 'cd' to 'get_cwd', enforcing Sandbox rules)
-    └─ live2d   → UI Fire-and-forget signal
             │
             ▼
  Tool results inject into the message list, triggering the next inference round
@@ -360,20 +360,6 @@ Install Neo4j ([Docker](https://hub.docker.com/_/neo4j) or [Neo4j Desktop](https
   }
 }
 ```
-</details>
-
-<details>
-<summary><b>Live2D Avatar</b></summary>
-
-```json
-{
-  "live2d": {
-    "enabled": true,
-    "model_path": "path/to/your/model.model3.json"
-  }
-}
-```
-
 </details>
 
 <details>

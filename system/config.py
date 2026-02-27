@@ -541,28 +541,6 @@ class UIConfig(BaseModel):
     animation_duration: int = Field(default=600, ge=100, le=2000, description="动画时长（毫秒）")
 
 
-class Live2DConfig(BaseModel):
-    """Live2D配置"""
-
-    enabled: bool = Field(default=True, description="是否启用Live2D功能")
-    model_path: str = Field(
-        default="", description="Live2D模型文件路径（archived Electron 路径按需填写）"
-    )
-    fallback_image: str = Field(default="", description="回退图片路径（可选）")
-    auto_switch: bool = Field(default=True, description="是否自动切换模式")
-    animation_enabled: bool = Field(default=True, description="是否启用动画")
-    touch_interaction: bool = Field(default=True, description="是否启用触摸交互")
-    scale_factor: float = Field(default=1.0, ge=0.5, le=3.0, description="Live2D缩放比例")
-
-    # 嘴部同步配置
-    lip_sync_enabled: bool = Field(default=True, description="是否启用嘴部同步动画")
-    lip_sync_smooth_factor: float = Field(default=0.3, ge=0.1, le=1.0, description="嘴部动画平滑系数（越小越平滑）")
-    lip_sync_volume_scale: float = Field(default=1.5, ge=0.5, le=5.0, description="音量放大系数（调整嘴部张开幅度）")
-    lip_sync_volume_threshold: float = Field(
-        default=0.01, ge=0.0, le=0.1, description="音量检测阈值（低于此值视为静音）"
-    )
-
-
 class FloatingConfig(BaseModel):
     """悬浮球模式配置"""
     enabled: bool = Field(default=False, description="是否启用悬浮球模式")
@@ -1179,7 +1157,6 @@ class NagaConfig(BaseModel):
     # weather: 天气服务使用免费API，无需配置
     mqtt: MQTTConfig = Field(default_factory=MQTTConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
-    live2d: Live2DConfig = Field(default_factory=Live2DConfig)
     floating: FloatingConfig = Field(default_factory=FloatingConfig)
     naga_portal: NagaPortalConfig = Field(default_factory=NagaPortalConfig)
     online_search: OnlineSearchConfig = Field(default_factory=OnlineSearchConfig)
