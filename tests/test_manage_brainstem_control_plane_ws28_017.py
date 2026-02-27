@@ -41,31 +41,57 @@ def test_manage_brainstem_control_plane_start_status_stop_flow(monkeypatch) -> N
         spec_file = repo_root / "system" / "brainstem_services.spec"
         _write_json(spec_file, {"services": []})
 
-        alive_pids = {55001}
+        alive_pids = {55001, 55002}
 
         class _FakeProcess:
-            pid = 55001
+            def __init__(self, pid: int) -> None:
+                self.pid = pid
 
         def _fake_popen(command, cwd, stdout, stderr, start_new_session):  # noqa: ARG001
-            heartbeat_path = Path(command[command.index("--heartbeat-file") + 1])
-            heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
-            heartbeat_path.write_text(
-                json.dumps(
-                    {
-                        "generated_at": datetime.now(timezone.utc).isoformat(),
-                        "pid": 55001,
-                        "tick": 1,
-                        "mode": "daemon",
-                        "healthy": True,
-                        "service_count": 1,
-                        "unhealthy_services": [],
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-            return _FakeProcess()
+            joined = " ".join(str(item) for item in command)
+            if "run_brainstem_supervisor_ws23_001.py" in joined:
+                heartbeat_path = Path(command[command.index("--heartbeat-file") + 1])
+                heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+                heartbeat_path.write_text(
+                    json.dumps(
+                        {
+                            "generated_at": datetime.now(timezone.utc).isoformat(),
+                            "pid": 55001,
+                            "tick": 1,
+                            "mode": "daemon",
+                            "healthy": True,
+                            "service_count": 1,
+                            "unhealthy_services": [],
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                return _FakeProcess(55001)
+            if "run_watchdog_daemon_ws28_025.py" in joined:
+                state_path = Path(command[command.index("--state-file") + 1])
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(
+                    json.dumps(
+                        {
+                            "generated_at": datetime.now(timezone.utc).isoformat(),
+                            "pid": 55002,
+                            "mode": "daemon",
+                            "tick": 1,
+                            "status": "ok",
+                            "reason_code": "WATCHDOG_DAEMON_OK",
+                            "reason_text": "watchdog daemon heartbeat is healthy",
+                            "snapshot": {},
+                            "action": None,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                return _FakeProcess(55002)
+            raise AssertionError(f"unexpected popen command: {command}")
 
         def _fake_kill(pid, sig):
             target = int(pid)
@@ -98,6 +124,8 @@ def test_manage_brainstem_control_plane_start_status_stop_flow(monkeypatch) -> N
         assert start_report["passed"] is True
         assert start_report["checks"]["spawned"] is True
         assert start_report["checks"]["heartbeat_detected"] is True
+        assert start_report["checks"]["watchdog_spawned"] is True
+        assert start_report["checks"]["watchdog_gate"] is True
         assert start_report["report_schema_version"] == "ws28_017_brainstem_control_plane_manage.v1"
         assert start_report["output_file"].endswith("manager_report.json")
         persisted_start = _read_json(output)
@@ -114,6 +142,8 @@ def test_manage_brainstem_control_plane_start_status_stop_flow(monkeypatch) -> N
         assert status_report["passed"] is True
         assert status_report["checks"]["heartbeat_gate"] is True
         assert status_report["checks"]["launcher_pid_alive"] is True
+        assert status_report["checks"]["watchdog_gate"] is True
+        assert status_report["checks"]["watchdog_daemon_pid_alive"] is True
         persisted_status = _read_json(output)
         assert persisted_status["action"] == "status"
         assert persisted_status["report_schema_version"] == "ws28_017_brainstem_control_plane_manage.v1"

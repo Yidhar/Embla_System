@@ -65,10 +65,23 @@ def test_full_chain_m0_m12_runs_all_groups_when_green(monkeypatch) -> None:
                     "heartbeat_gate": True,
                     "launcher_pid_alive": True,
                     "manager_state_exists": True,
+                    "watchdog_gate": True,
+                    "watchdog_state_exists": True,
+                    "watchdog_launcher_pid_alive": True,
+                    "watchdog_daemon_pid_alive": True,
                 },
                 "heartbeat": {"checks": {"heartbeat_exists": True}},
+                "watchdog": {
+                    "checks": {
+                        "state_file_exists": True,
+                        "state_status_known": True,
+                        "launcher_pid_alive": True,
+                        "daemon_pid_alive": True,
+                    }
+                },
                 "state_file": "scratch/runtime/brainstem_control_plane_manager_ws28_017_state.json",
                 "heartbeat_file": "scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json",
+                "watchdog_state_file": "scratch/runtime/watchdog_daemon_state_ws28_025.json",
             },
         )
 
@@ -127,6 +140,8 @@ def test_full_chain_m0_m12_runs_all_groups_when_green(monkeypatch) -> None:
         assert brainstem["action_sequence"] == ["start", "status"]
         assert brainstem["checks"]["state_file_consistent"] is True
         assert brainstem["checks"]["heartbeat_file_consistent"] is True
+        assert brainstem["checks"]["watchdog_gate"] is True
+        assert brainstem["checks"]["watchdog_state_file_consistent"] is True
         assert brainstem["checks"]["start_spawn_or_already_running"] is True
         assert output.exists() is True
     finally:
@@ -152,10 +167,23 @@ def test_full_chain_m0_m12_stops_after_cutover_failure_by_default(monkeypatch) -
                     "heartbeat_gate": True,
                     "launcher_pid_alive": True,
                     "manager_state_exists": True,
+                    "watchdog_gate": True,
+                    "watchdog_state_exists": True,
+                    "watchdog_launcher_pid_alive": True,
+                    "watchdog_daemon_pid_alive": True,
                 },
                 "heartbeat": {"checks": {"heartbeat_exists": True}},
+                "watchdog": {
+                    "checks": {
+                        "state_file_exists": True,
+                        "state_status_known": True,
+                        "launcher_pid_alive": True,
+                        "daemon_pid_alive": True,
+                    }
+                },
                 "state_file": "scratch/runtime/brainstem_control_plane_manager_ws28_017_state.json",
                 "heartbeat_file": "scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json",
+                "watchdog_state_file": "scratch/runtime/watchdog_daemon_state_ws28_025.json",
             },
         )
 
@@ -242,10 +270,23 @@ def test_full_chain_m0_m12_quick_mode_forwards_flags(monkeypatch) -> None:
                     "heartbeat_gate": True,
                     "launcher_pid_alive": True,
                     "manager_state_exists": True,
+                    "watchdog_gate": True,
+                    "watchdog_state_exists": True,
+                    "watchdog_launcher_pid_alive": True,
+                    "watchdog_daemon_pid_alive": True,
                 },
                 "heartbeat": {"checks": {"heartbeat_exists": True}},
+                "watchdog": {
+                    "checks": {
+                        "state_file_exists": True,
+                        "state_status_known": True,
+                        "launcher_pid_alive": True,
+                        "daemon_pid_alive": True,
+                    }
+                },
                 "state_file": "scratch/runtime/brainstem_control_plane_manager_ws28_017_state.json",
                 "heartbeat_file": "scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json",
+                "watchdog_state_file": "scratch/runtime/watchdog_daemon_state_ws28_025.json",
             },
         )
         monkeypatch.setattr(
@@ -317,10 +358,23 @@ def test_full_chain_m0_m12_stops_when_brainstem_control_plane_step_fails(monkeyp
                     "heartbeat_gate": False,
                     "launcher_pid_alive": False,
                     "manager_state_exists": True,
+                    "watchdog_gate": False,
+                    "watchdog_state_exists": False,
+                    "watchdog_launcher_pid_alive": False,
+                    "watchdog_daemon_pid_alive": False,
                 },
                 "heartbeat": {"checks": {"heartbeat_exists": True}},
+                "watchdog": {
+                    "checks": {
+                        "state_file_exists": False,
+                        "state_status_known": False,
+                        "launcher_pid_alive": False,
+                        "daemon_pid_alive": False,
+                    }
+                },
                 "state_file": "scratch/runtime/brainstem_control_plane_manager_ws28_017_state.json",
                 "heartbeat_file": "scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json",
+                "watchdog_state_file": "scratch/runtime/watchdog_daemon_state_ws28_025.json",
             },
         )
         endurance_called = {"value": False}
@@ -383,10 +437,23 @@ def test_full_chain_m0_m12_stops_when_execution_governance_gate_fails(monkeypatc
                     "heartbeat_gate": True,
                     "launcher_pid_alive": True,
                     "manager_state_exists": True,
+                    "watchdog_gate": True,
+                    "watchdog_state_exists": True,
+                    "watchdog_launcher_pid_alive": True,
+                    "watchdog_daemon_pid_alive": True,
                 },
                 "heartbeat": {"checks": {"heartbeat_exists": True}},
+                "watchdog": {
+                    "checks": {
+                        "state_file_exists": True,
+                        "state_status_known": True,
+                        "launcher_pid_alive": True,
+                        "daemon_pid_alive": True,
+                    }
+                },
                 "state_file": "scratch/runtime/brainstem_control_plane_manager_ws28_017_state.json",
                 "heartbeat_file": "scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json",
+                "watchdog_state_file": "scratch/runtime/watchdog_daemon_state_ws28_025.json",
             },
         )
         monkeypatch.setattr(

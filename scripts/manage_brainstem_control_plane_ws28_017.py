@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
+from system.watchdog_daemon import WatchdogDaemon
+
 
 DEFAULT_STATE_FILE = Path("scratch/runtime/brainstem_control_plane_manager_ws28_017_state.json")
 DEFAULT_HEARTBEAT_FILE = Path("scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json")
@@ -21,11 +23,17 @@ DEFAULT_SUPERVISOR_SCRIPT = Path("scripts/run_brainstem_supervisor_ws23_001.py")
 DEFAULT_SPEC_FILE = Path("system/brainstem_services.spec")
 DEFAULT_SUPERVISOR_OUTPUT = Path("scratch/reports/brainstem_supervisor_entry_ws23_001.json")
 DEFAULT_MANAGER_LOG = Path("logs/autonomous/brainstem_control_plane_manager_ws28_017.log")
+DEFAULT_WATCHDOG_SCRIPT = Path("scripts/run_watchdog_daemon_ws28_025.py")
+DEFAULT_WATCHDOG_STATE_FILE = Path("scratch/runtime/watchdog_daemon_state_ws28_025.json")
+DEFAULT_WATCHDOG_OUTPUT = Path("scratch/reports/watchdog_daemon_ws28_025.json")
+DEFAULT_WATCHDOG_LOG = Path("logs/autonomous/watchdog_daemon_ws28_025.log")
 DEFAULT_OUTPUT = Path("scratch/reports/brainstem_control_plane_manage_ws28_017.json")
 REPORT_SCHEMA_VERSION = "ws28_017_brainstem_control_plane_manage.v1"
 
 _HEARTBEAT_STALE_WARNING_SECONDS = 120.0
 _HEARTBEAT_STALE_CRITICAL_SECONDS = 300.0
+_WATCHDOG_STATE_STALE_WARNING_SECONDS = 120.0
+_WATCHDOG_STATE_STALE_CRITICAL_SECONDS = 300.0
 
 
 def _utc_iso_now() -> str:
@@ -221,6 +229,113 @@ def _build_daemon_command(
     ]
 
 
+def _build_watchdog_daemon_command(
+    *,
+    python_executable: str,
+    watchdog_script: Path,
+    repo_root: Path,
+    state_file: Path,
+    output_file: Path,
+    interval_seconds: float,
+    max_ticks: int,
+    warn_only: bool = True,
+) -> List[str]:
+    command = [
+        python_executable,
+        _to_unix_path(watchdog_script),
+        "--repo-root",
+        _to_unix_path(repo_root),
+        "--mode",
+        "run",
+        "--state-file",
+        _to_unix_path(state_file),
+        "--output",
+        _to_unix_path(output_file),
+        "--interval-seconds",
+        str(max(0.0, float(interval_seconds))),
+        "--max-ticks",
+        str(max(1, int(max_ticks))),
+    ]
+    if warn_only:
+        command.append("--warn-only")
+    return command
+
+
+def _build_watchdog_status(
+    *,
+    watchdog_state_file: Path,
+    launcher_pid: int = 0,
+    stale_warning_seconds: float = _WATCHDOG_STATE_STALE_WARNING_SECONDS,
+    stale_critical_seconds: float = _WATCHDOG_STATE_STALE_CRITICAL_SECONDS,
+) -> Dict[str, Any]:
+    state_summary = WatchdogDaemon.read_daemon_state(
+        watchdog_state_file,
+        stale_warning_seconds=float(stale_warning_seconds),
+        stale_critical_seconds=float(stale_critical_seconds),
+    )
+    daemon_pid = int(state_summary.get("pid") or 0)
+    launcher_pid_int = int(launcher_pid)
+    launcher_pid_alive = _pid_alive(launcher_pid_int) if launcher_pid_int > 0 else True
+    daemon_pid_alive = _pid_alive(daemon_pid) if daemon_pid > 0 else False
+    reason_code = str(state_summary.get("reason_code") or "")
+    checks = {
+        "state_file_exists": watchdog_state_file.exists(),
+        "state_status_known": str(state_summary.get("status") or "") in {"ok", "warning", "critical"},
+        "state_not_stale": reason_code not in {"WATCHDOG_DAEMON_STALE_WARNING", "WATCHDOG_DAEMON_STALE_CRITICAL"},
+        "launcher_pid_alive": launcher_pid_alive,
+        "daemon_pid_alive": daemon_pid_alive,
+    }
+    reasons: List[str] = []
+    if not checks["state_file_exists"]:
+        reasons.append("state_file_missing")
+    if checks["state_file_exists"] and not checks["state_status_known"]:
+        reasons.append("state_status_unknown")
+    if checks["state_file_exists"] and not checks["state_not_stale"]:
+        reasons.append("state_stale")
+    if launcher_pid_int > 0 and not checks["launcher_pid_alive"]:
+        reasons.append("launcher_pid_not_alive")
+    if checks["state_file_exists"] and not checks["daemon_pid_alive"]:
+        reasons.append("daemon_pid_not_alive")
+    return {
+        "passed": all(checks.values()),
+        "checks": checks,
+        "reasons": reasons,
+        "state_file": _to_unix_path(watchdog_state_file),
+        "launcher_pid": launcher_pid_int,
+        "daemon_pid": daemon_pid,
+        "state_summary": state_summary,
+    }
+
+
+def _wait_for_watchdog_state(
+    watchdog_state_file: Path,
+    *,
+    launcher_pid: int,
+    timeout_seconds: float,
+    stale_warning_seconds: float = _WATCHDOG_STATE_STALE_WARNING_SECONDS,
+    stale_critical_seconds: float = _WATCHDOG_STATE_STALE_CRITICAL_SECONDS,
+) -> Dict[str, Any]:
+    deadline = time.time() + max(0.5, float(timeout_seconds))
+    last_snapshot = _build_watchdog_status(
+        watchdog_state_file=watchdog_state_file,
+        launcher_pid=launcher_pid,
+        stale_warning_seconds=stale_warning_seconds,
+        stale_critical_seconds=stale_critical_seconds,
+    )
+    while time.time() <= deadline:
+        snapshot = _build_watchdog_status(
+            watchdog_state_file=watchdog_state_file,
+            launcher_pid=launcher_pid,
+            stale_warning_seconds=stale_warning_seconds,
+            stale_critical_seconds=stale_critical_seconds,
+        )
+        last_snapshot = snapshot
+        if bool(snapshot.get("passed")):
+            return snapshot
+        time.sleep(0.2)
+    return last_snapshot
+
+
 def start_brainstem_control_plane(
     *,
     repo_root: Path,
@@ -230,9 +345,18 @@ def start_brainstem_control_plane(
     spec_file: Path,
     supervisor_output: Path,
     manager_log: Path,
+    watchdog_script: Path,
+    watchdog_state_file: Path,
+    watchdog_output: Path,
+    watchdog_log: Path,
     interval_seconds: float = 5.0,
     max_ticks: int = 1000000000,
+    watchdog_interval_seconds: float = 5.0,
+    watchdog_max_ticks: int = 1000000000,
+    watchdog_warn_only: bool = True,
     start_timeout_seconds: float = 8.0,
+    watchdog_state_stale_warning_seconds: float = _WATCHDOG_STATE_STALE_WARNING_SECONDS,
+    watchdog_state_stale_critical_seconds: float = _WATCHDOG_STATE_STALE_CRITICAL_SECONDS,
     force_restart: bool = False,
 ) -> Dict[str, Any]:
     root = repo_root.resolve()
@@ -242,10 +366,29 @@ def start_brainstem_control_plane(
     spec_file_path = _resolve_path(root, spec_file)
     supervisor_output_path = _resolve_path(root, supervisor_output)
     manager_log_path = _resolve_path(root, manager_log)
+    watchdog_script_path = _resolve_path(root, watchdog_script)
+    watchdog_state_path = _resolve_path(root, watchdog_state_file)
+    watchdog_output_path = _resolve_path(root, watchdog_output)
+    watchdog_log_path = _resolve_path(root, watchdog_log)
+    previous_state = _read_json(state_path)
 
     if not force_restart:
         current = _build_heartbeat_status(heartbeat_path)
-        if bool(current.get("passed")):
+        watchdog_launcher_pid = int(previous_state.get("watchdog_launcher_pid") or 0)
+        current_watchdog = _build_watchdog_status(
+            watchdog_state_file=watchdog_state_path,
+            launcher_pid=watchdog_launcher_pid,
+            stale_warning_seconds=watchdog_state_stale_warning_seconds,
+            stale_critical_seconds=watchdog_state_stale_critical_seconds,
+        )
+        if bool(current.get("passed")) and bool(current_watchdog.get("passed")):
+            checks = {
+                "already_running": True,
+                "spawned": False,
+                "heartbeat_detected": True,
+                "watchdog_gate": True,
+                "watchdog_state_exists": bool(current_watchdog.get("checks", {}).get("state_file_exists")),
+            }
             report = {
                 "task_id": "NGA-WS28-017",
                 "scenario": "brainstem_control_plane_manage",
@@ -254,16 +397,32 @@ def start_brainstem_control_plane(
                 "passed": True,
                 "status": "already_running",
                 "repo_root": _to_unix_path(root),
-                "checks": {
-                    "already_running": True,
-                    "spawned": False,
-                    "heartbeat_detected": True,
-                },
+                "checks": checks,
                 "heartbeat": current,
+                "watchdog": current_watchdog,
                 "state_file": _to_unix_path(state_path),
                 "heartbeat_file": _to_unix_path(heartbeat_path),
+                "watchdog_state_file": _to_unix_path(watchdog_state_path),
+                "watchdog_output": _to_unix_path(watchdog_output_path),
+                "watchdog_log": _to_unix_path(watchdog_log_path),
             }
-            _write_json(state_path, report)
+            persisted_state = dict(previous_state)
+            persisted_state.update(
+                {
+                    "task_id": "NGA-WS28-017",
+                    "scenario": "brainstem_control_plane_manage",
+                    "generated_at": _utc_iso_now(),
+                    "status": "already_running",
+                    "action": "start",
+                    "repo_root": _to_unix_path(root),
+                    "heartbeat_file": _to_unix_path(heartbeat_path),
+                    "watchdog_state_file": _to_unix_path(watchdog_state_path),
+                    "watchdog_output": _to_unix_path(watchdog_output_path),
+                    "watchdog_log": _to_unix_path(watchdog_log_path),
+                    "checks": checks,
+                }
+            )
+            _write_json(state_path, persisted_state)
             return report
 
     command = _build_daemon_command(
@@ -285,13 +444,45 @@ def start_brainstem_control_plane(
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+    watchdog_command = _build_watchdog_daemon_command(
+        python_executable=sys.executable,
+        watchdog_script=watchdog_script_path,
+        repo_root=root,
+        state_file=watchdog_state_path,
+        output_file=watchdog_output_path,
+        interval_seconds=watchdog_interval_seconds,
+        max_ticks=watchdog_max_ticks,
+        warn_only=watchdog_warn_only,
+    )
+    watchdog_log_path.parent.mkdir(parents=True, exist_ok=True)
+    with watchdog_log_path.open("a", encoding="utf-8") as watchdog_log_handle:
+        watchdog_process = subprocess.Popen(  # noqa: S603
+            watchdog_command,
+            cwd=str(root),
+            stdout=watchdog_log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
 
     heartbeat_snapshot = _wait_for_heartbeat(heartbeat_path, timeout_seconds=start_timeout_seconds)
+    watchdog_snapshot = _wait_for_watchdog_state(
+        watchdog_state_path,
+        launcher_pid=int(watchdog_process.pid),
+        timeout_seconds=start_timeout_seconds,
+        stale_warning_seconds=watchdog_state_stale_warning_seconds,
+        stale_critical_seconds=watchdog_state_stale_critical_seconds,
+    )
     checks = {
         "spawned": int(process.pid) > 0,
         "heartbeat_detected": bool(heartbeat_snapshot.get("checks", {}).get("heartbeat_exists")),
         "heartbeat_generated_at_valid": bool(heartbeat_snapshot.get("checks", {}).get("generated_at_valid")),
         "daemon_pid_alive": bool(heartbeat_snapshot.get("checks", {}).get("daemon_pid_alive")),
+        "watchdog_spawned": int(watchdog_process.pid) > 0,
+        "watchdog_state_detected": bool(watchdog_snapshot.get("checks", {}).get("state_file_exists")),
+        "watchdog_state_known": bool(watchdog_snapshot.get("checks", {}).get("state_status_known")),
+        "watchdog_daemon_pid_alive": bool(watchdog_snapshot.get("checks", {}).get("daemon_pid_alive")),
+        "watchdog_launcher_pid_alive": bool(watchdog_snapshot.get("checks", {}).get("launcher_pid_alive")),
+        "watchdog_gate": bool(watchdog_snapshot.get("passed")),
     }
     passed = all(checks.values())
 
@@ -305,10 +496,16 @@ def start_brainstem_control_plane(
         "launcher_pid": int(process.pid),
         "heartbeat_pid": int(heartbeat_snapshot.get("pid") or 0),
         "command": command,
+        "watchdog_launcher_pid": int(watchdog_process.pid),
+        "watchdog_daemon_pid": int(watchdog_snapshot.get("daemon_pid") or 0),
+        "watchdog_command": watchdog_command,
         "state_file": _to_unix_path(state_path),
         "heartbeat_file": _to_unix_path(heartbeat_path),
+        "watchdog_state_file": _to_unix_path(watchdog_state_path),
         "supervisor_output": _to_unix_path(supervisor_output_path),
+        "watchdog_output": _to_unix_path(watchdog_output_path),
         "manager_log": _to_unix_path(manager_log_path),
+        "watchdog_log": _to_unix_path(watchdog_log_path),
         "checks": checks,
     }
     _write_json(state_path, state_payload)
@@ -321,12 +518,19 @@ def start_brainstem_control_plane(
         "repo_root": _to_unix_path(root),
         "checks": checks,
         "heartbeat": heartbeat_snapshot,
+        "watchdog": watchdog_snapshot,
         "state_file": _to_unix_path(state_path),
         "heartbeat_file": _to_unix_path(heartbeat_path),
+        "watchdog_state_file": _to_unix_path(watchdog_state_path),
         "manager_log": _to_unix_path(manager_log_path),
+        "watchdog_log": _to_unix_path(watchdog_log_path),
         "launcher_pid": int(process.pid),
         "heartbeat_pid": int(heartbeat_snapshot.get("pid") or 0),
+        "watchdog_launcher_pid": int(watchdog_process.pid),
+        "watchdog_daemon_pid": int(watchdog_snapshot.get("daemon_pid") or 0),
         "command": command,
+        "watchdog_command": watchdog_command,
+        "watchdog_output": _to_unix_path(watchdog_output_path),
     }
 
 
@@ -335,18 +539,33 @@ def status_brainstem_control_plane(
     repo_root: Path,
     state_file: Path,
     heartbeat_file: Path,
+    watchdog_state_file: Path,
+    watchdog_state_stale_warning_seconds: float = _WATCHDOG_STATE_STALE_WARNING_SECONDS,
+    watchdog_state_stale_critical_seconds: float = _WATCHDOG_STATE_STALE_CRITICAL_SECONDS,
 ) -> Dict[str, Any]:
     root = repo_root.resolve()
     state_path = _resolve_path(root, state_file)
     heartbeat_path = _resolve_path(root, heartbeat_file)
+    watchdog_state_path = _resolve_path(root, watchdog_state_file)
     manager_state = _read_json(state_path)
     heartbeat = _build_heartbeat_status(heartbeat_path)
     launcher_pid = int(manager_state.get("launcher_pid") or 0)
     launcher_pid_alive = _pid_alive(launcher_pid) if launcher_pid > 0 else True
+    watchdog_launcher_pid = int(manager_state.get("watchdog_launcher_pid") or 0)
+    watchdog = _build_watchdog_status(
+        watchdog_state_file=watchdog_state_path,
+        launcher_pid=watchdog_launcher_pid,
+        stale_warning_seconds=watchdog_state_stale_warning_seconds,
+        stale_critical_seconds=watchdog_state_stale_critical_seconds,
+    )
     checks = {
         "manager_state_exists": state_path.exists(),
         "heartbeat_gate": bool(heartbeat.get("passed")),
         "launcher_pid_alive": launcher_pid_alive,
+        "watchdog_gate": bool(watchdog.get("passed")),
+        "watchdog_launcher_pid_alive": bool(watchdog.get("checks", {}).get("launcher_pid_alive")),
+        "watchdog_daemon_pid_alive": bool(watchdog.get("checks", {}).get("daemon_pid_alive")),
+        "watchdog_state_exists": bool(watchdog.get("checks", {}).get("state_file_exists")),
     }
     reasons: List[str] = []
     if not checks["manager_state_exists"]:
@@ -355,7 +574,9 @@ def status_brainstem_control_plane(
         reasons.extend([f"heartbeat:{item}" for item in list(heartbeat.get("reasons") or [])])
     if launcher_pid > 0 and not checks["launcher_pid_alive"]:
         reasons.append("launcher_pid_not_alive")
-    passed = checks["heartbeat_gate"] and checks["launcher_pid_alive"]
+    if not checks["watchdog_gate"]:
+        reasons.extend([f"watchdog:{item}" for item in list(watchdog.get("reasons") or [])])
+    passed = all(checks.values())
     return {
         "task_id": "NGA-WS28-017",
         "scenario": "brainstem_control_plane_manage",
@@ -367,8 +588,10 @@ def status_brainstem_control_plane(
         "reasons": reasons,
         "state_file": _to_unix_path(state_path),
         "heartbeat_file": _to_unix_path(heartbeat_path),
+        "watchdog_state_file": _to_unix_path(watchdog_state_path),
         "manager_state": manager_state,
         "heartbeat": heartbeat,
+        "watchdog": watchdog,
     }
 
 
@@ -377,18 +600,24 @@ def stop_brainstem_control_plane(
     repo_root: Path,
     state_file: Path,
     heartbeat_file: Path,
+    watchdog_state_file: Path,
     stop_timeout_seconds: float = 3.0,
 ) -> Dict[str, Any]:
     root = repo_root.resolve()
     state_path = _resolve_path(root, state_file)
     heartbeat_path = _resolve_path(root, heartbeat_file)
+    watchdog_state_path = _resolve_path(root, watchdog_state_file)
     state_payload = _read_json(state_path)
     heartbeat_payload = _read_json(heartbeat_path)
+    watchdog_payload = _read_json(watchdog_state_path)
 
     target_pids = sorted(
         {
             int(state_payload.get("launcher_pid") or 0),
             int(heartbeat_payload.get("pid") or 0),
+            int(state_payload.get("watchdog_launcher_pid") or 0),
+            int(state_payload.get("watchdog_daemon_pid") or 0),
+            int(watchdog_payload.get("pid") or 0),
         }
         - {0}
     )
@@ -407,6 +636,7 @@ def stop_brainstem_control_plane(
         "action": "stop",
         "state_file": _to_unix_path(state_path),
         "heartbeat_file": _to_unix_path(heartbeat_path),
+        "watchdog_state_file": _to_unix_path(watchdog_state_path),
         "target_pids": target_pids,
         "termination_results": termination_results,
         "remaining_pids": remaining_pids,
@@ -427,6 +657,7 @@ def stop_brainstem_control_plane(
         "remaining_pids": remaining_pids,
         "state_file": _to_unix_path(state_path),
         "heartbeat_file": _to_unix_path(heartbeat_path),
+        "watchdog_state_file": _to_unix_path(watchdog_state_path),
     }
 
 
@@ -440,10 +671,19 @@ def run_manage_brainstem_control_plane_ws28_017(
     spec_file: Path = DEFAULT_SPEC_FILE,
     supervisor_output: Path = DEFAULT_SUPERVISOR_OUTPUT,
     manager_log: Path = DEFAULT_MANAGER_LOG,
+    watchdog_script: Path = DEFAULT_WATCHDOG_SCRIPT,
+    watchdog_state_file: Path = DEFAULT_WATCHDOG_STATE_FILE,
+    watchdog_output: Path = DEFAULT_WATCHDOG_OUTPUT,
+    watchdog_log: Path = DEFAULT_WATCHDOG_LOG,
     output_file: Path = DEFAULT_OUTPUT,
     interval_seconds: float = 5.0,
     max_ticks: int = 1000000000,
+    watchdog_interval_seconds: float = 5.0,
+    watchdog_max_ticks: int = 1000000000,
+    watchdog_warn_only: bool = True,
     start_timeout_seconds: float = 8.0,
+    watchdog_state_stale_warning_seconds: float = _WATCHDOG_STATE_STALE_WARNING_SECONDS,
+    watchdog_state_stale_critical_seconds: float = _WATCHDOG_STATE_STALE_CRITICAL_SECONDS,
     stop_timeout_seconds: float = 3.0,
     force_restart: bool = False,
 ) -> Dict[str, Any]:
@@ -457,9 +697,18 @@ def run_manage_brainstem_control_plane_ws28_017(
             spec_file=spec_file,
             supervisor_output=supervisor_output,
             manager_log=manager_log,
+            watchdog_script=watchdog_script,
+            watchdog_state_file=watchdog_state_file,
+            watchdog_output=watchdog_output,
+            watchdog_log=watchdog_log,
             interval_seconds=interval_seconds,
             max_ticks=max_ticks,
+            watchdog_interval_seconds=watchdog_interval_seconds,
+            watchdog_max_ticks=watchdog_max_ticks,
+            watchdog_warn_only=watchdog_warn_only,
             start_timeout_seconds=start_timeout_seconds,
+            watchdog_state_stale_warning_seconds=watchdog_state_stale_warning_seconds,
+            watchdog_state_stale_critical_seconds=watchdog_state_stale_critical_seconds,
             force_restart=force_restart,
         )
     elif normalized_action == "status":
@@ -467,12 +716,16 @@ def run_manage_brainstem_control_plane_ws28_017(
             repo_root=repo_root,
             state_file=state_file,
             heartbeat_file=heartbeat_file,
+            watchdog_state_file=watchdog_state_file,
+            watchdog_state_stale_warning_seconds=watchdog_state_stale_warning_seconds,
+            watchdog_state_stale_critical_seconds=watchdog_state_stale_critical_seconds,
         )
     elif normalized_action == "stop":
         report = stop_brainstem_control_plane(
             repo_root=repo_root,
             state_file=state_file,
             heartbeat_file=heartbeat_file,
+            watchdog_state_file=watchdog_state_file,
             stop_timeout_seconds=stop_timeout_seconds,
         )
     else:
@@ -499,11 +752,35 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_SUPERVISOR_OUTPUT,
         help="Supervisor report output path",
     )
+    parser.add_argument("--watchdog-script", type=Path, default=DEFAULT_WATCHDOG_SCRIPT, help="Watchdog daemon script path")
+    parser.add_argument("--watchdog-state-file", type=Path, default=DEFAULT_WATCHDOG_STATE_FILE, help="Watchdog daemon state path")
+    parser.add_argument("--watchdog-output", type=Path, default=DEFAULT_WATCHDOG_OUTPUT, help="Watchdog daemon run report path")
+    parser.add_argument("--watchdog-log", type=Path, default=DEFAULT_WATCHDOG_LOG, help="Watchdog daemon process log path")
     parser.add_argument("--manager-log", type=Path, default=DEFAULT_MANAGER_LOG, help="Manager log path")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Result output JSON path")
     parser.add_argument("--interval-seconds", type=float, default=5.0, help="Heartbeat interval seconds")
     parser.add_argument("--max-ticks", type=int, default=1000000000, help="Daemon max ticks")
+    parser.add_argument("--watchdog-interval-seconds", type=float, default=5.0, help="Watchdog daemon interval seconds")
+    parser.add_argument("--watchdog-max-ticks", type=int, default=1000000000, help="Watchdog daemon max ticks")
+    parser.add_argument(
+        "--watchdog-warn-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run watchdog daemon in warn-only mode",
+    )
     parser.add_argument("--start-timeout-seconds", type=float, default=8.0, help="Start action heartbeat timeout")
+    parser.add_argument(
+        "--watchdog-state-stale-warning-seconds",
+        type=float,
+        default=_WATCHDOG_STATE_STALE_WARNING_SECONDS,
+        help="Watchdog daemon stale warning threshold",
+    )
+    parser.add_argument(
+        "--watchdog-state-stale-critical-seconds",
+        type=float,
+        default=_WATCHDOG_STATE_STALE_CRITICAL_SECONDS,
+        help="Watchdog daemon stale critical threshold",
+    )
     parser.add_argument("--stop-timeout-seconds", type=float, default=3.0, help="Stop action wait timeout")
     parser.add_argument("--force-restart", action="store_true", help="Allow start action to restart regardless of current health")
     parser.add_argument("--strict", action="store_true", help="Return non-zero when checks fail")
@@ -521,10 +798,19 @@ def main() -> int:
         spec_file=args.spec_file,
         supervisor_output=args.supervisor_output,
         manager_log=args.manager_log,
+        watchdog_script=args.watchdog_script,
+        watchdog_state_file=args.watchdog_state_file,
+        watchdog_output=args.watchdog_output,
+        watchdog_log=args.watchdog_log,
         output_file=args.output,
         interval_seconds=float(args.interval_seconds),
         max_ticks=int(args.max_ticks),
+        watchdog_interval_seconds=float(args.watchdog_interval_seconds),
+        watchdog_max_ticks=int(args.watchdog_max_ticks),
+        watchdog_warn_only=bool(args.watchdog_warn_only),
         start_timeout_seconds=float(args.start_timeout_seconds),
+        watchdog_state_stale_warning_seconds=float(args.watchdog_state_stale_warning_seconds),
+        watchdog_state_stale_critical_seconds=float(args.watchdog_state_stale_critical_seconds),
         stop_timeout_seconds=float(args.stop_timeout_seconds),
         force_restart=bool(args.force_restart),
     )
