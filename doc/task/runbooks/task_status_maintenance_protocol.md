@@ -1,7 +1,7 @@
-# 任务状态维护协议（WS10-WS20）
+# 任务状态维护协议（M0-M12）
 
 文档状态：执行协议  
-最后更新：2026-02-26
+最后更新：2026-02-27
 
 ## 1. 目标
 
@@ -16,6 +16,7 @@
 1. 运行态状态源：`doc/task/09-execution-board.csv`。
 2. 导入态镜像：`doc/task/99-task-backlog.csv`（由脚本从 `09` 同步）。
 3. WS 文档（`10~20-ws-*.md`）默认按“设计与任务拆解说明”使用，不作为实时状态源。
+4. `doc/task/23-phase3-full-execution-board.csv` 保留为 Phase3 快照视图；实时状态以 `09/99` 为准。
 
 ## 3. `done` 最低证据标准
 
@@ -26,7 +27,7 @@
 
 ## 4. 维护流程（建议每次里程碑/机器迁移后执行）
 
-1. 先同步 WS10-WS20 文档状态（消除 `- status:` 漂移）：
+1. 先同步 WS10-WS20 文档状态（消除 `- status:` 漂移；该步骤仅覆盖 `10~20-ws-*.md`）：
 
 ```bash
 .venv/bin/python scripts/sync_ws_doc_status_from_board.py --apply

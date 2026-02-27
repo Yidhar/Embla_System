@@ -159,3 +159,13 @@
   - 已完成 Phase B：执行桥新增 FE/BE/Ops 语义工具链守卫（semantic toolchain guard），并将结构化拒绝原因（`reason_code/category/severity/violations/policy_source`）接入 `SubTaskExecutionCompleted/SubTaskRejected` 事件与 `/v1/ops/runtime/posture`、`/v1/ops/incidents/latest` 聚合视图。
   - 已完成 Phase C：语义守卫策略外置为 `.spec`（`policy/role_executor_semantic_guard.spec`），`execution_bridge` 按 spec 加载并支持任务 contract 覆盖。
   - 已完成 Phase D：`M0-M12` 全链新增 `m12_execution_governance` 门禁组，治理 critical 与预算超限可直接阻断收口链；同时对 `role_executor_semantic_guard.spec` 执行低成本发布门禁（存在性/schema/角色完整性+hash）。
+
+### NGA-WS28-022~025 待办拆卡（#4/#6/#7/#9）
+
+- 状态：`active`（2026-02-27）
+- 任务单：`doc/task/implementation/NGA-WS28-022-025-executable-cards.md`
+- 说明：
+  - `WS28-022`（#7）Immutable DNA 运行时注入：`done`，实施记录 `doc/task/implementation/NGA-WS28-022-implementation.md`。
+  - `WS28-023`（#9）真实 MCP agent 隔离联调：`done`，实施记录 `doc/task/implementation/NGA-WS28-023-implementation.md`。
+  - `WS28-024`（#4）Brainstem Supervisor 接入主启动链：`done`，实施记录 `doc/task/implementation/NGA-WS28-024-implementation.md`。
+  - `WS28-025`（#6）Watchdog Daemon 常驻化：`done`，实施记录 `doc/task/implementation/NGA-WS28-025-implementation.md`。

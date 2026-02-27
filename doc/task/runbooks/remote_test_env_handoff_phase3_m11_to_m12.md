@@ -186,4 +186,4 @@ uv sync
 1. 当前仓库已新增 `WS27-001` 虚拟 72h 等效脚本，但尚无“连续 72h 墙钟执行完成”的远程验收记录；放行前需补齐真实墙钟报告。
 2. 如远程环境出现 `scratch` 膨胀、锁文件或权限清理问题，按人工清理流程处理后继续，不在自动脚本中执行破坏性清理。
 3. 继续开发时，优先保持“分片提交”节奏（功能提交与文档提交分离）。
-4. `doc/task/09-execution-board.csv` 与 `doc/task/99-task-backlog.csv` 目前仍是 `WS10-WS20` 主域口径；`WS23-WS27` 进度以 `doc/task/23-phase3-full-execution-board.csv` + `doc/task/23-phase3-full-target-task-list.md` + `doc/task/implementation/NGA-WS27-*.md` 为准。
+4. `doc/task/09-execution-board.csv` 与 `doc/task/99-task-backlog.csv` 现为 `M0-M12` 统一状态源；`doc/task/23-phase3-full-execution-board.csv` 保留为 Phase3 快照视图，用于历史核对。

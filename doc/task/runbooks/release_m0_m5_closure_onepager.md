@@ -1,12 +1,12 @@
 # 发布收口一页清单（M0-M5）
 
 文档状态：`release_closure_active`  
-适用范围：`doc/task` 当前执行板（76/76 done）  
+适用范围：`M0-M5` 收口核对（`doc/task/09-execution-board.csv` 已扩展到 `M0-M12`）  
 基准日期：`2026-02-24`
 
 ## 1. 当前收口快照
 
-- 任务执行板：`doc/task/09-execution-board.csv` -> `done=76`, `review=0`
+- 任务执行板：`doc/task/09-execution-board.csv`（统一执行板；`M0-M5` 子集请按 `phase=M0~M5` 过滤）
 - 风险台账：`doc/task/08-risk-closure-ledger.md` -> `R1-R16 全部 done`
 - 文档一致性：`python scripts/validate_doc_consistency_ws16_006.py --strict` -> `0 issue`
 

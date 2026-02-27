@@ -8,7 +8,7 @@
 
 ## 2. 当前基线（2026-02-24）
 
-- `M0-M5`: 已收口，`doc/task/09-execution-board.csv` 为 `76/76 done`。
+- `M0-M5`: 已收口，当前在统一执行板 `doc/task/09-execution-board.csv` 中按 `phase=M0~M5` 过滤查看。
 - `M6-M7`: 已收口，`WS21 (6/6)` + `WS22 (4/4)` 完成。
 - 当前阶段: `Phase3 Full` 增量落地启动（新增里程碑定义为 `M8-M12`）。
 
@@ -88,7 +88,7 @@
 - 按 `G0 -> G9` 顺序推进；同组任务按 lane 并行派发。
 - 每个 `P0` 任务必须绑定至少 1 个自动化验证任务与 1 份 Runbook 更新。
 - 每个里程碑结束时，先跑门禁脚本，再更新 `doc/00-omni-operator-architecture.md` 的证据矩阵与状态字段。
-- `WS23-WS27` 状态跟踪优先维护在 `doc/task/23-phase3-full-execution-board.csv`，并与本清单快照保持一致。
+- `WS23-WS27` 运行态状态已同步到 `doc/task/09-execution-board.csv` / `doc/task/99-task-backlog.csv`；`doc/task/23-phase3-full-execution-board.csv` 作为 Phase3 快照视图保留。
 
 ## 8. 本轮推进快照（2026-02-25）
 

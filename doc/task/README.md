@@ -67,7 +67,7 @@
 22. `doc/task/08-risk-closure-ledger.md`
     - Critical/High 风险闭环台账（实现任务 + 验证任务 + 证据）。
 23. `doc/task/09-execution-board.csv`
-    - 可直接执行/流转的任务看板数据（已将 W1 任务置为 `in_progress`）。
+    - 可直接执行/流转的统一任务看板数据（`M0-M12`）。
 24. `doc/task/implementation/`
     - 各任务波次实施记录与验证证据归档（按任务 ID 命名）。
 25. `doc/task/runbooks/INDEX.md`
@@ -112,7 +112,7 @@
 44. `doc/task/25-subagent-development-fabric-status-matrix.md`
     - 子代理开发执行面分层状态矩阵（区分 `BRIDGE_DONE` 与 `TARGET_DONE`，并标注文档噪音与统一判定口径）。
 45. `doc/task/23-phase3-full-execution-board.csv`
-    - Phase3 Full（WS23-WS27）专用执行板，作为 `09/99`（WS10-WS20）之外的增量任务状态源。
+    - Phase3 Full（WS23-WS27）快照执行板，用于历史核对与阶段复盘（运行态状态源已并入 `09/99`）。
 46. `scripts/audit_task_status_drift.py`
     - 状态漂移审计与批量回调工具（检查 `09/99` 漂移、`done` 缺少日期证据、WS markdown 状态漂移；可把弱证据 `done` 回调为 `review`）。
 47. `scripts/sync_ws_doc_status_from_board.py`
@@ -141,4 +141,4 @@
 1. 所有高风险任务必须带回滚方案与演练记录。
 2. 任何跨模块任务必须明确依赖与接口契约。
 3. 迁移任务禁止一次性大爆炸切换，必须支持灰度与回退。
-4. 执行板读取顺序：`WS10-WS20` 看 `09/99`；`WS23-WS27` 看 `23-phase3-full-execution-board.csv` + `23-phase3-full-target-task-list.md`。
+4. 执行板读取顺序：统一以 `09/99` 为主；`23-phase3-full-execution-board.csv` + `23-phase3-full-target-task-list.md` 用于 Phase3 历史快照核对。
