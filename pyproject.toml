@@ -118,7 +118,16 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 
-include = ["apiserver", "agentserver", "summer_memory", "thinking", "ui", "voice"]
+include = [
+    "apiserver",
+    "agentserver",
+    "autonomous",
+    "guide_engine",
+    "mcpserver",
+    "summer_memory",
+    "system",
+    "voice",
+]
 
 
 
@@ -149,6 +158,7 @@ test = [
 addopts = "-q -p no:cacheprovider"
 testpaths = [
   "autonomous/tests",
+  "tests",
 ]
 python_files = ["test_*.py", "*_test.py"]
 

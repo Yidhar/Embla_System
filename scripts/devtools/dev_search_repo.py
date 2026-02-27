@@ -3,7 +3,7 @@
 """Search plain substring in repo files.
 
 Usage:
-  python system/_dev_search_repo.py <needle> [root]
+  python scripts/devtools/dev_search_repo.py <needle> [root]
 
 Prints: relative_path:line_no: line
 """
@@ -17,11 +17,11 @@ from pathlib import Path
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("usage: python system/_dev_search_repo.py <needle> [root]")
+        print("usage: python scripts/devtools/dev_search_repo.py <needle> [root]")
         return 2
 
     needle = sys.argv[1]
-    root = Path(sys.argv[2]) if len(sys.argv) >= 3 else Path(__file__).parent.parent
+    root = Path(sys.argv[2]) if len(sys.argv) >= 3 else Path(__file__).resolve().parents[2]
     root = root.resolve()
 
     ignore_dirs = {".git", ".venv", "__pycache__", "node_modules", "dist", "release", "logs"}

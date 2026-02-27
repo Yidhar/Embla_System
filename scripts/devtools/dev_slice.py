@@ -3,7 +3,7 @@
 """Print file lines in a range.
 
 Usage:
-  python system/_dev_slice.py <file> <start> <end>
+  python scripts/devtools/dev_slice.py <file> <start> <end>
 
 Start/end are 1-based inclusive.
 """
@@ -16,7 +16,7 @@ from pathlib import Path
 
 def main() -> int:
     if len(sys.argv) < 4:
-        print("usage: python system/_dev_slice.py <file> <start> <end>")
+        print("usage: python scripts/devtools/dev_slice.py <file> <start> <end>")
         return 2
 
     file_path = Path(sys.argv[1])

@@ -35,10 +35,18 @@ This directory contains release gates, runbook utilities, and one-off task scrip
   - Canonical implementation:
     - `scripts/gates/legacy/desktop_release_compat_ws20_006.py`
 
+## Devtools Helpers (`experimental`)
+
+- `scripts/devtools/dev_grep.py`
+  - Tiny grep helper for line-level pattern scan in a single file.
+- `scripts/devtools/dev_search_repo.py`
+  - Plain substring search across the repo.
+- `scripts/devtools/dev_slice.py`
+  - Print file line ranges for quick inspection.
+
 ## Compatibility Policy
 
 - Root-level script names are treated as stable command contracts.
 - When internals are reorganized, root wrappers should remain available.
 - Legacy gates can be forced to blocking mode when needed:
   - `python scripts/release_closure_chain_m0_m5.py --strict-legacy-desktop-gate`
-

@@ -3,7 +3,7 @@
 """Tiny repo-local grep helper.
 
 Usage:
-  python system/_dev_grep.py <file> <pattern>
+  python scripts/devtools/dev_grep.py <file> <pattern>
 
 Prints matching line numbers and the line text.
 """
@@ -17,7 +17,7 @@ from pathlib import Path
 
 def main() -> int:
     if len(sys.argv) < 3:
-        print("usage: python system/_dev_grep.py <file> <pattern>")
+        print("usage: python scripts/devtools/dev_grep.py <file> <pattern>")
         return 2
 
     file_path = Path(sys.argv[1])
