@@ -17,8 +17,8 @@
 - 出现“先/再/然后/并且/依次”等时，拆成 JSON 数组，按依赖顺序输出。
 - 顺序遵循 TSP-v1 阶段：`T0 发现` -> `T1 实施` -> `T2 验证` -> `T3 证据`。
 
-5. **代码开发任务默认走 Codex 主链**
-- 涉及代码实现/修复/批量改造时，优先输出 `mcp(codex-cli/ask-codex)`。
+5. **代码开发任务默认走原生执行主链**
+- 涉及代码实现/修复/批量改造时，优先输出 `native` 工具链调用（读/改/验）。
 - `prompt` 里必须包含：目标、约束、执行排期（T0-T3）、验收与证据路径要求。
 
 6. **无可执行任务**
@@ -57,14 +57,13 @@
   "arguments": {{}}
 }}
 
-### Codex 代码任务（优先模板）
+### 代码任务（优先模板）
 {{
-  "agentType": "mcp",
-  "service_name": "codex-cli",
-  "tool_name": "ask-codex",
-  "prompt": "在当前仓库完成目标，并遵循：T0读取定位/T1实现改动/T2最小验证/T3输出证据路径与风险。",
-  "sandboxMode": "workspace-write",
-  "approvalPolicy": "on-failure"
+  "agentType": "native",
+  "tool_name": "run_cmd",
+  "command": "按 T0->T1->T2->T3 排期推进；先执行 T0 发现阶段命令（例如 rg/ls/git status）",
+  "cwd": ".",
+  "timeout_seconds": 120
 }}
 
 ### Live2D 调用格式
@@ -76,7 +75,7 @@
 ## 路由规则
 
 - 文件读写、命令执行、git 分析、文档查询：优先 `native`。
-- 代码开发与批量重构：优先 `codex-cli/ask-codex`。
+- 代码开发与批量重构：优先 `native` 工具链；必要时使用已注册 `mcp` 服务。
 - 需要 MCP 服务能力时：使用 `mcp`。
 - 发布/自治链路语义：优先生成“状态核验/门禁判定”任务，不直接生成“已发布”结论型任务。
 - `git_checkout_file` 必须显式包含 `confirm: true`。

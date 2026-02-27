@@ -1,11 +1,11 @@
 {
   "schema_version": "ws18-006-v1",
-  "generated_at": "2026-02-26T10:39:59.407776+00:00",
+  "generated_at": "2026-02-27T15:33:10.189197+00:00",
   "files": {
     "conversation_style_prompt.txt": "01bc3d70916bade52ab894f7ce79d97bb785c6c57f2ab7321dd90fa14071dfa5",
-    "conversation_analyzer_prompt.txt": "d747e9bbee81e5f3fafc5308e24a9b03c6f9adf2572ffb74128aca1f7f8eefe0",
-    "tool_dispatch_prompt.txt": "68226effd78cc30127469cdf14d7eccfe180658ac1a76605423bd35b22a4b3cc",
-    "agentic_tool_prompt.txt": "baf6cee149db1230a58901d239763287d69eedb2b46bbfc802a43454c66c69ce"
+    "conversation_analyzer_prompt.txt": "fd55a1578df933b4f2c6c49889360f041032752098d02cbd68b260f54c096b1d",
+    "tool_dispatch_prompt.txt": "7138165df3030949a3f54d798af2b2a8e59f2d5c7887bdbbef0675389e35d140",
+    "agentic_tool_prompt.txt": "07a29eef3d3d89ca69007d1e01329cd950d62f1ae308ea52ffb80757b4b0117d"
   },
   "injection_order": [
     "conversation_style_prompt.txt",

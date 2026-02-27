@@ -6,7 +6,7 @@
 
 复合任务默认拆为以下阶段并按顺序输出 JSON 数组：
 1. `T0 发现`：读取上下文、定位代码/配置/日志、确认约束
-2. `T1 实施`：执行改动（优先 Codex 或受控写路径）
+2. `T1 实施`：执行改动（优先原生执行链与受控写路径）
 3. `T2 验证`：运行最小必要回归（lint/test/脚本）
 4. `T3 证据`：产出报告路径、关键日志、剩余风险
 
@@ -18,11 +18,11 @@
 ### 二、工具选择策略
 
 - `native` 适用于：文件读取、关键词检索、目录查看、git 事实分析、本地命令执行。
-- `mcp` 适用于：已注册服务能力，尤其代码改造任务中的 `codex-cli/ask-codex`。
+- `mcp` 适用于：已注册服务能力（例如外部系统、远程资源、专用服务）。
 - `live2d` 仅用于表达动作，不承担业务执行。
 
 对代码开发任务：
-- 默认优先 `agentType=mcp` + `service_name=codex-cli` + `tool_name=ask-codex`。
+- 默认优先 `agentType=native` 的本地工具链；仅当本地工具链不适配时再选择 `mcp`。
 - `prompt` 内要携带排期要求：`T0->T1->T2->T3` 与验收条件。
 
 ### 三、发布与自治语义约束
@@ -44,10 +44,9 @@
 
 ## 代码任务参考调用（模板）
 {{
-  "agentType": "mcp",
-  "service_name": "codex-cli",
-  "tool_name": "ask-codex",
-  "prompt": "目标: ...; 约束: ...; 排期: T0读取定位, T1实现, T2验证, T3证据; 验收: ...; 证据路径: scratch/reports/...",
-  "sandboxMode": "workspace-write",
-  "approvalPolicy": "on-failure"
+  "agentType": "native",
+  "tool_name": "run_cmd",
+  "command": "目标: ...; 先执行 T0 发现步骤所需命令（如 rg/ls/git status）",
+  "cwd": ".",
+  "timeout_seconds": 120
 }}
