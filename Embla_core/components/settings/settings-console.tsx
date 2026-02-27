@@ -12,10 +12,6 @@ type QuickForm = {
   apiProtocol: string;
   apiTemperature: string;
   apiTimeout: string;
-  voiceEnabled: boolean;
-  realtimeVoiceEnabled: boolean;
-  realtimeVoiceMode: string;
-  realtimeTtsVoice: string;
   autonomousEnabled: boolean;
   autonomousCycleSeconds: string;
   releaseGuardEnabled: boolean;
@@ -30,7 +26,7 @@ type SettingsConsoleProps = {
   lang: AppLang;
 };
 
-type SectionKey = "api" | "voice" | "autonomous" | "ui" | "patch";
+type SectionKey = "api" | "autonomous" | "ui" | "patch";
 
 type DiffRow = {
   path: string;
@@ -47,10 +43,6 @@ const FORM_DEFAULT: QuickForm = {
   apiProtocol: "auto",
   apiTemperature: "0.7",
   apiTimeout: "120",
-  voiceEnabled: true,
-  realtimeVoiceEnabled: false,
-  realtimeVoiceMode: "auto",
-  realtimeTtsVoice: "zh-CN-XiaoyiNeural",
   autonomousEnabled: false,
   autonomousCycleSeconds: "3600",
   releaseGuardEnabled: true,
@@ -63,7 +55,6 @@ const FORM_DEFAULT: QuickForm = {
 
 const COLLAPSED_DEFAULT: Record<SectionKey, boolean> = {
   api: false,
-  voice: false,
   autonomous: false,
   ui: false,
   patch: false,
@@ -71,8 +62,6 @@ const COLLAPSED_DEFAULT: Record<SectionKey, boolean> = {
 
 const SENSITIVE_PATHS: Array<{ id: string; path: string[]; labelKey: string }> = [
   { id: "api.api_key", path: ["api", "api_key"], labelKey: "apiKey" },
-  { id: "voice_realtime.api_key", path: ["voice_realtime", "api_key"], labelKey: "realtimeApiKey" },
-  { id: "tts.api_key", path: ["tts", "api_key"], labelKey: "ttsApiKey" },
   { id: "computer_control.api_key", path: ["computer_control", "api_key"], labelKey: "computerControlApiKey" },
   {
     id: "computer_control.grounding_api_key",
@@ -82,7 +71,6 @@ const SENSITIVE_PATHS: Array<{ id: string; path: string[]; labelKey: string }> =
 ];
 
 const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"] as const;
-const REALTIME_VOICE_MODES = ["auto", "realtime", "hybrid"] as const;
 const API_PROVIDER_OPTIONS = ["openai_compatible", "openai", "google", "gemini", "auto"] as const;
 const API_PROTOCOL_OPTIONS = ["auto", "openai_chat_completions"] as const;
 
@@ -94,7 +82,6 @@ const PAGE_COPY: Record<
     loading: string;
     summary: {
       apiModel: string;
-      voice: string;
       autonomous: string;
       debug: string;
       enabled: string;
@@ -107,7 +94,6 @@ const PAGE_COPY: Record<
       saving: string;
       sections: {
         api: string;
-        voice: string;
         autonomous: string;
         ui: string;
       };
@@ -119,10 +105,6 @@ const PAGE_COPY: Record<
         apiProtocol: string;
         apiTemperature: string;
         apiTimeout: string;
-        voiceEnabled: string;
-        realtimeVoiceEnabled: string;
-        realtimeVoiceMode: string;
-        realtimeTtsVoice: string;
         autonomousEnabled: string;
         autonomousCycleSeconds: string;
         releaseGuardEnabled: string;
@@ -162,8 +144,6 @@ const PAGE_COPY: Record<
       empty: string;
       labels: {
         apiKey: string;
-        realtimeApiKey: string;
-        ttsApiKey: string;
         computerControlApiKey: string;
         groundingApiKey: string;
       };
@@ -180,11 +160,10 @@ const PAGE_COPY: Record<
 > = {
   en: {
     title: "Settings",
-    subtitle: "Configure API, voice, autonomous runtime guard, and UI behavior.",
+    subtitle: "Configure API, autonomous runtime guard, and UI behavior.",
     loading: "Loading settings from backend...",
     summary: {
       apiModel: "API Model",
-      voice: "Voice",
       autonomous: "Autonomous",
       debug: "Debug",
       enabled: "Enabled",
@@ -197,7 +176,6 @@ const PAGE_COPY: Record<
       saving: "Saving...",
       sections: {
         api: "API & Model",
-        voice: "Voice",
         autonomous: "Autonomous Guard",
         ui: "UI & Diagnostics",
       },
@@ -209,10 +187,6 @@ const PAGE_COPY: Record<
         apiProtocol: "Protocol",
         apiTemperature: "Temperature",
         apiTimeout: "Request Timeout (s)",
-        voiceEnabled: "Enable Voice Output",
-        realtimeVoiceEnabled: "Enable Realtime Voice",
-        realtimeVoiceMode: "Realtime Voice Mode",
-        realtimeTtsVoice: "Realtime TTS Voice",
         autonomousEnabled: "Enable Autonomous Runtime",
         autonomousCycleSeconds: "Cycle Interval (s)",
         releaseGuardEnabled: "Enable Release Guard",
@@ -252,8 +226,6 @@ const PAGE_COPY: Record<
       empty: "Empty",
       labels: {
         apiKey: "API Key",
-        realtimeApiKey: "Realtime Voice API Key",
-        ttsApiKey: "TTS API Key",
         computerControlApiKey: "Computer Control API Key",
         groundingApiKey: "Grounding API Key",
       },
@@ -269,11 +241,10 @@ const PAGE_COPY: Record<
   },
   "zh-CN": {
     title: "设置",
-    subtitle: "配置 API、语音、自主运行门禁和 UI 行为。",
+    subtitle: "配置 API、自主运行门禁和 UI 行为。",
     loading: "正在从后端加载配置...",
     summary: {
       apiModel: "API 模型",
-      voice: "语音",
       autonomous: "自主运行",
       debug: "调试模式",
       enabled: "已启用",
@@ -286,7 +257,6 @@ const PAGE_COPY: Record<
       saving: "保存中...",
       sections: {
         api: "API 与模型",
-        voice: "语音",
         autonomous: "自主运行门禁",
         ui: "界面与诊断",
       },
@@ -298,10 +268,6 @@ const PAGE_COPY: Record<
         apiProtocol: "Protocol",
         apiTemperature: "Temperature",
         apiTimeout: "请求超时（秒）",
-        voiceEnabled: "启用语音输出",
-        realtimeVoiceEnabled: "启用实时语音",
-        realtimeVoiceMode: "实时语音模式",
-        realtimeTtsVoice: "实时 TTS 声线",
         autonomousEnabled: "启用自主运行",
         autonomousCycleSeconds: "循环间隔（秒）",
         releaseGuardEnabled: "启用发布门禁",
@@ -341,8 +307,6 @@ const PAGE_COPY: Record<
       empty: "为空",
       labels: {
         apiKey: "API 密钥",
-        realtimeApiKey: "实时语音 API 密钥",
-        ttsApiKey: "TTS API 密钥",
         computerControlApiKey: "电脑控制 API 密钥",
         groundingApiKey: "Grounding API 密钥",
       },
@@ -408,10 +372,6 @@ function buildQuickForm(config: Record<string, unknown>): QuickForm {
     apiProtocol: getNestedString(config, ["api", "protocol"], "auto"),
     apiTemperature: getNestedString(config, ["api", "temperature"], "0.7"),
     apiTimeout: getNestedString(config, ["api", "request_timeout"], "120"),
-    voiceEnabled: getNestedBoolean(config, ["system", "voice_enabled"], true),
-    realtimeVoiceEnabled: getNestedBoolean(config, ["voice_realtime", "enabled"], false),
-    realtimeVoiceMode: getNestedString(config, ["voice_realtime", "voice_mode"], "auto"),
-    realtimeTtsVoice: getNestedString(config, ["voice_realtime", "tts_voice"], "zh-CN-XiaoyiNeural"),
     autonomousEnabled: getNestedBoolean(config, ["autonomous", "enabled"], false),
     autonomousCycleSeconds: getNestedString(config, ["autonomous", "cycle_interval_seconds"], "3600"),
     releaseGuardEnabled: getNestedBoolean(config, ["autonomous", "release", "enabled"], true),
@@ -533,14 +493,8 @@ function buildQuickPayload(form: QuickForm): { ok: true; payload: Record<string,
         request_timeout: Math.max(1, Math.round(apiTimeout)),
       },
       system: {
-        voice_enabled: form.voiceEnabled,
         log_level: form.logLevel.trim() || "INFO",
         debug: form.debugMode,
-      },
-      voice_realtime: {
-        enabled: form.realtimeVoiceEnabled,
-        voice_mode: form.realtimeVoiceMode.trim() || "auto",
-        tts_voice: form.realtimeTtsVoice.trim(),
       },
       autonomous: {
         enabled: form.autonomousEnabled,
@@ -611,7 +565,6 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
     const snapshot = asRecord(config || {});
     return {
       apiModel: getNestedString(snapshot, ["api", "model"], "--"),
-      voiceEnabled: getNestedBoolean(snapshot, ["system", "voice_enabled"], false),
       autonomousEnabled: getNestedBoolean(snapshot, ["autonomous", "enabled"], false),
       debugEnabled: getNestedBoolean(snapshot, ["system", "debug"], false),
     };
@@ -720,13 +673,9 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
       <section className="glass-card p-6">
         <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.title}</p>
         <h2 className="mt-2 text-2xl font-extrabold tracking-tight text-[#1c1c1e]">{copy.subtitle}</h2>
-        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
           <div className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-700">
             {copy.summary.apiModel}: <span className="font-bold">{summary.apiModel}</span>
-          </div>
-          <div className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-700">
-            {copy.summary.voice}:{" "}
-            <span className="font-bold">{summary.voiceEnabled ? copy.summary.enabled : copy.summary.disabled}</span>
           </div>
           <div className="rounded-xl bg-white/70 px-3 py-2 text-xs text-gray-700">
             {copy.summary.autonomous}:{" "}
@@ -864,54 +813,6 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
                     />
                   </label>
                 </div>
-              </div>
-            )}
-          </article>
-
-          <article className="space-y-3 rounded-2xl border border-gray-200/60 bg-white/70 p-4">
-            {sectionHeader(copy.quick.sections.voice, "voice", collapsed, toggleSection)}
-            {collapsed.voice ? null : (
-              <div className="space-y-3">
-                <label className="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
-                  <span>{copy.quick.fields.voiceEnabled}</span>
-                  <input
-                    type="checkbox"
-                    checked={form.voiceEnabled}
-                    onChange={(event) => setField("voiceEnabled", event.target.checked)}
-                    className="h-4 w-4"
-                  />
-                </label>
-                <label className="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2 text-xs text-gray-700">
-                  <span>{copy.quick.fields.realtimeVoiceEnabled}</span>
-                  <input
-                    type="checkbox"
-                    checked={form.realtimeVoiceEnabled}
-                    onChange={(event) => setField("realtimeVoiceEnabled", event.target.checked)}
-                    className="h-4 w-4"
-                  />
-                </label>
-                <label className="block">
-                  <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.realtimeVoiceMode}</p>
-                  <select
-                    value={form.realtimeVoiceMode}
-                    onChange={(event) => setField("realtimeVoiceMode", event.target.value)}
-                    className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
-                  >
-                    {REALTIME_VOICE_MODES.map((mode) => (
-                      <option key={mode} value={mode}>
-                        {mode}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="block">
-                  <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.realtimeTtsVoice}</p>
-                  <input
-                    value={form.realtimeTtsVoice}
-                    onChange={(event) => setField("realtimeTtsVoice", event.target.value)}
-                    className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
-                  />
-                </label>
               </div>
             )}
           </article>

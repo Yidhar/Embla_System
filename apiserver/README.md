@@ -231,7 +231,7 @@ print(response.json())
 - **`api_server.py`**: 主API服务器，提供所有RESTful接口
 - **`llm_service.py`**: LLM服务模块，提供独立的LLM调用服务
 - **`message_manager.py`**: 消息管理器，统一管理会话和消息
-- **`streaming_tool_extractor.py`**: 流式文本处理器（实时按句切割并发送给TTS）
+- **`agentic_tool_loop.py`**: 多轮工具调用编排与执行循环
 - **`tool_call_utils.py`**: 工具调用工具函数
 
 ### 相关模块

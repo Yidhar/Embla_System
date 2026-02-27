@@ -140,7 +140,6 @@ class ServiceManager:
         self.bg_thread = None
         self.api_thread = None
         self.agent_thread = None
-        self.tts_thread = None
         self.system_agent = None
         self._autonomous_task = None
         self._services_ready = False  # 服务就绪状态
@@ -299,7 +298,7 @@ class ServiceManager:
             return False
 
     def start_all_servers(self):
-        """并行启动所有服务：API(可选)、MCP、TTS（不自动启动 Agent Server）"""
+        """并行启动所有服务：API(可选)、MCP（不自动启动 Agent Server）"""
         print("🚀 正在并行启动所有服务...")
         print("=" * 50)
         threads = []
@@ -324,7 +323,6 @@ class ServiceManager:
                 'api': config.api_server.enabled and config.api_server.auto_start and
                       self.check_port_available(config.api_server.host, config.api_server.port),
                 'mcp': self.check_port_available("0.0.0.0", get_server_port("mcp_server")),
-                'tts': self.check_port_available("0.0.0.0", config.tts.port)
             }
 
             # API服务器（可选）
@@ -347,15 +345,6 @@ class ServiceManager:
 
             # Agent Server 服务不再随主进程自动启动
             service_status['AgentServer'] = "已禁用自动启动"
-
-            # TTS服务器
-            if port_checks['tts']:
-                tts_thread = threading.Thread(target=self._start_tts_server, daemon=True)
-                threads.append(("TTS", tts_thread))
-                service_status['TTS'] = "准备启动"
-            else:
-                print(f"⚠️  TTS服务器: 端口 {config.tts.port} 已被占用，跳过启动")
-                service_status['TTS'] = "端口占用"
             
             # 显示服务启动计划
             print("\n📋 服务启动计划:")
@@ -380,8 +369,6 @@ class ServiceManager:
                 expected_ports.append(config.api_server.port)
             if port_checks.get('mcp'):
                 expected_ports.append(get_server_port("mcp_server"))
-            if port_checks.get('tts'):
-                expected_ports.append(config.tts.port)
 
             if expected_ports:
                 for _ in range(15):  # 最多 15 × 0.2s = 3s
@@ -681,27 +668,6 @@ class ServiceManager:
             print(f"   ❌ Agent服务器启动失败: {e}", flush=True)
             traceback.print_exc()
     
-    def _start_tts_server(self):
-        """内部TTS服务器启动方法"""
-        try:
-            from voice.output.start_voice_service import start_http_server
-            start_http_server()
-        except Exception as e:
-            import traceback
-            print(f"   ❌ TTS服务器启动失败: {e}", flush=True)
-            traceback.print_exc()
-
-    
-    def _init_voice_system(self):
-        """初始化语音处理系统"""
-        try:
-            if config.system.voice_enabled:
-                logger.info("语音功能已启用（语音输入+输出），由UI层管理")
-            else:
-                logger.info("语音功能已禁用")
-        except Exception as e:
-            logger.warning(f"语音系统初始化失败: {e}")
-    
     def _init_memory_system(self):
         """初始化记忆系统"""
         try:
@@ -740,7 +706,6 @@ def kill_port_occupiers():
     ports = [
         all_ports["api_server"],
         all_ports["mcp_server"],
-        all_ports["tts_server"],
     ]
     my_pid = os.getpid()
     killed = False
@@ -889,7 +854,6 @@ def _lazy_init_services():
         # 初始化各个系统
         service_manager._init_mcp_services()
         _emit_progress(20, "注册MCP服务...")
-        service_manager._init_voice_system()
         service_manager._init_memory_system()
         _emit_progress(25, "初始化子系统...")
         

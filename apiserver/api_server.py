@@ -12,7 +12,6 @@ import traceback
 import os
 import logging
 import time
-import threading
 import subprocess
 import locale
 import uuid
@@ -31,12 +30,10 @@ logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from starlette.background import BackgroundTask
 import shutil
 from pathlib import Path
-from system.asyncio_offload import offload_blocking
 from system.coding_intent import contains_direct_coding_signal, has_recent_coding_context, is_coding_followup
 from system.watchdog_daemon import WatchdogDaemon
 from autonomous.event_log.event_store import EventStore
@@ -45,7 +42,6 @@ from autonomous.router_engine import RouterRequest, TaskRouterEngine
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# 流式文本处理模块（仅用于TTS）
 from .message_manager import message_manager  # 导入统一的消息管理器
 
 from .llm_service import get_llm_service  # 导入LLM服务
@@ -979,7 +975,7 @@ def _format_sse_payload_chunk(payload: Dict[str, Any]) -> str:
     return f"data: {b64}\n\n"
 
 
-# 回调工厂类已移除 - 功能已整合到streaming_tool_extractor
+# 历史流式文本切分器已移除，流式处理统一由 chat_stream 主循环管理
 
 
 @asynccontextmanager
@@ -1179,8 +1175,6 @@ class ChatRequest(BaseModel):
     message: str
     stream: bool = False
     session_id: Optional[str] = None
-    disable_tts: bool = False  # V17: 支持禁用服务器端TTS
-    return_audio: bool = False  # V19: 支持返回音频URL供客户端播放
     skip_intent_analysis: bool = False  # 新增：跳过意图分析
     skill: Optional[str] = None  # 用户主动选择的技能名称，注入完整指令到系统提示词
     images: Optional[List[str]] = None  # 截屏图片 base64 数据列表（data:image/png;base64,...）
@@ -1215,38 +1209,6 @@ class DocumentProcessRequest(BaseModel):
     file_path: str
     action: str = "read"  # read, analyze, summarize
     session_id: Optional[str] = None
-
-
-class TTSSpeechRequest(BaseModel):
-    model: str = "tts-1"
-    input: str
-    voice: Optional[str] = None
-    speed: float = 1.0
-    response_format: str = "mp3"
-
-
-AUDIO_MEDIA_TYPES = {
-    "mp3": "audio/mpeg",
-    "wav": "audio/wav",
-    "ogg": "audio/ogg",
-    "webm": "audio/webm",
-    "aac": "audio/aac",
-    "flac": "audio/flac",
-    "m4a": "audio/mp4",
-}
-
-
-def _resolve_audio_media_type(response_format: str) -> str:
-    return AUDIO_MEDIA_TYPES.get(response_format.lower(), "application/octet-stream")
-
-
-def _cleanup_temp_file(path: str) -> None:
-    try:
-        os.remove(path)
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        logger.warning(f"[API Server] Failed to remove temp TTS file {path}: {e}")
 
 
 # ============ Local-only auth compatibility endpoints ============
@@ -1327,42 +1289,6 @@ async def get_api_contract_v1():
 
 
 # ============ Utility APIs ============
-
-
-@app.post("/tts/speech")
-async def tts_speech(request: TTSSpeechRequest):
-    text = request.input.strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="input is required")
-
-    response_format = (request.response_format or "mp3").strip().lower() or "mp3"
-    tts_config = get_config().tts
-    voice = request.voice or tts_config.default_voice or "zh-CN-XiaoxiaoNeural"
-    speed = request.speed if request.speed is not None else tts_config.default_speed
-
-    try:
-        from voice.tts_wrapper import generate_speech_safe
-
-        audio_file = await offload_blocking(
-            generate_speech_safe,
-            text,
-            voice,
-            response_format,
-            speed,
-        )
-    except Exception as e:
-        logger.error(f"[API Server] TTS generation failed: {e}")
-        raise HTTPException(status_code=500, detail="TTS generation failed") from e
-
-    if not audio_file or not os.path.exists(audio_file):
-        raise HTTPException(status_code=500, detail="TTS generation returned no audio file")
-
-    return FileResponse(
-        path=audio_file,
-        media_type=_resolve_audio_media_type(response_format),
-        filename=f"speech.{response_format}",
-        background=BackgroundTask(_cleanup_temp_file, audio_file),
-    )
 
 @app.get("/system/info", response_model=SystemInfoResponse)
 async def get_system_info():
@@ -1681,7 +1607,7 @@ async def chat_stream(request: ChatRequest):
     user_message = request.message
 
     async def generate_response() -> AsyncGenerator[str, None]:
-        complete_text = ""  # 用于累积最终轮的完整文本（供 return_audio 模式使用）
+        complete_response_parts: List[str] = []
         try:
             # 获取或创建会话ID
             session_id = message_manager.create_session(request.session_id, temporary=request.temporary)
@@ -1805,48 +1731,6 @@ async def chat_stream(request: ChatRequest):
                     "content": content_parts,
                 }
 
-            # 初始化语音集成（根据voice_mode和return_audio决定）
-            voice_integration = None
-
-            should_enable_tts = (
-                get_config().system.voice_enabled
-                and not request.return_audio  # return_audio时不启用实时TTS
-                and get_config().voice_realtime.voice_mode != "hybrid"
-                and not request.disable_tts
-            )
-
-            if should_enable_tts:
-                try:
-                    from voice.output.voice_integration import get_voice_integration
-
-                    voice_integration = get_voice_integration()
-                    logger.info(
-                        f"[API Server] 实时语音集成已启用 (return_audio={request.return_audio}, voice_mode={get_config().voice_realtime.voice_mode})"
-                    )
-                except Exception as e:
-                    print(f"语音集成初始化失败: {e}")
-            else:
-                if request.return_audio:
-                    logger.info("[API Server] return_audio模式，将在最后生成完整音频")
-                elif get_config().voice_realtime.voice_mode == "hybrid" and not request.return_audio:
-                    logger.info("[API Server] 混合模式下且未请求音频，不处理TTS")
-                elif request.disable_tts:
-                    logger.info("[API Server] 客户端禁用了TTS (disable_tts=True)")
-
-            # 初始化流式文本切割器（仅用于TTS处理）
-            tool_extractor = None
-            try:
-                from .streaming_tool_extractor import StreamingToolCallExtractor
-
-                tool_extractor = StreamingToolCallExtractor()
-                if voice_integration and not request.return_audio:
-                    tool_extractor.set_callbacks(
-                        on_text_chunk=None,
-                        voice_integration=voice_integration,
-                    )
-            except Exception as e:
-                print(f"流式文本切割器初始化失败: {e}")
-
             # 如果本次携带图片，标记此会话为 VLM 会话
             if request.images:
                 _vlm_sessions.add(session_id)
@@ -1863,10 +1747,7 @@ async def chat_stream(request: ChatRequest):
                 }
                 logger.info(f"[API Server] VLM 会话，使用视觉模型: {cc.model}")
 
-            complete_reasoning = ""
-            # 记录每轮的content，用于在每轮结束时完成TTS处理
             current_round_text = ""
-            is_tool_event = False  # 标记当前是否在处理工具事件（不送TTS）
 
             stream_source: AsyncGenerator[str, None]
             if path == "path-c":
@@ -1907,50 +1788,12 @@ async def chat_stream(request: ChatRequest):
                             chunk_text = chunk_data.get("text", "")
 
                             if chunk_type == "content":
-                                # 累积本轮内容（TTS + 保存）
                                 current_round_text += chunk_text
-                                if request.return_audio:
-                                    complete_text += chunk_text
-                                # TTS：每轮的正常content都发送（不含工具内容）
-                                if tool_extractor and not is_tool_event:
-                                    asyncio.create_task(tool_extractor.process_text_chunk(chunk_text))
+                                complete_response_parts.append(chunk_text)
                             elif chunk_type == "reasoning":
-                                complete_reasoning += chunk_text
+                                pass
                             elif chunk_type == "round_end":
-                                # 每轮结束时，完成TTS处理并重置
-                                has_more = chunk_data.get("has_more", False)
-                                if has_more and tool_extractor and not request.return_audio:
-                                    # 中间轮结束，flush TTS缓冲
-                                    try:
-                                        await tool_extractor.finish_processing()
-                                    except Exception as e:
-                                        logger.debug(f"中间轮TTS flush失败: {e}")
-                                    if voice_integration:
-                                        try:
-                                            threading.Thread(
-                                                target=voice_integration.finish_processing,
-                                                daemon=True,
-                                            ).start()
-                                        except Exception:
-                                            pass
-                                    # 重新初始化 tool_extractor 给下一轮使用
-                                    try:
-                                        tool_extractor = StreamingToolCallExtractor()
-                                        if voice_integration and not request.return_audio:
-                                            tool_extractor.set_callbacks(
-                                                on_text_chunk=None,
-                                                voice_integration=voice_integration,
-                                            )
-                                    except Exception:
-                                        pass
                                 current_round_text = ""
-                            elif chunk_type == "tool_calls":
-                                is_tool_event = True
-                            elif chunk_type == "tool_results":
-                                is_tool_event = True
-                            elif chunk_type == "round_start":
-                                # 新一轮开始，重置工具事件标记
-                                is_tool_event = False
 
                             # 透传所有 chunk 给前端（content/reasoning/tool events）
                             yield chunk
@@ -1962,60 +1805,10 @@ async def chat_stream(request: ChatRequest):
 
             # ====== 流式处理完成 ======
 
-            # V19: 如果请求返回音频，在这里生成并返回音频URL
-            if request.return_audio and complete_text:
-                try:
-                    logger.info(f"[API Server V19] 生成音频，文本长度: {len(complete_text)}")
-
-                    from voice.tts_wrapper import generate_speech_safe
-
-                    tts_voice = get_config().voice_realtime.tts_voice or "zh-CN-XiaoyiNeural"
-                    audio_file = generate_speech_safe(
-                        text=complete_text, voice=tts_voice, response_format="mp3", speed=1.0
-                    )
-
-                    try:
-                        from voice.output.voice_integration import get_voice_integration
-
-                        voice_integration = get_voice_integration()
-                        voice_integration.receive_audio_url(audio_file)
-                        logger.info(f"[API Server V19] 音频已直接播放: {audio_file}")
-                    except Exception as e:
-                        logger.error(f"[API Server V19] 音频播放失败: {e}")
-                        yield f"data: audio_url: {audio_file}\n\n"
-
-                except Exception as e:
-                    logger.error(f"[API Server V19] 音频生成失败: {e}")
-                    traceback.print_exc()
-
-            # 完成流式文本切割器处理（最终轮）
-            if tool_extractor and not request.return_audio:
-                try:
-                    await tool_extractor.finish_processing()
-                except Exception as e:
-                    print(f"流式文本切割器完成处理错误: {e}")
-
-            # 完成语音处理（最终轮）
-            if voice_integration and not request.return_audio:
-                try:
-                    threading.Thread(
-                        target=voice_integration.finish_processing,
-                        daemon=True,
-                    ).start()
-                except Exception as e:
-                    print(f"语音集成完成处理错误: {e}")
-
             # 获取完整文本用于保存
-            complete_response = ""
-            if tool_extractor:
-                try:
-                    complete_response = tool_extractor.get_complete_text()
-                except Exception as e:
-                    print(f"获取完整响应文本失败: {e}")
-            elif request.return_audio:
-                complete_response = complete_text
+            complete_response = "".join(complete_response_parts)
 
-            # fallback: 如果 tool_extractor 没有累积到文本，使用最后一轮的 current_round_text
+            # fallback: 如果没有累积到文本，使用最后一轮的 current_round_text
             if not complete_response and current_round_text:
                 complete_response = current_round_text
 
@@ -4833,8 +4626,6 @@ async def _trigger_chat_stream_no_intent(session_id: str, response_text: str):
             "message": response_text,  # 直接使用AI回复内容，不加标记
             "stream": True,
             "session_id": session_id,
-            "disable_tts": False,
-            "return_audio": False,
             "skip_intent_analysis": True,  # 关键：跳过意图分析
         }
 
@@ -4846,7 +4637,7 @@ async def _trigger_chat_stream_no_intent(session_id: str, response_text: str):
         async with httpx.AsyncClient() as client:
             async with client.stream("POST", api_url, json=chat_request) as response:
                 if response.status_code == 200:
-                    # 处理流式响应，包括TTS切割
+                    # 处理流式响应
                     async for chunk in response.aiter_text():
                         if chunk.strip():
                             # 这里可以进一步处理流式响应
@@ -4909,8 +4700,6 @@ async def _send_ai_response_directly(session_id: str, response_text: str):
             "message": f"[工具结果] {response_text}",  # 添加标记让UI知道这是工具结果
             "stream": False,
             "session_id": session_id,
-            "disable_tts": False,
-            "return_audio": False,
             "skip_intent_analysis": True,
         }
 
