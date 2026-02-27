@@ -107,6 +107,8 @@ _SAFE_PY_MODULES = [
     "json",
     "csv",
 ]
+_TOOL_RESULT_NONE_MARKERS = {"", "(none)", "none", "null", "nil", "n/a", "undefined"}
+_TOOL_RESULT_TAG_LINE_RE = re.compile(r"^\[([A-Za-z0-9_]+)\](?:\s*(.*))?$")
 
 
 def _preview_text(text: str, limit: int = _DEFAULT_PREVIEW_CHARS) -> str:
@@ -351,6 +353,52 @@ def _render_tool_result_envelope(
     return "\n".join(lines)
 
 
+def _clean_optional_ref(value: Any) -> str:
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return ""
+    if text.lower() in _TOOL_RESULT_NONE_MARKERS:
+        return ""
+    return text
+
+
+def _parse_tool_result_sections(result_text: str) -> Dict[str, str]:
+    sections: Dict[str, str] = {}
+    current_tag: Optional[str] = None
+    current_lines: List[str] = []
+    for line in str(result_text or "").splitlines():
+        stripped = line.strip()
+        matched = _TOOL_RESULT_TAG_LINE_RE.match(stripped)
+        if matched:
+            if current_tag is not None:
+                sections[current_tag] = "\n".join(current_lines).strip()
+            current_tag = str(matched.group(1) or "").strip().lower()
+            inline = str(matched.group(2) or "").strip()
+            current_lines = [inline] if inline else []
+            continue
+        if current_tag is not None:
+            current_lines.append(line.rstrip())
+    if current_tag is not None:
+        sections[current_tag] = "\n".join(current_lines).strip()
+    return sections
+
+
+def _build_result_contract_fields(result_text: str) -> Dict[str, Any]:
+    text = str(result_text or "")
+    sections = _parse_tool_result_sections(text)
+    narrative_summary = str(sections.get("narrative_summary") or sections.get("display_preview") or text).strip()
+    display_preview = str(sections.get("display_preview") or narrative_summary).strip()
+    forensic_ref = _clean_optional_ref(sections.get("forensic_artifact_ref") or sections.get("raw_result_ref"))
+    payload: Dict[str, Any] = {
+        "narrative_summary": narrative_summary,
+        "display_preview": display_preview,
+    }
+    if forensic_ref:
+        payload["forensic_artifact_ref"] = forensic_ref
+        payload["raw_result_ref"] = forensic_ref
+    return payload
+
+
 def _build_safe_python_payload(user_code: str) -> str:
     """Build restricted python runner payload executed by a separate interpreter process."""
     return f"""
@@ -549,12 +597,14 @@ class NativeToolExecutor:
             else:
                 return self._error(call, f"不支持的native工具: {tool_name}", tool_name=tool_name)
 
+            contract_fields = _build_result_contract_fields(result)
             return {
                 "tool_call": call,
                 "result": result,
                 "status": "success",
                 "service_name": "native",
                 "tool_name": tool_name,
+                **contract_fields,
             }
         except NativeSecurityError as e:
             return self._error(call, f"安全限制: {e}", tool_name=tool_name)
@@ -1664,12 +1714,14 @@ class NativeToolExecutor:
 
     @staticmethod
     def _error(call: Dict[str, Any], message: str, *, tool_name: Optional[str] = None) -> Dict[str, Any]:
+        contract_fields = _build_result_contract_fields(message)
         return {
             "tool_call": call,
             "result": message,
             "status": "error",
             "service_name": "native",
             "tool_name": tool_name or str(call.get("tool_name") or call.get("tool") or "native"),
+            **contract_fields,
         }
 
 

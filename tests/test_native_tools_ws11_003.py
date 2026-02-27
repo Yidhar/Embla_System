@@ -68,6 +68,10 @@ def test_run_cmd_structured_stdout_packs_artifact_envelope(monkeypatch):
         )
 
         assert result["status"] == "success"
+        assert result.get("narrative_summary")
+        assert result.get("display_preview")
+        assert result.get("forensic_artifact_ref", "").startswith("artifact_")
+        assert result.get("raw_result_ref", "").startswith("artifact_")
         text = str(result["result"])
         assert "[content_type] application/json" in text
         assert "[forensic_artifact_ref] artifact_" in text

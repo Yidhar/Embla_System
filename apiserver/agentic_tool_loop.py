@@ -128,6 +128,8 @@ _TOOL_CONTRACT_MODE_ALIASES = {
     "new_stack": "new_stack_only",
     "v2_only": "new_stack_only",
 }
+_TOOL_RESULT_NONE_MARKERS = {"", "(none)", "none", "null", "nil", "n/a", "undefined"}
+_TOOL_RESULT_TAG_LINE_RE = re.compile(r"^\[([A-Za-z0-9_]+)\](?:\s*(.*))?$")
 
 
 def _clamp_int(value: Any, default: int, min_value: int, max_value: int) -> int:
@@ -345,6 +347,173 @@ def _coalesce_result_text(result: Dict[str, Any]) -> str:
         if text:
             return text
     return ""
+
+
+def _clean_optional_ref(value: Any) -> str:
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return ""
+    if text.lower() in _TOOL_RESULT_NONE_MARKERS:
+        return ""
+    return text
+
+
+def _parse_tagged_tool_result_sections(result_text: str) -> Dict[str, str]:
+    sections: Dict[str, str] = {}
+    current_tag: Optional[str] = None
+    current_lines: List[str] = []
+    for line in str(result_text or "").splitlines():
+        stripped = line.strip()
+        matched = _TOOL_RESULT_TAG_LINE_RE.match(stripped)
+        if matched:
+            if current_tag is not None:
+                sections[current_tag] = "\n".join(current_lines).strip()
+            current_tag = str(matched.group(1) or "").strip().lower()
+            inline = str(matched.group(2) or "").strip()
+            current_lines = [inline] if inline else []
+            continue
+        if current_tag is not None:
+            current_lines.append(line.rstrip())
+    if current_tag is not None:
+        sections[current_tag] = "\n".join(current_lines).strip()
+    return sections
+
+
+def _normalize_fetch_hints_value(value: Any) -> List[str]:
+    if value is None:
+        return []
+    raw_items: List[str]
+    if isinstance(value, list):
+        raw_items = [str(item or "").strip() for item in value]
+    else:
+        text = str(value or "").strip()
+        if not text:
+            raw_items = []
+        else:
+            raw_items = [segment.strip() for segment in text.split(",")]
+
+    hints: List[str] = []
+    seen = set()
+    for item in raw_items:
+        if not item:
+            continue
+        if item.lower() in _TOOL_RESULT_NONE_MARKERS:
+            continue
+        if item in seen:
+            continue
+        seen.add(item)
+        hints.append(item)
+    return hints
+
+
+def _extract_result_text_preview(result_payload: Any) -> str:
+    if isinstance(result_payload, str):
+        text = result_payload
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return text
+        if isinstance(parsed, dict):
+            for key in ("narrative_summary", "display_preview", "message", "result"):
+                value = parsed.get(key)
+                candidate = str(value if value is not None else "").strip()
+                if candidate:
+                    return candidate
+        return text
+    if isinstance(result_payload, dict):
+        for key in ("narrative_summary", "display_preview", "message", "result"):
+            value = result_payload.get(key)
+            text = str(value if value is not None else "").strip()
+            if text:
+                return text
+        try:
+            return json.dumps(result_payload, ensure_ascii=False)
+        except Exception:
+            return str(result_payload)
+    if result_payload is None:
+        return ""
+    return str(result_payload)
+
+
+def _upgrade_tool_result_contract_payload(result: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(result or {})
+    result_payload = normalized.get("result")
+    result_preview = _extract_result_text_preview(result_payload)
+    tagged = _parse_tagged_tool_result_sections(result_preview)
+    parsed_result_payload: Dict[str, Any] = {}
+    if isinstance(result_payload, dict):
+        parsed_result_payload = result_payload
+    elif isinstance(result_payload, str):
+        try:
+            maybe = json.loads(result_payload)
+            if isinstance(maybe, dict):
+                parsed_result_payload = maybe
+        except Exception:
+            parsed_result_payload = {}
+
+    # Prefer explicit new-contract fields; fallback to tagged blocks or legacy result text.
+    narrative_summary = str(
+        normalized.get("narrative_summary")
+        or parsed_result_payload.get("narrative_summary")
+        or parsed_result_payload.get("display_preview")
+        or parsed_result_payload.get("message")
+        or parsed_result_payload.get("result")
+        or tagged.get("narrative_summary")
+        or tagged.get("display_preview")
+        or result_preview
+        or ""
+    ).strip()
+    display_preview = str(
+        normalized.get("display_preview")
+        or parsed_result_payload.get("display_preview")
+        or parsed_result_payload.get("narrative_summary")
+        or tagged.get("display_preview")
+        or narrative_summary
+        or ""
+    ).strip()
+
+    if narrative_summary:
+        normalized.setdefault("narrative_summary", narrative_summary)
+    if display_preview:
+        normalized.setdefault("display_preview", display_preview)
+
+    forensic_ref = _clean_optional_ref(
+        normalized.get("forensic_artifact_ref")
+        or normalized.get("raw_result_ref")
+        or parsed_result_payload.get("forensic_artifact_ref")
+        or parsed_result_payload.get("raw_result_ref")
+        or tagged.get("forensic_artifact_ref")
+        or tagged.get("raw_result_ref")
+    )
+    if forensic_ref:
+        normalized.setdefault("forensic_artifact_ref", forensic_ref)
+        normalized.setdefault("raw_result_ref", forensic_ref)
+
+    if "fetch_hints" not in normalized:
+        hints = _normalize_fetch_hints_value(
+            parsed_result_payload.get("fetch_hints") or tagged.get("fetch_hints")
+        )
+        if hints:
+            normalized["fetch_hints"] = hints
+
+    if "critical_evidence" not in normalized:
+        critical_raw = parsed_result_payload.get("critical_evidence") or tagged.get("critical_evidence")
+        critical_value: Dict[str, Any] = {}
+        if isinstance(critical_raw, dict):
+            critical_value = dict(critical_raw)
+        elif isinstance(critical_raw, str):
+            text = critical_raw.strip()
+            if text and text.lower() not in _TOOL_RESULT_NONE_MARKERS:
+                try:
+                    parsed = json.loads(text)
+                    if isinstance(parsed, dict):
+                        critical_value = parsed
+                except Exception:
+                    critical_value = {"summary": text}
+        if critical_value:
+            normalized["critical_evidence"] = critical_value
+
+    return normalized
 
 
 def _has_new_contract_payload(result: Dict[str, Any]) -> bool:
@@ -1612,13 +1781,13 @@ async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
         from apiserver import naga_auth
 
         if not naga_auth.is_authenticated():
-            return {
+            return _upgrade_tool_result_contract_payload({
                 "tool_call": call,
                 "result": "游戏攻略功能需要登录 Naga 账号后才能使用，请先登录。",
                 "status": "error",
                 "service_name": service_name,
                 "tool_name": tool_name,
-            }
+            })
 
     try:
         from mcpserver.mcp_manager import get_mcp_manager
@@ -1634,13 +1803,13 @@ async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
                 tool_name,
                 mcp_detail,
             )
-            return {
+            return _upgrade_tool_result_contract_payload({
                 "tool_call": call,
                 "result": result,
                 "status": "error",
                 "service_name": service_name,
                 "tool_name": tool_name,
-            }
+            })
         logger.info(
             "[AgenticLoop] MCP tool success id=%s service=%s tool=%s detail=%s",
             call_id,
@@ -1648,22 +1817,22 @@ async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
             tool_name,
             mcp_detail,
         )
-        return {
+        return _upgrade_tool_result_contract_payload({
             "tool_call": call,
             "result": result,
             "status": "success",
             "service_name": service_name,
             "tool_name": tool_name,
-        }
+        })
     except Exception as e:
         logger.error("[AgenticLoop] MCP调用异常 id=%s service=%s tool=%s error=%s", call_id, service_name, tool_name, e)
-        return {
+        return _upgrade_tool_result_contract_payload({
             "tool_call": call,
             "result": f"调用失败: {e}",
             "status": "error",
             "service_name": service_name,
             "tool_name": tool_name,
-        }
+        })
 async def _execute_native_call(call: Dict[str, Any], session_id: str) -> Dict[str, Any]:
     """执行单个本地native调用"""
     executor = get_native_tool_executor()
@@ -1823,6 +1992,8 @@ async def _execute_tool_call_with_retry(
         if approval_hook.get("required"):
             result.setdefault("approval_hook", approval_hook)
 
+        if isinstance(result, dict):
+            result = _upgrade_tool_result_contract_payload(result)
         result = _enforce_tool_result_schema(
             result,
             call=call,

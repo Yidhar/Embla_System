@@ -124,6 +124,105 @@ def test_new_stack_only_accepts_new_contract_payload(monkeypatch) -> None:
     assert summary["narrative_summary"] == "new-ok"
 
 
+def test_upgrade_tool_result_contract_payload_extracts_tagged_sections() -> None:
+    upgraded = tool_loop._upgrade_tool_result_contract_payload(
+        {
+            "status": "success",
+            "service_name": "native",
+            "tool_name": "run_cmd",
+            "result": (
+                "[forensic_artifact_ref] artifact_x123\n"
+                "[narrative_summary]\n"
+                "legacy summary\n"
+                "[display_preview]\n"
+                "preview summary"
+            ),
+        }
+    )
+
+    assert upgraded["narrative_summary"] == "legacy summary"
+    assert upgraded["display_preview"] == "preview summary"
+    assert upgraded["forensic_artifact_ref"] == "artifact_x123"
+    assert upgraded["raw_result_ref"] == "artifact_x123"
+
+
+def test_execute_tool_call_with_retry_upgrades_legacy_payload_before_decommission_gate(monkeypatch) -> None:
+    _set_rollout(monkeypatch, mode="new_stack_only", gate=True)
+
+    async def _fake_execute_single_tool_call(call: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+        _ = (call, session_id)
+        return {
+            "status": "success",
+            "service_name": "native",
+            "tool_name": "read_file",
+            "result": (
+                "[forensic_artifact_ref] artifact_retry_001\n"
+                "[narrative_summary]\n"
+                "legacy path upgraded"
+            ),
+        }
+
+    monkeypatch.setattr(tool_loop, "_execute_single_tool_call", _fake_execute_single_tool_call)
+
+    async def _run_once() -> Dict[str, Any]:
+        return await tool_loop._execute_tool_call_with_retry(
+            {
+                "agentType": "native",
+                "tool_name": "read_file",
+                "path": "README.md",
+                "_tool_call_id": "call_retry_upgrade_1",
+            },
+            "sess_retry_upgrade",
+            semaphore=asyncio.Semaphore(1),
+            retry_failed=False,
+            max_retries=0,
+            retry_backoff_seconds=0.0,
+        )
+
+    row = asyncio.run(_run_once())
+    assert row["status"] == "success"
+    assert row.get("error_code") is None
+    assert row["narrative_summary"] == "legacy path upgraded"
+    assert row["display_preview"] == "legacy path upgraded"
+    assert row["forensic_artifact_ref"] == "artifact_retry_001"
+    assert row["_contract_rollout"]["legacy_blocked"] is False
+
+
+def test_execute_mcp_call_emits_new_contract_fields(monkeypatch) -> None:
+    class _FakeManager:
+        async def unified_call(self, service_name: str, call: Dict[str, Any]) -> str:
+            _ = (service_name, call)
+            return json.dumps(
+                {
+                    "status": "ok",
+                    "result": "mcp completed",
+                    "forensic_artifact_ref": "artifact_mcp_001",
+                },
+                ensure_ascii=False,
+            )
+
+    import mcpserver.mcp_manager as mcp_manager_module
+
+    monkeypatch.setattr(mcp_manager_module, "get_mcp_manager", lambda: _FakeManager())
+
+    async def _run_mcp_call() -> Dict[str, Any]:
+        return await tool_loop._execute_mcp_call(
+            {
+                "agentType": "mcp",
+                "service_name": "dummy-service",
+                "tool_name": "dummy-tool",
+                "_tool_call_id": "call_mcp_upgrade_1",
+            }
+        )
+
+    row = asyncio.run(_run_mcp_call())
+    assert row["status"] == "success"
+    assert row["narrative_summary"] == "mcp completed"
+    assert row["display_preview"] == "mcp completed"
+    assert row["forensic_artifact_ref"] == "artifact_mcp_001"
+    assert row["raw_result_ref"] == "artifact_mcp_001"
+
+
 def test_agentic_loop_emits_rollout_snapshot_and_tool_results_metadata(monkeypatch) -> None:
     class _FakeLLMService:
         async def stream_chat_with_context(self, *_args, **_kwargs):
