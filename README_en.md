@@ -2,7 +2,7 @@
 
 # NagaAgent
 
-**Four-Service AI Desktop Assistant — Streaming Tool Calls · Knowledge Graph Memory · Live2D · Voice**
+**Three-Service AI Runtime Platform — Streaming Tool Calls · Knowledge Graph Memory · Ops Dashboard**
 
 [简体中文](README.md) | [English](README_en.md)
 
@@ -23,14 +23,13 @@
 
 ## Overview
 
-NagaAgent consists of four independent microservices:
+NagaAgent consists of three independent microservices:
 
 | Service | Port | Responsibilities |
 |---------|------|-----------------|
 | **API Server** | 8000 | Chat, streaming tool calls, document upload, auth proxy, memory API, config management |
 | **Agent Server** | 8001 | Background intent analysis, task scheduling with compressed memory |
 | **MCP Server** | 8003 | MCP tool registration / discovery / parallel dispatch |
-| **Voice Service** | 5048 | TTS (Edge-TTS) + ASR (FunASR) + Realtime voice (Qwen Omni) |
 
 `main.py` orchestrates all services as daemon threads. The active frontend is `Embla_core` (Next.js ops dashboard); `frontend/` (Electron + Vue 3) is an `archived` compatibility lane.
 
@@ -215,26 +214,10 @@ Source (archived): [`frontend/`](frontend/)
 
 ---
 
-### Voice Interaction
+### Voice Module Status
 
-**TTS (Text-to-Speech)**:
-
-- Edge-TTS engine, OpenAI-compatible endpoint `/v1/audio/speech`
-- 3-thread pipeline: sentence queue → TTS API calls (Semaphore(2) concurrency) → pygame playback
-- Live2D lip sync: `AdvancedLipSyncEngineV2` at 60FPS extracting 5 parameters (mouth_open / mouth_form / mouth_smile / eye_brow_up / eye_wide)
-- Supports mp3 / aac / wav / opus / flac, optional FFmpeg transcoding
-
-**ASR (Speech Recognition)**:
-
-- FunASR local server with VAD endpoint detection and WebSocket real-time streaming
-- Three-mode auto-switch: LOCAL (FunASR) → END_TO_END (Qwen Omni) → HYBRID (Qwen ASR + API Server)
-
-**Realtime Voice Chat** (requires DashScope API Key):
-
-- Full-duplex WebSocket voice interaction via Qwen Omni
-- Echo suppression, VAD detection, audio chunking (200ms), session cooldown, max speech duration control
-
-Source: [`voice/`](voice/)
+The historical `voice/` implementation has been removed from the active runtime path.  
+The current repository no longer ships built-in TTS/ASR services.
 
 ---
 
@@ -260,37 +243,29 @@ Source: [`autonomous/`](autonomous/)
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                 Electron / PyQt5 Frontend                 │
-│  Vue 3 + Vite + UnoCSS + PrimeVue + pixi-live2d-display  │
-└────────────┬────────────┬────────────┬───────────────────┘
-             │            │            │
-     ┌───────▼──────┐ ┌──▼──────┐ ┌──▼──────┐
-     │  API Server  │ │ Agent   │ │  Voice  │
-     │   :8000      │ │ Server  │ │  :5048  │
-     │              │ │  :8001  │ │         │
-     │ - Dialog/SSE │ │ - Task  │ │ - TTS   │
-     │ - Native Dpt │ │   Auton │ │ - ASR   │
-     │ - Doc Upload │ │   Agent │ │ - Real- │
-     │ - Auth Proxy │ │ - Git   │ │   time  │
-     │ - Memory API │ │   CntrL │ │   Voice │
-     │ - Skill Mrkt │ │ - Open  │ │         │
-     │ - Config Mgr │ │   Claw  │ │         │
-     └──────┬───────┘ └────┬────┘ └─────────┘
-            │              │
-     ┌──────▼──────┐  ┌───▼──────────┐
-     │ MCP Server  │  │  Autonomous  │
-     │   :8003     │  │  Subsystem   │
-     │             │  │   (SDLC)     │
-     │ - Tool Reg  │  └──────────────┘
-     │ - Agent Dsc │
-     │ - Parallel  │
+┌──────────────────────────────────────────────────────┐
+│                Embla_core (Next.js Frontend)        │
+└────────────┬────────────┬────────────────────────────┘
+             │            │
+     ┌───────▼──────┐ ┌──▼──────────┐
+     │  API Server  │ │ AgentServer │
+     │   :8000      │ │   :8001     │
+     │ - Chat / SSE │ │ - Task Mgmt │
+     │ - Native Ops │ │ - Memory    │
+     │ - Auth Proxy │ └──┬──────────┘
+     │ - Config API │    │
+     └──────┬───────┘ ┌──▼──────────┐
+            │         │ Autonomous  │
+     ┌──────▼──────┐  │ Subsystem   │
+     │ MCP Server  │  │   (SDLC)    │
+     │   :8003     │  └─────────────┘
+     │ - Registry  │
+     │ - Discovery │
+     │ - Dispatch  │
      └──────┬──────┘
             │
-    ┌───────┴──────────────────────┐
-    │  MCP Agents (Pluggable)      │
-    │ Weather | Search | Scrape    │
-    │ Launcher| Guide  | Doc |MQTT │
+    ┌───────▼──────────────────────┐
+    │   MCP Agents (Pluggable)     │
     └──────────────────────────────┘
             │
      ┌──────▼──────┐
@@ -309,8 +284,7 @@ NagaAgent/
 │   ├── api_server.py     #   FastAPI Main App
 │   ├── agentic_tool_loop.py  #   Multi-round native tool call loop
 │   ├── native_tools.py   #   Local-First interception tools
-│   ├── llm_service.py    #   LiteLLM Unified Caller & tool_calls stream
-│   └── streaming_tool_extractor.py  #   Stream segmentation + TTS dispatch
+│   └── llm_service.py    #   LiteLLM Unified Caller & tool_calls stream
 ├── agentserver/          # Agent Server — Legacy Compatibility layer
 │   ├── agent_server.py   #   FastAPI Main App
 │   └── task_scheduler.py #   Task orchestration + Compression memory
@@ -335,9 +309,6 @@ NagaAgent/
 │   ├── task_manager.py         #   3-worker async task manager
 │   ├── memory_manager.py       #   GRAG orchestrator
 │   └── memory_client.py        #   NagaMemory remote client
-├── voice/                # Voice service
-│   ├── output/           #   TTS (Edge-TTS) + lip sync
-│   └── input/            #   ASR (FunASR) + realtime voice (Qwen Omni)
 ├── guide_engine/         # Game guide engine — cloud RAG service
 ├── Embla_core/           # Next.js runtime posture dashboard (active)
 ├── frontend/             # Electron + Vue 3 frontend (archived compatibility lane)
@@ -398,7 +369,7 @@ Works with any OpenAI-compatible API (DeepSeek, Qwen, OpenAI, Ollama, etc.).
 ### Launch
 
 ```bash
-python main.py             # Full launch (API + Agent + MCP + Voice + GUI)
+python main.py             # Full launch (API + Agent + MCP + GUI)
 uv run main.py             # Using uv
 python main.py --headless  # Headless mode (for web/remote frontend)
 ```
@@ -444,30 +415,6 @@ Install Neo4j ([Docker](https://hub.docker.com/_/neo4j) or [Neo4j Desktop](https
     "neo4j_uri": "neo4j://127.0.0.1:7687",
     "neo4j_user": "neo4j",
     "neo4j_password": "your-password"
-  }
-}
-```
-</details>
-
-<details>
-<summary><b>Voice Interaction</b></summary>
-
-```json
-{
-  "system": { "voice_enabled": true },
-  "tts": { "port": 5048, "default_voice": "zh-CN-XiaoxiaoNeural" }
-}
-```
-
-Realtime voice chat (requires Qwen DashScope API Key):
-
-```json
-{
-  "voice_realtime": {
-    "enabled": true,
-    "provider": "qwen",
-    "api_key": "your-dashscope-key",
-    "model": "qwen3-omni-flash-realtime"
   }
 }
 ```
@@ -528,7 +475,6 @@ Electron frontend Live2D config:
 | API Server | 8000 | Main interface: chat, config, auth, Skill Market |
 | Agent Server | 8001 | Intent analysis, task scheduling |
 | MCP Server | 8003 | MCP tool registration & dispatch |
-| Voice Service | 5048 | TTS / ASR |
 | Neo4j | 7687 | Knowledge graph (optional) |
 
 ---
@@ -547,7 +493,7 @@ uv sync
 | Issue | Solution |
 |-------|----------|
 | Python version mismatch | Use Python 3.11, or use uv (manages Python versions automatically) |
-| Port in use | Check if ports 8000, 8001, 8003, 5048 are available |
+| Port in use | Check if ports 8000, 8001, 8003 are available |
 | Neo4j connection failed | Ensure Neo4j is running, verify config.json connection parameters |
 | Progress bar stuck | Check API key config; restart hint appears after 3s; Electron auto-polls backend health |
 

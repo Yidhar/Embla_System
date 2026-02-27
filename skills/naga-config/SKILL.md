@@ -23,14 +23,12 @@ enabled: true
 GET /system/config
 ```
 返回完整的系统配置 JSON，包含以下主要分区：
-- `system` — 基础设置（ai_name, voice_enabled, stream_mode, debug, log_level）
+- `system` — 基础设置（ai_name, stream_mode, debug, log_level）
 - `api` — LLM 模型设置（api_key, base_url, model, temperature, max_tokens, max_history_rounds）
 - `grag` — 知识图谱设置（enabled, auto_extract, similarity_threshold, neo4j 连接）
-- `tts` — 语音合成设置（default_voice, default_speed, default_language）
 - `online_search` — 搜索引擎设置（searxng_url, engines, num_results）
 - `live2d` — Live2D 虚拟形象设置（enabled, model_path, animation_enabled）
 - `handoff` — 工具调用循环设置（max_loop_stream, max_loop_non_stream）
-- `voice_realtime` — 实时语音对话设置（enabled, provider, model, voice）
 - `weather` — 天气 API 设置
 - `mqtt` — MQTT 物联网设置
 - `crawl4ai` — 网页爬取设置
@@ -51,7 +49,6 @@ Content-Type: application/json
 **切换 LLM 模型**：修改 `api.model`、`api.base_url`、`api.api_key`
 **调整创造力**：修改 `api.temperature`（0.0=精确，1.0=创意，2.0=随机）
 **修改 AI 名称**：修改 `system.ai_name`
-**开关语音**：修改 `system.voice_enabled`
 **开关知识图谱**：修改 `grag.enabled` 和 `grag.auto_extract`
 **调整搜索结果数**：修改 `online_search.num_results`
 
