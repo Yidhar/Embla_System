@@ -1679,51 +1679,10 @@ def _parse_structured_tool_calls_payload(raw_payload: Any) -> List[Dict[str, Any
             return [item for item in value if isinstance(item, dict)]
         return []
 
+    # Strict protocol: tool_calls must already be structured objects from model delta.
     if isinstance(raw_payload, (dict, list)):
         return _normalize(raw_payload)
-    if not isinstance(raw_payload, str):
-        return []
-
-    payload_text = raw_payload.strip()
-    if not payload_text:
-        return []
-
-    parsed: Any = None
-    try:
-        parsed = json.loads(payload_text)
-    except Exception:
-        try:
-            import json5 as _json5
-
-            parsed = _json5.loads(payload_text)
-        except Exception:
-            return []
-    return _normalize(parsed)
-
-
-def _detect_legacy_tool_protocol_violation(
-    complete_text: str,
-    structured_calls: List[Dict[str, Any]],
-) -> Optional[str]:
-    if structured_calls:
-        return None
-    if not complete_text:
-        return None
-
-    lowered = complete_text.lower()
-    if "```tool" in lowered:
-        return (
-            "检测到旧式 ```tool``` 代码块。当前系统仅接受原生 function calling，"
-            "请直接发起函数调用，不要在正文输出工具 JSON。"
-        )
-
-    # 不执行旧协议，仅将其视为协议违规并让模型纠偏。
-    if re.search(r"\"agentType\"\s*:\s*\"[A-Za-z0-9_\-]+\"", complete_text):
-        return (
-            "检测到正文中的 agentType 工具 JSON。当前系统仅接受原生 function calling，"
-            "请改为函数调用。"
-        )
-    return None
+    return []
 
 
 def _shorten_for_log(value: Any, limit: int = 300) -> str:
@@ -2551,11 +2510,21 @@ def _convert_structured_tool_calls(
                     _schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "mcp_call.arguments 必须是对象")
                 )
                 continue
-            # Keep compatibility with flattened mcp_call arguments while preferring nested `arguments`.
-            for key, value in args.items():
-                if key in {"tool_name", "service_name", "arguments"}:
-                    continue
-                arg_payload.setdefault(key, value)
+            legacy_flattened_keys = sorted(
+                str(key)
+                for key in args.keys()
+                if key not in {"tool_name", "service_name", "arguments"}
+            )
+            if legacy_flattened_keys:
+                validation_errors.append(
+                    _schema_error(
+                        _SCHEMA_ERR_INPUT_INVALID,
+                        call_id,
+                        "mcp_call 仅支持结构化 arguments 对象，检测到扁平参数: "
+                        + ",".join(legacy_flattened_keys),
+                    )
+                )
+                continue
             merged_call.update(arg_payload)
             _inject_call_context_metadata(
                 merged_call,
@@ -2823,10 +2792,6 @@ async def run_agentic_loop(
             session_id=session_id,
             trace_id=None,  # 自动生成
         )
-        legacy_protocol_error = _detect_legacy_tool_protocol_violation(complete_text, structured_tool_calls)
-        if legacy_protocol_error:
-            validation_errors.append(legacy_protocol_error)
-
         actionable_calls, blocked_mutating_calls = _apply_coding_route_guard(
             actionable_calls,
             latest_user_request=latest_user_request,

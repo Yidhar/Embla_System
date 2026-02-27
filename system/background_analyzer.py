@@ -285,24 +285,24 @@ class ConversationAnalyzer:
         prompt = self._build_prompt(messages)
         logger.info(f"[ConversationAnalyzer] 构建提示词完成，长度: {len(prompt)}")
 
-        # 使用简化的非标准JSON解析
-        result = self._analyze_with_non_standard_json(prompt)
+        result = self._analyze_with_function_calling(prompt)
         if result and result.get("tool_calls"):
             return result
 
-        # 解析失败
         logger.info("[ConversationAnalyzer] 未发现可执行任务")
         return {"tasks": [], "reason": "未发现可执行任务", "raw": "", "tool_calls": []}
 
-    def _analyze_with_non_standard_json(self, prompt: str) -> Optional[Dict]:
-        """非标准JSON格式解析 - 直接调用LLM，避免嵌套线程池"""
-        logger.info("[ConversationAnalyzer] 尝试非标准JSON格式解析")
+    def _analyze_with_function_calling(self, prompt: str) -> Optional[Dict]:
+        """Strict mode: only accept native function-calling tool_calls."""
+        logger.info("[ConversationAnalyzer] 尝试原生 function calling 解析")
         try:
             if self.llm is None:
                 raise RuntimeError("ConversationAnalyzer LLM is not initialized")
 
-            # Call LLM directly and avoid nested threadpool invocations.
-            resp = self.llm.invoke(
+            from apiserver.agentic_tool_loop import _convert_structured_tool_calls, get_agentic_tool_definitions
+
+            llm_with_tools = self.llm.bind_tools(get_agentic_tool_definitions(), tool_choice="auto")
+            resp = llm_with_tools.invoke(
                 [
                     {"role": "system", "content": "You are a precise intent extractor and MCP tool planning assistant."},
                     {"role": "user", "content": prompt},
@@ -315,129 +315,83 @@ class ConversationAnalyzer:
             else:
                 text = str(raw_content).strip()
 
-            logger.info(f"[ConversationAnalyzer] LLM响应完成，响应长度: {len(text)}")
-            logger.info(f"[ConversationAnalyzer] LLM原始响应内容: {text}")
-
-            # 解析非标准JSON格式
-            tool_calls = self._parse_non_standard_json(text)
+            logger.info(f"[ConversationAnalyzer] LLM响应完成，正文长度: {len(text)}")
+            structured_calls = self._extract_structured_tool_calls(resp)
+            logger.info(f"[ConversationAnalyzer] 提取到结构化 tool_calls: {len(structured_calls)}")
+            tool_calls, validation_errors = _convert_structured_tool_calls(
+                structured_calls,
+                session_id=None,
+                trace_id=None,
+            )
+            if validation_errors:
+                logger.warning("[ConversationAnalyzer] function-calling 参数校验失败: %s", " | ".join(validation_errors))
 
             if tool_calls:
-                logger.info(f"[ConversationAnalyzer] 非标准JSON解析成功，发现 {len(tool_calls)} 个工具调用")
+                logger.info(f"[ConversationAnalyzer] function-calling 解析成功，发现 {len(tool_calls)} 个工具调用")
                 return {
                     "tasks": [],
-                    "reason": f"非标准JSON解析成功，发现 {len(tool_calls)} 个工具调用",
+                    "reason": f"function-calling 解析成功，发现 {len(tool_calls)} 个工具调用",
                     "tool_calls": tool_calls,
                 }
-            else:
-                logger.info("[ConversationAnalyzer] 未发现工具调用")
-                return None
-
-        except Exception as e:
-            logger.error(f"[ConversationAnalyzer] 非标准JSON解析失败: {e}")
+            logger.info("[ConversationAnalyzer] 未发现结构化工具调用")
             return None
 
-    def _parse_non_standard_json(self, text: str) -> List[Dict[str, Any]]:
-        """解析非标准JSON格式。
-
-        兼容场景：
-        - LLM输出全角括号/标点（如｛｝），导致下游解析器无法识别
-        - LLM输出在JSON前后夹杂少量说明文字
-        """
-
-        normalized_text = self._normalize_fullwidth_json_chars(text)
-
-        # 优先使用核心库解析器（如果可用）
-        try:
-            from system.parsing import parse_non_standard_json
-
-            tool_calls = parse_non_standard_json(normalized_text)
-            if tool_calls:
-                return tool_calls
         except Exception as e:
-            logger.debug(f"parse_non_standard_json不可用或解析失败，尝试回退解析: {e}")
-
-        # 回退：从文本中提取一个或多个JSON对象并解析
-        return self._fallback_extract_json_objects(normalized_text)
+            logger.error(f"[ConversationAnalyzer] function-calling 解析失败: {e}")
+            return None
 
     @staticmethod
-    def _normalize_fullwidth_json_chars(text: str) -> str:
-        """将常见全角JSON相关字符归一化为ASCII。
+    def _normalize_structured_tool_call(raw_call: Dict[str, Any], index: int) -> Optional[Dict[str, Any]]:
+        if not isinstance(raw_call, dict):
+            return None
+        call_id = str(raw_call.get("id") or f"tool_call_{index}").strip() or f"tool_call_{index}"
+        name = str(raw_call.get("name") or "").strip()
+        args = raw_call.get("args")
+        parse_error = ""
 
-        仅做保守替换，避免影响普通文本内容。
-        """
-        if not text:
-            return text
+        function_payload = raw_call.get("function")
+        if not name and isinstance(function_payload, dict):
+            name = str(function_payload.get("name") or "").strip()
+            args = function_payload.get("arguments")
 
-        translation_table = str.maketrans(
-            {
-                "｛": "{",
-                "｝": "}",
-                "：": ":",
-                "，": ",",
-                "“": '"',
-                "”": '"',
-                "‘": "'",
-                "’": "'",
-            }
-        )
-        return text.translate(translation_table)
-
-    def _fallback_extract_json_objects(self, text: str) -> List[Dict[str, Any]]:
-        """从文本中提取JSON对象（支持多个），并用json5/json解析。
-
-        返回值统一为List[Dict]；无法解析时返回空列表。
-        """
-
-        def _loads(s: str) -> Any:
+        if isinstance(args, str):
             try:
-                import json5 as _json5
+                args = json.loads(args)
+            except Exception as exc:
+                parse_error = str(exc)
+                args = {}
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):
+            parse_error = parse_error or f"arguments must be object, got {type(args).__name__}"
+            args = {}
 
-                return _json5.loads(s)
-            except Exception:
-                import json as _json
+        if not name:
+            return None
+        payload: Dict[str, Any] = {"id": call_id, "name": name, "arguments": args}
+        if parse_error:
+            payload["parse_error"] = parse_error
+        return payload
 
-                return _json.loads(s)
+    def _extract_structured_tool_calls(self, response: Any) -> List[Dict[str, Any]]:
+        raw_calls: List[Any] = []
 
-        objects: List[Dict[str, Any]] = []
-        start: Optional[int] = None
-        depth = 0
+        response_tool_calls = getattr(response, "tool_calls", None)
+        if isinstance(response_tool_calls, list):
+            raw_calls.extend(response_tool_calls)
 
-        for i, ch in enumerate(text):
-            if ch == "{":
-                if depth == 0:
-                    start = i
-                depth += 1
-            elif ch == "}":
-                if depth > 0:
-                    depth -= 1
-                    if depth == 0 and start is not None:
-                        candidate = text[start : i + 1].strip()
-                        start = None
+        additional_kwargs = getattr(response, "additional_kwargs", None)
+        if isinstance(additional_kwargs, dict):
+            nested = additional_kwargs.get("tool_calls")
+            if isinstance(nested, list):
+                raw_calls.extend(nested)
 
-                        # 跳过空对象（表示“无任务”）
-                        if candidate in ("{}", "{ }"):
-                            continue
-
-                        try:
-                            parsed = _loads(candidate)
-                        except Exception:
-                            continue
-
-                        if isinstance(parsed, dict):
-                            objects.append(parsed)
-                        elif isinstance(parsed, list):
-                            for item in parsed:
-                                if isinstance(item, dict):
-                                    objects.append(item)
-
-        # 只保留形如工具调用的对象（避免误解析到无关JSON）
-        filtered: List[Dict[str, Any]] = []
-        for obj in objects:
-            agent_type = obj.get("agentType")
-            if isinstance(agent_type, str) and agent_type:
-                filtered.append(obj)
-
-        return filtered
+        normalized: List[Dict[str, Any]] = []
+        for index, item in enumerate(raw_calls, start=1):
+            normalized_call = self._normalize_structured_tool_call(item, index)
+            if normalized_call is not None:
+                normalized.append(normalized_call)
+        return normalized
 
 
 class BackgroundAnalyzer:

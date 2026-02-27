@@ -785,7 +785,7 @@ class LLMService:
                 if tool_call_buffers:
                     finalized_calls = self._finalize_stream_tool_calls(tool_call_buffers)
                     if finalized_calls:
-                        yield self._format_sse_chunk("tool_calls", json.dumps(finalized_calls, ensure_ascii=False))
+                        yield self._format_sse_chunk("tool_calls", finalized_calls)
                 return
 
             except litellm.AuthenticationError as e:
@@ -853,7 +853,7 @@ class LLMService:
                 )
                 return
 
-    def _format_sse_chunk(self, chunk_type: str, text: str) -> str:
+    def _format_sse_chunk(self, chunk_type: str, text: Any) -> str:
         data = {"type": chunk_type, "text": text}
         b64 = base64.b64encode(json.dumps(data, ensure_ascii=False).encode("utf-8")).decode("ascii")
         return f"data: {b64}\n\n"

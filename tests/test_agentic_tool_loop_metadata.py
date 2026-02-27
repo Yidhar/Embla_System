@@ -19,7 +19,9 @@ def test_convert_structured_tool_calls_injects_context_metadata() -> None:
             "name": "mcp_call",
             "arguments": {
                 "tool_name": "ping",
-                "message": "hello",
+                "arguments": {
+                    "message": "hello",
+                },
             },
         },
     ]

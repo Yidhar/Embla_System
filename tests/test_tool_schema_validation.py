@@ -133,3 +133,32 @@ def test_output_schema_rejects_non_dict_result(monkeypatch) -> None:
     assert result["status"] == "error"
     assert result["error_code"] == "E_SCHEMA_OUTPUT_INVALID"
     assert "payload must be object" in result["result"]
+
+
+def test_structured_tool_calls_payload_rejects_stringified_json_payload() -> None:
+    payload = '[{"id":"call_1","name":"native_call","arguments":{"tool_name":"read_file","path":"README.md"}}]'
+    parsed = tool_loop._parse_structured_tool_calls_payload(payload)
+    assert parsed == []
+
+
+def test_mcp_call_rejects_flattened_arguments() -> None:
+    calls = [
+        {
+            "id": "schema_call_mcp_1",
+            "name": "mcp_call",
+            "arguments": {
+                "tool_name": "ping",
+                "message": "hello",
+            },
+        }
+    ]
+
+    actionable_calls, validation_errors = _convert_structured_tool_calls(
+        calls,
+        session_id="schema_sess_mcp_1",
+        trace_id="schema_trace_mcp_1",
+    )
+
+    assert actionable_calls == []
+    assert validation_errors
+    assert "仅支持结构化 arguments 对象" in validation_errors[0]
