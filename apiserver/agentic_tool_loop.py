@@ -642,65 +642,6 @@ def _build_tool_call_descriptions(actionable_calls: List[Dict[str, Any]]) -> Lis
     return descriptions
 
 
-def _looks_like_pending_tool_intent(text: str) -> bool:
-    if not text:
-        return False
-    lowered = text.lower()
-    markers = [
-        "我先查",
-        "我来查",
-        "我先看",
-        "我来看看",
-        "让我查",
-        "让我看",
-        "正在检查",
-        "稍等",
-        "I'll check",
-        "let me check",
-        "I will check",
-    ]
-    return any(m in lowered for m in markers)
-
-
-def _is_explicit_no_tool_completion(text: str) -> bool:
-    """Detect explicit model signal that no additional tools are needed."""
-    if not text:
-        return False
-
-    compact = re.sub(r"\s+", "", text).lower()
-    cn_markers = (
-        "不需要工具",
-        "无需工具",
-        "不需要额外工具",
-        "无需额外工具",
-    )
-    if any(marker in compact for marker in cn_markers):
-        return True
-
-    lowered = text.lower()
-    en_markers = (
-        "no tool needed",
-        "no tools needed",
-        "no additional tools needed",
-        "no need to use tools",
-        "no extra tools needed",
-        "no_tool_needed",
-    )
-    return any(marker in lowered for marker in en_markers)
-
-
-_END_MARKER_RE = re.compile(r"\{\s*end\s*\}", re.IGNORECASE)
-
-
-def _find_end_marker_span(text: str) -> Optional[Tuple[int, int]]:
-    if not text:
-        return None
-    matched = _END_MARKER_RE.search(text)
-    if not matched:
-        return None
-    return matched.span()
-
-
 def _extract_terminal_stream_error_text(text: str) -> str:
     """Detect fatal upstream stream errors that should stop the loop immediately."""
     if not text:
@@ -2434,68 +2375,14 @@ async def run_agentic_loop(
         structured_tool_calls: List[Dict[str, Any]] = []
         stream_terminal_error = ""
         stream_terminal_error_reason = ""
-        end_marker_cutoff: Optional[int] = None
         buffered_round_chunks: List[str] = []
 
-        def _drain_buffered_round_chunks(*, content_cutoff: Optional[int] = None) -> List[str]:
+        def _drain_buffered_round_chunks() -> List[str]:
             if not buffered_round_chunks:
                 return []
             drained_raw = list(buffered_round_chunks)
             buffered_round_chunks.clear()
-            if content_cutoff is None:
-                return drained_raw
-
-            cutoff = max(0, int(content_cutoff))
-            drained_sanitized: List[str] = []
-            content_cursor = 0
-            content_closed = False
-
-            for chunk in drained_raw:
-                if not chunk.startswith("data: "):
-                    drained_sanitized.append(chunk)
-                    continue
-
-                try:
-                    data_str = chunk[6:].strip()
-                    if not data_str or data_str == "[DONE]":
-                        drained_sanitized.append(chunk)
-                        continue
-                    payload = json.loads(base64.b64decode(data_str).decode("utf-8"))
-                    chunk_type = payload.get("type", "content")
-                    if chunk_type != "content":
-                        drained_sanitized.append(chunk)
-                        continue
-
-                    chunk_text = payload.get("text", "")
-                    if not isinstance(chunk_text, str):
-                        chunk_text = str(chunk_text)
-                except Exception:
-                    drained_sanitized.append(chunk)
-                    continue
-
-                if content_closed:
-                    content_cursor += len(chunk_text)
-                    continue
-
-                remaining = cutoff - content_cursor
-                chunk_len = len(chunk_text)
-                if remaining <= 0:
-                    content_cursor += chunk_len
-                    content_closed = True
-                    continue
-
-                if chunk_len <= remaining:
-                    drained_sanitized.append(chunk)
-                    content_cursor += chunk_len
-                    continue
-
-                payload["text"] = chunk_text[:remaining]
-                b64 = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode("utf-8")).decode("ascii")
-                drained_sanitized.append(f"data: {b64}\n\n")
-                content_cursor += chunk_len
-                content_closed = True
-
-            return drained_sanitized
+            return drained_raw
 
         round_tool_choice = "auto"
 
@@ -2562,13 +2449,8 @@ async def run_agentic_loop(
                 stream_terminal_error = detected
                 stream_terminal_error_reason = "llm_stream_error"
 
-        marker_span = _find_end_marker_span(complete_text)
-        if marker_span:
-            end_marker_cutoff = marker_span[0]
-            complete_text = complete_text[:end_marker_cutoff]
-
         if stream_terminal_error:
-            for buffered_chunk in _drain_buffered_round_chunks(content_cutoff=end_marker_cutoff):
+            for buffered_chunk in _drain_buffered_round_chunks():
                 yield buffered_chunk
             runtime.stop_reason = stream_terminal_error_reason or "llm_stream_error"
             logger.error(
@@ -2693,11 +2575,6 @@ async def run_agentic_loop(
                 _bind_execution_contract_to_calls(actionable_calls, contract_state=contract_state)
 
         validation_results = _build_validation_results(validation_errors)
-        pending_tool_intent = False
-        explicit_no_tool_completion = False
-        if not actionable_calls and not validation_results:
-            pending_tool_intent = _looks_like_pending_tool_intent(complete_text)
-            explicit_no_tool_completion = _is_explicit_no_tool_completion(complete_text)
 
         def _build_round_model_output_event(*, fallback_text: str) -> str:
             output_text = complete_text if isinstance(complete_text, str) else str(complete_text)
@@ -2715,48 +2592,6 @@ async def run_agentic_loop(
                     "validation_errors": len(validation_results),
                 },
             )
-
-        if end_marker_cutoff is not None:
-            yield _build_round_model_output_event(fallback_text="（检测到结束标记，本轮结束）")
-            for buffered_chunk in _drain_buffered_round_chunks(content_cutoff=end_marker_cutoff):
-                yield buffered_chunk
-
-            runtime.stop_reason = "end_marker"
-            plan_success_event = _format_workflow_stage_event(
-                round_num,
-                "plan",
-                "success",
-                policy=policy,
-                reason="end_marker",
-                details={
-                    "actionable_calls": len(actionable_calls),
-                    "validation_errors": len(validation_results),
-                },
-            )
-            if plan_success_event:
-                yield plan_success_event
-            execute_skip_event = _format_workflow_stage_event(
-                round_num,
-                "execute",
-                "skip",
-                policy=policy,
-                reason="end_marker",
-            )
-            if execute_skip_event:
-                yield execute_skip_event
-            verify_success_event = _format_workflow_stage_event(
-                round_num,
-                "verify",
-                "success",
-                policy=policy,
-                reason="end_marker",
-                decision="stop",
-            )
-            if verify_success_event:
-                yield verify_success_event
-            logger.info(f"[AgenticLoop] Round {round_num}: 检测到 {{End}} 标记，循环结束")
-            yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
-            break
 
         if actionable_calls:
             yield _build_round_model_output_event(fallback_text="（本轮模型未返回正文，直接发起工具调用）")
@@ -2787,18 +2622,12 @@ async def run_agentic_loop(
             if plan_error_event:
                 yield plan_error_event
         else:
-            if explicit_no_tool_completion:
-                no_action_reason = "explicit_no_tool_completion"
-            elif pending_tool_intent:
-                no_action_reason = "pending_tool_intent"
-            else:
-                no_action_reason = "no_actionable_calls"
             plan_no_action_event = _format_workflow_stage_event(
                 round_num,
                 "plan",
                 "success",
                 policy=policy,
-                reason=no_action_reason,
+                reason="no_actionable_calls",
                 details={
                     "actionable_calls": 0,
                     "validation_errors": 0,
@@ -2937,27 +2766,9 @@ async def run_agentic_loop(
 
             runtime.consecutive_validation_failures = 0
             runtime.consecutive_no_tool_rounds += 1
-            if explicit_no_tool_completion:
-                yield _build_round_model_output_event(fallback_text="（本轮模型未返回正文，但声明无需继续工具）")
-                for buffered_chunk in _drain_buffered_round_chunks():
-                    yield buffered_chunk
-                runtime.stop_reason = "explicit_no_tool_completion"
-                verify_success_event = _format_workflow_stage_event(
-                    round_num,
-                    "verify",
-                    "success",
-                    policy=policy,
-                    reason="explicit_no_tool_completion",
-                    decision="stop",
-                )
-                if verify_success_event:
-                    yield verify_success_event
-                logger.info(f"[AgenticLoop] Round {round_num}: 模型明确返回“不需要工具”，循环结束")
-                yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
-                break
 
             should_retry_no_tool = (
-                (pending_tool_intent or policy.inject_no_tool_feedback)
+                policy.inject_no_tool_feedback
                 and runtime.consecutive_no_tool_rounds < policy.max_consecutive_no_tool_rounds
                 and round_num < policy.max_rounds
             )
@@ -2980,18 +2791,11 @@ async def run_agentic_loop(
                 )
                 if repair_start_event:
                     yield repair_start_event
-                if pending_tool_intent:
-                    feedback_text = (
-                        "[系统反馈] 你上一轮表示将使用工具，但没有实际发起函数调用。"
-                        "请立即调用合适函数继续执行；只有在无需任何工具且任务已完成时才直接给最终答案，"
-                        "并在回答中显式包含“不需要工具”。"
-                    )
-                else:
-                    feedback_text = (
-                        "[系统反馈] 你上一轮没有发起任何工具调用。"
-                        "如果任务仍需要外部信息、文件操作、命令执行或网络能力，请立即调用合适函数并继续执行。"
-                        "只有在无需任何工具且任务已完成时才直接给最终答案，并在回答中显式包含“不需要工具”。"
-                    )
+                feedback_text = (
+                    "[系统反馈] 你上一轮没有发起任何工具调用。"
+                    "如果任务仍需要外部信息、文件操作、命令执行或网络能力，请立即调用合适函数继续执行。"
+                    "如果任务已完成，直接给出最终答案即可。"
+                )
                 messages.append({"role": "assistant", "content": assistant_content})
                 messages.append(
                     {
@@ -3005,7 +2809,6 @@ async def run_agentic_loop(
                     "success",
                     policy=policy,
                     reason="no_tool_feedback_injected",
-                    details={"pending_tool_intent": bool(pending_tool_intent)},
                 )
                 if repair_success_event:
                     yield repair_success_event
