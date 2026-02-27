@@ -1126,6 +1126,87 @@ def build_system_prompt(
     return "".join(parts)
 
 
+def build_system_prompt_for_path(
+    path: str,
+    *,
+    include_skills: bool = True,
+    skill_name: Optional[str] = None,
+) -> str:
+    """
+    按路由路径构建裁剪后的系统提示词。
+
+    - path-a: 外层只读 — 完整对话风格 + 技能元数据，不注入工具指令
+    - path-b: 外层澄清 — 完整对话风格 + 技能元数据，不注入工具指令
+    - path-c: Core 执行 — 使用精简 core_exec_base + 工具指令，不注入闲聊风格
+
+    异常时降级到原始 build_system_prompt()。
+    """
+    normalized_path = str(path or "path-c").strip().lower()
+    try:
+        if normalized_path in {"path-a", "path-b"}:
+            # Outer 路径：完整对话风格，不注入工具指令
+            return build_system_prompt(
+                include_skills=include_skills,
+                include_tool_instructions=False,
+                skill_name=skill_name,
+            )
+
+        # path-c: Core 执行路径
+        # 使用精简的 Core 身份 prompt 替代闲聊风格 prompt
+        core_prompt_file = Path(__file__).parent / "prompts" / "agents" / "core_exec" / "core_exec_base.txt"
+        if core_prompt_file.exists():
+            base_prompt = core_prompt_file.read_text(encoding="utf-8").strip()
+        else:
+            # 如果 Core prompt 文件不存在，降级到通用身份
+            base_prompt = "你是一个自治执行代理，负责规划和执行用户通过 Contract 提交的任务。"
+
+        parts = [base_prompt]
+
+        # 附加知识分隔符
+        parts.append("\n\n━━━━━━━━━━ 以下是附加知识 ━━━━━━━━━━\n")
+
+        # 时间信息（所有路径都需要）
+        current_time = datetime.now()
+        time_info = (
+            f"\n【当前时间信息】\n"
+            f"当前日期：{current_time.strftime('%Y年%m月%d日')}\n"
+            f"当前时间：{current_time.strftime('%H:%M:%S')}\n"
+            f"当前星期：{current_time.strftime('%A')}"
+        )
+        parts.append(time_info)
+
+        # Core 路径不注入技能元数据列表（按 Contract 执行）
+
+        # 注入工具调用指令（Core 路径始终需要）
+        try:
+            from mcpserver.mcp_registry import auto_register_mcp
+
+            auto_register_mcp()
+            from mcpserver.mcp_manager import get_mcp_manager
+
+            available_mcp_tools = get_mcp_manager().format_available_services() or "（暂无MCP服务注册）"
+        except Exception:
+            available_mcp_tools = "（MCP服务未启动）"
+
+        raw_template = get_prompt_manager()._load_prompt("agentic_tool_prompt") or ""
+        tool_prompt = raw_template.replace("{available_mcp_tools}", available_mcp_tools)
+        parts.append("\n\n" + tool_prompt)
+
+        # Core 路径不注入技能活化指令（技能由 Contract scope 控制）
+
+        return "".join(parts)
+
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "build_system_prompt_for_path(%s) 降级到 build_system_prompt: %s", path, exc
+        )
+        return build_system_prompt(
+            include_skills=include_skills,
+            include_tool_instructions=(normalized_path == "path-c"),
+            skill_name=skill_name,
+        )
+
+
 class NagaConfig(BaseModel):
     """NagaAgent主配置类"""
 

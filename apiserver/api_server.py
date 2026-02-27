@@ -26,6 +26,12 @@ from system.coding_intent import contains_direct_coding_signal, has_recent_codin
 from system.watchdog_daemon import WatchdogDaemon
 from autonomous.event_log.event_store import EventStore
 from autonomous.router_engine import RouterRequest, TaskRouterEngine
+from autonomous.llm_gateway import (
+    GatewayRouteRequest,
+    LLMGateway,
+    PromptEnvelopeInput,
+    PromptSlice,
+)
 
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,7 +46,7 @@ _vlm_sessions: set = set()
 
 # 导入配置系统
 try:
-    from system.config import get_config, build_system_prompt  # 使用新的配置系统
+    from system.config import get_config, build_system_prompt, build_system_prompt_for_path  # 使用新的配置系统
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 except ImportError:
     import sys
@@ -48,7 +54,7 @@ except ImportError:
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from system.config import get_config  # 使用新的配置系统
-    from system.config import build_system_prompt  # 导入提示词仓库
+    from system.config import build_system_prompt, build_system_prompt_for_path  # 导入提示词仓库
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 from apiserver.response_util import extract_message  # noqa: E402 - imported after fallback config setup
 
@@ -74,6 +80,10 @@ def _save_conversation_and_logs(session_id: str, user_message: str, assistant_re
 
 
 _CHAT_PATH_ROUTER = TaskRouterEngine()
+try:
+    _CHAT_LLM_GATEWAY: Optional[LLMGateway] = LLMGateway()
+except Exception:
+    _CHAT_LLM_GATEWAY = None
 _CHAT_ROUTE_EVENT_STORE: Optional[EventStore] = None
 _CHAT_ROUTE_STATE_KEY = "_chat_route_state"
 _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT = 1
@@ -687,12 +697,24 @@ def _build_core_execution_contract_payload(
     if len(goal) <= 24 and any(marker in goal.lower() for marker in _CHAT_ROUTE_FOLLOWUP_MARKERS):
         assumptions.append("用户输入可能是续写指令，需结合 recent_user_history 推断目标。")
 
+    # Outer 上下文摘要：Core 唯一的历史感知来源
+    outer_context_summary = ""
+    if latest_user_history:
+        outer_context_summary = " → ".join(latest_user_history[-2:])
+    if latest_assistant_history:
+        last_assistant = latest_assistant_history[-1]
+        if outer_context_summary:
+            outer_context_summary += f" [assistant: {last_assistant[:120]}]"
+        else:
+            outer_context_summary = f"[assistant: {last_assistant[:120]}]"
+
     return {
         "contract_stage": "seed",
         "session_id": str(session_id or ""),
         "goal": goal,
         "scope_hint": scope_hint,
         "acceptance_hint": acceptance_hint,
+        "outer_context_summary": outer_context_summary,
         "recent_user_history": latest_user_history,
         "recent_assistant_history": latest_assistant_history,
         "assumptions": assumptions,
@@ -703,9 +725,18 @@ def _build_core_execution_contract_payload(
 def _build_core_execution_messages(
     *,
     session_id: str,
-    system_prompt: str,
+    core_system_prompt: str,
     current_message: str,
 ) -> List[Dict[str, Any]]:
+    """构建 Core 执行代理的消息列表。
+
+    Core 消息列表仅包含三条：
+    1. system: 已裁剪的 Core 身份 prompt（由 build_system_prompt_for_path('path-c') 生成）
+    2. system: [ExecutionContractInput] JSON（Outer 上下文摘要 + 目标 + 证据约束）
+    3. user: 当前用户请求
+
+    不注入 Outer 闲聊历史，实现上下文隔离。
+    """
     recent_messages = message_manager.get_recent_messages(session_id, count=10)
     contract_payload = _build_core_execution_contract_payload(
         session_id=session_id,
@@ -714,7 +745,7 @@ def _build_core_execution_messages(
     )
     contract_text = "[ExecutionContractInput]\n" + json.dumps(contract_payload, ensure_ascii=False, sort_keys=True)
     return [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": core_system_prompt},
         {"role": "system", "content": contract_text},
         {"role": "user", "content": current_message},
     ]
@@ -754,16 +785,16 @@ def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[s
         "readonly_write_tool_dropped_count": 0,
         "readonly_write_tool_selected_slices": [],
         "readonly_write_tool_dropped_slices": [],
-        "selected_slices": [],
-        "dropped_slices": [],
-        "selected_slice_count": 0,
-        "dropped_slice_count": 0,
+        "selected_slices": route_meta.get("_slice_selected") or [],
+        "dropped_slices": route_meta.get("_slice_dropped") or [],
+        "selected_slice_count": int(route_meta.get("_slice_selected_count") or 0),
+        "dropped_slice_count": int(route_meta.get("_slice_dropped_count") or 0),
         "dropped_conflict_count": 0,
-        "selected_layers": [],
+        "selected_layers": route_meta.get("_slice_selected_layers") or [],
         "selected_layer_counts": {},
         "recovery_hit": False,
-        "prefix_hash": "",
-        "tail_hash": "",
+        "prefix_hash": str(route_meta.get("_slice_prefix_hash") or ""),
+        "tail_hash": str(route_meta.get("_slice_tail_hash") or ""),
         "prefix_cache_hit": False,
         "block1_cache_hit": False,
         "block2_cache_hit": False,
@@ -1614,6 +1645,34 @@ async def chat_stream(request: ChatRequest):
             route_decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
             path = str(route_meta.get("path") or "path-c")
             execution_session_id = str(route_meta.get("execution_session_id") or session_id)
+            # ====== Prompt Slice 引擎：resolve + serialize ======
+            try:
+                if _CHAT_LLM_GATEWAY is not None:
+                    _gw_request = GatewayRouteRequest(
+                        task_type=str(route_decision.get("task_type") or ""),
+                        severity=str(route_meta.get("risk_level") or ""),
+                        path=path,
+                        prompt_profile=str(route_decision.get("prompt_profile") or ""),
+                        injection_mode=str(route_decision.get("injection_mode") or ""),
+                        delegation_intent=str(route_decision.get("delegation_intent") or ""),
+                    )
+                    _gw_prompt_input = PromptEnvelopeInput(static_header="", long_term_summary="")
+                    _gw_resolve = _CHAT_LLM_GATEWAY.resolve(request=_gw_request, prompt_input=_gw_prompt_input)
+                    _gw_selected = _gw_resolve.get("selected") or []
+                    _gw_dropped = _gw_resolve.get("dropped") or []
+                    _gw_cache = _CHAT_LLM_GATEWAY.serialize_for_cache(selected_slices=_gw_selected)
+                    route_meta["_slice_selected"] = [s.slice_uid for s in _gw_selected if hasattr(s, "slice_uid")]
+                    route_meta["_slice_dropped"] = [s.slice_uid for s in _gw_dropped if hasattr(s, "slice_uid")]
+                    route_meta["_slice_selected_count"] = len(_gw_selected)
+                    route_meta["_slice_dropped_count"] = len(_gw_dropped)
+                    route_meta["_slice_prefix_hash"] = str(_gw_cache.get("prefix_hash") or "")
+                    route_meta["_slice_tail_hash"] = str(_gw_cache.get("tail_hash") or "")
+                    route_meta["_slice_selected_layers"] = sorted(set(
+                        str(getattr(s, "layer", "")) for s in _gw_selected if getattr(s, "layer", "")
+                    ))
+            except Exception as _gw_exc:
+                logger.debug("[prompt_slice] gateway resolve/serialize 降级: %s", _gw_exc)
+
             _emit_chat_route_prompt_event(route_meta, session_id=session_id)
             _emit_chat_route_guard_event(route_meta, session_id=session_id)
             yield _format_sse_payload_chunk(
@@ -1646,6 +1705,10 @@ async def chat_stream(request: ChatRequest):
                     "core_session_id": str(route_meta.get("core_session_id") or ""),
                     "execution_session_id": execution_session_id,
                     "core_session_created": bool(route_meta.get("core_session_created")),
+                    "selected_slice_count": int(route_meta.get("_slice_selected_count") or 0),
+                    "dropped_slice_count": int(route_meta.get("_slice_dropped_count") or 0),
+                    "prefix_hash": str(route_meta.get("_slice_prefix_hash") or ""),
+                    "tail_hash": str(route_meta.get("_slice_tail_hash") or ""),
                 }
             )
             logger.info(
@@ -1659,11 +1722,10 @@ async def chat_stream(request: ChatRequest):
                 route_meta.get("route_quality_guard_action", ""),
             )
 
-            # 构建系统提示词（仅 Path-C 注入工具指令，Path-A/B 保持外层只读）
-            include_tool_instructions = path == "path-c"
-            system_prompt = build_system_prompt(
+            # 构建系统提示词（按路径裁剪：Path-A/B 只读风格，Path-C Core 执行风格）
+            system_prompt = build_system_prompt_for_path(
+                path,
                 include_skills=True,
-                include_tool_instructions=include_tool_instructions,
                 skill_name=request.skill,
             )
 
@@ -1708,7 +1770,7 @@ async def chat_stream(request: ChatRequest):
             if path == "path-c":
                 messages = _build_core_execution_messages(
                     session_id=session_id,
-                    system_prompt=system_prompt,
+                    core_system_prompt=system_prompt,
                     current_message=effective_message,
                 )
 
