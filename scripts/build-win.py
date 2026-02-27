@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-FRONTEND_DIR = PROJECT_ROOT / "frontend"
-BACKEND_DIST_DIR = FRONTEND_DIR / "backend-dist"
+EMBLA_CORE_DIR = PROJECT_ROOT / "Embla_core"
+LEGACY_FRONTEND_DIR = PROJECT_ROOT / "frontend"
+DEFAULT_BACKEND_DIST_DIR = PROJECT_ROOT / "dist" / "backend-dist"
+LEGACY_BACKEND_DIST_DIR = LEGACY_FRONTEND_DIR / "backend-dist"
 SPEC_FILE = PROJECT_ROOT / "naga-backend.spec"
 PHASE3_CLOSURE_SCRIPT = PROJECT_ROOT / "scripts" / "release_phase3_closure_chain_ws22_004.py"
 
@@ -71,7 +73,7 @@ def get_cmd_version(cmd: str, args: list[str] | None = None) -> Optional[str]:
     return None
 
 
-def check_environment() -> bool:
+def check_environment(*, require_node: bool) -> bool:
     ok = True
 
     if os.name != "nt":
@@ -92,24 +94,25 @@ def check_environment() -> bool:
         log("uv not found (install with: pip install uv)")
         ok = False
 
-    node_ver = get_cmd_version("node")
-    if node_ver:
-        major = int(node_ver.lstrip("v").split(".")[0])
-        if major >= MIN_NODE_MAJOR:
-            log(f"Node.js {node_ver} OK")
+    if require_node:
+        node_ver = get_cmd_version("node")
+        if node_ver:
+            major = int(node_ver.lstrip("v").split(".")[0])
+            if major >= MIN_NODE_MAJOR:
+                log(f"Node.js {node_ver} OK")
+            else:
+                log(f"Node.js {node_ver} too old, requires >= {MIN_NODE_MAJOR}")
+                ok = False
         else:
-            log(f"Node.js {node_ver} too old, requires >= {MIN_NODE_MAJOR}")
+            log(f"Node.js not found (requires >= {MIN_NODE_MAJOR})")
             ok = False
-    else:
-        log(f"Node.js not found (requires >= {MIN_NODE_MAJOR})")
-        ok = False
 
-    npm_ver = get_cmd_version("npm")
-    if npm_ver:
-        log(f"npm {npm_ver} OK")
-    else:
-        log("npm not found")
-        ok = False
+        npm_ver = get_cmd_version("npm")
+        if npm_ver:
+            log(f"npm {npm_ver} OK")
+        else:
+            log("npm not found")
+            ok = False
 
     return ok
 
@@ -119,7 +122,7 @@ def sync_dependencies() -> None:
     log("Python dependencies synced")
 
 
-def build_backend() -> None:
+def build_backend(*, backend_dist_dir: Path) -> None:
     if not SPEC_FILE.exists():
         raise FileNotFoundError(f"spec file missing: {SPEC_FILE}")
 
@@ -133,7 +136,7 @@ def build_backend() -> None:
             "pyinstaller",
             str(SPEC_FILE),
             "--distpath",
-            str(BACKEND_DIST_DIR),
+            str(backend_dist_dir),
             "--workpath",
             str(work_dir),
             "--clean",
@@ -142,17 +145,17 @@ def build_backend() -> None:
         cwd=PROJECT_ROOT,
     )
 
-    backend_exe = BACKEND_DIST_DIR / "naga-backend" / "naga-backend.exe"
+    backend_exe = backend_dist_dir / "naga-backend" / "naga-backend.exe"
     if not backend_exe.exists():
         raise FileNotFoundError(f"backend artifact missing: {backend_exe}")
     log(f"Backend build complete: {backend_exe}")
 
 
-def build_frontend(debug: bool = False) -> None:
-    node_modules = FRONTEND_DIR / "node_modules"
+def build_frontend_legacy(debug: bool = False) -> None:
+    node_modules = LEGACY_FRONTEND_DIR / "node_modules"
     if not node_modules.exists():
-        log("Installing frontend dependencies...")
-        run(["npm", "install"], cwd=FRONTEND_DIR)
+        log("Installing legacy frontend dependencies...")
+        run(["npm", "install"], cwd=LEGACY_FRONTEND_DIR)
 
     if debug:
         run(
@@ -163,12 +166,12 @@ def build_frontend(debug: bool = False) -> None:
                 "--",
                 "-c.extraMetadata.nagaDebugConsole=true",
             ],
-            cwd=FRONTEND_DIR,
+            cwd=LEGACY_FRONTEND_DIR,
         )
     else:
-        run(["npm", "run", "dist:win"], cwd=FRONTEND_DIR)
+        run(["npm", "run", "dist:win"], cwd=LEGACY_FRONTEND_DIR)
 
-    log("Electron package build complete")
+    log("Legacy Electron package build complete")
 
 
 def run_phase3_closure_chain(
@@ -192,26 +195,32 @@ def run_phase3_closure_chain(
     log("Phase3 closure chain gate passed")
 
 
-def print_summary() -> None:
+def print_summary(*, backend_dist_dir: Path, include_legacy_electron: bool) -> None:
     print()
     print("=" * 50)
     print("  Build complete")
     print("=" * 50)
 
-    backend_dir = BACKEND_DIST_DIR / "naga-backend"
+    backend_dir = backend_dist_dir / "naga-backend"
     if backend_dir.exists():
         size = sum(f.stat().st_size for f in backend_dir.rglob("*") if f.is_file())
         log(f"Backend artifact: {backend_dir} ({size / 1024 / 1024:.0f} MB)")
 
-    release_dir = FRONTEND_DIR / "release"
-    if release_dir.exists():
-        for f in release_dir.glob("*.exe"):
-            log(f"Installer: {f} ({f.stat().st_size / 1024 / 1024:.0f} MB)")
+    if include_legacy_electron:
+        release_dir = LEGACY_FRONTEND_DIR / "release"
+        if release_dir.exists():
+            for f in release_dir.glob("*.exe"):
+                log(f"Installer: {f} ({f.stat().st_size / 1024 / 1024:.0f} MB)")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="NagaAgent Windows build script")
     parser.add_argument("--backend-only", action="store_true", help="Build backend only")
+    parser.add_argument(
+        "--legacy-electron",
+        action="store_true",
+        help="Enable legacy Electron + Vue packaging flow under frontend/",
+    )
     parser.add_argument(
         "--debug",
         action="store_true",
@@ -240,9 +249,17 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     start_time = time.time()
+    backend_dist_dir = LEGACY_BACKEND_DIST_DIR if args.legacy_electron else DEFAULT_BACKEND_DIST_DIR
+
+    if not args.legacy_electron and not args.backend_only:
+        log(
+            "Embla_core is the active frontend; scripts/build-win.py no longer builds frontend/ by default. "
+            "Use --legacy-electron to build the archived Electron lane."
+        )
+        args.backend_only = True
 
     total_steps = 3
-    if not args.backend_only:
+    if not args.backend_only and args.legacy_electron:
         total_steps += 1
     if args.phase3_closure:
         total_steps += 1
@@ -251,7 +268,7 @@ def main() -> None:
 
     step += 1
     log_step(step, total_steps, "Environment checks")
-    if not check_environment():
+    if not check_environment(require_node=args.legacy_electron):
         log("Environment check failed")
         sys.exit(1)
 
@@ -269,15 +286,15 @@ def main() -> None:
 
     step += 1
     log_step(step, total_steps, "Build backend via PyInstaller")
-    build_backend()
+    build_backend(backend_dist_dir=backend_dist_dir)
 
-    if not args.backend_only:
+    if not args.backend_only and args.legacy_electron:
         step += 1
-        title = "Build Electron frontend (DEBUG)" if args.debug else "Build Electron frontend"
+        title = "Build legacy Electron frontend (DEBUG)" if args.debug else "Build legacy Electron frontend"
         log_step(step, total_steps, title)
-        build_frontend(debug=args.debug)
+        build_frontend_legacy(debug=args.debug)
 
-    print_summary()
+    print_summary(backend_dist_dir=backend_dist_dir, include_legacy_electron=args.legacy_electron and not args.backend_only)
     elapsed = time.time() - start_time
     log(f"Total elapsed: {elapsed / 60:.1f} min")
 

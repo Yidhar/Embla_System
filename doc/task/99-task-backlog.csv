@@ -69,9 +69,9 @@ NGA-WS19-005,WS19,M3,P1,feature,Episodic Memory 写入与检索链路,NGA-WS15-0
 NGA-WS19-006,WS19,M3,P2,feature,Semantic Graph 拓扑扫描与更新,NGA-WS19-005,11,semantic_graph,依赖链查询准确,done
 NGA-WS19-007,WS19,M4,P2,ops,Daily Checkpoint 日结归档,NGA-WS19-004;NGA-WS19-005,11,checkpoint_cron,日结稳定可审计,done
 NGA-WS19-008,WS19,M3,P1,hardening,Router 仲裁熔断联动,NGA-WS19-002;NGA-WS12-005,11|09,router_arbiter,超限冲突不无限循环,done
-NGA-WS20-001,WS20,M1,P1,migration,API 契约冻结与版本策略,NGA-WS10-001,04|08,apiserver_contract,兼容窗口明确,done
-NGA-WS20-002,WS20,M2,P1,feature,SSE 事件协议统一,NGA-WS10-004,01|04,sse_protocol,前端消费无需多分支,done
-NGA-WS20-003,WS20,M3,P2,refactor,前端模块按域解耦,NGA-WS20-001,08,frontend_modules,模块边界清晰可测,done
-NGA-WS20-004,WS20,M4,P1,migration,MCP 状态展示与真实后端对齐,NGA-WS16-003,01|08,mcp_status_ui,UI 与后台状态一致,done
-NGA-WS20-005,WS20,M4,P1,qa,前后端联调回归套件,NGA-WS20-002;NGA-WS20-004,05|08,e2e_front_back,核心链路回归全通过,done
-NGA-WS20-006,WS20,M5,P2,qa,桌面端发布兼容性验证,NGA-WS20-005,05|08,electron_release_checks,关键平台稳定运行,review
+NGA-WS20-001,WS20,M1,P1,migration,API 契约冻结与版本策略,NGA-WS10-001,04|08,apiserver_contract,兼容窗口明确,archived
+NGA-WS20-002,WS20,M2,P1,feature,SSE 事件协议统一,NGA-WS10-004,01|04,sse_protocol,前端消费无需多分支,archived
+NGA-WS20-003,WS20,M3,P2,refactor,前端模块按域解耦,NGA-WS20-001,08,frontend_modules,模块边界清晰可测,archived
+NGA-WS20-004,WS20,M4,P1,migration,MCP 状态展示与真实后端对齐,NGA-WS16-003,01|08,mcp_status_ui,UI 与后台状态一致,archived
+NGA-WS20-005,WS20,M4,P1,qa,前后端联调回归套件,NGA-WS20-002;NGA-WS20-004,05|08,e2e_front_back,核心链路回归全通过,archived
+NGA-WS20-006,WS20,M5,P2,qa,桌面端发布兼容性验证,NGA-WS20-005,05|08,electron_release_checks,关键平台稳定运行,archived

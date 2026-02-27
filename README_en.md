@@ -34,7 +34,7 @@ NagaAgent consists of four independent microservices:
 | **MCP Server** | 8003 | MCP tool registration / discovery / parallel dispatch |
 | **Voice Service** | 5048 | TTS (Edge-TTS) + ASR (FunASR) + Realtime voice (Qwen Omni) |
 
-`main.py` orchestrates all services as daemon threads. Frontend options: Electron + Vue 3 desktop or PyQt5 native GUI.
+`main.py` orchestrates all services as daemon threads. The active frontend is `Embla_core` (Next.js ops dashboard); `frontend/` (Electron + Vue 3) is retained as a legacy compatibility lane.
 
 ---
 
@@ -210,7 +210,7 @@ easeOutCubic easing (`1 - (1 - t)^3`), 160ms / 60FPS transitions. Smart position
 3. **Stall detection**: 3 seconds with no progress change shows restart hint, health polling every 1s after 25% to prevent signal loss
 4. **Awaken**: Progress 100% shows pulsing "Click to Awaken" prompt
 
-Source: [`frontend/`](frontend/)
+Source (legacy): [`frontend/`](frontend/)
 
 ---
 
@@ -343,7 +343,8 @@ NagaAgent/
 │   ├── output/           #   TTS (Edge-TTS) + lip sync
 │   └── input/            #   ASR (FunASR) + realtime voice (Qwen Omni)
 ├── guide_engine/         # Game guide engine — cloud RAG service
-├── frontend/             # Electron + Vue 3 frontend
+├── Embla_core/           # Next.js runtime posture dashboard (active)
+├── frontend/             # Electron + Vue 3 frontend (legacy compatibility)
 │   ├── electron/         #   Main process (window mgmt, floating ball, backend, hotkeys)
 │   └── src/              #   Vue 3 app
 │       ├── views/        #     MessageView / MindView / SkillView / ModelView / MemoryView / ConfigView
@@ -406,7 +407,7 @@ Works with any OpenAI-compatible API (DeepSeek, Qwen, OpenAI, Ollama, etc.).
 ```bash
 python main.py             # Full launch (API + Agent + MCP + Voice + GUI)
 uv run main.py             # Using uv
-python main.py --headless  # Headless mode (for Electron frontend)
+python main.py --headless  # Headless mode (for web/remote frontend)
 ```
 
 All services are orchestrated by `main.py`. For development, each can be started independently:
@@ -416,7 +417,16 @@ uvicorn apiserver.api_server:app --host 127.0.0.1 --port 8000 --reload
 uvicorn agentserver.agent_server:app --host 0.0.0.0 --port 8001
 ```
 
-### Electron Frontend Development
+### Embla_core Frontend Development (Active)
+
+```bash
+cd Embla_core
+npm install
+npm run dev    # Next.js dev mode
+npm run build  # Next.js production build
+```
+
+### Electron Frontend Development (Legacy Compatibility)
 
 ```bash
 cd frontend

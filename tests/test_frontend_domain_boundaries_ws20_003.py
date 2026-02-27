@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+
+pytestmark = pytest.mark.skip(
+    reason="WS20 archived: legacy Electron/Vue frontend domain-boundary suite is retired from active gates."
+)
+
 
 FRONTEND_SRC = Path("frontend/src")
 

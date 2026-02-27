@@ -22,8 +22,8 @@
 统一入口（推荐）：
 `.\.venv\Scripts\python.exe scripts/release_phase3_closure_chain_ws22_004.py`
 
-发布链串接入口（Windows 打包前置门禁）：
-`.\.venv\Scripts\python.exe scripts/build-win.py --phase3-closure`
+发布链串接入口（Windows legacy 打包前置门禁）：
+`.\.venv\Scripts\python.exe scripts/build-win.py --legacy-electron --phase3-closure`
 
 全量总入口（M0-M8）：
 `.\.venv\Scripts\python.exe scripts/release_closure_chain_full_m0_m7.py`

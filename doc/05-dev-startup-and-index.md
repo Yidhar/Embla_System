@@ -36,7 +36,15 @@ cd E:\Programs\NagaAgent
 python main.py --headless
 ```
 
-### 2.3 前端开发
+### 2.3 前端开发（主链：Embla_core）
+
+```powershell
+cd E:\Programs\NagaAgent\Embla_core
+npm install
+npm run dev
+```
+
+### 2.4 legacy Electron 前端（仅兼容）
 
 ```powershell
 cd E:\Programs\NagaAgent\frontend
@@ -101,7 +109,7 @@ uvicorn mcpserver.mcp_server:app --host 0.0.0.0 --port 8003
 最小建议：
 
 1. Python 依赖：`uv sync`
-2. Node 依赖：`cd frontend && npm install`
+2. Node 依赖（主链）：`cd Embla_core && npm install`
 3. Git 可用（Native/Git 工具依赖）
 4. 可选：安装 `mcporter` 与 Codex MCP 以测试降级链路
 
@@ -128,7 +136,8 @@ curl http://127.0.0.1:8001/health
 - `summer_memory/`：记忆与图谱。
 - `guide_engine/`：领域问答与计算。
 - `voice/`：语音 I/O。
-- `frontend/`：Electron + Vue。
+- `Embla_core/`：Next.js 运行态势面板（主链）。
+- `frontend/`：Electron + Vue（legacy 兼容）。
 - `system/`：配置、日志与底层安全能力。
 
 ## 9. 常见排障清单

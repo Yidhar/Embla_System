@@ -2,5 +2,5 @@
 chcp 65001
 
 call .venv\Scripts\activate.bat
-cd frontend
+cd Embla_core
 npm run dev
