@@ -202,7 +202,7 @@ def run_benchmark():
     base_prompt = load_base_system_prompt()
     tool_prompt = load_tool_prompt()
 
-    print(f"数据来源：")
+    print("数据来源：")
     print(f"  - skills 目录：{len(skills)} 个技能")
     print(f"  - sessions 目录：{len(sessions)} 个会话")
     print()

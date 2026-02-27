@@ -160,7 +160,6 @@ def store_quintuples(new_quintuples) -> bool:
         _graph = get_graph()
 
         # 同步更新Neo4j图谱数据库（仅在graph可用时）
-        success = True
         if _graph is not None:
             success_count = 0
             for head, head_type, rel, tail, tail_type in new_quintuples:
@@ -183,7 +182,6 @@ def store_quintuples(new_quintuples) -> bool:
                     success_count += 1
                 except Exception as e:
                     logger.error(f"存储五元组失败: {head}-{rel}-{tail}, 错误: {e}")
-                    success = False
 
             logger.info(f"成功存储 {success_count}/{len(new_quintuples)} 个五元组到Neo4j")
             # 如果至少成功存储了一个五元组，就认为是成功的

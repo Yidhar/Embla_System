@@ -1,7 +1,17 @@
-from .arknights import ArknightsProcessor
-from .genshin import GenshinProcessor
-from .starrail import StarrailProcessor
-from .zenless import ZenlessProcessor
-from .wutheringwaves import WutheringWavesProcessor
-from .pgr import PGRProcessor
-from .umamusume import UmaMusumeProcessor
+from .arknights import ArknightsProcessor as ArknightsProcessor
+from .genshin import GenshinProcessor as GenshinProcessor
+from .pgr import PGRProcessor as PGRProcessor
+from .starrail import StarrailProcessor as StarrailProcessor
+from .umamusume import UmaMusumeProcessor as UmaMusumeProcessor
+from .wutheringwaves import WutheringWavesProcessor as WutheringWavesProcessor
+from .zenless import ZenlessProcessor as ZenlessProcessor
+
+__all__ = [
+    "ArknightsProcessor",
+    "GenshinProcessor",
+    "StarrailProcessor",
+    "ZenlessProcessor",
+    "WutheringWavesProcessor",
+    "PGRProcessor",
+    "UmaMusumeProcessor",
+]

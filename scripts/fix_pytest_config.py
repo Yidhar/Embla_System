@@ -22,7 +22,7 @@ def main() -> int:
 
     header = "[tool.pytest.ini_options]"
     try:
-        start = next(i for i, l in enumerate(lines) if l.strip() == header)
+        start = next(i for i, line in enumerate(lines) if line.strip() == header)
     except StopIteration:
         raise SystemExit("pytest ini section not found")
 
@@ -38,18 +38,18 @@ def main() -> int:
     after = lines[end:]
 
     # Remove all existing addopts lines
-    section_wo_addopts = [l for l in section if not re.match(r"^\s*addopts\s*=", l)]
+    section_wo_addopts = [line for line in section if not re.match(r"^\s*addopts\s*=", line)]
 
     desired_addopts = 'addopts = "-q"'
 
     # Insert addopts as the first non-empty, non-comment line (right after header)
     inserted = False
     new_section: list[str] = []
-    for l in section_wo_addopts:
-        if not inserted and l.strip() and not l.lstrip().startswith("#"):
+    for line in section_wo_addopts:
+        if not inserted and line.strip() and not line.lstrip().startswith("#"):
             new_section.append(desired_addopts)
             inserted = True
-        new_section.append(l)
+        new_section.append(line)
 
     if not inserted:
         # section was empty or only comments

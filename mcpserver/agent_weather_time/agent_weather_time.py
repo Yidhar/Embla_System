@@ -3,8 +3,7 @@ import json
 import aiohttp
 import requests
 import re
-from datetime import datetime, timedelta
-from system.config import config, AI_NAME
+from datetime import datetime
 
 from mcpserver.agent_weather_time.city_codes import codes_map
 
@@ -21,7 +20,7 @@ class WeatherTimeTool:
         import asyncio
         try:
             try:
-                loop = asyncio.get_running_loop()
+                asyncio.get_running_loop()
                 asyncio.create_task(self._preload_ip_info())
             except RuntimeError:
                 self._ip_info = None
@@ -41,7 +40,7 @@ class WeatherTimeTool:
             else:
                 self._local_ip = None
                 self._local_city = None
-        except Exception as e:
+        except Exception:
             self._local_ip = None
             self._local_city = None
 
@@ -141,7 +140,7 @@ class WeatherTimeAgent:
     def __init__(self):
         self._tool = WeatherTimeTool()
         import sys
-        ip_str = getattr(self._tool, '_local_ip', '未获取到IP')
+        getattr(self._tool, '_local_ip', '未获取到IP')
         city_str = getattr(self._tool, '_local_city', '未知城市')
         sys.stderr.write(f'✅ WeatherTimeAgent初始化完成，登陆地址：{city_str}\n')
 

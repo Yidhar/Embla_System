@@ -1,8 +1,6 @@
 # agent_app_launcher.py # 应用启动与管理Agent（综合版）
 import os
-import platform
 import subprocess
-import asyncio
 import json
 import sys
 
@@ -17,7 +15,7 @@ class AppLauncherAgent(object):
 
     def __init__(self):
         self.scanner = get_comprehensive_scanner()
-        print(f'✅ AppLauncherAgent初始化完成，应用扫描将在首次使用时异步执行')
+        print('✅ AppLauncherAgent初始化完成，应用扫描将在首次使用时异步执行')
 
     async def handle_handoff(self, data: dict) -> str:
         """MCP标准接口，处理handoff请求"""

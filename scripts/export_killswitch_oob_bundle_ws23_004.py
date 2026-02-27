@@ -7,7 +7,7 @@ import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, Sequence
 
 from system.killswitch_guard import (
     build_oob_health_probe_plan,

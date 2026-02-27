@@ -13,7 +13,6 @@ from .neo4j_service import Neo4jService
 from .prompt_manager import PromptManager
 from .query_router import QueryMode, RouteResult, get_query_router
 from .screenshot_provider import get_screenshot_provider
-from .neo4j_service import Neo4jService
 
 
 logger = logging.getLogger("GuideService")

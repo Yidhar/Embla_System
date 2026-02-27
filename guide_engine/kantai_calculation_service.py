@@ -10,7 +10,6 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 import json
 import math
-import os
 import re
 
 from .neo4j_service import Neo4jService
@@ -373,9 +372,9 @@ class KantaiCalculationService:
             ("equipment", "装备列表（改修/熟练度不写默认满改修/满熟练）"),
         ]
         missing = []
-        for field, label in required:
-            value = getattr(payload, field)
-            if field == "equipment" and not value:
+        for field_name, label in required:
+            value = getattr(payload, field_name)
+            if field_name == "equipment" and not value:
                 missing.append(label)
             elif not value:
                 missing.append(label)

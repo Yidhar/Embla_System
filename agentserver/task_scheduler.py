@@ -374,22 +374,22 @@ class _TaskScheduler:
 
     def _build_compression_prompt(self, task_id: str) -> str:
         """构建压缩提示"""
-        prompt = """
+        prompt = f"""
 你是一个专业的任务执行助手，需要压缩任务执行历史记录。请执行以下任务：
 1. 识别并提取关键的技术细节和发现
 2. 标记已尝试但失败的解决方案
 3. 总结当前任务状态和下一步建议
 4. 以JSON格式返回以下结构的数据：
-{
+{{
   "key_findings": ["发现1", "发现2"],
   "failed_attempts": ["命令1", "命令2"],
   "current_status": "当前状态描述",
   "next_steps": ["建议1", "建议2"]
-}
+}}
 
 任务ID: {task_id}
 历史记录:
-""".format(task_id=task_id)
+"""
         
         # 添加关键事实
         prompt += "关键事实摘要:\n"

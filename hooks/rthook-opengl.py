@@ -51,7 +51,7 @@ def _setup_opengl_environment():
             # 强制使用基础平台
             import OpenGL.platform
             OpenGL.platform.use(OpenGL.platform.base_platform.BasePlatform)
-        except:
+        except Exception:
             pass
 
 # 在模块导入时立即设置环境

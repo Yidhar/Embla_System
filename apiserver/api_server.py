@@ -13,20 +13,9 @@ import os
 import logging
 import time
 import subprocess
-import locale
 import uuid
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, AsyncGenerator, Any, Tuple, Literal, Callable
-from urllib.request import Request as UrlRequest, urlopen
-from urllib.error import URLError
-
-# 在导入其他模块前先设置HTTP库日志级别
-logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore.connection").setLevel(logging.WARNING)
-
-# 创建logger实例
-logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,18 +31,17 @@ from autonomous.router_engine import RouterRequest, TaskRouterEngine
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from .message_manager import message_manager  # 导入统一的消息管理器
+from .message_manager import message_manager  # noqa: E402 - keep script-mode compatibility path setup
 
-from .llm_service import get_llm_service  # 导入LLM服务
-from . import naga_auth  # NagaCAS 认证模块
+from .llm_service import get_llm_service, llm_app  # noqa: E402 - mounted below
+from . import naga_auth  # noqa: E402 - keep script-mode compatibility path setup
 
 # 记录哪些会话曾发送过图片，后续消息继续走 VLM 直到新会话
 _vlm_sessions: set = set()
 
 # 导入配置系统
 try:
-    from system.config import get_config, AI_NAME  # 使用新的配置系统
-    from system.config import get_prompt, build_system_prompt  # 导入提示词仓库
+    from system.config import get_config, build_system_prompt  # 使用新的配置系统
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 except ImportError:
     import sys
@@ -63,7 +51,13 @@ except ImportError:
     from system.config import get_config  # 使用新的配置系统
     from system.config import build_system_prompt  # 导入提示词仓库
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
-from apiserver.response_util import extract_message  # 导入消息提取工具
+from apiserver.response_util import extract_message  # noqa: E402 - imported after fallback config setup
+
+# 在导入其他模块后设置HTTP库日志级别
+logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore.connection").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
 
 # 对话核心功能已集成到apiserver
 
@@ -1552,7 +1546,7 @@ async def chat(request: ChatRequest):
                         logger.info(f"[RAG] 召回 {len(mem_lines)} 条记忆注入上下文")
                 elif mem_result.get("success") and mem_result.get("answer"):
                     system_prompt += f"\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆：\n{mem_result['answer']}"
-                    logger.info(f"[RAG] 召回记忆（answer 模式）注入上下文")
+                    logger.info("[RAG] 召回记忆（answer 模式）注入上下文")
         except Exception as e:
             logger.debug(f"[RAG] 记忆召回失败（不影响对话）: {e}")
 
@@ -1697,7 +1691,7 @@ async def chat_stream(request: ChatRequest):
                     elif mem_result.get("success") and mem_result.get("answer"):
                         memory_context = f"\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆：\n{mem_result['answer']}"
                         system_prompt += memory_context
-                        logger.info(f"[RAG] 召回记忆（answer 模式）注入上下文")
+                        logger.info("[RAG] 召回记忆（answer 模式）注入上下文")
             except Exception as e:
                 logger.debug(f"[RAG] 记忆召回失败（不影响对话）: {e}")
 
@@ -3676,6 +3670,17 @@ def _resolve_mcporter_invoker() -> List[str]:
     return []
 
 
+def _run_command(cmd: List[str], *, timeout: int) -> Tuple[int, str, str]:
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    return result.returncode, result.stdout, result.stderr
+
+
 def _mcporter_call(
     server_name: str,
     tool_name: str,
@@ -4263,7 +4268,8 @@ async def upload_parse(file: UploadFile = File(...)):
             lines = _docx_mod.extract_docx_text(tmp_path)
             content = "\n".join(lines)
         elif suffix == ".xlsx":
-            import importlib.util, zipfile as _zf
+            import importlib.util
+            import zipfile as _zf
             _xlsx_spec = importlib.util.spec_from_file_location(
                 "xlsx_extract", Path(__file__).parent / "skills_templates" / "office-docs" / "tools" / "xlsx_extract.py"
             )
@@ -4306,8 +4312,6 @@ async def proxy_update_check(platform: str = "windows"):
     """Update check is disabled in local-only mode."""
     return {"has_update": False, "local_mode": True}
 
-
-from .llm_service import llm_app
 
 app.mount("/llm", llm_app)
 

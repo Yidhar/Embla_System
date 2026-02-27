@@ -82,7 +82,7 @@ class ComprehensiveAppScanner:
                                             friendly_name, _ = winreg.QueryValueEx(app_key, "FriendlyAppName")
                                             if friendly_name:
                                                 display_name = friendly_name
-                                        except:
+                                        except Exception:
                                             pass
 
                                         apps.append({
@@ -92,9 +92,9 @@ class ComprehensiveAppScanner:
                                             "source": "registry",
                                             "description": f"从注册表扫描到的应用: {display_name}"
                                         })
-                                except:
+                                except Exception:
                                     pass
-                    except:
+                    except Exception:
                         continue
         except Exception as e:
             print(f"扫描App Paths注册表失败: {e}")
@@ -124,9 +124,9 @@ class ComprehensiveAppScanner:
                                             "source": "registry",
                                             "description": f"从卸载注册表扫描到的应用: {display_name}"
                                         })
-                            except:
+                            except Exception:
                                 pass
-                    except:
+                    except Exception:
                         continue
         except Exception as e:
             print(f"扫描Uninstall注册表失败: {e}")
@@ -156,9 +156,9 @@ class ComprehensiveAppScanner:
                                             "source": "registry",
                                             "description": f"从用户卸载注册表扫描到的应用: {display_name}"
                                         })
-                            except:
+                            except Exception:
                                 pass
-                    except:
+                    except Exception:
                         continue
         except Exception as e:
             print(f"扫描用户Uninstall注册表失败: {e}")
@@ -226,7 +226,7 @@ class ComprehensiveAppScanner:
                     description = shortcut.Description
                     if description:
                         app_name = description
-                except:
+                except Exception:
                     pass
                 
                 return {
@@ -257,7 +257,7 @@ class ComprehensiveAppScanner:
                         exe_path = os.path.join(root, file)
                         if os.path.exists(exe_path):
                             exe_files.append(exe_path)
-        except:
+        except Exception:
             pass
         
         return exe_files

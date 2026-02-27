@@ -6,9 +6,8 @@ GameData 数据加载器
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
-from functools import lru_cache
 
 
 @dataclass
@@ -220,7 +219,7 @@ class GameDataLoader:
         self._load_name_mapping()
         self._loaded = True
 
-        print(f"[GameDataLoader] 数据加载完成:")
+        print("[GameDataLoader] 数据加载完成:")
         print(f"  干员: {len(self._characters)}")
         print(f"  技能: {len(self._skills)}")
         print(f"  模组: {len(self._modules)}")
