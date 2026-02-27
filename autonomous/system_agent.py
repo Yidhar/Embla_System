@@ -31,7 +31,7 @@ from autonomous.tools.subagent_runtime import (
 )
 from autonomous.types import OptimizationTask
 from system.brainstem_event_bridge import BRIDGED_EVENT_TYPE, build_brainstem_bridge_payload
-from system.watchdog_daemon import WatchdogDaemon, WatchdogThresholds
+from system.watchdog_daemon import WatchdogAction, WatchdogDaemon, WatchdogThresholds
 
 
 class LeaseLostError(RuntimeError):
@@ -86,6 +86,11 @@ class WatchdogRuntimeConfig:
     io_read_bps: float = 50 * 1024 * 1024
     io_write_bps: float = 50 * 1024 * 1024
     cost_per_hour: float = 5.0
+    prefer_daemon_state: bool = True
+    daemon_state_file: str = "scratch/runtime/watchdog_daemon_state_ws28_025.json"
+    daemon_state_stale_warning_seconds: float = 120.0
+    daemon_state_stale_critical_seconds: float = 300.0
+    fail_closed_on_daemon_state_stale: bool = False
 
 
 @dataclass
@@ -161,6 +166,19 @@ class SystemAgentConfig:
             io_read_bps=max(1.0, float(pick(watchdog, "io_read_bps", 50 * 1024 * 1024))),
             io_write_bps=max(1.0, float(pick(watchdog, "io_write_bps", 50 * 1024 * 1024))),
             cost_per_hour=max(0.0, float(pick(watchdog, "cost_per_hour", 5.0))),
+            prefer_daemon_state=bool(pick(watchdog, "prefer_daemon_state", True)),
+            daemon_state_file=str(
+                pick(watchdog, "daemon_state_file", "scratch/runtime/watchdog_daemon_state_ws28_025.json")
+            ),
+            daemon_state_stale_warning_seconds=max(
+                1.0,
+                float(pick(watchdog, "daemon_state_stale_warning_seconds", 120.0)),
+            ),
+            daemon_state_stale_critical_seconds=max(
+                1.0,
+                float(pick(watchdog, "daemon_state_stale_critical_seconds", 300.0)),
+            ),
+            fail_closed_on_daemon_state_stale=bool(pick(watchdog, "fail_closed_on_daemon_state_stale", False)),
         )
         subagent_cfg = SubAgentRuntimeConfig(
             enabled=bool(pick(subagent_runtime, "enabled", False)),
@@ -284,6 +302,7 @@ class SystemAgent:
         )
         self.execution_bridge = NativeExecutionBridge(project_root=self.repo_dir)
         self.watchdog_daemon: WatchdogDaemon | None = None
+        self.watchdog_daemon_state_file = self.repo_dir / str(self.config.watchdog.daemon_state_file)
         if self.config.watchdog.enabled:
             self.watchdog_daemon = WatchdogDaemon(
                 thresholds=WatchdogThresholds(
@@ -595,7 +614,69 @@ class SystemAgent:
         if daemon is None:
             return None
 
-        action = daemon.run_once()
+        action: WatchdogAction | None = None
+        daemon_state_status = ""
+        daemon_state_reason_code = ""
+        daemon_state_used = False
+        if self.config.watchdog.prefer_daemon_state:
+            daemon_state = WatchdogDaemon.read_daemon_state(
+                self.watchdog_daemon_state_file,
+                stale_warning_seconds=float(self.config.watchdog.daemon_state_stale_warning_seconds),
+                stale_critical_seconds=float(self.config.watchdog.daemon_state_stale_critical_seconds),
+            )
+            daemon_state_status = str(daemon_state.get("status") or "")
+            daemon_state_reason_code = str(daemon_state.get("reason_code") or "")
+            daemon_state_used = daemon_state_status in {"ok", "warning", "critical"}
+            self._emit(
+                "WatchdogDaemonStateConsumed",
+                {
+                    "workflow_id": workflow_id,
+                    "task_id": task.task_id,
+                    "attempt": attempt,
+                    "runtime_mode": runtime_mode,
+                    "state_file": str(daemon_state.get("state_file") or ""),
+                    "state": str(daemon_state.get("state") or ""),
+                    "status": daemon_state_status,
+                    "reason_code": daemon_state_reason_code,
+                    "heartbeat_age_seconds": daemon_state.get("heartbeat_age_seconds"),
+                    "tick": daemon_state.get("tick"),
+                },
+                workflow_id=workflow_id,
+                fencing_epoch=fencing_epoch,
+            )
+            action_payload = daemon_state.get("action")
+            if isinstance(action_payload, dict):
+                action = WatchdogAction(
+                    level=str(action_payload.get("level") or ""),
+                    action=str(action_payload.get("action") or ""),
+                    reasons=[str(item) for item in list(action_payload.get("reasons") or []) if str(item).strip()],
+                    snapshot=(
+                        dict(action_payload.get("snapshot"))
+                        if isinstance(action_payload.get("snapshot"), dict)
+                        else {}
+                    ),
+                )
+            if (
+                action is None
+                and bool(self.config.watchdog.fail_closed_on_daemon_state_stale)
+                and daemon_state_reason_code in {"WATCHDOG_DAEMON_STALE_WARNING", "WATCHDOG_DAEMON_STALE_CRITICAL"}
+            ):
+                action = WatchdogAction(
+                    level="critical",
+                    action="pause_dispatch_and_escalate",
+                    reasons=[
+                        f"watchdog_daemon:{daemon_state_reason_code}",
+                        str(daemon_state.get("reason_text") or "watchdog daemon state is stale"),
+                    ],
+                    snapshot=(
+                        dict(daemon_state.get("snapshot"))
+                        if isinstance(daemon_state.get("snapshot"), dict)
+                        else {}
+                    ),
+                )
+
+        if action is None and (not daemon_state_used or daemon_state_reason_code in {"WATCHDOG_DAEMON_STATE_MISSING", "WATCHDOG_DAEMON_STALE_WARNING", "WATCHDOG_DAEMON_STALE_CRITICAL"}):
+            action = daemon.run_once()
         if action is None:
             return None
 

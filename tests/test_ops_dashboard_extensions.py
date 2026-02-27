@@ -200,6 +200,43 @@ def test_ops_incidents_latest_payload_includes_brainstem_stale_incident(tmp_path
     assert any(path.endswith("brainstem_control_plane_heartbeat_ws23_001.json") for path in payload["source_reports"])
 
 
+def test_ops_incidents_latest_payload_includes_watchdog_daemon_stale_incident(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    now = datetime(2026, 2, 26, 12, 0, tzinfo=timezone.utc)
+    watchdog_state_file = repo_root / "scratch" / "runtime" / "watchdog_daemon_state_ws28_025.json"
+    _write_json(
+        watchdog_state_file,
+        {
+            "generated_at": datetime(2026, 2, 26, 10, 0, tzinfo=timezone.utc).isoformat(),
+            "pid": 52001,
+            "tick": 9,
+            "mode": "daemon",
+            "warn_only": False,
+            "threshold_hit": False,
+            "status": "ok",
+            "snapshot": {},
+            "action": None,
+        },
+    )
+
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(api_server, "_ops_collect_required_reports", lambda _repo_root: [])
+    monkeypatch.setattr(api_server.time, "time", lambda: now.timestamp())
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", lambda **_kwargs: {"metrics": {}})
+    payload = api_server._ops_build_incidents_latest_payload(limit=30)
+
+    incidents = payload["data"]["incidents"]
+    stale = [item for item in incidents if str(item.get("event_type")) == "WatchdogDaemonStateStale"]
+    assert len(stale) == 1
+    stale_item = stale[0]
+    assert stale_item["source"] == "report"
+    assert stale_item["severity"] == "critical"
+    assert stale_item["payload_excerpt"]["reason_code"] == "WATCHDOG_DAEMON_STALE_CRITICAL"
+    assert any(path.endswith("watchdog_daemon_state_ws28_025.json") for path in payload["source_reports"])
+
+
 def test_ops_runtime_posture_payload_includes_execution_bridge_governance(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
     events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
@@ -562,3 +599,59 @@ def test_ops_runtime_posture_payload_escalates_when_brainstem_heartbeat_stale(tm
     brainstem = payload["data"]["brainstem_control_plane"]
     assert brainstem["status"] == "critical"
     assert brainstem["reason_code"] == "BRAINSTEM_HEARTBEAT_STALE_CRITICAL"
+
+
+def test_ops_runtime_posture_payload_includes_watchdog_daemon_signal(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    now = datetime(2026, 2, 26, 12, 0, tzinfo=timezone.utc)
+    watchdog_state_file = repo_root / "scratch" / "runtime" / "watchdog_daemon_state_ws28_025.json"
+    _write_json(
+        watchdog_state_file,
+        {
+            "generated_at": now.isoformat(),
+            "pid": 52001,
+            "tick": 4,
+            "mode": "daemon",
+            "warn_only": False,
+            "threshold_hit": True,
+            "status": "warning",
+            "snapshot": {"cpu_percent": 89.0},
+            "action": {
+                "level": "warn",
+                "action": "throttle_new_workloads",
+                "reasons": ["cpu_percent=89.00>=85.00"],
+                "snapshot": {"cpu_percent": 89.0},
+            },
+        },
+    )
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "ok", "metric_status": {}},
+            "metrics": {},
+            "threshold_profile": {},
+            "sources": {"events_file": "logs/autonomous/events.jsonl"},
+        }
+
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(api_server.time, "time", lambda: now.timestamp() + 5.0)
+
+    payload = api_server._ops_build_runtime_posture_payload(events_limit=200)
+    assert payload["status"] == "success"
+    assert payload["severity"] == "warning"
+    assert payload["reason_code"] == "WATCHDOG_DAEMON_WARNING"
+    assert payload["data"]["summary"]["watchdog_daemon_status"] == "warning"
+
+    watchdog = payload["data"]["watchdog_daemon"]
+    assert watchdog["status"] == "warning"
+    assert watchdog["reason_code"] == "WATCHDOG_DAEMON_THRESHOLD_WARNING"
+    assert watchdog["tick"] == 4
+    assert watchdog["threshold_hit"] is True
+    assert any(path.endswith("watchdog_daemon_state_ws28_025.json") for path in payload["source_reports"])
+
+    watchdog_metric = payload["data"]["metrics"]["watchdog_daemon"]
+    assert watchdog_metric["status"] == "warning"
+    assert watchdog_metric["tick"] == 4

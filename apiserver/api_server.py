@@ -38,6 +38,7 @@ import shutil
 from pathlib import Path
 from system.asyncio_offload import offload_blocking
 from system.coding_intent import contains_direct_coding_signal, has_recent_coding_context, is_coding_followup
+from system.watchdog_daemon import WatchdogDaemon
 from autonomous.event_log.event_store import EventStore
 from autonomous.router_engine import RouterRequest, TaskRouterEngine
 
@@ -134,6 +135,8 @@ _CHAT_ROUTE_FOLLOWUP_MARKERS = (
 _BRAINSTEM_AUTOSTART_ENV = "NAGA_BRAINSTEM_AUTOSTART"
 _BRAINSTEM_AUTOSTOP_ENV = "NAGA_BRAINSTEM_AUTOSTOP_ON_API_SHUTDOWN"
 _BRAINSTEM_AUTOSTART_TIMEOUT_ENV = "NAGA_BRAINSTEM_AUTOSTART_TIMEOUT_SECONDS"
+_BRAINSTEM_BOOTSTRAP_OWNER_ENV = "NAGA_BRAINSTEM_BOOTSTRAP_OWNER"
+_BRAINSTEM_BOOTSTRAP_OWNER_API = "api"
 _BRAINSTEM_AUTOSTART_DEFAULT = True
 _BRAINSTEM_AUTOSTART_OUTPUT = Path("scratch/reports/brainstem_control_plane_autostart_ws28_017.json")
 _BRAINSTEM_AUTOSTOP_OUTPUT = Path("scratch/reports/brainstem_control_plane_autostop_ws28_017.json")
@@ -160,7 +163,23 @@ def _env_float(name: str, default: float) -> float:
         return float(default)
 
 
+def _brainstem_bootstrap_owner() -> str:
+    return str(os.environ.get(_BRAINSTEM_BOOTSTRAP_OWNER_ENV) or "").strip().lower()
+
+
+def _brainstem_bootstrap_owned_by_external() -> tuple[bool, str]:
+    owner = _brainstem_bootstrap_owner()
+    if not owner:
+        return False, ""
+    if owner in {_BRAINSTEM_BOOTSTRAP_OWNER_API, "apiserver"}:
+        return False, owner
+    return True, owner
+
+
 def _should_bootstrap_brainstem_control_plane() -> tuple[bool, str]:
+    external_owned, owner = _brainstem_bootstrap_owned_by_external()
+    if external_owned:
+        return False, f"owned_by_{owner}"
     explicit = os.environ.get(_BRAINSTEM_AUTOSTART_ENV)
     if explicit is None and os.environ.get("PYTEST_CURRENT_TEST"):
         return False, "pytest_default_skip"
@@ -223,6 +242,7 @@ def _bootstrap_brainstem_control_plane_shutdown(
     manager: Optional[Callable[..., Dict[str, Any]]] = None,
     repo_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
+    external_owned, owner = _brainstem_bootstrap_owned_by_external()
     enabled = _env_flag(_BRAINSTEM_AUTOSTOP_ENV, False)
     root = (repo_root or _ops_repo_root()).resolve()
     report: Dict[str, Any] = {
@@ -230,8 +250,13 @@ def _bootstrap_brainstem_control_plane_shutdown(
         "repo_root": str(root).replace("\\", "/"),
         "env": {
             "autostop_env": _BRAINSTEM_AUTOSTOP_ENV,
+            "owner_env": _BRAINSTEM_BOOTSTRAP_OWNER_ENV,
         },
     }
+    if external_owned:
+        report["enabled"] = False
+        report["reason"] = f"owned_by_{owner}"
+        return report
     if not enabled:
         report["reason"] = "env_disabled"
         return report
@@ -2493,6 +2518,9 @@ _OPS_INCIDENT_EVENT_SEVERITY: Dict[str, str] = {
 _OPS_BRAINSTEM_HEARTBEAT_RELATIVE_PATH = Path("scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json")
 _OPS_BRAINSTEM_HEARTBEAT_STALE_WARNING_SECONDS = 120.0
 _OPS_BRAINSTEM_HEARTBEAT_STALE_CRITICAL_SECONDS = 300.0
+_OPS_WATCHDOG_DAEMON_STATE_RELATIVE_PATH = Path("scratch/runtime/watchdog_daemon_state_ws28_025.json")
+_OPS_WATCHDOG_DAEMON_STALE_WARNING_SECONDS = 120.0
+_OPS_WATCHDOG_DAEMON_STALE_CRITICAL_SECONDS = 300.0
 
 
 def _ops_read_json_file(path: Path) -> Dict[str, Any]:
@@ -2609,6 +2637,38 @@ def _ops_build_brainstem_control_plane_summary(repo_root: Path) -> Dict[str, Any
     }
 
 
+def _ops_build_watchdog_daemon_summary(repo_root: Path) -> Dict[str, Any]:
+    state_file = repo_root / _OPS_WATCHDOG_DAEMON_STATE_RELATIVE_PATH
+    state = WatchdogDaemon.read_daemon_state(
+        state_file,
+        stale_warning_seconds=float(_OPS_WATCHDOG_DAEMON_STALE_WARNING_SECONDS),
+        stale_critical_seconds=float(_OPS_WATCHDOG_DAEMON_STALE_CRITICAL_SECONDS),
+    )
+    action_payload = state.get("action") if isinstance(state.get("action"), dict) else {}
+    snapshot = state.get("snapshot") if isinstance(state.get("snapshot"), dict) else {}
+    return {
+        "status": _ops_status_to_severity(str(state.get("status") or "unknown")),
+        "reason_code": str(state.get("reason_code") or ""),
+        "reason_text": str(state.get("reason_text") or ""),
+        "state_file": str(state.get("state_file") or _ops_unix_path(state_file)),
+        "exists": bool(state_file.exists()),
+        "generated_at": str(state.get("generated_at") or ""),
+        "heartbeat_age_seconds": state.get("heartbeat_age_seconds"),
+        "stale_warning_seconds": float(state.get("stale_warning_seconds") or _OPS_WATCHDOG_DAEMON_STALE_WARNING_SECONDS),
+        "stale_critical_seconds": float(
+            state.get("stale_critical_seconds") or _OPS_WATCHDOG_DAEMON_STALE_CRITICAL_SECONDS
+        ),
+        "state": str(state.get("state") or ""),
+        "tick": _ops_safe_int(state.get("tick"), default=0),
+        "pid": _ops_safe_int(state.get("pid"), default=0),
+        "mode": str(state.get("mode") or ""),
+        "warn_only": bool(state.get("warn_only")),
+        "threshold_hit": bool(state.get("threshold_hit")),
+        "action": action_payload,
+        "snapshot": snapshot,
+    }
+
+
 def _ops_collect_required_reports(repo_root: Path) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for spec in _OPS_REQUIRED_REPORT_DEFINITIONS:
@@ -2712,10 +2772,14 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     repo_root = _ops_repo_root()
     brainstem_control_plane = _ops_build_brainstem_control_plane_summary(repo_root)
     brainstem_status = _ops_status_to_severity(str(brainstem_control_plane.get("status") or "unknown"))
+    watchdog_daemon = _ops_build_watchdog_daemon_summary(repo_root)
+    watchdog_daemon_status = _ops_status_to_severity(str(watchdog_daemon.get("status") or "unknown"))
 
     metric_status = summary.get("metric_status") if isinstance(summary.get("metric_status"), dict) else {}
     snapshot_overall_status = str(summary.get("overall_status") or "unknown")
-    overall_status = _ops_max_status([snapshot_overall_status, brainstem_status, execution_bridge_governance_status])
+    overall_status = _ops_max_status(
+        [snapshot_overall_status, brainstem_status, watchdog_daemon_status, execution_bridge_governance_status]
+    )
     severity = _ops_status_to_severity(overall_status)
 
     ws26_runtime_report = repo_root / "scratch" / "reports" / "ws26_runtime_snapshot_ws26_002.json"
@@ -2738,6 +2802,8 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
 
     if bool(brainstem_control_plane.get("exists")):
         source_reports.append(str(brainstem_control_plane.get("heartbeat_file") or ""))
+    if bool(watchdog_daemon.get("exists")):
+        source_reports.append(str(watchdog_daemon.get("state_file") or ""))
 
     response_data: Dict[str, Any] = {
         "summary": {
@@ -2745,6 +2811,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "metric_status": metric_status,
             "route_quality": _ops_build_route_quality_summary(metrics, trend=route_quality_trend),
             "brainstem_control_plane_status": brainstem_status,
+            "watchdog_daemon_status": watchdog_daemon_status,
             "execution_bridge_governance_status": execution_bridge_governance_status,
             "execution_bridge_governance_reason_codes": list(execution_bridge_governance.get("reason_codes") or []),
         },
@@ -2772,6 +2839,16 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
                 "stale_critical_seconds": brainstem_control_plane.get("stale_critical_seconds"),
                 "tick": brainstem_control_plane.get("tick"),
             },
+            "watchdog_daemon": {
+                "status": watchdog_daemon_status,
+                "value": watchdog_daemon.get("heartbeat_age_seconds"),
+                "tick": watchdog_daemon.get("tick"),
+                "threshold_hit": watchdog_daemon.get("threshold_hit"),
+                "warn_only": watchdog_daemon.get("warn_only"),
+                "stale_warning_seconds": watchdog_daemon.get("stale_warning_seconds"),
+                "stale_critical_seconds": watchdog_daemon.get("stale_critical_seconds"),
+                "reason_code": watchdog_daemon.get("reason_code"),
+            },
             "execution_bridge_rejection_ratio": {
                 "status": execution_bridge_governance_status,
                 "value": execution_bridge_governance.get("rejection_ratio"),
@@ -2789,6 +2866,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         "threshold_profile": threshold_profile,
         "sources": sources,
         "brainstem_control_plane": brainstem_control_plane,
+        "watchdog_daemon": watchdog_daemon,
         "execution_bridge_governance": execution_bridge_governance,
     }
     if ws26_runtime_report_payload:
@@ -2799,12 +2877,18 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     if brainstem_status == "critical":
         reason_code = "BRAINSTEM_CONTROL_PLANE_CRITICAL"
         reason_text = str(brainstem_control_plane.get("reason_text") or "Brainstem control-plane is unhealthy.")
+    elif watchdog_daemon_status == "critical":
+        reason_code = "WATCHDOG_DAEMON_CRITICAL"
+        reason_text = str(watchdog_daemon.get("reason_text") or "Watchdog daemon reports critical state.")
     elif execution_bridge_governance_status == "critical":
         reason_code = "EXECUTION_BRIDGE_GOVERNANCE_CRITICAL"
         reason_text = "Execution bridge governance has critical rejections; check role guards and policy contracts."
     elif brainstem_status == "warning":
         reason_code = "BRAINSTEM_CONTROL_PLANE_WARNING"
         reason_text = str(brainstem_control_plane.get("reason_text") or "Brainstem control-plane requires attention.")
+    elif watchdog_daemon_status == "warning":
+        reason_code = "WATCHDOG_DAEMON_WARNING"
+        reason_text = str(watchdog_daemon.get("reason_text") or "Watchdog daemon requires attention.")
     elif execution_bridge_governance_status == "warning":
         reason_code = "EXECUTION_BRIDGE_GOVERNANCE_WARNING"
         reason_text = "Execution bridge governance has warning signals; review semantic/path guard drift."
@@ -3616,6 +3700,38 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
                     "tick": brainstem_summary.get("tick"),
                 },
                 "report_path": str(brainstem_summary.get("heartbeat_file") or ""),
+                "gate_level": "hard",
+            }
+        )
+
+    watchdog_summary = _ops_build_watchdog_daemon_summary(repo_root)
+    watchdog_status = str(watchdog_summary.get("status") or "")
+    if watchdog_status in {"warning", "critical"}:
+        reason_code = str(watchdog_summary.get("reason_code") or "")
+        watchdog_event_type = "WatchdogDaemonIssue"
+        if reason_code == "WATCHDOG_DAEMON_STATE_MISSING":
+            watchdog_event_type = "WatchdogDaemonStateMissing"
+        elif reason_code in {"WATCHDOG_DAEMON_STALE_WARNING", "WATCHDOG_DAEMON_STALE_CRITICAL"}:
+            watchdog_event_type = "WatchdogDaemonStateStale"
+        elif reason_code in {"WATCHDOG_DAEMON_THRESHOLD_WARNING", "WATCHDOG_DAEMON_THRESHOLD_CRITICAL"}:
+            watchdog_event_type = "WatchdogDaemonThresholdExceeded"
+        incidents.append(
+            {
+                "source": "report",
+                "severity": watchdog_status,
+                "timestamp": str(watchdog_summary.get("generated_at") or ""),
+                "event_type": watchdog_event_type,
+                "summary": str(watchdog_summary.get("reason_text") or "Watchdog daemon issue detected."),
+                "payload_excerpt": {
+                    "reason_code": reason_code,
+                    "heartbeat_age_seconds": watchdog_summary.get("heartbeat_age_seconds"),
+                    "stale_warning_seconds": watchdog_summary.get("stale_warning_seconds"),
+                    "stale_critical_seconds": watchdog_summary.get("stale_critical_seconds"),
+                    "tick": watchdog_summary.get("tick"),
+                    "threshold_hit": watchdog_summary.get("threshold_hit"),
+                    "action": watchdog_summary.get("action"),
+                },
+                "report_path": str(watchdog_summary.get("state_file") or ""),
                 "gate_level": "hard",
             }
         )

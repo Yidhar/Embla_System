@@ -11,9 +11,9 @@ import base64
 import json
 import logging
 import os
-import re
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -25,6 +25,7 @@ from litellm import acompletion
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from system.config import get_config
+from system.immutable_dna import DNAFileSpec, ImmutableDNALoader
 from . import naga_auth
 
 logger = logging.getLogger("LLMService")
@@ -48,6 +49,17 @@ class LLMService:
     """Unified LLM service with OpenAI-compatible routing."""
 
     PROTOCOL_OPENAI_CHAT = "openai_chat_completions"
+    DNA_RUNTIME_HEADER = "[Immutable DNA Runtime Injection]"
+    DNA_RUNTIME_ENABLED_ENV = "NAGA_IMMUTABLE_DNA_RUNTIME_INJECTION"
+    DNA_PROMPTS_ROOT_ENV = "NAGA_IMMUTABLE_DNA_PROMPTS_ROOT"
+    DNA_MANIFEST_PATH_ENV = "NAGA_IMMUTABLE_DNA_MANIFEST_PATH"
+    DNA_AUDIT_PATH_ENV = "NAGA_IMMUTABLE_DNA_AUDIT_PATH"
+    DNA_REQUIRED_FILES = (
+        "conversation_style_prompt.txt",
+        "conversation_analyzer_prompt.txt",
+        "tool_dispatch_prompt.txt",
+        "agentic_tool_prompt.txt",
+    )
 
     OPENAI_HINTS = {"openai", "openai_compatible"}
     GOOGLE_HINTS = {"google", "gemini", "google_ai_studio", "google_genai"}
@@ -55,7 +67,86 @@ class LLMService:
 
     def __init__(self):
         self._initialized = False
+        self._immutable_dna_enabled = self._resolve_immutable_dna_runtime_enabled()
+        self._immutable_dna_loader: Optional[ImmutableDNALoader] = None
         self._initialize_client()
+
+    def _resolve_immutable_dna_runtime_enabled(self) -> bool:
+        raw = os.environ.get(self.DNA_RUNTIME_ENABLED_ENV, "1")
+        normalized = str(raw or "").strip().lower()
+        if not normalized:
+            return True
+        return normalized not in {"0", "false", "no", "off"}
+
+    def _build_immutable_dna_loader(self) -> Optional[ImmutableDNALoader]:
+        if not self._immutable_dna_enabled:
+            return None
+
+        try:
+            repo_root = Path(__file__).resolve().parent.parent
+            prompts_root_raw = os.environ.get(
+                self.DNA_PROMPTS_ROOT_ENV,
+                str(repo_root / "system" / "prompts"),
+            )
+            prompts_root = Path(str(prompts_root_raw)).expanduser().resolve()
+            manifest_path_raw = os.environ.get(
+                self.DNA_MANIFEST_PATH_ENV,
+                str(prompts_root / "immutable_dna_manifest.spec"),
+            )
+            manifest_path = Path(str(manifest_path_raw)).expanduser().resolve()
+            audit_path_raw = os.environ.get(
+                self.DNA_AUDIT_PATH_ENV,
+                str(repo_root / "scratch" / "reports" / "immutable_dna_runtime_injection_audit.jsonl"),
+            )
+            audit_path = Path(str(audit_path_raw)).expanduser().resolve()
+            return ImmutableDNALoader(
+                root_dir=prompts_root,
+                dna_files=[DNAFileSpec(path=name, required=True) for name in self.DNA_REQUIRED_FILES],
+                manifest_path=manifest_path,
+                audit_file=audit_path,
+            )
+        except Exception as exc:
+            logger.error("Immutable DNA loader init failed: %s", exc)
+            return None
+
+    def _ensure_immutable_dna_loader(self) -> Optional[ImmutableDNALoader]:
+        if self._immutable_dna_loader is None:
+            self._immutable_dna_loader = self._build_immutable_dna_loader()
+        return self._immutable_dna_loader
+
+    def _is_dna_runtime_system_message(self, message: Dict[str, Any]) -> bool:
+        if str(message.get("role") or "") != "system":
+            return False
+        content = message.get("content")
+        return isinstance(content, str) and content.startswith(self.DNA_RUNTIME_HEADER)
+
+    def _inject_immutable_dna(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not self._immutable_dna_enabled:
+            return [dict(item) for item in messages]
+
+        loader = self._ensure_immutable_dna_loader()
+        if loader is None:
+            raise PermissionError("immutable DNA runtime injection loader unavailable")
+
+        payload = loader.inject()
+        dna_text = str(payload.get("dna_text") or "").strip()
+        dna_hash = str(payload.get("dna_hash") or "").strip()
+        if not dna_text:
+            raise PermissionError("immutable DNA runtime injection payload is empty")
+
+        system_prompt = (
+            f"{self.DNA_RUNTIME_HEADER}\n"
+            f"dna_hash={dna_hash}\n"
+            f"{dna_text}"
+        )
+        sanitized_messages: List[Dict[str, Any]] = []
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            if self._is_dna_runtime_system_message(item):
+                continue
+            sanitized_messages.append(dict(item))
+        return [{"role": "system", "content": system_prompt}, *sanitized_messages]
 
     def _initialize_client(self):
         """Initialize LiteLLM global configuration."""
@@ -341,6 +432,13 @@ class LLMService:
         final_api_key = api_key_override or cfg.api.api_key
 
         try:
+            prepared_messages = self._inject_immutable_dna(messages)
+        except Exception as e:
+            safe_error = self._sanitize_litellm_error_text(e)
+            logger.error("Immutable DNA runtime injection failed: %s", safe_error)
+            return LLMResponse(content=f"Chat call blocked: {safe_error}")
+
+        try:
             model_name = final_model
             normalized_provider_hint = (provider_hint or "").strip().lower()
             if normalized_provider_hint and normalized_provider_hint not in {"openai", "openai_compatible"}:
@@ -360,7 +458,7 @@ class LLMService:
 
             response = await acompletion(
                 model=model_name,
-                messages=messages,
+                messages=prepared_messages,
                 temperature=normalized_temperature,
                 max_tokens=cfg.api.max_tokens if hasattr(cfg.api, "max_tokens") else None,
                 **compat_params,
@@ -586,6 +684,14 @@ class LLMService:
             final_base = cfg.api.base_url
             final_api_key = cfg.api.api_key
 
+        try:
+            prepared_messages = self._inject_immutable_dna(messages)
+        except Exception as e:
+            safe_error = self._sanitize_litellm_error_text(e)
+            logger.error("Immutable DNA runtime injection failed: %s", safe_error)
+            yield self._format_sse_chunk("error", f"Chat call blocked: {safe_error}")
+            return
+
         for attempt in range(max_attempts):
             try:
                 model_name = self._get_model_name(model=final_model, base_url=final_base)
@@ -616,7 +722,7 @@ class LLMService:
 
                 response = await acompletion(
                     model=model_name,
-                    messages=messages,
+                    messages=prepared_messages,
                     temperature=normalized_temperature,
                     max_tokens=cfg.api.max_tokens if hasattr(cfg.api, "max_tokens") else None,
                     stream=True,
@@ -753,5 +859,3 @@ async def llm_chat(request: Dict[str, Any]):
     except Exception as e:
         logger.error("LLM chat endpoint error: %s", e)
         raise HTTPException(status_code=500, detail=f"LLM service error: {e}")
-
-

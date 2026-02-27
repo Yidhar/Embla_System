@@ -13,6 +13,11 @@ def test_system_agent_config_from_source_defaults():
     assert cfg.release.enabled is True
     assert cfg.watchdog.enabled is False
     assert cfg.watchdog.warn_only is True
+    assert cfg.watchdog.prefer_daemon_state is True
+    assert cfg.watchdog.daemon_state_file == "scratch/runtime/watchdog_daemon_state_ws28_025.json"
+    assert cfg.watchdog.daemon_state_stale_warning_seconds == 120.0
+    assert cfg.watchdog.daemon_state_stale_critical_seconds == 300.0
+    assert cfg.watchdog.fail_closed_on_daemon_state_stale is False
     assert cfg.subagent_runtime.enabled is False
     assert cfg.subagent_runtime.fail_open is True
     assert cfg.subagent_runtime.fail_open_budget_ratio == 0.15
@@ -71,6 +76,11 @@ def test_system_agent_config_from_dict():
             "io_read_bps": 2048.0,
             "io_write_bps": 4096.0,
             "cost_per_hour": 1.5,
+            "prefer_daemon_state": False,
+            "daemon_state_file": "scratch/runtime/custom_watchdog_state.json",
+            "daemon_state_stale_warning_seconds": 33.0,
+            "daemon_state_stale_critical_seconds": 66.0,
+            "fail_closed_on_daemon_state_stale": True,
         },
         "subagent_runtime": {
             "enabled": True,
@@ -98,6 +108,11 @@ def test_system_agent_config_from_dict():
     assert cfg.watchdog.enabled is True
     assert cfg.watchdog.warn_only is False
     assert cfg.watchdog.cpu_percent == 70.0
+    assert cfg.watchdog.prefer_daemon_state is False
+    assert cfg.watchdog.daemon_state_file == "scratch/runtime/custom_watchdog_state.json"
+    assert cfg.watchdog.daemon_state_stale_warning_seconds == 33.0
+    assert cfg.watchdog.daemon_state_stale_critical_seconds == 66.0
+    assert cfg.watchdog.fail_closed_on_daemon_state_stale is True
     assert cfg.subagent_runtime.enabled is True
     assert cfg.subagent_runtime.max_subtasks == 9
     assert cfg.subagent_runtime.rollout_percent == 25

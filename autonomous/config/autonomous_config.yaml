@@ -44,6 +44,11 @@ autonomous:
     io_read_bps: 52428800
     io_write_bps: 52428800
     cost_per_hour: 5.0
+    prefer_daemon_state: true
+    daemon_state_file: scratch/runtime/watchdog_daemon_state_ws28_025.json
+    daemon_state_stale_warning_seconds: 120.0
+    daemon_state_stale_critical_seconds: 300.0
+    fail_closed_on_daemon_state_stale: false
   subagent_runtime:
     enabled: true
     max_subtasks: 16

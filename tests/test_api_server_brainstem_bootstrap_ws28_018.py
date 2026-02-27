@@ -44,6 +44,24 @@ def test_brainstem_bootstrap_startup_runs_when_enabled(monkeypatch, tmp_path: Pa
     assert startup_report.get("action") == "start"
 
 
+def test_brainstem_bootstrap_startup_skips_when_owned_by_main(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(api_server._BRAINSTEM_AUTOSTART_ENV, "1")  # noqa: SLF001
+    monkeypatch.setenv(api_server._BRAINSTEM_BOOTSTRAP_OWNER_ENV, "main")  # noqa: SLF001
+    called = {"value": False}
+
+    def _manager(**kwargs):  # type: ignore[no-untyped-def]
+        called["value"] = True
+        return {"passed": True}
+
+    report = api_server._bootstrap_brainstem_control_plane_startup(  # noqa: SLF001
+        manager=_manager,
+        repo_root=tmp_path,
+    )
+    assert report["enabled"] is False
+    assert report["reason"] == "owned_by_main"
+    assert called["value"] is False
+
+
 def test_brainstem_bootstrap_shutdown_runs_only_when_enabled(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv(api_server._BRAINSTEM_AUTOSTOP_ENV, "true")  # noqa: SLF001
     captured = {"action": ""}
@@ -59,6 +77,24 @@ def test_brainstem_bootstrap_shutdown_runs_only_when_enabled(monkeypatch, tmp_pa
     assert report["enabled"] is True
     assert report["passed"] is True
     assert captured["action"] == "stop"
+
+
+def test_brainstem_bootstrap_shutdown_skips_when_owned_by_main(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(api_server._BRAINSTEM_AUTOSTOP_ENV, "true")  # noqa: SLF001
+    monkeypatch.setenv(api_server._BRAINSTEM_BOOTSTRAP_OWNER_ENV, "main")  # noqa: SLF001
+    called = {"value": False}
+
+    def _manager(**kwargs):  # type: ignore[no-untyped-def]
+        called["value"] = True
+        return {"passed": True}
+
+    report = api_server._bootstrap_brainstem_control_plane_shutdown(  # noqa: SLF001
+        manager=_manager,
+        repo_root=tmp_path,
+    )
+    assert report["enabled"] is False
+    assert report["reason"] == "owned_by_main"
+    assert called["value"] is False
 
 
 def test_global_mutex_bootstrap_initializes_idle_state(tmp_path: Path) -> None:

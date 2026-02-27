@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List
 
 from system.watchdog_daemon import WatchdogDaemon, WatchdogThresholds
@@ -13,6 +18,16 @@ class DummyEmitter:
 
     def emit(self, event_type: str, payload: Dict[str, Any], **kwargs: Any) -> None:
         self.events.append({"event_type": event_type, "payload": dict(payload), "kwargs": dict(kwargs)})
+
+
+def _make_case_root(prefix: str) -> Path:
+    root = Path("scratch") / prefix / uuid.uuid4().hex[:12]
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _cleanup_case_root(root: Path) -> None:
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def test_watchdog_run_once_no_threshold_hit() -> None:
@@ -100,3 +115,63 @@ def test_watchdog_non_warn_mode_warn_level_throttles() -> None:
     assert action is not None
     assert action.level == "warn"
     assert action.action == "throttle_new_workloads"
+
+
+def test_watchdog_daemon_run_daemon_writes_state_file() -> None:
+    case_root = _make_case_root("test_watchdog_daemon_ws18_004")
+    try:
+        state_file = case_root / "watchdog_state.json"
+        daemon = WatchdogDaemon(
+            thresholds=WatchdogThresholds(cpu_percent=99, memory_percent=99, disk_percent=99, io_read_bps=1e9, io_write_bps=1e9, cost_per_hour=100),
+            metrics_provider=lambda: {
+                "cpu_percent": 10.0,
+                "memory_percent": 20.0,
+                "disk_percent": 30.0,
+                "io_read_bps": 1.0,
+                "io_write_bps": 2.0,
+                "cost_per_hour": 0.1,
+            },
+            warn_only=True,
+        )
+        result = daemon.run_daemon(state_file=state_file, interval_seconds=0.0, max_ticks=2)
+        assert int(result["ticks_completed"]) == 2
+        assert state_file.exists() is True
+        payload = json.loads(state_file.read_text(encoding="utf-8"))
+        assert payload["tick"] == 2
+        assert payload["mode"] == "daemon"
+        assert payload["status"] == "ok"
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_watchdog_daemon_read_state_marks_stale() -> None:
+    case_root = _make_case_root("test_watchdog_daemon_ws18_004")
+    try:
+        state_file = case_root / "watchdog_state.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "generated_at": "2026-02-20T00:00:00+00:00",
+                    "pid": 1234,
+                    "mode": "daemon",
+                    "tick": 5,
+                    "status": "ok",
+                    "warn_only": True,
+                    "threshold_hit": False,
+                    "snapshot": {},
+                    "action": None,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        state = WatchdogDaemon.read_daemon_state(
+            state_file,
+            now_ts=datetime(2026, 2, 20, 1, 0, tzinfo=timezone.utc).timestamp(),
+            stale_warning_seconds=30.0,
+            stale_critical_seconds=60.0,
+        )
+        assert state["status"] == "critical"
+        assert state["reason_code"] == "WATCHDOG_DAEMON_STALE_CRITICAL"
+    finally:
+        _cleanup_case_root(case_root)

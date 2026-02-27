@@ -42,6 +42,7 @@ IS_PACKAGED = getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
 import asyncio
 import json as _json
 import logging
+from pathlib import Path
 import re
 import socket
 import threading
@@ -100,6 +101,13 @@ logging.getLogger("live2d.config_dialog").setLevel(logging.WARNING)
 logging.getLogger("OpenGL").setLevel(logging.WARNING)
 logging.getLogger("OpenGL.acceleratesupport").setLevel(logging.WARNING)
 
+_BRAINSTEM_MAIN_BOOTSTRAP_ENV = "NAGA_BRAINSTEM_MAIN_BOOTSTRAP"
+_BRAINSTEM_BOOTSTRAP_OWNER_ENV = "NAGA_BRAINSTEM_BOOTSTRAP_OWNER"
+_BRAINSTEM_BOOTSTRAP_OWNER_MAIN = "main"
+_BRAINSTEM_API_AUTOSTART_ENV = "NAGA_BRAINSTEM_AUTOSTART"
+_BRAINSTEM_API_AUTOSTART_TIMEOUT_ENV = "NAGA_BRAINSTEM_AUTOSTART_TIMEOUT_SECONDS"
+_BRAINSTEM_MAIN_STARTUP_OUTPUT = Path("scratch/reports/brainstem_control_plane_main_startup_ws28_024.json")
+
 
 def _emit_progress(percent: int, phase: str):
     """向 stdout 发送结构化进度信号，供 Electron 主进程解析"""
@@ -136,6 +144,7 @@ class ServiceManager:
         self.system_agent = None
         self._autonomous_task = None
         self._services_ready = False  # 服务就绪状态
+        self.brainstem_bootstrap = {}
     
     def start_background_services(self):
         """启动后台服务 - 异步非阻塞"""
@@ -187,6 +196,98 @@ class ServiceManager:
             logger.info("[Autonomous] system agent started")
         except Exception as exc:
             logger.error(f"[Autonomous] failed to start: {exc}")
+
+    def _bootstrap_brainstem_control_plane_main_startup(
+        self,
+        *,
+        manager=None,
+        api_autostart_enabled=None,
+        repo_root: Path | None = None,
+    ):
+        """主启动链托管 Brainstem 控制面，并声明 ownership，避免 API lifespan 重复托管。"""
+
+        def _env_flag(name: str, default: bool) -> bool:
+            raw = os.environ.get(str(name))
+            if raw is None:
+                return bool(default)
+            normalized = str(raw).strip().lower()
+            if not normalized:
+                return bool(default)
+            return normalized in {"1", "true", "yes", "on", "y"}
+
+        def _env_float(name: str, default: float) -> float:
+            raw = os.environ.get(str(name))
+            if raw is None:
+                return float(default)
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                return float(default)
+
+        root = (repo_root or Path(os.getcwd())).resolve()
+        enabled = _env_flag(_BRAINSTEM_MAIN_BOOTSTRAP_ENV, True)
+        api_enabled = (
+            bool(config.api_server.enabled and config.api_server.auto_start)
+            if api_autostart_enabled is None
+            else bool(api_autostart_enabled)
+        )
+        report = {
+            "enabled": False,
+            "passed": False,
+            "repo_root": str(root).replace("\\", "/"),
+            "reason": "",
+            "env": {
+                "main_bootstrap_env": _BRAINSTEM_MAIN_BOOTSTRAP_ENV,
+                "owner_env": _BRAINSTEM_BOOTSTRAP_OWNER_ENV,
+                "api_autostart_env": _BRAINSTEM_API_AUTOSTART_ENV,
+                "api_autostart_timeout_env": _BRAINSTEM_API_AUTOSTART_TIMEOUT_ENV,
+            },
+        }
+        if not api_enabled:
+            report["reason"] = "api_autostart_disabled"
+            self.brainstem_bootstrap = report
+            return report
+        if not enabled:
+            report["reason"] = "env_disabled"
+            self.brainstem_bootstrap = report
+            return report
+
+        run_manager = manager
+        if run_manager is None:
+            from scripts.manage_brainstem_control_plane_ws28_017 import run_manage_brainstem_control_plane_ws28_017
+
+            run_manager = run_manage_brainstem_control_plane_ws28_017
+
+        report["enabled"] = True
+        timeout_seconds = max(2.0, _env_float(_BRAINSTEM_API_AUTOSTART_TIMEOUT_ENV, 8.0))
+        try:
+            startup_report = run_manager(
+                repo_root=root,
+                action="start",
+                output_file=_BRAINSTEM_MAIN_STARTUP_OUTPUT,
+                start_timeout_seconds=timeout_seconds,
+                force_restart=False,
+            )
+            report["startup_report"] = startup_report
+            report["passed"] = bool(startup_report.get("passed"))
+            if report["passed"]:
+                os.environ[_BRAINSTEM_BOOTSTRAP_OWNER_ENV] = _BRAINSTEM_BOOTSTRAP_OWNER_MAIN
+                os.environ[_BRAINSTEM_API_AUTOSTART_ENV] = "0"
+                report["reason"] = "main_startup_managed"
+                report["api_lifespan_autostart_disabled"] = True
+                logger.info("[brainstem_bootstrap_main] control plane startup ensured and ownership set to main")
+            else:
+                report["reason"] = "main_startup_failed"
+                report["api_lifespan_autostart_disabled"] = False
+                logger.warning("[brainstem_bootstrap_main] control plane startup failed; api lifespan fallback remains enabled")
+        except Exception as exc:
+            report["reason"] = "main_startup_error"
+            report["error"] = f"{type(exc).__name__}:{exc}"
+            report["api_lifespan_autostart_disabled"] = False
+            logger.error(f"[brainstem_bootstrap_main] startup error: {exc}")
+
+        self.brainstem_bootstrap = report
+        return report
     
     def check_port_available(self, host, port):
         """检查端口是否可用"""
@@ -206,6 +307,17 @@ class ServiceManager:
 
         try:
             self._init_proxy_settings()
+            brainstem_bootstrap = self._bootstrap_brainstem_control_plane_main_startup()
+            if brainstem_bootstrap.get("enabled"):
+                if brainstem_bootstrap.get("passed"):
+                    print("✅ Brainstem 控制面: 主启动链托管成功（已禁用 API lifespan 重复托管）")
+                    service_status["Brainstem"] = "主启动链托管"
+                else:
+                    print("⚠️ Brainstem 控制面: 主启动链托管失败，保留 API lifespan 自动托管回退")
+                    service_status["Brainstem"] = "托管失败，保留回退"
+            else:
+                reason = str(brainstem_bootstrap.get("reason") or "disabled")
+                service_status["Brainstem"] = f"跳过({reason})"
             # 预检查所有端口（端口已在启动前由 kill_port_occupiers 清理）
             from system.config import get_server_port
             port_checks = {

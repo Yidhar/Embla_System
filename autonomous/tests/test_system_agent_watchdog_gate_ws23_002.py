@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import uuid
 from pathlib import Path
@@ -170,5 +171,78 @@ def test_system_agent_watchdog_warn_only_emits_alert_but_keeps_dispatch() -> Non
             not (event_type == "ReleaseGateRejected" and str(payload.get("gate")) == "watchdog")
             for event_type, payload, _ in events
         )
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_system_agent_watchdog_consumes_daemon_state_file_and_blocks_without_run_once() -> None:
+    case_root = _make_case_root("test_system_agent_watchdog_gate_ws23_002")
+    try:
+        repo = case_root / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        _write_policy(repo / "policy" / "gate_policy.yaml")
+        state_file = repo / "scratch" / "runtime" / "watchdog_daemon_state_ws28_025.json"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text(
+            json.dumps(
+                {
+                    "generated_at": "2026-02-27T10:00:00+00:00",
+                    "pid": 52001,
+                    "mode": "daemon",
+                    "tick": 7,
+                    "warn_only": False,
+                    "threshold_hit": True,
+                    "status": "critical",
+                    "snapshot": {"cpu_percent": 97.0},
+                    "action": {
+                        "level": "critical",
+                        "action": "pause_dispatch_and_escalate",
+                        "reasons": ["cpu_percent=97.00>=80.00"],
+                        "snapshot": {"cpu_percent": 97.0},
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        agent = SystemAgent(
+            config={
+                "enabled": False,
+                "cli_tools": {"max_retries": 0},
+                "lease": {"enabled": False},
+                "subagent_runtime": {"enabled": False},
+                "watchdog": {
+                    "enabled": True,
+                    "warn_only": False,
+                    "prefer_daemon_state": True,
+                    "daemon_state_file": "scratch/runtime/watchdog_daemon_state_ws28_025.json",
+                },
+                "release": {"enabled": True, "gate_policy_path": "policy/gate_policy.yaml"},
+            },
+            repo_dir=str(repo),
+        )
+
+        assert agent.watchdog_daemon is not None
+        agent.watchdog_daemon.run_once = lambda: (_ for _ in ()).throw(AssertionError("run_once should not be called"))  # type: ignore[method-assign]
+
+        async def _dispatch_should_not_run(_task: OptimizationTask) -> DispatchResult:
+            raise AssertionError("dispatch should not run when watchdog daemon state blocks")
+
+        agent.dispatcher.dispatch = _dispatch_should_not_run  # type: ignore[method-assign]
+
+        events: list[tuple[str, dict, dict]] = []
+        agent._emit = lambda event_type, payload, **kwargs: events.append((event_type, dict(payload), dict(kwargs)))  # type: ignore[method-assign]
+
+        task = OptimizationTask(task_id="task-ws23-watchdog-daemon-block", instruction="watchdog daemon gate block test")
+        asyncio.run(agent._run_task(task, fencing_epoch=1))
+
+        consumed = [payload for event_type, payload, _ in events if event_type == "WatchdogDaemonStateConsumed"]
+        assert len(consumed) == 1
+        assert consumed[0]["status"] == "critical"
+        gate_rejected = [payload for event_type, payload, _ in events if event_type == "ReleaseGateRejected"]
+        assert len(gate_rejected) == 1
+        assert gate_rejected[0]["gate"] == "watchdog"
+        assert gate_rejected[0]["watchdog_action"] == "pause_dispatch_and_escalate"
     finally:
         _cleanup_case_root(case_root)
