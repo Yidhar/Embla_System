@@ -16,6 +16,7 @@
 - 基础链（复用）：`scripts/release_closure_chain_full_m0_m7.py`（目标域已到 `M0-M11`）
 - M12 子步骤脚本：
   - `scripts/manage_brainstem_control_plane_ws28_017.py`
+  - `scripts/run_watchdog_daemon_ws28_025.py`（由 WS28-017 托管链自动拉起）
   - `scripts/run_ws27_longrun_endurance_ws27_001.py`
   - `scripts/manage_ws27_subagent_cutover_ws27_002.py`
   - `scripts/run_ws27_oob_repair_drill_ws27_003.py`
@@ -78,6 +79,7 @@
 11. `scratch/reports/ws28_execution_governance_gate_ws28_021.json`
 12. `scratch/reports/ws28_execution_governance_runtime_posture_ws28_021.json`
 13. `scratch/reports/ws28_execution_governance_incidents_ws28_021.json`
+14. `scratch/runtime/watchdog_daemon_state_ws28_025.json`（M12-T0 启动后应刷新）
 
 ## 5. 判定标准
 
@@ -96,8 +98,13 @@
   - `heartbeat_gate=true`
   - `launcher_pid_alive=true`
   - `manager_state_exists=true`
+  - `watchdog_gate=true`
+  - `watchdog_state_exists=true`
+  - `watchdog_launcher_pid_alive=true`
+  - `watchdog_daemon_pid_alive=true`
   - `state_file_consistent=true`
   - `heartbeat_file_consistent=true`
+  - `watchdog_state_file_consistent=true`
 - `m12_cutover` 检查项必须全部通过：
   - `subagent_runtime_enabled=true`
   - `rollout_percent_is_full=true`
