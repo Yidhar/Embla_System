@@ -574,13 +574,8 @@ class LLMService:
                 try:
                     parsed_arguments = json.loads(raw_arguments)
                 except Exception as e_json:
-                    try:
-                        import json5 as _json5
-
-                        parsed_arguments = _json5.loads(raw_arguments)
-                    except Exception:
-                        parse_error = str(e_json)
-                        parsed_arguments = {}
+                    parse_error = str(e_json)
+                    parsed_arguments = {}
 
             finalized.append(
                 {
