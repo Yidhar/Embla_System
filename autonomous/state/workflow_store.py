@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
-from autonomous.event_log.event_schema import build_event_envelope, is_event_envelope, normalize_event_envelope
+from core.event_bus import build_event_envelope, is_event_envelope, normalize_event_envelope
 
 
 def _now_utc() -> datetime:

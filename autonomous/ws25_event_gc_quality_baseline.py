@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import system.artifact_store as artifact_store_module
-from autonomous.event_log import EventStore
+from core.event_bus import EventStore
 from system.artifact_store import ArtifactStore, ArtifactStoreConfig
 from system.gc_eval_suite import DEFAULT_GC_QUALITY_THRESHOLDS, evaluate_gc_quality, validate_gc_quality_report
 from system.tool_contract import build_tool_result_with_artifact

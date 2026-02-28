@@ -207,7 +207,7 @@ class LLMGateway:
         self._event_store = None
         if event_log_file is not None:
             try:
-                from autonomous.event_log import EventStore
+                from core.event_bus import EventStore
 
                 self._event_store = EventStore(file_path=Path(event_log_file))
             except Exception:

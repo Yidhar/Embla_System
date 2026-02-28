@@ -14,7 +14,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import yaml
 
-from autonomous.event_log.event_schema import normalize_event_envelope
+from core.event_bus import normalize_event_envelope
 from system.artifact_store import ArtifactStore, ArtifactStoreConfig
 
 

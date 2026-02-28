@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-from autonomous.event_log import EventStore
+from core.event_bus import EventStore
 from system.artifact_store import ArtifactStore, ArtifactStoreConfig, ContentType
 
 
