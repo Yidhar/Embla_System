@@ -662,6 +662,29 @@ class SystemAgent:
             workflow_id=workflow_id,
             fencing_epoch=fencing_epoch,
         )
+        self._emit_structured_incident(
+            incident_event_type=(
+                "RuntimeFuseTriggeredCritical"
+                if str(action.level or "").strip().lower() == "critical"
+                else "RuntimeFuseTriggeredWarning"
+            ),
+            severity="critical" if str(action.level or "").strip().lower() == "critical" else "warning",
+            reason_code=f"WATCHDOG_FUSE_{str(action.action or '').strip().upper()}",
+            reason_text=f"watchdog gate blocked task dispatch: {action.action}",
+            workflow_id=workflow_id,
+            task_id=task.task_id,
+            trigger="watchdog_gate",
+            details={
+                "attempt": attempt,
+                "runtime_mode": runtime_mode,
+                "watchdog_level": action.level,
+                "watchdog_action": action.action,
+                "reasons": reasons,
+                "snapshot": dict(action.snapshot),
+            },
+            fencing_epoch=fencing_epoch,
+            enqueue_outbox=True,
+        )
         return TaskAttemptOutcome(approved=False, reasons=reasons)
 
     async def _execute_subagent_attempt(
@@ -1341,18 +1364,37 @@ class SystemAgent:
                 enqueue_outbox=True,
                 fencing_epoch=fencing_epoch,
             )
-            self._emit(
-                "IncidentOpened",
-                {
-                    "workflow_id": workflow_id,
-                    "task_id": task_id,
-                    "trigger": "automatic_canary_rollback",
-                    "decision_reason": decision.reason,
-                },
+            self._emit_structured_incident(
+                incident_event_type="ReleaseRollbackTriggered",
+                severity="critical",
+                reason_code="CANARY_ROLLBACK_TRIGGERED",
+                reason_text=str(decision.reason or "canary thresholds triggered rollback"),
                 workflow_id=workflow_id,
-                enqueue_outbox=True,
+                task_id=task_id,
+                trigger="automatic_canary_rollback",
+                details={
+                    "decision": decision_payload,
+                    "rollback_result": rollback_result,
+                },
                 fencing_epoch=fencing_epoch,
+                enqueue_outbox=True,
             )
+            if str(rollback_result.get("status") or "") == "failed":
+                self._emit_structured_incident(
+                    incident_event_type="ReleaseRollbackFailed",
+                    severity="critical",
+                    reason_code="ROLLBACK_COMMAND_FAILED",
+                    reason_text=str(rollback_result.get("details") or "rollback command failed"),
+                    workflow_id=workflow_id,
+                    task_id=task_id,
+                    trigger="automatic_canary_rollback",
+                    details={
+                        "decision": decision_payload,
+                        "rollback_result": rollback_result,
+                    },
+                    fencing_epoch=fencing_epoch,
+                    enqueue_outbox=True,
+                )
             return
 
         self.workflow_store.update_command(canary_command_id, status="succeeded")
@@ -1435,3 +1477,49 @@ class SystemAgent:
                     self.logger.warning("[SystemAgent] skip outbox enqueue due to lease loss: %s", exc)
                     return
             self.workflow_store.enqueue_outbox(workflow_id, event_type, event_payload)
+
+    def _emit_structured_incident(
+        self,
+        *,
+        incident_event_type: str,
+        severity: str,
+        reason_code: str,
+        reason_text: str,
+        workflow_id: str,
+        task_id: str,
+        trigger: str,
+        details: Dict[str, Any] | None = None,
+        fencing_epoch: int | None = None,
+        enqueue_outbox: bool = True,
+    ) -> None:
+        normalized_severity = str(severity or "warning").strip().lower()
+        if normalized_severity not in {"warning", "critical"}:
+            normalized_severity = "warning"
+
+        payload = {
+            "workflow_id": workflow_id,
+            "task_id": task_id,
+            "severity": normalized_severity,
+            "reason_code": str(reason_code or "INCIDENT_UNSPECIFIED"),
+            "reason_text": str(reason_text or "incident opened"),
+            "trigger": str(trigger or ""),
+            "source_component": "autonomous.system_agent",
+            "details": dict(details or {}),
+        }
+        self._emit(
+            incident_event_type,
+            payload,
+            workflow_id=workflow_id,
+            enqueue_outbox=enqueue_outbox,
+            fencing_epoch=fencing_epoch,
+        )
+        self._emit(
+            "IncidentOpened",
+            {
+                **payload,
+                "incident_event_type": str(incident_event_type or ""),
+            },
+            workflow_id=workflow_id,
+            enqueue_outbox=enqueue_outbox,
+            fencing_epoch=fencing_epoch,
+        )

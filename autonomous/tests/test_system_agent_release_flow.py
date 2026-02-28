@@ -103,6 +103,93 @@ def test_release_rollback_event_contains_canary_audit_fields() -> None:
         assert decision["trigger_window_index"] == 2
         assert rollback_payload["rollback_result"]["enabled"] is False
         assert rollback_payload["rollback_result"]["status"] == "skipped"
+
+        structured = [payload for event_type, payload, _ in captured if event_type == "ReleaseRollbackTriggered"]
+        assert len(structured) == 1
+        assert structured[0]["severity"] == "critical"
+        assert structured[0]["reason_code"] == "CANARY_ROLLBACK_TRIGGERED"
+        assert structured[0]["trigger"] == "automatic_canary_rollback"
+
+        opened = [
+            payload
+            for event_type, payload, _ in captured
+            if event_type == "IncidentOpened" and payload.get("incident_event_type") == "ReleaseRollbackTriggered"
+        ]
+        assert len(opened) == 1
+        assert opened[0]["reason_code"] == "CANARY_ROLLBACK_TRIGGERED"
+        assert opened[0]["details"]["rollback_result"]["status"] == "skipped"
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_release_rollback_failure_emits_structured_incident() -> None:
+    case_root = _make_case_root("test_system_agent_release_flow")
+    try:
+        repo = case_root / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        _write_policy(repo / "policy" / "gate_policy.yaml")
+        agent = SystemAgent(
+            config={
+                "enabled": False,
+                "release": {
+                    "enabled": True,
+                    "gate_policy_path": "policy/gate_policy.yaml",
+                    "auto_rollback_enabled": True,
+                    "rollback_command": "rollback-now",
+                },
+            },
+            repo_dir=str(repo),
+        )
+        agent.release_controller.execute_rollback = lambda _cmd: (False, "simulated rollback failure")  # type: ignore[method-assign]
+
+        workflow_id = "wf-ws17-007-rollback-fail"
+        agent.workflow_store.create_workflow(workflow_id, task_id="task-ws17-007-rollback-fail", initial_state="ReleaseCandidate")
+
+        captured: list[tuple[str, dict, dict]] = []
+
+        def _capture(event_type: str, payload: dict, **kwargs) -> None:
+            captured.append((event_type, dict(payload), dict(kwargs)))
+
+        agent._emit = _capture  # type: ignore[method-assign]
+        event = {
+            "outbox_id": 102,
+            "workflow_id": workflow_id,
+            "payload": {
+                "task_id": "task-ws17-007-rollback-fail",
+                "canary_observations": [
+                    {
+                        "window_minutes": 15,
+                        "sample_count": 230,
+                        "error_rate": 0.11,
+                        "latency_p95_ms": 2600,
+                        "kpi_ratio": 0.81,
+                    },
+                    {
+                        "window_minutes": 15,
+                        "sample_count": 210,
+                        "error_rate": 0.14,
+                        "latency_p95_ms": 3000,
+                        "kpi_ratio": 0.79,
+                    },
+                ],
+            },
+        }
+        asyncio.run(agent._handle_task_approved_event(event, fencing_epoch=1))
+
+        rollback_failed = [payload for event_type, payload, _ in captured if event_type == "ReleaseRollbackFailed"]
+        assert len(rollback_failed) == 1
+        assert rollback_failed[0]["severity"] == "critical"
+        assert rollback_failed[0]["reason_code"] == "ROLLBACK_COMMAND_FAILED"
+        assert rollback_failed[0]["details"]["rollback_result"]["status"] == "failed"
+
+        opened = [
+            payload
+            for event_type, payload, _ in captured
+            if event_type == "IncidentOpened" and payload.get("incident_event_type") == "ReleaseRollbackFailed"
+        ]
+        assert len(opened) == 1
+        assert opened[0]["reason_code"] == "ROLLBACK_COMMAND_FAILED"
+        assert "simulated rollback failure" in opened[0]["reason_text"]
     finally:
         _cleanup_case_root(case_root)
 

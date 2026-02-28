@@ -85,6 +85,20 @@ def test_system_agent_watchdog_critical_action_blocks_dispatch_and_rejects_task(
         assert gate_rejected[0]["gate"] == "watchdog"
         assert gate_rejected[0]["watchdog_action"] == "pause_dispatch_and_escalate"
 
+        fuse_events = [payload for event_type, payload, _ in events if event_type == "RuntimeFuseTriggeredCritical"]
+        assert len(fuse_events) == 1
+        assert fuse_events[0]["reason_code"] == "WATCHDOG_FUSE_PAUSE_DISPATCH_AND_ESCALATE"
+        assert fuse_events[0]["trigger"] == "watchdog_gate"
+
+        incident_opened = [
+            payload
+            for event_type, payload, _ in events
+            if event_type == "IncidentOpened" and payload.get("incident_event_type") == "RuntimeFuseTriggeredCritical"
+        ]
+        assert len(incident_opened) == 1
+        assert incident_opened[0]["severity"] == "critical"
+        assert incident_opened[0]["reason_code"] == "WATCHDOG_FUSE_PAUSE_DISPATCH_AND_ESCALATE"
+
         task_rejected = [payload for event_type, payload, _ in events if event_type == "TaskRejected"]
         assert len(task_rejected) == 1
         assert "watchdog:pause_dispatch_and_escalate" in task_rejected[0]["reasons"]
@@ -228,5 +242,9 @@ def test_system_agent_watchdog_consumes_daemon_state_file_and_blocks_without_run
         assert len(gate_rejected) == 1
         assert gate_rejected[0]["gate"] == "watchdog"
         assert gate_rejected[0]["watchdog_action"] == "pause_dispatch_and_escalate"
+
+        fuse_events = [payload for event_type, payload, _ in events if event_type == "RuntimeFuseTriggeredCritical"]
+        assert len(fuse_events) == 1
+        assert fuse_events[0]["reason_code"] == "WATCHDOG_FUSE_PAUSE_DISPATCH_AND_ESCALATE"
     finally:
         _cleanup_case_root(case_root)

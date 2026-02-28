@@ -2732,12 +2732,16 @@ _OPS_INCIDENT_EVENT_SEVERITY: Dict[str, str] = {
     "ProcessGuardZombieDetected": "critical",
     "KillSwitchEngaged": "critical",
     "BudgetGuardTriggered": "critical",
+    "ReleaseRollbackTriggered": "critical",
+    "ReleaseRollbackFailed": "critical",
+    "RuntimeFuseTriggeredCritical": "critical",
     "AgenticLoopCompletionNotSubmitted": "critical",
     "SubAgentRuntimeFailOpenBlocked": "warning",
     "SubAgentRuntimeFailOpen": "warning",
     "RouteQualityGuardEscalatedWarning": "warning",
     "RouteArbiterGuardEscalatedWarning": "warning",
     "ProcessGuardOrphanReaped": "warning",
+    "RuntimeFuseTriggeredWarning": "warning",
 }
 
 _OPS_BRAINSTEM_HEARTBEAT_RELATIVE_PATH = Path("scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json")
