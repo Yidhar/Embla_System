@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from autonomous.meta_agent_runtime import Goal, MetaAgentRuntime, TaskFeedback
+from agents.meta_agent import Goal, MetaAgentRuntime, TaskFeedback
 
 
 def test_meta_agent_can_decompose_typical_incident_goal() -> None:

@@ -5,7 +5,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from autonomous.router_engine import RouterRequest, TaskRouterEngine
+from agents.router_engine import RouterRequest, TaskRouterEngine
 
 
 def _make_case_root(prefix: str) -> Path:

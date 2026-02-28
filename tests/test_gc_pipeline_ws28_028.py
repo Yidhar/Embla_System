@@ -4,7 +4,7 @@ import json
 import time
 from pathlib import Path
 
-from autonomous.gc_pipeline import GCPipelineConfig, run_gc_pipeline
+from agents.memory.gc_pipeline import GCPipelineConfig, run_gc_pipeline
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:

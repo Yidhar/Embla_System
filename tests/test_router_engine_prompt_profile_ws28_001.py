@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from autonomous.router_engine import RouterRequest, TaskRouterEngine
+from agents.router_engine import RouterRequest, TaskRouterEngine
 
 
 def test_router_engine_adds_prompt_profile_fields_for_read_only_research() -> None:
