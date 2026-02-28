@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from autonomous.event_log.cron_alert_producer import AlertEventProducer, CronEventProducer
+from agents.memory import GCPipelineConfig, run_gc_pipeline
+from agents.meta_agent import Goal, MetaAgentRuntime, TaskFeedback
 from core.event_bus.consumers import register_default_consumers
 from core.event_bus.event_store import EventStore
 from core.supervisor.watchdog_daemon import WatchdogAction, WatchdogDaemon, WatchdogThresholds
@@ -83,6 +85,16 @@ class WatchdogRuntimeConfig:
 
 
 @dataclass
+class MemoryGCRuntimeConfig:
+    enabled: bool = True
+    dry_run: bool = True
+    retention_seconds: float = 7 * 24 * 3600
+    max_records_per_session: int = 300
+    max_total_records: int = 20_000
+    output_report_path: str = "scratch/reports/system_agent_memory_gc_ws28_032.json"
+
+
+@dataclass
 class SystemAgentConfig:
     enabled: bool = False
     cycle_interval_seconds: int = 3600
@@ -95,6 +107,7 @@ class SystemAgentConfig:
     outbox_dispatch: OutboxDispatchConfig = field(default_factory=OutboxDispatchConfig)
     release: ReleaseAutomationConfig = field(default_factory=ReleaseAutomationConfig)
     watchdog: WatchdogRuntimeConfig = field(default_factory=WatchdogRuntimeConfig)
+    memory_gc: MemoryGCRuntimeConfig = field(default_factory=MemoryGCRuntimeConfig)
     subagent_runtime: SubAgentRuntimeConfig = field(default_factory=SubAgentRuntimeConfig)
 
     @classmethod
@@ -112,6 +125,7 @@ class SystemAgentConfig:
         outbox_dispatch = pick(source, "outbox_dispatch", {})
         release = pick(source, "release", {})
         watchdog = pick(source, "watchdog", {})
+        memory_gc = pick(source, "memory_gc", {})
         subagent_runtime = pick(source, "subagent_runtime", {})
         lease_cfg = LeaseConfig(
             enabled=bool(pick(lease, "enabled", True)),
@@ -159,6 +173,16 @@ class SystemAgentConfig:
             ),
             fail_closed_on_daemon_state_stale=bool(pick(watchdog, "fail_closed_on_daemon_state_stale", False)),
         )
+        memory_gc_cfg = MemoryGCRuntimeConfig(
+            enabled=bool(pick(memory_gc, "enabled", True)),
+            dry_run=bool(pick(memory_gc, "dry_run", True)),
+            retention_seconds=max(0.0, float(pick(memory_gc, "retention_seconds", 7 * 24 * 3600))),
+            max_records_per_session=max(1, int(pick(memory_gc, "max_records_per_session", 300))),
+            max_total_records=max(1, int(pick(memory_gc, "max_total_records", 20_000))),
+            output_report_path=str(
+                pick(memory_gc, "output_report_path", "scratch/reports/system_agent_memory_gc_ws28_032.json")
+            ),
+        )
         subagent_cfg = SubAgentRuntimeConfig(
             enabled=bool(pick(subagent_runtime, "enabled", True)),
             max_subtasks=max(1, int(pick(subagent_runtime, "max_subtasks", 16))),
@@ -185,6 +209,7 @@ class SystemAgentConfig:
             outbox_dispatch=outbox_cfg,
             release=release_cfg,
             watchdog=watchdog_cfg,
+            memory_gc=memory_gc_cfg,
             subagent_runtime=subagent_cfg,
         )
 
@@ -203,6 +228,16 @@ class _SystemAgentWatchdogEmitter:
 
     def emit(self, event_type: str, payload: Dict[str, Any], **kwargs: Any) -> None:
         self._agent._emit(event_type, payload, **kwargs)
+
+
+class _MetaPlannerCompat:
+    """Compatibility adapter exposing `generate_tasks(findings)`."""
+
+    def __init__(self, agent: "SystemAgent") -> None:
+        self._agent = agent
+
+    def generate_tasks(self, findings: List[Dict[str, str]]) -> List[OptimizationTask]:
+        return self._agent._generate_tasks_with_meta_agent(findings)
 
 
 class SystemAgent:
@@ -252,7 +287,9 @@ class SystemAgent:
         self.workflow_store = WorkflowStore(db_path=db_path)
 
         self.sensor = Sensor(str(self.repo_dir))
-        self.planner = Planner()
+        self._legacy_planner = Planner()
+        self.meta_agent_runtime = MetaAgentRuntime()
+        self.planner = _MetaPlannerCompat(self)
 
         policy_path = Path(self.config.release.gate_policy_path)
         if not policy_path.is_absolute():
@@ -315,6 +352,132 @@ class SystemAgent:
             return owner
         host = os.environ.get("COMPUTERNAME") or os.environ.get("HOSTNAME") or "localhost"
         return f"{host}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+    def _generate_tasks_with_meta_agent(self, findings: List[Dict[str, str]]) -> List[OptimizationTask]:
+        if not findings:
+            return []
+
+        try:
+            goal_id = f"goal-{uuid.uuid4().hex[:10]}"
+            bullet_lines: List[str] = []
+            for finding in findings:
+                kind = str(finding.get("kind", "generic")).strip() or "generic"
+                severity = str(finding.get("severity", "medium")).strip() or "medium"
+                summary = str(finding.get("summary", "Address detected issue")).strip() or "Address detected issue"
+                bullet_lines.append(f"- [{kind}/{severity}] {summary}")
+            goal = Goal(
+                goal_id=goal_id,
+                description="\n".join(bullet_lines),
+                context_files=[
+                    "doc/07-autonomous-agent-sdlc-architecture.md",
+                    "doc/架构与时序设计.md",
+                ],
+            )
+            subtasks = self.meta_agent_runtime.accept_goal(goal)
+            tasks: List[OptimizationTask] = []
+            for index, subtask in enumerate(subtasks):
+                finding = findings[min(index, len(findings) - 1)] if findings else {}
+                complexity = str(subtask.estimated_complexity or "medium").strip() or "medium"
+                tasks.append(
+                    OptimizationTask(
+                        task_id=subtask.task_id,
+                        instruction=subtask.description,
+                        complexity=complexity,
+                        target_files=["autonomous/"],
+                        context_files=list(subtask.context_files),
+                        metadata={
+                            "meta_goal_id": goal.goal_id,
+                            "meta_priority": int(subtask.priority),
+                            "meta_target_role": subtask.target_role,
+                            "meta_parent_goal_id": subtask.parent_goal_id,
+                            "finding": finding,
+                        },
+                    )
+                )
+
+            self._emit(
+                "MetaAgentGoalAccepted",
+                {
+                    "goal_id": goal.goal_id,
+                    "subtask_count": len(subtasks),
+                    "subtask_ids": [task.task_id for task in subtasks],
+                },
+            )
+            return tasks
+        except Exception as exc:
+            # Fail-open to legacy planner to keep run-cycle availability.
+            self.logger.warning("[SystemAgent] meta-agent planning fallback to legacy planner: %s", exc)
+            return self._legacy_planner.generate_tasks(findings)
+
+    def _record_meta_feedback_for_task(self, task: OptimizationTask) -> None:
+        metadata = task.metadata if isinstance(task.metadata, dict) else {}
+        goal_id = str(metadata.get("meta_goal_id") or "").strip()
+        if not goal_id:
+            return
+
+        workflow_id = f"wf-{task.task_id}"
+        workflow = self.workflow_store.get_workflow(workflow_id) or {}
+        current_state = str(workflow.get("current_state") or "").strip()
+        success_states = {"ReleaseCandidate", "Promoted", "Released"}
+        success = current_state in success_states
+
+        feedback = TaskFeedback(
+            task_id=task.task_id,
+            success=success,
+            summary=f"workflow={current_state or 'unknown'}",
+            details={
+                "workflow_id": workflow_id,
+                "workflow_state": current_state,
+            },
+        )
+        self.meta_agent_runtime.collect_feedback(goal_id, feedback)
+        reflection = self.meta_agent_runtime.reflect(goal_id)
+        self._emit(
+            "MetaAgentReflectionUpdated",
+            {
+                "goal_id": reflection.goal_id,
+                "summary": reflection.summary,
+                "progress_ratio": reflection.progress_ratio,
+                "failed_task_ids": list(reflection.failed_task_ids),
+            },
+        )
+
+    def _run_memory_gc_pipeline(self, *, fencing_epoch: int) -> None:
+        if not bool(self.config.memory_gc.enabled):
+            return
+        output_path = Path(self.config.memory_gc.output_report_path)
+        if not output_path.is_absolute():
+            output_path = self.repo_dir / output_path
+
+        try:
+            report = run_gc_pipeline(
+                output_path=output_path,
+                config=GCPipelineConfig(
+                    retention_seconds=float(self.config.memory_gc.retention_seconds),
+                    max_records_per_session=int(self.config.memory_gc.max_records_per_session),
+                    max_total_records=int(self.config.memory_gc.max_total_records),
+                    dry_run=bool(self.config.memory_gc.dry_run),
+                ),
+            )
+            self._emit(
+                "MemoryGCPipelineCompleted",
+                {
+                    "passed": bool(report.get("passed", False)),
+                    "retained_count": int(report.get("stats", {}).get("retained_count", 0)),
+                    "deleted_count": int(report.get("stats", {}).get("deleted_count", 0)),
+                    "output_path": str(output_path),
+                },
+                fencing_epoch=fencing_epoch,
+            )
+        except Exception as exc:
+            self._emit(
+                "MemoryGCPipelineFailed",
+                {
+                    "error": f"{type(exc).__name__}:{exc}",
+                    "output_path": str(output_path),
+                },
+                fencing_epoch=fencing_epoch,
+            )
 
     async def start(self) -> None:
         if not self.config.enabled:
@@ -395,6 +558,9 @@ class SystemAgent:
 
         for task in tasks:
             await self._run_task(task, fencing_epoch=active_epoch)
+            self._record_meta_feedback_for_task(task)
+
+        self._run_memory_gc_pipeline(fencing_epoch=active_epoch)
 
         self._emit("CycleCompleted", {"task_count": len(tasks)}, fencing_epoch=active_epoch)
 

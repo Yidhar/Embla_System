@@ -27,6 +27,12 @@ from core.supervisor.watchdog_daemon import WatchdogDaemon
 from core.event_bus import EventStore
 from autonomous.router_engine import RouterRequest, TaskRouterEngine
 from autonomous.router_arbiter_guard import RouterArbiterGuard
+from agents.contract_runtime import (
+    build_core_execution_contract_payload as build_brain_core_execution_contract_payload,
+    build_core_execution_messages as build_brain_core_execution_messages,
+    trim_contract_text as trim_brain_contract_text,
+)
+from agents.tool_loop import run_agentic_loop as run_brain_agentic_tool_loop
 from autonomous.llm_gateway import (
     GatewayRouteRequest,
     LLMGateway,
@@ -836,10 +842,7 @@ def _build_chat_route_prompt_hints(route_meta: Dict[str, Any]) -> str:
 
 
 def _trim_contract_text(value: Any, *, limit: int = 240) -> str:
-    text = " ".join(str(value or "").strip().split())
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 3)] + "..."
+    return trim_brain_contract_text(value, limit=limit)
 
 
 def _build_core_execution_contract_payload(
@@ -848,54 +851,12 @@ def _build_core_execution_contract_payload(
     current_message: str,
     recent_messages: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    latest_user_history: List[str] = []
-    latest_assistant_history: List[str] = []
-    for item in reversed(list(recent_messages or [])):
-        role = str(item.get("role") or "").strip().lower()
-        content = _trim_contract_text(item.get("content", ""))
-        if not content:
-            continue
-        if role == "user" and len(latest_user_history) < 3:
-            latest_user_history.append(content)
-        elif role == "assistant" and len(latest_assistant_history) < 2:
-            latest_assistant_history.append(content)
-        if len(latest_user_history) >= 3 and len(latest_assistant_history) >= 2:
-            break
-
-    latest_user_history.reverse()
-    latest_assistant_history.reverse()
-    goal = _trim_contract_text(current_message, limit=320)
-    scope_hint = latest_user_history[-1] if latest_user_history else goal
-    acceptance_hint = "输出可验证的执行证据（含结果与报告路径），必要时附失败根因与下一步。"
-    assumptions: List[str] = []
-    if not latest_user_history:
-        assumptions.append("历史上下文为空，按当前请求建立新执行契约。")
-    if len(goal) <= 24 and any(marker in goal.lower() for marker in _CHAT_ROUTE_FOLLOWUP_MARKERS):
-        assumptions.append("用户输入可能是续写指令，需结合 recent_user_history 推断目标。")
-
-    # Outer 上下文摘要：Core 唯一的历史感知来源
-    outer_context_summary = ""
-    if latest_user_history:
-        outer_context_summary = " → ".join(latest_user_history[-2:])
-    if latest_assistant_history:
-        last_assistant = latest_assistant_history[-1]
-        if outer_context_summary:
-            outer_context_summary += f" [assistant: {last_assistant[:120]}]"
-        else:
-            outer_context_summary = f"[assistant: {last_assistant[:120]}]"
-
-    return {
-        "contract_stage": "seed",
-        "session_id": str(session_id or ""),
-        "goal": goal,
-        "scope_hint": scope_hint,
-        "acceptance_hint": acceptance_hint,
-        "outer_context_summary": outer_context_summary,
-        "recent_user_history": latest_user_history,
-        "recent_assistant_history": latest_assistant_history,
-        "assumptions": assumptions,
-        "evidence_path_hint": "scratch/reports/",
-    }
+    return build_brain_core_execution_contract_payload(
+        session_id=session_id,
+        current_message=current_message,
+        recent_messages=recent_messages,
+        followup_markers=_CHAT_ROUTE_FOLLOWUP_MARKERS,
+    )
 
 
 def _build_core_execution_messages(
@@ -914,22 +875,15 @@ def _build_core_execution_messages(
 
     不注入 Outer 闲聊历史，实现上下文隔离。
     """
-    resolved_system_prompt = _trim_contract_text(core_system_prompt or system_prompt)
-    if not resolved_system_prompt:
-        raise ValueError("core_system_prompt/system_prompt 不能为空")
-
     recent_messages = message_manager.get_recent_messages(session_id, count=10)
-    contract_payload = _build_core_execution_contract_payload(
+    return build_brain_core_execution_messages(
         session_id=session_id,
         current_message=current_message,
+        core_system_prompt=core_system_prompt,
+        system_prompt=system_prompt,
         recent_messages=recent_messages,
+        followup_markers=_CHAT_ROUTE_FOLLOWUP_MARKERS,
     )
-    contract_text = "[ExecutionContractInput]\n" + json.dumps(contract_payload, ensure_ascii=False, sort_keys=True)
-    return [
-        {"role": "system", "content": resolved_system_prompt},
-        {"role": "system", "content": contract_text},
-        {"role": "user", "content": current_message},
-    ]
 
 
 def _get_chat_route_event_store() -> Optional[EventStore]:
@@ -2215,8 +2169,6 @@ async def chat_stream(request: ChatRequest):
 
             stream_source: AsyncGenerator[str, None]
             if path == "path-c":
-                from .agentic_tool_loop import run_agentic_loop
-
                 cfg = get_config()
                 loop_cfg = getattr(cfg, "agentic_loop", None)
                 if loop_cfg is not None:
@@ -2224,7 +2176,7 @@ async def chat_stream(request: ChatRequest):
                 else:
                     loop_max_rounds = int(cfg.handoff.max_loop_stream)
 
-                stream_source = run_agentic_loop(
+                stream_source = run_brain_agentic_tool_loop(
                     messages,
                     execution_session_id,
                     max_rounds=loop_max_rounds,

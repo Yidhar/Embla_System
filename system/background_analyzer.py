@@ -299,7 +299,7 @@ class ConversationAnalyzer:
             if self.llm is None:
                 raise RuntimeError("ConversationAnalyzer LLM is not initialized")
 
-            from apiserver.agentic_tool_loop import _convert_structured_tool_calls, get_agentic_tool_definitions
+            from agents.tool_loop import convert_structured_tool_calls, get_agentic_tool_definitions
 
             llm_with_tools = self.llm.bind_tools(get_agentic_tool_definitions(), tool_choice="auto")
             resp = llm_with_tools.invoke(
@@ -318,7 +318,7 @@ class ConversationAnalyzer:
             logger.info(f"[ConversationAnalyzer] LLM响应完成，正文长度: {len(text)}")
             structured_calls = self._extract_structured_tool_calls(resp)
             logger.info(f"[ConversationAnalyzer] 提取到结构化 tool_calls: {len(structured_calls)}")
-            tool_calls, validation_errors = _convert_structured_tool_calls(
+            tool_calls, validation_errors = convert_structured_tool_calls(
                 structured_calls,
                 session_id=None,
                 trace_id=None,
