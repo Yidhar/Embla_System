@@ -8,7 +8,7 @@
 
 # 11 - 大脑层模块详细架构 (Brain Layer Modules)
 
-> **定位**：大脑层是 Omni-Operator 的认知中枢，负责推理、记忆、路由和状态管理。属于工作空间层中的高级逻辑区域。
+> **定位**：大脑层是 Embla_system 的认知中枢，负责推理、记忆、路由和状态管理。属于工作空间层中的高级逻辑区域。
 >
 > **实施状态**：
 > - 🟢 **Phase 0 已实现**：System Agent 主循环、Workflow Store

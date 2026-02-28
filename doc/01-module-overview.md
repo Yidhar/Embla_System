@@ -1,11 +1,11 @@
-﻿# 01 模块总览（Omni-Operator 开发预备版）
+﻿# 01 模块总览（Embla_system 开发预备版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-24
 
 ## 1. 目标
 
-本文用于统一 NagaAgent 当前可运行架构与 Omni-Operator 目标架构之间的语义。
+本文用于统一 NagaAgent 当前可运行架构与 Embla_system 目标架构之间的语义。
 
 本文件只描述 **当前代码已实现** 与 **已确认的过渡态**，并将目标态映射到三层模型：
 
@@ -73,7 +73,7 @@
 - `apiserver` 的 `/mcp/status`、`/mcp/tasks` 返回离线占位响应（兼容 UI，非真实 MCP 运行状态）。
 - `apiserver` 的 `/mcp/services`、`/mcp/import` 仍提供可用的服务管理能力。
 
-## 5. Omni-Operator 三层映射（开发预备语义）
+## 5. Embla_system 三层映射（开发预备语义）
 
 ### 5.1 Brainstem（控制与接入层）
 
@@ -143,7 +143,7 @@
 
 ## 8. 系统落地最高原则（新增）
 
-在 Omni-Operator 开发生命周期中，统一采用以下反直觉原则：
+在 Embla_system 开发生命周期中，统一采用以下反直觉原则：
 
 - `逻辑并发，执行串行（Logical Concurrency, Serial Execution）`
 

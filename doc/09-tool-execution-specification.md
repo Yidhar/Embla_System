@@ -7,7 +7,7 @@
 **目标态参考**：`doc/00-omni-operator-architecture.md` + `doc/task/25-subagent-development-fabric-status-matrix.md`
 ---
 
-# 09 工具调用与任务执行规范（Omni-Operator 对齐版）
+# 09 工具调用与任务执行规范（Embla_system 对齐版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-27
@@ -74,7 +74,7 @@
 
 ## 4. Tool Contract（统一契约）
 
-目标态字段（来源：Omni-Operator 蓝图）：
+目标态字段（来源：Embla_system 蓝图）：
 
 - `tool_name`
 - `input_schema_version`

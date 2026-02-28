@@ -1,4 +1,4 @@
-﻿# 08 前后端分离方案（Omni-Operator 入口对齐版）
+﻿# 08 前后端分离方案（Embla_system 入口对齐版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-22
@@ -20,9 +20,9 @@
 2. `apiserver` 的 MCP 状态接口存在“占位语义”与真实 MCP 服务并行。
 3. `agentserver` 仍存在兼容 API，但已不属于主执行链。
 
-## 2. Omni-Operator 对齐目标
+## 2. Embla_system 对齐目标
 
-目标是把 `apiserver` 明确为 Omni 入口层（BFF），并把前端与内部服务解耦：
+目标是把 `apiserver` 明确为 Embla_system 入口层（BFF），并把前端与内部服务解耦：
 
 - 前端只依赖 BFF 契约与事件流
 - BFF 内部可自由替换 `mcpserver`、`autonomous`、`memory` 细节

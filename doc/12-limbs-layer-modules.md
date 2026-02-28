@@ -8,7 +8,7 @@
 
 # 12 - 手脚层模块详细架构 (Limbs Layer Modules)
 
-> **定位**：手脚层是 Omni-Operator 的执行末端，所有能力以 MCP (Model Context Protocol) 形式挂载，支持热插拔和动态注册。
+> **定位**：手脚层是 Embla_system 的执行末端，所有能力以 MCP (Model Context Protocol) 形式挂载，支持热插拔和动态注册。
 >
 > **实施状态**：
 > - 🟢 **Phase 0 已实现**：MCP Manager、Native Executor、基础工具集

@@ -7,7 +7,7 @@
 1. `doc/00-mvp-architecture-design.md`
    - Phase 0 历史归档（CLI 时代设计回溯，不作为当前实现依据）。
 2. `doc/00-omni-operator-architecture.md`
-   - Omni-Operator 目标态总蓝图（Phase 3 参考，不等价当前实现）。
+   - Embla_system 目标态总蓝图（Phase 3 参考，不等价当前实现）。
 3. `doc/01-module-overview.md`
    - 当前模块总览、运行链路与关键边界。
 4. `doc/02-module-archive.md`

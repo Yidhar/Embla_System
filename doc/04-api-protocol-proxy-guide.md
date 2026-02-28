@@ -1,4 +1,4 @@
-﻿# 04 模型协议与代理指南（Omni-Operator 对齐版）
+﻿# 04 模型协议与代理指南（Embla_system 对齐版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-22
@@ -111,7 +111,7 @@
    - 4xx/5xx：多为鉴权或参数问题。
    - connect timeout / connection attempts failed：多为网络或代理连通问题。
 
-## 7. 与 Omni-Operator 对齐说明
+## 7. 与 Embla_system 对齐说明
 
 当前状态：
 

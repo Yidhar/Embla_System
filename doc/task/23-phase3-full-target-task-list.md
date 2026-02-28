@@ -1,4 +1,4 @@
-# 23 M7 之后到 Omni 全目标态（Phase3 Full）任务清单
+# 23 M7 之后到 Embla_system 全目标态（Phase3 Full）任务清单
 
 ## 1. 目标与边界
 

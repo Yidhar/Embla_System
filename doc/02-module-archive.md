@@ -1,22 +1,22 @@
-﻿# 02 模块归档明细（Omni-Operator 开发预备版）
+﻿# 02 模块归档明细（Embla_system 开发预备版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-22
 
 ## 1. 归档规则
 
-本归档按“模块职责 + 当前状态 + Omni 对齐”统一表达。
+本归档按“模块职责 + 当前状态 + Embla_system 对齐”统一表达。
 
 状态标签：
 
 - `已实现`：当前代码可直接运行。
 - `过渡态`：行为可用但接口语义尚未收敛。
 - `兼容保留`：仅为历史兼容存在，不建议新功能依赖。
-- `目标态`：来自 Omni-Operator 蓝图，当前未完全落地。
+- `目标态`：来自 Embla_system 蓝图，当前未完全落地。
 
-## 2. Omni 集成层（新增）
+## 2. Embla_system 集成层（新增）
 
-Omni-Operator 在当前项目的集成层由三块组成：
+Embla_system 在当前项目的集成层由三块组成：
 
 1. BFF 入口：`apiserver/`
 2. MCP Host + Tool Registry：`mcpserver/`
@@ -32,7 +32,7 @@ Omni-Operator 在当前项目的集成层由三块组成：
 
 - 职责：统一启动 API/MCP/TTS、后台循环、代理环境、可选自治循环。
 - 关键事实：AgentServer 已标记“禁用自动启动”。
-- Omni 对齐：承担 Brainstem 的运行时编排职责。
+- Embla_system 对齐：承担 Brainstem 的运行时编排职责。
 
 ### 3.2 系统基础能力
 
@@ -40,7 +40,7 @@ Omni-Operator 在当前项目的集成层由三块组成：
 
 - 职责：配置模型、日志、提示词、系统检测、Native 执行安全边界。
 - 关键文件：`system/config.py`、`system/native_executor.py`。
-- Omni 对齐：作为 Brainstem 的配置与安全基座。
+- Embla_system 对齐：作为 Brainstem 的配置与安全基座。
 
 ### 3.3 BFF 与对话编排
 
@@ -49,7 +49,7 @@ Omni-Operator 在当前项目的集成层由三块组成：
 - 职责：对外 REST/SSE 入口，`/chat/stream` 工具循环编排。
 - 关键文件：`apiserver/api_server.py`、`apiserver/agentic_tool_loop.py`、`apiserver/llm_service.py`。
 - 过渡点：`/mcp/status`、`/mcp/tasks` 仍是离线占位语义。
-- Omni 对齐：Brainstem 入口 + Brain 编排核心。
+- Embla_system 对齐：Brainstem 入口 + Brain 编排核心。
 
 ### 3.4 自治系统代理（新增归档）
 
@@ -66,7 +66,7 @@ Omni-Operator 在当前项目的集成层由三块组成：
   - `autonomous/state/workflow_store.py`
   - `autonomous/event_log/event_store.py`
   - `autonomous/release/controller.py`
-- Omni 对齐：Brainstem 控制器与治理执行枢纽。
+- Embla_system 对齐：Brainstem 控制器与治理执行枢纽。
 
 ### 3.5 MCP 主机与注册中心
 
@@ -74,7 +74,7 @@ Omni-Operator 在当前项目的集成层由三块组成：
 
 - 职责：manifest 扫描注册、统一调用入口、本地优先/外部兜底。
 - 关键文件：`mcpserver/mcp_registry.py`、`mcpserver/mcp_manager.py`、`mcpserver/mcp_server.py`。
-- Omni 对齐：Limbs 侧工具网关（Tool Registry）。
+- Embla_system 对齐：Limbs 侧工具网关（Tool Registry）。
 
 ### 3.6 AgentServer（降级）
 
@@ -84,28 +84,28 @@ Omni-Operator 在当前项目的集成层由三块组成：
   - `/schedule` 与 `/analyze_and_execute` 已返回 `deprecated`。
   - 主要剩余价值是任务/会话内存查询与管理。
 - 结论：OpenClaw 旧执行路径视为弃用，不再作为主执行链路。
-- Omni 对齐：仅保留兼容接口，不纳入新架构主链。
+- Embla_system 对齐：仅保留兼容接口，不纳入新架构主链。
 
 ### 3.7 记忆与图谱
 
 模块：`summer_memory/`（`已实现`）
 
 - 职责：五元组抽取、记忆检索、Neo4j 与文件存储。
-- Omni 对齐：Brain 的知识与检索支撑层。
+- Embla_system 对齐：Brain 的知识与检索支撑层。
 
 ### 3.8 领域引擎
 
 模块：`guide_engine/`（`已实现`）
 
 - 职责：游戏问答路由、RAG、计算服务。
-- Omni 对齐：Brain 的领域技能子系统。
+- Embla_system 对齐：Brain 的领域技能子系统。
 
 ### 3.9 语音能力
 
 模块：`voice/`（`已实现`）
 
 - 职责：TTS/ASR/实时语音输入输出。
-- Omni 对齐：Limbs 侧多模态执行通道。
+- Embla_system 对齐：Limbs 侧多模态执行通道。
 
 ### 3.10 前端桌面层
 
@@ -113,14 +113,14 @@ Omni-Operator 在当前项目的集成层由三块组成：
 
 - 职责：Electron 壳层 + Vue UI。
 - 关键事实：聊天流已消费结构化 SSE 事件；API 基址支持 `VITE_API_BASE_URL`。
-- Omni 对齐：作为 BFF 的事件消费者，逐步向事件总线语义靠拢。
+- Embla_system 对齐：作为 BFF 的事件消费者，逐步向事件总线语义靠拢。
 
 ### 3.11 构建与发布
 
 模块：`scripts/`（`已实现`）
 
 - 职责：Windows 构建与打包链路。
-- Omni 对齐：工程交付层，不参与运行时编排。
+- Embla_system 对齐：工程交付层，不参与运行时编排。
 
 ## 4. 模块关系（统一语义）
 

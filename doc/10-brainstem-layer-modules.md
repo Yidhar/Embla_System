@@ -8,7 +8,7 @@
 
 # 10 - 脑干层模块详细架构 (Brainstem Layer Modules)
 
-> **定位**：脑干层是 Omni-Operator 的不可变守护进程区。Agent 无法修改该层的任何代码。所有模块编译后打包为二进制运行，由人类工程师维护。
+> **定位**：脑干层是 Embla_system 的不可变守护进程区。Agent 无法修改该层的任何代码。所有模块编译后打包为二进制运行，由人类工程师维护。
 >
 > **实施状态**：
 > - 🟢 **Phase 0 已实现**：Event Store (SQLite)、Native Executor、基础安全沙箱
@@ -335,7 +335,7 @@ flowchart LR
         HASH["Integrity Check<br/>SHA-256 完整性校验"]
     end
 
-    CONFIG["omni.config.json<br/>(加密DNA路径)"] --> LOADER
+    CONFIG["embla_system.yaml<br/>(加密DNA路径)"] --> LOADER
     LOADER -->|"解密·校验"| CACHE
     CACHE --> INJECTOR
     INJECTOR -->|"强制前置"| LLM["LLM Client"]
@@ -507,7 +507,7 @@ sequenceDiagram
 ### 4.4 Policy Firewall 规则配置
 
 ```yaml
-# omni.config.json → security.policy_firewall
+# embla_system.yaml → security.policy_firewall
 policy_firewall:
   capability_allowlist:
     - name: "filesystem.read"

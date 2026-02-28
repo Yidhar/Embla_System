@@ -16,7 +16,7 @@
 本文不再把目标态与现状混写。
 
 - `As-Is`：当前 `autonomous/` 已落地能力（可运行）。
-- `Target`：Omni-Operator 目标架构（`00-omni-operator-architecture.md` + 10/11/12）。
+- `Target`：Embla_system 目标架构（`00-omni-operator-architecture.md` + 10/11/12）。
 - `Gap`：从当前到目标态的实施差距。
 - `状态判定`：是否属于 `BRIDGE_DONE` / `TARGET_DONE` 以 `doc/task/25-subagent-development-fabric-status-matrix.md` 为准。
 
@@ -106,7 +106,7 @@
 - 阈值策略评估（错误率、延迟、KPI）。
 - 自动回滚命令执行与结果记录。
 
-## 3. 与 Omni-Operator 目标态对齐矩阵
+## 3. 与 Embla_system 目标态对齐矩阵
 
 | 目标能力 | 当前状态 | 当前落点 | 说明 |
 |---|---|---|---|
