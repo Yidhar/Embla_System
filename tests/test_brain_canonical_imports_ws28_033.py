@@ -11,6 +11,7 @@ FORBIDDEN_PATTERNS = (
     "from autonomous.router_engine import",
     "from autonomous.meta_agent_runtime import",
     "from autonomous.gc_pipeline import",
+    "from autonomous.working_memory_manager import",
     "from apiserver.agentic_tool_loop import",
 )
 
@@ -41,4 +42,3 @@ def test_runtime_imports_use_agents_canonical_namespace_ws28_033() -> None:
             if pattern in text:
                 violations.append(f"{rel}: {pattern}")
     assert not violations, "\n".join(violations)
-

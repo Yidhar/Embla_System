@@ -17,12 +17,12 @@ from autonomous.llm_gateway import (
 )
 from agents.meta_agent import Goal, MetaAgentRuntime, SubTask, TaskFeedback
 from agents.router_engine import RouterDecision, RouterRequest, TaskRouterEngine
-from autonomous.router_arbiter_guard import RouterArbiterDecision, RouterArbiterGuard
-from autonomous.working_memory_manager import (
+from agents.memory.working_memory import (
     MemoryWindowRebalanceResult,
     MemoryWindowThresholds,
     WorkingMemoryWindowManager,
 )
+from autonomous.router_arbiter_guard import RouterArbiterDecision, RouterArbiterGuard
 
 if TYPE_CHECKING:
     from autonomous.system_agent import SystemAgent

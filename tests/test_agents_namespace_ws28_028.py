@@ -137,4 +137,5 @@ def test_agents_memory_namespace_exports_core_modules() -> None:
     thresholds = MemoryWindowThresholds()
     manager = WorkingMemoryWindowManager(thresholds=thresholds)
     assert manager.estimate_tokens([{"role": "user", "content": "hello"}]) > 0
+    assert WorkingMemoryWindowManager.__module__.startswith("agents.memory.")
     assert SemanticGraphStore.__module__.startswith("system.")
