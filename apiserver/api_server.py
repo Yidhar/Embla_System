@@ -2729,11 +2729,15 @@ _OPS_INCIDENT_EVENT_SEVERITY: Dict[str, str] = {
     "LeaseLost": "critical",
     "RouteQualityGuardEscalatedCritical": "critical",
     "RouteArbiterGuardEscalatedCritical": "critical",
+    "ProcessGuardZombieDetected": "critical",
+    "KillSwitchEngaged": "critical",
+    "BudgetGuardTriggered": "critical",
     "AgenticLoopCompletionNotSubmitted": "critical",
     "SubAgentRuntimeFailOpenBlocked": "warning",
     "SubAgentRuntimeFailOpen": "warning",
     "RouteQualityGuardEscalatedWarning": "warning",
     "RouteArbiterGuardEscalatedWarning": "warning",
+    "ProcessGuardOrphanReaped": "warning",
 }
 
 _OPS_BRAINSTEM_HEARTBEAT_RELATIVE_PATH = Path("scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json")
@@ -2742,6 +2746,13 @@ _OPS_BRAINSTEM_HEARTBEAT_STALE_CRITICAL_SECONDS = 300.0
 _OPS_WATCHDOG_DAEMON_STATE_RELATIVE_PATH = Path("scratch/runtime/watchdog_daemon_state_ws28_025.json")
 _OPS_WATCHDOG_DAEMON_STALE_WARNING_SECONDS = 120.0
 _OPS_WATCHDOG_DAEMON_STALE_CRITICAL_SECONDS = 300.0
+_OPS_PROCESS_GUARD_STATE_RELATIVE_PATH = Path("scratch/runtime/process_guard_state_ws28_028.json")
+_OPS_PROCESS_GUARD_STALE_WARNING_SECONDS = 120.0
+_OPS_PROCESS_GUARD_STALE_CRITICAL_SECONDS = 300.0
+_OPS_KILLSWITCH_GUARD_STATE_RELATIVE_PATH = Path("scratch/runtime/killswitch_guard_state_ws28_028.json")
+_OPS_BUDGET_GUARD_STATE_RELATIVE_PATH = Path("scratch/runtime/budget_guard_state_ws28_028.json")
+_OPS_BUDGET_GUARD_STALE_WARNING_SECONDS = 120.0
+_OPS_BUDGET_GUARD_STALE_CRITICAL_SECONDS = 300.0
 _OPS_AUDIT_LEDGER_RELATIVE_PATH = Path("scratch/runtime/audit_ledger.jsonl")
 
 
@@ -2903,6 +2914,118 @@ def _ops_build_watchdog_daemon_summary(repo_root: Path) -> Dict[str, Any]:
         "threshold_hit": bool(state.get("threshold_hit")),
         "action": action_payload,
         "snapshot": snapshot,
+    }
+
+
+def _ops_build_process_guard_summary(repo_root: Path) -> Dict[str, Any]:
+    state_file = repo_root / _OPS_PROCESS_GUARD_STATE_RELATIVE_PATH
+    try:
+        from core.supervisor.process_guard import ProcessGuardDaemon
+
+        state = ProcessGuardDaemon.read_daemon_state(
+            state_file,
+            stale_warning_seconds=float(_OPS_PROCESS_GUARD_STALE_WARNING_SECONDS),
+            stale_critical_seconds=float(_OPS_PROCESS_GUARD_STALE_CRITICAL_SECONDS),
+        )
+    except Exception as exc:
+        state = {
+            "status": "critical",
+            "reason_code": "PROCESS_GUARD_READ_FAILED",
+            "reason_text": f"process guard state read failed: {exc}",
+            "state_file": _ops_unix_path(state_file),
+        }
+    return {
+        "status": _ops_status_to_severity(str(state.get("status") or "unknown")),
+        "reason_code": str(state.get("reason_code") or ""),
+        "reason_text": str(state.get("reason_text") or ""),
+        "state_file": str(state.get("state_file") or _ops_unix_path(state_file)),
+        "exists": bool(state_file.exists()),
+        "generated_at": str(state.get("generated_at") or ""),
+        "heartbeat_age_seconds": state.get("heartbeat_age_seconds"),
+        "stale_warning_seconds": float(
+            state.get("stale_warning_seconds") or _OPS_PROCESS_GUARD_STALE_WARNING_SECONDS
+        ),
+        "stale_critical_seconds": float(
+            state.get("stale_critical_seconds") or _OPS_PROCESS_GUARD_STALE_CRITICAL_SECONDS
+        ),
+        "running_jobs": _ops_safe_int(state.get("running_jobs"), default=0),
+        "orphan_jobs": _ops_safe_int(state.get("orphan_jobs"), default=0),
+        "stale_jobs": _ops_safe_int(state.get("stale_jobs"), default=0),
+        "orphan_reaped_count": _ops_safe_int(state.get("orphan_reaped_count"), default=0),
+    }
+
+
+def _ops_build_killswitch_guard_summary(repo_root: Path) -> Dict[str, Any]:
+    state_file = repo_root / _OPS_KILLSWITCH_GUARD_STATE_RELATIVE_PATH
+    try:
+        from core.security import KillSwitchController
+
+        state = KillSwitchController(state_file=state_file).read_state()
+    except Exception as exc:
+        state = {
+            "status": "critical",
+            "reason_code": "KILLSWITCH_STATE_READ_FAILED",
+            "reason_text": f"killswitch guard state read failed: {exc}",
+            "state_file": _ops_unix_path(state_file),
+            "active": False,
+        }
+    status = _ops_status_to_severity(str(state.get("status") or "unknown"))
+    active = bool(state.get("active"))
+    reason_code = str(state.get("reason_code") or "")
+    reason_text = str(state.get("reason_text") or "")
+    if active and status in {"ok", "unknown"}:
+        status = "critical"
+        reason_code = "KILLSWITCH_ENGAGED"
+        reason_text = "KillSwitch state is active."
+    return {
+        "status": status,
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "state_file": str(state.get("state_file") or _ops_unix_path(state_file)),
+        "exists": bool(state_file.exists()),
+        "generated_at": str(state.get("generated_at") or ""),
+        "active": active,
+        "mode": str(state.get("mode") or ""),
+        "approval_ticket": str(state.get("approval_ticket") or ""),
+        "requested_by": str(state.get("requested_by") or ""),
+        "commands_count": _ops_safe_int(state.get("commands_count"), default=0),
+    }
+
+
+def _ops_build_budget_guard_summary(repo_root: Path) -> Dict[str, Any]:
+    state_file = repo_root / _OPS_BUDGET_GUARD_STATE_RELATIVE_PATH
+    try:
+        from core.security import BudgetGuardController
+
+        state = BudgetGuardController(state_file=state_file).read_state(
+            stale_warning_seconds=float(_OPS_BUDGET_GUARD_STALE_WARNING_SECONDS),
+            stale_critical_seconds=float(_OPS_BUDGET_GUARD_STALE_CRITICAL_SECONDS),
+        )
+    except Exception as exc:
+        state = {
+            "status": "critical",
+            "reason_code": "BUDGET_GUARD_STATE_READ_FAILED",
+            "reason_text": f"budget guard state read failed: {exc}",
+            "state_file": _ops_unix_path(state_file),
+        }
+    return {
+        "status": _ops_status_to_severity(str(state.get("status") or "unknown")),
+        "reason_code": str(state.get("reason_code") or ""),
+        "reason_text": str(state.get("reason_text") or ""),
+        "state_file": str(state.get("state_file") or _ops_unix_path(state_file)),
+        "exists": bool(state_file.exists()),
+        "generated_at": str(state.get("generated_at") or ""),
+        "heartbeat_age_seconds": state.get("heartbeat_age_seconds"),
+        "stale_warning_seconds": float(
+            state.get("stale_warning_seconds") or _OPS_BUDGET_GUARD_STALE_WARNING_SECONDS
+        ),
+        "stale_critical_seconds": float(
+            state.get("stale_critical_seconds") or _OPS_BUDGET_GUARD_STALE_CRITICAL_SECONDS
+        ),
+        "action": str(state.get("action") or ""),
+        "task_id": str(state.get("task_id") or ""),
+        "tool_name": str(state.get("tool_name") or ""),
+        "details": state.get("details") if isinstance(state.get("details"), dict) else {},
     }
 
 
@@ -3148,6 +3271,12 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     brainstem_status = _ops_status_to_severity(str(brainstem_control_plane.get("status") or "unknown"))
     watchdog_daemon = _ops_build_watchdog_daemon_summary(repo_root)
     watchdog_daemon_status = _ops_status_to_severity(str(watchdog_daemon.get("status") or "unknown"))
+    process_guard = _ops_build_process_guard_summary(repo_root)
+    process_guard_status = _ops_status_to_severity(str(process_guard.get("status") or "unknown"))
+    killswitch_guard = _ops_build_killswitch_guard_summary(repo_root)
+    killswitch_guard_status = _ops_status_to_severity(str(killswitch_guard.get("status") or "unknown"))
+    budget_guard = _ops_build_budget_guard_summary(repo_root)
+    budget_guard_status = _ops_status_to_severity(str(budget_guard.get("status") or "unknown"))
     immutable_dna = _ops_build_immutable_dna_summary()
     immutable_dna_status = _ops_status_to_severity(str(immutable_dna.get("status") or "unknown"))
     audit_ledger = _ops_build_audit_ledger_summary(repo_root)
@@ -3160,6 +3289,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             snapshot_overall_status,
             brainstem_status,
             watchdog_daemon_status,
+            process_guard_status,
+            killswitch_guard_status,
+            budget_guard_status,
             immutable_dna_status,
             audit_ledger_status,
             execution_bridge_governance_status,
@@ -3190,6 +3322,12 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         source_reports.append(str(brainstem_control_plane.get("heartbeat_file") or ""))
     if bool(watchdog_daemon.get("exists")):
         source_reports.append(str(watchdog_daemon.get("state_file") or ""))
+    if bool(process_guard.get("exists")):
+        source_reports.append(str(process_guard.get("state_file") or ""))
+    if bool(killswitch_guard.get("exists")):
+        source_reports.append(str(killswitch_guard.get("state_file") or ""))
+    if bool(budget_guard.get("exists")):
+        source_reports.append(str(budget_guard.get("state_file") or ""))
     if str(immutable_dna.get("manifest_path") or "").strip():
         source_reports.append(str(immutable_dna.get("manifest_path") or ""))
     if str(immutable_dna.get("audit_file") or "").strip():
@@ -3204,6 +3342,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "route_quality": _ops_build_route_quality_summary(metrics, trend=route_quality_trend),
             "brainstem_control_plane_status": brainstem_status,
             "watchdog_daemon_status": watchdog_daemon_status,
+            "process_guard_status": process_guard_status,
+            "killswitch_guard_status": killswitch_guard_status,
+            "budget_guard_status": budget_guard_status,
             "immutable_dna_status": immutable_dna_status,
             "audit_ledger_status": audit_ledger_status,
             "execution_bridge_governance_status": execution_bridge_governance_status,
@@ -3243,6 +3384,29 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
                 "stale_warning_seconds": watchdog_daemon.get("stale_warning_seconds"),
                 "stale_critical_seconds": watchdog_daemon.get("stale_critical_seconds"),
                 "reason_code": watchdog_daemon.get("reason_code"),
+            },
+            "process_guard_orphan_jobs": {
+                "status": process_guard_status,
+                "value": process_guard.get("orphan_jobs"),
+                "running_jobs": process_guard.get("running_jobs"),
+                "stale_jobs": process_guard.get("stale_jobs"),
+                "orphan_reaped_count": process_guard.get("orphan_reaped_count"),
+                "reason_code": process_guard.get("reason_code"),
+            },
+            "killswitch_guard": {
+                "status": killswitch_guard_status,
+                "active": killswitch_guard.get("active"),
+                "mode": killswitch_guard.get("mode"),
+                "commands_count": killswitch_guard.get("commands_count"),
+                "reason_code": killswitch_guard.get("reason_code"),
+            },
+            "budget_guard": {
+                "status": budget_guard_status,
+                "value": budget_guard.get("heartbeat_age_seconds"),
+                "action": budget_guard.get("action"),
+                "task_id": budget_guard.get("task_id"),
+                "tool_name": budget_guard.get("tool_name"),
+                "reason_code": budget_guard.get("reason_code"),
             },
             "immutable_dna": {
                 "status": immutable_dna_status,
@@ -3286,6 +3450,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         "sources": sources,
         "brainstem_control_plane": brainstem_control_plane,
         "watchdog_daemon": watchdog_daemon,
+        "process_guard": process_guard,
+        "killswitch_guard": killswitch_guard,
+        "budget_guard": budget_guard,
         "immutable_dna": immutable_dna,
         "audit_ledger": audit_ledger,
         "execution_bridge_governance": execution_bridge_governance,
@@ -3302,6 +3469,15 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     elif watchdog_daemon_status == "critical":
         reason_code = "WATCHDOG_DAEMON_CRITICAL"
         reason_text = str(watchdog_daemon.get("reason_text") or "Watchdog daemon reports critical state.")
+    elif process_guard_status == "critical":
+        reason_code = "PROCESS_GUARD_CRITICAL"
+        reason_text = str(process_guard.get("reason_text") or "Process guard reports zombie/orphan process risk.")
+    elif killswitch_guard_status == "critical":
+        reason_code = "KILLSWITCH_GUARD_CRITICAL"
+        reason_text = str(killswitch_guard.get("reason_text") or "KillSwitch guard is active.")
+    elif budget_guard_status == "critical":
+        reason_code = "BUDGET_GUARD_CRITICAL"
+        reason_text = str(budget_guard.get("reason_text") or "Budget guard reports critical stop signal.")
     elif immutable_dna_status == "critical":
         reason_code = "IMMUTABLE_DNA_CRITICAL"
         reason_text = str(immutable_dna.get("reason_text") or "Immutable DNA preflight failed.")
@@ -3323,6 +3499,15 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     elif watchdog_daemon_status == "warning":
         reason_code = "WATCHDOG_DAEMON_WARNING"
         reason_text = str(watchdog_daemon.get("reason_text") or "Watchdog daemon requires attention.")
+    elif process_guard_status == "warning":
+        reason_code = "PROCESS_GUARD_WARNING"
+        reason_text = str(process_guard.get("reason_text") or "Process guard requires attention.")
+    elif killswitch_guard_status == "warning":
+        reason_code = "KILLSWITCH_GUARD_WARNING"
+        reason_text = str(killswitch_guard.get("reason_text") or "KillSwitch guard requires attention.")
+    elif budget_guard_status == "warning":
+        reason_code = "BUDGET_GUARD_WARNING"
+        reason_text = str(budget_guard.get("reason_text") or "Budget guard requires attention.")
     elif immutable_dna_status == "warning":
         reason_code = "IMMUTABLE_DNA_WARNING"
         reason_text = str(immutable_dna.get("reason_text") or "Immutable DNA preflight requires attention.")
@@ -4074,6 +4259,9 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
         limit=max(200, int(limit) * 10),
         issues_limit=max(10, int(limit)),
     )
+    process_guard = _ops_build_process_guard_summary(repo_root)
+    killswitch_guard = _ops_build_killswitch_guard_summary(repo_root)
+    budget_guard = _ops_build_budget_guard_summary(repo_root)
     agentic_loop_completion = _ops_build_agentic_loop_completion_summary(
         events_file=events_file,
         limit=max(200, int(limit) * 10),
@@ -4118,6 +4306,9 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             "route_quality": _ops_build_route_quality_summary(snapshot_metrics, trend=route_quality_trend),
             "execution_bridge_governance": execution_bridge_governance,
             "agentic_loop_completion": agentic_loop_completion,
+            "process_guard": process_guard,
+            "killswitch_guard": killswitch_guard,
+            "budget_guard": budget_guard,
         }
     except Exception as exc:
         logger.warning(f"构建 incidents prompt safety 摘要失败（降级为空）: {exc}")
@@ -4125,6 +4316,12 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
         prompt_safety_summary["execution_bridge_governance"] = execution_bridge_governance
     if "agentic_loop_completion" not in prompt_safety_summary:
         prompt_safety_summary["agentic_loop_completion"] = agentic_loop_completion
+    if "process_guard" not in prompt_safety_summary:
+        prompt_safety_summary["process_guard"] = process_guard
+    if "killswitch_guard" not in prompt_safety_summary:
+        prompt_safety_summary["killswitch_guard"] = killswitch_guard
+    if "budget_guard" not in prompt_safety_summary:
+        prompt_safety_summary["budget_guard"] = budget_guard
 
     incidents: List[Dict[str, Any]] = []
     event_counters: Dict[str, int] = {key: 0 for key in sorted(_OPS_INCIDENT_EVENT_SEVERITY.keys())}
@@ -4237,6 +4434,74 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
                     "action": watchdog_summary.get("action"),
                 },
                 "report_path": str(watchdog_summary.get("state_file") or ""),
+                "gate_level": "hard",
+            }
+        )
+
+    process_guard_status = str(process_guard.get("status") or "")
+    if process_guard_status in {"warning", "critical"}:
+        process_event_type = "ProcessGuardOrphanReaped"
+        reason_code = str(process_guard.get("reason_code") or "")
+        if process_guard_status == "critical":
+            process_event_type = "ProcessGuardZombieDetected"
+        event_counters[process_event_type] = int(event_counters.get(process_event_type, 0)) + 1
+        incidents.append(
+            {
+                "source": "report",
+                "severity": process_guard_status,
+                "timestamp": str(process_guard.get("generated_at") or ""),
+                "event_type": process_event_type,
+                "summary": str(process_guard.get("reason_text") or "Process guard detected runtime process risk."),
+                "payload_excerpt": {
+                    "reason_code": reason_code,
+                    "running_jobs": process_guard.get("running_jobs"),
+                    "orphan_jobs": process_guard.get("orphan_jobs"),
+                    "stale_jobs": process_guard.get("stale_jobs"),
+                    "orphan_reaped_count": process_guard.get("orphan_reaped_count"),
+                },
+                "report_path": str(process_guard.get("state_file") or ""),
+                "gate_level": "hard",
+            }
+        )
+
+    killswitch_status = str(killswitch_guard.get("status") or "")
+    if killswitch_status in {"warning", "critical"} and bool(killswitch_guard.get("active")):
+        event_counters["KillSwitchEngaged"] = int(event_counters.get("KillSwitchEngaged", 0)) + 1
+        incidents.append(
+            {
+                "source": "report",
+                "severity": "critical" if killswitch_status == "critical" else "warning",
+                "timestamp": str(killswitch_guard.get("generated_at") or ""),
+                "event_type": "KillSwitchEngaged",
+                "summary": str(killswitch_guard.get("reason_text") or "KillSwitch guard is active."),
+                "payload_excerpt": {
+                    "reason_code": str(killswitch_guard.get("reason_code") or ""),
+                    "mode": str(killswitch_guard.get("mode") or ""),
+                    "approval_ticket": str(killswitch_guard.get("approval_ticket") or ""),
+                    "requested_by": str(killswitch_guard.get("requested_by") or ""),
+                },
+                "report_path": str(killswitch_guard.get("state_file") or ""),
+                "gate_level": "hard",
+            }
+        )
+
+    budget_guard_status = str(budget_guard.get("status") or "")
+    if budget_guard_status in {"warning", "critical"}:
+        event_counters["BudgetGuardTriggered"] = int(event_counters.get("BudgetGuardTriggered", 0)) + 1
+        incidents.append(
+            {
+                "source": "report",
+                "severity": budget_guard_status,
+                "timestamp": str(budget_guard.get("generated_at") or ""),
+                "event_type": "BudgetGuardTriggered",
+                "summary": str(budget_guard.get("reason_text") or "Budget guard threshold triggered."),
+                "payload_excerpt": {
+                    "reason_code": str(budget_guard.get("reason_code") or ""),
+                    "action": str(budget_guard.get("action") or ""),
+                    "task_id": str(budget_guard.get("task_id") or ""),
+                    "tool_name": str(budget_guard.get("tool_name") or ""),
+                },
+                "report_path": str(budget_guard.get("state_file") or ""),
                 "gate_level": "hard",
             }
         )

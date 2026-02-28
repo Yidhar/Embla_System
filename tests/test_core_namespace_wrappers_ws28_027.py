@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from core.event_bus import EventStore, TopicEventBus
 from core.mcp import MCPCallInput, MCPCallOutput
-from core.security import ApprovalGate, AuditLedger
-from core.supervisor import BrainstemSupervisor, WatchdogDaemon
+from core.security import ApprovalGate, AuditLedger, BudgetGuardController, KillSwitchController, PolicyFirewall
+from core.supervisor import BrainstemSupervisor, ProcessGuardDaemon, WatchdogDaemon
 
 
 def test_core_namespace_exports_resolve() -> None:
@@ -11,8 +11,12 @@ def test_core_namespace_exports_resolve() -> None:
     assert TopicEventBus.__name__ == "TopicEventBus"
     assert BrainstemSupervisor.__name__ == "BrainstemSupervisor"
     assert WatchdogDaemon.__name__ == "WatchdogDaemon"
+    assert ProcessGuardDaemon.__name__ == "ProcessGuardDaemon"
     assert ApprovalGate.__name__ == "ApprovalGate"
     assert AuditLedger.__name__ == "AuditLedger"
+    assert PolicyFirewall.__name__ == "PolicyFirewall"
+    assert BudgetGuardController.__name__ == "BudgetGuardController"
+    assert KillSwitchController.__name__ == "KillSwitchController"
 
 
 def test_core_mcp_contract_models_construct() -> None:

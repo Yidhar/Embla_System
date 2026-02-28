@@ -585,6 +585,136 @@ def test_ops_incidents_latest_payload_includes_agentic_loop_completion_not_submi
     assert item["payload_excerpt"]["session_id"] == "sess-loop-001"
 
 
+def test_ops_runtime_posture_payload_includes_control_plane_guard_summaries(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    _write_json(
+        repo_root / "scratch" / "runtime" / "process_guard_state_ws28_028.json",
+        {
+            "generated_at": "2026-03-01T03:20:00+00:00",
+            "status": "warning",
+            "reason_code": "PROCESS_GUARD_ORPHAN_REAPED",
+            "reason_text": "orphan jobs reaped",
+            "running_jobs": 2,
+            "orphan_jobs": 1,
+            "stale_jobs": 0,
+            "orphan_reaped_count": 1,
+        },
+    )
+    _write_json(
+        repo_root / "scratch" / "runtime" / "killswitch_guard_state_ws28_028.json",
+        {
+            "generated_at": "2026-03-01T03:20:01+00:00",
+            "status": "critical",
+            "reason_code": "KILLSWITCH_ENGAGED",
+            "reason_text": "KillSwitch is active",
+            "active": True,
+            "mode": "freeze_with_oob_allowlist",
+            "commands_count": 8,
+        },
+    )
+    _write_json(
+        repo_root / "scratch" / "runtime" / "budget_guard_state_ws28_028.json",
+        {
+            "generated_at": "2026-03-01T03:20:02+00:00",
+            "status": "warning",
+            "reason_code": "DAILY_COST_LIMIT_EXCEEDED",
+            "reason_text": "budget guard triggered",
+            "action": "freeze_noncritical_budget",
+            "task_id": "task-bgt-1",
+            "tool_name": "run_cmd",
+            "details": {"daily_cost": 10.0},
+        },
+    )
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "ok", "metric_status": {}},
+            "metrics": {},
+            "threshold_profile": {},
+            "sources": {"events_file": "logs/autonomous/events.jsonl"},
+        }
+
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+
+    payload = api_server._ops_build_runtime_posture_payload(events_limit=200)
+    assert payload["status"] == "success"
+    assert payload["severity"] == "critical"
+    assert payload["reason_code"] == "KILLSWITCH_GUARD_CRITICAL"
+
+    summary = payload["data"]["summary"]
+    assert summary["process_guard_status"] == "warning"
+    assert summary["killswitch_guard_status"] == "critical"
+    assert summary["budget_guard_status"] == "warning"
+
+    assert payload["data"]["process_guard"]["orphan_reaped_count"] == 1
+    assert payload["data"]["killswitch_guard"]["active"] is True
+    assert payload["data"]["budget_guard"]["action"] == "freeze_noncritical_budget"
+
+
+def test_ops_incidents_latest_payload_includes_control_plane_guard_incidents(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    _write_json(
+        repo_root / "scratch" / "runtime" / "process_guard_state_ws28_028.json",
+        {
+            "generated_at": "2026-03-01T03:30:00+00:00",
+            "status": "critical",
+            "reason_code": "PROCESS_GUARD_ORPHAN_RUNNING_JOBS",
+            "reason_text": "orphan jobs still running",
+            "running_jobs": 3,
+            "orphan_jobs": 2,
+            "stale_jobs": 0,
+            "orphan_reaped_count": 0,
+        },
+    )
+    _write_json(
+        repo_root / "scratch" / "runtime" / "killswitch_guard_state_ws28_028.json",
+        {
+            "generated_at": "2026-03-01T03:30:01+00:00",
+            "status": "critical",
+            "reason_code": "KILLSWITCH_ENGAGED",
+            "reason_text": "KillSwitch is active",
+            "active": True,
+            "mode": "freeze_with_oob_allowlist",
+            "commands_count": 8,
+        },
+    )
+    _write_json(
+        repo_root / "scratch" / "runtime" / "budget_guard_state_ws28_028.json",
+        {
+            "generated_at": "2026-03-01T03:30:02+00:00",
+            "status": "critical",
+            "reason_code": "TASK_COST_LIMIT_EXCEEDED",
+            "reason_text": "budget guard triggered",
+            "action": "terminate_task_budget_exceeded",
+            "task_id": "task-bgt-2",
+            "tool_name": "python_repl",
+            "details": {"task_cost": 5.6},
+        },
+    )
+
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(api_server, "_ops_collect_required_reports", lambda _repo_root: [])
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", lambda **_kwargs: {"metrics": {}})
+
+    payload = api_server._ops_build_incidents_latest_payload(limit=30)
+    assert payload["status"] == "success"
+    assert payload["severity"] == "critical"
+    counters = payload["data"]["event_counters"]
+    assert counters["ProcessGuardZombieDetected"] == 1
+    assert counters["KillSwitchEngaged"] == 1
+    assert counters["BudgetGuardTriggered"] == 1
+
+    incidents = payload["data"]["incidents"]
+    assert any(str(item.get("event_type")) == "ProcessGuardZombieDetected" for item in incidents)
+    assert any(str(item.get("event_type")) == "KillSwitchEngaged" for item in incidents)
+    assert any(str(item.get("event_type")) == "BudgetGuardTriggered" for item in incidents)
+
+
 def test_ops_incidents_latest_payload_includes_audit_ledger_chain_invalid(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
     ledger_path = repo_root / "scratch" / "runtime" / "audit_ledger.jsonl"

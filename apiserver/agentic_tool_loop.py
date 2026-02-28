@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
 
+from core.security.budget_guard import BudgetGuardController
 from system.config import get_config
 from system.coding_intent import contains_direct_coding_signal, extract_latest_user_message
 from system.episodic_memory import archive_tool_results_for_session, build_reinjection_context
@@ -133,6 +134,14 @@ _TOOL_CONTRACT_MODE_ALIASES = {
 }
 _TOOL_RESULT_NONE_MARKERS = {"", "(none)", "none", "null", "nil", "n/a", "undefined"}
 _TOOL_RESULT_TAG_LINE_RE = re.compile(r"^\[([A-Za-z0-9_]+)\](?:\s*(.*))?$")
+_BUDGET_GUARD_CONTROLLER: Optional[BudgetGuardController] = None
+
+
+def _get_budget_guard_controller() -> BudgetGuardController:
+    global _BUDGET_GUARD_CONTROLLER
+    if _BUDGET_GUARD_CONTROLLER is None:
+        _BUDGET_GUARD_CONTROLLER = BudgetGuardController()
+    return _BUDGET_GUARD_CONTROLLER
 
 
 def _clamp_int(value: Any, default: int, min_value: int, max_value: int) -> int:
@@ -3732,6 +3741,11 @@ async def run_agentic_loop(
                     logger.warning("[AgenticLoop] watchdog sample/evaluate skipped in round %s: %s", round_num, exc)
 
         for signal in watchdog_signals:
+            if isinstance(signal, dict) and "reason" in signal:
+                try:
+                    _get_budget_guard_controller().record_action_payload(signal)
+                except Exception as exc:
+                    logger.warning("[AgenticLoop] budget guard state update skipped in round %s: %s", round_num, exc)
             yield _format_sse_event(
                 "guardrail",
                 _build_watchdog_guardrail_payload(

@@ -17,8 +17,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.security.killswitch import KillSwitchController
 from system.artifact_store import get_artifact_store
-from system.killswitch_guard import build_oob_killswitch_plan
 from system.native_executor import CommandResult, NativeExecutor, NativeSecurityError
 from system.policy_firewall import get_policy_firewall
 from system.sleep_watch import wait_for_log_pattern
@@ -491,6 +491,9 @@ class NativeToolExecutor:
         self.executor = NativeExecutor()
         self.project_root = self.executor.base_dir
         self.policy_firewall = get_policy_firewall()
+        self.killswitch_controller = KillSwitchController(
+            state_file=self.project_root / "scratch" / "runtime" / "killswitch_guard_state_ws28_028.json"
+        )
         self.workspace_txn = WorkspaceTransactionManager(project_root=self.project_root)
         self._doc_roots = [
             "doc",
@@ -1266,7 +1269,15 @@ class NativeToolExecutor:
             allowlist = []
 
         dns_allow = bool(call.get("dns_allow", True))
-        plan = build_oob_killswitch_plan(oob_allowlist=allowlist, dns_allow=dns_allow)
+        requested_by = str(call.get("requested_by") or "native_tool").strip() or "native_tool"
+        approval_ticket = str(call.get("approval_ticket") or "").strip()
+        plan = self.killswitch_controller.create_freeze_plan(
+            oob_allowlist=allowlist,
+            dns_allow=dns_allow,
+            requested_by=requested_by,
+            approval_ticket=approval_ticket,
+            activate=(mode == "freeze"),
+        )
         lines = [
             f"[mode] {plan.mode}",
             f"[oob_allowlist] {', '.join(plan.oob_allowlist)}",
