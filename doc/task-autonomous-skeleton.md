@@ -1,5 +1,10 @@
 # Autonomous Skeleton Task Tracker
 
+> `DOC_LAYER: L3_ARCHIVE_IMPLEMENTATION`  
+> `作用：历史实施记录（自治骨架早期阶段）`  
+> `约束：不作为当前执行主链依据`  
+> `当前口径：doc/01-module-overview.md + doc/05-dev-startup-and-index.md + doc/task/25-subagent-development-fabric-status-matrix.md`
+
 > 历史归档说明（M0-M1）：
 > 本文档记录的是自治骨架早期实现过程，包含 CLI/Codex 路由等阶段性方案，不作为当前执行主链依据。
 > 当前权威口径请以以下文档为准：

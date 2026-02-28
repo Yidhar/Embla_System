@@ -1,5 +1,10 @@
 ﻿# NagaAgent 多Agent自治架构设计文档（修订版）
 
+> `DOC_LAYER: L3_ARCHIVE_PHASE0`  
+> `作用：Phase 0 历史方案回溯`  
+> `约束：不作为当前主链设计与运行基线`  
+> `当前口径：doc/01-module-overview.md + doc/05-dev-startup-and-index.md + doc/task/25-subagent-development-fabric-status-matrix.md`
+
 ---
 **文档类型**：Phase 0 历史实施记录（Historical Archive）
 **实施状态**：⚪ 历史归档（仅用于回溯 Phase 0 设计与实现背景）

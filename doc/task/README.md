@@ -1,11 +1,22 @@
 ﻿# Task 拆解总览（迁移 + 增量开发）
 
 文档状态：执行规划（基于当前 As-Is 与目标态文档）  
-最后更新：2026-02-25
+最后更新：2026-02-28
 
 ## 1. 目标
 
 在不打断当前可运行链路（Phase 0）的前提下，按可落地增量方式推进到目标态能力，并把安全盲区治理（R1-R16）纳入主线任务。
+
+## 1.1 分层口径（强制）
+
+- `L2-RUNBOOK`：执行协议、任务看板、发布门禁与运维手册。
+- `L3-ARCHIVE`：历史实施记录、阶段快照与回溯证据。
+
+执行规则：
+
+1. 日常开发默认使用 `L2` 文档。
+2. `doc/task/implementation/*.md` 统一归类为 `L3-ARCHIVE`，只用于证据追溯。
+3. `L3` 文档中的状态、路径、端口与命令，不直接作为当前主链执行依据。
 
 ## 2. 使用方式
 
@@ -69,7 +80,8 @@
 23. `doc/task/09-execution-board.csv`
     - 可直接执行/流转的统一任务看板数据（`M0-M12`）。
 24. `doc/task/implementation/`
-    - 各任务波次实施记录与验证证据归档（按任务 ID 命名）。
+    - `L3-ARCHIVE`：各任务波次实施记录与验证证据归档（按任务 ID 命名）。
+    - 分层说明：`doc/task/implementation/README.md`。
 25. `doc/task/runbooks/INDEX.md`
     - runbook 主索引（active）。
     - archived 索引：`doc/task/runbooks/ARCHIVED.md`。
@@ -122,7 +134,7 @@
 49. `doc/task/runbooks/subagent_runtime_native_bridge_sequence_and_gate_runbook.md`
     - Sub-Agent 内生执行桥时序图与 Gate 决策图（排障与 onboarding 入口，覆盖 `SubTaskExecutionCompleted` 主事件语义）。
 
-## 4. 任务状态约定
+## 4. 任务状态约定（L2）
 
 - `todo`：未开始
 - `in_progress`：执行中
@@ -135,6 +147,10 @@
 1. `done` 表示在对应阶段门禁下已闭环，不等于“在当前新环境已复验”。
 2. 新机器迁移、依赖栈变化或验收标准抬升后，允许把历史 `done` 回调为 `review`，待复验通过后再恢复 `done`。
 3. `99-task-backlog.csv` 由 `scripts/sync_task_backlog_status.py` 从执行板同步状态；人工修正状态时需先改执行板，再同步到 backlog。
+
+历史补充（L3）：
+1. `doc/task/implementation/*.md` 中出现的 “已完成/done” 为当时阶段结论，不自动等于当前环境复验结论。
+2. 需按当前门禁重跑回归后，才能把历史结论提升为当前放行证据。
 
 ## 5. 约束
 

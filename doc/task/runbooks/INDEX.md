@@ -1,7 +1,15 @@
 # Runbook Active Index
 
 文档状态：`active_index`  
-最后更新：`2026-02-27`
+最后更新：`2026-02-28`
+
+文档层级：`L2-RUNBOOK`
+
+## 0. 使用约束
+
+1. 本索引中的 Active 条目属于当前执行口径。
+2. 历史 runbook 仅在排障/追溯时按需查阅，不作为默认发布阻断项。
+3. 若 Active 与 Archived 口径冲突，以 Active 条目为准。
 
 ## 1. Active Runbooks
 

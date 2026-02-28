@@ -1,7 +1,9 @@
 # Runbook Archived Index
 
 文档状态：`archived_index`  
-最后更新：`2026-02-27`
+最后更新：`2026-02-28`
+
+文档层级：`L3-ARCHIVE`
 
 ## Archived Entries
 

@@ -1,3 +1,8 @@
+> `DOC_LAYER: L3_ARCHIVE_IMPLEMENTATION`  
+> `作用：历史实施证据归档（Implementation Record）`  
+> `约束：不作为当前主链设计、接口契约或运行基线`  
+> `当前口径：doc/01-module-overview.md + doc/05-dev-startup-and-index.md + doc/task/25-subagent-development-fabric-status-matrix.md`
+
 # NGA-WS13-006 实施记录（跨文件事务回归与联调用例）
 
 ## 任务信息

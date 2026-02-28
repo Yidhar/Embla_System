@@ -1,7 +1,7 @@
 ﻿# 08 前后端分离方案（Embla_system 入口对齐版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
-最后更新：2026-02-22
+最后更新：2026-02-28
 
 ## 1. 现状结论（As-Is）
 
@@ -9,16 +9,16 @@
 
 ### 1.1 已落地能力
 
-1. 前端 API 基址支持 `VITE_API_BASE_URL`，默认回退 `localhost`。
+1. 前端 API 基址支持 `NEXT_PUBLIC_API_BASE`，默认回退同源路径。
 2. 聊天主链路通过 `POST /chat/stream` 消费结构化 SSE 事件。
-3. `MessageView.vue` 已按 `tool_calls/tool_results/tool_stage/round_*` 渲染。
-4. TTS 已通过 BFF 路由 `/tts/speech` 调用，不再直连独立端口。
+3. `Embla_core` 调试控制台通过 `POST /v1/chat/stream` 消费 SSE（`content/reasoning/route_decision`）。
+4. 运维看板已通过 BFF 聚合接口消费运行态数据（`/v1/ops/*`）。
 
 ### 1.2 仍在过渡的点
 
-1. Electron 仍负责“本地一体化启动后端”逻辑（开发体验有益，但部署边界耦合仍在）。
-2. `apiserver` 的 MCP 状态接口存在“占位语义”与真实 MCP 服务并行。
-3. `agentserver` 仍存在兼容 API，但已不属于主执行链。
+1. 前端与后端仍同仓库协同开发，发布边界尚未完全独立。
+2. `apiserver` 的 MCP 状态接口为“运行态快照语义”，仍与底层 `mcpserver` 状态并行存在。
+3. 历史 `frontend/voice/agentserver` 目录已移除，但旧文档仍有残留引用。
 
 ## 2. Embla_system 对齐目标
 
@@ -38,7 +38,7 @@
 - 会话：`/sessions/*`
 - 配置：`/config/*` 或对应系统配置接口
 - 工具集成：`/mcp/services`、`/mcp/import`（经 BFF 暴露）
-- 音频：`/tts/speech`
+- 运行态：`/v1/ops/*`
 
 ### 3.2 内部边界
 
@@ -47,7 +47,6 @@ BFF 内部编排：
 - 工具调用：`agentic_tool_loop -> native/mcp`
 - 记忆检索：`summer_memory`
 - 自治执行：`autonomous`
-- 兼容查询：`agentserver`（非主路径）
 
 ## 4. 分阶段实施路径
 
@@ -61,7 +60,7 @@ BFF 内部编排：
 
 1. 前端调用只走 BFF，不直连内部服务端口。
 2. 清理前端遗留的 Agent 直连依赖（如仅剩配置透传的冗余链路）。
-3. 收敛 MCP 状态接口语义，避免“离线占位”和“真实服务”混淆。
+3. 收敛 MCP 状态接口语义，避免“运行快照”与“底层服务状态”混淆。
 
 ### Phase 2：事件总线化
 
@@ -94,7 +93,7 @@ BFF 内部编排：
 1. 前端是否仅依赖 `API_BASE_URL`。
 2. 是否仍存在业务直连 `localhost:xxxx` 子服务。
 3. SSE 事件是否可被独立解析并稳定渲染。
-4. MCP/Agent 状态接口是否语义一致。
+4. MCP/OPS 状态接口是否语义一致。
 
 ## 7. 并发落地黄金法则（新增）
 

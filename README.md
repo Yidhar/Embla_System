@@ -2,7 +2,7 @@
 
 # NagaAgent
 
-**三服务协同的 AI 桌面助手 — 流式工具调用 · 知识图谱记忆 · 运维看板**
+**双服务主链的 AI 运行平台 — 流式工具调用 · 知识图谱记忆 · 运维看板**
 
 [简体中文](README.md)  | [English](README_en.md)
 
@@ -23,15 +23,15 @@
 
 ## 概述
 
-NagaAgent 由三个独立微服务组成：
+当前运行主链由两个后端服务组成（另有可选调试服务）：
 
 | 服务 | 端口 | 职责 |
 |------|------|------|
-| **API Server** | 8000 | 对话、流式工具调用、文档上传、认证代理、记忆 API、配置管理 |
-| **Agent Server** | 8001 | 后台意图分析、任务调度与压缩记忆 |
+| **API Server** | 8000 | 对话、流式工具调用、文档上传、系统配置、运行态聚合 |
 | **MCP Server** | 8003 | MCP 工具注册/发现/并行调度 |
+| **LLM Service（可选调试）** | 8001 | `apiserver.llm_service` 独立调试入口（不在 `main.py` 默认启动链） |
 
-`main.py` 统一编排启动，所有服务以 daemon thread 运行。当前前端主链为 `Embla_core`（Next.js 运维面板）。
+`main.py` 默认编排 `API + MCP`，并按配置启停 `autonomous` 后台循环。当前前端主链为 `Embla_core`（Next.js 运维面板）。
 
 ---
 
@@ -115,11 +115,11 @@ GRAG（Graph-RAG）从对话中自动提取五元组 `(主体, 主体类型, 谓
 2. Cypher 查询：`MATCH (e1:Entity)-[r]->(e2:Entity) WHERE e1.name CONTAINS '{kw}' ... LIMIT 5`
 3. 格式化为 `主体(类型) —[谓词]→ 客体(类型)` 注入 LLM 上下文
 
-**远程记忆**（5.0.0 新增）：
+**记忆访问现状**：
 
-- `summer_memory/memory_client.py` 对接 NagaMemory 云端服务
-- 登录用户自动使用云端存储，退出登录或离线时自动回退本地 GRAG
-- API Server 新增 `/api/memory/*` 代理端点，前端通过 API Server 中转
+- `summer_memory/memory_client.py` 当前为 local-only shim（`get_remote_memory_client()` 恒为 `None`）
+- 对话链路默认走本地 GRAG 回退
+- API Server 暴露 `memory/stats`、`memory/quintuples`、`memory/quintuples/search` 等本地记忆查询端点
 
 源码：[`summer_memory/`](summer_memory/)
 
@@ -183,7 +183,7 @@ mcpserver/
 ### Autonomous（自治系统主链）
 
 **现状**：
-`agentserver/` 旧管线已退役，任务执行与治理统一收敛到 `apiserver` + `autonomous` + `mcpserver` 主链。
+Legacy `agentserver` 执行管线已从仓库移除，任务执行与治理统一收敛到 `apiserver` + `autonomous` + `mcpserver` 主链。
 
 **Autonomous 自治模块**（位于 `autonomous/` 目录）：
 系统采用强一致、全自动化的自研 SDLC (Software Development Life Cycle) 架构，面向深度全栈工程执行：
@@ -308,9 +308,9 @@ pip install -r requirements.txt
 ### 启动
 
 ```bash
-python main.py             # 完整启动（API + MCP + 自治后台 + GUI）
+python main.py             # 完整启动（API + MCP + 可选自治后台）
 uv run main.py             # 使用 uv
-python main.py --headless  # 无 GUI 模式（配合 Web/远程前端）
+python main.py --headless  # 无头模式（跳过交互提示，适配 Web/远程前端）
 ```
 
 所有服务由 `main.py` 统一编排，也可单独启动：
@@ -370,8 +370,8 @@ npm run build  # Next.js 生产构建
 | 服务 | 端口 | 说明 |
 |------|------|------|
 | API Server | 8000 | 主接口：对话、配置、认证、Skill 市场 |
-| Agent Server | 8001 | 意图分析、任务调度 |
 | MCP Server | 8003 | MCP 工具注册与调度 |
+| LLM Service（可选调试） | 8001 | `apiserver.llm_service` 独立调试端口（默认不由 `main.py` 启动） |
 | Neo4j | 7687 | 知识图谱（可选） |
 
 ---
@@ -390,7 +390,7 @@ uv sync
 | 问题 | 解决方案 |
 |------|----------|
 | Python 版本不兼容 | 使用 Python 3.11；或使用 uv（自动管理 Python 版本） |
-| 端口被占用 | 检查 8000、8001、8003 是否可用 |
+| 端口被占用 | 检查 8000、8003 是否可用（若单独启 `llm_service` 再检查 8001） |
 | Neo4j 连接失败 | 确认 Neo4j 服务已启动，检查 config.json 中的连接参数 |
 | 启动卡在进度条 | 检查 API Key 是否配置正确；3 秒后出现重启提示；启动器会自动轮询后端健康状态 |
 
@@ -423,4 +423,4 @@ python scripts/build-win.py  # 构建 Windows 一键运行整合包，输出到 
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=RTGS2017/NagaAgent&type=date&legend=top-left)](https://www.star-history.com/#RTGS2017/NagaAgent&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=Xxiii8322766509/NagaAgent&type=date&legend=top-left)](https://www.star-history.com/#Xxiii8322766509/NagaAgent&type=date&legend=top-left)

@@ -2,7 +2,7 @@
 
 # NagaAgent
 
-**Three-Service AI Runtime Platform — Streaming Tool Calls · Knowledge Graph Memory · Ops Dashboard**
+**Dual-Service Runtime Platform — Streaming Tool Calls · Knowledge Graph Memory · Ops Dashboard**
 
 [简体中文](README.md) | [English](README_en.md)
 
@@ -23,15 +23,15 @@
 
 ## Overview
 
-NagaAgent consists of three independent microservices:
+The active runtime pipeline consists of two backend services (plus one optional debug service):
 
 | Service | Port | Responsibilities |
 |---------|------|-----------------|
-| **API Server** | 8000 | Chat, streaming tool calls, document upload, auth proxy, memory API, config management |
-| **Agent Server** | 8001 | Background intent analysis, task scheduling with compressed memory |
+| **API Server** | 8000 | Chat, streaming tool calls, document upload, system config, runtime aggregation |
 | **MCP Server** | 8003 | MCP tool registration / discovery / parallel dispatch |
+| **LLM Service (Optional Debug)** | 8001 | Standalone `apiserver.llm_service` entry for debug (not started by default in `main.py`) |
 
-`main.py` orchestrates all services as daemon threads. The active frontend is `Embla_core` (Next.js ops dashboard).
+`main.py` orchestrates `API + MCP` by default and conditionally starts the `autonomous` background loop. The active frontend is `Embla_core` (Next.js ops dashboard).
 
 ---
 
@@ -115,11 +115,11 @@ GRAG (Graph-RAG) automatically extracts quintuples `(subject, subject_type, pred
 2. Cypher query: `MATCH (e1:Entity)-[r]->(e2:Entity) WHERE e1.name CONTAINS '{kw}' ... LIMIT 5`
 3. Format as `subject(type) —[predicate]→ object(type)` and inject into LLM context
 
-**Remote memory** (new in 5.0.0):
+**Current memory access mode**:
 
-- `summer_memory/memory_client.py` interfaces with NagaMemory cloud service
-- Logged-in users automatically use cloud storage; falls back to local GRAG on logout or offline
-- API Server adds `/api/memory/*` proxy endpoints for frontend access
+- `summer_memory/memory_client.py` is currently a local-only shim (`get_remote_memory_client()` always returns `None`)
+- Chat flow falls back to local GRAG by default
+- API Server exposes local memory endpoints such as `memory/stats`, `memory/quintuples`, and `memory/quintuples/search`
 
 Source: [`summer_memory/`](summer_memory/)
 
@@ -184,7 +184,7 @@ The current repository no longer ships built-in TTS/ASR services.
 ### Autonomous (Primary Execution Path)
 
 **Current state**:
-The legacy `agentserver/` pipeline is retired. Runtime execution and governance are now unified on `apiserver` + `autonomous` + `mcpserver`.
+The legacy `agentserver` pipeline has been removed from this repository. Runtime execution and governance are unified on `apiserver` + `autonomous` + `mcpserver`.
 
 **Autonomous Module** (Located in `autonomous/`):
 The system uses a robust, highly-automated SDLC (Software Development Life Cycle) architecture tailored for complex software engineering:
@@ -310,9 +310,9 @@ Works with any OpenAI-compatible API (DeepSeek, Qwen, OpenAI, Ollama, etc.).
 ### Launch
 
 ```bash
-python main.py             # Full launch (API + MCP + autonomous backend + GUI)
+python main.py             # Full launch (API + MCP + optional autonomous backend)
 uv run main.py             # Using uv
-python main.py --headless  # Headless mode (for web/remote frontend)
+python main.py --headless  # Headless mode (skip interactive prompt; for web/remote frontend)
 ```
 
 All services are orchestrated by `main.py`. For development, each can be started independently:
@@ -372,8 +372,8 @@ Install Neo4j ([Docker](https://hub.docker.com/_/neo4j) or [Neo4j Desktop](https
 | Service | Port | Description |
 |---------|------|-------------|
 | API Server | 8000 | Main interface: chat, config, auth, Skill Market |
-| Agent Server | 8001 | Intent analysis, task scheduling |
 | MCP Server | 8003 | MCP tool registration & dispatch |
+| LLM Service (Optional Debug) | 8001 | Standalone `apiserver.llm_service` port (not launched by `main.py` by default) |
 | Neo4j | 7687 | Knowledge graph (optional) |
 
 ---
@@ -392,7 +392,7 @@ uv sync
 | Issue | Solution |
 |-------|----------|
 | Python version mismatch | Use Python 3.11, or use uv (manages Python versions automatically) |
-| Port in use | Check if ports 8000, 8001, 8003 are available |
+| Port in use | Check ports 8000 and 8003 first (check 8001 only when launching `llm_service` separately) |
 | Neo4j connection failed | Ensure Neo4j is running, verify config.json connection parameters |
 | Progress bar stuck | Check API key config; restart hint appears after 3s; the launcher auto-polls backend health |
 

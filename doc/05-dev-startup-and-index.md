@@ -1,7 +1,7 @@
 ﻿# 05 开发启动与目录索引（Embla_system 开发预备版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
-最后更新：2026-02-22
+最后更新：2026-02-28
 
 ## 1. 目标
 
@@ -16,7 +16,7 @@
 ### 2.1 后端（推荐）
 
 ```powershell
-cd E:\Programs\NagaAgent
+cd <repo-root>
 uv sync
 uv run main.py
 ```
@@ -25,31 +25,28 @@ uv run main.py
 
 - 启动 `apiserver`（默认 `8000`）
 - 启动 `mcpserver`（默认 `8003`）
-- 启动 `tts`（默认 `5048`）
 - 后台循环尝试启动 `autonomous`（仅当 `config.autonomous.enabled=true`）
-- `agentserver` 默认不自动启动
 
 ### 2.2 后端（前端调试常用）
 
 ```powershell
-cd E:\Programs\NagaAgent
+cd <repo-root>
 python main.py --headless
 ```
 
 ### 2.3 前端开发（主链：Embla_core）
 
 ```powershell
-cd E:\Programs\NagaAgent\Embla_core
+cd <repo-root>\Embla_core
 npm install
 npm run dev
 ```
 
-### 2.4 archived Electron 前端（历史兼容）
+### 2.4 可选：LLM 调试服务（非主链）
 
 ```powershell
-cd E:\Programs\NagaAgent\frontend
-npm install
-npm run dev
+cd <repo-root>
+python apiserver/start_server.py llm
 ```
 
 ## 3. 可选服务独立启动
@@ -60,13 +57,13 @@ npm run dev
 uvicorn apiserver.api_server:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-### 3.2 AgentServer（仅兼容场景）
+### 3.2 LLM Service（调试场景）
 
 ```powershell
-uvicorn agentserver.agent_server:app --host 127.0.0.1 --port 8001
+uvicorn apiserver.llm_service:llm_app --host 127.0.0.1 --port 8001
 ```
 
-说明：`/schedule` 与 `/analyze_and_execute` 已是 deprecated 兼容接口。
+说明：该服务用于独立调试 LLM 接入，不属于 `main.py` 默认启动链。
 
 ### 3.3 MCP Server 单独启动
 
@@ -77,10 +74,8 @@ uvicorn mcpserver.mcp_server:app --host 0.0.0.0 --port 8003
 ## 4. 端口基线（`system/config.py`）
 
 - API: `8000`
-- Agent: `8001`
 - MCP: `8003`
-- TTS: `5048`
-- ASR: `5060`
+- LLM 调试服务（可选）: `8001`
 
 ## 5. 启用 Autonomous（新增）
 
@@ -102,7 +97,6 @@ uvicorn mcpserver.mcp_server:app --host 0.0.0.0 --port 8003
 建议同时确认：
 
 - `autonomous.release.gate_policy_path` 路径存在
-- `autonomous.disable_legacy_cli_fallback=true`（确保仅走 subagent 主链）
 
 ## 6. Embla_system 开发环境建议
 
@@ -118,13 +112,12 @@ uvicorn mcpserver.mcp_server:app --host 0.0.0.0 --port 8003
 ```powershell
 curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8003/status
-curl http://127.0.0.1:8001/health
 ```
 
 说明：
 
-- `8001` 仅在手动启动 AgentServer 时可达。
-- `apiserver` 的 `/mcp/status` 是前端兼容占位，不等价于 `mcpserver` 的真实 `/status`。
+- `8001` 仅在手动启动 `apiserver.llm_service` 时可达。
+- `apiserver` 的 `/mcp/status` 输出运行态快照；`mcpserver` 的 `/status` 仍可用于底层服务直接健康检查。
 
 ## 8. 目录索引（开发预备语义）
 
@@ -132,12 +125,9 @@ curl http://127.0.0.1:8001/health
 - `apiserver/`：BFF 与工具循环。
 - `autonomous/`：System Agent 自治闭环。
 - `mcpserver/`：MCP Host 与 Tool Registry。
-- `agentserver/`：兼容保留（任务/会话内存查询）。
 - `summer_memory/`：记忆与图谱。
 - `guide_engine/`：领域问答与计算。
-- `voice/`：语音 I/O。
 - `Embla_core/`：Next.js 运行态势面板（主链）。
-- `frontend/`：Electron + Vue（archived 历史兼容）。
 - `system/`：配置、日志与底层安全能力。
 
 ## 9. 常见排障清单

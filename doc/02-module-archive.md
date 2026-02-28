@@ -1,7 +1,7 @@
 ﻿# 02 模块归档明细（Embla_system 开发预备版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
-最后更新：2026-02-22
+最后更新：2026-02-28
 
 ## 1. 归档规则
 
@@ -30,8 +30,8 @@ Embla_system 在当前项目的集成层由三块组成：
 
 模块：`main.py`（`已实现`）
 
-- 职责：统一启动 API/MCP/TTS、后台循环、代理环境、可选自治循环。
-- 关键事实：AgentServer 已标记“禁用自动启动”。
+- 职责：统一启动 API/MCP、后台循环、代理环境、可选自治循环。
+- 关键事实：运行主链已收敛为 `apiserver + mcpserver + autonomous`。
 - Embla_system 对齐：承担 Brainstem 的运行时编排职责。
 
 ### 3.2 系统基础能力
@@ -48,7 +48,7 @@ Embla_system 在当前项目的集成层由三块组成：
 
 - 职责：对外 REST/SSE 入口，`/chat/stream` 工具循环编排。
 - 关键文件：`apiserver/api_server.py`、`apiserver/agentic_tool_loop.py`、`apiserver/llm_service.py`。
-- 过渡点：`/mcp/status`、`/mcp/tasks` 仍是离线占位语义。
+- 过渡点：`/mcp/status`、`/mcp/tasks` 当前为快照语义，仍需与底层 `mcpserver` 状态口径持续对齐。
 - Embla_system 对齐：Brainstem 入口 + Brain 编排核心。
 
 ### 3.4 自治系统代理（新增归档）
@@ -76,15 +76,15 @@ Embla_system 在当前项目的集成层由三块组成：
 - 关键文件：`mcpserver/mcp_registry.py`、`mcpserver/mcp_manager.py`、`mcpserver/mcp_server.py`。
 - Embla_system 对齐：Limbs 侧工具网关（Tool Registry）。
 
-### 3.6 AgentServer（降级）
+### 3.6 Legacy AgentServer（已移除）
 
-模块：`agentserver/`（`兼容保留`）
+模块：`agentserver/`（`历史归档`）
 
 - 现状：
-  - `/schedule` 与 `/analyze_and_execute` 已返回 `deprecated`。
-  - 主要剩余价值是任务/会话内存查询与管理。
-- 结论：OpenClaw 旧执行路径视为弃用，不再作为主执行链路。
-- Embla_system 对齐：仅保留兼容接口，不纳入新架构主链。
+  - 当前仓库已无 `agentserver/` 目录。
+  - 相关内容仅保留在任务实现文档/迁移 runbook 中，用于历史追溯。
+- 结论：OpenClaw 旧执行路径已退出运行面，不再作为主执行链路。
+- Embla_system 对齐：不纳入当前主链。
 
 ### 3.7 记忆与图谱
 
@@ -100,20 +100,19 @@ Embla_system 在当前项目的集成层由三块组成：
 - 职责：游戏问答路由、RAG、计算服务。
 - Embla_system 对齐：Brain 的领域技能子系统。
 
-### 3.9 语音能力
+### 3.9 前端运行层
 
-模块：`voice/`（`已实现`）
+模块：`Embla_core/`（`已实现`）
 
-- 职责：TTS/ASR/实时语音输入输出。
-- Embla_system 对齐：Limbs 侧多模态执行通道。
+- 职责：Next.js 运维与调试前端，消费 BFF 与 OPS 聚合接口。
+- Embla_system 对齐：作为 Brainstem/BFF 的可视化消费端。
 
-### 3.10 前端桌面层
+### 3.10 历史 UI 资产（归档说明）
 
-模块：`frontend/`（`已实现`，持续解耦中）
+模块：`frontend/`、`voice/`（`历史归档`）
 
-- 职责：Electron 壳层 + Vue UI。
-- 关键事实：聊天流已消费结构化 SSE 事件；API 基址支持 `VITE_API_BASE_URL`。
-- Embla_system 对齐：作为 BFF 的事件消费者，逐步向事件总线语义靠拢。
+- 现状：相关目录已不在当前仓库。
+- 说明：文档中若出现上述路径，属于历史阶段记录，不代表当前可运行资产。
 
 ### 3.11 构建与发布
 
@@ -124,16 +123,16 @@ Embla_system 在当前项目的集成层由三块组成：
 
 ## 4. 模块关系（统一语义）
 
-1. `frontend` 仅面向 `apiserver`（BFF）进行调用。
+1. `Embla_core` 仅面向 `apiserver`（BFF）进行调用。
 2. `apiserver` 负责编排 `native tools`、`mcpserver`、`summer_memory`、`guide_engine`。
 3. `autonomous` 在后台循环中执行自治任务与发布治理。
 4. `mcpserver` 提供工具注册和统一分发能力。
-5. `agentserver` 仅提供兼容查询接口，不承担主执行。
+5. `agentserver/voice/frontend` 仅作为历史归档语义，不在当前运行面。
 
 ## 5. 开发预备差距
 
 - 需将 Tool Contract 字段从“约定”升级为“强制校验”。
-- 需收敛 MCP 相关占位接口与真实运行状态描述。
+- 需持续收敛 MCP 快照语义与底层运行状态描述。
 - 需持续将目标态模块（见 10/11/12）拆解为可交付增量。
 
 ## 6. 交叉引用

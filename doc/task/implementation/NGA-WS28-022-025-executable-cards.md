@@ -1,3 +1,8 @@
+> `DOC_LAYER: L3_ARCHIVE_IMPLEMENTATION`  
+> `作用：历史实施证据归档（Implementation Record）`  
+> `约束：不作为当前主链设计、接口契约或运行基线`  
+> `当前口径：doc/01-module-overview.md + doc/05-dev-startup-and-index.md + doc/task/25-subagent-development-fabric-status-matrix.md`
+
 # NGA-WS28-022~025 可执行任务单（#4/#6/#7/#9）
 
 最后更新：2026-02-27  

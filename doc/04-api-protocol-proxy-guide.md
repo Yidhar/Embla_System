@@ -1,7 +1,7 @@
 ﻿# 04 模型协议与代理指南（Embla_system 对齐版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
-最后更新：2026-02-22
+最后更新：2026-02-28
 
 ## 1. 目标
 
@@ -12,7 +12,7 @@
 - `apiserver/llm_service.py`
 - `system/background_analyzer.py`
 - `main.py`（代理环境处理）
-- `frontend/src/views/ModelView.vue`
+- `Embla_core/components/settings/settings-console.tsx`
 
 ## 2. 当前真实协议（As-Is）
 
