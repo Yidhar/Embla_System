@@ -545,6 +545,46 @@ def test_ops_incidents_latest_payload_includes_execution_bridge_governance_issue
     assert item["payload_excerpt"]["category"] == "change_control"
 
 
+def test_ops_incidents_latest_payload_includes_agentic_loop_completion_not_submitted(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    _write_jsonl(
+        events_file,
+        [
+            {
+                "timestamp": "2026-03-01T03:00:00+00:00",
+                "event_type": "AgenticLoopCompletionNotSubmitted",
+                "payload": {"session_id": "sess-loop-001", "reason": "completion_not_submitted"},
+            }
+        ],
+    )
+
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(api_server, "_ops_collect_required_reports", lambda _repo_root: [])
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", lambda **_kwargs: {"metrics": {}})
+
+    payload = api_server._ops_build_incidents_latest_payload(limit=20)
+    assert payload["status"] == "success"
+    assert payload["severity"] == "critical"
+    assert payload["data"]["event_counters"]["AgenticLoopCompletionNotSubmitted"] == 1
+
+    summary = payload["data"]["summary"]
+    prompt_safety = summary["runtime_prompt_safety"]
+    assert prompt_safety["agentic_loop_completion"]["status"] == "critical"
+    assert prompt_safety["agentic_loop_completion"]["reason_code"] == "AGENTIC_LOOP_COMPLETION_NOT_SUBMITTED_PRESENT"
+
+    incidents = payload["data"]["incidents"]
+    completion_incidents = [
+        item for item in incidents if str(item.get("event_type")) == "AgenticLoopCompletionNotSubmitted"
+    ]
+    assert len(completion_incidents) == 1
+    item = completion_incidents[0]
+    assert item["severity"] == "critical"
+    assert item["payload_excerpt"]["session_id"] == "sess-loop-001"
+
+
 def test_ops_incidents_latest_payload_includes_audit_ledger_chain_invalid(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
     ledger_path = repo_root / "scratch" / "runtime" / "audit_ledger.jsonl"

@@ -2729,6 +2729,7 @@ _OPS_INCIDENT_EVENT_SEVERITY: Dict[str, str] = {
     "LeaseLost": "critical",
     "RouteQualityGuardEscalatedCritical": "critical",
     "RouteArbiterGuardEscalatedCritical": "critical",
+    "AgenticLoopCompletionNotSubmitted": "critical",
     "SubAgentRuntimeFailOpenBlocked": "warning",
     "SubAgentRuntimeFailOpen": "warning",
     "RouteQualityGuardEscalatedWarning": "warning",
@@ -4073,6 +4074,10 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
         limit=max(200, int(limit) * 10),
         issues_limit=max(10, int(limit)),
     )
+    agentic_loop_completion = _ops_build_agentic_loop_completion_summary(
+        events_file=events_file,
+        limit=max(200, int(limit) * 10),
+    )
     prompt_safety_summary: Dict[str, Any] = {}
     try:
         from scripts.export_slo_snapshot import build_snapshot
@@ -4112,11 +4117,14 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             "core_session_creation_rate": core_session_creation,
             "route_quality": _ops_build_route_quality_summary(snapshot_metrics, trend=route_quality_trend),
             "execution_bridge_governance": execution_bridge_governance,
+            "agentic_loop_completion": agentic_loop_completion,
         }
     except Exception as exc:
         logger.warning(f"构建 incidents prompt safety 摘要失败（降级为空）: {exc}")
     if "execution_bridge_governance" not in prompt_safety_summary:
         prompt_safety_summary["execution_bridge_governance"] = execution_bridge_governance
+    if "agentic_loop_completion" not in prompt_safety_summary:
+        prompt_safety_summary["agentic_loop_completion"] = agentic_loop_completion
 
     incidents: List[Dict[str, Any]] = []
     event_counters: Dict[str, int] = {key: 0 for key in sorted(_OPS_INCIDENT_EVENT_SEVERITY.keys())}
