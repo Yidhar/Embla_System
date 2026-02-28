@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from autonomous.ws27_longrun_endurance import WS27LongRunConfig, run_ws27_72h_endurance_baseline
+from scripts.check_legacy_shim_imports_ws28_030 import run_check_legacy_shim_imports_ws28_030
 from scripts.export_slo_snapshot import build_snapshot
 from scripts.export_ws26_runtime_snapshot_ws26_002 import _build_ws26_report
 from scripts.manage_brainstem_control_plane_ws28_017 import run_manage_brainstem_control_plane_ws28_017
@@ -46,6 +47,7 @@ DEFAULT_WS28_EXECUTION_GOVERNANCE_RUNTIME_POSTURE_OUTPUT = Path(
 DEFAULT_WS28_EXECUTION_GOVERNANCE_INCIDENTS_OUTPUT = Path(
     "scratch/reports/ws28_execution_governance_incidents_ws28_021.json"
 )
+DEFAULT_WS28_LEGACY_IMPORTS_CHECK_OUTPUT = Path("scratch/reports/ws28_legacy_shim_imports_check_ws28_030.json")
 DEFAULT_AUTONOMOUS_CONFIG = Path("autonomous/config/autonomous_config.yaml")
 
 
@@ -398,6 +400,7 @@ def _run_m12_execution_governance_gate_step(
     gate_output: Path,
     runtime_posture_output: Path,
     incidents_output: Path,
+    legacy_imports_output: Path,
     quick_mode: bool,
 ) -> Dict[str, Any]:
     started = time.time()
@@ -414,14 +417,27 @@ def _run_m12_execution_governance_gate_step(
             max_warning_ratio=max_warning_ratio,
             max_rejection_ratio=max_rejection_ratio,
         )
-        checks = gate_report.get("checks") if isinstance(gate_report.get("checks"), dict) else {}
+        legacy_report = run_check_legacy_shim_imports_ws28_030(
+            repo_root=repo_root,
+            output_file=legacy_imports_output,
+            include_tests=False,
+        )
+
+        checks = dict(gate_report.get("checks")) if isinstance(gate_report.get("checks"), dict) else {}
+        checks["legacy_shim_runtime_imports_clean"] = bool(legacy_report.get("passed"))
         governance = gate_report.get("governance") if isinstance(gate_report.get("governance"), dict) else {}
+        passed = bool(gate_report.get("passed")) and bool(legacy_report.get("passed"))
         return {
             "step_id": "M12-T4",
             "name": "ws28_021_execution_governance_gate",
-            "passed": bool(gate_report.get("passed")),
+            "passed": passed,
             "checks": checks,
             "governance": governance,
+            "legacy_imports": {
+                "passed": bool(legacy_report.get("passed")),
+                "hit_count": int(legacy_report.get("hit_count") or 0),
+                "output_file": str(legacy_report.get("output_file") or ""),
+            },
             "thresholds": {
                 "max_warning_ratio": max_warning_ratio,
                 "max_rejection_ratio": max_rejection_ratio,
@@ -430,6 +446,7 @@ def _run_m12_execution_governance_gate_step(
                 "gate_output": _to_unix_path(gate_output),
                 "runtime_posture_output": _to_unix_path(runtime_posture_output),
                 "incidents_output": _to_unix_path(incidents_output),
+                "legacy_imports_output": _to_unix_path(legacy_imports_output),
             },
             "duration_seconds": round(time.time() - started, 4),
         }
@@ -443,6 +460,7 @@ def _run_m12_execution_governance_gate_step(
                 "gate_output": _to_unix_path(gate_output),
                 "runtime_posture_output": _to_unix_path(runtime_posture_output),
                 "incidents_output": _to_unix_path(incidents_output),
+                "legacy_imports_output": _to_unix_path(legacy_imports_output),
             },
             "duration_seconds": round(time.time() - started, 4),
             "error": f"{type(exc).__name__}:{exc}",
@@ -480,6 +498,7 @@ def run_release_closure_chain_full_m0_m12(
     ws28_execution_governance_gate_output: Path = DEFAULT_WS28_EXECUTION_GOVERNANCE_GATE_OUTPUT,
     ws28_execution_governance_runtime_posture_output: Path = DEFAULT_WS28_EXECUTION_GOVERNANCE_RUNTIME_POSTURE_OUTPUT,
     ws28_execution_governance_incidents_output: Path = DEFAULT_WS28_EXECUTION_GOVERNANCE_INCIDENTS_OUTPUT,
+    ws28_legacy_imports_check_output: Path = DEFAULT_WS28_LEGACY_IMPORTS_CHECK_OUTPUT,
     config_path: Path = DEFAULT_AUTONOMOUS_CONFIG,
     rollback_window_minutes: int = 180,
     skip_m0_m11: bool = False,
@@ -557,6 +576,7 @@ def run_release_closure_chain_full_m0_m12(
         governance_gate_output = _resolve_path(root, ws28_execution_governance_gate_output)
         governance_runtime_posture_output = _resolve_path(root, ws28_execution_governance_runtime_posture_output)
         governance_incidents_output = _resolve_path(root, ws28_execution_governance_incidents_output)
+        legacy_imports_output = _resolve_path(root, ws28_legacy_imports_check_output)
 
         if not skip_m12_brainstem:
             brainstem_report = _run_m12_brainstem_control_plane_step(
@@ -651,6 +671,7 @@ def run_release_closure_chain_full_m0_m12(
                 gate_output=governance_gate_output,
                 runtime_posture_output=governance_runtime_posture_output,
                 incidents_output=governance_incidents_output,
+                legacy_imports_output=legacy_imports_output,
                 quick_mode=bool(quick_mode),
             )
             group_results["m12_execution_governance"] = governance_report
@@ -785,6 +806,12 @@ def parse_args() -> argparse.Namespace:
         help="WS28-021 incidents snapshot output JSON report path",
     )
     parser.add_argument(
+        "--ws28-030-legacy-imports-output",
+        type=Path,
+        default=DEFAULT_WS28_LEGACY_IMPORTS_CHECK_OUTPUT,
+        help="WS28-030 runtime legacy shim imports check output JSON report path",
+    )
+    parser.add_argument(
         "--config",
         type=Path,
         default=DEFAULT_AUTONOMOUS_CONFIG,
@@ -841,6 +868,7 @@ def main() -> int:
         ws28_execution_governance_gate_output=args.ws28_021_governance_output,
         ws28_execution_governance_runtime_posture_output=args.ws28_021_runtime_posture_output,
         ws28_execution_governance_incidents_output=args.ws28_021_incidents_output,
+        ws28_legacy_imports_check_output=args.ws28_030_legacy_imports_output,
         config_path=args.config,
         rollback_window_minutes=max(15, int(args.rollback_window_minutes)),
         skip_m0_m11=bool(args.skip_m0_m11),
