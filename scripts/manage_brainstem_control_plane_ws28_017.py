@@ -162,13 +162,27 @@ def _build_heartbeat_status(heartbeat_file: Path) -> Dict[str, Any]:
     }
 
 
-def _wait_for_heartbeat(heartbeat_file: Path, *, timeout_seconds: float) -> Dict[str, Any]:
+def _wait_for_heartbeat(
+    heartbeat_file: Path,
+    *,
+    timeout_seconds: float,
+    min_generated_ts: float | None = None,
+) -> Dict[str, Any]:
     deadline = time.time() + max(0.5, float(timeout_seconds))
     last_snapshot = _build_heartbeat_status(heartbeat_file)
     while time.time() <= deadline:
         snapshot = _build_heartbeat_status(heartbeat_file)
         last_snapshot = snapshot
-        if snapshot["checks"]["heartbeat_exists"] and snapshot["checks"]["generated_at_valid"]:
+        if (
+            snapshot["checks"]["heartbeat_exists"]
+            and snapshot["checks"]["generated_at_valid"]
+            and snapshot["checks"]["daemon_pid_alive"]
+        ):
+            if min_generated_ts is not None:
+                generated_ts = _parse_iso_datetime(snapshot.get("generated_at"))
+                if generated_ts is None or generated_ts < float(min_generated_ts):
+                    time.sleep(0.2)
+                    continue
             return snapshot
         time.sleep(0.2)
     return last_snapshot
@@ -529,6 +543,7 @@ def start_brainstem_control_plane(
     watchdog_output_path = _resolve_path(root, watchdog_output)
     watchdog_log_path = _resolve_path(root, watchdog_log)
     previous_state = _read_json(state_path)
+    start_requested_ts = time.time()
 
     if not force_restart:
         current = _build_heartbeat_status(heartbeat_path)
@@ -622,7 +637,11 @@ def start_brainstem_control_plane(
             start_new_session=True,
         )
 
-    heartbeat_snapshot = _wait_for_heartbeat(heartbeat_path, timeout_seconds=start_timeout_seconds)
+    heartbeat_snapshot = _wait_for_heartbeat(
+        heartbeat_path,
+        timeout_seconds=start_timeout_seconds,
+        min_generated_ts=start_requested_ts,
+    )
     watchdog_snapshot = _wait_for_watchdog_state(
         watchdog_state_path,
         launcher_pid=int(watchdog_process.pid),

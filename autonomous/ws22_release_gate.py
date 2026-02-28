@@ -76,11 +76,20 @@ def evaluate_ws22_longrun_report(
     checks: Dict[str, bool] = {
         "report_passed_flag": bool(report.get("passed")),
         "virtual_elapsed_window": virtual_elapsed_seconds >= thresholds.min_virtual_elapsed_seconds,
-        "task_approved_matches_rounds": rounds > 0 and task_approved_count == rounds,
-        "task_rejected_within_threshold": task_rejected_count <= thresholds.max_task_rejected_count,
+        # Legacy mode expected all rounds approved. In subagent-only mode,
+        # planned fail-open rounds are materialized as rejected outcomes.
+        "task_approved_matches_rounds": rounds > 0 and (task_approved_count + task_rejected_count) == rounds,
+        "task_rejected_within_threshold": task_rejected_count <= max(
+            thresholds.max_task_rejected_count,
+            planned_fail_open_rounds,
+        ),
         "subtask_dispatching_matches_rounds": rounds > 0 and subtask_dispatching_count == rounds,
         "runtime_completed_matches_rounds": rounds > 0 and runtime_completed_count == rounds,
-        "fail_open_matches_planned": fail_open_count == planned_fail_open_rounds,
+        # Accept both semantics:
+        # 1) legacy fail_open path increments fail_open_count;
+        # 2) subagent-only path blocks fallback and records planned rejects instead.
+        "fail_open_matches_planned": (fail_open_count == planned_fail_open_rounds)
+        or (fail_open_count == 0 and task_rejected_count == planned_fail_open_rounds),
         "event_mismatch_within_threshold": event_mismatch_count <= thresholds.max_event_mismatch_count,
         "unhandled_exception_within_threshold": unhandled_exception_count <= thresholds.max_unhandled_exception_count,
         "failed_workflow_states_within_threshold": failed_workflow_state_count <= thresholds.max_failed_workflow_state_count,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import signal
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -162,6 +163,125 @@ def test_manage_brainstem_control_plane_start_status_stop_flow(monkeypatch) -> N
         persisted_stop = _read_json(output)
         assert persisted_stop["action"] == "stop"
         assert persisted_stop["report_schema_version"] == "ws28_017_brainstem_control_plane_manage.v1"
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_manage_brainstem_start_waits_for_fresh_heartbeat(monkeypatch) -> None:
+    case_root = _make_case_root("test_manage_brainstem_control_plane_ws28_017")
+    try:
+        repo_root = case_root / "repo"
+        heartbeat = repo_root / "scratch" / "runtime" / "heartbeat.json"
+        state_file = repo_root / "scratch" / "runtime" / "manager_state.json"
+        output = repo_root / "scratch" / "reports" / "manager_report.json"
+        manager_log = repo_root / "logs" / "autonomous" / "manager.log"
+        supervisor_output = repo_root / "scratch" / "reports" / "supervisor.json"
+        spec_file = repo_root / "system" / "brainstem_services.spec"
+        _write_json(spec_file, {"services": []})
+        _write_json(
+            heartbeat,
+            {
+                "generated_at": "2026-02-25T08:00:00+00:00",
+                "pid": 44001,
+                "tick": 3,
+                "mode": "daemon",
+                "healthy": True,
+                "service_count": 1,
+                "unhealthy_services": [],
+            },
+        )
+
+        alive_pids = {55101, 55102}
+
+        class _FakeProcess:
+            def __init__(self, pid: int) -> None:
+                self.pid = pid
+
+        def _fake_popen(command, cwd, stdout, stderr, start_new_session):  # noqa: ARG001
+            joined = " ".join(str(item) for item in command)
+            if "run_brainstem_supervisor_ws23_001.py" in joined:
+                heartbeat_path = Path(command[command.index("--heartbeat-file") + 1])
+
+                def _write_fresh_heartbeat() -> None:
+                    heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+                    heartbeat_path.write_text(
+                        json.dumps(
+                            {
+                                "generated_at": datetime.now(timezone.utc).isoformat(),
+                                "pid": 55101,
+                                "tick": 1,
+                                "mode": "daemon",
+                                "healthy": True,
+                                "service_count": 1,
+                                "unhealthy_services": [],
+                            },
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+
+                timer = threading.Timer(0.35, _write_fresh_heartbeat)
+                timer.daemon = True
+                timer.start()
+                return _FakeProcess(55101)
+            if "run_watchdog_daemon_ws28_025.py" in joined:
+                state_path = Path(command[command.index("--state-file") + 1])
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(
+                    json.dumps(
+                        {
+                            "generated_at": datetime.now(timezone.utc).isoformat(),
+                            "pid": 55102,
+                            "mode": "daemon",
+                            "tick": 1,
+                            "status": "ok",
+                            "reason_code": "WATCHDOG_DAEMON_OK",
+                            "reason_text": "watchdog daemon heartbeat is healthy",
+                            "snapshot": {},
+                            "action": None,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                return _FakeProcess(55102)
+            raise AssertionError(f"unexpected popen command: {command}")
+
+        def _fake_kill(pid, sig):
+            if sig == 0:
+                if int(pid) in alive_pids:
+                    return None
+                raise ProcessLookupError
+            if sig in {signal.SIGTERM, signal.SIGKILL}:
+                alive_pids.discard(int(pid))
+                return None
+            return None
+
+        monkeypatch.setattr(manager.subprocess, "Popen", _fake_popen)
+        monkeypatch.setattr(manager.os, "kill", _fake_kill)
+
+        start_report = manager.run_manage_brainstem_control_plane_ws28_017(
+            repo_root=repo_root,
+            action="start",
+            heartbeat_file=heartbeat.relative_to(repo_root),
+            state_file=state_file.relative_to(repo_root),
+            output_file=output.relative_to(repo_root),
+            manager_log=manager_log.relative_to(repo_root),
+            supervisor_output=supervisor_output.relative_to(repo_root),
+            spec_file=spec_file.relative_to(repo_root),
+            interval_seconds=0.0,
+            max_ticks=10,
+            start_timeout_seconds=2.0,
+            force_restart=True,
+        )
+
+        assert start_report["passed"] is True
+        assert start_report["checks"]["heartbeat_detected"] is True
+        assert start_report["checks"]["daemon_pid_alive"] is True
+        assert int(start_report["heartbeat"]["pid"]) == 55101
+        assert start_report["heartbeat"]["generated_at"] != "2026-02-25T08:00:00+00:00"
     finally:
         _cleanup_case_root(case_root)
 

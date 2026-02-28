@@ -82,6 +82,80 @@ def test_execute_shell_echo_runs_cross_platform():
     assert "native-executor-smoke" in result.stdout.lower()
 
 
+def test_execute_shell_recovers_timeout_race_when_process_already_exited(monkeypatch):
+    ex = NativeExecutor()
+
+    class _FakeProcess:
+        def __init__(self) -> None:
+            self.pid = 90001
+            self.returncode = 0
+            self.kill_called = False
+
+        async def wait(self):
+            return self.returncode
+
+        async def communicate(self):
+            return b"native-timeout-race\n", b""
+
+        def kill(self) -> None:
+            self.kill_called = True
+
+    fake_process = _FakeProcess()
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):  # noqa: ARG001
+        return fake_process
+
+    async def _fake_wait_for(awaitable, timeout):  # noqa: ARG001
+        if hasattr(awaitable, "close"):
+            awaitable.close()
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr("system.native_executor.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr("system.native_executor.asyncio.wait_for", _fake_wait_for)
+
+    result = asyncio.run(ex.execute_shell("echo native-timeout-race"))
+    assert result.returncode == 0
+    assert "native-timeout-race" in result.stdout
+    assert fake_process.kill_called is False
+
+
+def test_execute_shell_timeout_still_raises_when_process_not_exited(monkeypatch):
+    ex = NativeExecutor()
+
+    class _FakeProcess:
+        def __init__(self) -> None:
+            self.pid = 90002
+            self.returncode = None
+            self.kill_called = False
+
+        async def wait(self):
+            return self.returncode
+
+        async def communicate(self):
+            self.returncode = -9
+            return b"", b""
+
+        def kill(self) -> None:
+            self.kill_called = True
+
+    fake_process = _FakeProcess()
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):  # noqa: ARG001
+        return fake_process
+
+    async def _fake_wait_for(awaitable, timeout):  # noqa: ARG001
+        if hasattr(awaitable, "close"):
+            awaitable.close()
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr("system.native_executor.asyncio.create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr("system.native_executor.asyncio.wait_for", _fake_wait_for)
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(ex.execute_shell("echo timeout-hard-fail"))
+    assert fake_process.kill_called is True
+
+
 def test_oob_health_probe_plan_valid_with_marker_and_allowlist():
     plan = build_oob_health_probe_plan(
         oob_allowlist=["10.0.0.0/24", "bastion.example.com"],

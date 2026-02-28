@@ -56,6 +56,18 @@ def test_ws22_release_gate_rejects_on_event_mismatch() -> None:
     assert "event_mismatch_within_threshold" in result.reasons
 
 
+def test_ws22_release_gate_accepts_subagent_only_fail_open_blocked_semantics() -> None:
+    payload = _good_report_payload()
+    payload["metrics"]["task_approved_count"] = 112
+    payload["metrics"]["task_rejected_count"] = 8
+    payload["metrics"]["fail_open_count"] = 0
+    payload["metrics"]["planned_fail_open_rounds"] = 8
+
+    result = evaluate_ws22_longrun_report(payload)
+    assert result.passed is True
+    assert result.reasons == []
+
+
 def test_ws22_doc_closure_requires_ws22_004_done_and_4_of_4_summary() -> None:
     case_root = _make_case_root("test_ws22_release_gate")
     try:

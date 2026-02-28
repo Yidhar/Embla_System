@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 import uuid
@@ -312,25 +313,31 @@ class NativeExecutor:
             job_root_id = None
 
         effective_timeout = self.default_timeout_s if timeout_s is None else timeout_s
-        try:
-            if effective_timeout is None:
-                stdout_b, stderr_b = await process.communicate()
-            else:
-                stdout_b, stderr_b = await asyncio.wait_for(process.communicate(), timeout=effective_timeout)
-        except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.communicate()
-            if job_root_id:
-                try:
-                    get_process_lineage_registry().register_end(
-                        job_root_id,
-                        return_code=None,
-                        status="timeout",
-                        reason=f"timeout_after_{effective_timeout}s",
-                    )
-                except Exception:
-                    pass
-            raise TimeoutError(f"Command timed out after {effective_timeout}s") from exc
+        if effective_timeout is None:
+            stdout_b, stderr_b = await process.communicate()
+        else:
+            try:
+                await asyncio.wait_for(process.wait(), timeout=effective_timeout)
+            except asyncio.TimeoutError as exc:
+                # Race guard: process may have already exited while wait_for
+                # raised timeout due event-loop cancellation timing.
+                if process.returncode is None:
+                    with contextlib.suppress(ProcessLookupError):
+                        process.kill()
+                    with contextlib.suppress(Exception):
+                        await process.communicate()
+                    if job_root_id:
+                        try:
+                            get_process_lineage_registry().register_end(
+                                job_root_id,
+                                return_code=None,
+                                status="timeout",
+                                reason=f"timeout_after_{effective_timeout}s",
+                            )
+                        except Exception:
+                            pass
+                    raise TimeoutError(f"Command timed out after {effective_timeout}s") from exc
+            stdout_b, stderr_b = await process.communicate()
 
         if job_root_id:
             try:
@@ -406,25 +413,29 @@ class NativeExecutor:
             job_root_id = None
 
         effective_timeout = self.default_timeout_s if timeout_s is None else timeout_s
-        try:
-            if effective_timeout is None:
-                stdout_b, stderr_b = await process.communicate()
-            else:
-                stdout_b, stderr_b = await asyncio.wait_for(process.communicate(), timeout=effective_timeout)
-        except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.communicate()
-            if job_root_id:
-                try:
-                    get_process_lineage_registry().register_end(
-                        job_root_id,
-                        return_code=None,
-                        status="timeout",
-                        reason=f"timeout_after_{effective_timeout}s",
-                    )
-                except Exception:
-                    pass
-            raise TimeoutError(f"Command timed out after {effective_timeout}s") from exc
+        if effective_timeout is None:
+            stdout_b, stderr_b = await process.communicate()
+        else:
+            try:
+                await asyncio.wait_for(process.wait(), timeout=effective_timeout)
+            except asyncio.TimeoutError as exc:
+                if process.returncode is None:
+                    with contextlib.suppress(ProcessLookupError):
+                        process.kill()
+                    with contextlib.suppress(Exception):
+                        await process.communicate()
+                    if job_root_id:
+                        try:
+                            get_process_lineage_registry().register_end(
+                                job_root_id,
+                                return_code=None,
+                                status="timeout",
+                                reason=f"timeout_after_{effective_timeout}s",
+                            )
+                        except Exception:
+                            pass
+                    raise TimeoutError(f"Command timed out after {effective_timeout}s") from exc
+            stdout_b, stderr_b = await process.communicate()
 
         if job_root_id:
             try:
