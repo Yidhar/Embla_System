@@ -395,6 +395,22 @@ def test_l1_5_prompt_slice_injection_upserts_existing_context():
     assert "seed_context" not in str(messages[1].get("content", ""))
 
 
+def test_l1_5_prompt_slice_contains_atomic_completion_gate():
+    prompt_slice = tool_loop._build_l1_5_prompt_slice_context(
+        episodic_context="查到上次回归失败点在 /v1/chat",
+        contract_state={"stage": "seed", "seed_contract_id": "seed-1", "seed_contract_checksum": "abc"},
+        agent_state={"task_completed": False, "pending_actions": ["修复测试", "补报告"]},
+        submit_result_called=False,
+    )
+
+    assert tool_loop._L15_SLICE_MARKER in prompt_slice
+    assert "AtomicControlPlane" in prompt_slice
+    assert "CompletionGate" in prompt_slice
+    assert "SubmitResult_Tool" in prompt_slice
+    assert "task_completed: false" in prompt_slice
+    assert "submit_result_called: false" in prompt_slice
+
+
 def test_seed_contract_upgrades_to_execution_and_binds_mutating_calls():
     contract_state = tool_loop._build_seed_contract_state(
         session_id="sess-core-contract",

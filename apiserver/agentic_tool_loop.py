@@ -12,7 +12,7 @@ import logging
 import re
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
 
 from system.config import get_config
@@ -72,6 +72,9 @@ class AgenticLoopRuntimeState:
     gc_guard_error_total: int = 0
     gc_guard_success_total: int = 0
     gc_guard_hit_total: int = 0
+    agent_state: Dict[str, Any] = field(default_factory=lambda: {"task_completed": False})
+    submit_result_called: bool = False
+    submit_result_round: int = 0
     stop_reason: str = ""
 
 
@@ -1245,7 +1248,10 @@ _RISK_DEFAULT_APPROVAL_POLICY = {
 _RISK_POLICY_BLOCKLIST = {"never", "deny", "denied", "disabled", "off", "none"}
 _RISK_POLICY_STRICT_APPROVAL = {"always", "required"}
 _L15_SLICE_MARKER = "[Prompt Slice][L1.5_EPISODIC_MEMORY]"
-_L15_SLICE_UID = "l1_5_ep_reinjection"
+_ATOMIC_CTRL_SLICE_UID = "ws28_atomic_ctrl_plane"
+_ATOMIC_CTRL_PROTOCOL_VERSION = "ws28_agent_state_submission.v1"
+_SUBMIT_RESULT_TOOL_NAME = "SubmitResult_Tool"
+_INTERNAL_SUBMIT_TOOL_NAME = "submit_result"
 _CONTRACT_GATE_REASON_READONLY_DOWNGRADE = "contract_checksum_missing_parallel_write_downgraded_to_readonly"
 
 
@@ -1258,6 +1264,24 @@ def _as_nonempty_text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _normalize_submit_string_list(value: Any, *, max_items: int = 20, max_item_chars: int = 240) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: List[str] = []
+    for raw in value:
+        text = _as_nonempty_text(raw)
+        if not text:
+            continue
+        normalized.append(text[:max_item_chars])
+        if len(normalized) >= max_items:
+            break
+    return normalized
+
+
+def _is_completion_submitted(runtime: AgenticLoopRuntimeState) -> bool:
+    return bool(runtime.submit_result_called and runtime.agent_state.get("task_completed") is True)
 
 
 def _normalize_native_tool_name(tool_name: str) -> str:
@@ -1656,16 +1680,39 @@ def _build_l1_5_prompt_slice_context(
     *,
     episodic_context: str,
     contract_state: Optional[Dict[str, Any]],
+    agent_state: Optional[Dict[str, Any]],
+    submit_result_called: bool,
 ) -> str:
     normalized_episodic = str(episodic_context or "").strip()
     if normalized_episodic.startswith("[Episodic Memory Reinjection]"):
         normalized_episodic = normalized_episodic.split("\n", 1)[1].strip() if "\n" in normalized_episodic else ""
 
+    normalized_agent_state = dict(agent_state or {})
+    task_completed = bool(normalized_agent_state.get("task_completed") is True)
+    pending_actions = _normalize_submit_string_list(normalized_agent_state.get("pending_actions"))
+
     lines: List[str] = [
         _L15_SLICE_MARKER,
-        f"slice_uid: {_L15_SLICE_UID}",
+        f"slice_uid: {_ATOMIC_CTRL_SLICE_UID}",
+        f"slice_protocol: {_ATOMIC_CTRL_PROTOCOL_VERSION}",
         "ttl_scope: task_lifecycle",
+        "[AtomicControlPlane]",
+        "该区块为原子注入控制面：需一次性读取并同时遵守，不要拆分执行。",
+        "[CompletionGate]",
+        "仅当以下条件同时满足，才能视为工具循环完成：",
+        "1) agent_state.task_completed == true",
+        f"2) 已调用 {_SUBMIT_RESULT_TOOL_NAME} 并更新状态",
+        f"若任务完成，必须调用 {_SUBMIT_RESULT_TOOL_NAME}(task_completed=true, final_answer=..., deliverables=[...])。",
+        f"若任务未完成，可调用 {_SUBMIT_RESULT_TOOL_NAME}(task_completed=false, pending_actions=[...])，并继续工具执行。",
+        "[AgentState]",
+        f"task_completed: {'true' if task_completed else 'false'}",
+        f"submit_result_called: {'true' if bool(submit_result_called) else 'false'}",
+        f"submit_result_round: {int(normalized_agent_state.get('submit_result_round') or 0)}",
     ]
+    if pending_actions:
+        lines.append("pending_actions: " + "; ".join(pending_actions))
+
+    lines.append("[ContractState]")
     if isinstance(contract_state, dict):
         stage = str(contract_state.get("stage") or "")
         lines.append(f"contract_stage: {stage}")
@@ -1676,13 +1723,13 @@ def _build_l1_5_prompt_slice_context(
             lines.append(
                 f"execution_contract_checksum: {str(contract_state.get('execution_contract_checksum') or '')}"
             )
+    else:
+        lines.append("contract_stage: unknown")
 
     if normalized_episodic:
         lines.append("[Episodic Memory Reinjection]")
         lines.append(normalized_episodic)
 
-    if len(lines) <= 3 and not normalized_episodic:
-        return ""
     lines.append("若历史经验与当前事实冲突，以当前事实为准。")
     return "\n".join(lines)
 
@@ -2644,6 +2691,28 @@ def get_agentic_tool_definitions() -> List[Dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": _SUBMIT_RESULT_TOOL_NAME,
+                "description": (
+                    "Atomically update agent_state and submit task completion status. "
+                    "Task is complete only when this tool is called with task_completed=true."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "task_completed": {"type": "boolean"},
+                        "final_answer": {"type": "string"},
+                        "completion_summary": {"type": "string"},
+                        "deliverables": {"type": "array", "items": {"type": "string"}},
+                        "pending_actions": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["task_completed"],
+                },
+            },
+        },
     ]
 
 
@@ -2767,6 +2836,46 @@ def _convert_structured_tool_calls(
             actionable_calls.append(merged_call)
             continue
 
+        if tool_name == _SUBMIT_RESULT_TOOL_NAME:
+            task_completed = args.get("task_completed")
+            if not isinstance(task_completed, bool):
+                validation_errors.append(
+                    _schema_error(
+                        _SCHEMA_ERR_INPUT_INVALID,
+                        call_id,
+                        f"{_SUBMIT_RESULT_TOOL_NAME} 的 task_completed 必须是 boolean",
+                    )
+                )
+                continue
+
+            submit_call: Dict[str, Any] = {
+                "agentType": "internal",
+                "tool_name": _INTERNAL_SUBMIT_TOOL_NAME,
+                "task_completed": bool(task_completed),
+                "_submit_tool_name": _SUBMIT_RESULT_TOOL_NAME,
+            }
+            final_answer = _as_nonempty_text(args.get("final_answer"))
+            completion_summary = _as_nonempty_text(args.get("completion_summary"))
+            deliverables = _normalize_submit_string_list(args.get("deliverables"))
+            pending_actions = _normalize_submit_string_list(args.get("pending_actions"))
+            if final_answer:
+                submit_call["final_answer"] = final_answer[:2000]
+            if completion_summary:
+                submit_call["completion_summary"] = completion_summary[:1200]
+            if deliverables:
+                submit_call["deliverables"] = deliverables
+            if pending_actions:
+                submit_call["pending_actions"] = pending_actions
+
+            _inject_call_context_metadata(
+                submit_call,
+                call_id=call_id,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            actionable_calls.append(submit_call)
+            continue
+
         validation_errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, f"未知函数调用: name={tool_name}"))
 
     return actionable_calls, validation_errors
@@ -2785,6 +2894,85 @@ def _build_validation_results(errors: List[str]) -> List[Dict[str, Any]]:
         _attach_tool_receipt(row["tool_call"], row)
         results.append(row)
     return results
+
+
+def _apply_submit_result_calls(
+    actionable_calls: List[Dict[str, Any]],
+    *,
+    runtime: AgenticLoopRuntimeState,
+    round_num: int,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    passthrough_calls: List[Dict[str, Any]] = []
+    submit_calls: List[Dict[str, Any]] = []
+    submit_results: List[Dict[str, Any]] = []
+
+    for call in actionable_calls:
+        if str(call.get("agentType") or "").strip().lower() != "internal":
+            passthrough_calls.append(call)
+            continue
+        if str(call.get("tool_name") or "").strip().lower() != _INTERNAL_SUBMIT_TOOL_NAME:
+            passthrough_calls.append(call)
+            continue
+
+        submit_calls.append(call)
+        task_completed = bool(call.get("task_completed") is True)
+        runtime.submit_result_called = True
+        runtime.submit_result_round = int(round_num)
+        runtime.agent_state["task_completed"] = task_completed
+        runtime.agent_state["submit_result_called"] = True
+        runtime.agent_state["submit_result_round"] = int(round_num)
+
+        final_answer = _as_nonempty_text(call.get("final_answer"))
+        completion_summary = _as_nonempty_text(call.get("completion_summary"))
+        deliverables = _normalize_submit_string_list(call.get("deliverables"))
+        pending_actions = _normalize_submit_string_list(call.get("pending_actions"))
+        if final_answer:
+            runtime.agent_state["final_answer"] = final_answer
+        if completion_summary:
+            runtime.agent_state["completion_summary"] = completion_summary
+        if deliverables:
+            runtime.agent_state["deliverables"] = deliverables
+        if pending_actions:
+            runtime.agent_state["pending_actions"] = pending_actions
+
+        summary_text = completion_summary or final_answer
+        if not summary_text:
+            summary_text = "task_completed=true" if task_completed else "task_completed=false"
+        preview = summary_text[:500]
+        result_text = (
+            f"{_SUBMIT_RESULT_TOOL_NAME} 已更新 agent_state: "
+            f"task_completed={str(task_completed).lower()}, round={round_num}"
+        )
+        row = {
+            "tool_call": call,
+            "result": result_text,
+            "status": "success",
+            "service_name": "agent_state",
+            "tool_name": _SUBMIT_RESULT_TOOL_NAME,
+            "narrative_summary": summary_text,
+            "display_preview": preview,
+        }
+        if deliverables:
+            row["deliverables"] = deliverables
+        if pending_actions:
+            row["pending_actions"] = pending_actions
+        row = _upgrade_tool_result_contract_payload(row)
+        _attach_tool_receipt(call, row)
+        submit_results.append(row)
+
+    return passthrough_calls, submit_calls, submit_results
+
+
+def _build_no_tool_feedback_text(*, runtime: AgenticLoopRuntimeState) -> str:
+    task_completed = bool(runtime.agent_state.get("task_completed") is True)
+    submit_called = bool(runtime.submit_result_called)
+    return (
+        "[系统反馈] 你上一轮没有发起任何工具调用。"
+        f"当前 agent_state.task_completed={str(task_completed).lower()}，"
+        f"submit_result_called={str(submit_called).lower()}。"
+        f"若任务已完成，请立即调用 {_SUBMIT_RESULT_TOOL_NAME}(task_completed=true, final_answer=..., deliverables=[...])；"
+        f"若任务未完成，请继续调用 native_call/mcp_call，或调用 {_SUBMIT_RESULT_TOOL_NAME}(task_completed=false, pending_actions=[...]) 同步状态。"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2809,12 +2997,16 @@ def _format_sse_event(event_type: str, data: Any) -> str:
 
 def _build_summary_instruction(runtime: AgenticLoopRuntimeState, max_rounds: int) -> str:
     reason = runtime.stop_reason or "unknown"
+    completion_state = "true" if bool(runtime.agent_state.get("task_completed") is True) else "false"
+    submit_called = "true" if bool(runtime.submit_result_called) else "false"
     return (
         "[系统提示] 工具调用循环已结束。请基于已有工具结果直接回答用户问题。\n"
         f"- 结束原因: {reason}\n"
         f"- 已执行轮次: {runtime.round_num}/{max_rounds}\n"
         f"- 工具调用总数: {runtime.total_tool_calls}\n"
         f"- 工具成功/失败: {runtime.total_tool_success}/{runtime.total_tool_errors}\n"
+        f"- agent_state.task_completed: {completion_state}\n"
+        f"- submit_result_called: {submit_called}\n"
         f"- GC防抖计数(命中/错误/成功): "
         f"{runtime.gc_guard_hit_total}/{runtime.gc_guard_error_total}/{runtime.gc_guard_success_total}\n"
         "若关键工具全部失败，请诚实告知当前限制并给出下一步可执行方案。\n"
@@ -2861,6 +3053,7 @@ async def run_agentic_loop(
         session_id=session_id,
         latest_user_request=latest_user_request,
     )
+    episodic_context_cache = ""
 
     if contract_rollout.emit_observability_metadata:
         yield _format_sse_event("contract_rollout_snapshot", {"snapshot": contract_rollout.snapshot()})
@@ -2876,22 +3069,25 @@ async def run_agentic_loop(
 
     if latest_user_request:
         try:
-            episodic_context = build_reinjection_context(
+            episodic_context_cache = build_reinjection_context(
                 session_id=session_id,
                 query=latest_user_request,
                 top_k=3,
             )
-            l1_5_context = _build_l1_5_prompt_slice_context(
-                episodic_context=episodic_context,
-                contract_state=contract_state,
-            )
-            if l1_5_context and _inject_ephemeral_system_context(messages, l1_5_context):
-                logger.info("[AgenticLoop] injected L1.5 prompt slice context for session=%s", session_id)
         except Exception as exc:
             logger.warning("[AgenticLoop] episodic reinjection skipped: %s", exc)
+            episodic_context_cache = ""
 
     for round_num in range(1, policy.max_rounds + 1):
         runtime.round_num = round_num
+        atomic_context = _build_l1_5_prompt_slice_context(
+            episodic_context=episodic_context_cache,
+            contract_state=contract_state,
+            agent_state=runtime.agent_state,
+            submit_result_called=runtime.submit_result_called,
+        )
+        if atomic_context and _inject_ephemeral_system_context(messages, atomic_context):
+            logger.info("[AgenticLoop] upserted atomic prompt control plane for session=%s round=%s", session_id, round_num)
         if round_num > 1:
             yield _format_sse_event("round_start", {"round": round_num})
         plan_start_event = _format_workflow_stage_event(round_num, "plan", "start", policy=policy)
@@ -3040,6 +3236,13 @@ async def run_agentic_loop(
         if contract_gate.validation_errors:
             validation_errors.extend(contract_gate.validation_errors)
 
+        actionable_calls, submit_result_calls, submit_result_rows = _apply_submit_result_calls(
+            actionable_calls,
+            runtime=runtime,
+            round_num=round_num,
+        )
+        has_model_tool_activity = bool(actionable_calls or submit_result_calls)
+
         if contract_gate.messages:
             for msg in contract_gate.messages:
                 logger.warning("[AgenticLoop] round %s %s", round_num, msg)
@@ -3054,6 +3257,15 @@ async def run_agentic_loop(
             if contract_gate.reason:
                 guardrail_payload["reason"] = contract_gate.reason
             yield _format_sse_event("guardrail", guardrail_payload)
+
+        if submit_result_calls:
+            logger.info(
+                "[AgenticLoop] round %s received %s %s call(s), task_completed=%s",
+                round_num,
+                len(submit_result_calls),
+                _SUBMIT_RESULT_TOOL_NAME,
+                runtime.agent_state.get("task_completed"),
+            )
 
         if actionable_calls:
             if not isinstance(contract_state, dict):
@@ -3081,8 +3293,10 @@ async def run_agentic_loop(
                 if isinstance(contract_state, dict):
                     _bind_execution_contract_to_calls(actionable_calls, contract_state=contract_state)
                     execution_l1_5 = _build_l1_5_prompt_slice_context(
-                        episodic_context="",
+                        episodic_context=episodic_context_cache,
                         contract_state=contract_state,
+                        agent_state=runtime.agent_state,
+                        submit_result_called=runtime.submit_result_called,
                     )
                     if execution_l1_5:
                         _inject_ephemeral_system_context(messages, execution_l1_5)
@@ -3112,13 +3326,13 @@ async def run_agentic_loop(
                     "round": round_num,
                     "text": output_text,
                     "placeholder": placeholder,
-                    "has_tool_calls": bool(actionable_calls),
+                    "has_tool_calls": has_model_tool_activity,
                     "validation_errors": len(validation_results),
                 },
             )
 
-        if actionable_calls:
-            yield _build_round_model_output_event(fallback_text="（本轮模型未返回正文，直接发起工具调用）")
+        if has_model_tool_activity:
+            yield _build_round_model_output_event(fallback_text="（本轮模型未返回正文，已发起工具调用或状态提交）")
             for buffered_chunk in _drain_buffered_round_chunks():
                 yield buffered_chunk
             plan_success_event = _format_workflow_stage_event(
@@ -3128,6 +3342,7 @@ async def run_agentic_loop(
                 policy=policy,
                 details={
                     "actionable_calls": len(actionable_calls),
+                    "submit_result_calls": len(submit_result_calls),
                     "validation_errors": len(validation_results),
                 },
             )
@@ -3160,7 +3375,7 @@ async def run_agentic_loop(
             if plan_no_action_event:
                 yield plan_no_action_event
 
-        if not actionable_calls:
+        if not actionable_calls and not submit_result_calls:
             execute_skip_event = _format_workflow_stage_event(
                 round_num,
                 "execute",
@@ -3291,15 +3506,60 @@ async def run_agentic_loop(
             runtime.consecutive_validation_failures = 0
             runtime.consecutive_no_tool_rounds += 1
 
-            should_retry_no_tool = (
-                policy.inject_no_tool_feedback
-                and runtime.consecutive_no_tool_rounds < policy.max_consecutive_no_tool_rounds
-                and round_num < policy.max_rounds
-            )
-            if should_retry_no_tool:
+            if _is_completion_submitted(runtime):
+                yield _build_round_model_output_event(fallback_text="（状态已提交，等待结束）")
+                for buffered_chunk in _drain_buffered_round_chunks():
+                    yield buffered_chunk
+                runtime.stop_reason = "submitted_completion"
+                verify_success_event = _format_workflow_stage_event(
+                    round_num,
+                    "verify",
+                    "success",
+                    policy=policy,
+                    reason="submitted_completion",
+                    decision="stop",
+                    details={"submit_result_round": runtime.submit_result_round},
+                )
+                if verify_success_event:
+                    yield verify_success_event
+                logger.info("[AgenticLoop] Round %s: completion gate satisfied, stop loop", round_num)
+                yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+                break
+
+            yield _build_round_model_output_event(fallback_text="（本轮模型未返回正文）")
+            for buffered_chunk in _drain_buffered_round_chunks():
+                yield buffered_chunk
+
+            if round_num >= policy.max_rounds:
+                runtime.stop_reason = "completion_not_submitted"
+                verify_error_event = _format_workflow_stage_event(
+                    round_num,
+                    "verify",
+                    "error",
+                    policy=policy,
+                    reason="completion_not_submitted",
+                    decision="summary" if policy.enable_summary_round else "stop",
+                    details={
+                        "task_completed": bool(runtime.agent_state.get("task_completed") is True),
+                        "submit_result_called": bool(runtime.submit_result_called),
+                    },
+                )
+                if verify_error_event:
+                    yield verify_error_event
+                if policy.enable_summary_round:
+                    needs_summary = True
+                    yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
+                else:
+                    yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+                break
+
+            if policy.inject_no_tool_feedback:
                 logger.info(
-                    f"[AgenticLoop] Round {round_num}: 无工具调用，注入纠偏反馈后继续下一轮 "
-                    f"(连续无工具 {runtime.consecutive_no_tool_rounds}/{policy.max_consecutive_no_tool_rounds})"
+                    "[AgenticLoop] Round %s: no tool call while completion gate not satisfied "
+                    "(%s/%s), inject corrective feedback",
+                    round_num,
+                    runtime.consecutive_no_tool_rounds,
+                    policy.max_consecutive_no_tool_rounds,
                 )
                 assistant_content = complete_text if complete_text else "(本轮未发起工具调用)"
                 repair_start_event = _format_workflow_stage_event(
@@ -3307,7 +3567,7 @@ async def run_agentic_loop(
                     "repair",
                     "start",
                     policy=policy,
-                    reason="no_tool_retry",
+                    reason="await_submit_result_tool",
                     details={
                         "consecutive_no_tool_rounds": runtime.consecutive_no_tool_rounds,
                         "threshold": policy.max_consecutive_no_tool_rounds,
@@ -3315,18 +3575,8 @@ async def run_agentic_loop(
                 )
                 if repair_start_event:
                     yield repair_start_event
-                feedback_text = (
-                    "[系统反馈] 你上一轮没有发起任何工具调用。"
-                    "如果任务仍需要外部信息、文件操作、命令执行或网络能力，请立即调用合适函数继续执行。"
-                    "如果任务已完成，直接给出最终答案即可。"
-                )
                 messages.append({"role": "assistant", "content": assistant_content})
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": feedback_text,
-                    }
-                )
+                messages.append({"role": "user", "content": _build_no_tool_feedback_text(runtime=runtime)})
                 repair_success_event = _format_workflow_stage_event(
                     round_num,
                     "repair",
@@ -3336,67 +3586,65 @@ async def run_agentic_loop(
                 )
                 if repair_success_event:
                     yield repair_success_event
-                verify_success_event = _format_workflow_stage_event(
-                    round_num,
-                    "verify",
-                    "success",
-                    policy=policy,
-                    decision="continue",
-                    reason="no_tool_retry",
-                    details={
-                        "consecutive_no_tool_rounds": runtime.consecutive_no_tool_rounds,
-                        "threshold": policy.max_consecutive_no_tool_rounds,
-                    },
-                )
-                if verify_success_event:
-                    yield verify_success_event
-                yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
-                continue
 
-            yield _build_round_model_output_event(fallback_text="（本轮模型未返回正文）")
-            for buffered_chunk in _drain_buffered_round_chunks():
-                yield buffered_chunk
-            runtime.stop_reason = "no_tool_calls"
             verify_success_event = _format_workflow_stage_event(
                 round_num,
                 "verify",
                 "success",
                 policy=policy,
-                reason="no_tool_calls",
-                decision="stop",
+                decision="continue",
+                reason="await_submit_result_tool",
+                details={
+                    "consecutive_no_tool_rounds": runtime.consecutive_no_tool_rounds,
+                    "task_completed": bool(runtime.agent_state.get("task_completed") is True),
+                    "submit_result_called": bool(runtime.submit_result_called),
+                },
             )
             if verify_success_event:
                 yield verify_success_event
-            logger.info(f"[AgenticLoop] Round {round_num}: 无工具调用，循环结束")
-            yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
-            break
+            yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
+            continue
 
         runtime.consecutive_validation_failures = 0
         runtime.consecutive_no_tool_rounds = 0
-        logger.info(f"[AgenticLoop] Round {round_num}: 检测到 {len(actionable_calls)} 个工具调用")
+        planned_tool_call_count = len(actionable_calls) + len(submit_result_calls)
+        logger.info(
+            "[AgenticLoop] Round %s: 检测到 %s 个工具调用 (external=%s, submit_state=%s)",
+            round_num,
+            planned_tool_call_count,
+            len(actionable_calls),
+            len(submit_result_calls),
+        )
         execute_start_event = _format_workflow_stage_event(
             round_num,
             "execute",
             "start",
             policy=policy,
-            details={"actionable_calls": len(actionable_calls)},
+            details={
+                "actionable_calls": planned_tool_call_count,
+                "external_calls": len(actionable_calls),
+                "submit_result_calls": len(submit_result_calls),
+            },
         )
         if execute_start_event:
             yield execute_start_event
 
-        call_descriptions = _build_tool_call_descriptions(actionable_calls)
+        call_descriptions = _build_tool_call_descriptions(actionable_calls + submit_result_calls)
         yield _format_sse_event("tool_calls", {"calls": call_descriptions})
 
-        primary_results = await execute_tool_calls(
-            actionable_calls,
-            session_id,
-            max_parallel_calls=policy.max_parallel_tool_calls,
-            retry_failed=policy.retry_failed_tool_calls,
-            max_retries=policy.max_tool_retries,
-            retry_backoff_seconds=policy.retry_backoff_seconds,
-        )
-        followup_results = await _maybe_execute_gc_reader_followup(primary_results, session_id, round_num=round_num)
-        executed_results = primary_results + followup_results
+        primary_results: List[Dict[str, Any]] = []
+        followup_results: List[Dict[str, Any]] = []
+        if actionable_calls:
+            primary_results = await execute_tool_calls(
+                actionable_calls,
+                session_id,
+                max_parallel_calls=policy.max_parallel_tool_calls,
+                retry_failed=policy.retry_failed_tool_calls,
+                max_retries=policy.max_tool_retries,
+                retry_backoff_seconds=policy.retry_backoff_seconds,
+            )
+            followup_results = await _maybe_execute_gc_reader_followup(primary_results, session_id, round_num=round_num)
+        executed_results = submit_result_rows + primary_results + followup_results
 
         try:
             archived_records = archive_tool_results_for_session(session_id, executed_results)
@@ -3418,9 +3666,9 @@ async def run_agentic_loop(
         except Exception as exc:
             logger.warning("[AgenticLoop] episodic archive skipped in round %s: %s", round_num, exc)
 
-        success_count = sum(1 for r in primary_results if r.get("status") == "success")
-        error_count = sum(1 for r in primary_results if r.get("status") == "error")
-        runtime.total_tool_calls += len(actionable_calls)
+        success_count = sum(1 for r in executed_results if r.get("status") == "success")
+        error_count = sum(1 for r in executed_results if r.get("status") == "error")
+        runtime.total_tool_calls += planned_tool_call_count
         runtime.total_tool_success += success_count
         runtime.total_tool_errors += error_count
 
@@ -3428,6 +3676,8 @@ async def run_agentic_loop(
         if loop_watchdog is not None:
             for row in executed_results:
                 if not isinstance(row, dict):
+                    continue
+                if str(row.get("service_name") or "").strip().lower() == "agent_state":
                     continue
                 tool_name = str(row.get("tool_name") or row.get("service_name") or "unknown_tool")
                 success = str(row.get("status") or "").strip().lower() == "success"
@@ -3493,18 +3743,21 @@ async def run_agentic_loop(
             break
 
         results = validation_results + executed_results
-        gc_guard_signal = gc_budget_guard.observe_round(executed_results) if gc_budget_guard is not None else None
+        gc_guard_observed_results = primary_results + followup_results
+        gc_guard_signal = (
+            gc_budget_guard.observe_round(gc_guard_observed_results) if gc_budget_guard is not None else None
+        )
         gc_guard_snapshot = gc_budget_guard.snapshot() if gc_budget_guard is not None else {}
         runtime.gc_guard_repeat_count = _clamp_int(gc_guard_snapshot.get("repeat_count", 0), 0, 0, 9999)
         runtime.gc_guard_error_total = _clamp_int(gc_guard_snapshot.get("gc_error_total", 0), 0, 0, 999999)
         runtime.gc_guard_success_total = _clamp_int(gc_guard_snapshot.get("gc_success_total", 0), 0, 0, 999999)
         runtime.gc_guard_hit_total = _clamp_int(gc_guard_snapshot.get("gc_guard_hits", 0), 0, 0, 999999)
 
-        all_failed = bool(primary_results) and success_count == 0
+        all_failed = bool(executed_results) and success_count == 0
         if all_failed:
             runtime.consecutive_tool_failures += 1
             logger.warning(
-                f"[AgenticLoop] Round {round_num}: 本轮所有可执行工具调用失败 "
+                f"[AgenticLoop] Round {round_num}: 本轮所有已调度工具调用失败 "
                 f"(连续 {runtime.consecutive_tool_failures} 轮)"
             )
         else:
@@ -3516,7 +3769,9 @@ async def run_agentic_loop(
             execute_final_status,
             policy=policy,
             details={
-                "actionable_calls": len(actionable_calls),
+                "actionable_calls": planned_tool_call_count,
+                "external_calls": len(actionable_calls),
+                "submit_result_calls": len(submit_result_calls),
                 "auto_followup_calls": len(followup_results),
                 "success_count": success_count,
                 "error_count": error_count,
@@ -3581,6 +3836,25 @@ async def run_agentic_loop(
         )
         if verify_start_event:
             yield verify_start_event
+
+        if _is_completion_submitted(runtime):
+            runtime.stop_reason = "submitted_completion"
+            verify_success_event = _format_workflow_stage_event(
+                round_num,
+                "verify",
+                "success",
+                policy=policy,
+                reason="submitted_completion",
+                decision="stop",
+                details={
+                    "task_completed": True,
+                    "submit_result_round": runtime.submit_result_round,
+                },
+            )
+            if verify_success_event:
+                yield verify_success_event
+            yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+            break
 
         arbiter_escalation = next(
             (
@@ -3684,7 +3958,7 @@ async def run_agentic_loop(
         yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
         logger.info(f"[AgenticLoop] Round {round_num}: 工具结果已注入，继续下一轮")
     else:
-        runtime.stop_reason = "max_rounds_exhausted"
+        runtime.stop_reason = "submitted_completion" if _is_completion_submitted(runtime) else "completion_not_submitted"
         needs_summary = policy.enable_summary_round
 
     if needs_summary and policy.enable_summary_round:

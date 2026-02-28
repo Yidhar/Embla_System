@@ -223,3 +223,54 @@ def test_mcp_call_rejects_flattened_arguments() -> None:
     assert actionable_calls == []
     assert validation_errors
     assert "仅支持结构化 arguments 对象" in validation_errors[0]
+
+
+def test_submit_result_tool_accepts_boolean_task_completed() -> None:
+    calls = [
+        {
+            "id": "schema_call_submit_1",
+            "name": "SubmitResult_Tool",
+            "arguments": {
+                "task_completed": True,
+                "final_answer": "已完成",
+                "deliverables": ["patch", "test_report"],
+            },
+        }
+    ]
+
+    actionable_calls, validation_errors = _convert_structured_tool_calls(
+        calls,
+        session_id="schema_submit_session_1",
+        trace_id="schema_submit_trace_1",
+    )
+
+    assert validation_errors == []
+    assert len(actionable_calls) == 1
+    call = actionable_calls[0]
+    assert call["agentType"] == "internal"
+    assert call["tool_name"] == "submit_result"
+    assert call["task_completed"] is True
+    assert call["_session_id"] == "schema_submit_session_1"
+    assert call["_trace_id"] == "schema_submit_trace_1"
+
+
+def test_submit_result_tool_rejects_non_boolean_task_completed() -> None:
+    calls = [
+        {
+            "id": "schema_call_submit_2",
+            "name": "SubmitResult_Tool",
+            "arguments": {
+                "task_completed": "true",
+            },
+        }
+    ]
+
+    actionable_calls, validation_errors = _convert_structured_tool_calls(
+        calls,
+        session_id="schema_submit_session_2",
+        trace_id="schema_submit_trace_2",
+    )
+
+    assert actionable_calls == []
+    assert validation_errors
+    assert "task_completed 必须是 boolean" in validation_errors[0]
