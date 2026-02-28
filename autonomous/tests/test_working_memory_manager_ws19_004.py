@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from autonomous.working_memory_manager import (
+from agents.memory.working_memory import (
     MemoryWindowThresholds,
     WorkingMemoryWindowManager,
 )
