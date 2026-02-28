@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from autonomous.router_engine import RouterRequest, TaskRouterEngine
+from agents.router_engine import RouterRequest, TaskRouterEngine
 
 
 DEFAULT_OUTPUT = Path("scratch/reports/ws28_001_router_prompt_profile.json")

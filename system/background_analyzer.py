@@ -14,7 +14,7 @@ from system.asyncio_offload import offload_blocking
 from system.config import config, logger
 from system.coding_intent import extract_latest_user_message as extract_latest_user_message_shared
 from system.coding_intent import requires_core_execution_for_messages
-from autonomous.router_engine import RouterRequest, TaskRouterEngine
+from agents.router_engine import RouterRequest, TaskRouterEngine
 
 from system.config import get_prompt
 

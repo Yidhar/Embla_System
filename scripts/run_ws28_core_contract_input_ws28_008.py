@@ -9,10 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from apiserver.api_server import (
-    _build_core_execution_contract_payload,
-    _build_core_execution_messages,
-)
+from agents.contract_runtime import build_core_execution_contract_payload, build_core_execution_messages
 
 
 DEFAULT_OUTPUT = Path("scratch/reports/ws28_008_core_contract_input.json")
@@ -37,19 +34,21 @@ def run_ws28_core_contract_input_ws28_008(
 ) -> Dict[str, Any]:
     root = repo_root.resolve()
 
-    payload = _build_core_execution_contract_payload(
+    recent_messages = [
+        {"role": "user", "content": "先定位线上失败请求"},
+        {"role": "assistant", "content": "目前看到 500 来自 /v1/chat"},
+        {"role": "user", "content": "继续修复"},
+    ]
+    payload = build_core_execution_contract_payload(
         session_id="ws28-008",
         current_message="请修复 API 错误并补齐回归",
-        recent_messages=[
-            {"role": "user", "content": "先定位线上失败请求"},
-            {"role": "assistant", "content": "目前看到 500 来自 /v1/chat"},
-            {"role": "user", "content": "继续修复"},
-        ],
+        recent_messages=recent_messages,
     )
-    messages = _build_core_execution_messages(
+    messages = build_core_execution_messages(
         session_id="ws28-008",
         core_system_prompt="SYSTEM_PROMPT",
         current_message="请修复 API 错误并补齐回归",
+        recent_messages=recent_messages,
     )
 
     checks = {
