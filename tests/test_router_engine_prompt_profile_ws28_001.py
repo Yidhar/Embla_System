@@ -24,6 +24,8 @@ def test_router_engine_adds_prompt_profile_fields_for_read_only_research() -> No
     assert payload["prompt_profile"] == "outer_readonly_research"
     assert payload["injection_mode"] == "minimal"
     assert payload["delegation_intent"] == "read_only_exploration"
+    assert payload["workflow_entry_state"] == "planned"
+    assert payload["controlled_execution_plan"]["schema_version"] == "ws28_router_workflow_engine.v1"
 
 
 def test_router_engine_keeps_legacy_role_tier_behavior_for_high_risk_path() -> None:
@@ -46,6 +48,7 @@ def test_router_engine_keeps_legacy_role_tier_behavior_for_high_risk_path() -> N
     assert decision.delegation_intent == "core_execution"
     assert decision.prompt_profile == "core_exec_ops"
     assert decision.injection_mode == "hardened"
+    assert decision.controlled_execution_plan["guardrails"]["requires_human_approval"] is True
 
 
 def test_router_engine_marks_explicit_role_delegate_and_recovery_mode() -> None:

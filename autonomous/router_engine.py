@@ -64,6 +64,8 @@ class RouterDecision:
     budget_remaining: Optional[int]
     reasoning: List[str]
     replay_fingerprint: str
+    workflow_entry_state: str
+    controlled_execution_plan: Dict[str, Any]
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -112,8 +114,19 @@ class TaskRouterEngine:
             "estimated_complexity": request.estimated_complexity,
         }
         replay_fingerprint = _stable_hash(fingerprint_payload)
+        decision_id = f"route_{uuid.uuid4().hex[:12]}"
+        controlled_execution_plan = self._build_controlled_execution_plan(
+            request=request,
+            task_type=task_type,
+            selected_role=role,
+            selected_model_tier=model_tier,
+            tool_profile=tool_profile,
+            prompt_profile=prompt_profile,
+            injection_mode=injection_mode,
+            delegation_intent=delegation_intent,
+        )
         decision = RouterDecision(
-            decision_id=f"route_{uuid.uuid4().hex[:12]}",
+            decision_id=decision_id,
             created_at=_utc_iso(),
             task_id=request.task_id,
             trace_id=request.trace_id,
@@ -129,6 +142,8 @@ class TaskRouterEngine:
             budget_remaining=request.budget_remaining,
             reasoning=reasons,
             replay_fingerprint=replay_fingerprint,
+            workflow_entry_state=str(controlled_execution_plan.get("entry_state") or "planned"),
+            controlled_execution_plan=controlled_execution_plan,
         )
         self._append_log(request=request, decision=decision)
         return decision
@@ -149,6 +164,65 @@ class TaskRouterEngine:
         with self._lock:
             with self.decision_log.open("a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
+
+    @staticmethod
+    def _build_controlled_execution_plan(
+        *,
+        request: RouterRequest,
+        task_type: str,
+        selected_role: str,
+        selected_model_tier: str,
+        tool_profile: List[str],
+        prompt_profile: str,
+        injection_mode: str,
+        delegation_intent: str,
+    ) -> Dict[str, Any]:
+        risk = str(request.risk_level or "").strip().lower()
+        requires_human_approval = risk in HIGH_RISK_LEVELS or str(selected_role).strip().lower() == "sys_admin"
+        states = [
+            "planned",
+            "delegating",
+            "executing",
+            "verifying",
+            "completed",
+            "blocked",
+            "failed",
+        ]
+        transitions = [
+            {"from": "planned", "to": "delegating", "guard": "route_decision_committed"},
+            {
+                "from": "delegating",
+                "to": "executing",
+                "guard": "delegate_intent_allows_execution and policy_firewall_ready",
+            },
+            {"from": "executing", "to": "verifying", "guard": "tool_calls_finished"},
+            {"from": "verifying", "to": "completed", "guard": "submit_result_confirmed"},
+            {"from": "verifying", "to": "blocked", "guard": "guardrail_rejected"},
+            {"from": "executing", "to": "failed", "guard": "execution_error_unrecoverable"},
+            {"from": "blocked", "to": "delegating", "guard": "operator_override_or_retry_window"},
+        ]
+        return {
+            "schema_version": "ws28_router_workflow_engine.v1",
+            "entry_state": "planned",
+            "states": states,
+            "terminal_states": ["completed", "failed"],
+            "transitions": transitions,
+            "route_contract": {
+                "task_type": task_type,
+                "selected_role": selected_role,
+                "selected_model_tier": selected_model_tier,
+                "tool_profile": list(tool_profile),
+                "prompt_profile": prompt_profile,
+                "injection_mode": injection_mode,
+                "delegation_intent": delegation_intent,
+            },
+            "guardrails": {
+                "requires_human_approval": requires_human_approval,
+                "risk_level": str(request.risk_level or ""),
+                "budget_remaining": request.budget_remaining,
+                "max_delegate_turns": 3,
+            },
+        }
 
     @staticmethod
     def _infer_task_type(description: str) -> str:

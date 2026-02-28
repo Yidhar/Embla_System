@@ -34,6 +34,11 @@ def test_router_engine_routes_high_risk_ops_to_sys_admin_primary() -> None:
     assert decision.selected_model_tier == "primary"
     assert decision.replay_fingerprint
     assert any("risk level deploy" in reason for reason in decision.reasoning)
+    assert decision.workflow_entry_state == "planned"
+    assert decision.controlled_execution_plan["schema_version"] == "ws28_router_workflow_engine.v1"
+    assert decision.controlled_execution_plan["entry_state"] == "planned"
+    assert decision.controlled_execution_plan["route_contract"]["selected_role"] == decision.selected_role
+    assert decision.controlled_execution_plan["guardrails"]["requires_human_approval"] is True
 
 
 def test_router_engine_uses_budget_tiering() -> None:
@@ -96,5 +101,7 @@ def test_router_engine_writes_decision_log() -> None:
         assert rows[0]["request"]["task_id"] == "task-log-001"
         assert rows[0]["decision"]["decision_id"] == decision.decision_id
         assert rows[0]["decision"]["replay_fingerprint"] == decision.replay_fingerprint
+        assert rows[0]["decision"]["workflow_entry_state"] == "planned"
+        assert rows[0]["decision"]["controlled_execution_plan"]["schema_version"] == "ws28_router_workflow_engine.v1"
     finally:
         _cleanup_case_root(case_root)
