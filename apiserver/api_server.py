@@ -147,6 +147,7 @@ _BRAINSTEM_AUTOSTART_DEFAULT = True
 _BRAINSTEM_AUTOSTART_OUTPUT = Path("scratch/reports/brainstem_control_plane_autostart_ws28_017.json")
 _BRAINSTEM_AUTOSTOP_OUTPUT = Path("scratch/reports/brainstem_control_plane_autostop_ws28_017.json")
 _GLOBAL_MUTEX_BOOTSTRAP_TTL_SECONDS = 10.0
+_BUDGET_GUARD_BOOTSTRAP_STATE_FILE = Path("scratch/runtime/budget_guard_state_ws28_028.json")
 _IMMUTABLE_DNA_PREFLIGHT_REQUIRED_ENV = "NAGA_IMMUTABLE_DNA_PREFLIGHT_REQUIRED"
 
 
@@ -345,6 +346,47 @@ def _bootstrap_immutable_dna_preflight() -> Dict[str, Any]:
         report["reason"] = "immutable_dna_preflight_exception"
         report["error"] = f"{type(exc).__name__}:{exc}"
         logger.error("[immutable_dna_bootstrap] preflight exception: %s", exc)
+    return report
+
+
+def _bootstrap_budget_guard_state(
+    *,
+    controller_factory: Optional[Callable[[Path], Any]] = None,
+    repo_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    root = (repo_root or _ops_repo_root()).resolve()
+    state_file = root / _BUDGET_GUARD_BOOTSTRAP_STATE_FILE
+    report: Dict[str, Any] = {
+        "enabled": True,
+        "state_file": str(state_file).replace("\\", "/"),
+        "passed": False,
+        "baseline_written": False,
+    }
+    try:
+        if controller_factory is None:
+            from core.security import BudgetGuardController
+
+            controller = BudgetGuardController(state_file=state_file)
+        else:
+            controller = controller_factory(state_file)
+
+        baseline = controller.ensure_baseline_state(requested_by="api_lifespan_bootstrap")
+        report["baseline"] = baseline if isinstance(baseline, dict) else {}
+        report["status"] = str(report["baseline"].get("status") or "")
+        report["reason_code"] = str(report["baseline"].get("reason_code") or "")
+        report["baseline_written"] = bool(report["baseline"].get("baseline_written"))
+        report["passed"] = state_file.exists()
+        if report["passed"]:
+            if report["baseline_written"]:
+                logger.info("[budget_guard_bootstrap] baseline state initialized")
+            else:
+                logger.info("[budget_guard_bootstrap] existing state reused")
+        else:
+            logger.warning("[budget_guard_bootstrap] state file missing after bootstrap")
+    except Exception as exc:
+        report["passed"] = False
+        report["error"] = f"{type(exc).__name__}:{exc}"
+        logger.error("[budget_guard_bootstrap] bootstrap error: %s", exc)
     return report
 
 
@@ -1278,6 +1320,10 @@ async def lifespan(app: FastAPI):
         app.state.global_mutex_bootstrap = mutex_bootstrap
         if not bool(mutex_bootstrap.get("passed", False)):
             print("[WARN] Global mutex 启动初始化未通过，锁状态可能显示 missing/unknown")
+        budget_guard_bootstrap = _bootstrap_budget_guard_state()
+        app.state.budget_guard_bootstrap = budget_guard_bootstrap
+        if not bool(budget_guard_bootstrap.get("passed", False)):
+            print("[WARN] Budget guard 启动初始化未通过，预算状态可能显示 missing/unknown")
         immutable_dna_preflight = _bootstrap_immutable_dna_preflight()
         app.state.immutable_dna_preflight = immutable_dna_preflight
         immutable_dna_required = bool(immutable_dna_preflight.get("required", True))

@@ -120,3 +120,21 @@ def test_global_mutex_bootstrap_initializes_idle_state(tmp_path: Path) -> None:
     assert report["state"] == "idle"
     assert report["fencing_epoch"] == 0
     assert report["state_file"].endswith("global_mutex_lease.json")
+
+
+def test_budget_guard_bootstrap_initializes_baseline_state(tmp_path: Path) -> None:
+    report = api_server._bootstrap_budget_guard_state(  # noqa: SLF001
+        repo_root=tmp_path,
+    )
+    assert report["enabled"] is True
+    assert report["passed"] is True
+    assert report["baseline_written"] is True
+    assert report["status"] == "ok"
+    assert report["reason_code"] == "BUDGET_GUARD_BASELINE_READY"
+    assert report["state_file"].endswith("budget_guard_state_ws28_028.json")
+
+    second = api_server._bootstrap_budget_guard_state(  # noqa: SLF001
+        repo_root=tmp_path,
+    )
+    assert second["passed"] is True
+    assert second["baseline_written"] is False

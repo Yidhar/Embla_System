@@ -46,3 +46,17 @@ def test_budget_guard_controller_persists_trigger_state(tmp_path: Path) -> None:
     assert state["status"] == "critical"
     assert state["reason_code"] == "CONSECUTIVE_ERROR_LIMIT_EXCEEDED"
     assert state["task_id"] == "task-1"
+
+
+def test_budget_guard_controller_initializes_baseline_state(tmp_path: Path) -> None:
+    controller = BudgetGuardController(state_file=tmp_path / "budget_guard_state.json")
+    first = controller.ensure_baseline_state(requested_by="unit-test")
+    assert first["baseline_written"] is True
+    assert first["status"] == "ok"
+    assert first["reason_code"] == "BUDGET_GUARD_BASELINE_READY"
+    assert first["details"]["baseline"] is True
+    assert first["details"]["requested_by"] == "unit-test"
+
+    second = controller.ensure_baseline_state(requested_by="unit-test")
+    assert second["baseline_written"] is False
+    assert second["status"] == "ok"

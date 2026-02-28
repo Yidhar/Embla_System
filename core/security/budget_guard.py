@@ -91,6 +91,40 @@ class BudgetGuardController:
         self._write_state(state)
         return {**payload, "status": state.status, "reason_code": state.reason_code}
 
+    def ensure_baseline_state(
+        self,
+        *,
+        requested_by: str = "startup",
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        if self.state_file.exists() and not force:
+            snapshot = self.read_state()
+            snapshot["baseline_written"] = False
+            return snapshot
+
+        state = BudgetGuardState(
+            generated_at=_utc_iso(),
+            status="ok",
+            reason_code="BUDGET_GUARD_BASELINE_READY",
+            reason_text="budget guard baseline state initialized",
+            task_id="",
+            tool_name="",
+            action="",
+            details={
+                "baseline": True,
+                "requested_by": str(requested_by or "startup").strip() or "startup",
+            },
+        )
+        self._write_state(state)
+        return {
+            **state.to_dict(),
+            "state_file": _to_unix(self.state_file),
+            "baseline_written": True,
+            "heartbeat_age_seconds": 0.0,
+            "stale_warning_seconds": 120.0,
+            "stale_critical_seconds": 300.0,
+        }
+
     def read_state(
         self,
         *,
