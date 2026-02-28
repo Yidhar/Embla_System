@@ -22,7 +22,7 @@ from system.episodic_memory import archive_tool_results_for_session, build_reinj
 from system.gc_budget_guard import GCBudgetGuard, GCBudgetGuardConfig
 from system.gc_memory_card import build_gc_memory_index_card
 from system.gc_reader_bridge import build_gc_reader_followup_plan
-from system.global_mutex import LeaseHandle, get_global_mutex_manager
+from core.security import LeaseHandle, get_global_mutex_manager
 from system.loop_cost_guard import LoopCostGuard, LoopCostThresholds
 from system.router_arbiter import MAX_DELEGATE_TURNS, evaluate_workspace_conflict_retry
 from system.semantic_graph import update_semantic_graph_from_records

@@ -303,7 +303,7 @@ def _bootstrap_global_mutex_lease_state(
     }
     try:
         if manager_factory is None:
-            from system.global_mutex import get_global_mutex_manager
+            from core.security import get_global_mutex_manager
 
             manager = get_global_mutex_manager()
         else:

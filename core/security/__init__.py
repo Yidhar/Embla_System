@@ -3,7 +3,14 @@
 from .approval_gate import ApprovalDecision, ApprovalGate, ApprovalRequest
 from .audit_ledger import AuditLedger, AuditLedgerRecord, AuditLedgerVerifyReport
 from .budget_guard import BudgetGuardController, BudgetGuardState
-from .lease_fencing import LeaseFencingController, LeaseFencingSnapshot, get_lease_fencing_controller
+from .lease_fencing import (
+    GlobalMutexManager,
+    LeaseFencingController,
+    LeaseFencingSnapshot,
+    LeaseHandle,
+    get_global_mutex_manager,
+    get_lease_fencing_controller,
+)
 from .killswitch import KillSwitchController, KillSwitchState
 from .policy_firewall import FirewallDecision, PolicyFirewall, get_policy_firewall
 
@@ -16,6 +23,9 @@ __all__ = [
     "AuditLedgerVerifyReport",
     "BudgetGuardController",
     "BudgetGuardState",
+    "LeaseHandle",
+    "GlobalMutexManager",
+    "get_global_mutex_manager",
     "LeaseFencingController",
     "LeaseFencingSnapshot",
     "get_lease_fencing_controller",
