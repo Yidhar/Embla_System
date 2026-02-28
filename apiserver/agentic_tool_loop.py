@@ -13,7 +13,7 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
 
 from system.config import get_config
 from system.coding_intent import contains_direct_coding_signal, extract_latest_user_message
@@ -1032,6 +1032,207 @@ _SUPPORTED_NATIVE_TOOL_NAMES = {
     "sleep_and_watch",
     "killswitch_plan",
 }
+_NATIVE_TOOL_ALLOWED_INPUT_ARGS: Dict[str, Set[str]] = {
+    "read_file": {"tool_name", "path", "file_path", "start_line", "end_line", "max_chars"},
+    "write_file": {
+        "tool_name",
+        "path",
+        "file_path",
+        "content",
+        "mode",
+        "encoding",
+        "requester",
+        "approvalPolicy",
+        "approval_policy",
+        "approval_granted",
+        "approved",
+    },
+    "get_cwd": {"tool_name"},
+    "run_cmd": {
+        "tool_name",
+        "command",
+        "cmd",
+        "cwd",
+        "timeout_seconds",
+        "max_output_chars",
+        "artifact_priority",
+        "approvalPolicy",
+        "approval_policy",
+        "approval_granted",
+        "approved",
+    },
+    "search_keyword": {
+        "tool_name",
+        "keyword",
+        "query",
+        "search_path",
+        "glob",
+        "case_sensitive",
+        "max_results",
+        "max_file_size_kb",
+    },
+    "query_docs": {"tool_name", "query", "keyword", "max_results", "max_file_size_kb", "case_sensitive"},
+    "list_files": {"tool_name", "path", "recursive", "max_results", "glob"},
+    "git_status": {
+        "tool_name",
+        "repo_path",
+        "cwd",
+        "timeout_seconds",
+        "max_output_chars",
+        "porcelain",
+        "include_untracked",
+        "short",
+        "branch",
+    },
+    "git_diff": {
+        "tool_name",
+        "repo_path",
+        "cwd",
+        "timeout_seconds",
+        "max_output_chars",
+        "name_only",
+        "stat",
+        "cached",
+        "staged",
+        "unified",
+        "ref",
+        "base_ref",
+        "target_path",
+        "pathspec",
+    },
+    "git_log": {
+        "tool_name",
+        "repo_path",
+        "cwd",
+        "timeout_seconds",
+        "max_output_chars",
+        "max_count",
+        "oneline",
+        "pretty",
+        "since",
+        "ref",
+        "target_path",
+        "pathspec",
+    },
+    "git_show": {
+        "tool_name",
+        "repo_path",
+        "cwd",
+        "timeout_seconds",
+        "max_output_chars",
+        "ref",
+        "stat_only",
+        "name_only",
+        "target_path",
+        "pathspec",
+    },
+    "git_blame": {
+        "tool_name",
+        "repo_path",
+        "cwd",
+        "timeout_seconds",
+        "max_output_chars",
+        "target_path",
+        "path",
+        "file_path",
+        "ref",
+        "max_lines",
+        "start_line",
+        "end_line",
+    },
+    "git_grep": {
+        "tool_name",
+        "repo_path",
+        "cwd",
+        "timeout_seconds",
+        "max_output_chars",
+        "pattern",
+        "keyword",
+        "query",
+        "case_sensitive",
+        "use_regex",
+        "max_results",
+        "ref",
+        "target_path",
+        "pathspec",
+    },
+    "git_changed_files": {"tool_name", "repo_path", "cwd", "timeout_seconds", "max_output_chars", "max_results"},
+    "git_checkout_file": {
+        "tool_name",
+        "repo_path",
+        "cwd",
+        "timeout_seconds",
+        "max_output_chars",
+        "target_path",
+        "path",
+        "file_path",
+        "confirm",
+        "ref",
+        "staged",
+        "worktree",
+    },
+    "python_repl": {
+        "tool_name",
+        "code",
+        "expression",
+        "sandbox",
+        "timeout_seconds",
+        "max_output_chars",
+        "docker_image",
+        "python_cmd",
+    },
+    "artifact_reader": {
+        "tool_name",
+        "forensic_artifact_ref",
+        "raw_result_ref",
+        "artifact_id",
+        "mode",
+        "max_results",
+        "start_line",
+        "end_line",
+        "pattern",
+        "keyword",
+        "query",
+        "use_regex",
+        "case_sensitive",
+        "jsonpath",
+        "max_chars",
+    },
+    "file_ast_skeleton": {"tool_name", "path", "file_path", "max_results"},
+    "file_ast_chunk_read": {
+        "tool_name",
+        "path",
+        "file_path",
+        "start_line",
+        "end_line",
+        "context_before",
+        "context_after",
+    },
+    "workspace_txn_apply": {
+        "tool_name",
+        "changes",
+        "contract_id",
+        "contract_checksum",
+        "verify_after_apply",
+        "requester",
+        "approvalPolicy",
+        "approval_policy",
+        "approval_granted",
+        "approved",
+    },
+    "sleep_and_watch": {
+        "tool_name",
+        "log_file",
+        "path",
+        "pattern",
+        "regex",
+        "timeout_seconds",
+        "poll_interval_seconds",
+        "from_end",
+        "max_line_chars",
+    },
+    "killswitch_plan": {"tool_name", "mode", "oob_allowlist", "dns_allow"},
+}
 _VALID_RESULT_STATUS = {"success", "ok", "error", "timeout", "blocked"}
 _SSE_PROTOCOL_VERSION = "ws20-002-v1"
 _HIGH_RISK_LEVELS = {"write_repo", "deploy", "secrets", "self_modify"}
@@ -1142,6 +1343,30 @@ def _validate_native_call_schema(call_id: str, args: Dict[str, Any]) -> Tuple[st
             errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "sleep_and_watch 缺少 pattern/regex"))
 
     return normalized_tool, errors
+
+
+def _prune_native_call_arguments(
+    *,
+    normalized_tool: str,
+    args: Dict[str, Any],
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Drop per-tool unsupported fields before firewall validation.
+
+    Firewall remains strict; pruning only removes incompatible keys from model payload.
+    """
+    allowed = _NATIVE_TOOL_ALLOWED_INPUT_ARGS.get(normalized_tool)
+    if allowed is None:
+        return dict(args), []
+
+    pruned: Dict[str, Any] = {}
+    dropped: List[str] = []
+    for key, value in args.items():
+        name = str(key)
+        if name.startswith("_") or name in allowed:
+            pruned[name] = value
+        else:
+            dropped.append(name)
+    return pruned, sorted(set(dropped))
 
 
 def _enforce_tool_result_schema(
@@ -2472,15 +2697,22 @@ def _convert_structured_tool_calls(
             if not native_tool_name:
                 validation_errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "native_call 缺少 tool_name"))
                 continue
-            normalized_native_tool, native_schema_errors = _validate_native_call_schema(call_id, args)
+            normalized_native_tool = _normalize_native_tool_name(native_tool_name)
+            pruned_args, dropped_args = _prune_native_call_arguments(
+                normalized_tool=normalized_native_tool,
+                args=args,
+            )
+            pruned_args["tool_name"] = normalized_native_tool
+            _, native_schema_errors = _validate_native_call_schema(call_id, pruned_args)
             if native_schema_errors:
                 validation_errors.extend(native_schema_errors)
                 continue
             native_call = {
                 "agentType": "native",
-                **args,
-                "tool_name": normalized_native_tool,
+                **pruned_args,
             }
+            if dropped_args:
+                native_call["_dropped_input_args"] = dropped_args
             _inject_call_context_metadata(
                 native_call,
                 call_id=call_id,

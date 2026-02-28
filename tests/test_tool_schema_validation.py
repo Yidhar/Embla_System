@@ -4,6 +4,7 @@ import asyncio
 
 import apiserver.agentic_tool_loop as tool_loop
 from apiserver.agentic_tool_loop import _convert_structured_tool_calls
+from system.policy_firewall import PolicyFirewall
 
 
 def test_native_input_schema_rejects_missing_run_cmd_command() -> None:
@@ -71,6 +72,66 @@ def test_native_input_schema_accepts_artifact_reader_forensic_ref() -> None:
     assert len(actionable_calls) == 1
     assert actionable_calls[0]["tool_name"] == "artifact_reader"
     assert actionable_calls[0]["forensic_artifact_ref"] == "artifact_abc123"
+
+
+def test_native_run_cmd_prunes_bloated_arguments_before_firewall() -> None:
+    calls = [
+        {
+            "id": "schema_call_run_cmd_prune_1",
+            "name": "native_call",
+            "arguments": {
+                "tool_name": "run_cmd",
+                "command": "echo run_cmd_prune_smoke",
+                "cwd": ".",
+                "timeout_seconds": 60,
+                "max_output_chars": 8000,
+                "artifact_priority": "normal",
+                # Bloated unknown keys from generic schema payload
+                "artifact_id": "",
+                "mode": "preview",
+                "max_count": 1,
+                "max_results": 1,
+                "max_chars": 200,
+                "sandbox": "restricted",
+                "worktree": False,
+                "start_line": 1,
+                "end_line": 1,
+            },
+        }
+    ]
+
+    actionable_calls, validation_errors = _convert_structured_tool_calls(
+        calls,
+        session_id="schema_sess_run_cmd_prune_1",
+        trace_id="schema_trace_run_cmd_prune_1",
+    )
+
+    assert validation_errors == []
+    assert len(actionable_calls) == 1
+    call = actionable_calls[0]
+    assert call["tool_name"] == "run_cmd"
+    assert call["command"] == "echo run_cmd_prune_smoke"
+    assert call["cwd"] == "."
+    assert call["timeout_seconds"] == 60
+    assert call["max_output_chars"] == 8000
+    assert call["artifact_priority"] == "normal"
+
+    for dropped_key in (
+        "artifact_id",
+        "mode",
+        "max_count",
+        "max_results",
+        "max_chars",
+        "sandbox",
+        "worktree",
+        "start_line",
+        "end_line",
+    ):
+        assert dropped_key not in call
+        assert dropped_key in call["_dropped_input_args"]
+
+    decision = PolicyFirewall().validate_native_call("run_cmd", call)
+    assert decision.allowed is True
 
 
 def test_output_schema_rejects_result_without_status(monkeypatch) -> None:
