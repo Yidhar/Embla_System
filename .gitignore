@@ -214,6 +214,7 @@ AGENTS.md
 
 *.dat
 *.jsonl
+!doc/task/reports/role_executor_semantic_guard_change_ledger_ws28_021.jsonl
 *.json
 *.txt
 *.lock
