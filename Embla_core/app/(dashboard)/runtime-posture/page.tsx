@@ -1,6 +1,7 @@
 import { SignalCard, type SignalState } from "@/components/cards/signal-card";
 import { MetricBar, type MetricBarTone } from "@/components/charts/metric-bar";
 import { fetchEvidenceIndex, fetchIncidentsLatest, fetchRuntimePosture } from "@/lib/api/ops";
+import { fetchSystemConfig } from "@/lib/api/system";
 import {
   formatIsoDateTime,
   formatNumber,
@@ -44,6 +45,7 @@ const PAGE_COPY: Record<
       requiredEvidence: string;
       leaseGuard: string;
       brainstemGate: string;
+      runtimeGovernanceConfig: string;
       summarySnapshot: string;
       recentEvidenceFiles: string;
     };
@@ -100,6 +102,9 @@ const PAGE_COPY: Record<
       tick: string;
       pid: string;
       generatedAt: string;
+      auditLedgerFile: string;
+      approvalRequiredScopes: string;
+      noApprovalScopesConfigured: string;
       noIncidentSignal: string;
       noBrainstemIncident: string;
       seconds: string;
@@ -128,6 +133,7 @@ const PAGE_COPY: Record<
       requiredEvidence: "Required Evidence Reports",
       leaseGuard: "Lease Guard",
       brainstemGate: "Brainstem Control-Plane Gate",
+      runtimeGovernanceConfig: "Runtime Governance Config",
       summarySnapshot: "Summary Snapshot",
       recentEvidenceFiles: "Recent Evidence Files",
     },
@@ -184,6 +190,9 @@ const PAGE_COPY: Record<
       tick: "Tick",
       pid: "PID",
       generatedAt: "Generated at",
+      auditLedgerFile: "Audit ledger file",
+      approvalRequiredScopes: "Approval required scopes",
+      noApprovalScopesConfigured: "No approval scope configured.",
       noIncidentSignal: "No incident signal detected.",
       noBrainstemIncident: "No brainstem incident in current window.",
       seconds: "s",
@@ -211,6 +220,7 @@ const PAGE_COPY: Record<
       requiredEvidence: "必需证据报告",
       leaseGuard: "租约防护",
       brainstemGate: "脑干管控门禁",
+      runtimeGovernanceConfig: "运行治理配置快照",
       summarySnapshot: "摘要快照",
       recentEvidenceFiles: "最近证据文件",
     },
@@ -267,6 +277,9 @@ const PAGE_COPY: Record<
       tick: "心跳计数",
       pid: "进程号",
       generatedAt: "生成时间",
+      auditLedgerFile: "审计账本文件",
+      approvalRequiredScopes: "需人工审批范围",
+      noApprovalScopesConfigured: "未配置审批范围。",
       noIncidentSignal: "未检测到事件信号。",
       noBrainstemIncident: "当前窗口无脑干相关事件。",
       seconds: "秒",
@@ -407,10 +420,11 @@ function reportStatusLabel(status: unknown, lang: AppLang): string {
 export default async function RuntimePosturePage({ searchParams }: RuntimePageProps) {
   const lang = await resolveLangFromSearchParams(searchParams);
   const copy = PAGE_COPY[lang];
-  const [payload, evidencePayload, incidentsPayload] = await Promise.all([
+  const [payload, evidencePayload, incidentsPayload, systemConfig] = await Promise.all([
     fetchRuntimePosture(),
     fetchEvidenceIndex(),
     fetchIncidentsLatest(),
+    fetchSystemConfig(),
   ]);
   const metrics = asRecord(payload?.data?.metrics);
   const runtimeRollout = asRecord(metrics.runtime_rollout);
@@ -427,6 +441,12 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
   const sources = asRecord(payload?.data?.sources);
   const postureSummary = asRecord(payload?.data?.summary);
   const brainstemControlPlane = asRecord(payload?.data?.brainstem_control_plane);
+  const emblaSystem = asRecord(asRecord(systemConfig || {}).embla_system);
+  const emblaSecurity = asRecord(emblaSystem.security);
+  const emblaAuditLedgerFile = asText(emblaSecurity.audit_ledger_file, "scratch/runtime/audit_ledger.jsonl");
+  const emblaApprovalRequiredScopes = Array.isArray(emblaSecurity.approval_required_scopes)
+    ? emblaSecurity.approval_required_scopes.map((item) => String(item || "").trim()).filter((item) => item.length > 0)
+    : [];
   const brainstemStatus = asText(postureSummary.brainstem_control_plane_status, "unknown");
   const routeQuality = asRecord(postureSummary.route_quality);
   const routeQualityTrend = asRecord(routeQuality.trend);
@@ -836,6 +856,23 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
               <li className="rounded-xl bg-white/70 px-3 py-2 text-gray-500">{copy.words.noIncidentSignal}</li>
             ) : null}
           </ul>
+        </article>
+
+        <article className="glass-card p-6">
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.runtimeGovernanceConfig}</p>
+          <div className="mt-4 space-y-2 text-xs text-gray-700">
+            <p className="rounded-xl bg-white/70 px-3 py-2">
+              {copy.words.auditLedgerFile}: <span className="font-mono font-bold">{emblaAuditLedgerFile}</span>
+            </p>
+            <div className="rounded-xl bg-white/70 px-3 py-2">
+              <p className="font-bold">{copy.words.approvalRequiredScopes}</p>
+              <p className="mt-1 font-mono text-[10px] text-gray-600">
+                {emblaApprovalRequiredScopes.length > 0
+                  ? emblaApprovalRequiredScopes.join(", ")
+                  : copy.words.noApprovalScopesConfigured}
+              </p>
+            </div>
+          </div>
         </article>
 
         <article className="glass-card p-6">
