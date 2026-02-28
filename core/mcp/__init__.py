@@ -2,7 +2,12 @@
 
 from .contract import MCPCallInput, MCPCallOutput
 from .host import MCPManager, get_mcp_manager
-from .isolated_worker import PluginWorkerProxy, PluginWorkerSpec
+from .isolated_worker import (
+    IsolatedWorkerRuntime,
+    IsolatedWorkerRuntimeSnapshot,
+    PluginWorkerProxy,
+    PluginWorkerSpec,
+)
 
 __all__ = [
     "MCPCallInput",
@@ -11,4 +16,6 @@ __all__ = [
     "get_mcp_manager",
     "PluginWorkerProxy",
     "PluginWorkerSpec",
+    "IsolatedWorkerRuntime",
+    "IsolatedWorkerRuntimeSnapshot",
 ]
