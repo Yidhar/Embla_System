@@ -4,8 +4,8 @@ import shutil
 import uuid
 from pathlib import Path
 
-from system.episodic_memory import EpisodicRecord
-from system.semantic_graph import SemanticGraphStore, update_semantic_graph_from_records
+from agents.memory.episodic_memory import EpisodicRecord
+from agents.memory.semantic_graph import SemanticGraphStore, update_semantic_graph_from_records
 
 
 def _make_case_dir() -> Path:
@@ -91,4 +91,3 @@ def test_semantic_graph_reload_and_session_filter():
         assert sess_b_view[0]["sessions"] == ["sess-b"]
     finally:
         shutil.rmtree(case_dir, ignore_errors=True)
-
