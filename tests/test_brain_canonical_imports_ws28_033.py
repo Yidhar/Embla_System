@@ -12,6 +12,8 @@ FORBIDDEN_PATTERNS = (
     "from autonomous.meta_agent_runtime import",
     "from autonomous.gc_pipeline import",
     "from autonomous.working_memory_manager import",
+    "from system.episodic_memory import",
+    "from system.semantic_graph import",
     "from apiserver.agentic_tool_loop import",
 )
 

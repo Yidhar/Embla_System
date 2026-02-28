@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from system.episodic_memory import get_episodic_memory
+from agents.memory.episodic_memory import get_episodic_memory
 
 
 def _utc_iso() -> str:
