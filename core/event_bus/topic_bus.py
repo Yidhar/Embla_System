@@ -1,7 +1,18 @@
-"""Compatibility wrapper for existing topic event bus implementation."""
+"""Core topic bus facade (brainstem namespace)."""
 
 from __future__ import annotations
 
-from autonomous.event_log.topic_event_bus import TopicEventBus
+from autonomous.event_log.topic_event_bus import (
+    ReplayDispatchResult,
+    TopicEventBus as _TopicEventBus,
+    TopicSubscription,
+    infer_event_topic,
+)
 
-__all__ = ["TopicEventBus"]
+
+class TopicEventBus(_TopicEventBus):
+    """Brainstem namespace facade for topic-oriented event bus."""
+
+
+__all__ = ["TopicEventBus", "TopicSubscription", "ReplayDispatchResult", "infer_event_topic"]
+

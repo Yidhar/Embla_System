@@ -3,4 +3,7 @@
 from .event_store import EventStore
 from .topic_bus import TopicEventBus
 
-__all__ = ["EventStore", "TopicEventBus"]
+__all__ = [
+    "EventStore",
+    "TopicEventBus",
+]

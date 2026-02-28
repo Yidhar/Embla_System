@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Set
 
 from core.supervisor.process_guard import ProcessGuardDaemon
-from system.watchdog_daemon import WatchdogDaemon
+from core.supervisor.watchdog_daemon import WatchdogDaemon
 
 
 DEFAULT_STATE_FILE = Path("scratch/runtime/brainstem_control_plane_manager_ws28_017_state.json")

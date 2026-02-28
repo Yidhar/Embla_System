@@ -1,7 +1,17 @@
-"""Compatibility wrapper for existing brainstem supervisor implementation."""
+"""Core namespace exports for brainstem supervisor primitives."""
 
 from __future__ import annotations
 
-from system.brainstem_supervisor import BrainstemSupervisor
+from system.brainstem_supervisor import (
+    BrainstemServiceSpec,
+    BrainstemServiceState,
+    BrainstemSupervisor,
+    SupervisorAction,
+)
 
-__all__ = ["BrainstemSupervisor"]
+__all__ = [
+    "BrainstemServiceSpec",
+    "BrainstemServiceState",
+    "BrainstemSupervisor",
+    "SupervisorAction",
+]

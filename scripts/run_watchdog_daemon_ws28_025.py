@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from system.watchdog_daemon import WatchdogDaemon, WatchdogThresholds
+from core.supervisor.watchdog_daemon import WatchdogDaemon, WatchdogThresholds
 
 
 TASK_ID = "NGA-WS28-025"

@@ -12,7 +12,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
 
-from autonomous.event_log import AlertEventProducer, CronEventProducer, EventStore
+from autonomous.event_log import AlertEventProducer, CronEventProducer
+from core.event_bus.consumers import register_default_consumers
+from core.event_bus.event_store import EventStore
+from core.supervisor.watchdog_daemon import WatchdogAction, WatchdogDaemon, WatchdogThresholds
 from autonomous.planner import Planner
 from autonomous.release import CanaryThresholds, ReleaseController
 from autonomous.sensor import Sensor
@@ -27,7 +30,6 @@ from autonomous.tools.subagent_runtime import (
 )
 from autonomous.types import OptimizationTask
 from system.brainstem_event_bridge import BRIDGED_EVENT_TYPE, build_brainstem_bridge_payload
-from system.watchdog_daemon import WatchdogAction, WatchdogDaemon, WatchdogThresholds
 
 
 class LeaseLostError(RuntimeError):
@@ -216,6 +218,20 @@ class SystemAgent:
         db_path = log_dir / "workflow.db"
 
         self.event_store = EventStore(event_path)
+        self.event_bus_consumers: Dict[str, Any] = {}
+        try:
+            hooks = register_default_consumers(
+                event_store=self.event_store,
+                repo_root=self.repo_dir,
+                include_warning_incidents=True,
+            )
+            self.event_bus_consumers = {
+                "posture_state_file": hooks.posture_state_file,
+                "incident_file": hooks.incident_file,
+                "release_gate_file": hooks.release_gate_file,
+            }
+        except Exception as exc:
+            self.logger.warning("[SystemAgent] event bus consumer registration skipped: %s", exc)
         self.cron_event_producer = CronEventProducer(
             event_store=self.event_store,
             source="autonomous.system_agent.cron",

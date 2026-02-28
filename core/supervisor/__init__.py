@@ -1,7 +1,22 @@
 """Core supervisor namespace wrappers."""
 
-from .brainstem_supervisor import BrainstemSupervisor
+from .brainstem_supervisor import (
+    BrainstemServiceSpec,
+    BrainstemServiceState,
+    BrainstemSupervisor,
+    SupervisorAction,
+)
 from .process_guard import ProcessGuardDaemon
-from .watchdog_daemon import WatchdogDaemon
+from .watchdog_daemon import WatchdogAction, WatchdogDaemon, WatchdogSnapshot, WatchdogThresholds
 
-__all__ = ["BrainstemSupervisor", "WatchdogDaemon", "ProcessGuardDaemon"]
+__all__ = [
+    "BrainstemServiceSpec",
+    "BrainstemServiceState",
+    "BrainstemSupervisor",
+    "SupervisorAction",
+    "WatchdogAction",
+    "WatchdogDaemon",
+    "WatchdogSnapshot",
+    "WatchdogThresholds",
+    "ProcessGuardDaemon",
+]

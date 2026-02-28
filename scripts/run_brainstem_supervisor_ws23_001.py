@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
-from system.brainstem_supervisor import BrainstemServiceSpec, BrainstemSupervisor
+from core.supervisor.brainstem_supervisor import BrainstemServiceSpec, BrainstemSupervisor
 
 
 def _utc_iso() -> str:

@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 from core.security.killswitch import KillSwitchController
 from system.artifact_store import get_artifact_store
 from system.native_executor import CommandResult, NativeExecutor, NativeSecurityError
-from system.policy_firewall import get_policy_firewall
+from core.security import get_policy_firewall
 from system.sleep_watch import wait_for_log_pattern
 from system.subagent_contract import validate_parallel_contract
 from system.test_baseline_guard import TestBaselineGuard, TestPoisoningDetector

@@ -23,7 +23,7 @@ from pydantic import BaseModel
 import shutil
 from pathlib import Path
 from system.coding_intent import contains_direct_coding_signal, has_recent_coding_context, is_coding_followup
-from system.watchdog_daemon import WatchdogDaemon
+from core.supervisor.watchdog_daemon import WatchdogDaemon
 from autonomous.event_log.event_store import EventStore
 from autonomous.router_engine import RouterRequest, TaskRouterEngine
 from autonomous.router_arbiter_guard import RouterArbiterGuard

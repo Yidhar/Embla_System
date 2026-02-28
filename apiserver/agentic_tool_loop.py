@@ -27,7 +27,7 @@ from system.loop_cost_guard import LoopCostGuard, LoopCostThresholds
 from system.router_arbiter import MAX_DELEGATE_TURNS, evaluate_workspace_conflict_retry
 from system.semantic_graph import update_semantic_graph_from_records
 from system.tool_contract import ToolCallEnvelope
-from system.watchdog_daemon import WatchdogDaemon, WatchdogThresholds
+from core.supervisor.watchdog_daemon import WatchdogDaemon, WatchdogThresholds
 from .native_tools import get_native_tool_executor
 
 logger = logging.getLogger(__name__)

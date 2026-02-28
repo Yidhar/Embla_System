@@ -1,5 +1,9 @@
 """Autonomous SDLC skeleton package."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from autonomous.daily_checkpoint import DailyCheckpointConfig, DailyCheckpointEngine, DailyCheckpointReport
 from autonomous.llm_gateway import (
     GatewayPlan,
@@ -14,12 +18,14 @@ from autonomous.llm_gateway import (
 from autonomous.meta_agent_runtime import Goal, MetaAgentRuntime, SubTask, TaskFeedback
 from autonomous.router_arbiter_guard import RouterArbiterDecision, RouterArbiterGuard
 from autonomous.router_engine import RouterDecision, RouterRequest, TaskRouterEngine
-from autonomous.system_agent import SystemAgent
 from autonomous.working_memory_manager import (
     MemoryWindowRebalanceResult,
     MemoryWindowThresholds,
     WorkingMemoryWindowManager,
 )
+
+if TYPE_CHECKING:
+    from autonomous.system_agent import SystemAgent
 
 __all__ = [
     "SystemAgent",
@@ -47,3 +53,11 @@ __all__ = [
     "MemoryWindowRebalanceResult",
     "WorkingMemoryWindowManager",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "SystemAgent":
+        from autonomous.system_agent import SystemAgent as _SystemAgent
+
+        return _SystemAgent
+    raise AttributeError(f"module 'autonomous' has no attribute {name!r}")
