@@ -42,7 +42,7 @@ def test_manage_brainstem_control_plane_start_status_stop_flow(monkeypatch) -> N
         spec_file = repo_root / "system" / "brainstem_services.spec"
         _write_json(spec_file, {"services": []})
 
-        alive_pids = {55001, 55002}
+        alive_pids = {55001, 55002, 55003}
 
         class _FakeProcess:
             def __init__(self, pid: int) -> None:
@@ -92,6 +92,30 @@ def test_manage_brainstem_control_plane_start_status_stop_flow(monkeypatch) -> N
                     encoding="utf-8",
                 )
                 return _FakeProcess(55002)
+            if "run_process_guard_daemon_ws28_028.py" in joined:
+                state_path = Path(command[command.index("--state-file") + 1])
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(
+                    json.dumps(
+                        {
+                            "generated_at": datetime.now(timezone.utc).isoformat(),
+                            "pid": 55003,
+                            "mode": "daemon",
+                            "tick": 1,
+                            "status": "ok",
+                            "reason_code": "OK",
+                            "reason_text": "No orphan/stale running jobs detected.",
+                            "running_jobs": 0,
+                            "orphan_jobs": 0,
+                            "stale_jobs": 0,
+                            "orphan_reaped_count": 0,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                return _FakeProcess(55003)
             raise AssertionError(f"unexpected popen command: {command}")
 
         def _fake_kill(pid, sig):
@@ -127,6 +151,8 @@ def test_manage_brainstem_control_plane_start_status_stop_flow(monkeypatch) -> N
         assert start_report["checks"]["heartbeat_detected"] is True
         assert start_report["checks"]["watchdog_spawned"] is True
         assert start_report["checks"]["watchdog_gate"] is True
+        assert start_report["checks"]["process_guard_spawned"] is True
+        assert start_report["checks"]["process_guard_gate"] is True
         assert start_report["report_schema_version"] == "ws28_017_brainstem_control_plane_manage.v1"
         assert start_report["output_file"].endswith("manager_report.json")
         persisted_start = _read_json(output)
@@ -145,6 +171,8 @@ def test_manage_brainstem_control_plane_start_status_stop_flow(monkeypatch) -> N
         assert status_report["checks"]["launcher_pid_alive"] is True
         assert status_report["checks"]["watchdog_gate"] is True
         assert status_report["checks"]["watchdog_daemon_pid_alive"] is True
+        assert status_report["checks"]["process_guard_gate"] is True
+        assert status_report["checks"]["process_guard_daemon_pid_alive"] is True
         persisted_status = _read_json(output)
         assert persisted_status["action"] == "status"
         assert persisted_status["report_schema_version"] == "ws28_017_brainstem_control_plane_manage.v1"
@@ -191,7 +219,7 @@ def test_manage_brainstem_start_waits_for_fresh_heartbeat(monkeypatch) -> None:
             },
         )
 
-        alive_pids = {55101, 55102}
+        alive_pids = {55101, 55102, 55103}
 
         class _FakeProcess:
             def __init__(self, pid: int) -> None:
@@ -247,6 +275,30 @@ def test_manage_brainstem_start_waits_for_fresh_heartbeat(monkeypatch) -> None:
                     encoding="utf-8",
                 )
                 return _FakeProcess(55102)
+            if "run_process_guard_daemon_ws28_028.py" in joined:
+                state_path = Path(command[command.index("--state-file") + 1])
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(
+                    json.dumps(
+                        {
+                            "generated_at": datetime.now(timezone.utc).isoformat(),
+                            "pid": 55103,
+                            "mode": "daemon",
+                            "tick": 1,
+                            "status": "ok",
+                            "reason_code": "OK",
+                            "reason_text": "No orphan/stale running jobs detected.",
+                            "running_jobs": 0,
+                            "orphan_jobs": 0,
+                            "stale_jobs": 0,
+                            "orphan_reaped_count": 0,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                return _FakeProcess(55103)
             raise AssertionError(f"unexpected popen command: {command}")
 
         def _fake_kill(pid, sig):

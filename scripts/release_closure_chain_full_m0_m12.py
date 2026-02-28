@@ -168,6 +168,12 @@ def _run_m12_brainstem_control_plane_step(
             and isinstance(status_report.get("watchdog", {}).get("checks"), dict)
             else {}
         )
+        process_guard_checks = (
+            status_report.get("process_guard", {}).get("checks")
+            if isinstance(status_report.get("process_guard"), dict)
+            and isinstance(status_report.get("process_guard", {}).get("checks"), dict)
+            else {}
+        )
 
         start_state_file = str(start_report.get("state_file") or "")
         status_state_file = str(status_report.get("state_file") or "")
@@ -175,6 +181,8 @@ def _run_m12_brainstem_control_plane_step(
         status_heartbeat_file = str(status_report.get("heartbeat_file") or "")
         start_watchdog_state_file = str(start_report.get("watchdog_state_file") or "")
         status_watchdog_state_file = str(status_report.get("watchdog_state_file") or "")
+        start_process_guard_state_file = str(start_report.get("process_guard_state_file") or "")
+        status_process_guard_state_file = str(status_report.get("process_guard_state_file") or "")
         state_file_consistent = (
             start_state_file == status_state_file
             if start_state_file and status_state_file
@@ -188,6 +196,11 @@ def _run_m12_brainstem_control_plane_step(
         watchdog_state_file_consistent = (
             start_watchdog_state_file == status_watchdog_state_file
             if start_watchdog_state_file and status_watchdog_state_file
+            else True
+        )
+        process_guard_state_file_consistent = (
+            start_process_guard_state_file == status_process_guard_state_file
+            if start_process_guard_state_file and status_process_guard_state_file
             else True
         )
 
@@ -204,9 +217,15 @@ def _run_m12_brainstem_control_plane_step(
             "watchdog_launcher_pid_alive": bool(status_checks.get("watchdog_launcher_pid_alive")),
             "watchdog_daemon_pid_alive": bool(status_checks.get("watchdog_daemon_pid_alive")),
             "status_watchdog_state_known": bool(watchdog_checks.get("state_status_known", True)),
+            "process_guard_gate": bool(status_checks.get("process_guard_gate", True)),
+            "process_guard_state_exists": bool(status_checks.get("process_guard_state_exists", True)),
+            "process_guard_launcher_pid_alive": bool(status_checks.get("process_guard_launcher_pid_alive", True)),
+            "process_guard_daemon_pid_alive": bool(status_checks.get("process_guard_daemon_pid_alive", True)),
+            "status_process_guard_state_known": bool(process_guard_checks.get("state_status_known", True)),
             "state_file_consistent": bool(state_file_consistent),
             "heartbeat_file_consistent": bool(heartbeat_file_consistent),
             "watchdog_state_file_consistent": bool(watchdog_state_file_consistent),
+            "process_guard_state_file_consistent": bool(process_guard_state_file_consistent),
         }
         return {
             "step_id": "M12-T0",
