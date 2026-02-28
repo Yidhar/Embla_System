@@ -15,6 +15,7 @@ from autonomous.tools.execution_bridge import (
     DEFAULT_ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC,
     ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC_SCHEMA,
 )
+from core.security import AuditLedger
 
 
 DEFAULT_OUTPUT = Path("scratch/reports/ws28_execution_governance_gate_ws28_021.json")
@@ -87,7 +88,23 @@ def _load_latest_change_event(ledger_path: Path) -> Dict[str, Any]:
         if not isinstance(payload, dict):
             continue
         latest = payload
-    return latest
+
+    if not latest:
+        return {}
+
+    nested = latest.get("payload") if isinstance(latest.get("payload"), dict) else {}
+    normalized = dict(latest)
+    if "event_type" not in normalized:
+        normalized["event_type"] = str(latest.get("record_type") or nested.get("event_type") or "")
+    if "generated_at" not in normalized:
+        normalized["generated_at"] = str(latest.get("generated_at") or latest.get("ts") or "")
+    if "spec_sha256" not in normalized:
+        normalized["spec_sha256"] = str(nested.get("spec_sha256") or "")
+    if "changed_by" not in normalized:
+        normalized["changed_by"] = str(nested.get("changed_by") or latest.get("requested_by") or "")
+    if "change_id" not in normalized:
+        normalized["change_id"] = str(latest.get("change_id") or "")
+    return normalized
 
 
 def _validate_semantic_guard_spec(spec_path: Path, *, repo_root: Path) -> Dict[str, Any]:
@@ -97,6 +114,7 @@ def _validate_semantic_guard_spec(spec_path: Path, *, repo_root: Path) -> Dict[s
         "semantic_guard_spec_roles_ready": False,
         "semantic_guard_change_control_ready": False,
         "semantic_guard_change_control_ledger_exists": False,
+        "semantic_guard_change_control_ledger_chain_valid": False,
         "semantic_guard_change_control_latest_event_valid": False,
         "semantic_guard_change_control_latest_sha_match": False,
     }
@@ -170,6 +188,11 @@ def _validate_semantic_guard_spec(spec_path: Path, *, repo_root: Path) -> Dict[s
     checks["semantic_guard_change_control_ledger_exists"] = bool(ledger_raw) and ledger_path.exists()
     if not checks["semantic_guard_change_control_ledger_exists"]:
         failed_reasons.append("semantic_guard_change_control_ledger_missing")
+    else:
+        verify = AuditLedger(ledger_file=ledger_path).verify_chain()
+        checks["semantic_guard_change_control_ledger_chain_valid"] = bool(verify.passed and verify.checked_count >= 1)
+        if not checks["semantic_guard_change_control_ledger_chain_valid"]:
+            failed_reasons.append("semantic_guard_change_control_ledger_chain_invalid")
 
     latest_event = _load_latest_change_event(ledger_path) if checks["semantic_guard_change_control_ledger_exists"] else {}
     latest_ticket = str(latest_event.get("approval_ticket") or "").strip() if isinstance(latest_event, dict) else ""
@@ -289,6 +312,9 @@ def run_ws28_execution_governance_gate_ws28_021(
         ),
         "semantic_guard_change_control_ledger_exists": bool(
             semantic_guard_spec_checks.get("semantic_guard_change_control_ledger_exists")
+        ),
+        "semantic_guard_change_control_ledger_chain_valid": bool(
+            semantic_guard_spec_checks.get("semantic_guard_change_control_ledger_chain_valid")
         ),
         "semantic_guard_change_control_latest_event_valid": bool(
             semantic_guard_spec_checks.get("semantic_guard_change_control_latest_event_valid")

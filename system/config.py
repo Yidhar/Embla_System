@@ -6,6 +6,7 @@ NagaAgent 配置系统 - 基于Pydantic实现类型安全和验证
 
 import os
 import json
+import copy
 import logging
 import fnmatch
 from pathlib import Path
@@ -15,6 +16,11 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 from charset_normalizer import from_path
 import json5  # 支持带注释的JSON解析
+
+try:
+    import yaml
+except Exception:  # pragma: no cover - graceful fallback when yaml dependency is unavailable
+    yaml = None
 
 
 # ========== 服务器端口配置 - 统一管理 ==========
@@ -33,6 +39,16 @@ class ServerPortsConfig(BaseModel):
 # 全局服务器端口配置实例
 server_ports = ServerPortsConfig()
 
+_EMBLA_SYSTEM_CONFIG_ENV = "EMBLA_SYSTEM_CONFIG_PATH"
+_EMBLA_SYSTEM_DEFAULT_FILE = "embla_system.yaml"
+_EMBLA_SYSTEM_DEFAULT_SECURITY: Dict[str, Any] = {
+    "enforce_dual_lane": True,
+    "approval_required_scopes": ["core", "policy", "prompt_dna", "tools_registry"],
+    "audit_ledger_file": "scratch/runtime/audit_ledger.jsonl",
+    "audit_signing_key_env": "EMBLA_AUDIT_SIGNING_KEY",
+}
+_embla_system_config: Dict[str, Any] = {}
+
 
 def get_server_port(server_name: str) -> int:
     """获取指定服务器的端口号"""
@@ -46,6 +62,129 @@ def get_all_server_ports() -> Dict[str, int]:
         "agent_server": server_ports.agent_server,
         "mcp_server": server_ports.mcp_server,
     }
+
+
+def _deep_merge_dict(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = copy.deepcopy(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dict(merged[key], value)
+            continue
+        merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def _resolve_embla_system_config_path(config_path: str | Path | None = None) -> Path:
+    base_dir = Path(__file__).parent.parent
+    if config_path is not None:
+        candidate = Path(config_path)
+    else:
+        raw = str(os.getenv(_EMBLA_SYSTEM_CONFIG_ENV, "")).strip()
+        candidate = Path(raw) if raw else base_dir / _EMBLA_SYSTEM_DEFAULT_FILE
+    if not candidate.is_absolute():
+        candidate = base_dir / candidate
+    return candidate
+
+
+def _embla_system_default_payload() -> Dict[str, Any]:
+    return {
+        "version": 1,
+        "profile": "pythonic-secure",
+        "runtime": {
+            "heartbeat_interval_seconds": 5,
+            "max_rounds_default": 500,
+            "max_task_cost_usd": 5.0,
+        },
+        "security": copy.deepcopy(_EMBLA_SYSTEM_DEFAULT_SECURITY),
+        "watchers": {
+            "prompt_root": "workspace/prompts",
+            "tools_registry_root": "workspace/tools_registry",
+            "backend": "watchdog",
+        },
+        "ops": {
+            "posture_endpoint": "/v1/ops/runtime/posture",
+            "incidents_latest_endpoint": "/v1/ops/incidents/latest",
+        },
+    }
+
+
+def _normalize_embla_system_payload(payload: Dict[str, Any], *, source: str, loaded: bool) -> Dict[str, Any]:
+    merged = _deep_merge_dict(_embla_system_default_payload(), payload if isinstance(payload, dict) else {})
+    security = merged.get("security") if isinstance(merged.get("security"), dict) else {}
+    merged["security"] = security
+
+    if not isinstance(security.get("approval_required_scopes"), list):
+        security["approval_required_scopes"] = list(_EMBLA_SYSTEM_DEFAULT_SECURITY["approval_required_scopes"])
+    else:
+        normalized_scopes = []
+        for scope in security.get("approval_required_scopes", []):
+            text = str(scope or "").strip().lower()
+            if text and text not in normalized_scopes:
+                normalized_scopes.append(text)
+        security["approval_required_scopes"] = normalized_scopes or list(_EMBLA_SYSTEM_DEFAULT_SECURITY["approval_required_scopes"])
+
+    audit_ledger_file = str(security.get("audit_ledger_file") or "").strip()
+    if not audit_ledger_file:
+        security["audit_ledger_file"] = str(_EMBLA_SYSTEM_DEFAULT_SECURITY["audit_ledger_file"])
+    security["audit_signing_key_env"] = str(
+        security.get("audit_signing_key_env") or _EMBLA_SYSTEM_DEFAULT_SECURITY["audit_signing_key_env"]
+    ).strip() or str(_EMBLA_SYSTEM_DEFAULT_SECURITY["audit_signing_key_env"])
+    security["enforce_dual_lane"] = bool(security.get("enforce_dual_lane", True))
+
+    merged["config_source"] = str(source).replace("\\", "/")
+    merged["config_loaded"] = bool(loaded)
+    return merged
+
+
+def load_embla_system_config(config_path: str | Path | None = None) -> Dict[str, Any]:
+    """加载 Embla_system 统一配置（embla_system.yaml），失败时回退到安全默认值。"""
+    path = _resolve_embla_system_config_path(config_path)
+    if not path.exists():
+        return _normalize_embla_system_payload({}, source=str(path), loaded=False)
+
+    parsed: Dict[str, Any] = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+        if yaml is not None:
+            loaded = yaml.safe_load(text)
+        else:
+            # 降级模式：允许 JSON/JSON5 形态配置。
+            loaded = json5.loads(text)
+        if isinstance(loaded, dict):
+            parsed = loaded
+    except Exception as exc:
+        print(f"警告：加载 embla_system 统一配置失败 {path}: {exc}")
+    return _normalize_embla_system_payload(parsed, source=str(path), loaded=bool(parsed))
+
+
+def _refresh_embla_system_config() -> Dict[str, Any]:
+    global _embla_system_config
+    _embla_system_config = load_embla_system_config()
+    return _embla_system_config
+
+
+def get_embla_system_config() -> Dict[str, Any]:
+    if not isinstance(_embla_system_config, dict) or not _embla_system_config:
+        _refresh_embla_system_config()
+    return copy.deepcopy(_embla_system_config)
+
+
+def save_embla_system_config(payload: Dict[str, Any], config_path: str | Path | None = None) -> Dict[str, Any]:
+    """保存 Embla_system 统一配置并刷新进程内缓存。"""
+    if not isinstance(payload, dict):
+        raise ValueError("embla_system payload must be a dict")
+    path = _resolve_embla_system_config_path(config_path)
+    normalized = _normalize_embla_system_payload(payload, source=str(path), loaded=True)
+    to_persist = {k: v for k, v in normalized.items() if k not in {"config_source", "config_loaded"}}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if yaml is not None:
+        text = yaml.safe_dump(to_persist, allow_unicode=True, sort_keys=False)
+    else:
+        text = json.dumps(to_persist, ensure_ascii=False, indent=2)
+    path.write_text(text, encoding="utf-8")
+    global _embla_system_config
+    _embla_system_config = dict(normalized)
+    return copy.deepcopy(_embla_system_config)
 
 
 # 配置变更监听器
@@ -1261,6 +1400,7 @@ class NagaConfig(BaseModel):
 
 def load_config():
     """加载配置"""
+    _refresh_embla_system_config()
     config_path = str(Path(__file__).parent.parent / "config.json")
 
     bootstrap_config_from_example(config_path)

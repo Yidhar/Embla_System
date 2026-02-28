@@ -67,6 +67,8 @@ def test_register_semantic_guard_change_writes_audit_ledger_event() -> None:
 
         assert report["passed"] is True
         assert report["checks"]["ledger_event_written"] is True
+        assert report["checks"]["approval_gate_passed"] is True
+        assert report["checks"]["ledger_hash_chain_verified"] is True
         assert report["spec_sha256"] == hashlib.sha256(spec_path.read_bytes()).hexdigest()
         assert output.exists() is True
 
@@ -75,7 +77,10 @@ def test_register_semantic_guard_change_writes_audit_ledger_event() -> None:
         line = ledger.read_text(encoding="utf-8").strip().splitlines()[-1]
         event = json.loads(line)
         assert event["approval_ticket"] == "CAB-WS28-021-LOCAL"
-        assert event["spec_sha256"] == report["spec_sha256"]
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        assert payload["spec_sha256"] == report["spec_sha256"]
+        assert event["ledger_hash"]
+        assert event["prev_ledger_hash"]
     finally:
         _cleanup_case_root(case_root)
 
@@ -96,6 +101,7 @@ def test_register_semantic_guard_change_rejects_missing_ticket_when_required() -
 
         assert report["passed"] is False
         assert "approval_ticket_present" in set(report["failed_checks"])
+        assert "approval_gate_passed" in set(report["failed_checks"])
         assert report["checks"]["ledger_event_written"] is False
     finally:
         _cleanup_case_root(case_root)

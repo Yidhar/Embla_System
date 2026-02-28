@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from autonomous.tools.execution_bridge import DEFAULT_ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC
+from core.security import ApprovalGate, ApprovalRequest, AuditLedger
 
 
 DEFAULT_OUTPUT = Path("scratch/reports/ws28_role_executor_semantic_guard_change_register.json")
@@ -53,12 +54,6 @@ def _sha256_file(path: Path) -> str:
         return ""
 
 
-def _append_jsonl(path: Path, row: Dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-
-
 def run_register_role_executor_semantic_guard_change_ws28_021(
     *,
     repo_root: Path,
@@ -78,7 +73,9 @@ def run_register_role_executor_semantic_guard_change_ws28_021(
         "change_control_exists": False,
         "change_control_acl_ready": False,
         "approval_ticket_present": bool(str(approval_ticket or "").strip()),
+        "approval_gate_passed": False,
         "ledger_event_written": False,
+        "ledger_hash_chain_verified": False,
     }
     failed_checks = []
 
@@ -120,24 +117,65 @@ def run_register_role_executor_semantic_guard_change_ws28_021(
         failed_checks.append("audit_ledger_configured")
 
     spec_sha256 = _sha256_file(spec_path) if checks["spec_exists"] else ""
+    approval_gate = ApprovalGate()
+    approval_decision = approval_gate.evaluate(
+        ApprovalRequest(
+            scope="policy",
+            risk_level="high",
+            requested_by=str(changed_by or "").strip() or "release-bot",
+            approval_ticket=str(approval_ticket or "").strip(),
+            lane="framework_maintenance",
+        )
+    )
+    checks["approval_gate_passed"] = bool(approval_decision.approved)
+    if not checks["approval_gate_passed"]:
+        failed_checks.append("approval_gate_passed")
+
     event: Dict[str, Any] = {}
     if not failed_checks and ledger_raw:
+        change_id = f"ws28_021_{uuid.uuid4().hex[:12]}"
+        ledger = AuditLedger(ledger_file=ledger_path)
+        record = ledger.append_record(
+            record_type="spec_change_registered",
+            change_id=change_id,
+            scope="policy",
+            risk_level="high",
+            requested_by=str(changed_by or "").strip() or "release-bot",
+            approved_by=str(changed_by or "").strip() or "release-bot",
+            approval_ticket=str(approval_ticket).strip(),
+            evidence_refs=[_to_repo_relative_path(spec_path, repo_root=root)],
+            payload={
+                "event_type": "spec_change_registered",
+                "spec_path": _to_repo_relative_path(spec_path, repo_root=root),
+                "spec_sha256": spec_sha256,
+                "changed_by": str(changed_by or "").strip(),
+                "notes": str(notes or "").strip(),
+                "acl_snapshot": {
+                    "owners": [str(item).strip() for item in list(owners or []) if str(item).strip()],
+                    "approvers": [str(item).strip() for item in list(approvers or []) if str(item).strip()],
+                    "min_approvals": int(min_approvals),
+                },
+            },
+        )
+        verify = ledger.verify_chain()
+        checks["ledger_hash_chain_verified"] = bool(verify.passed)
+        if not checks["ledger_hash_chain_verified"]:
+            failed_checks.append("ledger_hash_chain_verified")
+
         event = {
             "event_type": "spec_change_registered",
-            "generated_at": _utc_iso_now(),
-            "change_id": f"ws28_021_{uuid.uuid4().hex[:12]}",
+            "generated_at": record.generated_at,
+            "schema_version": record.schema_version,
+            "record_type": record.record_type,
+            "change_id": record.change_id,
             "spec_path": _to_repo_relative_path(spec_path, repo_root=root),
             "spec_sha256": spec_sha256,
-            "approval_ticket": str(approval_ticket).strip(),
+            "approval_ticket": record.approval_ticket,
             "changed_by": str(changed_by or "").strip(),
             "notes": str(notes or "").strip(),
-            "acl_snapshot": {
-                "owners": [str(item).strip() for item in list(owners or []) if str(item).strip()],
-                "approvers": [str(item).strip() for item in list(approvers or []) if str(item).strip()],
-                "min_approvals": int(min_approvals),
-            },
+            "ledger_hash": record.ledger_hash,
+            "prev_ledger_hash": record.prev_ledger_hash,
         }
-        _append_jsonl(ledger_path, event)
         checks["ledger_event_written"] = True
     elif "audit_ledger_configured" not in failed_checks:
         failed_checks.append("ledger_event_written")
@@ -158,6 +196,7 @@ def run_register_role_executor_semantic_guard_change_ws28_021(
             "audit_ledger": _to_unix_path(ledger_path) if ledger_raw else "",
             "acl_ready": checks["change_control_acl_ready"],
         },
+        "approval_gate": approval_decision.to_dict(),
         "registered_event": event,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)

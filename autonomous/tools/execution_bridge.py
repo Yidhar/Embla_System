@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
+from core.security import ApprovalGate, ApprovalRequest, AuditLedger
 from autonomous.scaffold_engine import ScaffoldPatch
 from autonomous.tools.subagent_runtime import RuntimeSubTaskResult, RuntimeSubTaskSpec
 from autonomous.types import OptimizationTask
@@ -16,6 +17,7 @@ from autonomous.types import OptimizationTask
 
 DEFAULT_ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC = Path("policy/role_executor_semantic_guard.spec")
 ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC_SCHEMA = "ws28-role-executor-semantic-guard-v1"
+DEFAULT_EXECUTION_BRIDGE_AUDIT_LEDGER = Path("scratch/runtime/audit_ledger.jsonl")
 
 
 def _utc_now_iso() -> str:
@@ -502,6 +504,182 @@ class NativeExecutionBridge:
         )
         self.semantic_guard_spec_path = self._resolve_semantic_guard_spec_path(semantic_guard_spec)
         self.semantic_guard_spec = self._load_semantic_guard_spec()
+        self._approval_gate: ApprovalGate | None = None
+        self._audit_ledger: AuditLedger | None = None
+        self._audit_ledger_path = self.project_root / DEFAULT_EXECUTION_BRIDGE_AUDIT_LEDGER
+        self._configure_governance_trace()
+
+    def _configure_governance_trace(self) -> None:
+        security_config = self._load_embla_security_config()
+        approval_required_scopes = security_config.get("approval_required_scopes")
+        normalized_scopes = {
+            str(item).strip().lower()
+            for item in (approval_required_scopes if isinstance(approval_required_scopes, list) else [])
+            if str(item).strip()
+        }
+        enforce_dual_lane = bool(security_config.get("enforce_dual_lane", True))
+        signing_key_env = str(security_config.get("audit_signing_key_env") or "EMBLA_AUDIT_SIGNING_KEY").strip()
+        audit_ledger_raw = str(security_config.get("audit_ledger_file") or "").strip()
+        if audit_ledger_raw:
+            candidate = Path(audit_ledger_raw)
+            if not candidate.is_absolute():
+                candidate = self.project_root / candidate
+            self._audit_ledger_path = candidate
+
+        try:
+            self._approval_gate = ApprovalGate(
+                approval_required_scopes=normalized_scopes or None,
+                strict_maintenance_lane=enforce_dual_lane,
+            )
+        except Exception:
+            self._approval_gate = ApprovalGate()
+        try:
+            self._audit_ledger = AuditLedger(
+                ledger_file=self._audit_ledger_path,
+                signing_key_env=signing_key_env,
+            )
+        except Exception:
+            self._audit_ledger = None
+
+    @staticmethod
+    def _load_embla_security_config() -> Dict[str, Any]:
+        try:
+            from system.config import get_embla_system_config
+
+            embla_system = get_embla_system_config()
+        except Exception:
+            return {}
+        if not isinstance(embla_system, dict):
+            return {}
+        security = embla_system.get("security")
+        return security if isinstance(security, dict) else {}
+
+    def _collect_approval_ticket(self, *, task: OptimizationTask, subtask: RuntimeSubTaskSpec) -> str:
+        task_meta = task.metadata if isinstance(task.metadata, dict) else {}
+        subtask_meta = subtask.metadata if isinstance(subtask.metadata, dict) else {}
+        return str(
+            subtask_meta.get("approval_ticket")
+            or subtask_meta.get("ops_ticket")
+            or subtask_meta.get("change_ticket")
+            or task_meta.get("approval_ticket")
+            or task_meta.get("ops_ticket")
+            or task_meta.get("change_ticket")
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _infer_scope(governance: Dict[str, Any]) -> str:
+        category = str(governance.get("category") or "").strip().lower()
+        if category in {"path_policy", "semantic_toolchain", "change_control"}:
+            return "policy"
+        if category == "forced_error":
+            return "core"
+        if category == "patch_intent":
+            return "tools_registry"
+        return "policy"
+
+    @staticmethod
+    def _infer_risk_level(governance: Dict[str, Any]) -> str:
+        severity = str(governance.get("severity") or governance.get("status") or "").strip().lower()
+        if severity == "critical":
+            return "high"
+        if severity == "warning":
+            return "medium"
+        return "low"
+
+    def _record_governance_rejection(
+        self,
+        *,
+        task: OptimizationTask,
+        subtask: RuntimeSubTaskSpec,
+        executor_name: str,
+        reason: str,
+        governance: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        trace: Dict[str, Any] = {
+            "execution_bridge_approval": {},
+            "execution_bridge_audit_ledger": {
+                "event_recorded": False,
+                "ledger_file": str(self._audit_ledger_path).replace("\\", "/"),
+                "chain_valid": None,
+                "error_count": 0,
+                "errors": [],
+            },
+        }
+
+        task_meta = task.metadata if isinstance(task.metadata, dict) else {}
+        subtask_meta = subtask.metadata if isinstance(subtask.metadata, dict) else {}
+        requested_by = str(
+            subtask_meta.get("requested_by")
+            or task_meta.get("requested_by")
+            or task_meta.get("operator")
+            or "execution_bridge"
+        ).strip()
+        ticket = self._collect_approval_ticket(task=task, subtask=subtask)
+        lane = str(subtask_meta.get("lane") or task_meta.get("lane") or "task_execution").strip().lower() or "task_execution"
+        scope = self._infer_scope(governance)
+        risk_level = self._infer_risk_level(governance)
+
+        approval_decision = self._approval_gate.evaluate(
+            ApprovalRequest(
+                scope=scope,
+                risk_level=risk_level,
+                requested_by=requested_by,
+                approval_ticket=ticket,
+                lane=lane,
+            )
+        ) if self._approval_gate is not None else None
+        if approval_decision is not None:
+            trace["execution_bridge_approval"] = approval_decision.to_dict()
+
+        if self._audit_ledger is None:
+            trace["execution_bridge_audit_ledger"]["errors"] = ["audit_ledger_unavailable"]
+            trace["execution_bridge_audit_ledger"]["error_count"] = 1
+            return trace
+
+        change_id = f"ebr_{task.task_id}_{subtask.subtask_id}_{uuid.uuid4().hex[:8]}"
+        evidence_refs = [str(self.semantic_guard_spec_path).replace("\\", "/")]
+        try:
+            record = self._audit_ledger.append_record(
+                record_type="execution_bridge_rejection",
+                change_id=change_id,
+                scope=scope,
+                risk_level=risk_level,
+                requested_by=requested_by or "execution_bridge",
+                approved_by="execution_bridge",
+                approval_ticket=ticket,
+                evidence_refs=evidence_refs,
+                payload={
+                    "task_id": str(task.task_id),
+                    "subtask_id": str(subtask.subtask_id),
+                    "role": str(subtask.role),
+                    "role_executor": str(executor_name),
+                    "reason": str(reason),
+                    "governance": dict(governance),
+                    "approval": trace["execution_bridge_approval"],
+                },
+            )
+            verify = self._audit_ledger.verify_chain()
+            trace["execution_bridge_audit_ledger"] = {
+                "event_recorded": True,
+                "ledger_file": str(self._audit_ledger_path).replace("\\", "/"),
+                "chain_valid": bool(verify.passed),
+                "checked_count": int(verify.checked_count),
+                "error_count": len(list(verify.errors or [])),
+                "errors": list(verify.errors or []),
+                "change_id": str(record.change_id),
+                "ledger_hash": str(record.ledger_hash),
+                "generated_at": str(record.generated_at),
+            }
+        except Exception as exc:
+            trace["execution_bridge_audit_ledger"] = {
+                "event_recorded": False,
+                "ledger_file": str(self._audit_ledger_path).replace("\\", "/"),
+                "chain_valid": None,
+                "error_count": 1,
+                "errors": [str(exc)],
+            }
+        return trace
 
     def execute_subtask(self, *, task: OptimizationTask, subtask: RuntimeSubTaskSpec) -> RuntimeSubTaskResult:
         metadata = subtask.metadata if isinstance(subtask.metadata, dict) else {}
@@ -530,6 +708,13 @@ class NativeExecutionBridge:
                 role_policy=role_policy,
                 governance=governance,
             )
+            governance_trace = self._record_governance_rejection(
+                task=task,
+                subtask=subtask,
+                executor_name=executor.name,
+                reason=reason,
+                governance=governance,
+            )
             return RuntimeSubTaskResult(
                 subtask_id=subtask.subtask_id,
                 role=subtask.role,
@@ -540,6 +725,7 @@ class NativeExecutionBridge:
                     "execution_bridge_governance": governance,
                     "execution_bridge_receipt": receipt.to_dict(),
                     "source": "execution_bridge.force_error",
+                    **governance_trace,
                 },
             )
 
@@ -567,6 +753,13 @@ class NativeExecutionBridge:
                 role_policy=role_policy,
                 governance=governance,
             )
+            governance_trace = self._record_governance_rejection(
+                task=task,
+                subtask=subtask,
+                executor_name=executor.name,
+                reason=reason,
+                governance=governance,
+            )
             return RuntimeSubTaskResult(
                 subtask_id=subtask.subtask_id,
                 role=subtask.role,
@@ -577,6 +770,7 @@ class NativeExecutionBridge:
                     "execution_bridge_mode": self.mode,
                     "execution_bridge_governance": governance,
                     "execution_bridge_receipt": receipt.to_dict(),
+                    **governance_trace,
                 },
             )
 
@@ -598,6 +792,13 @@ class NativeExecutionBridge:
                 warnings=role_decision.warnings,
                 governance=role_decision.governance,
             )
+            governance_trace = self._record_governance_rejection(
+                task=task,
+                subtask=subtask,
+                executor_name=executor.name,
+                reason=role_decision.reason,
+                governance=dict(role_decision.governance),
+            )
             return RuntimeSubTaskResult(
                 subtask_id=subtask.subtask_id,
                 role=subtask.role,
@@ -612,6 +813,7 @@ class NativeExecutionBridge:
                     "execution_bridge_role_warnings": list(role_decision.warnings),
                     "execution_bridge_governance": dict(role_decision.governance),
                     "execution_bridge_receipt": receipt.to_dict(),
+                    **governance_trace,
                 },
             )
 

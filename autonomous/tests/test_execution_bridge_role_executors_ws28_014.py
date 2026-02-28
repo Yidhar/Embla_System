@@ -92,6 +92,55 @@ def test_frontend_role_executor_strict_blocks_backend_path() -> None:
     assert receipt.get("role_executor") == "frontend"
 
 
+def test_execution_bridge_rejection_is_audited_with_approval_and_ledger(tmp_path, monkeypatch) -> None:
+    import system.config as system_config
+
+    monkeypatch.setattr(
+        system_config,
+        "get_embla_system_config",
+        lambda: {
+            "security": {
+                "enforce_dual_lane": True,
+                "approval_required_scopes": ["policy"],
+                "audit_ledger_file": "scratch/runtime/audit_ledger.jsonl",
+                "audit_signing_key_env": "EMBLA_AUDIT_SIGNING_KEY",
+            }
+        },
+    )
+
+    bridge = NativeExecutionBridge(project_root=tmp_path)
+    subtask = RuntimeSubTaskSpec(
+        subtask_id="fe-audit-1",
+        role="frontend",
+        instruction="strict path violation should be rejected and audited",
+        patches=[ScaffoldPatch(path="autonomous/system_agent.py", content="# forbidden")],
+        metadata={"role_executor_policy": {"strict_role_paths": True}},
+    )
+
+    result = bridge.execute_subtask(task=_task("task-role-fe-audit"), subtask=subtask)
+
+    assert result.success is False
+    approval = result.metadata.get("execution_bridge_approval")
+    assert isinstance(approval, dict)
+    assert approval.get("approved") is False
+    assert approval.get("reason_code") == "APPROVAL_TICKET_REQUIRED"
+
+    audit_meta = result.metadata.get("execution_bridge_audit_ledger")
+    assert isinstance(audit_meta, dict)
+    assert audit_meta.get("event_recorded") is True
+    assert audit_meta.get("chain_valid") is True
+    assert str(audit_meta.get("ledger_file") or "").endswith("scratch/runtime/audit_ledger.jsonl")
+
+    ledger_path = tmp_path / "scratch" / "runtime" / "audit_ledger.jsonl"
+    rows = [json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert rows
+    latest = rows[-1]
+    assert latest["record_type"] == "execution_bridge_rejection"
+    assert latest["payload"]["task_id"] == "task-role-fe-audit"
+    assert latest["payload"]["subtask_id"] == "fe-audit-1"
+    assert latest["payload"]["governance"]["reason_code"] == "ROLE_PATH_VIOLATION"
+
+
 def test_ops_role_executor_strict_requires_change_ticket() -> None:
     bridge = NativeExecutionBridge(project_root=".")
     subtask = RuntimeSubTaskSpec(

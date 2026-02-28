@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import apiserver.api_server as api_server
+from core.security import AuditLedger
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -392,6 +393,53 @@ def test_ops_runtime_posture_payload_marks_immutable_dna_failure_as_critical(mon
     assert immutable_dna["reason_code"] == "IMMUTABLE_DNA_PREFLIGHT_FAILED"
 
 
+def test_ops_runtime_posture_payload_includes_audit_ledger_summary(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "ok", "metric_status": {}},
+            "metrics": {},
+            "threshold_profile": {},
+            "sources": {"events_file": "logs/autonomous/events.jsonl"},
+        }
+
+    ledger_path = repo_root / "scratch" / "runtime" / "audit_ledger.jsonl"
+    ledger = AuditLedger(ledger_file=ledger_path, signing_key="test-signing-key")
+    ledger.append_record(
+        record_type="change_promoted",
+        change_id="chg_ops_001",
+        scope="policy",
+        risk_level="high",
+        requested_by="qa-bot",
+        approved_by="release-owner",
+        approval_ticket="CAB-OPS-001",
+        payload={"summary": "runtime posture ledger smoke"},
+    )
+
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+
+    payload = api_server._ops_build_runtime_posture_payload(events_limit=200)
+    assert payload["status"] == "success"
+    assert payload["data"]["summary"]["audit_ledger_status"] == "ok"
+
+    audit_ledger = payload["data"]["audit_ledger"]
+    assert audit_ledger["status"] == "ok"
+    assert audit_ledger["checked_count"] == 1
+    assert audit_ledger["error_count"] == 0
+    assert audit_ledger["latest_change_id"] == "chg_ops_001"
+
+    metric = payload["data"]["metrics"]["audit_ledger"]
+    assert metric["status"] == "ok"
+    assert metric["value"] == 1
+    assert metric["error_count"] == 0
+    assert metric["reason_code"] == "OK"
+    assert any(path.endswith("scratch/runtime/audit_ledger.jsonl") for path in payload["source_reports"])
+
+
 def test_ops_incidents_latest_payload_includes_execution_bridge_governance_issue(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
     events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
@@ -444,6 +492,57 @@ def test_ops_incidents_latest_payload_includes_execution_bridge_governance_issue
     assert item["severity"] == "critical"
     assert item["payload_excerpt"]["reason_code"] == "OPS_CHANGE_TICKET_REQUIRED"
     assert item["payload_excerpt"]["category"] == "change_control"
+
+
+def test_ops_incidents_latest_payload_includes_audit_ledger_chain_invalid(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    ledger_path = repo_root / "scratch" / "runtime" / "audit_ledger.jsonl"
+    ledger = AuditLedger(ledger_file=ledger_path)
+    ledger.append_record(
+        record_type="change_promoted",
+        change_id="chg_audit_ok_001",
+        scope="policy",
+        risk_level="high",
+        requested_by="qa-bot",
+        approval_ticket="CAB-001",
+        payload={"step": "before tamper"},
+    )
+    ledger.append_record(
+        record_type="change_promoted",
+        change_id="chg_audit_ok_002",
+        scope="policy",
+        risk_level="high",
+        requested_by="qa-bot",
+        approval_ticket="CAB-002",
+        payload={"step": "will tamper"},
+    )
+
+    rows = [json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows[-1]["change_id"] = "chg_audit_tampered_999"
+    ledger_path.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(api_server, "_ops_collect_required_reports", lambda _repo_root: [])
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", lambda **_kwargs: {"metrics": {}})
+
+    payload = api_server._ops_build_incidents_latest_payload(limit=20)
+    assert payload["status"] == "success"
+    assert payload["severity"] == "critical"
+    assert payload["data"]["event_counters"]["AuditLedgerChainInvalid"] == 1
+
+    incidents = payload["data"]["incidents"]
+    audit_incidents = [item for item in incidents if str(item.get("event_type")) == "AuditLedgerChainInvalid"]
+    assert len(audit_incidents) == 1
+    incident = audit_incidents[0]
+    assert incident["severity"] == "critical"
+    assert incident["payload_excerpt"]["reason_code"] == "AUDIT_LEDGER_CHAIN_INVALID"
+    assert incident["payload_excerpt"]["error_count"] >= 1
+    assert str(incident["report_path"]).endswith("scratch/runtime/audit_ledger.jsonl")
 
 
 def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_path, monkeypatch) -> None:

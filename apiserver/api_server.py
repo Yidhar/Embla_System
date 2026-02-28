@@ -46,14 +46,20 @@ _vlm_sessions: set = set()
 
 # 导入配置系统
 try:
-    from system.config import get_config, build_system_prompt, build_system_prompt_for_path  # 使用新的配置系统
+    from system.config import (
+        get_config,
+        get_embla_system_config,
+        save_embla_system_config,
+        build_system_prompt,
+        build_system_prompt_for_path,
+    )  # 使用新的配置系统
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 except ImportError:
     import sys
     import os
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from system.config import get_config  # 使用新的配置系统
+    from system.config import get_config, get_embla_system_config, save_embla_system_config  # 使用新的配置系统
     from system.config import build_system_prompt, build_system_prompt_for_path  # 导入提示词仓库
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 from apiserver.response_util import extract_message  # noqa: E402 - imported after fallback config setup
@@ -1576,6 +1582,9 @@ async def get_system_config():
     """获取完整系统配置"""
     try:
         config_data = get_config_snapshot()
+        embla_system = get_embla_system_config()
+        if isinstance(config_data, dict):
+            config_data["embla_system"] = _strip_embla_runtime_meta(embla_system if isinstance(embla_system, dict) else {})
         return {"status": "success", "config": config_data}
     except Exception as e:
         logger.error(f"获取系统配置失败: {e}")
@@ -1587,11 +1596,42 @@ async def get_system_config():
 async def update_system_config(payload: Dict[str, Any]):
     """更新系统配置"""
     try:
-        success = update_config(payload)
-        if success:
-            return {"status": "success", "message": "配置更新成功"}
-        else:
-            raise HTTPException(status_code=500, detail="配置更新失败")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="配置补丁必须是对象")
+
+        config_patch = dict(payload)
+        embla_patch = config_patch.pop("embla_system", None)
+
+        config_updated = False
+        embla_updated = False
+
+        if config_patch:
+            config_updated = bool(update_config(config_patch))
+            if not config_updated:
+                raise HTTPException(status_code=500, detail="config.json 更新失败")
+
+        if embla_patch is not None:
+            if not isinstance(embla_patch, dict):
+                raise HTTPException(status_code=400, detail="embla_system 必须是对象")
+            current_embla = get_embla_system_config()
+            merged_embla = _deep_merge_config_patch(
+                _strip_embla_runtime_meta(current_embla if isinstance(current_embla, dict) else {}),
+                embla_patch,
+            )
+            save_embla_system_config(merged_embla)
+            embla_updated = True
+
+        if not config_patch and embla_patch is None:
+            raise HTTPException(status_code=400, detail="配置补丁为空")
+
+        return {
+            "status": "success",
+            "message": "配置更新成功",
+            "updated": {
+                "config_json": config_updated,
+                "embla_system_yaml": embla_updated,
+            },
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -1662,6 +1702,20 @@ def _normalize_prompt_template_name(name: str) -> str:
     if not all(ch.isalnum() or ch == "_" for ch in normalized):
         raise HTTPException(status_code=400, detail="提示词名称仅允许字母、数字、下划线")
     return normalized
+
+
+def _deep_merge_config_patch(base: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = dict(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_config_patch(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _strip_embla_runtime_meta(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in payload.items() if k not in {"config_source", "config_loaded"}}
 
 
 def _build_prompt_template_meta(path: Path) -> Dict[str, Any]:
@@ -2633,6 +2687,22 @@ _OPS_BRAINSTEM_HEARTBEAT_STALE_CRITICAL_SECONDS = 300.0
 _OPS_WATCHDOG_DAEMON_STATE_RELATIVE_PATH = Path("scratch/runtime/watchdog_daemon_state_ws28_025.json")
 _OPS_WATCHDOG_DAEMON_STALE_WARNING_SECONDS = 120.0
 _OPS_WATCHDOG_DAEMON_STALE_CRITICAL_SECONDS = 300.0
+_OPS_AUDIT_LEDGER_RELATIVE_PATH = Path("scratch/runtime/audit_ledger.jsonl")
+
+
+def _ops_resolve_audit_ledger_path(repo_root: Path) -> Path:
+    try:
+        embla_system = get_embla_system_config()
+    except Exception:
+        embla_system = {}
+    security = embla_system.get("security") if isinstance(embla_system, dict) else {}
+    ledger_raw = str(security.get("audit_ledger_file") or "").strip() if isinstance(security, dict) else ""
+    if ledger_raw:
+        candidate = Path(ledger_raw)
+        if candidate.is_absolute():
+            return candidate
+        return repo_root / candidate
+    return repo_root / _OPS_AUDIT_LEDGER_RELATIVE_PATH
 
 
 def _ops_read_json_file(path: Path) -> Dict[str, Any]:
@@ -2838,6 +2908,81 @@ def _ops_build_immutable_dna_summary() -> Dict[str, Any]:
     }
 
 
+def _ops_build_audit_ledger_summary(repo_root: Path) -> Dict[str, Any]:
+    ledger_file = _ops_resolve_audit_ledger_path(repo_root)
+    if not ledger_file.exists():
+        return {
+            "status": "unknown",
+            "reason_code": "AUDIT_LEDGER_MISSING",
+            "reason_text": "Audit ledger file is missing.",
+            "ledger_file": _ops_unix_path(ledger_file),
+            "exists": False,
+            "checked_count": 0,
+            "error_count": 0,
+            "errors": [],
+            "latest_generated_at": "",
+            "latest_change_id": "",
+            "latest_record_type": "",
+        }
+
+    try:
+        from core.security import AuditLedger
+
+        ledger = AuditLedger(ledger_file=ledger_file)
+        records = ledger.read_records()
+        verify = ledger.verify_chain()
+    except Exception as exc:
+        return {
+            "status": "critical",
+            "reason_code": "AUDIT_LEDGER_READ_FAILED",
+            "reason_text": f"Audit ledger read/verify failed: {exc}",
+            "ledger_file": _ops_unix_path(ledger_file),
+            "exists": True,
+            "checked_count": 0,
+            "error_count": 1,
+            "errors": [str(exc)],
+            "latest_generated_at": "",
+            "latest_change_id": "",
+            "latest_record_type": "",
+        }
+
+    latest_generated_at = ""
+    latest_change_id = ""
+    latest_record_type = ""
+    if records:
+        latest = records[-1]
+        latest_generated_at = str(latest.generated_at or "")
+        latest_change_id = str(latest.change_id or "")
+        latest_record_type = str(latest.record_type or "")
+
+    if verify.passed and verify.checked_count >= 1:
+        status = "ok"
+        reason_code = "OK"
+        reason_text = "Audit ledger hash chain is valid."
+    elif verify.passed and verify.checked_count == 0:
+        status = "warning"
+        reason_code = "AUDIT_LEDGER_EMPTY"
+        reason_text = "Audit ledger exists but has no valid records."
+    else:
+        status = "critical"
+        reason_code = "AUDIT_LEDGER_CHAIN_INVALID"
+        reason_text = "Audit ledger hash chain verification failed."
+
+    return {
+        "status": _ops_status_to_severity(status),
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "ledger_file": _ops_unix_path(ledger_file),
+        "exists": True,
+        "checked_count": int(verify.checked_count),
+        "error_count": len(list(verify.errors or [])),
+        "errors": list(verify.errors or []),
+        "latest_generated_at": latest_generated_at,
+        "latest_change_id": latest_change_id,
+        "latest_record_type": latest_record_type,
+    }
+
+
 def _ops_collect_required_reports(repo_root: Path) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for spec in _OPS_REQUIRED_REPORT_DEFINITIONS:
@@ -2945,6 +3090,8 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     watchdog_daemon_status = _ops_status_to_severity(str(watchdog_daemon.get("status") or "unknown"))
     immutable_dna = _ops_build_immutable_dna_summary()
     immutable_dna_status = _ops_status_to_severity(str(immutable_dna.get("status") or "unknown"))
+    audit_ledger = _ops_build_audit_ledger_summary(repo_root)
+    audit_ledger_status = _ops_status_to_severity(str(audit_ledger.get("status") or "unknown"))
 
     metric_status = summary.get("metric_status") if isinstance(summary.get("metric_status"), dict) else {}
     snapshot_overall_status = str(summary.get("overall_status") or "unknown")
@@ -2954,6 +3101,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             brainstem_status,
             watchdog_daemon_status,
             immutable_dna_status,
+            audit_ledger_status,
             execution_bridge_governance_status,
         ]
     )
@@ -2985,6 +3133,8 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         source_reports.append(str(immutable_dna.get("manifest_path") or ""))
     if str(immutable_dna.get("audit_file") or "").strip():
         source_reports.append(str(immutable_dna.get("audit_file") or ""))
+    if bool(audit_ledger.get("exists")) and str(audit_ledger.get("ledger_file") or "").strip():
+        source_reports.append(str(audit_ledger.get("ledger_file") or ""))
 
     response_data: Dict[str, Any] = {
         "summary": {
@@ -2994,6 +3144,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "brainstem_control_plane_status": brainstem_status,
             "watchdog_daemon_status": watchdog_daemon_status,
             "immutable_dna_status": immutable_dna_status,
+            "audit_ledger_status": audit_ledger_status,
             "execution_bridge_governance_status": execution_bridge_governance_status,
             "execution_bridge_governance_reason_codes": list(execution_bridge_governance.get("reason_codes") or []),
         },
@@ -3039,6 +3190,14 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
                 "reason_code": immutable_dna.get("reason_code"),
                 "manifest_hash": immutable_dna.get("manifest_hash"),
             },
+            "audit_ledger": {
+                "status": audit_ledger_status,
+                "value": audit_ledger.get("checked_count"),
+                "error_count": audit_ledger.get("error_count"),
+                "reason_code": audit_ledger.get("reason_code"),
+                "latest_generated_at": audit_ledger.get("latest_generated_at"),
+                "latest_record_type": audit_ledger.get("latest_record_type"),
+            },
             "execution_bridge_rejection_ratio": {
                 "status": execution_bridge_governance_status,
                 "value": execution_bridge_governance.get("rejection_ratio"),
@@ -3058,6 +3217,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         "brainstem_control_plane": brainstem_control_plane,
         "watchdog_daemon": watchdog_daemon,
         "immutable_dna": immutable_dna,
+        "audit_ledger": audit_ledger,
         "execution_bridge_governance": execution_bridge_governance,
     }
     if ws26_runtime_report_payload:
@@ -3074,6 +3234,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     elif immutable_dna_status == "critical":
         reason_code = "IMMUTABLE_DNA_CRITICAL"
         reason_text = str(immutable_dna.get("reason_text") or "Immutable DNA preflight failed.")
+    elif audit_ledger_status == "critical":
+        reason_code = "AUDIT_LEDGER_CRITICAL"
+        reason_text = str(audit_ledger.get("reason_text") or "Audit ledger integrity check failed.")
     elif execution_bridge_governance_status == "critical":
         reason_code = "EXECUTION_BRIDGE_GOVERNANCE_CRITICAL"
         reason_text = "Execution bridge governance has critical rejections; check role guards and policy contracts."
@@ -3086,6 +3249,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     elif immutable_dna_status == "warning":
         reason_code = "IMMUTABLE_DNA_WARNING"
         reason_text = str(immutable_dna.get("reason_text") or "Immutable DNA preflight requires attention.")
+    elif audit_ledger_status == "warning":
+        reason_code = "AUDIT_LEDGER_WARNING"
+        reason_text = str(audit_ledger.get("reason_text") or "Audit ledger requires attention.")
     elif execution_bridge_governance_status == "warning":
         reason_code = "EXECUTION_BRIDGE_GOVERNANCE_WARNING"
         reason_text = "Execution bridge governance has warning signals; review semantic/path guard drift."
@@ -3822,6 +3988,7 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
     incidents: List[Dict[str, Any]] = []
     event_counters: Dict[str, int] = {key: 0 for key in sorted(_OPS_INCIDENT_EVENT_SEVERITY.keys())}
     event_counters["ExecutionBridgeGovernanceIssue"] = 0
+    event_counters["AuditLedgerChainInvalid"] = 0
 
     for row in event_rows:
         event_type = str(row.get("event_type") or "").strip()
@@ -3929,6 +4096,29 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
                     "action": watchdog_summary.get("action"),
                 },
                 "report_path": str(watchdog_summary.get("state_file") or ""),
+                "gate_level": "hard",
+            }
+        )
+
+    audit_ledger_summary = _ops_build_audit_ledger_summary(repo_root)
+    audit_ledger_status = str(audit_ledger_summary.get("status") or "")
+    audit_reason_code = str(audit_ledger_summary.get("reason_code") or "")
+    if audit_ledger_status == "critical" and audit_reason_code in {"AUDIT_LEDGER_CHAIN_INVALID", "AUDIT_LEDGER_READ_FAILED"}:
+        event_counters["AuditLedgerChainInvalid"] = int(event_counters.get("AuditLedgerChainInvalid", 0)) + 1
+        incidents.append(
+            {
+                "source": "report",
+                "severity": "critical",
+                "timestamp": str(audit_ledger_summary.get("latest_generated_at") or ""),
+                "event_type": "AuditLedgerChainInvalid",
+                "summary": str(audit_ledger_summary.get("reason_text") or "Audit ledger hash chain is invalid."),
+                "payload_excerpt": {
+                    "reason_code": audit_reason_code,
+                    "checked_count": audit_ledger_summary.get("checked_count"),
+                    "error_count": audit_ledger_summary.get("error_count"),
+                    "errors": list(audit_ledger_summary.get("errors") or []),
+                },
+                "report_path": str(audit_ledger_summary.get("ledger_file") or ""),
                 "gate_level": "hard",
             }
         )
