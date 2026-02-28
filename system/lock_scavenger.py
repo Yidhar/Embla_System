@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, Optional
 
-from system.global_mutex import GlobalMutexManager, get_global_mutex_manager
+from core.security import GlobalMutexManager, get_global_mutex_manager
 
 
 class LockScavenger:
