@@ -105,6 +105,9 @@ NGA-WS27-003,WS27,M12,P1,qa,OOB 抢修 Runbook + 演练记录,NGA-WS27-002,27,la
 NGA-WS27-004,WS27,M12,P0,qa,release_closure_chain_full_m0_m12.py,NGA-WS27-001;NGA-WS27-002;NGA-WS27-003,27,lane_rel,M0-M12 统一收口脚本一键执行成功,done
 NGA-WS27-005,WS27,M12,P1,qa,文档一致性收口（00/10/11/12/13 + task）,NGA-WS27-004,27,lane_rel,文档状态与实现证据一致无冲突,done
 NGA-WS27-006,WS27,M12,P0,ops,Phase3 Full 放行报告与签署模板,NGA-WS27-005,27,lane_rel,放行报告可追踪到代码、测试、runbook,done
+NGA-WS28-019,WS28,M13,P0,hardening,脑干守护进程真实存活探测与自愈重启,NGA-WS28-018,25,brainstem_supervisor,stale pid 可识别并自动自愈重启,done
+NGA-WS28-020,WS28,M13,P0,ops,脑干控制面托管入口标准化（start/status/stop 同源）,NGA-WS28-017;NGA-WS28-019,25,brainstem_control_plane,托管链路报告与全链验收字段统一,done
+NGA-WS28-021,WS28,M13,P1,feature,FE/BE/Ops 角色执行器语义治理闭环 + signoff 策略分层,NGA-WS28-020,25,execution_bridge|release_signoff,reason_code hard/soft 分层生效且 spec 变更受 acl+ticket+ledger 管控,done
 NGA-WS28-022,WS28,M13,P0,hardening,Immutable DNA 运行时注入（每次 LLM 调用前强校验）,NGA-WS23-003,24|25,llm_service|immutable_dna,manifest 不一致时调用 fail-closed 并审计,done
 NGA-WS28-023,WS28,M13,P0,qa,Plugin Worker 隔离真实 MCP agent 联调,NGA-WS24-006,24,mcp_registry|plugin_worker,真实 MCP manifest 可在 isolated_worker 路径执行并产出报告,done
 NGA-WS28-024,WS28,M13,P1,refactor,Brainstem Supervisor 接入 main.py 主启动链,NGA-WS28-020,10|25,main|api_server,主启动链托管脑干控制面且避免重复 bootstrap,done

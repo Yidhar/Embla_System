@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import uuid
+import hashlib
 from pathlib import Path
 
 import scripts.run_ws28_execution_governance_gate_ws28_021 as ws28_gate
@@ -34,10 +35,38 @@ def _write_semantic_guard_spec(repo_root: Path) -> Path:
                     "backend": {"allowed_semantic_toolchains": ["backend", "docs", "config", "ops"]},
                     "ops": {"allowed_semantic_toolchains": ["ops", "docs", "config"]},
                 },
+                "change_control": {
+                    "schema_version": "ws28-role-executor-semantic-guard-change-control-v1",
+                    "approval_ticket_required": True,
+                    "audit_ledger": "doc/task/reports/role_executor_semantic_guard_change_ledger_ws28_021.jsonl",
+                    "acl": {
+                        "owners": ["AG-PH3-BS-01"],
+                        "approvers": ["release-owner", "security-reviewer"],
+                        "min_approvals": 1,
+                    },
+                },
             },
             ensure_ascii=False,
             indent=2,
         ),
+        encoding="utf-8",
+    )
+    sha256 = hashlib.sha256(spec_path.read_bytes()).hexdigest()
+    ledger_path = repo_root / "doc/task/reports/role_executor_semantic_guard_change_ledger_ws28_021.jsonl"
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
+        json.dumps(
+            {
+                "event_type": "spec_change_registered",
+                "generated_at": "2026-02-28T00:00:00+00:00",
+                "change_id": "ws28_021_test_baseline",
+                "approval_ticket": "CAB-WS28-021-TEST",
+                "changed_by": "qa-bot",
+                "spec_sha256": sha256,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
         encoding="utf-8",
     )
     return spec_path
@@ -104,6 +133,10 @@ def test_run_ws28_execution_governance_gate_passes_when_within_budget(monkeypatc
         assert report["checks"]["semantic_guard_spec_exists"] is True
         assert report["checks"]["semantic_guard_spec_schema_valid"] is True
         assert report["checks"]["semantic_guard_spec_roles_ready"] is True
+        assert report["checks"]["semantic_guard_change_control_ready"] is True
+        assert report["checks"]["semantic_guard_change_control_ledger_exists"] is True
+        assert report["checks"]["semantic_guard_change_control_latest_event_valid"] is True
+        assert report["checks"]["semantic_guard_change_control_latest_sha_match"] is True
         assert output_file.exists() is True
         assert runtime_output.exists() is True
         assert incidents_output.exists() is True
@@ -114,6 +147,8 @@ def test_run_ws28_execution_governance_gate_passes_when_within_budget(monkeypatc
         assert persisted["governance"]["rejection_ratio"] == 0.1
         assert persisted["semantic_guard_spec"]["schema_version"] == "ws28-role-executor-semantic-guard-v1"
         assert bool(persisted["semantic_guard_spec"]["sha256"])
+        assert persisted["semantic_guard_spec"]["change_control"]["approval_ticket_required"] is True
+        assert persisted["semantic_guard_spec"]["change_control"]["latest_event"]["approval_ticket_present"] is True
     finally:
         _cleanup_case_root(case_root)
 
@@ -178,6 +213,10 @@ def test_run_ws28_execution_governance_gate_fails_when_critical_present(monkeypa
         assert "semantic_guard_spec_exists" not in failed_checks
         assert "semantic_guard_spec_schema_valid" not in failed_checks
         assert "semantic_guard_spec_roles_ready" not in failed_checks
+        assert "semantic_guard_change_control_ready" not in failed_checks
+        assert "semantic_guard_change_control_ledger_exists" not in failed_checks
+        assert "semantic_guard_change_control_latest_event_valid" not in failed_checks
+        assert "semantic_guard_change_control_latest_sha_match" not in failed_checks
     finally:
         _cleanup_case_root(case_root)
 
@@ -236,6 +275,10 @@ def test_run_ws28_execution_governance_gate_fails_when_semantic_spec_missing(mon
         assert "semantic_guard_spec_exists" in failed_checks
         assert "semantic_guard_spec_schema_valid" in failed_checks
         assert "semantic_guard_spec_roles_ready" in failed_checks
+        assert "semantic_guard_change_control_ready" in failed_checks
+        assert "semantic_guard_change_control_ledger_exists" in failed_checks
+        assert "semantic_guard_change_control_latest_event_valid" in failed_checks
+        assert "semantic_guard_change_control_latest_sha_match" in failed_checks
         assert report["semantic_guard_spec"]["failed_reasons"] == ["semantic_guard_spec_missing"]
     finally:
         _cleanup_case_root(case_root)

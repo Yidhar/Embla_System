@@ -29,5 +29,20 @@
         "test_ops"
       ]
     }
+  },
+  "change_control": {
+    "schema_version": "ws28-role-executor-semantic-guard-change-control-v1",
+    "approval_ticket_required": true,
+    "audit_ledger": "doc/task/reports/role_executor_semantic_guard_change_ledger_ws28_021.jsonl",
+    "acl": {
+      "owners": [
+        "AG-PH3-BS-01"
+      ],
+      "approvers": [
+        "release-owner",
+        "security-reviewer"
+      ],
+      "min_approvals": 1
+    }
   }
 }

@@ -63,16 +63,48 @@ def _sha256_file(path: Path) -> str:
     return digest
 
 
-def _validate_semantic_guard_spec(spec_path: Path) -> Dict[str, Any]:
+def _resolve_ledger_path(repo_root: Path, ledger_raw: str) -> Path:
+    candidate = Path(str(ledger_raw).strip())
+    return candidate if candidate.is_absolute() else repo_root / candidate
+
+
+def _load_latest_change_event(ledger_path: Path) -> Dict[str, Any]:
+    if not ledger_path.exists():
+        return {}
+    latest: Dict[str, Any] = {}
+    try:
+        lines = ledger_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    for line in lines:
+        raw = str(line or "").strip()
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        latest = payload
+    return latest
+
+
+def _validate_semantic_guard_spec(spec_path: Path, *, repo_root: Path) -> Dict[str, Any]:
     checks = {
         "semantic_guard_spec_exists": spec_path.exists(),
         "semantic_guard_spec_schema_valid": False,
         "semantic_guard_spec_roles_ready": False,
+        "semantic_guard_change_control_ready": False,
+        "semantic_guard_change_control_ledger_exists": False,
+        "semantic_guard_change_control_latest_event_valid": False,
+        "semantic_guard_change_control_latest_sha_match": False,
     }
     failed_reasons = []
     schema_version = ""
     roles_summary: Dict[str, Any] = {}
     sha256 = ""
+    change_control_summary: Dict[str, Any] = {}
 
     if not checks["semantic_guard_spec_exists"]:
         failed_reasons.append("semantic_guard_spec_missing")
@@ -83,6 +115,7 @@ def _validate_semantic_guard_spec(spec_path: Path) -> Dict[str, Any]:
             "checks": checks,
             "failed_reasons": failed_reasons,
             "roles": roles_summary,
+            "change_control": change_control_summary,
         }
 
     sha256 = _sha256_file(spec_path)
@@ -113,6 +146,60 @@ def _validate_semantic_guard_spec(spec_path: Path) -> Dict[str, Any]:
     if not checks["semantic_guard_spec_roles_ready"]:
         failed_reasons.append("semantic_guard_spec_roles_incomplete")
 
+    change_control = payload.get("change_control") if isinstance(payload.get("change_control"), dict) else {}
+    acl = change_control.get("acl") if isinstance(change_control, dict) else {}
+    owners = acl.get("owners") if isinstance(acl, dict) else None
+    approvers = acl.get("approvers") if isinstance(acl, dict) else None
+    min_approvals = _safe_int(acl.get("min_approvals") if isinstance(acl, dict) else 0, default=0)
+    ticket_required = bool(change_control.get("approval_ticket_required")) if isinstance(change_control, dict) else False
+    ledger_raw = str(change_control.get("audit_ledger") or "").strip() if isinstance(change_control, dict) else ""
+    ledger_path = _resolve_ledger_path(repo_root, ledger_raw) if ledger_raw else Path("")
+
+    checks["semantic_guard_change_control_ready"] = (
+        isinstance(owners, list)
+        and len([item for item in owners if str(item).strip()]) > 0
+        and isinstance(approvers, list)
+        and len([item for item in approvers if str(item).strip()]) > 0
+        and min_approvals >= 1
+        and ticket_required
+        and bool(ledger_raw)
+    )
+    if not checks["semantic_guard_change_control_ready"]:
+        failed_reasons.append("semantic_guard_change_control_not_ready")
+
+    checks["semantic_guard_change_control_ledger_exists"] = bool(ledger_raw) and ledger_path.exists()
+    if not checks["semantic_guard_change_control_ledger_exists"]:
+        failed_reasons.append("semantic_guard_change_control_ledger_missing")
+
+    latest_event = _load_latest_change_event(ledger_path) if checks["semantic_guard_change_control_ledger_exists"] else {}
+    latest_ticket = str(latest_event.get("approval_ticket") or "").strip() if isinstance(latest_event, dict) else ""
+    latest_sha = str(latest_event.get("spec_sha256") or "").strip() if isinstance(latest_event, dict) else ""
+    checks["semantic_guard_change_control_latest_event_valid"] = bool(latest_ticket) and bool(latest_sha)
+    if not checks["semantic_guard_change_control_latest_event_valid"]:
+        failed_reasons.append("semantic_guard_change_control_latest_event_invalid")
+
+    checks["semantic_guard_change_control_latest_sha_match"] = bool(latest_sha) and latest_sha == sha256
+    if not checks["semantic_guard_change_control_latest_sha_match"]:
+        failed_reasons.append("semantic_guard_change_control_sha_mismatch")
+
+    change_control_summary = {
+        "schema_version": str(change_control.get("schema_version") or "") if isinstance(change_control, dict) else "",
+        "approval_ticket_required": ticket_required,
+        "audit_ledger": _to_unix_path(ledger_path) if ledger_raw else "",
+        "acl": {
+            "owners": [str(item).strip() for item in list(owners or []) if str(item).strip()],
+            "approvers": [str(item).strip() for item in list(approvers or []) if str(item).strip()],
+            "min_approvals": int(min_approvals),
+        },
+        "latest_event": {
+            "event_type": str(latest_event.get("event_type") or "") if isinstance(latest_event, dict) else "",
+            "generated_at": str(latest_event.get("generated_at") or "") if isinstance(latest_event, dict) else "",
+            "approval_ticket_present": bool(latest_ticket),
+            "spec_sha256": latest_sha,
+            "changed_by": str(latest_event.get("changed_by") or "") if isinstance(latest_event, dict) else "",
+        },
+    }
+
     return {
         "path": _to_unix_path(spec_path),
         "schema_version": schema_version,
@@ -120,6 +207,7 @@ def _validate_semantic_guard_spec(spec_path: Path) -> Dict[str, Any]:
         "checks": checks,
         "failed_reasons": failed_reasons,
         "roles": roles_summary,
+        "change_control": change_control_summary,
     }
 
 
@@ -178,7 +266,7 @@ def run_ws28_execution_governance_gate_ws28_021(
 
     warning_ratio = _safe_float(runtime_governance.get("governed_warning_ratio"))
     rejection_ratio = _safe_float(runtime_governance.get("rejection_ratio"))
-    semantic_guard_spec_report = _validate_semantic_guard_spec(semantic_guard_spec_path)
+    semantic_guard_spec_report = _validate_semantic_guard_spec(semantic_guard_spec_path, repo_root=root)
     semantic_guard_spec_checks = (
         semantic_guard_spec_report.get("checks")
         if isinstance(semantic_guard_spec_report.get("checks"), dict)
@@ -196,6 +284,18 @@ def run_ws28_execution_governance_gate_ws28_021(
         "semantic_guard_spec_exists": bool(semantic_guard_spec_checks.get("semantic_guard_spec_exists")),
         "semantic_guard_spec_schema_valid": bool(semantic_guard_spec_checks.get("semantic_guard_spec_schema_valid")),
         "semantic_guard_spec_roles_ready": bool(semantic_guard_spec_checks.get("semantic_guard_spec_roles_ready")),
+        "semantic_guard_change_control_ready": bool(
+            semantic_guard_spec_checks.get("semantic_guard_change_control_ready")
+        ),
+        "semantic_guard_change_control_ledger_exists": bool(
+            semantic_guard_spec_checks.get("semantic_guard_change_control_ledger_exists")
+        ),
+        "semantic_guard_change_control_latest_event_valid": bool(
+            semantic_guard_spec_checks.get("semantic_guard_change_control_latest_event_valid")
+        ),
+        "semantic_guard_change_control_latest_sha_match": bool(
+            semantic_guard_spec_checks.get("semantic_guard_change_control_latest_sha_match")
+        ),
     }
     passed = all(bool(value) for value in checks.values())
     failed_checks = [key for key, value in checks.items() if not bool(value)]

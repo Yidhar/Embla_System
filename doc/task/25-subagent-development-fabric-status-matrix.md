@@ -148,7 +148,7 @@
 
 - type: `feature`
 - priority: `P1`
-- status: `in_progress`（2026-02-27）
+- status: `done`（2026-02-28）
 - scope: 在现有路径策略/strict 门禁基础上，补语义级工具链与更细粒度策略
 - expected anchors:
   - `autonomous/tools/execution_bridge.py`
@@ -159,6 +159,8 @@
   - 已完成 Phase B：执行桥新增 FE/BE/Ops 语义工具链守卫（semantic toolchain guard），并将结构化拒绝原因（`reason_code/category/severity/violations/policy_source`）接入 `SubTaskExecutionCompleted/SubTaskRejected` 事件与 `/v1/ops/runtime/posture`、`/v1/ops/incidents/latest` 聚合视图。
   - 已完成 Phase C：语义守卫策略外置为 `.spec`（`policy/role_executor_semantic_guard.spec`），`execution_bridge` 按 spec 加载并支持任务 contract 覆盖。
   - 已完成 Phase D：`M0-M12` 全链新增 `m12_execution_governance` 门禁组，治理 critical 与预算超限可直接阻断收口链；同时对 `role_executor_semantic_guard.spec` 执行低成本发布门禁（存在性/schema/角色完整性+hash）。
+  - 已完成收口 E：`release signoff` 接入 governance `reason_code` 的 `hard/soft` 分层策略表，不再只依赖固定预算阈值。
+  - 已完成收口 F：`role_executor_semantic_guard.spec` 纳入受控变更链（`ACL + 审批票据 + 审计 ledger`），并纳入 `WS28-021` 门禁校验。
 
 ### NGA-WS28-022~025 待办拆卡（#4/#6/#7/#9）
 

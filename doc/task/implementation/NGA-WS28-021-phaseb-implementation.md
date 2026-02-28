@@ -1,7 +1,7 @@
 # NGA-WS28-021 Phase B 实施记录（语义工具链守卫 + 治理可观测）
 
 最后更新：2026-02-27  
-任务状态：`in_progress`（Phase B done）  
+任务状态：`done`（Phase B done；后续 Phase C/D 收口已落地）  
 优先级：`P1`  
 类型：`feature`
 

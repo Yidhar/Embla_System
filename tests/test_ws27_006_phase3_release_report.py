@@ -26,8 +26,16 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _bootstrap_reports(repo_root: Path, *, all_passed: bool) -> None:
-    _write_json(repo_root / "scratch/reports/release_closure_chain_full_m0_m12_result.json", {"passed": all_passed})
+def _bootstrap_reports(repo_root: Path, *, all_passed: bool, governance_reason_codes: list[str] | None = None) -> None:
+    full_chain_payload = {"passed": all_passed}
+    if governance_reason_codes is not None:
+        full_chain_payload["group_results"] = {
+            "m12_execution_governance": {
+                "passed": all_passed,
+                "governance": {"reason_codes": list(governance_reason_codes)},
+            }
+        }
+    _write_json(repo_root / "scratch/reports/release_closure_chain_full_m0_m12_result.json", full_chain_payload)
     _write_json(repo_root / "scratch/reports/ws27_m12_doc_consistency_ws27_005.json", {"passed": all_passed})
     _write_json(repo_root / "scratch/reports/ws27_72h_endurance_ws27_001.json", {"passed": all_passed})
     _write_json(repo_root / "scratch/reports/ws27_72h_wallclock_acceptance_ws27_001.json", {"passed": all_passed})
@@ -110,6 +118,28 @@ def test_generate_phase3_release_report_requires_wallclock_when_enabled() -> Non
         assert checks["all_required_reports_present"] is False
         assert any("ws27_72h_wallclock_acceptance_ws27_001.json" in item for item in report["missing_required_reports"])
         assert "ws27_wallclock_acceptance_passed" in report["gating_check_ids"]
+    finally:
+        _cleanup_case_root(case_root)
+
+
+def test_generate_phase3_release_report_blocks_hard_governance_reason_code() -> None:
+    case_root = _make_case_root("test_ws27_006_phase3_release_report_hard_governance")
+    try:
+        repo_root = case_root / "repo"
+        _bootstrap_reports(repo_root, all_passed=True, governance_reason_codes=["SEMANTIC_TOOLCHAIN_VIOLATION"])
+
+        report = run_generate_phase3_full_release_report_ws27_006(
+            repo_root=repo_root,
+            output_json=Path("scratch/reports/ws27_006_release_report_hard_governance_fail.json"),
+            output_markdown=Path("scratch/reports/ws27_006_signoff_hard_governance_fail.md"),
+        )
+        assert report["passed"] is False
+        checks = report["checks"]
+        assert checks["ws28_governance_hard_reason_codes_absent"] is False
+        assert checks["ws28_governance_soft_reason_codes_within_budget"] is True
+        assert checks["ws28_governance_unknown_reason_codes_absent"] is True
+        evaluation = report["governance_reason_code_evaluation"]
+        assert "SEMANTIC_TOOLCHAIN_VIOLATION" in evaluation["hard_hits"]
     finally:
         _cleanup_case_root(case_root)
 

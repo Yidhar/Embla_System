@@ -1,7 +1,7 @@
 # NGA-WS28-021 Phase C/D 实施记录（`.spec` 策略外置 + 门禁闭环）
 
 最后更新：2026-02-27  
-任务状态：`in_progress`（Phase C/D done）  
+任务状态：`done`（Phase C/D done；WS28-021 全量收口完成）  
 优先级：`P1`  
 类型：`feature`
 
@@ -35,6 +35,11 @@
     - governance status 非 critical
     - critical 治理事故计数为 0
     - warning/rejection ratio 在预算内
+- 新增变更链校验（本次收口）：
+  - `role_executor_semantic_guard.spec` 的 `change_control` 元数据必须完整（ACL、审批票据、ledger 路径）。
+  - `audit_ledger` 必须存在，并且最新事件包含 `approval_ticket + spec_sha256` 且 hash 匹配当前 spec。
+- 新增变更登记脚本：`scripts/register_role_executor_semantic_guard_change_ws28_021.py`
+  - 用于写入 `spec_change_registered` 审计事件（审批票据、操作者、spec hash）。
 - `scripts/release_closure_chain_full_m0_m12.py`
   - 新增 `m12_execution_governance` 组（`M12-T4`）
   - 新增 CLI 参数：
@@ -42,6 +47,12 @@
     - `--ws28-021-runtime-posture-output`
     - `--ws28-021-incidents-output`
     - `--skip-m12-governance`
+ - `scripts/generate_phase3_full_release_report_ws27_006.py`
+   - 新增 governance `reason_code` 的 `hard/soft` 策略表与签署检查项：
+     - `ws28_governance_hard_reason_codes_absent`
+     - `ws28_governance_soft_reason_codes_within_budget`
+     - `ws28_governance_unknown_reason_codes_absent`
+   - 签署模板新增 reason-code 策略可视化区块（hard/soft/observed/hits）。
 
 ## 3. 测试更新
 
@@ -51,12 +62,19 @@
 
 2. `tests/test_run_ws28_execution_governance_gate_ws28_021.py`
 - 新增门禁脚本通过/失败双场景测试。
+- 新增 `change_control` / ledger / sha 对齐校验断言。
 
-3. `tests/test_release_closure_chain_full_m0_m12.py`
+3. `tests/test_register_role_executor_semantic_guard_change_ws28_021.py`
+- 新增受控变更登记脚本测试（成功写 ledger / 缺少审批票据拒绝）。
+
+4. `tests/test_release_closure_chain_full_m0_m12.py`
 - 新增 `m12_execution_governance` 组断言。
 - 新增治理门禁失败即停链测试。
 
-4. `doc/task/runbooks/release_m12_full_chain_m0_m12_onepager_ws27_004.md`
+5. `tests/test_ws27_006_phase3_release_report.py`
+- 新增 hard reason_code 命中时放行失败断言。
+
+6. `doc/task/runbooks/release_m12_full_chain_m0_m12_onepager_ws27_004.md`
 - 同步新增产物与判定标准。
 
 ## 4. 回归命令（本次）
@@ -84,7 +102,7 @@
   tests/test_ops_dashboard_extensions.py
 ```
 
-## 5. 下一步
+## 5. 收口结果
 
-1. 将治理 reason_code 分层进 release signoff（hard/soft）策略表，不仅靠固定预算阈值。
-2. 将 `role_executor_semantic_guard.spec` 纳入受控变更链（ACL + 审批票据 + 审计 ledger）。
+1. `release signoff` 已接入 governance `reason_code` 的 `hard/soft` 分层策略表，阻断逻辑不再只依赖固定预算阈值。
+2. `role_executor_semantic_guard.spec` 已纳入受控变更链（`ACL + 审批票据 + 审计 ledger`），并接入 `WS28-021` 门禁校验。

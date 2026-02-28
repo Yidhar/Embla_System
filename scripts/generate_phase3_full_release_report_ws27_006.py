@@ -19,6 +19,22 @@ DEFAULT_WS27_OOB_REPORT = Path("scratch/reports/ws27_oob_repair_drill_ws27_003.j
 DEFAULT_OUTPUT_JSON = Path("scratch/reports/phase3_full_release_report_ws27_006.json")
 DEFAULT_OUTPUT_MARKDOWN = Path("scratch/reports/phase3_full_release_signoff_ws27_006.md")
 
+DEFAULT_HARD_GOVERNANCE_REASON_CODES = (
+    "SEMANTIC_TOOLCHAIN_VIOLATION",
+    "ROLE_PATH_VIOLATION",
+    "MISSING_PATCH_INTENT",
+    "FORCED_SUBTASK_ERROR",
+    "EXECUTION_BRIDGE_REJECTED",
+    "EXECUTION_BRIDGE_GOVERNANCE_CRITICAL",
+)
+DEFAULT_SOFT_GOVERNANCE_REASON_CODES = (
+    "ROLE_EXECUTOR_GUARD_WARNING",
+    "ROLE_EXECUTOR_GUARD_OK",
+    "EXECUTION_BRIDGE_GOVERNANCE_WARNING",
+    "EXECUTION_BRIDGE_GOVERNANCE_OK",
+    "EXECUTION_BRIDGE_GOVERNANCE_UNKNOWN",
+)
+
 
 def _utc_iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -48,6 +64,8 @@ def _build_signoff_markdown(
     release_candidate: str,
     checks: Dict[str, bool],
     report_paths: Dict[str, str],
+    governance_reason_code_policy: Dict[str, Any],
+    governance_reason_code_evaluation: Dict[str, Any],
     verdict_passed: bool,
     require_wallclock_acceptance: bool,
 ) -> str:
@@ -82,6 +100,17 @@ def _build_signoff_markdown(
             "## 签署策略",
             "",
             f"- `require_wallclock_acceptance`: `{'true' if require_wallclock_acceptance else 'false'}`",
+            "- `governance_reason_codes`: `hard/soft` 分层阻断策略启用",
+            "",
+            "## Governance Reason-Code 策略",
+            "",
+            f"- `hard_policy_codes`: `{', '.join(list(governance_reason_code_policy.get('hard', []) or []))}`",
+            f"- `soft_policy_codes`: `{', '.join(list(governance_reason_code_policy.get('soft', []) or []))}`",
+            f"- `observed_codes`: `{', '.join(list(governance_reason_code_evaluation.get('observed', []) or []))}`",
+            f"- `hard_hits`: `{', '.join(list(governance_reason_code_evaluation.get('hard_hits', []) or []))}`",
+            f"- `soft_hits`: `{', '.join(list(governance_reason_code_evaluation.get('soft_hits', []) or []))}`",
+            f"- `unknown_hits`: `{', '.join(list(governance_reason_code_evaluation.get('unknown_hits', []) or []))}`",
+            f"- `max_soft_reason_code_count`: `{int(governance_reason_code_evaluation.get('max_soft_reason_code_count') or 0)}`",
             "",
             "## 签署信息",
             "",
@@ -93,6 +122,21 @@ def _build_signoff_markdown(
         ]
     )
     return "\n".join(lines)
+
+
+def _extract_governance_reason_codes_from_full_chain(full_chain_payload: Dict[str, Any]) -> list[str]:
+    group_results = full_chain_payload.get("group_results") if isinstance(full_chain_payload.get("group_results"), dict) else {}
+    governance_group = group_results.get("m12_execution_governance") if isinstance(group_results.get("m12_execution_governance"), dict) else {}
+    governance = governance_group.get("governance") if isinstance(governance_group.get("governance"), dict) else {}
+    codes_raw = governance.get("reason_codes")
+    if not isinstance(codes_raw, list):
+        return []
+    normalized: list[str] = []
+    for item in codes_raw:
+        code = str(item or "").strip().upper()
+        if code:
+            normalized.append(code)
+    return sorted(set(normalized))
 
 
 def run_generate_phase3_full_release_report_ws27_006(
@@ -108,6 +152,7 @@ def run_generate_phase3_full_release_report_ws27_006(
     output_json: Path = DEFAULT_OUTPUT_JSON,
     output_markdown: Path = DEFAULT_OUTPUT_MARKDOWN,
     require_wallclock_acceptance: bool = False,
+    max_soft_reason_code_count: int = 5,
 ) -> Dict[str, Any]:
     root = repo_root.resolve()
     resolved_paths = {
@@ -126,6 +171,15 @@ def run_generate_phase3_full_release_report_ws27_006(
     ws27_cutover_status_payload = _read_json_if_exists(resolved_paths["ws27_cutover_status_report"])
     ws27_oob_payload = _read_json_if_exists(resolved_paths["ws27_oob_report"])
 
+    governance_reason_codes = _extract_governance_reason_codes_from_full_chain(full_chain_payload)
+    hard_policy = sorted(set(str(code).strip().upper() for code in DEFAULT_HARD_GOVERNANCE_REASON_CODES if str(code).strip()))
+    soft_policy = sorted(set(str(code).strip().upper() for code in DEFAULT_SOFT_GOVERNANCE_REASON_CODES if str(code).strip()))
+    hard_policy_set = set(hard_policy)
+    soft_policy_set = set(soft_policy)
+    hard_hits = sorted([code for code in governance_reason_codes if code in hard_policy_set])
+    soft_hits = sorted([code for code in governance_reason_codes if code in soft_policy_set])
+    unknown_hits = sorted([code for code in governance_reason_codes if code not in hard_policy_set and code not in soft_policy_set])
+
     checks = {
         "full_chain_passed": bool(full_chain_payload.get("passed")),
         "doc_consistency_passed": bool(doc_consistency_payload.get("passed")),
@@ -134,6 +188,9 @@ def run_generate_phase3_full_release_report_ws27_006(
         "ws27_wallclock_acceptance_passed": bool(ws27_wallclock_payload.get("passed")),
         "ws27_cutover_status_passed": bool(ws27_cutover_status_payload.get("passed")),
         "ws27_oob_drill_passed": bool(ws27_oob_payload.get("passed")),
+        "ws28_governance_hard_reason_codes_absent": len(hard_hits) == 0,
+        "ws28_governance_soft_reason_codes_within_budget": len(soft_hits) <= max(0, int(max_soft_reason_code_count)),
+        "ws28_governance_unknown_reason_codes_absent": len(unknown_hits) == 0,
     }
     required_path_keys = [
         "full_chain_report",
@@ -154,6 +211,9 @@ def run_generate_phase3_full_release_report_ws27_006(
         "ws27_endurance_passed",
         "ws27_cutover_status_passed",
         "ws27_oob_drill_passed",
+        "ws28_governance_hard_reason_codes_absent",
+        "ws28_governance_soft_reason_codes_within_budget",
+        "ws28_governance_unknown_reason_codes_absent",
         "all_required_reports_present",
     ]
     if require_wallclock_acceptance:
@@ -182,6 +242,18 @@ def run_generate_phase3_full_release_report_ws27_006(
             "ws27_cutover_status_report": ws27_cutover_status_payload,
             "ws27_oob_report": ws27_oob_payload,
         },
+        "governance_reason_code_policy": {
+            "hard": hard_policy,
+            "soft": soft_policy,
+            "unknown_policy": "hard_fail",
+        },
+        "governance_reason_code_evaluation": {
+            "observed": governance_reason_codes,
+            "hard_hits": hard_hits,
+            "soft_hits": soft_hits,
+            "unknown_hits": unknown_hits,
+            "max_soft_reason_code_count": max(0, int(max_soft_reason_code_count)),
+        },
     }
 
     output_report = _resolve_path(root, output_json)
@@ -195,6 +267,8 @@ def run_generate_phase3_full_release_report_ws27_006(
         release_candidate=str(release_candidate or "phase3-full-m12"),
         checks=checks,
         report_paths=path_report,
+        governance_reason_code_policy=report["governance_reason_code_policy"],
+        governance_reason_code_evaluation=report["governance_reason_code_evaluation"],
         verdict_passed=passed,
         require_wallclock_acceptance=bool(require_wallclock_acceptance),
     )
@@ -242,6 +316,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output-json", type=Path, default=DEFAULT_OUTPUT_JSON, help="Output JSON report path")
     parser.add_argument("--output-markdown", type=Path, default=DEFAULT_OUTPUT_MARKDOWN, help="Output markdown signoff template path")
+    parser.add_argument(
+        "--max-soft-reason-code-count",
+        type=int,
+        default=5,
+        help="Maximum accepted count of soft governance reason_codes",
+    )
     parser.add_argument("--strict", action="store_true", help="Return non-zero when checks fail")
     return parser.parse_args()
 
@@ -260,6 +340,7 @@ def main() -> int:
         output_json=args.output_json,
         output_markdown=args.output_markdown,
         require_wallclock_acceptance=bool(args.require_wallclock_acceptance),
+        max_soft_reason_code_count=max(0, int(args.max_soft_reason_code_count)),
     )
     print(
         json.dumps(
