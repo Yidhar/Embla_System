@@ -4,7 +4,7 @@ import asyncio
 
 import apiserver.agentic_tool_loop as tool_loop
 from apiserver.agentic_tool_loop import _convert_structured_tool_calls
-from system.policy_firewall import PolicyFirewall
+from core.security import PolicyFirewall
 
 
 def test_native_input_schema_rejects_missing_run_cmd_command() -> None:

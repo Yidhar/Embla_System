@@ -6,7 +6,7 @@ import asyncio
 
 import apiserver.agentic_tool_loop as tool_loop
 from apiserver.agentic_tool_loop import _apply_parallel_contract_gate, _requires_global_mutex
-from system.global_mutex import LeaseHandle
+from core.security import LeaseHandle
 
 
 def test_contract_gate_downgrades_missing_checksum_parallel_writes_to_readonly():

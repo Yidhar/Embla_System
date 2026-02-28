@@ -7,8 +7,8 @@ import sys
 import uuid
 from pathlib import Path
 
-import system.brainstem_supervisor as brainstem_supervisor_module
-from system.brainstem_supervisor import BrainstemServiceSpec, BrainstemSupervisor
+import core.supervisor.brainstem_supervisor as brainstem_supervisor_module
+from core.supervisor import BrainstemServiceSpec, BrainstemSupervisor
 
 
 def _make_case_root(prefix: str) -> Path:

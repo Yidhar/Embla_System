@@ -7,8 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from autonomous.event_log.event_schema import build_event_envelope
-from autonomous.event_log.event_store import EventStore
+from core.event_bus import EventStore, build_event_envelope
 from autonomous.event_log.replay_tool import EventReplayTool, ReplayRequest
 
 

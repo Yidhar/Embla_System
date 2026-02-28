@@ -6,8 +6,8 @@ import asyncio
 import json
 from pathlib import Path
 
-import system.global_mutex as global_mutex_module
-from system.global_mutex import GlobalMutexManager
+import core.security.lease_fencing as global_mutex_module
+from core.security import GlobalMutexManager
 
 
 def test_global_mutex_reclaim_after_expire():

@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 
 from scripts.run_brainstem_supervisor_ws23_001 import run_brainstem_supervisor_entry
-from system.brainstem_supervisor import BrainstemServiceSpec, BrainstemSupervisor
+from core.supervisor import BrainstemServiceSpec, BrainstemSupervisor
 
 
 def _make_case_root(prefix: str) -> Path:

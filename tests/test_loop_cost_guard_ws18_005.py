@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from core.supervisor import WatchdogDaemon
 from system.loop_cost_guard import LoopCostGuard, LoopCostThresholds
-from system.watchdog_daemon import WatchdogDaemon
 
 
 class DummyEmitter:

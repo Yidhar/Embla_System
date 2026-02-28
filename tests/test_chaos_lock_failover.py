@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-import system.global_mutex as global_mutex_module
-from system.global_mutex import GlobalMutexManager
+import core.security.lease_fencing as global_mutex_module
+from core.security import GlobalMutexManager
 
 
 class ManualClock:

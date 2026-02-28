@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from system.policy_firewall import PolicyFirewall
+from core.security import PolicyFirewall
 
 
 def test_firewall_blocks_obfuscation_and_audits():

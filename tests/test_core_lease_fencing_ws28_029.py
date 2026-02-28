@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 
 from core.security.lease_fencing import LeaseFencingController
-from system.global_mutex import GlobalMutexManager
+from core.security import GlobalMutexManager
 
 
 def test_lease_fencing_controller_full_lifecycle(tmp_path: Path) -> None:
@@ -45,4 +45,3 @@ def test_lease_fencing_controller_full_lifecycle(tmp_path: Path) -> None:
     scan_report = asyncio.run(controller.scan_and_reap_expired(reason="unit_test_scan"))
     assert scan_report["state_file"].endswith("global_mutex_lease.json")
     assert "reclaimed_count" in scan_report
-

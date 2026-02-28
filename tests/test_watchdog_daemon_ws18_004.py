@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-from system.watchdog_daemon import WatchdogDaemon, WatchdogThresholds
+from core.supervisor import WatchdogDaemon, WatchdogThresholds
 
 
 class DummyEmitter:
