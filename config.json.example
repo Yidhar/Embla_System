@@ -2,7 +2,7 @@
   "system": {
     "version": "5.0.0",  // 系统版本号
     "config_schema_version": 1, // 配置结构版本号
-    "ai_name": "娜迦", // AI助手名称
+    "ai_name": "恩布拉", // AI助手名称
     "stream_mode": true, // 是否启用流式响应
     "debug": false, // 是否启用调试模式
     "log_level": "INFO", // 日志级别: DEBUG, INFO, WARNING, ERROR
@@ -32,13 +32,6 @@
     "port": 8000, // 服务器端口
     "auto_start": true, // 是否自动启动
     "docs_enabled": true // 是否启用API文档
-  },
-  "mcpserver": {
-    "enabled": true, // 是否启用MCP服务器
-    "host": "127.0.0.1", // MCP服务器主机
-    "port": 8003, // MCP服务器端口
-    "auto_start": true, // 是否自动启动
-    "agent_discovery": true // 是否启用代理发现
   },
   "grag": {
     "enabled": true, // 是否启用知识图谱
@@ -123,13 +116,6 @@
   "browser": {
     "playwright_headless": false // Playwright是否无头模式
   },
-  "game": {
-    "enabled": false, // 是否启用游戏功能
-    "skip_on_error": true // 出错时是否跳过
-  },
-  "weather": {
-    "api_key": "your-weather-api-key-or-leave-empty" // 天气API密钥
-  },
   "mqtt": {
     "enabled": false, // 是否启用MQTT
     "broker": "mqtt-broker-address", // MQTT代理地址
@@ -202,21 +188,10 @@
     "api_base": "", // 嵌入模型API地址（留空回退到api.base_url）
     "api_key": "" // 嵌入模型API密钥（留空回退到api.api_key）
   },
-  "crawl4ai": {
-    "headless": true, // 是否无头模式
-    "timeout": 30000, // 超时时间(毫秒)
-    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36", // 用户代理
-    "viewport_width": 1280, // 视口宽度
-    "viewport_height": 720 // 视口高度
-  },
   "system_check": {
     "passed": false, // 系统检查是否通过
     "timestamp": "", // 检查时间戳
     "python_version": "", // Python版本
     "project_path": "" // 项目路径
-  },
-  "pypi": {
-    "token_name": "RTGS", // PyPI令牌名称
-    "api": "pypi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" // PyPI API令牌
   }
 }

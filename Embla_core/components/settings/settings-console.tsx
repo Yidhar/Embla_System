@@ -17,6 +17,8 @@ type QuickForm = {
   releaseGuardEnabled: boolean;
   releaseMaxErrorRate: string;
   releaseMaxLatencyP95: string;
+  emblaAuditLedgerFile: string;
+  emblaApprovalRequiredScopes: string;
   userName: string;
   logLevel: string;
   debugMode: boolean;
@@ -26,7 +28,7 @@ type SettingsConsoleProps = {
   lang: AppLang;
 };
 
-type SectionKey = "api" | "autonomous" | "ui" | "patch";
+type SectionKey = "api" | "autonomous" | "runtimeGovernance" | "ui" | "patch";
 
 type DiffRow = {
   path: string;
@@ -48,6 +50,8 @@ const FORM_DEFAULT: QuickForm = {
   releaseGuardEnabled: true,
   releaseMaxErrorRate: "0.02",
   releaseMaxLatencyP95: "1500",
+  emblaAuditLedgerFile: "scratch/runtime/audit_ledger.jsonl",
+  emblaApprovalRequiredScopes: "core,policy,prompt_dna,tools_registry",
   userName: "",
   logLevel: "INFO",
   debugMode: false,
@@ -56,6 +60,7 @@ const FORM_DEFAULT: QuickForm = {
 const COLLAPSED_DEFAULT: Record<SectionKey, boolean> = {
   api: false,
   autonomous: false,
+  runtimeGovernance: false,
   ui: false,
   patch: false,
 };
@@ -95,6 +100,7 @@ const PAGE_COPY: Record<
       sections: {
         api: string;
         autonomous: string;
+        runtimeGovernance: string;
         ui: string;
       };
       fields: {
@@ -110,6 +116,8 @@ const PAGE_COPY: Record<
         releaseGuardEnabled: string;
         releaseMaxErrorRate: string;
         releaseMaxLatencyP95: string;
+        emblaAuditLedgerFile: string;
+        emblaApprovalRequiredScopes: string;
         userName: string;
         logLevel: string;
         debugMode: string;
@@ -117,6 +125,7 @@ const PAGE_COPY: Record<
       hints: {
         apiTemperature: string;
         releaseMaxErrorRate: string;
+        emblaApprovalRequiredScopes: string;
       };
     };
     preview: {
@@ -177,6 +186,7 @@ const PAGE_COPY: Record<
       sections: {
         api: "API & Model",
         autonomous: "Autonomous Guard",
+        runtimeGovernance: "Runtime Governance",
         ui: "UI & Diagnostics",
       },
       fields: {
@@ -192,6 +202,8 @@ const PAGE_COPY: Record<
         releaseGuardEnabled: "Enable Release Guard",
         releaseMaxErrorRate: "Max Error Rate",
         releaseMaxLatencyP95: "Max Latency P95 (ms)",
+        emblaAuditLedgerFile: "Audit Ledger File",
+        emblaApprovalRequiredScopes: "Approval Required Scopes",
         userName: "UI User Name",
         logLevel: "Log Level",
         debugMode: "Debug Mode",
@@ -199,6 +211,7 @@ const PAGE_COPY: Record<
       hints: {
         apiTemperature: "Recommended range: 0.0 - 1.5",
         releaseMaxErrorRate: "Recommended range: 0.0 - 1.0",
+        emblaApprovalRequiredScopes: "Use comma-separated scope names, for example: core,policy,prompt_dna,tools_registry",
       },
     },
     preview: {
@@ -258,6 +271,7 @@ const PAGE_COPY: Record<
       sections: {
         api: "API 与模型",
         autonomous: "自主运行门禁",
+        runtimeGovernance: "运行态治理",
         ui: "界面与诊断",
       },
       fields: {
@@ -273,6 +287,8 @@ const PAGE_COPY: Record<
         releaseGuardEnabled: "启用发布门禁",
         releaseMaxErrorRate: "最大错误率",
         releaseMaxLatencyP95: "最大 P95 延迟（毫秒）",
+        emblaAuditLedgerFile: "审计账本文件路径",
+        emblaApprovalRequiredScopes: "需人工审批的范围",
         userName: "界面用户名",
         logLevel: "日志级别",
         debugMode: "调试模式",
@@ -280,6 +296,7 @@ const PAGE_COPY: Record<
       hints: {
         apiTemperature: "建议区间：0.0 - 1.5",
         releaseMaxErrorRate: "建议区间：0.0 - 1.0",
+        emblaApprovalRequiredScopes: "使用英文逗号分隔，例如：core,policy,prompt_dna,tools_registry",
       },
     },
     preview: {
@@ -364,6 +381,13 @@ function getNestedBoolean(root: Record<string, unknown>, path: string[], fallbac
 }
 
 function buildQuickForm(config: Record<string, unknown>): QuickForm {
+  const emblaScopesRaw = getNestedValue(config, ["embla_system", "security", "approval_required_scopes"]);
+  const emblaScopes = Array.isArray(emblaScopesRaw)
+    ? emblaScopesRaw
+        .map((item) => String(item ?? "").trim())
+        .filter(Boolean)
+        .join(",")
+    : "core,policy,prompt_dna,tools_registry";
   return {
     apiKey: getNestedString(config, ["api", "api_key"], ""),
     apiBaseUrl: getNestedString(config, ["api", "base_url"], ""),
@@ -377,6 +401,12 @@ function buildQuickForm(config: Record<string, unknown>): QuickForm {
     releaseGuardEnabled: getNestedBoolean(config, ["autonomous", "release", "enabled"], true),
     releaseMaxErrorRate: getNestedString(config, ["autonomous", "release", "max_error_rate"], "0.02"),
     releaseMaxLatencyP95: getNestedString(config, ["autonomous", "release", "max_latency_p95_ms"], "1500"),
+    emblaAuditLedgerFile: getNestedString(
+      config,
+      ["embla_system", "security", "audit_ledger_file"],
+      "scratch/runtime/audit_ledger.jsonl",
+    ),
+    emblaApprovalRequiredScopes: emblaScopes,
     userName: getNestedString(config, ["ui", "user_name"], ""),
     logLevel: getNestedString(config, ["system", "log_level"], "INFO"),
     debugMode: getNestedBoolean(config, ["system", "debug"], false),
@@ -479,6 +509,10 @@ function buildQuickPayload(form: QuickForm): { ok: true; payload: Record<string,
   if (numberValues.some((value) => !Number.isFinite(value))) {
     return { ok: false };
   }
+  const approvalScopes = form.emblaApprovalRequiredScopes
+    .split(/[\n,]/g)
+    .map((scope) => scope.trim().toLowerCase())
+    .filter(Boolean);
 
   return {
     ok: true,
@@ -507,6 +541,12 @@ function buildQuickPayload(form: QuickForm): { ok: true; payload: Record<string,
       },
       ui: {
         user_name: form.userName.trim(),
+      },
+      embla_system: {
+        security: {
+          audit_ledger_file: form.emblaAuditLedgerFile.trim() || "scratch/runtime/audit_ledger.jsonl",
+          approval_required_scopes: approvalScopes.length > 0 ? approvalScopes : ["core", "policy", "prompt_dna", "tools_registry"],
+        },
       },
     },
   };
@@ -919,6 +959,32 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
                   <span className="font-bold">API timeout: </span>
                   {formatNumber(Number(form.apiTimeout), lang, { maximumFractionDigits: 0, fallback: "--" })} s
                 </div>
+              </div>
+            )}
+          </article>
+
+          <article className="space-y-3 rounded-2xl border border-gray-200/60 bg-white/70 p-4">
+            {sectionHeader(copy.quick.sections.runtimeGovernance, "runtimeGovernance", collapsed, toggleSection)}
+            {collapsed.runtimeGovernance ? null : (
+              <div className="space-y-3">
+                <label className="block">
+                  <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.emblaAuditLedgerFile}</p>
+                  <input
+                    value={form.emblaAuditLedgerFile}
+                    onChange={(event) => setField("emblaAuditLedgerFile", event.target.value)}
+                    className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                  />
+                </label>
+                <label className="block">
+                  <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.emblaApprovalRequiredScopes}</p>
+                  <textarea
+                    value={form.emblaApprovalRequiredScopes}
+                    onChange={(event) => setField("emblaApprovalRequiredScopes", event.target.value)}
+                    className="h-24 w-full rounded-xl border border-white/70 bg-white/85 px-3 py-2 text-sm outline-none"
+                    spellCheck={false}
+                  />
+                  <p className="mt-1 text-[10px] text-gray-500">{copy.quick.hints.emblaApprovalRequiredScopes}</p>
+                </label>
               </div>
             )}
           </article>
