@@ -3553,7 +3553,12 @@ async def run_agentic_loop(
                     yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
                 break
 
-            if policy.inject_no_tool_feedback:
+            can_continue_no_tool = (
+                runtime.consecutive_no_tool_rounds < policy.max_consecutive_no_tool_rounds
+                and round_num < policy.max_rounds
+            )
+
+            if can_continue_no_tool and policy.inject_no_tool_feedback:
                 logger.info(
                     "[AgenticLoop] Round %s: no tool call while completion gate not satisfied "
                     "(%s/%s), inject corrective feedback",
@@ -3587,23 +3592,51 @@ async def run_agentic_loop(
                 if repair_success_event:
                     yield repair_success_event
 
-            verify_success_event = _format_workflow_stage_event(
+            if can_continue_no_tool:
+                verify_success_event = _format_workflow_stage_event(
+                    round_num,
+                    "verify",
+                    "success",
+                    policy=policy,
+                    decision="continue",
+                    reason="await_submit_result_tool",
+                    details={
+                        "consecutive_no_tool_rounds": runtime.consecutive_no_tool_rounds,
+                        "threshold": policy.max_consecutive_no_tool_rounds,
+                        "inject_no_tool_feedback": bool(policy.inject_no_tool_feedback),
+                        "task_completed": bool(runtime.agent_state.get("task_completed") is True),
+                        "submit_result_called": bool(runtime.submit_result_called),
+                    },
+                )
+                if verify_success_event:
+                    yield verify_success_event
+                yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
+                continue
+
+            runtime.stop_reason = "completion_not_submitted"
+            verify_error_event = _format_workflow_stage_event(
                 round_num,
                 "verify",
-                "success",
+                "error",
                 policy=policy,
-                decision="continue",
-                reason="await_submit_result_tool",
+                reason="completion_not_submitted",
+                decision="summary" if policy.enable_summary_round else "stop",
                 details={
                     "consecutive_no_tool_rounds": runtime.consecutive_no_tool_rounds,
+                    "threshold": policy.max_consecutive_no_tool_rounds,
+                    "inject_no_tool_feedback": bool(policy.inject_no_tool_feedback),
                     "task_completed": bool(runtime.agent_state.get("task_completed") is True),
                     "submit_result_called": bool(runtime.submit_result_called),
                 },
             )
-            if verify_success_event:
-                yield verify_success_event
-            yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
-            continue
+            if verify_error_event:
+                yield verify_error_event
+            if policy.enable_summary_round:
+                needs_summary = True
+                yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
+            else:
+                yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+            break
 
         runtime.consecutive_validation_failures = 0
         runtime.consecutive_no_tool_rounds = 0

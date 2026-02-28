@@ -168,3 +168,49 @@ def test_agentic_loop_stops_when_submit_result_marks_completed(monkeypatch):
     round_end_events = [event for event in events if event.get("type") == "round_end"]
     assert round_end_events
     assert round_end_events[-1].get("has_more") is False
+
+
+def test_agentic_loop_honors_no_tool_threshold_before_max_rounds(monkeypatch):
+    class _NoToolLLM:
+        async def stream_chat_with_context(self, *_args, **_kwargs):
+            yield tool_loop._format_sse_event("content", {"text": "继续分析，不调用工具"})
+
+    fake_cfg = SimpleNamespace(api=SimpleNamespace(temperature=0.0))
+    monkeypatch.setattr(tool_loop, "get_config", lambda: fake_cfg)
+    monkeypatch.setattr(tool_loop, "_resolve_agentic_loop_policy", lambda _max_rounds: _policy(8))
+    monkeypatch.setattr(tool_loop, "_build_agentic_loop_watchdog", lambda: None)
+    monkeypatch.setattr(llm_service_module, "get_llm_service", lambda: _NoToolLLM())
+    monkeypatch.setattr(tool_loop, "archive_tool_results_for_session", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(tool_loop, "build_reinjection_context", lambda **_kwargs: "")
+    monkeypatch.setattr(
+        tool_loop,
+        "_maybe_execute_gc_reader_followup",
+        lambda *_args, **_kwargs: asyncio.sleep(0, result=[]),
+    )
+
+    async def _collect_events() -> List[Dict[str, Any]]:
+        collected: List[Dict[str, Any]] = []
+        async for chunk in tool_loop.run_agentic_loop(
+            [{"role": "user", "content": "推进但始终无工具调用"}],
+            session_id="sess-submit-threshold-1",
+            max_rounds=8,
+        ):
+            payload = _decode_sse_payload(chunk)
+            if payload:
+                collected.append(payload)
+        return collected
+
+    events = asyncio.run(_collect_events())
+    verify_errors = [
+        event
+        for event in events
+        if event.get("type") == "tool_stage"
+        and event.get("phase") == "verify"
+        and event.get("status") == "error"
+    ]
+    assert verify_errors
+    assert verify_errors[-1].get("reason") == "completion_not_submitted"
+
+    round_end_events = [event for event in events if event.get("type") == "round_end"]
+    assert len(round_end_events) == 2
+    assert round_end_events[-1].get("has_more") is False
