@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from autonomous.event_log.event_store import EventStore
+from core.event_bus import EventStore
 
 
 @dataclass(frozen=True)

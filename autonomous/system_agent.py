@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
 
-from autonomous.event_log import AlertEventProducer, CronEventProducer
+from autonomous.event_log.cron_alert_producer import AlertEventProducer, CronEventProducer
 from core.event_bus.consumers import register_default_consumers
 from core.event_bus.event_store import EventStore
 from core.supervisor.watchdog_daemon import WatchdogAction, WatchdogDaemon, WatchdogThresholds

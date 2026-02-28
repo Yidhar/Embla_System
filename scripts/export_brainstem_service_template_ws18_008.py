@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from system.brainstem_supervisor import BrainstemServiceSpec, BrainstemSupervisor
+from core.supervisor import BrainstemServiceSpec, BrainstemSupervisor
 
 
 def main() -> int:

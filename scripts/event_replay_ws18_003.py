@@ -7,7 +7,9 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
-from autonomous.event_log import EventReplayTool, EventStore, ReplayRequest
+from core.event_bus import EventStore
+
+from autonomous.event_log.replay_tool import EventReplayTool, ReplayRequest
 
 
 def _default_event_log() -> Path:
