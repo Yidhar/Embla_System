@@ -301,6 +301,57 @@ def test_ops_runtime_posture_payload_includes_execution_bridge_governance(tmp_pa
     assert metrics["execution_bridge_governance_warning_ratio"]["value"] == 1.0
 
 
+def test_ops_runtime_posture_payload_includes_agentic_loop_completion_summary(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    _write_jsonl(
+        events_file,
+        [
+            {
+                "timestamp": "2026-03-01T02:00:00+00:00",
+                "event_type": "AgenticLoopCompletionSubmitted",
+                "payload": {"session_id": "sess-ok-1", "reason": "submitted_completion"},
+            },
+            {
+                "timestamp": "2026-03-01T02:05:00+00:00",
+                "event_type": "AgenticLoopCompletionNotSubmitted",
+                "payload": {"session_id": "sess-fail-1", "reason": "completion_not_submitted"},
+            },
+        ],
+    )
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "ok", "metric_status": {}},
+            "metrics": {},
+            "threshold_profile": {},
+            "sources": {"events_file": "logs/autonomous/events.jsonl"},
+        }
+
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+
+    payload = api_server._ops_build_runtime_posture_payload(events_limit=200)
+    assert payload["status"] == "success"
+    assert payload["severity"] == "critical"
+    assert payload["reason_code"] == "AGENTIC_LOOP_COMPLETION_CRITICAL"
+    assert payload["data"]["summary"]["agentic_loop_completion_status"] == "critical"
+
+    completion = payload["data"]["agentic_loop_completion"]
+    assert completion["submitted_count"] == 1
+    assert completion["not_submitted_count"] == 1
+    assert completion["total_count"] == 2
+    assert completion["reason_code"] == "AGENTIC_LOOP_COMPLETION_NOT_SUBMITTED_PRESENT"
+
+    metric = payload["data"]["metrics"]["agentic_loop_completion_not_submitted_ratio"]
+    assert metric["status"] == "critical"
+    assert metric["submitted_count"] == 1
+    assert metric["not_submitted_count"] == 1
+    assert metric["total_count"] == 2
+
+
 def test_ops_runtime_posture_payload_includes_immutable_dna_preflight(monkeypatch, tmp_path) -> None:
     repo_root = tmp_path
 

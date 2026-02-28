@@ -398,7 +398,7 @@ class AgenticLoopConfig(BaseModel):
     max_consecutive_validation_failures: int = Field(default=2, ge=1, le=20, description="连续参数校验失败阈值")
     max_consecutive_no_tool_rounds: int = Field(default=2, ge=1, le=20, description="连续无工具调用阈值")
 
-    inject_no_tool_feedback: bool = Field(default=True, description="无工具调用时是否注入纠偏反馈继续下一轮")
+    inject_no_tool_feedback: bool = Field(default=False, description="无工具调用时是否注入纠偏反馈继续下一轮")
     tool_result_preview_chars: int = Field(default=500, ge=120, le=20000, description="前端工具结果预览长度")
     emit_workflow_stage_events: bool = Field(
         default=True, description="是否输出 plan/execute/verify/repair 阶段事件（SSE可视化）"

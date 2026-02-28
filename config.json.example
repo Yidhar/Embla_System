@@ -58,7 +58,7 @@
     "max_consecutive_tool_failures": 2, // 连续工具失败阈值
     "max_consecutive_validation_failures": 2, // 连续参数校验失败阈值
     "max_consecutive_no_tool_rounds": 2, // 连续无工具调用阈值（默认允许一次自动纠偏重试）
-    "inject_no_tool_feedback": true, // 无工具调用时注入纠偏反馈继续下一轮
+    "inject_no_tool_feedback": false, // 无工具调用时是否注入纠偏反馈继续下一轮（默认关闭）
     "tool_result_preview_chars": 500, // 前端展示的工具结果截断长度
     "emit_workflow_stage_events": true, // 是否输出 plan/execute/verify/repair 阶段事件
     "max_parallel_tool_calls": 8, // 单轮最大并行工具调用数

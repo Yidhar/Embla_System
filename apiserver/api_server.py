@@ -1083,6 +1083,53 @@ def _emit_chat_route_arbiter_event(route_meta: Dict[str, Any], *, session_id: st
     store.emit(event_type, payload, source="apiserver.chat_stream")
 
 
+def _emit_agentic_loop_completion_event(
+    *,
+    session_id: str,
+    execution_session_id: str,
+    route_meta: Dict[str, Any],
+    chunk_data: Dict[str, Any],
+) -> None:
+    if not isinstance(chunk_data, dict):
+        return
+    if str(chunk_data.get("type") or "").strip().lower() != "tool_stage":
+        return
+    if str(chunk_data.get("phase") or "").strip().lower() != "verify":
+        return
+
+    reason = str(chunk_data.get("reason") or "").strip().lower()
+    if reason == "submitted_completion":
+        event_type = "AgenticLoopCompletionSubmitted"
+    elif reason == "completion_not_submitted":
+        event_type = "AgenticLoopCompletionNotSubmitted"
+    else:
+        return
+
+    store = _get_chat_route_event_store()
+    if store is None:
+        return
+
+    decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
+    details = chunk_data.get("details") if isinstance(chunk_data.get("details"), dict) else {}
+    payload = {
+        "session_id": str(session_id or ""),
+        "execution_session_id": str(execution_session_id or ""),
+        "outer_session_id": str(route_meta.get("outer_session_id") or ""),
+        "core_session_id": str(route_meta.get("core_session_id") or ""),
+        "trace_id": str(decision.get("trace_id") or ""),
+        "workflow_id": str(decision.get("task_id") or ""),
+        "path": str(route_meta.get("path") or ""),
+        "status": str(chunk_data.get("status") or ""),
+        "reason": str(chunk_data.get("reason") or ""),
+        "decision": str(chunk_data.get("decision") or ""),
+        "round": int(chunk_data.get("round") or 0),
+        "task_completed": bool(details.get("task_completed") is True),
+        "submit_result_called": bool(details.get("submit_result_called") is True),
+        "submit_result_round": int(details.get("submit_result_round") or 0),
+    }
+    store.emit(event_type, payload, source="apiserver.chat_stream")
+
+
 def _read_chat_route_event_rows(*, limit: int = 2000) -> List[Dict[str, Any]]:
     event_file = Path(__file__).resolve().parent.parent / "logs" / "autonomous" / "events.jsonl"
     if not event_file.exists() or limit <= 0:
@@ -2163,6 +2210,13 @@ async def chat_stream(request: ChatRequest):
                                 complete_response_parts.append(chunk_text)
                             elif chunk_type == "reasoning":
                                 pass
+                            elif chunk_type == "tool_stage":
+                                _emit_agentic_loop_completion_event(
+                                    session_id=session_id,
+                                    execution_session_id=execution_session_id,
+                                    route_meta=route_meta,
+                                    chunk_data=chunk_data,
+                                )
                             elif chunk_type == "round_end":
                                 current_round_text = ""
 
@@ -3082,6 +3136,11 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         issues_limit=20,
     )
     execution_bridge_governance_status = _ops_status_to_severity(str(execution_bridge_governance.get("status") or "unknown"))
+    agentic_loop_completion = _ops_build_agentic_loop_completion_summary(
+        events_file=events_file,
+        limit=max(200, int(events_limit)),
+    )
+    agentic_loop_completion_status = _ops_status_to_severity(str(agentic_loop_completion.get("status") or "unknown"))
 
     repo_root = _ops_repo_root()
     brainstem_control_plane = _ops_build_brainstem_control_plane_summary(repo_root)
@@ -3103,6 +3162,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             immutable_dna_status,
             audit_ledger_status,
             execution_bridge_governance_status,
+            agentic_loop_completion_status,
         ]
     )
     severity = _ops_status_to_severity(overall_status)
@@ -3147,6 +3207,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "audit_ledger_status": audit_ledger_status,
             "execution_bridge_governance_status": execution_bridge_governance_status,
             "execution_bridge_governance_reason_codes": list(execution_bridge_governance.get("reason_codes") or []),
+            "agentic_loop_completion_status": agentic_loop_completion_status,
         },
         "metrics": {
             "runtime_rollout": metrics.get("runtime_rollout", {}),
@@ -3211,6 +3272,14 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
                 "governed_warning_count": execution_bridge_governance.get("governed_warning_count"),
                 "governed_critical_count": execution_bridge_governance.get("governed_critical_count"),
             },
+            "agentic_loop_completion_not_submitted_ratio": {
+                "status": agentic_loop_completion_status,
+                "value": agentic_loop_completion.get("not_submitted_ratio"),
+                "submitted_count": agentic_loop_completion.get("submitted_count"),
+                "not_submitted_count": agentic_loop_completion.get("not_submitted_count"),
+                "total_count": agentic_loop_completion.get("total_count"),
+                "reason_code": agentic_loop_completion.get("reason_code"),
+            },
         },
         "threshold_profile": threshold_profile,
         "sources": sources,
@@ -3219,6 +3288,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         "immutable_dna": immutable_dna,
         "audit_ledger": audit_ledger,
         "execution_bridge_governance": execution_bridge_governance,
+        "agentic_loop_completion": agentic_loop_completion,
     }
     if ws26_runtime_report_payload:
         response_data["ws26_runtime_snapshot_report"] = ws26_runtime_report_payload
@@ -3240,6 +3310,12 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     elif execution_bridge_governance_status == "critical":
         reason_code = "EXECUTION_BRIDGE_GOVERNANCE_CRITICAL"
         reason_text = "Execution bridge governance has critical rejections; check role guards and policy contracts."
+    elif agentic_loop_completion_status == "critical":
+        reason_code = "AGENTIC_LOOP_COMPLETION_CRITICAL"
+        reason_text = str(
+            agentic_loop_completion.get("reason_text")
+            or "Agentic loop completion gate contains completion_not_submitted events."
+        )
     elif brainstem_status == "warning":
         reason_code = "BRAINSTEM_CONTROL_PLANE_WARNING"
         reason_text = str(brainstem_control_plane.get("reason_text") or "Brainstem control-plane requires attention.")
@@ -3255,6 +3331,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     elif execution_bridge_governance_status == "warning":
         reason_code = "EXECUTION_BRIDGE_GOVERNANCE_WARNING"
         reason_text = "Execution bridge governance has warning signals; review semantic/path guard drift."
+    elif agentic_loop_completion_status == "warning":
+        reason_code = "AGENTIC_LOOP_COMPLETION_WARNING"
+        reason_text = str(agentic_loop_completion.get("reason_text") or "Agentic loop completion signals require attention.")
     elif severity == "unknown":
         reason_code = "RUNTIME_SIGNAL_UNKNOWN"
         reason_text = "Runtime posture lacks enough signal coverage; verify events/workflow inputs."
@@ -3632,6 +3711,60 @@ def _ops_build_execution_bridge_governance_summary(
         "governed_warning_ratio": governed_warning_ratio,
         "latest_issue_at": latest_issue_at,
         "recent_issues": recent_issues,
+    }
+
+
+def _ops_build_agentic_loop_completion_summary(
+    *,
+    events_file: Path,
+    limit: int = 5000,
+) -> Dict[str, Any]:
+    rows = _ops_read_event_rows(events_file, limit=max(200, int(limit)))
+    submitted_count = 0
+    not_submitted_count = 0
+    latest_timestamp = ""
+    latest_reason = ""
+
+    for row in rows:
+        event_type = str(row.get("event_type") or "").strip()
+        if event_type == "AgenticLoopCompletionSubmitted":
+            submitted_count += 1
+            if not latest_timestamp:
+                latest_timestamp = str(row.get("timestamp") or "")
+                latest_reason = "submitted_completion"
+        elif event_type == "AgenticLoopCompletionNotSubmitted":
+            not_submitted_count += 1
+            if not latest_timestamp:
+                latest_timestamp = str(row.get("timestamp") or "")
+                latest_reason = "completion_not_submitted"
+
+    total_count = submitted_count + not_submitted_count
+    not_submitted_ratio = float(not_submitted_count) / float(total_count) if total_count > 0 else None
+
+    if total_count <= 0:
+        status = "unknown"
+        reason_code = "AGENTIC_LOOP_COMPLETION_SIGNAL_EMPTY"
+        reason_text = "No agentic loop completion signal captured in runtime events."
+    elif not_submitted_count > 0:
+        status = "critical"
+        reason_code = "AGENTIC_LOOP_COMPLETION_NOT_SUBMITTED_PRESENT"
+        reason_text = "Detected completion_not_submitted stop reasons in recent agentic loop sessions."
+    else:
+        status = "ok"
+        reason_code = "OK"
+        reason_text = "All observed agentic loop sessions completed via submitted_completion."
+
+    return {
+        "status": _ops_status_to_severity(status),
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "submitted_count": submitted_count,
+        "not_submitted_count": not_submitted_count,
+        "total_count": total_count,
+        "not_submitted_ratio": not_submitted_ratio,
+        "latest_timestamp": latest_timestamp,
+        "latest_reason": latest_reason,
+        "events_file": _ops_unix_path(events_file) if events_file.exists() else "",
     }
 
 
