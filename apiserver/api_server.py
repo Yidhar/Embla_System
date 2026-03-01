@@ -3410,7 +3410,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         except (OSError, json.JSONDecodeError):
             pass
 
-    for key in ("events_file", "workflow_db", "global_mutex_state", "autonomous_config"):
+    for key in ("events_file", "events_db", "workflow_db", "global_mutex_state", "autonomous_config"):
         path_value = sources.get(key)
         if isinstance(path_value, str) and path_value.strip():
             source_reports.append(path_value.replace("\\", "/"))
@@ -3721,22 +3721,81 @@ def _ops_safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
-def _ops_read_event_rows(events_file: Path, *, limit: int) -> List[Dict[str, Any]]:
-    if not events_file.exists() or limit <= 0:
+def _ops_resolve_event_db_path(events_file: Path) -> Path:
+    from core.event_bus.topic_bus import resolve_topic_db_path_from_mirror
+
+    return resolve_topic_db_path_from_mirror(events_file)
+
+
+def _ops_read_event_rows_from_db(events_db: Path, *, limit: int) -> List[Dict[str, Any]]:
+    if not events_db.exists() or limit <= 0:
+        return []
+    import sqlite3
+
+    rows: List[Dict[str, Any]] = []
+    try:
+        conn = sqlite3.connect(str(events_db))
+        conn.row_factory = sqlite3.Row
+        query_rows = conn.execute(
+            """
+            SELECT envelope_json
+            FROM topic_event
+            ORDER BY seq DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        ).fetchall()
+        conn.close()
+    except Exception as exc:
+        logger.debug(f"读取事件数据库失败，降级文件读取: {exc}")
         return []
 
-    lines = events_file.read_text(encoding="utf-8", errors="ignore").splitlines()
-    rows: List[Dict[str, Any]] = []
-    for line in lines[-limit:]:
-        if not line.strip():
-            continue
+    for row in reversed(query_rows):
         try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
+            payload = json.loads(str(row["envelope_json"] or "{}"))
+        except Exception:
             continue
         if isinstance(payload, dict):
-            rows.append(payload)
+            rows.append({**payload, "payload": dict(payload.get("data") or {})})
     return rows
+
+
+def _ops_read_event_rows(events_file: Path, *, limit: int) -> List[Dict[str, Any]]:
+    if limit <= 0:
+        return []
+
+    events_db = _ops_resolve_event_db_path(events_file)
+    db_rows = _ops_read_event_rows_from_db(events_db, limit=max(1, int(limit)))
+
+    file_rows: List[Dict[str, Any]] = []
+    if events_file.exists():
+        lines = events_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+        for line in lines[-max(1, int(limit)) :]:
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                file_rows.append(payload)
+
+    merged: List[Dict[str, Any]] = []
+    dedupe: set[str] = set()
+    for row in (db_rows + file_rows):
+        event_id = str(row.get("event_id") or "").strip()
+        event_type = str(row.get("event_type") or "").strip()
+        timestamp = str(row.get("timestamp") or "").strip()
+        dedupe_key = event_id or f"{event_type}|{timestamp}|{json.dumps(row.get('payload', {}), ensure_ascii=False, sort_keys=True)}"
+        if dedupe_key in dedupe:
+            continue
+        dedupe.add(dedupe_key)
+        merged.append(row)
+
+    merged.sort(key=lambda item: _ops_parse_iso_datetime(item.get("timestamp")) or 0.0)
+    if len(merged) > int(limit):
+        merged = merged[-int(limit) :]
+    return merged
 
 
 def _ops_compact_event_payload(payload: Any) -> Dict[str, Any]:
@@ -4003,6 +4062,7 @@ def _ops_build_agentic_loop_completion_summary(
     limit: int = 5000,
 ) -> Dict[str, Any]:
     rows = _ops_read_event_rows(events_file, limit=max(200, int(limit)))
+    events_db = _ops_resolve_event_db_path(events_file)
     submitted_count = 0
     not_submitted_count = 0
     latest_timestamp = ""
@@ -4047,7 +4107,7 @@ def _ops_build_agentic_loop_completion_summary(
         "not_submitted_ratio": not_submitted_ratio,
         "latest_timestamp": latest_timestamp,
         "latest_reason": latest_reason,
-        "events_file": _ops_unix_path(events_file) if events_file.exists() else "",
+        "events_file": _ops_unix_path(events_db if events_db.exists() else events_file),
     }
 
 
@@ -4121,7 +4181,7 @@ def _ops_build_workflow_events_payload(
         reason_text = "Workflow signal coverage is insufficient; verify events/workflow data sources."
 
     source_reports: List[str] = []
-    for key in ("events_file", "workflow_db", "global_mutex_state"):
+    for key in ("events_file", "events_db", "workflow_db", "global_mutex_state"):
         value = sources.get(key)
         if isinstance(value, str) and value.strip():
             source_reports.append(value.replace("\\", "/"))
@@ -4353,6 +4413,7 @@ def _ops_build_evidence_index_payload(*, max_reports: int = 100) -> Dict[str, An
 def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
     repo_root = _ops_repo_root()
     events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    events_db = _ops_resolve_event_db_path(events_file)
     event_rows = _ops_read_event_rows(events_file, limit=max(200, int(limit) * 10))
     route_quality_trend = _ops_build_route_quality_trend(events_file, window_size=20, max_windows=6)
     execution_bridge_governance = _ops_build_execution_bridge_governance_summary(
@@ -4659,7 +4720,7 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
                         "task_id": str(issue.get("task_id") or ""),
                         "subtask_id": str(issue.get("subtask_id") or ""),
                     },
-                    "report_path": _ops_unix_path(events_file) if events_file.exists() else "",
+                    "report_path": _ops_unix_path(events_db if events_db.exists() else events_file),
                     "gate_level": "runtime",
                 }
             )
@@ -4677,7 +4738,9 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
         latest_incident_at = str(incidents[0].get("timestamp") or "")
 
     source_reports: List[str] = []
-    if events_file.exists():
+    if events_db.exists():
+        source_reports.append(_ops_unix_path(events_db))
+    elif events_file.exists():
         source_reports.append(_ops_unix_path(events_file))
     for item in incidents:
         report_path = str(item.get("report_path") or "")

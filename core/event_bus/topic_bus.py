@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -115,6 +116,7 @@ class TopicEventBus:
             severity TEXT NOT NULL,
             idempotency_key TEXT NOT NULL,
             timestamp TEXT NOT NULL,
+            partition_ym TEXT NOT NULL DEFAULT '',
             envelope_json TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_topic_event_topic_seq ON topic_event(topic, seq);
@@ -150,7 +152,31 @@ class TopicEventBus:
         with self._lock:
             with self._connect() as conn:
                 conn.executescript(schema)
+                self._migrate_topic_event_partition_column(conn)
                 conn.commit()
+
+    @staticmethod
+    def _partition_from_timestamp(timestamp: str) -> str:
+        parsed = _parse_iso_datetime(timestamp)
+        if parsed is None:
+            parsed = datetime.now(timezone.utc)
+        return parsed.strftime("%Y%m")
+
+    def _migrate_topic_event_partition_column(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(topic_event)").fetchall()
+        column_names = {str(row["name"]) for row in columns}
+        if "partition_ym" not in column_names:
+            conn.execute("ALTER TABLE topic_event ADD COLUMN partition_ym TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            "UPDATE topic_event SET partition_ym = strftime('%Y%m', replace(substr(timestamp, 1, 19), 'T', ' ')) "
+            "WHERE coalesce(partition_ym, '') = ''"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_topic_event_partition_seq ON topic_event(partition_ym, seq)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_topic_event_partition_topic_seq ON topic_event(partition_ym, topic, seq)"
+        )
 
     def subscribe(
         self,
@@ -198,6 +224,7 @@ class TopicEventBus:
             timestamp=timestamp,
         )
         envelope["topic"] = normalized_topic
+        partition_ym = self._partition_from_timestamp(str(envelope.get("timestamp") or ""))
 
         envelope_json = json.dumps(envelope, ensure_ascii=False)
         with self._lock:
@@ -205,8 +232,8 @@ class TopicEventBus:
                 conn.execute(
                     """
                     INSERT INTO topic_event
-                    (event_id, topic, event_type, source, severity, idempotency_key, timestamp, envelope_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (event_id, topic, event_type, source, severity, idempotency_key, timestamp, partition_ym, envelope_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         str(envelope.get("event_id") or ""),
@@ -216,6 +243,7 @@ class TopicEventBus:
                         str(envelope.get("severity") or ""),
                         str(envelope.get("idempotency_key") or ""),
                         str(envelope.get("timestamp") or ""),
+                        partition_ym,
                         envelope_json,
                     ),
                 )
@@ -580,12 +608,18 @@ class TopicEventBus:
         topic_pattern: str | None = None,
         from_seq: int = 1,
         to_seq: int | None = None,
+        from_timestamp: str | None = None,
+        to_timestamp: str | None = None,
         limit: int = 1_000,
     ) -> List[Dict[str, Any]]:
         normalized_pattern = _normalize_topic_token(topic_pattern or "") if topic_pattern else ""
         lower_seq = max(1, int(from_seq))
         upper_seq = int(to_seq) if to_seq is not None else None
         max_rows = max(1, int(limit))
+        lower_ts = str(from_timestamp or "").strip()
+        upper_ts = str(to_timestamp or "").strip()
+        lower_partition = self._partition_from_timestamp(lower_ts) if lower_ts else ""
+        upper_partition = self._partition_from_timestamp(upper_ts) if upper_ts else ""
 
         query = """
         SELECT seq, topic, envelope_json
@@ -596,6 +630,18 @@ class TopicEventBus:
         if upper_seq is not None:
             query += " AND seq <= ?"
             params.append(upper_seq)
+        if lower_partition:
+            query += " AND partition_ym >= ?"
+            params.append(lower_partition)
+        if upper_partition:
+            query += " AND partition_ym <= ?"
+            params.append(upper_partition)
+        if lower_ts:
+            query += " AND timestamp >= ?"
+            params.append(lower_ts)
+        if upper_ts:
+            query += " AND timestamp <= ?"
+            params.append(upper_ts)
         query += " ORDER BY seq ASC LIMIT ?"
         params.append(max_rows)
 
@@ -617,6 +663,22 @@ class TopicEventBus:
                 continue
             result.append(envelope)
         return result
+
+    def list_time_partitions(self, *, limit: int = 36) -> List[str]:
+        with self._lock:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT partition_ym
+                    FROM topic_event
+                    WHERE coalesce(partition_ym, '') <> ''
+                    GROUP BY partition_ym
+                    ORDER BY partition_ym DESC
+                    LIMIT ?
+                    """,
+                    (max(1, int(limit)),),
+                ).fetchall()
+        return [str(row["partition_ym"] or "") for row in rows if str(row["partition_ym"] or "")]
 
     def read_recent(self, *, limit: int = 100, topic_pattern: str | None = None) -> List[Dict[str, Any]]:
         upper = self._latest_seq()
@@ -716,10 +778,36 @@ class TopicEventBus:
         return subscriptions
 
 
+def _parse_iso_datetime(raw: Any) -> Optional[datetime]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def resolve_topic_db_path_from_mirror(file_path: Path) -> Path:
+    mirror = Path(file_path)
+    return mirror.with_name(f"{mirror.stem}_topics.db")
+
+
+def should_enable_jsonl_mirror() -> bool:
+    raw = str(os.environ.get("NAGA_EVENT_BUS_JSONL_MIRROR", "")).strip().lower()
+    return raw in {"1", "true", "yes", "on", "y"}
+
+
 __all__ = [
     "EventHandler",
     "ReplayDispatchResult",
     "TopicEventBus",
     "TopicSubscription",
     "infer_event_topic",
+    "resolve_topic_db_path_from_mirror",
+    "should_enable_jsonl_mirror",
 ]

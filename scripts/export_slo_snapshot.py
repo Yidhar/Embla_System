@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import yaml
 
 from core.event_bus import normalize_event_envelope
+from core.event_bus.topic_bus import resolve_topic_db_path_from_mirror
 from system.artifact_store import ArtifactStore, ArtifactStoreConfig
 
 
@@ -32,6 +33,7 @@ class SnapshotPaths:
 
     repo_root: Path
     events_file: Path
+    events_db: Path
     workflow_db: Path
     global_mutex_state: Path
     autonomous_config: Path
@@ -42,6 +44,7 @@ class SnapshotPaths:
         return cls(
             repo_root=root,
             events_file=root / "logs" / "autonomous" / "events.jsonl",
+            events_db=resolve_topic_db_path_from_mirror(root / "logs" / "autonomous" / "events.jsonl"),
             workflow_db=root / "logs" / "autonomous" / "workflow.db",
             global_mutex_state=root / "logs" / "runtime" / "global_mutex_lease.json",
             autonomous_config=root / "autonomous" / "config" / "autonomous_config.yaml",
@@ -102,25 +105,71 @@ def _read_yaml(path: Path) -> Dict[str, Any]:
 
 
 def _read_events(events_file: Path, *, limit: int) -> List[Dict[str, Any]]:
-    if not events_file.exists() or limit <= 0:
+    if limit <= 0:
         return []
-    lines = events_file.read_text(encoding="utf-8", errors="ignore").splitlines()
-    records: List[Dict[str, Any]] = []
-    for line in lines[-limit:]:
-        if not line.strip():
-            continue
+    db_records: List[Dict[str, Any]] = []
+    events_db = resolve_topic_db_path_from_mirror(events_file)
+    if events_db.exists():
+        import sqlite3
+
         try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
+            conn = sqlite3.connect(str(events_db))
+            conn.row_factory = sqlite3.Row
+            db_rows = conn.execute(
+                """
+                SELECT envelope_json
+                FROM topic_event
+                ORDER BY seq DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+            conn.close()
+            records: List[Dict[str, Any]] = []
+            for row in reversed(db_rows):
+                try:
+                    payload = json.loads(str(row["envelope_json"] or "{}"))
+                except Exception:
+                    continue
+                if isinstance(payload, dict):
+                    records.append({**payload, "payload": dict(payload.get("data") or {})})
+            db_records = records
+        except Exception:
+            pass
+
+    file_records: List[Dict[str, Any]] = []
+    if events_file.exists():
+        lines = events_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+        for line in lines[-max(1, int(limit)) :]:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict):
+                envelope = normalize_event_envelope(
+                    row,
+                    fallback_event_type=str(row.get("event_type") or ""),
+                    fallback_timestamp=str(row.get("timestamp") or ""),
+                )
+                file_records.append({**envelope, "payload": dict(envelope.get("data") or {})})
+
+    merged: List[Dict[str, Any]] = []
+    dedupe: set[str] = set()
+    for row in (db_records + file_records):
+        event_id = str(row.get("event_id") or "").strip()
+        event_type = str(row.get("event_type") or "").strip()
+        timestamp = str(row.get("timestamp") or "").strip()
+        dedupe_key = event_id or f"{event_type}|{timestamp}"
+        if dedupe_key in dedupe:
             continue
-        if isinstance(row, dict):
-            envelope = normalize_event_envelope(
-                row,
-                fallback_event_type=str(row.get("event_type") or ""),
-                fallback_timestamp=str(row.get("timestamp") or ""),
-            )
-            records.append({**envelope, "payload": dict(envelope.get("data") or {})})
-    return records
+        dedupe.add(dedupe_key)
+        merged.append(row)
+    merged.sort(key=lambda item: _parse_iso_datetime(item.get("timestamp")) or datetime.min.replace(tzinfo=timezone.utc))
+    if len(merged) > int(limit):
+        merged = merged[-int(limit) :]
+    return merged
 
 
 def _percentile(values: Iterable[float], percentile: float) -> Optional[float]:
@@ -1257,6 +1306,7 @@ def build_snapshot(
         "threshold_profile": thresholds,
         "sources": {
             "events_file": str(paths.events_file),
+            "events_db": str(paths.events_db),
             "workflow_db": str(paths.workflow_db),
             "global_mutex_state": str(paths.global_mutex_state),
             "autonomous_config": str(paths.autonomous_config),
@@ -1281,7 +1331,7 @@ def parse_args() -> argparse.Namespace:
         default=Path("logs/runtime/slo_snapshot_baseline.json"),
         help="Output JSON file path (relative to repo-root by default)",
     )
-    parser.add_argument("--events-limit", type=int, default=5000, help="Maximum event rows scanned from events.jsonl")
+    parser.add_argument("--events-limit", type=int, default=5000, help="Maximum event rows scanned from event DB/JSONL")
     parser.add_argument("--indent", type=int, default=2, help="JSON indent size")
     parser.add_argument("--stdout-only", action="store_true", help="Print JSON only, do not write output file")
     return parser.parse_args()

@@ -220,4 +220,3 @@ AGENTS.md
 *.lock
 *.log
 scratch/
-logs/autonomous/events.jsonl

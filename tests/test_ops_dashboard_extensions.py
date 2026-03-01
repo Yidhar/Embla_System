@@ -587,10 +587,11 @@ def test_ops_incidents_latest_payload_includes_agentic_loop_completion_not_submi
 
 def test_ops_runtime_posture_payload_includes_control_plane_guard_summaries(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
+    now_iso = datetime.now(timezone.utc).isoformat()
     _write_json(
         repo_root / "scratch" / "runtime" / "process_guard_state_ws28_028.json",
         {
-            "generated_at": "2026-03-01T03:20:00+00:00",
+            "generated_at": now_iso,
             "status": "warning",
             "reason_code": "PROCESS_GUARD_ORPHAN_REAPED",
             "reason_text": "orphan jobs reaped",
@@ -603,7 +604,7 @@ def test_ops_runtime_posture_payload_includes_control_plane_guard_summaries(tmp_
     _write_json(
         repo_root / "scratch" / "runtime" / "killswitch_guard_state_ws28_028.json",
         {
-            "generated_at": "2026-03-01T03:20:01+00:00",
+            "generated_at": now_iso,
             "status": "critical",
             "reason_code": "KILLSWITCH_ENGAGED",
             "reason_text": "KillSwitch is active",
@@ -615,7 +616,7 @@ def test_ops_runtime_posture_payload_includes_control_plane_guard_summaries(tmp_
     _write_json(
         repo_root / "scratch" / "runtime" / "budget_guard_state_ws28_028.json",
         {
-            "generated_at": "2026-03-01T03:20:02+00:00",
+            "generated_at": now_iso,
             "status": "warning",
             "reason_code": "DAILY_COST_LIMIT_EXCEEDED",
             "reason_text": "budget guard triggered",
@@ -656,10 +657,11 @@ def test_ops_runtime_posture_payload_includes_control_plane_guard_summaries(tmp_
 
 def test_ops_incidents_latest_payload_includes_control_plane_guard_incidents(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
+    now_iso = datetime.now(timezone.utc).isoformat()
     _write_json(
         repo_root / "scratch" / "runtime" / "process_guard_state_ws28_028.json",
         {
-            "generated_at": "2026-03-01T03:30:00+00:00",
+            "generated_at": now_iso,
             "status": "critical",
             "reason_code": "PROCESS_GUARD_ORPHAN_RUNNING_JOBS",
             "reason_text": "orphan jobs still running",
@@ -672,7 +674,7 @@ def test_ops_incidents_latest_payload_includes_control_plane_guard_incidents(tmp
     _write_json(
         repo_root / "scratch" / "runtime" / "killswitch_guard_state_ws28_028.json",
         {
-            "generated_at": "2026-03-01T03:30:01+00:00",
+            "generated_at": now_iso,
             "status": "critical",
             "reason_code": "KILLSWITCH_ENGAGED",
             "reason_text": "KillSwitch is active",
@@ -684,7 +686,7 @@ def test_ops_incidents_latest_payload_includes_control_plane_guard_incidents(tmp
     _write_json(
         repo_root / "scratch" / "runtime" / "budget_guard_state_ws28_028.json",
         {
-            "generated_at": "2026-03-01T03:30:02+00:00",
+            "generated_at": now_iso,
             "status": "critical",
             "reason_code": "TASK_COST_LIMIT_EXCEEDED",
             "reason_text": "budget guard triggered",

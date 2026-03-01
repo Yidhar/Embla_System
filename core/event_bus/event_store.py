@@ -9,20 +9,28 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List
 
 from core.event_bus.event_schema import normalize_event_envelope
-from core.event_bus.topic_bus import ReplayDispatchResult, TopicEventBus, TopicSubscription, infer_event_topic
+from core.event_bus.topic_bus import (
+    ReplayDispatchResult,
+    TopicEventBus,
+    TopicSubscription,
+    infer_event_topic,
+    resolve_topic_db_path_from_mirror,
+    should_enable_jsonl_mirror,
+)
 
 
 @dataclass
 class EventStore:
-    """Append-only JSONL event store."""
+    """Append-only event store (SQLite primary, optional JSONL mirror)."""
 
     file_path: Path
 
     def __post_init__(self) -> None:
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        topic_db_path = self.file_path.with_name(f"{self.file_path.stem}_topics.db")
-        self.topic_bus = TopicEventBus(db_path=topic_db_path, mirror_file_path=self.file_path)
+        self.topic_db_path = resolve_topic_db_path_from_mirror(self.file_path)
+        mirror_path = self.file_path if should_enable_jsonl_mirror() else None
+        self.topic_bus = TopicEventBus(db_path=self.topic_db_path, mirror_file_path=mirror_path)
 
     def emit(
         self,
@@ -80,28 +88,25 @@ class EventStore:
     def unsubscribe(self, subscription: TopicSubscription | str) -> None:
         self.topic_bus.unsubscribe(subscription)
 
-    def _read_raw_rows(self) -> List[Dict[str, Any]]:
-        if not self.file_path.exists():
-            return []
-        lines = self.file_path.read_text(encoding="utf-8").splitlines()
-        rows: List[Dict[str, Any]] = []
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                parsed = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(parsed, dict):
-                rows.append(parsed)
-        return rows
-
     def read_recent(self, limit: int = 100) -> List[Dict[str, Any]]:
         if limit <= 0:
             return []
-        rows = self._read_raw_rows()
+        rows = self.topic_bus.read_recent(limit=max(1, int(limit)))
+        if not rows and self.file_path.exists():
+            lines = self.file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            fallback_rows: List[Dict[str, Any]] = []
+            for line in lines[-max(1, int(limit)):]:
+                if not line.strip():
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict):
+                    fallback_rows.append(payload)
+            rows = fallback_rows
         normalized_rows: List[Dict[str, Any]] = []
-        for row in rows[-limit:]:
+        for row in rows[-max(1, int(limit)):]:
             envelope = normalize_event_envelope(
                 row,
                 fallback_event_type=str(row.get("event_type") or ""),
@@ -185,3 +190,6 @@ class EventStore:
 
     def list_topics(self, *, limit: int = 200) -> List[str]:
         return self.topic_bus.list_topics(limit=limit)
+
+    def list_time_partitions(self, *, limit: int = 36) -> List[str]:
+        return self.topic_bus.list_time_partitions(limit=limit)
