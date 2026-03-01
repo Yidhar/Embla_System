@@ -10,6 +10,17 @@ type QuickForm = {
   apiModel: string;
   apiProvider: string;
   apiProtocol: string;
+  apiReasoningEffort: string;
+  outerApiKey: string;
+  outerApiBaseUrl: string;
+  outerApiModel: string;
+  outerApiProvider: string;
+  outerReasoningEffort: string;
+  coreApiKey: string;
+  coreApiBaseUrl: string;
+  coreApiModel: string;
+  coreApiProvider: string;
+  coreReasoningEffort: string;
   apiTemperature: string;
   apiTimeout: string;
   embeddingApiKey: string;
@@ -53,6 +64,17 @@ const FORM_DEFAULT: QuickForm = {
   apiModel: "",
   apiProvider: "openai_compatible",
   apiProtocol: "auto",
+  apiReasoningEffort: "medium",
+  outerApiKey: "",
+  outerApiBaseUrl: "",
+  outerApiModel: "",
+  outerApiProvider: "",
+  outerReasoningEffort: "",
+  coreApiKey: "",
+  coreApiBaseUrl: "",
+  coreApiModel: "",
+  coreApiProvider: "",
+  coreReasoningEffort: "",
   apiTemperature: "0.7",
   apiTimeout: "120",
   embeddingApiKey: "",
@@ -87,6 +109,8 @@ const COLLAPSED_DEFAULT: Record<SectionKey, boolean> = {
 
 const SENSITIVE_PATHS: Array<{ id: string; path: string[]; labelKey: string }> = [
   { id: "api.api_key", path: ["api", "api_key"], labelKey: "apiKey" },
+  { id: "api.routing.outer.api_key", path: ["api", "routing", "outer", "api_key"], labelKey: "outerApiKey" },
+  { id: "api.routing.core.api_key", path: ["api", "routing", "core", "api_key"], labelKey: "coreApiKey" },
   { id: "embedding.api_key", path: ["embedding", "api_key"], labelKey: "embeddingApiKey" },
   { id: "grag.neo4j_password", path: ["grag", "neo4j_password"], labelKey: "neo4jPassword" },
   { id: "computer_control.api_key", path: ["computer_control", "api_key"], labelKey: "computerControlApiKey" },
@@ -100,6 +124,7 @@ const SENSITIVE_PATHS: Array<{ id: string; path: string[]; labelKey: string }> =
 const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"] as const;
 const API_PROVIDER_OPTIONS = ["openai_compatible", "openai", "google", "gemini", "auto"] as const;
 const API_PROTOCOL_OPTIONS = ["auto", "openai_chat_completions"] as const;
+const API_REASONING_EFFORT_OPTIONS = ["low", "medium", "high"] as const;
 
 const PAGE_COPY: Record<
   AppLang,
@@ -131,6 +156,17 @@ const PAGE_COPY: Record<
         apiModel: string;
         apiProvider: string;
         apiProtocol: string;
+        apiReasoningEffort: string;
+        outerApiKey: string;
+        outerApiBaseUrl: string;
+        outerApiModel: string;
+        outerApiProvider: string;
+        outerReasoningEffort: string;
+        coreApiKey: string;
+        coreApiBaseUrl: string;
+        coreApiModel: string;
+        coreApiProvider: string;
+        coreReasoningEffort: string;
         apiTemperature: string;
         apiTimeout: string;
         embeddingApiKey: string;
@@ -156,6 +192,7 @@ const PAGE_COPY: Record<
       };
       hints: {
         apiTemperature: string;
+        routeOverride: string;
         releaseMaxErrorRate: string;
         emblaApprovalRequiredScopes: string;
         embedding: string;
@@ -186,6 +223,8 @@ const PAGE_COPY: Record<
       empty: string;
       labels: {
         apiKey: string;
+        outerApiKey: string;
+        coreApiKey: string;
         embeddingApiKey: string;
         neo4jPassword: string;
         computerControlApiKey: string;
@@ -230,6 +269,17 @@ const PAGE_COPY: Record<
         apiModel: "Model",
         apiProvider: "Provider",
         apiProtocol: "Protocol",
+        apiReasoningEffort: "Reasoning Effort",
+        outerApiKey: "Outer API Key (Optional)",
+        outerApiBaseUrl: "Outer API Base URL (Optional)",
+        outerApiModel: "Outer Model (Optional)",
+        outerApiProvider: "Outer Provider (Optional)",
+        outerReasoningEffort: "Outer Reasoning Effort (Optional)",
+        coreApiKey: "Core API Key (Optional)",
+        coreApiBaseUrl: "Core API Base URL (Optional)",
+        coreApiModel: "Core Model (Optional)",
+        coreApiProvider: "Core Provider (Optional)",
+        coreReasoningEffort: "Core Reasoning Effort (Optional)",
         apiTemperature: "Temperature",
         apiTimeout: "Request Timeout (s)",
         embeddingApiKey: "Embedding API Key",
@@ -255,6 +305,7 @@ const PAGE_COPY: Record<
       },
       hints: {
         apiTemperature: "Recommended range: 0.0 - 1.5",
+        routeOverride: "Leave route fields empty to fallback to API defaults. Outer applies to Path-A/B, Core applies to Path-C.",
         releaseMaxErrorRate: "Recommended range: 0.0 - 1.0",
         emblaApprovalRequiredScopes: "Use comma-separated scope names, for example: core,policy,prompt_dna,tools_registry",
         embedding: "OpenAI-compatible embedding endpoint. Keep API Base/Key empty to fallback to API settings.",
@@ -285,6 +336,8 @@ const PAGE_COPY: Record<
       empty: "Empty",
       labels: {
         apiKey: "API Key",
+        outerApiKey: "Outer API Key",
+        coreApiKey: "Core API Key",
         embeddingApiKey: "Embedding API Key",
         neo4jPassword: "Neo4j Password",
         computerControlApiKey: "Computer Control API Key",
@@ -328,6 +381,17 @@ const PAGE_COPY: Record<
         apiModel: "模型",
         apiProvider: "Provider",
         apiProtocol: "Protocol",
+        apiReasoningEffort: "推理强度",
+        outerApiKey: "外层 API 密钥（可选）",
+        outerApiBaseUrl: "外层 API Base URL（可选）",
+        outerApiModel: "外层模型（可选）",
+        outerApiProvider: "外层 Provider（可选）",
+        outerReasoningEffort: "外层推理强度（可选）",
+        coreApiKey: "内层 Core API 密钥（可选）",
+        coreApiBaseUrl: "内层 Core API Base URL（可选）",
+        coreApiModel: "内层 Core 模型（可选）",
+        coreApiProvider: "内层 Core Provider（可选）",
+        coreReasoningEffort: "内层 Core 推理强度（可选）",
         apiTemperature: "Temperature",
         apiTimeout: "请求超时（秒）",
         embeddingApiKey: "Embedding API 密钥",
@@ -353,6 +417,7 @@ const PAGE_COPY: Record<
       },
       hints: {
         apiTemperature: "建议区间：0.0 - 1.5",
+        routeOverride: "路由字段留空会回退到主 API 配置。外层覆盖 Path-A/B，Core 覆盖 Path-C。",
         releaseMaxErrorRate: "建议区间：0.0 - 1.0",
         emblaApprovalRequiredScopes: "使用英文逗号分隔，例如：core,policy,prompt_dna,tools_registry",
         embedding: "OpenAI 兼容 Embedding 接口。若留空 API Base/API Key，将回退到主 API 配置。",
@@ -383,6 +448,8 @@ const PAGE_COPY: Record<
       empty: "为空",
       labels: {
         apiKey: "API 密钥",
+        outerApiKey: "外层 API 密钥",
+        coreApiKey: "内层 Core API 密钥",
         embeddingApiKey: "Embedding API 密钥",
         neo4jPassword: "Neo4j 密码",
         computerControlApiKey: "电脑控制 API 密钥",
@@ -455,6 +522,23 @@ function buildQuickForm(config: Record<string, unknown>): QuickForm {
     apiModel: getNestedString(config, ["api", "model"], ""),
     apiProvider: getNestedString(config, ["api", "provider"], "openai_compatible"),
     apiProtocol: getNestedString(config, ["api", "protocol"], "auto"),
+    apiReasoningEffort:
+      getNestedString(config, ["api", "reasoning_effort"], "") ||
+      getNestedString(config, ["api", "thinking_intensity"], "medium"),
+    outerApiKey: getNestedString(config, ["api", "routing", "outer", "api_key"], ""),
+    outerApiBaseUrl: getNestedString(config, ["api", "routing", "outer", "base_url"], ""),
+    outerApiModel: getNestedString(config, ["api", "routing", "outer", "model"], ""),
+    outerApiProvider: getNestedString(config, ["api", "routing", "outer", "provider"], ""),
+    outerReasoningEffort:
+      getNestedString(config, ["api", "routing", "outer", "reasoning_effort"], "") ||
+      getNestedString(config, ["api", "routing", "outer", "thinking_intensity"], ""),
+    coreApiKey: getNestedString(config, ["api", "routing", "core", "api_key"], ""),
+    coreApiBaseUrl: getNestedString(config, ["api", "routing", "core", "base_url"], ""),
+    coreApiModel: getNestedString(config, ["api", "routing", "core", "model"], ""),
+    coreApiProvider: getNestedString(config, ["api", "routing", "core", "provider"], ""),
+    coreReasoningEffort:
+      getNestedString(config, ["api", "routing", "core", "reasoning_effort"], "") ||
+      getNestedString(config, ["api", "routing", "core", "thinking_intensity"], ""),
     apiTemperature: getNestedString(config, ["api", "temperature"], "0.7"),
     apiTimeout: getNestedString(config, ["api", "request_timeout"], "120"),
     embeddingApiKey: getNestedString(config, ["embedding", "api_key"], ""),
@@ -608,8 +692,25 @@ function buildQuickPayload(form: QuickForm): { ok: true; payload: Record<string,
         model: form.apiModel.trim(),
         provider: form.apiProvider.trim() || "openai_compatible",
         protocol: form.apiProtocol.trim() || "auto",
+        reasoning_effort: form.apiReasoningEffort.trim() || "medium",
         temperature: apiTemperature,
         request_timeout: Math.max(1, Math.round(apiTimeout)),
+        routing: {
+          outer: {
+            api_key: form.outerApiKey.trim(),
+            base_url: form.outerApiBaseUrl.trim(),
+            model: form.outerApiModel.trim(),
+            provider: form.outerApiProvider.trim(),
+            reasoning_effort: form.outerReasoningEffort.trim(),
+          },
+          core: {
+            api_key: form.coreApiKey.trim(),
+            base_url: form.coreApiBaseUrl.trim(),
+            model: form.coreApiModel.trim(),
+            provider: form.coreApiProvider.trim(),
+            reasoning_effort: form.coreReasoningEffort.trim(),
+          },
+        },
       },
       embedding: {
         api_key: form.embeddingApiKey.trim(),
@@ -928,6 +1029,20 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
                     </select>
                   </label>
                 </div>
+                <label className="block">
+                  <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiReasoningEffort}</p>
+                  <select
+                    value={form.apiReasoningEffort}
+                    onChange={(event) => setField("apiReasoningEffort", event.target.value)}
+                    className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                  >
+                    {API_REASONING_EFFORT_OPTIONS.map((effort) => (
+                      <option key={effort} value={effort}>
+                        {effort}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   <label className="block">
                     <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.apiTemperature}</p>
@@ -952,6 +1067,111 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
                     />
                   </label>
                 </div>
+
+                <article className="rounded-2xl border border-gray-200/60 bg-white/80 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">Route-Level LLM Override</p>
+                  <p className="mt-1 text-[10px] text-gray-500">{copy.quick.hints.routeOverride}</p>
+                  <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.outerApiKey}</p>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={form.outerApiKey}
+                        onChange={(event) => setField("outerApiKey", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.outerApiBaseUrl}</p>
+                      <input
+                        value={form.outerApiBaseUrl}
+                        onChange={(event) => setField("outerApiBaseUrl", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.outerApiModel}</p>
+                      <input
+                        value={form.outerApiModel}
+                        onChange={(event) => setField("outerApiModel", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.outerApiProvider}</p>
+                      <input
+                        value={form.outerApiProvider}
+                        onChange={(event) => setField("outerApiProvider", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.outerReasoningEffort}</p>
+                      <select
+                        value={form.outerReasoningEffort}
+                        onChange={(event) => setField("outerReasoningEffort", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      >
+                        <option value="">default</option>
+                        {API_REASONING_EFFORT_OPTIONS.map((effort) => (
+                          <option key={`outer-${effort}`} value={effort}>
+                            {effort}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.coreApiKey}</p>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={form.coreApiKey}
+                        onChange={(event) => setField("coreApiKey", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.coreApiBaseUrl}</p>
+                      <input
+                        value={form.coreApiBaseUrl}
+                        onChange={(event) => setField("coreApiBaseUrl", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.coreApiModel}</p>
+                      <input
+                        value={form.coreApiModel}
+                        onChange={(event) => setField("coreApiModel", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.coreApiProvider}</p>
+                      <input
+                        value={form.coreApiProvider}
+                        onChange={(event) => setField("coreApiProvider", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.coreReasoningEffort}</p>
+                      <select
+                        value={form.coreReasoningEffort}
+                        onChange={(event) => setField("coreReasoningEffort", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      >
+                        <option value="">default</option>
+                        {API_REASONING_EFFORT_OPTIONS.map((effort) => (
+                          <option key={`core-${effort}`} value={effort}>
+                            {effort}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </article>
 
                 <article className="rounded-2xl border border-gray-200/60 bg-white/80 p-3">
                   <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">Embedding (OpenAI-Compatible)</p>

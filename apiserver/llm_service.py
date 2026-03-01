@@ -386,6 +386,38 @@ class LLMService:
 
         return normalized_temperature, compat
 
+    def _build_reasoning_effort_params(
+        self,
+        *,
+        model_name: str,
+        reasoning_effort: Optional[str],
+    ) -> Dict[str, Any]:
+        intensity = str(reasoning_effort or "").strip().lower()
+        if intensity not in {"low", "medium", "high"}:
+            return {}
+        lowered_model = str(model_name or "").strip().lower()
+        if "gpt-5" not in lowered_model:
+            return {}
+        return {"reasoning_effort": intensity}
+
+    @staticmethod
+    def _resolve_reasoning_effort(
+        *,
+        config_api: Any,
+        override_value: Optional[str] = None,
+    ) -> str:
+        for candidate in (
+            override_value,
+            getattr(config_api, "reasoning_effort", None),
+            getattr(config_api, "thinking_intensity", None),
+        ):
+            normalized = str(candidate or "").strip().lower()
+            if normalized in {"low", "medium", "high"}:
+                return normalized
+            if normalized in {"", "auto", "default"}:
+                continue
+        return "medium"
+
     def _get_litellm_params(
         self,
         api_key: Optional[str],
@@ -448,6 +480,7 @@ class LLMService:
         api_key_override: Optional[str] = None,
         api_base_override: Optional[str] = None,
         provider_hint: Optional[str] = None,
+        reasoning_effort_override: Optional[str] = None,
     ) -> LLMResponse:
         if not self._initialized:
             self._initialize_client()
@@ -479,6 +512,14 @@ class LLMService:
                 model_name=model_name,
                 temperature=temperature,
             )
+            resolved_reasoning_effort = self._resolve_reasoning_effort(
+                config_api=cfg.api,
+                override_value=reasoning_effort_override,
+            )
+            reasoning_effort_params = self._build_reasoning_effort_params(
+                model_name=model_name,
+                reasoning_effort=resolved_reasoning_effort,
+            )
             provider_override = self._infer_custom_provider_from_model(model_name)
             provider_params: Dict[str, Any] = {}
             if provider_override:
@@ -490,6 +531,7 @@ class LLMService:
                 temperature=normalized_temperature,
                 max_tokens=cfg.api.max_tokens if hasattr(cfg.api, "max_tokens") else None,
                 **compat_params,
+                **reasoning_effort_params,
                 **provider_params,
                 **self._get_litellm_params(final_api_key, final_base),
             )
@@ -684,7 +726,7 @@ class LLMService:
         self,
         messages: List[Dict],
         temperature: float = 0.7,
-        model_override: Optional[Dict[str, str]] = None,
+        model_override: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
     ):
@@ -702,10 +744,18 @@ class LLMService:
             final_model = model_override.get("model") or cfg.api.model
             final_base = model_override.get("api_base") or cfg.api.base_url
             final_api_key = model_override.get("api_key") or cfg.api.api_key
+            final_provider_hint = str(model_override.get("provider") or "").strip()
+            final_protocol_override = str(model_override.get("protocol") or "").strip()
+            final_reasoning_effort_override = str(
+                model_override.get("reasoning_effort") or model_override.get("thinking_intensity") or ""
+            ).strip()
         else:
             final_model = cfg.api.model
             final_base = cfg.api.base_url
             final_api_key = cfg.api.api_key
+            final_provider_hint = ""
+            final_protocol_override = ""
+            final_reasoning_effort_override = ""
 
         try:
             prepared_messages = self._inject_immutable_dna(messages)
@@ -717,12 +767,34 @@ class LLMService:
 
         for attempt in range(max_attempts):
             try:
-                model_name = self._get_model_name(model=final_model, base_url=final_base)
+                protocol = self._resolve_protocol(
+                    provider_hint=final_provider_hint or None,
+                    api_base=final_base,
+                    protocol_override=final_protocol_override or None,
+                )
+                if protocol != self.PROTOCOL_OPENAI_CHAT:
+                    logger.warning("Unsupported protocol override=%s, fallback to openai_chat_completions", protocol)
+
+                normalized_provider_hint = (final_provider_hint or "").strip().lower()
+                if normalized_provider_hint and normalized_provider_hint not in {"openai", "openai_compatible", "auto"}:
+                    model_name = str(final_model or "").strip()
+                    if model_name and "/" not in model_name:
+                        model_name = f"{normalized_provider_hint}/{model_name}"
+                else:
+                    model_name = self._get_model_name(model=final_model, base_url=final_base)
                 llm_params = self._get_litellm_params(final_api_key, final_base)
                 timeout_seconds = getattr(cfg.api, "request_timeout", 120)
                 normalized_temperature, compat_params = self._normalize_openai_params_for_model(
                     model_name=model_name,
                     temperature=temperature,
+                )
+                resolved_reasoning_effort = self._resolve_reasoning_effort(
+                    config_api=cfg.api,
+                    override_value=final_reasoning_effort_override,
+                )
+                reasoning_effort_params = self._build_reasoning_effort_params(
+                    model_name=model_name,
+                    reasoning_effort=resolved_reasoning_effort,
                 )
                 provider_override = self._infer_custom_provider_from_model(model_name)
                 provider_params: Dict[str, Any] = {}
@@ -753,6 +825,7 @@ class LLMService:
                     stream_timeout=timeout_seconds,
                     num_retries=0,
                     **compat_params,
+                    **reasoning_effort_params,
                     **request_kwargs,
                     **provider_params,
                     **llm_params,

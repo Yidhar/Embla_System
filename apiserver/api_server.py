@@ -859,6 +859,57 @@ def _apply_outer_core_session_bridge(route_meta: Dict[str, Any], *, outer_sessio
     return route_meta
 
 
+def _build_path_model_override(path: str) -> Optional[Dict[str, str]]:
+    """Build route-scoped LLM override for outer/core execution paths."""
+    normalized_path = str(path or "").strip().lower()
+    target_key = "core" if normalized_path == "path-c" else "outer"
+    cfg = get_config()
+    api_cfg = getattr(cfg, "api", None)
+    routing_cfg = getattr(api_cfg, "routing", None) if api_cfg is not None else None
+    target_cfg = getattr(routing_cfg, target_key, None) if routing_cfg is not None else None
+    if target_cfg is None:
+        return None
+
+    override: Dict[str, str] = {}
+    for source_key, target_field in (
+        ("api_key", "api_key"),
+        ("base_url", "api_base"),
+        ("model", "model"),
+        ("provider", "provider"),
+        ("protocol", "protocol"),
+    ):
+        value = str(getattr(target_cfg, source_key, "") or "").strip()
+        if value:
+            override[target_field] = value
+
+    route_reasoning_effort = str(
+        getattr(target_cfg, "reasoning_effort", "") or getattr(target_cfg, "thinking_intensity", "") or ""
+    ).strip()
+    if route_reasoning_effort:
+        override["reasoning_effort"] = route_reasoning_effort
+
+    return override or None
+
+
+def _merge_model_override(
+    base: Optional[Dict[str, str]],
+    high_priority: Optional[Dict[str, str]],
+) -> Optional[Dict[str, str]]:
+    """Merge model override dictionaries with high-priority values taking precedence."""
+    merged: Dict[str, str] = {}
+    if isinstance(base, dict):
+        for key, value in base.items():
+            text = str(value or "").strip()
+            if text:
+                merged[str(key)] = text
+    if isinstance(high_priority, dict):
+        for key, value in high_priority.items():
+            text = str(value or "").strip()
+            if text:
+                merged[str(key)] = text
+    return merged or None
+
+
 def _build_chat_route_prompt_hints(route_meta: Dict[str, Any]) -> str:
     path = str(route_meta.get("path") or "path-c")
     decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
@@ -2008,7 +2059,19 @@ async def chat(request: ChatRequest):
 
         # 使用整合后的LLM服务（支持 reasoning_content）
         llm_service = get_llm_service()
-        llm_response = await llm_service.chat_with_context_and_reasoning(messages, get_config().api.temperature)
+        outer_model_override = _build_path_model_override("path-a")
+        if outer_model_override:
+            llm_response = await llm_service.chat_with_context_and_reasoning_with_overrides(
+                messages,
+                get_config().api.temperature,
+                model_override=str(outer_model_override.get("model") or "").strip() or None,
+                api_key_override=str(outer_model_override.get("api_key") or "").strip() or None,
+                api_base_override=str(outer_model_override.get("api_base") or "").strip() or None,
+                provider_hint=str(outer_model_override.get("provider") or "").strip() or None,
+                reasoning_effort_override=str(outer_model_override.get("reasoning_effort") or "").strip() or None,
+            )
+        else:
+            llm_response = await llm_service.chat_with_context_and_reasoning(messages, get_config().api.temperature)
 
         # 处理完成
         # 统一保存对话历史与日志
@@ -2236,16 +2299,19 @@ async def chat_stream(request: ChatRequest):
             if request.images:
                 _vlm_sessions.add(session_id)
 
-            # 如果当前会话曾发送过图片，持续使用视觉模型
-            model_override = None
+            # 路由分层 LLM 覆盖（outer/core）；视觉模型覆盖优先级更高
+            model_override = _build_path_model_override(path)
             use_vlm = session_id in _vlm_sessions
             cc = get_config().computer_control
             if use_vlm and cc.enabled and (cc.api_key or naga_auth.is_authenticated()):
-                model_override = {
+                model_override = _merge_model_override(
+                    model_override,
+                    {
                     "model": cc.model,
                     "api_base": cc.model_url,
                     "api_key": cc.api_key,
-                }
+                    },
+                )
                 logger.info(f"[API Server] VLM 会话，使用视觉模型: {cc.model}")
 
             current_round_text = ""

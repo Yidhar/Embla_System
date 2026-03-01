@@ -14,6 +14,25 @@
     "model": "deepseek-v3.2", // 使用的模型名称
     "provider": "openai_compatible", // API提供商类型（openai_compatible/google）
     "protocol": "auto", // API protocol (recommended: auto/openai_chat_completions)
+    "reasoning_effort": "medium", // OpenAI兼容推理强度（low/medium/high，主要用于 GPT-5 推理强度）
+    "routing": {
+      "outer": {
+        "api_key": "", // 外层对话（Path-A/Path-B）专用API Key，留空回退到 api.api_key
+        "base_url": "", // 外层对话专用API地址，留空回退到 api.base_url
+        "model": "", // 外层对话专用模型，留空回退到 api.model
+        "provider": "", // 外层对话专用 provider，留空回退到 api.provider
+        "protocol": "", // 外层对话专用协议，留空回退到 api.protocol
+        "reasoning_effort": "" // 外层对话专用推理强度，留空回退到 api.reasoning_effort
+      },
+      "core": {
+        "api_key": "", // 内层执行（Path-C）专用API Key，留空回退到 api.api_key
+        "base_url": "", // 内层执行专用API地址，留空回退到 api.base_url
+        "model": "", // 内层执行专用模型，留空回退到 api.model
+        "provider": "", // 内层执行专用 provider，留空回退到 api.provider
+        "protocol": "", // 内层执行专用协议，留空回退到 api.protocol
+        "reasoning_effort": "" // 内层执行专用推理强度，留空回退到 api.reasoning_effort
+      }
+    },
     "google_live_api": false, // Deprecated legacy flag; ignored in OpenAI-compatible routing
     "temperature": 0.7, // 生成温度 (0.0-2.0)
     "max_tokens": 8192, // 最大token数

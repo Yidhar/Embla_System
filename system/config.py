@@ -332,6 +332,42 @@ class SystemConfig(BaseModel):
         return v.upper()
 
 
+class APIRouteTargetConfig(BaseModel):
+    """按路由分层覆盖 LLM 连接参数（留空回退到 api.*）。"""
+
+    api_key: str = Field(default="", description="路由专用API密钥（留空回退到 api.api_key）")
+    base_url: str = Field(default="", description="路由专用API地址（留空回退到 api.base_url）")
+    model: str = Field(default="", description="路由专用模型名（留空回退到 api.model）")
+    provider: str = Field(default="", description="路由专用provider（留空回退到 api.provider）")
+    protocol: str = Field(default="", description="路由专用协议（留空回退到 api.protocol）")
+    reasoning_effort: str = Field(default="", description="路由专用 reasoning_effort（low/medium/high）")
+    thinking_intensity: str = Field(default="", description="兼容字段：等价于 reasoning_effort")
+
+    @field_validator("reasoning_effort", "thinking_intensity")
+    @classmethod
+    def validate_reasoning_effort(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"", "auto", "default"}:
+            return ""
+        valid_values = {"low", "medium", "high"}
+        if normalized not in valid_values:
+            raise ValueError(f"reasoning_effort 必须是以下之一: {sorted(valid_values)}")
+        return normalized
+
+
+class APIRoutingConfig(BaseModel):
+    """外层/内层路由 LLM 覆盖配置。"""
+
+    outer: APIRouteTargetConfig = Field(
+        default_factory=APIRouteTargetConfig,
+        description="外层对话路径（Path-A/Path-B）LLM 覆盖配置",
+    )
+    core: APIRouteTargetConfig = Field(
+        default_factory=APIRouteTargetConfig,
+        description="内层执行路径（Path-C）LLM 覆盖配置",
+    )
+
+
 class APIConfig(BaseModel):
     """API服务配置"""
 
@@ -340,6 +376,8 @@ class APIConfig(BaseModel):
     model: str = Field(default="deepseek-v3.2", description="使用的模型名称")
     provider: str = Field(default="openai_compatible", description="API提供商类型")
     protocol: str = Field(default="auto", description="API协议类型")
+    reasoning_effort: str = Field(default="medium", description="OpenAI兼容推理强度（low/medium/high）")
+    thinking_intensity: str = Field(default="medium", description="思维强度（low/medium/high）")
     google_live_api: bool = Field(default=False, description="Google Live API（BidiGenerateContent）开关")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="温度参数")
     max_tokens: int = Field(default=10000, ge=1, le=32768, description="最大token数")
@@ -351,6 +389,21 @@ class APIConfig(BaseModel):
     request_timeout: int = Field(default=120, ge=1, le=600, description="模型请求超时时间（秒）")
     extra_headers: Dict[str, Any] = Field(default_factory=dict, description="附加HTTP请求头")
     extra_body: Dict[str, Any] = Field(default_factory=dict, description="附加请求体参数")
+    routing: APIRoutingConfig = Field(
+        default_factory=APIRoutingConfig,
+        description="按路由（outer/core）覆盖 LLM API 地址与模型",
+    )
+
+    @field_validator("reasoning_effort", "thinking_intensity")
+    @classmethod
+    def validate_reasoning_effort(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"", "auto", "default"}:
+            return "medium"
+        valid_values = {"low", "medium", "high"}
+        if normalized not in valid_values:
+            raise ValueError(f"reasoning_effort 必须是以下之一: {sorted(valid_values)}")
+        return normalized
 
 
 class APIServerConfig(BaseModel):

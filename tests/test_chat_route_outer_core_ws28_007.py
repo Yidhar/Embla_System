@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import apiserver.api_server as api_server
 import pytest
@@ -86,6 +87,65 @@ def test_chat_route_prompt_event_payload_keeps_outer_core_observability_fields()
     assert core_payload["trigger"] == "path-c"
     assert core_payload["outer_readonly_hit"] is False
     assert core_payload["core_escalation"] is True
+
+
+def test_build_path_model_override_resolves_outer_and_core_targets(monkeypatch) -> None:
+    fake_cfg = SimpleNamespace(
+        api=SimpleNamespace(
+            routing=SimpleNamespace(
+                outer=SimpleNamespace(
+                    api_key="outer-key",
+                    base_url="https://outer.example/v1",
+                    model="gpt-4.1-mini",
+                    provider="openai_compatible",
+                    protocol="",
+                    reasoning_effort="low",
+                ),
+                core=SimpleNamespace(
+                    api_key="core-key",
+                    base_url="https://core.example/v1",
+                    model="gpt-5.2",
+                    provider="openai",
+                    protocol="openai_chat_completions",
+                    reasoning_effort="high",
+                ),
+            )
+        )
+    )
+    monkeypatch.setattr(api_server, "get_config", lambda: fake_cfg)
+
+    outer = api_server._build_path_model_override("path-a")
+    core = api_server._build_path_model_override("path-c")
+
+    assert outer == {
+        "api_key": "outer-key",
+        "api_base": "https://outer.example/v1",
+        "model": "gpt-4.1-mini",
+        "provider": "openai_compatible",
+        "reasoning_effort": "low",
+    }
+    assert core == {
+        "api_key": "core-key",
+        "api_base": "https://core.example/v1",
+        "model": "gpt-5.2",
+        "provider": "openai",
+        "protocol": "openai_chat_completions",
+        "reasoning_effort": "high",
+    }
+
+
+def test_merge_model_override_prioritizes_high_priority_values() -> None:
+    base = {"model": "gpt-4.1-mini", "api_base": "https://outer.example/v1", "provider": "openai_compatible"}
+    high = {"model": "gpt-5.2", "api_key": "core-key"}
+
+    merged = api_server._merge_model_override(base, high)
+
+    assert merged == {
+        "model": "gpt-5.2",
+        "api_base": "https://outer.example/v1",
+        "provider": "openai_compatible",
+        "api_key": "core-key",
+    }
 
 
 def test_path_b_clarify_budget_first_round_keeps_path_b(monkeypatch) -> None:
