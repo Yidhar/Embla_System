@@ -1,3 +1,8 @@
+> `DOC_LAYER: L3_ARCHIVE_IMPLEMENTATION`  
+> `作用：历史实施证据归档（Implementation Record）`  
+> `约束：不作为当前主链设计、接口契约或运行基线`  
+> `当前口径：doc/01-module-overview.md + doc/05-dev-startup-and-index.md + doc/task/25-subagent-development-fabric-status-matrix.md`
+
 # NGA-WS28-030 Legacy Shim 最终退役可执行卡
 
 ## 目标
@@ -280,4 +285,3 @@
   回滚：在 `autonomous/event_log/__init__.py` 暂时保留 re-export 桥接。
 - 风险3：release chain 新增 gate 触发历史分支失败。  
   回滚：将 Card B3 的 strict 模式改为 warn-only 一版过渡。
-
