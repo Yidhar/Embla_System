@@ -135,7 +135,6 @@ A pluggable tool architecture based on the [Model Context Protocol](https://mode
 |-------|-----------|----------|--------|
 | `weather_time` | `mcpserver/agent_weather_time/` | Weather queries/forecasts, system time, auto city/IP detection | `available` |
 | `open_launcher` | `mcpserver/agent_open_launcher/` | Scan installed apps, launch programs via natural language | `available` |
-| `game_guide` | `mcpserver/agent_game_guide/` | Game strategy Q&A, damage calculation, team building, auto-screenshot injection | `available` |
 | `online_search` | `mcpserver/agent_online_search/` | Web search via SearXNG | `missing` (directory absent) |
 | `crawl4ai` | `mcpserver/agent_crawl4ai/` | Web content extraction via Crawl4AI | `missing` (directory absent) |
 | `playwright_master` | `mcpserver/agent_playwright_master/` | Browser automation via Playwright | `missing` (directory absent) |
@@ -153,9 +152,6 @@ mcpserver/
 ├── agent_open_launcher/
 │   ├── agent-manifest.json
 │   └── agent_app_launcher.py
-├── agent_game_guide/
-│   ├── agent-manifest.json
-│   └── agent_game_guide.py
 └── mcp_registry.py            ← scan_and_register_mcp_agents() globs **/agent-manifest.json
                                    importlib.import_module(module).ClassName() dynamic instantiation
 ```
@@ -248,7 +244,6 @@ NagaAgent/
 │   ├── mcp_manager.py    #   unified_call() routing
 │   ├── agent_weather_time/
 │   ├── agent_open_launcher/
-│   ├── agent_game_guide/
 │   └── (other agents are extension slots)
 ├── summer_memory/        # GRAG knowledge graph
 │   ├── quintuple_extractor.py  #   Quintuple extraction (structured output + JSON fallback)
@@ -257,7 +252,6 @@ NagaAgent/
 │   ├── task_manager.py         #   3-worker async task manager
 │   ├── memory_manager.py       #   GRAG orchestrator
 │   └── memory_client.py        #   NagaMemory remote client
-├── guide_engine/         # Game guide engine — cloud RAG service
 ├── Embla_core/           # Next.js runtime posture dashboard (active)
 ├── system/               # Config loader, env checker, system prompts, background analyzer
 ├── main.py               # Unified entry point, orchestrates all services

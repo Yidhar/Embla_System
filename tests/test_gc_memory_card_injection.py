@@ -77,7 +77,7 @@ def test_format_tool_results_multi_item_aggregation_is_stable():
         },
         {
             "service_name": "mcp",
-            "tool_name": "ask_guide",
+            "tool_name": "today_weather",
             "status": "error",
             "result": {
                 "narrative_summary": "摘要B",
@@ -97,6 +97,6 @@ def test_format_tool_results_multi_item_aggregation_is_stable():
     assert rows[0]["memory_card"].startswith("[记忆索引卡片 1/3 - native: run_cmd (success)]")
     assert rows[1]["memory_card"] == ""
     assert rows[1]["result_text"] == "short text"
-    assert rows[2]["memory_card"].startswith("[记忆索引卡片 3/3 - mcp: ask_guide (error)]")
+    assert rows[2]["memory_card"].startswith("[记忆索引卡片 3/3 - mcp: today_weather (error)]")
     assert "[fetch_hints] jsonpath:$..trace_id, grep:ERROR" in rows[0]["memory_card"]
     assert "[fetch_hints] line_range:120-180" in rows[2]["memory_card"]

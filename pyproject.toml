@@ -115,7 +115,6 @@ build-backend = "hatchling.build"
 include = [
     "apiserver",
     "autonomous",
-    "guide_engine",
     "mcpserver",
     "summer_memory",
     "system",

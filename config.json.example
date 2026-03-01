@@ -186,23 +186,6 @@
     "dpi_awareness": true, // 是否启用DPI感知
     "safe_mode": true // 是否启用安全模式
   },
-  "guide_engine": {
-    "enabled": true, // 是否启用游戏攻略引擎
-    "gamedata_dir": "./data", // 游戏数据目录（存放各游戏的JSON数据文件）
-    "embedding_api_base_url": "", // OpenAI兼容Embedding API地址（如 https://api.openai.com/v1）
-    "embedding_api_key": "", // OpenAI兼容Embedding API密钥
-    "embedding_api_model": "text-embedding-3-small", // OpenAI兼容Embedding模型名
-    "game_guide_llm_api_base_url": "", // 攻略专用LLM API地址，需支持图片输入（留空回退到api.base_url）
-    "game_guide_llm_api_key": "", // 攻略专用LLM API密钥（留空回退到api.api_key）
-    "game_guide_llm_api_model": "", // 攻略专用LLM模型名，需支持图片输入（留空回退到api.model）
-    "game_guide_llm_api_type": "openai", // 攻略专用LLM API类型（openai/gemini）
-    "prompt_dir": "./guide_engine/game_prompts", // 游戏Prompt目录
-    "neo4j_uri": "neo4j://127.0.0.1:7687", // 攻略图谱Neo4j URI
-    "neo4j_user": "neo4j", // 攻略图谱Neo4j用户名
-    "neo4j_password": "your_password", // 攻略图谱Neo4j密码
-    "screenshot_monitor_index": 1, // 自动截图显示器索引
-    "auto_screenshot_on_guide": true // 攻略调用时默认自动截图
-  },
   "memory_server": {
     "url": "http://localhost:8004", // NagaMemory 服务地址
     "token": null // 认证Token（Bearer），登录后自动设置

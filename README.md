@@ -135,7 +135,6 @@ GRAG（Graph-RAG）从对话中自动提取五元组 `(主体, 主体类型, 谓
 |-------|------|------|------|
 | `weather_time` | `mcpserver/agent_weather_time/` | 天气查询/预报、系统时间、自动城市/IP 检测 | `available` |
 | `open_launcher` | `mcpserver/agent_open_launcher/` | 扫描系统已安装应用，自然语言启动程序 | `available` |
-| `game_guide` | `mcpserver/agent_game_guide/` | 游戏策略问答、伤害计算、配队推荐、自动截图注入 | `available` |
 | `online_search` | `mcpserver/agent_online_search/` | 基于 SearXNG 的网络搜索 | `missing`（目录缺失） |
 | `crawl4ai` | `mcpserver/agent_crawl4ai/` | 基于 Crawl4AI 的网页内容提取 | `missing`（目录缺失） |
 | `playwright_master` | `mcpserver/agent_playwright_master/` | 基于 Playwright 的浏览器自动化 | `missing`（目录缺失） |
@@ -153,9 +152,6 @@ mcpserver/
 ├── agent_open_launcher/
 │   ├── agent-manifest.json
 │   └── agent_app_launcher.py
-├── agent_game_guide/
-│   ├── agent-manifest.json
-│   └── agent_game_guide.py
 └── mcp_registry.py            ← scan_and_register_mcp_agents() glob 扫描 **/agent-manifest.json
                                    importlib.import_module(module).ClassName() 动态实例化
 ```
@@ -246,7 +242,6 @@ NagaAgent/
 │   ├── mcp_manager.py    #   unified_call() 路由
 │   ├── agent_weather_time/
 │   ├── agent_open_launcher/
-│   ├── agent_game_guide/
 │   └── (其余 Agent 按需扩展)
 ├── summer_memory/        # GRAG 知识图谱
 │   ├── quintuple_extractor.py  #   五元组提取（结构化输出 + JSON 兜底）
@@ -255,7 +250,6 @@ NagaAgent/
 │   ├── task_manager.py         #   3 worker 异步任务管理器
 │   ├── memory_manager.py       #   GRAG 总管理器
 │   └── memory_client.py        #   NagaMemory 远程客户端
-├── guide_engine/         # 游戏攻略引擎 — 云端 RAG 服务
 ├── Embla_core/           # Next.js 运行态势面板（主链）
 ├── system/               # 配置加载、环境检测、系统提示词、后台分析器
 ├── main.py               # 统一入口，编排所有服务

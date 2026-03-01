@@ -60,15 +60,15 @@ class TestToolCallEnvelope:
         """测试从旧格式 mcp_call 转换"""
         legacy_call = {
             "agentType": "mcp",
-            "service_name": "game_guide",
-            "tool_name": "ask_guide",
+            "service_name": "weather_time",
+            "tool_name": "today_weather",
             "_tool_call_id": "mcp_call_abc",
             "arguments": {"question": "test"},
         }
 
         envelope = ToolCallEnvelope.from_legacy_call(legacy_call)
 
-        assert envelope.tool_name == "ask_guide"
+        assert envelope.tool_name == "today_weather"
         assert envelope.call_id == "mcp_call_abc"
         assert envelope.risk_level == RiskLevel.READ_ONLY
 

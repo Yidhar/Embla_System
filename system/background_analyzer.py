@@ -586,15 +586,6 @@ class BackgroundAnalyzer:
                 tool_name = call.get("tool_name", "")
                 call_id = str(call.get("_tool_call_id") or f"bg_mcp_{tool_name or 'unknown'}")
 
-                if not service_name and tool_name in {
-                    "ask_guide",
-                    "ask_guide_with_screenshot",
-                    "calculate_damage",
-                    "get_team_recommendation",
-                }:
-                    service_name = "game_guide"
-                    call["service_name"] = service_name
-
                 if not service_name and not tool_name:
                     logger.warning("[MCP] 工具调用缺少service_name和tool_name，跳过: %s", call)
                     return

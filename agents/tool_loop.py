@@ -2094,15 +2094,6 @@ async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
     tool_name = call.get("tool_name", "")
     call_id = str(call.get("_tool_call_id") or f"mcp_call_{tool_name or 'unknown'}")
 
-    if not service_name and tool_name in {
-        "ask_guide",
-        "ask_guide_with_screenshot",
-        "calculate_damage",
-        "get_team_recommendation",
-    }:
-        service_name = "game_guide"
-        call["service_name"] = service_name
-
     logger.info(
         "[AgenticLoop] MCP tool start id=%s service=%s tool=%s payload_keys=%s",
         call_id,
@@ -2110,19 +2101,6 @@ async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
         tool_name or "<missing>",
         sorted(call.keys()),
     )
-
-    # 游戏攻略功能仅登录用户可用
-    if service_name == "game_guide":
-        from apiserver import naga_auth
-
-        if not naga_auth.is_authenticated():
-            return _upgrade_tool_result_contract_payload({
-                "tool_call": call,
-                "result": "游戏攻略功能需要登录 Naga 账号后才能使用，请先登录。",
-                "status": "error",
-                "service_name": service_name,
-                "tool_name": tool_name,
-            })
 
     try:
         from mcpserver.mcp_manager import get_mcp_manager
