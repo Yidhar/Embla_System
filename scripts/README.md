@@ -24,6 +24,8 @@ This directory contains release gates, runbook utilities, and one-off task scrip
   - Watchdog daemon run/status entrypoint.
 - `scripts/run_ws29_neo4j_vector_smoke_ws29_001.py`
   - Neo4j + embedding vector smoke gate (strict mode for readiness verification).
+- `scripts/migrate_remove_guide_engine_config_ws29_003.py`
+  - Local config migration/check for retired `guide_engine` keys (`check/apply`).
 
 ## Frontend Compatibility Gates
 

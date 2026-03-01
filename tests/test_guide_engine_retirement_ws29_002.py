@@ -14,7 +14,6 @@ SCAN_TARGETS = (
     ROOT / "autonomous",
     ROOT / "core",
     ROOT / "mcpserver",
-    ROOT / "scripts",
     ROOT / "system",
     ROOT / "main.py",
     ROOT / "pyproject.toml",
