@@ -4,7 +4,7 @@ import traceback
 import weakref
 from typing import List, Dict, Optional, Tuple
 from .quintuple_extractor import extract_quintuples
-from .quintuple_graph import store_quintuples, query_graph_by_keywords, get_all_quintuples
+from .quintuple_graph import store_quintuples, query_graph_by_keywords, get_all_quintuples, get_vector_index_status
 from .quintuple_rag_query import query_knowledge, set_context
 from .task_manager import task_manager, start_auto_cleanup
 from system.asyncio_offload import offload_blocking
@@ -228,7 +228,8 @@ class GRAGMemoryManager:
                 "context_length": len(self.recent_context),
                 "cache_size": len(self.extraction_cache),
                 "active_tasks": len(self.active_tasks),
-                "task_manager": task_stats
+                "task_manager": task_stats,
+                "vector_index": get_vector_index_status(),
             }
         except Exception as e:
             logger.error(f"获取记忆统计失败: {e}")

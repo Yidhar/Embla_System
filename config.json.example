@@ -42,6 +42,11 @@
     "neo4j_user": "neo4j", // Neo4j用户名
     "neo4j_password": "your-neo4j-password", // Neo4j密码
     "neo4j_database": "neo4j", // Neo4j数据库名
+    "vector_index_enabled": true, // 是否启用Neo4j向量检索
+    "vector_index_name": "entity_embedding_index", // 向量索引名
+    "vector_query_top_k": 8, // 向量检索Top-K
+    "vector_similarity_function": "cosine", // 相似度函数（cosine/euclidean）
+    "vector_upsert_on_write": true, // 写入五元组时是否同步更新向量
     "extraction_timeout": 12, // 提取超时时间(秒)
     "extraction_retries": 2, // 提取重试次数
     "base_timeout": 15 // 基础超时时间(秒)
@@ -184,9 +189,13 @@
     "token": null // 认证Token（Bearer），登录后自动设置
   },
   "embedding": {
-    "model": "tongyi-embedding", // 嵌入模型名称
+    "model": "text-embedding-v4", // OpenAI兼容嵌入模型名称
     "api_base": "", // 嵌入模型API地址（留空回退到api.base_url）
-    "api_key": "" // 嵌入模型API密钥（留空回退到api.api_key）
+    "api_key": "", // 嵌入模型API密钥（留空回退到api.api_key）
+    "dimensions": 1024, // 向量维度（0表示模型默认）
+    "encoding_format": "float", // 编码格式（推荐 float）
+    "max_input_tokens": 8192, // 单条输入最大Token预算
+    "request_timeout_seconds": 30 // 嵌入请求超时时间（秒）
   },
   "system_check": {
     "passed": false, // 系统检查是否通过

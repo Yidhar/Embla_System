@@ -374,6 +374,11 @@ class GRAGConfig(BaseModel):
     neo4j_user: str = Field(default="neo4j", description="Neo4j用户名")
     neo4j_password: str = Field(default="your_password", description="Neo4j密码")
     neo4j_database: str = Field(default="neo4j", description="Neo4j数据库名")
+    vector_index_enabled: bool = Field(default=True, description="是否启用Neo4j向量索引检索")
+    vector_index_name: str = Field(default="entity_embedding_index", description="Neo4j向量索引名称")
+    vector_query_top_k: int = Field(default=8, ge=1, le=200, description="向量检索Top-K")
+    vector_similarity_function: str = Field(default="cosine", description="向量相似度函数（cosine/euclidean）")
+    vector_upsert_on_write: bool = Field(default=True, description="写入五元组时是否同步更新实体向量")
     extraction_timeout: int = Field(default=12, ge=1, le=60, description="知识提取超时时间（秒）")
     extraction_retries: int = Field(default=2, ge=0, le=5, description="知识提取重试次数")
     base_timeout: int = Field(default=15, ge=5, le=120, description="基础操作超时时间（秒）")
@@ -619,9 +624,13 @@ class MemoryServerConfig(BaseModel):
 class EmbeddingConfig(BaseModel):
     """嵌入模型配置"""
 
-    model: str = Field(default="tongyi-embedding", description="嵌入模型名称")
+    model: str = Field(default="text-embedding-v4", description="嵌入模型名称")
     api_base: str = Field(default="", description="嵌入模型API地址（留空回退到api.base_url）")
     api_key: str = Field(default="", description="嵌入模型API密钥（留空回退到api.api_key）")
+    dimensions: int = Field(default=1024, ge=0, le=8192, description="向量维度（0表示由模型默认）")
+    encoding_format: str = Field(default="float", description="编码格式（推荐 float）")
+    max_input_tokens: int = Field(default=8192, ge=1, le=65536, description="单条输入最大Token预算")
+    request_timeout_seconds: int = Field(default=30, ge=1, le=600, description="嵌入请求超时时间（秒）")
 
 
 class GuideEngineConfig(BaseModel):

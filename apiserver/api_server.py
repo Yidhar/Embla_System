@@ -5,7 +5,6 @@ NagaAgent API服务器
 """
 
 import asyncio
-import base64
 import json
 import sys
 import traceback
@@ -89,6 +88,57 @@ def _trigger_background_analysis(session_id: str):
 def _save_conversation_and_logs(session_id: str, user_message: str, assistant_response: str):
     """统一保存对话历史与日志 - 委托给message_manager"""
     message_manager.save_conversation_and_logs(session_id, user_message, assistant_response)
+
+
+def _format_memory_quintuple_line(item: Any) -> str:
+    if isinstance(item, (list, tuple)) and len(item) >= 5:
+        return f"- {item[0]}({item[1]}) —[{item[2]}]→ {item[3]}({item[4]})"
+    if isinstance(item, dict):
+        return (
+            f"- {item.get('subject', '')}({item.get('subject_type', '')}) "
+            f"—[{item.get('predicate', '')}]→ {item.get('object', '')}({item.get('object_type', '')})"
+        )
+    return ""
+
+
+async def _recall_memory_lines(question: str, *, limit: int = 5) -> List[str]:
+    """统一记忆召回入口：优先远程客户端，回退本地 GRAG。"""
+    lines: List[str] = []
+
+    # 1) 远程入口（若未来重新启用）
+    try:
+        from summer_memory.memory_client import get_remote_memory_client
+
+        remote_mem = get_remote_memory_client()
+        if remote_mem is not None:
+            mem_result = await remote_mem.query_memory(question=question, limit=limit)
+            quints = mem_result.get("quintuples") if isinstance(mem_result, dict) else None
+            if isinstance(quints, list):
+                for item in quints:
+                    line = _format_memory_quintuple_line(item)
+                    if line:
+                        lines.append(line)
+            if lines:
+                return lines
+            answer = str(mem_result.get("answer") or "").strip() if isinstance(mem_result, dict) else ""
+            if answer:
+                return [f"- {answer}"]
+    except Exception as exc:
+        logger.debug(f"[RAG] 远程记忆召回失败（回退本地）: {exc}")
+
+    # 2) 本地 GRAG 回退（当前主路径）
+    try:
+        from summer_memory.memory_manager import memory_manager
+
+        if memory_manager and memory_manager.enabled:
+            quintuples = await memory_manager.get_relevant_memories(question, limit=limit)
+            for item in quintuples:
+                line = _format_memory_quintuple_line(item)
+                if line:
+                    lines.append(line)
+    except Exception as exc:
+        logger.debug(f"[RAG] 本地记忆召回失败: {exc}")
+    return lines
 
 
 _CHAT_PATH_ROUTER = TaskRouterEngine()
@@ -1257,9 +1307,48 @@ def _build_chat_route_bridge_payload(session_id: str, *, limit: int = 20) -> Dic
     }
 
 
-def _format_sse_payload_chunk(payload: Dict[str, Any]) -> str:
-    b64 = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode("utf-8")).decode("ascii")
-    return f"data: {b64}\n\n"
+def _format_sse_payload_chunk_json(payload: Dict[str, Any]) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+STREAM_PROTOCOL_JSON_V1 = "sse_json_v1"
+STREAM_PROTOCOL_LEGACY_ALIASES = {"sse_base64", "base64", "legacy", "compat", "compatibility"}
+STREAM_PROTOCOL_JSON_ALIASES = {"sse_json", "sse-json", "json", "structured", STREAM_PROTOCOL_JSON_V1}
+STREAM_PROTOCOL_LEGACY_DECOMMISSIONED_AT = "2026-03-01"
+
+
+def _resolve_stream_protocol(raw_value: Optional[str]) -> str:
+    value = str(raw_value or "").strip().lower()
+    if not value or value in STREAM_PROTOCOL_JSON_ALIASES:
+        return STREAM_PROTOCOL_JSON_V1
+    return STREAM_PROTOCOL_JSON_V1
+
+
+def _is_legacy_stream_protocol_requested(raw_value: Optional[str]) -> bool:
+    value = str(raw_value or "").strip().lower()
+    return value in STREAM_PROTOCOL_LEGACY_ALIASES
+
+
+def _is_supported_stream_protocol_requested(raw_value: Optional[str]) -> bool:
+    value = str(raw_value or "").strip().lower()
+    return (not value) or (value in STREAM_PROTOCOL_JSON_ALIASES) or (value in STREAM_PROTOCOL_LEGACY_ALIASES)
+
+
+def _build_stream_response_headers(*, protocol: str) -> Dict[str, str]:
+    return {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Content-Type": "text/event-stream",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "*",
+        "X-Accel-Buffering": "no",  # 禁用nginx缓冲
+        "X-Embla-Stream-Protocol": protocol,
+    }
+
+
+def _format_stream_payload_chunk(payload: Dict[str, Any], *, protocol: str) -> str:
+    _ = protocol
+    return _format_sse_payload_chunk_json(payload)
 
 
 # 历史流式文本切分器已移除，流式处理统一由 chat_stream 主循环管理
@@ -1495,6 +1584,7 @@ class ChatRequest(BaseModel):
     skill: Optional[str] = None  # 用户主动选择的技能名称，注入完整指令到系统提示词
     images: Optional[List[str]] = None  # 截屏图片 base64 数据列表（data:image/png;base64,...）
     temporary: bool = False  # 临时会话标记，临时会话不持久化到磁盘
+    stream_protocol: Optional[str] = None  # 仅支持 sse_json_v1（legacy 已下线）
 
 
 class ChatResponse(BaseModel):
@@ -1896,27 +1986,12 @@ async def chat(request: ChatRequest):
         # 构建系统提示词（包含技能元数据）
         system_prompt = build_system_prompt(include_skills=True, skill_name=request.skill)
 
-        # RAG 记忆召回
+        # RAG 记忆召回（远程优先 + 本地 GRAG 回退）
         try:
-            from summer_memory.memory_client import get_remote_memory_client
-
-            remote_mem = get_remote_memory_client()
-            if remote_mem:
-                mem_result = await remote_mem.query_memory(question=request.message, limit=5)
-                if mem_result.get("success") and mem_result.get("quintuples"):
-                    quints = mem_result["quintuples"]
-                    mem_lines = []
-                    for q in quints:
-                        if isinstance(q, (list, tuple)) and len(q) >= 5:
-                            mem_lines.append(f"- {q[0]}({q[1]}) —[{q[2]}]→ {q[3]}({q[4]})")
-                        elif isinstance(q, dict):
-                            mem_lines.append(f"- {q.get('subject','')}({q.get('subject_type','')}) —[{q.get('predicate','')}]→ {q.get('object','')}({q.get('object_type','')})")
-                    if mem_lines:
-                        system_prompt += "\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆，请参考这些信息回答：\n" + "\n".join(mem_lines)
-                        logger.info(f"[RAG] 召回 {len(mem_lines)} 条记忆注入上下文")
-                elif mem_result.get("success") and mem_result.get("answer"):
-                    system_prompt += f"\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆：\n{mem_result['answer']}"
-                    logger.info("[RAG] 召回记忆（answer 模式）注入上下文")
+            mem_lines = await _recall_memory_lines(request.message, limit=5)
+            if mem_lines:
+                system_prompt += "\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆，请参考这些信息回答：\n" + "\n".join(mem_lines)
+                logger.info(f"[RAG] 召回 {len(mem_lines)} 条记忆注入上下文")
         except Exception as e:
             logger.debug(f"[RAG] 记忆召回失败（不影响对话）: {e}")
 
@@ -1969,6 +2044,26 @@ async def chat_stream(request: ChatRequest):
 
     # 用户消息保持干净，技能上下文完全由 system prompt 承载
     user_message = request.message
+    if _is_legacy_stream_protocol_requested(request.stream_protocol):
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "error": "legacy_stream_protocol_decommissioned",
+                "message": "Legacy stream protocol is decommissioned. Use stream_protocol=sse_json_v1.",
+                "replacement": STREAM_PROTOCOL_JSON_V1,
+                "decommissioned_at": STREAM_PROTOCOL_LEGACY_DECOMMISSIONED_AT,
+            },
+        )
+    if not _is_supported_stream_protocol_requested(request.stream_protocol):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "unsupported_stream_protocol",
+                "message": "Unsupported stream_protocol. Use stream_protocol=sse_json_v1.",
+                "supported": [STREAM_PROTOCOL_JSON_V1],
+            },
+        )
+    stream_protocol = _resolve_stream_protocol(request.stream_protocol)
 
     async def generate_response() -> AsyncGenerator[str, None]:
         complete_response_parts: List[str] = []
@@ -1977,7 +2072,10 @@ async def chat_stream(request: ChatRequest):
             session_id = message_manager.create_session(request.session_id, temporary=request.temporary)
 
             # 发送会话ID信息
-            yield f"data: session_id: {session_id}\n\n"
+            yield _format_stream_payload_chunk(
+                {"type": "session_meta", "session_id": session_id},
+                protocol=stream_protocol,
+            )
 
             route_meta = _resolve_chat_stream_route(request.message, session_id=session_id)
             route_meta = _apply_chat_route_quality_guard(route_meta)
@@ -2018,7 +2116,7 @@ async def chat_stream(request: ChatRequest):
             _emit_chat_route_prompt_event(route_meta, session_id=session_id)
             _emit_chat_route_guard_event(route_meta, session_id=session_id)
             _emit_chat_route_arbiter_event(route_meta, session_id=session_id)
-            yield _format_sse_payload_chunk(
+            yield _format_stream_payload_chunk(
                 {
                     "type": "route_decision",
                     "path": path,
@@ -2071,7 +2169,8 @@ async def chat_stream(request: ChatRequest):
                     "dropped_slice_count": int(route_meta.get("_slice_dropped_count") or 0),
                     "prefix_hash": str(route_meta.get("_slice_prefix_hash") or ""),
                     "tail_hash": str(route_meta.get("_slice_tail_hash") or ""),
-                }
+                },
+                protocol=stream_protocol,
             )
             logger.info(
                 "[API Server] chat route decided outer_session=%s execution_session=%s path=%s intent=%s profile=%s guard=%s action=%s arbiter=%s arbiter_action=%s",
@@ -2093,29 +2192,13 @@ async def chat_stream(request: ChatRequest):
                 skill_name=request.skill,
             )
 
-            # ====== RAG 记忆召回：在发送 LLM 前检索相关记忆 ======
+            # ====== RAG 记忆召回：在发送 LLM 前检索相关记忆（远程优先 + 本地回退） ======
             try:
-                from summer_memory.memory_client import get_remote_memory_client
-
-                remote_mem = get_remote_memory_client()
-                if remote_mem:
-                    mem_result = await remote_mem.query_memory(question=request.message, limit=5)
-                    if mem_result.get("success") and mem_result.get("quintuples"):
-                        quints = mem_result["quintuples"]
-                        mem_lines = []
-                        for q in quints:
-                            if isinstance(q, (list, tuple)) and len(q) >= 5:
-                                mem_lines.append(f"- {q[0]}({q[1]}) —[{q[2]}]→ {q[3]}({q[4]})")
-                            elif isinstance(q, dict):
-                                mem_lines.append(f"- {q.get('subject','')}({q.get('subject_type','')}) —[{q.get('predicate','')}]→ {q.get('object','')}({q.get('object_type','')})")
-                        if mem_lines:
-                            memory_context = "\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆，请参考这些信息回答：\n" + "\n".join(mem_lines)
-                            system_prompt += memory_context
-                            logger.info(f"[RAG] 召回 {len(mem_lines)} 条记忆注入上下文")
-                    elif mem_result.get("success") and mem_result.get("answer"):
-                        memory_context = f"\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆：\n{mem_result['answer']}"
-                        system_prompt += memory_context
-                        logger.info("[RAG] 召回记忆（answer 模式）注入上下文")
+                mem_lines = await _recall_memory_lines(request.message, limit=5)
+                if mem_lines:
+                    memory_context = "\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆，请参考这些信息回答：\n" + "\n".join(mem_lines)
+                    system_prompt += memory_context
+                    logger.info(f"[RAG] 召回 {len(mem_lines)} 条记忆注入上下文")
             except Exception as e:
                 logger.debug(f"[RAG] 记忆召回失败（不影响对话）: {e}")
 
@@ -2167,7 +2250,6 @@ async def chat_stream(request: ChatRequest):
 
             current_round_text = ""
 
-            stream_source: AsyncGenerator[str, None]
             if path == "path-c":
                 cfg = get_config()
                 loop_cfg = getattr(cfg, "agentic_loop", None)
@@ -2176,12 +2258,33 @@ async def chat_stream(request: ChatRequest):
                 else:
                     loop_max_rounds = int(cfg.handoff.max_loop_stream)
 
-                stream_source = run_brain_agentic_tool_loop(
+                async for event in run_brain_agentic_tool_loop(
                     messages,
                     execution_session_id,
                     max_rounds=loop_max_rounds,
                     model_override=model_override,
-                )
+                ):
+                    if not isinstance(event, dict):
+                        continue
+                    chunk_type = str(event.get("type", "content"))
+                    chunk_text = str(event.get("text", ""))
+
+                    if chunk_type == "content":
+                        current_round_text += chunk_text
+                        complete_response_parts.append(chunk_text)
+                    elif chunk_type == "reasoning":
+                        pass
+                    elif chunk_type == "tool_stage":
+                        _emit_agentic_loop_completion_event(
+                            session_id=session_id,
+                            execution_session_id=execution_session_id,
+                            route_meta=route_meta,
+                            chunk_data=event,
+                        )
+                    elif chunk_type == "round_end":
+                        current_round_text = ""
+
+                    yield _format_stream_payload_chunk(event, protocol=stream_protocol)
             else:
                 llm_service = get_llm_service()
                 stream_source = llm_service.stream_chat_with_context(
@@ -2189,42 +2292,38 @@ async def chat_stream(request: ChatRequest):
                     get_config().api.temperature,
                     model_override=model_override,
                 )
+                async for chunk in stream_source:
+                    # chunk 格式: "data: <json>\n\n"
+                    if chunk.startswith("data: "):
+                        try:
+                            data_str = chunk[6:].strip()
+                            if data_str and data_str != "[DONE]":
+                                chunk_data = json.loads(data_str)
+                                chunk_type = chunk_data.get("type", "content")
+                                chunk_text = chunk_data.get("text", "")
 
-            async for chunk in stream_source:
-                # chunk 格式: "data: <base64_json>\n\n"
-                if chunk.startswith("data: "):
-                    try:
-                        import json as json_module
+                                if chunk_type == "content":
+                                    current_round_text += chunk_text
+                                    complete_response_parts.append(chunk_text)
+                                elif chunk_type == "reasoning":
+                                    pass
+                                elif chunk_type == "tool_stage":
+                                    _emit_agentic_loop_completion_event(
+                                        session_id=session_id,
+                                        execution_session_id=execution_session_id,
+                                        route_meta=route_meta,
+                                        chunk_data=chunk_data,
+                                    )
+                                elif chunk_type == "round_end":
+                                    current_round_text = ""
 
-                        data_str = chunk[6:].strip()
-                        if data_str and data_str != "[DONE]":
-                            decoded = base64.b64decode(data_str).decode("utf-8")
-                            chunk_data = json_module.loads(decoded)
-                            chunk_type = chunk_data.get("type", "content")
-                            chunk_text = chunk_data.get("text", "")
+                                # 透传所有 chunk 给前端（content/reasoning/tool events）
+                                yield _format_stream_payload_chunk(chunk_data, protocol=stream_protocol)
+                                continue
+                        except Exception as e:
+                            logger.error(f"[API Server] 流式数据解析错误: {e}")
 
-                            if chunk_type == "content":
-                                current_round_text += chunk_text
-                                complete_response_parts.append(chunk_text)
-                            elif chunk_type == "reasoning":
-                                pass
-                            elif chunk_type == "tool_stage":
-                                _emit_agentic_loop_completion_event(
-                                    session_id=session_id,
-                                    execution_session_id=execution_session_id,
-                                    route_meta=route_meta,
-                                    chunk_data=chunk_data,
-                                )
-                            elif chunk_type == "round_end":
-                                current_round_text = ""
-
-                            # 透传所有 chunk 给前端（content/reasoning/tool events）
-                            yield chunk
-                            continue
-                    except Exception as e:
-                        logger.error(f"[API Server] 流式数据解析错误: {e}")
-
-                yield chunk
+                    yield chunk
 
             # ====== 流式处理完成 ======
 
@@ -2249,19 +2348,15 @@ async def chat_stream(request: ChatRequest):
         except Exception as e:
             print(f"流式对话处理错误: {e}")
             traceback.print_exc()
-            yield f"data: error:{str(e)}\n\n"
+            yield _format_stream_payload_chunk(
+                {"type": "error", "text": str(e)},
+                protocol=stream_protocol,
+            )
 
     return StreamingResponse(
         generate_response(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Content-Type": "text/event-stream",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "*",
-            "X-Accel-Buffering": "no",  # 禁用nginx缓冲
-        },
+        headers=_build_stream_response_headers(protocol=stream_protocol),
     )
 
 
@@ -4106,6 +4201,7 @@ async def _ops_build_memory_graph_payload(*, sample_limit: int = 200) -> Dict[st
         default=_ops_safe_int(quintuples_response.get("count"), default=len(quintuples)),
     )
     active_tasks = _ops_safe_int(memory_stats.get("active_tasks"), default=0)
+    vector_index = memory_stats.get("vector_index") if isinstance(memory_stats.get("vector_index"), dict) else {}
     enabled = bool(memory_stats.get("enabled"))
     error_text = str(memory_stats.get("error") or "").strip()
 
@@ -4139,8 +4235,11 @@ async def _ops_build_memory_graph_payload(*, sample_limit: int = 200) -> Dict[st
             "running_tasks": running_tasks,
             "failed_tasks": failed_tasks,
             "graph_sample_size": len(graph_sample),
+            "vector_index_state": str(vector_index.get("state") or "unknown"),
+            "vector_index_ready": bool(vector_index.get("ready", False)),
         },
         "task_manager": task_manager,
+        "vector_index": vector_index,
         "relation_hotspots": [
             {"relation": relation, "count": count} for relation, count in relation_counter.most_common(12)
         ],
@@ -5372,6 +5471,7 @@ async def _trigger_chat_stream_no_intent(session_id: str, response_text: str):
             "stream": True,
             "session_id": session_id,
             "skip_intent_analysis": True,  # 关键：跳过意图分析
+            "stream_protocol": "sse_json_v1",
         }
 
         # 调用现有的流式对话接口
