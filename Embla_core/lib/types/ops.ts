@@ -103,6 +103,39 @@ export interface WorkflowSummary {
   outbox_pending: number | null;
   oldest_pending_age_seconds: number | null;
   critical_events_total: number;
+  event_db_rows?: number;
+  event_db_partitions?: number;
+  event_db_latest_at?: string;
+  event_db_status?: string;
+}
+
+export interface WorkflowEventDbPartition {
+  partition_ym: string;
+  row_count: number;
+  latest_timestamp: string;
+}
+
+export interface WorkflowEventDbTopic {
+  topic: string;
+  row_count: number;
+  latest_timestamp: string;
+}
+
+export interface WorkflowEventDatabase {
+  status: string;
+  reason_code: string;
+  reason_text: string;
+  db_path: string;
+  exists: boolean;
+  size_bytes: number;
+  total_rows: number;
+  latest_seq: number | null;
+  latest_timestamp: string;
+  latest_event_type: string;
+  latest_topic: string;
+  partition_count: number;
+  partitions: WorkflowEventDbPartition[];
+  top_topics: WorkflowEventDbTopic[];
 }
 
 export interface WorkflowEventsData {
@@ -112,6 +145,7 @@ export interface WorkflowEventsData {
   runtime_lease: Record<string, unknown>;
   event_counters: WorkflowEventCounter;
   recent_critical_events: WorkflowRecentEvent[];
+  event_database?: WorkflowEventDatabase;
   log_context_statistics: Record<string, unknown>;
   tool_status: Record<string, unknown>;
 }

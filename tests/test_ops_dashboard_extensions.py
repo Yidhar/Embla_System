@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,6 +18,59 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n"
     path.write_text(content, encoding="utf-8")
+
+
+def _write_topic_events_db(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS topic_event (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                source TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                partition_ym TEXT NOT NULL DEFAULT '',
+                envelope_json TEXT NOT NULL
+            );
+            """
+        )
+        for idx, row in enumerate(rows, start=1):
+            envelope = {
+                "event_id": str(row.get("event_id") or f"evt-{idx:04d}"),
+                "timestamp": str(row.get("timestamp") or ""),
+                "event_type": str(row.get("event_type") or ""),
+                "topic": str(row.get("topic") or ""),
+                "data": row.get("payload") if isinstance(row.get("payload"), dict) else {},
+            }
+            timestamp = str(row.get("timestamp") or "")
+            partition_ym = str(row.get("partition_ym") or timestamp[:7].replace("-", ""))
+            conn.execute(
+                """
+                INSERT INTO topic_event
+                (event_id, topic, event_type, source, severity, idempotency_key, timestamp, partition_ym, envelope_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(row.get("event_id") or f"evt-{idx:04d}"),
+                    str(row.get("topic") or ""),
+                    str(row.get("event_type") or ""),
+                    "test",
+                    "info",
+                    str(row.get("event_id") or f"idem-{idx:04d}"),
+                    timestamp,
+                    partition_ym,
+                    json.dumps(envelope, ensure_ascii=False),
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def test_ops_evidence_index_payload_flags_hard_gate_failures(tmp_path, monkeypatch) -> None:
@@ -164,6 +218,78 @@ def test_ops_incidents_latest_payload_merges_events_and_report_issues(tmp_path, 
     assert "READONLY_WRITE_EXPOSURE_WARNING" in runtime_prompt_safety["route_quality"]["reason_codes"]
     assert runtime_prompt_safety["route_quality"]["trend"]["status"] == "unknown"
     assert runtime_prompt_safety["route_quality"]["trend"]["sample_count"] == 0
+
+
+def test_ops_workflow_events_payload_includes_event_database_summary(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    events_db = events_file.with_name("events_topics.db")
+    _write_topic_events_db(
+        events_db,
+        [
+            {
+                "event_id": "evt-db-001",
+                "timestamp": "2026-03-01T06:00:00+00:00",
+                "event_type": "LeaseLost",
+                "topic": "mutex.lease.lost",
+                "partition_ym": "202603",
+                "payload": {"owner_id": "runner-a"},
+            },
+            {
+                "event_id": "evt-db-002",
+                "timestamp": "2026-03-01T06:05:00+00:00",
+                "event_type": "SubAgentRuntimeFailOpen",
+                "topic": "agent.runtime.failopen",
+                "partition_ym": "202603",
+                "payload": {"runtime_id": "sar-001"},
+            },
+            {
+                "event_id": "evt-db-003",
+                "timestamp": "2026-02-28T18:10:00+00:00",
+                "event_type": "PromptInjectionComposed",
+                "topic": "evolution.prompt.compose",
+                "partition_ym": "202602",
+                "payload": {"path": "path-c"},
+            },
+        ],
+    )
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "ok"},
+            "metrics": {"queue_depth": {"status": "ok", "value": 0}},
+            "sources": {
+                "events_file": str(events_file),
+                "events_db": str(events_db),
+                "workflow_db": str(repo_root / "logs" / "autonomous" / "workflow.db"),
+            },
+        }
+
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    payload = api_server._ops_build_workflow_events_payload(events_limit=200, recent_critical_limit=20)
+
+    assert payload["status"] == "success"
+    assert payload["severity"] == "warning"
+    summary = payload["data"]["summary"]
+    assert summary["event_db_rows"] == 3
+    assert summary["event_db_partitions"] == 2
+    assert summary["event_db_status"] == "ok"
+    assert summary["event_db_latest_at"] == "2026-03-01T06:05:00+00:00"
+
+    event_db = payload["data"]["event_database"]
+    assert event_db["exists"] is True
+    assert event_db["total_rows"] == 3
+    assert event_db["partition_count"] == 2
+    assert event_db["latest_event_type"] == "SubAgentRuntimeFailOpen"
+    assert event_db["latest_topic"] == "agent.runtime.failopen"
+    assert len(event_db["partitions"]) == 2
+    assert event_db["partitions"][0]["partition_ym"] == "202603"
+    assert event_db["partitions"][0]["row_count"] == 2
+    assert len(event_db["top_topics"]) >= 1
+    assert any(path.endswith("events_topics.db") for path in payload["source_reports"])
 
 
 def test_ops_incidents_latest_payload_includes_brainstem_stale_incident(tmp_path, monkeypatch) -> None:

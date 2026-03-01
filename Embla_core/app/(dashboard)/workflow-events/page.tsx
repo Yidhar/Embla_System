@@ -28,10 +28,17 @@ const PAGE_COPY: Record<
       criticalIncidents: { title: string; note: string };
       warningIncidents: { title: string; note: string };
       latestIncident: { title: string; note: string };
+      eventDbRows: { title: string; note: string };
+      eventDbPartitions: { title: string; note: string };
+      eventDbSize: { title: string; note: string };
+      eventDbLatest: { title: string; note: string };
     };
     sections: {
       recentCriticalEvents: string;
       incidentFeed: string;
+      eventDatabase: string;
+      eventDatabasePartitions: string;
+      eventDatabaseTopics: string;
       eventPostureSummary: string;
       runtimeCrossSignals: string;
       incidentCounters: string;
@@ -50,6 +57,10 @@ const PAGE_COPY: Record<
     columns: {
       time: string;
       type: string;
+      partition: string;
+      topic: string;
+      rows: string;
+      latest: string;
       payload: string;
       severity: string;
       source: string;
@@ -74,6 +85,7 @@ const PAGE_COPY: Record<
       routeQualityReason: string;
       trend: string;
       volatility: string;
+      noRows: string;
     };
   }
 > = {
@@ -87,10 +99,17 @@ const PAGE_COPY: Record<
       criticalIncidents: { title: "Critical Incidents", note: "Critical incident count in current window" },
       warningIncidents: { title: "Warning Incidents", note: "Warning incident count in current window" },
       latestIncident: { title: "Latest Incident", note: "Most recent incident timestamp" },
+      eventDbRows: { title: "Event DB Rows", note: "Total rows in topic_event table" },
+      eventDbPartitions: { title: "DB Partitions", note: "Distinct partition_ym count" },
+      eventDbSize: { title: "DB Size", note: "Current events DB file size" },
+      eventDbLatest: { title: "Latest DB Event", note: "Most recent event timestamp in DB" },
     },
     sections: {
       recentCriticalEvents: "Recent Critical Events",
       incidentFeed: "Incident Feed",
+      eventDatabase: "Event Database",
+      eventDatabasePartitions: "Partition Distribution",
+      eventDatabaseTopics: "Top Topics",
       eventPostureSummary: "Event Posture Summary",
       runtimeCrossSignals: "Runtime Cross-Page Signals",
       incidentCounters: "Incident Counters",
@@ -109,6 +128,10 @@ const PAGE_COPY: Record<
     columns: {
       time: "Time",
       type: "Type",
+      partition: "Partition",
+      topic: "Topic",
+      rows: "Rows",
+      latest: "Latest",
       payload: "Payload",
       severity: "Severity",
       source: "Source",
@@ -133,6 +156,7 @@ const PAGE_COPY: Record<
       routeQualityReason: "Reason",
       trend: "Trend",
       volatility: "Volatility",
+      noRows: "No rows.",
     },
   },
   "zh-CN": {
@@ -145,10 +169,17 @@ const PAGE_COPY: Record<
       criticalIncidents: { title: "严重事件", note: "当前窗口内严重事件数量" },
       warningIncidents: { title: "告警事件", note: "当前窗口内告警事件数量" },
       latestIncident: { title: "最新事件", note: "最近一次事件时间" },
+      eventDbRows: { title: "事件库行数", note: "topic_event 表总行数" },
+      eventDbPartitions: { title: "分区数量", note: "partition_ym 去重数量" },
+      eventDbSize: { title: "事件库大小", note: "当前 events DB 文件体积" },
+      eventDbLatest: { title: "最新 DB 事件", note: "数据库中最近事件时间" },
     },
     sections: {
       recentCriticalEvents: "最近关键事件",
       incidentFeed: "事件流",
+      eventDatabase: "事件数据库",
+      eventDatabasePartitions: "分区分布",
+      eventDatabaseTopics: "主题热点",
       eventPostureSummary: "事件态势摘要",
       runtimeCrossSignals: "运行态跨页信号",
       incidentCounters: "事件计数器",
@@ -167,6 +198,10 @@ const PAGE_COPY: Record<
     columns: {
       time: "时间",
       type: "类型",
+      partition: "分区",
+      topic: "主题",
+      rows: "行数",
+      latest: "最近时间",
       payload: "载荷",
       severity: "级别",
       source: "来源",
@@ -191,6 +226,7 @@ const PAGE_COPY: Record<
       routeQualityReason: "原因",
       trend: "趋势",
       volatility: "波动率",
+      noRows: "暂无数据。",
     },
   },
 };
@@ -235,6 +271,39 @@ function toPercent(value: unknown, lang: AppLang): string {
   return formatPercentRatio(value, lang, 1, "--");
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function toStorageSize(value: unknown, lang: AppLang): string {
+  const bytes = toFiniteNumber(value);
+  if (bytes === null || bytes < 0) {
+    return "--";
+  }
+  if (bytes >= 1024 ** 3) {
+    const gb = bytes / 1024 ** 3;
+    return `${formatNumber(gb, lang, { maximumFractionDigits: 2, fallback: "--" })} GB`;
+  }
+  if (bytes >= 1024 ** 2) {
+    const mb = bytes / 1024 ** 2;
+    return `${formatNumber(mb, lang, { maximumFractionDigits: 2, fallback: "--" })} MB`;
+  }
+  if (bytes >= 1024) {
+    const kb = bytes / 1024;
+    return `${formatNumber(kb, lang, { maximumFractionDigits: 2, fallback: "--" })} KB`;
+  }
+  return `${formatNumber(bytes, lang, { maximumFractionDigits: 0, fallback: "--" })} B`;
+}
+
 function toTone(state: SignalState): MetricBarTone {
   if (state === "healthy") {
     return "healthy";
@@ -273,6 +342,9 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
   const toolStatus = payload?.data?.tool_status || {};
   const eventCounters = payload?.data?.event_counters || {};
   const recentEvents = payload?.data?.recent_critical_events || [];
+  const eventDatabase = payload?.data?.event_database;
+  const eventDbPartitions = Array.isArray(eventDatabase?.partitions) ? eventDatabase.partitions : [];
+  const eventDbTopics = Array.isArray(eventDatabase?.top_topics) ? eventDatabase.top_topics : [];
   const logStats = payload?.data?.log_context_statistics || {};
 
   const incidentsSummary = incidentsPayload?.data?.summary;
@@ -327,6 +399,8 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
   const runtimeRouteQualityDirection = String(runtimeRouteQualityTrend.direction || copy.words.unknown);
   const incidentRouteQualityDirection = String(incidentRouteQualityTrend.direction || copy.words.unknown);
   const latestIncidentText = formatIsoDateTime(incidentsSummary?.latest_incident_at, lang, "--");
+  const eventDbState = toState(String(eventDatabase?.status || summary?.event_db_status || "unknown"));
+  const eventDbLatestText = formatIsoDateTime(eventDatabase?.latest_timestamp || summary?.event_db_latest_at, lang, "--");
 
   return (
     <div className="space-y-6">
@@ -392,6 +466,39 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
         />
       </section>
 
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <SignalCard
+          title={copy.cards.eventDbRows.title}
+          value={formatNumber(eventDatabase?.total_rows ?? summary?.event_db_rows ?? 0, lang, { maximumFractionDigits: 0 })}
+          note={copy.cards.eventDbRows.note}
+          state={eventDbState}
+          stateLabel={translateSignalState(eventDbState, lang)}
+        />
+        <SignalCard
+          title={copy.cards.eventDbPartitions.title}
+          value={formatNumber(eventDatabase?.partition_count ?? summary?.event_db_partitions ?? 0, lang, {
+            maximumFractionDigits: 0,
+          })}
+          note={copy.cards.eventDbPartitions.note}
+          state={eventDbState}
+          stateLabel={translateSignalState(eventDbState, lang)}
+        />
+        <SignalCard
+          title={copy.cards.eventDbSize.title}
+          value={toStorageSize(eventDatabase?.size_bytes, lang)}
+          note={copy.cards.eventDbSize.note}
+          state={eventDbState}
+          stateLabel={translateSignalState(eventDbState, lang)}
+        />
+        <SignalCard
+          title={copy.cards.eventDbLatest.title}
+          value={eventDbLatestText}
+          note={copy.cards.eventDbLatest.note}
+          state={eventDbState}
+          stateLabel={translateSignalState(eventDbState, lang)}
+        />
+      </section>
+
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <article className="glass-card p-6">
           <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.recentCriticalEvents}</p>
@@ -454,6 +561,70 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
                   <tr>
                     <td colSpan={3} className="px-2 py-3 text-gray-500">
                       {copy.words.noIncidents}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <article className="glass-card p-6">
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.eventDatabasePartitions}</p>
+          <div className="mt-4 overflow-auto rounded-2xl bg-white/70 p-3">
+            <table className="min-w-full text-left text-xs text-gray-700">
+              <thead>
+                <tr className="border-b border-gray-200/80">
+                  <th className="px-2 py-2 uppercase tracking-[0.2em]">{copy.columns.partition}</th>
+                  <th className="px-2 py-2 uppercase tracking-[0.2em]">{copy.columns.rows}</th>
+                  <th className="px-2 py-2 uppercase tracking-[0.2em]">{copy.columns.latest}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {eventDbPartitions.slice(0, 20).map((item, idx) => (
+                  <tr key={`${item.partition_ym}-${idx}`} className="border-b border-gray-100/70 align-top">
+                    <td className="px-2 py-2 font-mono">{String(item.partition_ym || "-")}</td>
+                    <td className="px-2 py-2">{formatNumber(item.row_count || 0, lang, { maximumFractionDigits: 0 })}</td>
+                    <td className="px-2 py-2 font-mono">{formatIsoDateTime(item.latest_timestamp, lang, "--")}</td>
+                  </tr>
+                ))}
+                {eventDbPartitions.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="px-2 py-3 text-gray-500">
+                      {copy.words.noRows}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </article>
+
+        <article className="glass-card p-6">
+          <p className="text-[10px] font-bold uppercase tracking-[0.25em] text-gray-500">{copy.sections.eventDatabaseTopics}</p>
+          <div className="mt-4 overflow-auto rounded-2xl bg-white/70 p-3">
+            <table className="min-w-full text-left text-xs text-gray-700">
+              <thead>
+                <tr className="border-b border-gray-200/80">
+                  <th className="px-2 py-2 uppercase tracking-[0.2em]">{copy.columns.topic}</th>
+                  <th className="px-2 py-2 uppercase tracking-[0.2em]">{copy.columns.rows}</th>
+                  <th className="px-2 py-2 uppercase tracking-[0.2em]">{copy.columns.latest}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {eventDbTopics.slice(0, 20).map((item, idx) => (
+                  <tr key={`${item.topic}-${idx}`} className="border-b border-gray-100/70 align-top">
+                    <td className="px-2 py-2">{String(item.topic || "-")}</td>
+                    <td className="px-2 py-2">{formatNumber(item.row_count || 0, lang, { maximumFractionDigits: 0 })}</td>
+                    <td className="px-2 py-2 font-mono">{formatIsoDateTime(item.latest_timestamp, lang, "--")}</td>
+                  </tr>
+                ))}
+                {eventDbTopics.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="px-2 py-3 text-gray-500">
+                      {copy.words.noRows}
                     </td>
                   </tr>
                 )}

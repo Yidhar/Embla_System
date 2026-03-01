@@ -3798,6 +3798,165 @@ def _ops_read_event_rows(events_file: Path, *, limit: int) -> List[Dict[str, Any
     return merged
 
 
+def _ops_build_event_database_summary(
+    events_file: Path,
+    *,
+    max_partition_rows: int = 12,
+    max_topic_rows: int = 12,
+) -> Dict[str, Any]:
+    try:
+        events_db = _ops_resolve_event_db_path(events_file)
+    except Exception as exc:
+        return {
+            "status": "unknown",
+            "reason_code": "EVENT_DB_PATH_RESOLVE_FAILED",
+            "reason_text": str(exc),
+            "db_path": str(events_file).replace("\\", "/"),
+            "exists": False,
+            "size_bytes": 0,
+            "total_rows": 0,
+            "latest_seq": None,
+            "latest_timestamp": "",
+            "latest_event_type": "",
+            "latest_topic": "",
+            "partition_count": 0,
+            "partitions": [],
+            "top_topics": [],
+        }
+
+    summary: Dict[str, Any] = {
+        "status": "unknown",
+        "reason_code": "EVENT_DB_MISSING",
+        "reason_text": "Event topic database file is missing.",
+        "db_path": _ops_unix_path(events_db),
+        "exists": bool(events_db.exists()),
+        "size_bytes": 0,
+        "total_rows": 0,
+        "latest_seq": None,
+        "latest_timestamp": "",
+        "latest_event_type": "",
+        "latest_topic": "",
+        "partition_count": 0,
+        "partitions": [],
+        "top_topics": [],
+    }
+
+    if not events_db.exists():
+        return summary
+
+    try:
+        summary["size_bytes"] = _ops_safe_int(events_db.stat().st_size, default=0)
+    except OSError:
+        summary["size_bytes"] = 0
+
+    import sqlite3
+
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        conn = sqlite3.connect(str(events_db))
+        conn.row_factory = sqlite3.Row
+
+        total_row = conn.execute("SELECT COUNT(1) AS total_rows FROM topic_event").fetchone()
+        latest_row = conn.execute(
+            """
+            SELECT seq, timestamp, event_type, topic
+            FROM topic_event
+            ORDER BY timestamp DESC, seq DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        partition_count_row = conn.execute(
+            "SELECT COUNT(DISTINCT coalesce(partition_ym, '')) AS partition_count FROM topic_event"
+        ).fetchone()
+        partition_rows = conn.execute(
+            """
+            SELECT coalesce(partition_ym, '') AS partition_ym, COUNT(1) AS row_count, MAX(timestamp) AS latest_timestamp
+            FROM topic_event
+            GROUP BY coalesce(partition_ym, '')
+            ORDER BY partition_ym DESC
+            LIMIT ?
+            """,
+            (max(1, int(max_partition_rows)),),
+        ).fetchall()
+        topic_rows = conn.execute(
+            """
+            SELECT topic, COUNT(1) AS row_count, MAX(timestamp) AS latest_timestamp
+            FROM topic_event
+            GROUP BY topic
+            ORDER BY row_count DESC, topic ASC
+            LIMIT ?
+            """,
+            (max(1, int(max_topic_rows)),),
+        ).fetchall()
+    except Exception as exc:
+        logger.debug(f"查询事件数据库统计失败: {exc}")
+        summary["reason_code"] = "EVENT_DB_QUERY_FAILED"
+        summary["reason_text"] = str(exc)
+        return summary
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    total_rows = _ops_safe_int(total_row["total_rows"] if total_row is not None else 0, default=0)
+    partition_count = _ops_safe_int(
+        partition_count_row["partition_count"] if partition_count_row is not None else 0,
+        default=0,
+    )
+    latest_seq = _ops_safe_int(latest_row["seq"] if latest_row is not None else None, default=0)
+    latest_timestamp = str(latest_row["timestamp"] or "") if latest_row is not None else ""
+    latest_event_type = str(latest_row["event_type"] or "") if latest_row is not None else ""
+    latest_topic = str(latest_row["topic"] or "") if latest_row is not None else ""
+
+    partitions: List[Dict[str, Any]] = []
+    for row in partition_rows:
+        partitions.append(
+            {
+                "partition_ym": str(row["partition_ym"] or ""),
+                "row_count": _ops_safe_int(row["row_count"], default=0),
+                "latest_timestamp": str(row["latest_timestamp"] or ""),
+            }
+        )
+
+    top_topics: List[Dict[str, Any]] = []
+    for row in topic_rows:
+        top_topics.append(
+            {
+                "topic": str(row["topic"] or ""),
+                "row_count": _ops_safe_int(row["row_count"], default=0),
+                "latest_timestamp": str(row["latest_timestamp"] or ""),
+            }
+        )
+
+    if total_rows <= 0:
+        status = "unknown"
+        reason_code = "EVENT_DB_EMPTY"
+        reason_text = "Event topic database exists but no events are stored."
+    else:
+        status = "ok"
+        reason_code = "OK"
+        reason_text = "Event topic database is online."
+
+    summary.update(
+        {
+            "status": status,
+            "reason_code": reason_code,
+            "reason_text": reason_text,
+            "total_rows": total_rows,
+            "latest_seq": latest_seq if latest_row is not None else None,
+            "latest_timestamp": latest_timestamp,
+            "latest_event_type": latest_event_type,
+            "latest_topic": latest_topic,
+            "partition_count": partition_count,
+            "partitions": partitions,
+            "top_topics": top_topics,
+        }
+    )
+    return summary
+
+
 def _ops_compact_event_payload(payload: Any) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
@@ -4134,6 +4293,7 @@ def _ops_build_workflow_events_payload(
     events_file_raw = str(sources.get("events_file") or "").strip()
     events_file = Path(events_file_raw) if events_file_raw else Path("")
     event_rows = _ops_read_event_rows(events_file, limit=max(100, int(events_limit)))
+    event_database = _ops_build_event_database_summary(events_file)
 
     critical_event_types = {
         "SubAgentRuntimeFailOpen",
@@ -4185,6 +4345,9 @@ def _ops_build_workflow_events_payload(
         value = sources.get(key)
         if isinstance(value, str) and value.strip():
             source_reports.append(value.replace("\\", "/"))
+    db_path = str(event_database.get("db_path") or "").strip()
+    if db_path:
+        source_reports.append(db_path.replace("\\", "/"))
 
     response_data = {
         "summary": {
@@ -4193,12 +4356,17 @@ def _ops_build_workflow_events_payload(
             "outbox_pending": queue_depth.get("value"),
             "oldest_pending_age_seconds": queue_depth.get("oldest_pending_age_seconds"),
             "critical_events_total": sum(event_counters.values()),
+            "event_db_rows": _ops_safe_int(event_database.get("total_rows"), default=0),
+            "event_db_partitions": _ops_safe_int(event_database.get("partition_count"), default=0),
+            "event_db_latest_at": str(event_database.get("latest_timestamp") or ""),
+            "event_db_status": str(event_database.get("status") or "unknown"),
         },
         "queue_depth": queue_depth,
         "lock_status": lock_status,
         "runtime_lease": runtime_lease,
         "event_counters": event_counters,
         "recent_critical_events": recent_critical_events,
+        "event_database": event_database,
         "log_context_statistics": context_stats,
         "tool_status": tool_status,
     }
