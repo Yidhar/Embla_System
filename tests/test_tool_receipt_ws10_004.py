@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import apiserver.agentic_tool_loop as tool_loop
 
@@ -148,8 +149,13 @@ def test_format_tool_results_for_llm_includes_tool_receipt_block() -> None:
     row["tool_receipt"] = tool_loop._build_tool_receipt(call, row)
 
     formatted = tool_loop.format_tool_results_for_llm([row])
-
-    assert "[tool_receipt]" in formatted
-    assert "risk=read_only" in formatted
-    assert "result.status=success" in formatted
-    assert "next_steps=continue_next_planned_step" in formatted
+    payload = json.loads(formatted)
+    assert payload["schema"] == "agentic_tool_results.v2"
+    assert payload["total_results"] == 1
+    result = payload["results"][0]
+    assert result["status"] == "success"
+    assert result["service_name"] == "native"
+    assert result["tool_name"] == "read_file"
+    assert result["tool_receipt"]["risk_level"] == "read_only"
+    assert result["tool_receipt"]["result"]["status"] == "success"
+    assert result["tool_receipt"]["next_steps"] == ["continue_next_planned_step"]

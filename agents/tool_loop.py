@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import time
+import traceback
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
@@ -45,6 +46,7 @@ class AgenticLoopPolicy:
     max_consecutive_tool_failures: int
     max_consecutive_validation_failures: int
     max_consecutive_no_tool_rounds: int
+    # Deprecated: natural-language no-tool feedback injection has been retired.
     inject_no_tool_feedback: bool
     tool_result_preview_chars: int
     emit_workflow_stage_events: bool
@@ -176,7 +178,7 @@ def _resolve_agentic_loop_policy(max_rounds_override: Optional[int]) -> AgenticL
             max_consecutive_tool_failures=2,
             max_consecutive_validation_failures=2,
             max_consecutive_no_tool_rounds=2,
-            inject_no_tool_feedback=True,
+            inject_no_tool_feedback=False,
             tool_result_preview_chars=500,
             emit_workflow_stage_events=True,
             max_parallel_tool_calls=8,
@@ -200,7 +202,7 @@ def _resolve_agentic_loop_policy(max_rounds_override: Optional[int]) -> AgenticL
         max_consecutive_no_tool_rounds=_clamp_int(
             getattr(loop_cfg, "max_consecutive_no_tool_rounds", 2), 2, 1, 20
         ),
-        inject_no_tool_feedback=bool(getattr(loop_cfg, "inject_no_tool_feedback", True)),
+        inject_no_tool_feedback=False,
         tool_result_preview_chars=_clamp_int(
             getattr(loop_cfg, "tool_result_preview_chars", 500), 500, 120, 20000
         ),
@@ -2287,6 +2289,7 @@ async def _execute_tool_call_with_retry(
                         "status": "error",
                         "service_name": "runtime",
                         "tool_name": tool_name or "unknown",
+                        "error_code": "E_MUTEX_HEARTBEAT_FAILED",
                     }
                     if mutex_manager is not None:
                         try:
@@ -2307,6 +2310,8 @@ async def _execute_tool_call_with_retry(
                     "status": "error",
                     "service_name": "unknown",
                     "tool_name": "unknown",
+                    "error_code": "E_TOOL_EXECUTION_EXCEPTION",
+                    "stack_trace": traceback.format_exc(),
                 }
             finally:
                 stop_heartbeat.set()
@@ -2400,6 +2405,7 @@ async def _execute_tool_call_with_retry(
         "status": "error",
         "service_name": "unknown",
         "tool_name": "unknown",
+        "error_code": "E_TOOL_EXECUTION_UNKNOWN_RETRY_STATE",
     }
     fallback_row = _upgrade_tool_result_contract_payload(fallback_row)
     fallback_row = _enforce_tool_result_schema(
@@ -2453,6 +2459,8 @@ async def execute_tool_calls(
                 "status": "error",
                 "service_name": "unknown",
                 "tool_name": "unknown",
+                "error_code": "E_TOOL_EXECUTION_GATHER_EXCEPTION",
+                "stack_trace": "".join(traceback.format_exception(type(r), r, r.__traceback__)),
             }
             row = _upgrade_tool_result_contract_payload(row)
             row = _enforce_tool_result_schema(
@@ -2549,69 +2557,72 @@ async def _maybe_execute_gc_reader_followup(
 
 
 def format_tool_results_for_llm(results: List[Dict[str, Any]]) -> str:
-    """将工具执行结果格式化为LLM可理解的文本"""
-    parts = []
+    """Serialize tool outcomes into structured JSON for deterministic repair/continuation."""
+
+    def _normalize_stack_trace(raw: Any) -> str:
+        if isinstance(raw, str):
+            text = raw.strip()
+            if text:
+                return text[:8000]
+        return ""
+
+    def _extract_stack_trace_from_text(result_text: str) -> str:
+        marker = "Traceback (most recent call last):"
+        if marker not in result_text:
+            return ""
+        return result_text[result_text.find(marker) :][:8000]
+
+    payload_results: List[Dict[str, Any]] = []
     total = len(results)
-    for idx, r in enumerate(results, 1):
-        receipt_block = ""
-        receipt = r.get("tool_receipt")
-        if isinstance(receipt, dict):
-            budget = receipt.get("budget")
-            if not isinstance(budget, dict):
-                budget = {}
-            result_info = receipt.get("result")
-            if not isinstance(result_info, dict):
-                result_info = {}
-            approval = receipt.get("approval")
-            if not isinstance(approval, dict):
-                approval = {}
-            next_steps = _normalize_receipt_next_steps(receipt.get("next_steps"))
-            receipt_lines = [
-                "[tool_receipt]",
-                (
-                    f"- risk={receipt.get('risk_level', 'unknown')}, "
-                    f"scope={receipt.get('execution_scope', 'unknown')}, "
-                    f"mutex={bool(receipt.get('requires_global_mutex'))}"
-                ),
-                (
-                    f"- approval.required={bool(approval.get('required'))}, "
-                    f"policy={approval.get('policy', None)}, "
-                    f"granted={bool(approval.get('granted'))}"
-                ),
-                (
-                    f"- budget.estimated_token_cost={budget.get('estimated_token_cost', 0)}, "
-                    f"budget_remaining={budget.get('budget_remaining', None)}"
-                ),
-                (
-                    f"- result.status={result_info.get('status', 'unknown')}, "
-                    f"error_code={result_info.get('error_code', None)}, "
-                    f"has_artifact={bool(result_info.get('has_artifact'))}"
-                ),
-                f"- next_steps={', '.join(next_steps) if next_steps else '(none)'}",
-            ]
-            receipt_block = "\n".join(receipt_lines)
-
-        memory_card = build_gc_memory_index_card(r, index=idx, total=total)
-        if memory_card:
-            if receipt_block:
-                parts.append(f"{receipt_block}\n{memory_card}")
-            else:
-                parts.append(memory_card)
+    for idx, row in enumerate(results, start=1):
+        if not isinstance(row, dict):
             continue
+        status = str(row.get("status") or "unknown")
+        service_name = str(row.get("service_name") or "unknown")
+        tool_name = str(row.get("tool_name") or "")
+        result_text = _coalesce_result_text(row)
+        receipt = row.get("tool_receipt") if isinstance(row.get("tool_receipt"), dict) else {}
+        result_info = receipt.get("result") if isinstance(receipt, dict) and isinstance(receipt.get("result"), dict) else {}
+        error_code = str(
+            row.get("error_code")
+            or (result_info.get("error_code") if isinstance(result_info, dict) else "")
+            or ""
+        )
+        stack_trace = _normalize_stack_trace(row.get("stack_trace"))
+        if not stack_trace:
+            stack_trace = _extract_stack_trace_from_text(result_text)
+        memory_card = build_gc_memory_index_card(row, index=idx, total=total)
 
-        svc = r.get("service_name", "unknown")
-        tool = r.get("tool_name", "")
-        status = r.get("status", "unknown")
-        result_text = _coalesce_result_text(r)
-        label = f"{svc}"
-        if tool:
-            label += f": {tool}"
-        header = f"[工具结果 {idx}/{total} - {label} ({status})]"
-        if receipt_block:
-            parts.append(f"{header}\n{receipt_block}\n{result_text}")
-        else:
-            parts.append(f"{header}\n{result_text}")
-    return "\n\n".join(parts)
+        entry: Dict[str, Any] = {
+            "index": idx,
+            "total": total,
+            "status": status,
+            "service_name": service_name,
+            "tool_name": tool_name,
+            "result_text": result_text,
+            "error_code": error_code,
+            "stack_trace": stack_trace,
+            "narrative_summary": str(row.get("narrative_summary") or ""),
+            "display_preview": str(row.get("display_preview") or ""),
+            "forensic_artifact_ref": str(row.get("forensic_artifact_ref") or ""),
+            "raw_result_ref": str(row.get("raw_result_ref") or ""),
+            "memory_card": memory_card or "",
+            "tool_receipt": receipt,
+        }
+        if status == "error":
+            entry["error"] = {
+                "code": error_code or "E_TOOL_EXECUTION_FAILED",
+                "message": result_text[:4000],
+                "stack_trace": stack_trace,
+            }
+        payload_results.append(entry)
+
+    payload = {
+        "schema": "agentic_tool_results.v2",
+        "total_results": len(payload_results),
+        "results": payload_results,
+    }
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def get_agentic_tool_definitions() -> List[Dict[str, Any]]:
@@ -3089,17 +3100,6 @@ def _apply_submit_result_calls(
 
     return passthrough_calls, submit_calls, submit_results
 
-
-def _build_no_tool_feedback_text(*, runtime: AgenticLoopRuntimeState) -> str:
-    task_completed = bool(runtime.agent_state.get("task_completed") is True)
-    return (
-        "[系统反馈] 你上一轮没有发起任何工具调用。"
-        "如果任务仍需要外部信息、文件操作、命令执行或网络能力，请立即调用合适函数继续执行。"
-        f"如果任务已完成，请调用 {_SUBMIT_RESULT_TOOL_NAME}(task_completed=true, completion_summary=..., deliverables=[...], artifact_refs=[...]) 提交结果。"
-        f"当前 agent_state.task_completed={str(task_completed).lower()}。"
-    )
-
-
 # ---------------------------------------------------------------------------
 # SSE 辅助
 # ---------------------------------------------------------------------------
@@ -3236,7 +3236,7 @@ async def run_agentic_loop(
             buffered_round_events.clear()
             return drained_raw
 
-        round_tool_choice = "auto"
+        round_tool_choice = "required"
 
         async for chunk in llm_service.stream_chat_with_context(
             messages,
@@ -3678,40 +3678,6 @@ async def run_agentic_loop(
                 and round_num < policy.max_rounds
             )
 
-            if can_continue_no_tool and policy.inject_no_tool_feedback:
-                logger.info(
-                    "[AgenticLoop] Round %s: no tool call while completion gate not satisfied "
-                    "(%s/%s), inject corrective feedback",
-                    round_num,
-                    runtime.consecutive_no_tool_rounds,
-                    policy.max_consecutive_no_tool_rounds,
-                )
-                assistant_content = complete_text if complete_text else "(本轮未发起工具调用)"
-                repair_start_event = _format_workflow_stage_event(
-                    round_num,
-                    "repair",
-                    "start",
-                    policy=policy,
-                    reason="await_submit_result_tool",
-                    details={
-                        "consecutive_no_tool_rounds": runtime.consecutive_no_tool_rounds,
-                        "threshold": policy.max_consecutive_no_tool_rounds,
-                    },
-                )
-                if repair_start_event:
-                    yield repair_start_event
-                messages.append({"role": "assistant", "content": assistant_content})
-                messages.append({"role": "user", "content": _build_no_tool_feedback_text(runtime=runtime)})
-                repair_success_event = _format_workflow_stage_event(
-                    round_num,
-                    "repair",
-                    "success",
-                    policy=policy,
-                    reason="no_tool_feedback_injected",
-                )
-                if repair_success_event:
-                    yield repair_success_event
-
             if can_continue_no_tool:
                 verify_success_event = _format_workflow_stage_event(
                     round_num,
@@ -3723,9 +3689,9 @@ async def run_agentic_loop(
                     details={
                         "consecutive_no_tool_rounds": runtime.consecutive_no_tool_rounds,
                         "threshold": policy.max_consecutive_no_tool_rounds,
-                        "inject_no_tool_feedback": bool(policy.inject_no_tool_feedback),
                         "task_completed": bool(runtime.agent_state.get("task_completed") is True),
                         "submit_result_called": bool(runtime.submit_result_called),
+                        "tool_choice": "required",
                     },
                 )
                 if verify_success_event:
@@ -3744,9 +3710,9 @@ async def run_agentic_loop(
                 details={
                     "consecutive_no_tool_rounds": runtime.consecutive_no_tool_rounds,
                     "threshold": policy.max_consecutive_no_tool_rounds,
-                    "inject_no_tool_feedback": bool(policy.inject_no_tool_feedback),
                     "task_completed": bool(runtime.agent_state.get("task_completed") is True),
                     "submit_result_called": bool(runtime.submit_result_called),
+                    "tool_choice": "required",
                 },
             )
             if verify_error_event:

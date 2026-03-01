@@ -1,3 +1,5 @@
+import json
+
 from apiserver.agentic_tool_loop import format_tool_results_for_llm
 
 
@@ -18,14 +20,21 @@ def test_format_tool_results_uses_memory_index_card_when_ref_present():
     ]
 
     formatted = format_tool_results_for_llm(results)
-    assert "[记忆索引卡片 1/1 - native: run_cmd (success)]" in formatted
-    assert "[tool/status] native: run_cmd (success)" in formatted
-    assert "[narrative_summary]" in formatted
-    assert "关键错误码已索引" in formatted
-    assert "[forensic_artifact_ref] artifact_abc123" in formatted
-    assert "[raw_result_ref] artifact_abc123" in formatted
-    assert "[fetch_hints] jsonpath:$..error_code, line_range:20-40" in formatted
-    assert "[ref_readback] artifact_reader(" in formatted
+    payload = json.loads(formatted)
+    assert payload["schema"] == "agentic_tool_results.v2"
+    assert payload["total_results"] == 1
+    result = payload["results"][0]
+    assert result["status"] == "success"
+    assert result["service_name"] == "native"
+    assert result["tool_name"] == "run_cmd"
+    assert "[记忆索引卡片 1/1 - native: run_cmd (success)]" in result["memory_card"]
+    assert "[tool/status] native: run_cmd (success)" in result["memory_card"]
+    assert "[narrative_summary]" in result["memory_card"]
+    assert "关键错误码已索引" in result["memory_card"]
+    assert "[forensic_artifact_ref] artifact_abc123" in result["memory_card"]
+    assert "[raw_result_ref] artifact_abc123" in result["memory_card"]
+    assert "[fetch_hints] jsonpath:$..error_code, line_range:20-40" in result["memory_card"]
+    assert "[ref_readback] artifact_reader(" in result["memory_card"]
 
 
 def test_format_tool_results_without_ref_keeps_legacy_format():
@@ -39,8 +48,14 @@ def test_format_tool_results_without_ref_keeps_legacy_format():
     ]
 
     formatted = format_tool_results_for_llm(results)
-    assert formatted == "[工具结果 1/1 - native: read_file (success)]\nline1\nline2"
-    assert "[记忆索引卡片" not in formatted
+    payload = json.loads(formatted)
+    assert payload["schema"] == "agentic_tool_results.v2"
+    assert payload["total_results"] == 1
+    result = payload["results"][0]
+    assert result["service_name"] == "native"
+    assert result["tool_name"] == "read_file"
+    assert result["result_text"] == "line1\nline2"
+    assert result["memory_card"] == ""
 
 
 def test_format_tool_results_multi_item_aggregation_is_stable():
@@ -73,11 +88,15 @@ def test_format_tool_results_multi_item_aggregation_is_stable():
     ]
 
     formatted = format_tool_results_for_llm(results)
-    blocks = formatted.split("\n\n")
+    payload = json.loads(formatted)
+    assert payload["schema"] == "agentic_tool_results.v2"
+    assert payload["total_results"] == 3
 
-    assert len(blocks) == 3
-    assert blocks[0].startswith("[记忆索引卡片 1/3 - native: run_cmd (success)]")
-    assert blocks[1].startswith("[工具结果 2/3 - native: read_file (success)]")
-    assert blocks[2].startswith("[记忆索引卡片 3/3 - mcp: ask_guide (error)]")
-    assert "[fetch_hints] jsonpath:$..trace_id, grep:ERROR" in blocks[0]
-    assert "[fetch_hints] line_range:120-180" in blocks[2]
+    rows = payload["results"]
+    assert len(rows) == 3
+    assert rows[0]["memory_card"].startswith("[记忆索引卡片 1/3 - native: run_cmd (success)]")
+    assert rows[1]["memory_card"] == ""
+    assert rows[1]["result_text"] == "short text"
+    assert rows[2]["memory_card"].startswith("[记忆索引卡片 3/3 - mcp: ask_guide (error)]")
+    assert "[fetch_hints] jsonpath:$..trace_id, grep:ERROR" in rows[0]["memory_card"]
+    assert "[fetch_hints] line_range:120-180" in rows[2]["memory_card"]
