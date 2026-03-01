@@ -7,7 +7,6 @@ Gemini endpoints are normalized to Gemini's OpenAI-compatible base URL.
 """
 
 import asyncio
-import base64
 import json
 import logging
 import os
@@ -850,8 +849,7 @@ class LLMService:
 
     def _format_sse_chunk(self, chunk_type: str, text: Any) -> str:
         data = {"type": chunk_type, "text": text}
-        b64 = base64.b64encode(json.dumps(data, ensure_ascii=False).encode("utf-8")).decode("ascii")
-        return f"data: {b64}\n\n"
+        return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 _llm_service: Optional[LLMService] = None

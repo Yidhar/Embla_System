@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import base64
+import asyncio
 import json
 
 import apiserver.api_server as api_server
+import pytest
 from autonomous.router_arbiter_guard import RouterArbiterGuard
 
 
@@ -340,11 +341,59 @@ def test_outer_core_session_bridge_keeps_outer_for_non_core_path() -> None:
         api_server.message_manager.delete_session(outer_session_id)
 
 
-def test_route_decision_sse_chunk_is_base64_json() -> None:
-    chunk = api_server._format_sse_payload_chunk({"type": "route_decision", "path": "path-a"})
+def test_route_decision_sse_chunk_json_protocol() -> None:
+    payload = {"type": "route_decision", "path": "path-c", "risk_level": "write_repo"}
+    chunk = api_server._format_stream_payload_chunk(payload, protocol="sse_json_v1")
     assert chunk.startswith("data: ")
     payload_text = chunk[len("data: ") :].strip()
-    decoded = json.loads(base64.b64decode(payload_text).decode("utf-8"))
+    decoded = json.loads(payload_text)
+    assert decoded == payload
 
-    assert decoded["type"] == "route_decision"
-    assert decoded["path"] == "path-a"
+
+def test_resolve_stream_protocol_aliases() -> None:
+    assert api_server._resolve_stream_protocol(None) == "sse_json_v1"
+    assert api_server._resolve_stream_protocol("") == "sse_json_v1"
+    assert api_server._resolve_stream_protocol("sse_json_v1") == "sse_json_v1"
+    assert api_server._resolve_stream_protocol("json") == "sse_json_v1"
+    assert api_server._resolve_stream_protocol("structured") == "sse_json_v1"
+
+
+def test_legacy_stream_protocol_requests_are_detected() -> None:
+    assert api_server._is_legacy_stream_protocol_requested("sse_base64")
+    assert api_server._is_legacy_stream_protocol_requested("legacy")
+    assert api_server._is_legacy_stream_protocol_requested("compat")
+    assert not api_server._is_legacy_stream_protocol_requested("sse_json_v1")
+
+
+def test_supported_stream_protocol_validation() -> None:
+    assert api_server._is_supported_stream_protocol_requested(None)
+    assert api_server._is_supported_stream_protocol_requested("")
+    assert api_server._is_supported_stream_protocol_requested("sse_json_v1")
+    assert api_server._is_supported_stream_protocol_requested("json")
+    assert api_server._is_supported_stream_protocol_requested("legacy")
+    assert not api_server._is_supported_stream_protocol_requested("protobuf_v9")
+
+
+def test_build_stream_response_headers_sets_protocol_header_only() -> None:
+    headers = api_server._build_stream_response_headers(protocol="sse_json_v1")
+    assert headers["X-Embla-Stream-Protocol"] == "sse_json_v1"
+    assert "Deprecation" not in headers
+    assert "Sunset" not in headers
+
+
+def test_chat_stream_rejects_legacy_stream_protocol() -> None:
+    request = api_server.ChatRequest(message="hello", stream=True, stream_protocol="legacy")
+    with pytest.raises(api_server.HTTPException) as exc:
+        asyncio.run(api_server.chat_stream(request))
+    assert exc.value.status_code == 410
+    assert isinstance(exc.value.detail, dict)
+    assert exc.value.detail.get("error") == "legacy_stream_protocol_decommissioned"
+
+
+def test_chat_stream_rejects_unknown_stream_protocol() -> None:
+    request = api_server.ChatRequest(message="hello", stream=True, stream_protocol="protobuf_v9")
+    with pytest.raises(api_server.HTTPException) as exc:
+        asyncio.run(api_server.chat_stream(request))
+    assert exc.value.status_code == 400
+    assert isinstance(exc.value.detail, dict)
+    assert exc.value.detail.get("error") == "unsupported_stream_protocol"

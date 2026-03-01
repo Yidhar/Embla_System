@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
@@ -40,16 +38,6 @@ def _gc_success_result(*, artifact_ref: str = "artifact_ok") -> Dict[str, Any]:
             "mode": "preview",
         },
     }
-
-
-def _decode_sse_payload(chunk: str) -> Dict[str, Any] | None:
-    if not chunk.startswith("data: "):
-        return None
-    payload_text = chunk[6:].strip()
-    if not payload_text or payload_text == "[DONE]":
-        return None
-    decoded = base64.b64decode(payload_text).decode("utf-8")
-    return json.loads(decoded)
 
 
 def test_gc_budget_guard_hits_on_repeated_failure():
@@ -196,14 +184,13 @@ def test_agentic_loop_emits_gc_guard_signal_and_stops(monkeypatch):
 
     async def _collect_events() -> List[Dict[str, Any]]:
         collected: List[Dict[str, Any]] = []
-        async for chunk in tool_loop.run_agentic_loop(
+        async for event in tool_loop.run_agentic_loop(
             [{"role": "user", "content": "请读取日志并继续分析"}],
             session_id="sess-gc-guard",
             max_rounds=8,
         ):
-            payload = _decode_sse_payload(chunk)
-            if payload:
-                collected.append(payload)
+            if isinstance(event, dict):
+                collected.append(event)
         return collected
 
     events = asyncio.run(_collect_events())

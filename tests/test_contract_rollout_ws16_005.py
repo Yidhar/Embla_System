@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 from types import SimpleNamespace
 from typing import Any, Dict, List
@@ -9,16 +8,6 @@ from typing import Any, Dict, List
 import apiserver.agentic_tool_loop as tool_loop
 import apiserver.llm_service as llm_service_module
 from system.config import ToolContractRolloutConfig
-
-
-def _decode_sse_payload(chunk: str) -> Dict[str, Any] | None:
-    if not chunk.startswith("data: "):
-        return None
-    payload_text = chunk[6:].strip()
-    if not payload_text or payload_text == "[DONE]":
-        return None
-    decoded = base64.b64decode(payload_text).decode("utf-8")
-    return json.loads(decoded)
 
 
 def _set_rollout(monkeypatch, *, mode: str, gate: bool, emit_metadata: bool = True) -> None:
@@ -334,14 +323,13 @@ def test_agentic_loop_emits_rollout_snapshot_and_tool_results_metadata(monkeypat
 
     async def _collect_events() -> List[Dict[str, Any]]:
         events: List[Dict[str, Any]] = []
-        async for chunk in tool_loop.run_agentic_loop(
+        async for event in tool_loop.run_agentic_loop(
             [{"role": "user", "content": "读取 README"}],
             session_id="sess-rollout-meta",
             max_rounds=1,
         ):
-            payload = _decode_sse_payload(chunk)
-            if payload:
-                events.append(payload)
+            if isinstance(event, dict):
+                events.append(event)
         return events
 
     events = asyncio.run(_collect_events())
@@ -425,14 +413,13 @@ def test_agentic_loop_contract_state_transitions_seed_to_execution(monkeypatch) 
 
     async def _collect_events() -> List[Dict[str, Any]]:
         events: List[Dict[str, Any]] = []
-        async for chunk in tool_loop.run_agentic_loop(
+        async for event in tool_loop.run_agentic_loop(
             [{"role": "user", "content": "修复这个写入错误并提交补丁"}],
             session_id="sess-rollout-contract-state",
             max_rounds=1,
         ):
-            payload = _decode_sse_payload(chunk)
-            if payload:
-                events.append(payload)
+            if isinstance(event, dict):
+                events.append(event)
         return events
 
     events = asyncio.run(_collect_events())
@@ -543,14 +530,13 @@ def test_agentic_loop_parallel_missing_checksum_downgrades_to_readonly(monkeypat
 
     async def _collect_events() -> List[Dict[str, Any]]:
         events: List[Dict[str, Any]] = []
-        async for chunk in tool_loop.run_agentic_loop(
+        async for event in tool_loop.run_agentic_loop(
             [{"role": "user", "content": "请先读取并分析仓库结构"}],
             session_id="sess-rollout-gate-readonly",
             max_rounds=1,
         ):
-            payload = _decode_sse_payload(chunk)
-            if payload:
-                events.append(payload)
+            if isinstance(event, dict):
+                events.append(event)
         return events
 
     events = asyncio.run(_collect_events())

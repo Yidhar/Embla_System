@@ -1,23 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
 import apiserver.agentic_tool_loop as tool_loop
 import apiserver.llm_service as llm_service_module
-
-
-def _decode_sse_payload(chunk: str) -> Dict[str, Any] | None:
-    if not chunk.startswith("data: "):
-        return None
-    payload_text = chunk[6:].strip()
-    if not payload_text or payload_text == "[DONE]":
-        return None
-    decoded = base64.b64decode(payload_text).decode("utf-8")
-    return json.loads(decoded)
 
 
 def test_agentic_loop_watchdog_guard_stops_on_consecutive_tool_errors(monkeypatch):
@@ -97,14 +85,13 @@ def test_agentic_loop_watchdog_guard_stops_on_consecutive_tool_errors(monkeypatc
 
     async def _collect_events() -> List[Dict[str, Any]]:
         collected: List[Dict[str, Any]] = []
-        async for chunk in tool_loop.run_agentic_loop(
+        async for event in tool_loop.run_agentic_loop(
             [{"role": "user", "content": "请继续排查并执行命令"}],
             session_id="sess-watchdog-loop",
             max_rounds=8,
         ):
-            payload = _decode_sse_payload(chunk)
-            if payload:
-                collected.append(payload)
+            if isinstance(event, dict):
+                collected.append(event)
         return collected
 
     events = asyncio.run(_collect_events())

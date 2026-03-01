@@ -77,22 +77,23 @@ export type DebugRouteBridgePayload = {
   recent_route_events?: DebugRouteBridgeEvent[];
 };
 
-function decodeBase64Json(data: string): { ok: boolean; payload: Record<string, unknown> | null } {
-  try {
-    const binary = atob(data);
-    const bytes = new Uint8Array(binary.length);
-    for (let idx = 0; idx < binary.length; idx += 1) {
-      bytes[idx] = binary.charCodeAt(idx);
-    }
-    const decoded = new TextDecoder().decode(bytes);
-    const payload = JSON.parse(decoded) as Record<string, unknown>;
-    if (!payload || typeof payload !== "object") {
-      return { ok: false, payload: null };
-    }
-    return { ok: true, payload };
-  } catch {
+function parseStructuredDataLine(data: string): { ok: boolean; payload: Record<string, unknown> | null } {
+  const text = String(data || "").trim();
+  if (!text) {
     return { ok: false, payload: null };
   }
+  if (text.startsWith("{")) {
+    try {
+      const payload = JSON.parse(text) as Record<string, unknown>;
+      if (payload && typeof payload === "object") {
+        return { ok: true, payload };
+      }
+      return { ok: false, payload: null };
+    } catch {
+      return { ok: false, payload: null };
+    }
+  }
+  return { ok: false, payload: null };
 }
 
 function parseSseBlock(lines: string[]): string[] {
@@ -168,6 +169,7 @@ export async function sendDebugChatMessage(params: {
         disable_tts: true,
         skip_intent_analysis: true,
         temporary: true,
+        stream_protocol: "sse_json_v1",
       }),
     });
     if (!response.ok) {
@@ -189,21 +191,20 @@ export async function sendDebugChatMessage(params: {
       if (!dataText || dataText === "[DONE]") {
         return;
       }
-      if (dataText.startsWith("session_id:")) {
-        sessionId = dataText.slice("session_id:".length).trim() || sessionId;
-        return;
-      }
-      if (dataText.startsWith("error:")) {
-        streamError = dataText.slice("error:".length).trim();
-        return;
-      }
-      const decoded = decodeBase64Json(dataText);
+      const decoded = parseStructuredDataLine(dataText);
       if (!decoded.ok || !decoded.payload) {
         return;
       }
       const payload = decoded.payload;
       const type = String(payload.type || "");
       const text = String(payload.text || "");
+      if (type === "session_meta") {
+        const sid = String(payload.session_id || "").trim();
+        if (sid) {
+          sessionId = sid;
+        }
+        return;
+      }
       if (type === "content") {
         content += text;
       } else if (type === "reasoning") {

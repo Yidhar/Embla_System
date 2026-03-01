@@ -5,7 +5,6 @@ Agentic Tool Loop 核心引擎
 """
 
 import asyncio
-import base64
 import hashlib
 import json
 import logging
@@ -173,7 +172,7 @@ def _resolve_agentic_loop_policy(max_rounds_override: Optional[int]) -> AgenticL
     if loop_cfg is None:
         return AgenticLoopPolicy(
             max_rounds=max_rounds,
-            enable_summary_round=True,
+            enable_summary_round=False,
             max_consecutive_tool_failures=2,
             max_consecutive_validation_failures=2,
             max_consecutive_no_tool_rounds=2,
@@ -191,7 +190,7 @@ def _resolve_agentic_loop_policy(max_rounds_override: Optional[int]) -> AgenticL
 
     return AgenticLoopPolicy(
         max_rounds=max_rounds,
-        enable_summary_round=bool(getattr(loop_cfg, "enable_summary_round", True)),
+        enable_summary_round=bool(getattr(loop_cfg, "enable_summary_round", False)),
         max_consecutive_tool_failures=_clamp_int(
             getattr(loop_cfg, "max_consecutive_tool_failures", 2), 2, 1, 20
         ),
@@ -557,6 +556,21 @@ def _truncate_preview_text(text: Any, *, limit: int) -> str:
     return normalized[:limit] + "..." if len(normalized) > limit else normalized
 
 
+def _build_frontend_preview(
+    *,
+    text: Any,
+    limit: int,
+    artifact_ref: str,
+) -> Tuple[str, bool]:
+    normalized = str(text if text is not None else "")
+    if len(normalized) <= limit:
+        return normalized, False
+    if artifact_ref:
+        prefix = normalized[: min(limit, 320)]
+        return f"{prefix} ... [truncated, use artifact_reader on {artifact_ref}]", True
+    return normalized[:limit] + "...", True
+
+
 def _build_contract_observability_metadata(
     results: List[Dict[str, Any]],
     *,
@@ -883,14 +897,35 @@ def _summarize_results_for_frontend(
             "status": r.get("status", "unknown"),
         }
         result_text = _coalesce_result_text(r)
+        artifact_ref = str(r.get("forensic_artifact_ref") or r.get("raw_result_ref") or "").strip()
         preview_text = r.get("display_preview", r.get("narrative_summary", result_text))
-        summary["preview"] = _truncate_preview_text(preview_text, limit=limit)
+        preview_value, preview_truncated = _build_frontend_preview(
+            text=preview_text,
+            limit=limit,
+            artifact_ref=artifact_ref,
+        )
+        summary["preview"] = preview_value
+        if preview_truncated:
+            summary["preview_truncated"] = True
         if rollout_runtime.legacy_contract_enabled:
-            summary["result"] = _truncate_preview_text(result_text, limit=limit)
+            result_value, result_truncated = _build_frontend_preview(
+                text=result_text,
+                limit=limit,
+                artifact_ref=artifact_ref,
+            )
+            summary["result"] = result_value
+            if result_truncated:
+                summary["result_truncated"] = True
         if rollout_runtime.new_contract_enabled:
             narrative_text = r.get("narrative_summary", r.get("display_preview", result_text))
-            summary["narrative_summary"] = _truncate_preview_text(narrative_text, limit=limit)
-            artifact_ref = str(r.get("forensic_artifact_ref") or r.get("raw_result_ref") or "").strip()
+            narrative_value, narrative_truncated = _build_frontend_preview(
+                text=narrative_text,
+                limit=limit,
+                artifact_ref=artifact_ref,
+            )
+            summary["narrative_summary"] = narrative_value
+            if narrative_truncated:
+                summary["narrative_summary_truncated"] = True
             if artifact_ref:
                 summary["forensic_artifact_ref"] = artifact_ref
 
@@ -1286,6 +1321,23 @@ def _normalize_submit_string_list(value: Any, *, max_items: int = 20, max_item_c
         normalized.append(text[:max_item_chars])
         if len(normalized) >= max_items:
             break
+    return normalized
+
+
+def _normalize_submit_state_patch(value: Any, *, max_items: int = 20) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: Dict[str, Any] = {}
+    for index, (raw_key, raw_val) in enumerate(value.items()):
+        if index >= max_items:
+            break
+        key = _as_nonempty_text(raw_key)
+        if not key:
+            continue
+        if isinstance(raw_val, (str, int, float, bool)) or raw_val is None:
+            normalized[key[:80]] = raw_val
+            continue
+        normalized[key[:80]] = str(raw_val)[:500]
     return normalized
 
 
@@ -1923,6 +1975,19 @@ _WORKFLOW_PHASES = {"plan", "execute", "verify", "repair"}
 _WORKFLOW_PHASE_STATUS = {"start", "success", "error", "skip"}
 
 
+def _build_loop_event(event_type: str, data: Any) -> Dict[str, Any]:
+    payload = {
+        "type": event_type,
+        "schema_version": _SSE_PROTOCOL_VERSION,
+        "event_ts": int(time.time() * 1000),
+    }
+    if isinstance(data, dict):
+        payload.update(data)
+    else:
+        payload["data"] = data
+    return payload
+
+
 def _format_workflow_stage_event(
     round_num: int,
     phase: str,
@@ -1932,7 +1997,7 @@ def _format_workflow_stage_event(
     reason: str = "",
     decision: str = "",
     details: Optional[Dict[str, Any]] = None,
-) -> Optional[str]:
+) -> Optional[Dict[str, Any]]:
     if not policy.emit_workflow_stage_events:
         return None
 
@@ -1949,7 +2014,7 @@ def _format_workflow_stage_event(
         payload["decision"] = decision
     if details:
         payload.update(details)
-    return _format_sse_event("tool_stage", payload)
+    return _build_loop_event("tool_stage", payload)
 
 
 def _parse_structured_tool_calls_payload(raw_payload: Any) -> List[Dict[str, Any]]:
@@ -2705,7 +2770,7 @@ def get_agentic_tool_definitions() -> List[Dict[str, Any]]:
             "function": {
                 "name": _SUBMIT_RESULT_TOOL_NAME,
                 "description": (
-                    "Atomically update agent_state and submit task completion status. "
+                    "Atomically submit machine-readable completion state for the current task. "
                     "Task is complete only when this tool is called with task_completed=true."
                 ),
                 "parameters": {
@@ -2713,10 +2778,16 @@ def get_agentic_tool_definitions() -> List[Dict[str, Any]]:
                     "additionalProperties": False,
                     "properties": {
                         "task_completed": {"type": "boolean"},
-                        "final_answer": {"type": "string"},
+                        "outcome_code": {"type": "string"},
+                        "state_patch": {"type": "object", "additionalProperties": True},
+                        "artifact_refs": {"type": "array", "items": {"type": "string"}},
                         "completion_summary": {"type": "string"},
                         "deliverables": {"type": "array", "items": {"type": "string"}},
                         "pending_actions": {"type": "array", "items": {"type": "string"}},
+                        "final_answer": {
+                            "type": "string",
+                            "description": "Deprecated legacy field. Prefer completion_summary + deliverables.",
+                        },
                     },
                     "required": ["task_completed"],
                 },
@@ -2863,10 +2934,15 @@ def _convert_structured_tool_calls(
                 "task_completed": bool(task_completed),
                 "_submit_tool_name": _SUBMIT_RESULT_TOOL_NAME,
             }
+            outcome_code = _as_nonempty_text(args.get("outcome_code"))
             final_answer = _as_nonempty_text(args.get("final_answer"))
             completion_summary = _as_nonempty_text(args.get("completion_summary"))
             deliverables = _normalize_submit_string_list(args.get("deliverables"))
             pending_actions = _normalize_submit_string_list(args.get("pending_actions"))
+            artifact_refs = _normalize_submit_string_list(args.get("artifact_refs"), max_items=20, max_item_chars=500)
+            state_patch = _normalize_submit_state_patch(args.get("state_patch"))
+            if outcome_code:
+                submit_call["outcome_code"] = outcome_code[:80]
             if final_answer:
                 submit_call["final_answer"] = final_answer[:2000]
             if completion_summary:
@@ -2875,6 +2951,10 @@ def _convert_structured_tool_calls(
                 submit_call["deliverables"] = deliverables
             if pending_actions:
                 submit_call["pending_actions"] = pending_actions
+            if artifact_refs:
+                submit_call["artifact_refs"] = artifact_refs
+            if state_patch:
+                submit_call["state_patch"] = state_patch
 
             _inject_call_context_metadata(
                 submit_call,
@@ -2950,6 +3030,9 @@ def _apply_submit_result_calls(
         completion_summary = _as_nonempty_text(call.get("completion_summary"))
         deliverables = _normalize_submit_string_list(call.get("deliverables"))
         pending_actions = _normalize_submit_string_list(call.get("pending_actions"))
+        artifact_refs = _normalize_submit_string_list(call.get("artifact_refs"), max_items=20, max_item_chars=500)
+        state_patch = _normalize_submit_state_patch(call.get("state_patch"))
+        outcome_code = _as_nonempty_text(call.get("outcome_code"))
         if final_answer:
             runtime.agent_state["final_answer"] = final_answer
         if completion_summary:
@@ -2958,15 +3041,27 @@ def _apply_submit_result_calls(
             runtime.agent_state["deliverables"] = deliverables
         if pending_actions:
             runtime.agent_state["pending_actions"] = pending_actions
+        if artifact_refs:
+            runtime.agent_state["artifact_refs"] = artifact_refs
+        if state_patch:
+            runtime.agent_state["state_patch"] = state_patch
+        if outcome_code:
+            runtime.agent_state["outcome_code"] = outcome_code[:80]
 
         summary_text = completion_summary or final_answer
         if not summary_text:
             summary_text = "task_completed=true" if task_completed else "task_completed=false"
         preview = summary_text[:500]
-        result_text = (
-            f"{_SUBMIT_RESULT_TOOL_NAME} 已更新 agent_state: "
-            f"task_completed={str(task_completed).lower()}, round={round_num}"
-        )
+        handoff_payload = {
+            "task_completed": task_completed,
+            "round": int(round_num),
+            "outcome_code": outcome_code[:80] if outcome_code else "",
+            "deliverables": deliverables,
+            "pending_actions": pending_actions,
+            "artifact_refs": artifact_refs,
+            "state_patch": state_patch,
+        }
+        result_text = json.dumps(handoff_payload, ensure_ascii=False)
         row = {
             "tool_call": call,
             "result": result_text,
@@ -2975,11 +3070,19 @@ def _apply_submit_result_calls(
             "tool_name": _SUBMIT_RESULT_TOOL_NAME,
             "narrative_summary": summary_text,
             "display_preview": preview,
+            "submission": handoff_payload,
         }
         if deliverables:
             row["deliverables"] = deliverables
         if pending_actions:
             row["pending_actions"] = pending_actions
+        if artifact_refs:
+            row["artifact_refs"] = artifact_refs
+            row["forensic_artifact_ref"] = artifact_refs[0]
+        if state_patch:
+            row["state_patch"] = state_patch
+        if outcome_code:
+            row["outcome_code"] = outcome_code[:80]
         row = _upgrade_tool_result_contract_payload(row)
         _attach_tool_receipt(call, row)
         submit_results.append(row)
@@ -2989,13 +3092,11 @@ def _apply_submit_result_calls(
 
 def _build_no_tool_feedback_text(*, runtime: AgenticLoopRuntimeState) -> str:
     task_completed = bool(runtime.agent_state.get("task_completed") is True)
-    submit_called = bool(runtime.submit_result_called)
     return (
         "[系统反馈] 你上一轮没有发起任何工具调用。"
-        f"当前 agent_state.task_completed={str(task_completed).lower()}，"
-        f"submit_result_called={str(submit_called).lower()}。"
-        f"若任务已完成，请立即调用 {_SUBMIT_RESULT_TOOL_NAME}(task_completed=true, final_answer=..., deliverables=[...])；"
-        f"若任务未完成，请继续调用 native_call/mcp_call，或调用 {_SUBMIT_RESULT_TOOL_NAME}(task_completed=false, pending_actions=[...]) 同步状态。"
+        "如果任务仍需要外部信息、文件操作、命令执行或网络能力，请立即调用合适函数继续执行。"
+        f"如果任务已完成，请调用 {_SUBMIT_RESULT_TOOL_NAME}(task_completed=true, completion_summary=..., deliverables=[...], artifact_refs=[...]) 提交结果。"
+        f"当前 agent_state.task_completed={str(task_completed).lower()}。"
     )
 
 
@@ -3005,37 +3106,41 @@ def _build_no_tool_feedback_text(*, runtime: AgenticLoopRuntimeState) -> str:
 
 
 def _format_sse_event(event_type: str, data: Any) -> str:
-    """格式化扩展SSE事件（使用与llm_service相同的base64编码格式）"""
-    payload = {
-        "type": event_type,
-        "schema_version": _SSE_PROTOCOL_VERSION,
-        "event_ts": int(time.time() * 1000),
+    """格式化扩展SSE事件（JSON SSE 协议）"""
+    payload = _build_loop_event(event_type, data)
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _build_execution_receipt_payload(
+    *,
+    session_id: str,
+    runtime: AgenticLoopRuntimeState,
+    policy: AgenticLoopPolicy,
+) -> Dict[str, Any]:
+    task_completed = bool(runtime.agent_state.get("task_completed") is True)
+    submit_called = bool(runtime.submit_result_called)
+    return {
+        "session_id": str(session_id or ""),
+        "stop_reason": str(runtime.stop_reason or ""),
+        "round_num": int(runtime.round_num),
+        "max_rounds": int(policy.max_rounds),
+        "task_completed": task_completed,
+        "submit_result_called": submit_called,
+        "submit_result_round": int(runtime.submit_result_round or 0),
+        "total_tool_calls": int(runtime.total_tool_calls),
+        "total_tool_success": int(runtime.total_tool_success),
+        "total_tool_errors": int(runtime.total_tool_errors),
+        "consecutive_tool_failures": int(runtime.consecutive_tool_failures),
+        "consecutive_validation_failures": int(runtime.consecutive_validation_failures),
+        "consecutive_no_tool_rounds": int(runtime.consecutive_no_tool_rounds),
+        "gc_guard": {
+            "repeat_count": int(runtime.gc_guard_repeat_count),
+            "error_total": int(runtime.gc_guard_error_total),
+            "success_total": int(runtime.gc_guard_success_total),
+            "hit_total": int(runtime.gc_guard_hit_total),
+        },
+        "agent_state": dict(runtime.agent_state),
     }
-    if isinstance(data, dict):
-        payload.update(data)
-    else:
-        payload["data"] = data
-    b64 = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode("utf-8")).decode("ascii")
-    return f"data: {b64}\n\n"
-
-
-def _build_summary_instruction(runtime: AgenticLoopRuntimeState, max_rounds: int) -> str:
-    reason = runtime.stop_reason or "unknown"
-    completion_state = "true" if bool(runtime.agent_state.get("task_completed") is True) else "false"
-    submit_called = "true" if bool(runtime.submit_result_called) else "false"
-    return (
-        "[系统提示] 工具调用循环已结束。请基于已有工具结果直接回答用户问题。\n"
-        f"- 结束原因: {reason}\n"
-        f"- 已执行轮次: {runtime.round_num}/{max_rounds}\n"
-        f"- 工具调用总数: {runtime.total_tool_calls}\n"
-        f"- 工具成功/失败: {runtime.total_tool_success}/{runtime.total_tool_errors}\n"
-        f"- agent_state.task_completed: {completion_state}\n"
-        f"- submit_result_called: {submit_called}\n"
-        f"- GC防抖计数(命中/错误/成功): "
-        f"{runtime.gc_guard_hit_total}/{runtime.gc_guard_error_total}/{runtime.gc_guard_success_total}\n"
-        "若关键工具全部失败，请诚实告知当前限制并给出下一步可执行方案。\n"
-        "不要再发起任何工具调用。"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -3048,7 +3153,7 @@ async def run_agentic_loop(
     session_id: str,
     max_rounds: int = 500,
     model_override: Optional[Dict[str, str]] = None,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[Dict[str, Any], None]:
     """Agentic tool loop 核心（原生结构化 tool calling + 配置化编排控制）。"""
     from apiserver.llm_service import get_llm_service
 
@@ -3057,7 +3162,6 @@ async def run_agentic_loop(
     policy = _resolve_agentic_loop_policy(max_rounds)
     contract_rollout = _resolve_tool_contract_rollout_runtime()
     runtime = AgenticLoopRuntimeState()
-    needs_summary = False
     gc_budget_guard: Optional[GCBudgetGuard] = None
     loop_watchdog = _build_agentic_loop_watchdog()
     loop_cfg = getattr(get_config(), "agentic_loop", None)
@@ -3080,9 +3184,9 @@ async def run_agentic_loop(
     episodic_context_cache = ""
 
     if contract_rollout.emit_observability_metadata:
-        yield _format_sse_event("contract_rollout_snapshot", {"snapshot": contract_rollout.snapshot()})
+        yield _build_loop_event("contract_rollout_snapshot", {"snapshot": contract_rollout.snapshot()})
         if isinstance(contract_state, dict):
-            yield _format_sse_event(
+            yield _build_loop_event(
                 "contract_state",
                 _build_contract_state_event_payload(
                     contract_state=contract_state,
@@ -3113,7 +3217,7 @@ async def run_agentic_loop(
         if atomic_context and _inject_ephemeral_system_context(messages, atomic_context):
             logger.info("[AgenticLoop] upserted atomic prompt control plane for session=%s round=%s", session_id, round_num)
         if round_num > 1:
-            yield _format_sse_event("round_start", {"round": round_num})
+            yield _build_loop_event("round_start", {"round": round_num})
         plan_start_event = _format_workflow_stage_event(round_num, "plan", "start", policy=policy)
         if plan_start_event:
             yield plan_start_event
@@ -3123,13 +3227,13 @@ async def run_agentic_loop(
         structured_tool_calls: List[Dict[str, Any]] = []
         stream_terminal_error = ""
         stream_terminal_error_reason = ""
-        buffered_round_chunks: List[str] = []
+        buffered_round_events: List[Dict[str, Any]] = []
 
-        def _drain_buffered_round_chunks() -> List[str]:
-            if not buffered_round_chunks:
+        def _drain_buffered_round_events() -> List[Dict[str, Any]]:
+            if not buffered_round_events:
                 return []
-            drained_raw = list(buffered_round_chunks)
-            buffered_round_chunks.clear()
+            drained_raw = list(buffered_round_events)
+            buffered_round_events.clear()
             return drained_raw
 
         round_tool_choice = "auto"
@@ -3142,50 +3246,55 @@ async def run_agentic_loop(
             tool_choice=round_tool_choice,
         ):
             should_passthrough_chunk = True
-            if chunk.startswith("data: "):
-                try:
-                    data_str = chunk[6:].strip()
-                    if data_str and data_str != "[DONE]":
-                        decoded = base64.b64decode(data_str).decode("utf-8")
-                        chunk_data = json.loads(decoded)
-                        chunk_type = chunk_data.get("type", "content")
-                        chunk_payload = chunk_data.get("text", "")
+            chunk_data: Optional[Dict[str, Any]] = None
+            try:
+                if isinstance(chunk, dict):
+                    chunk_data = dict(chunk)
+                elif isinstance(chunk, str) and chunk.startswith("data: "):
+                    chunk_data = _decode_sse_payload(chunk)
+            except Exception as e:
+                logger.warning(f"[AgenticLoop] 解析流式工具调用失败: {e}")
 
-                        if chunk_type == "content":
-                            if isinstance(chunk_payload, str):
-                                complete_text += chunk_payload
-                                if not stream_terminal_error:
-                                    detected = _extract_terminal_stream_error_text(complete_text)
-                                    if detected:
-                                        stream_terminal_error = detected
-                                        stream_terminal_error_reason = "llm_stream_error"
-                            buffered_round_chunks.append(chunk)
-                            should_passthrough_chunk = False
-                        elif chunk_type == "reasoning":
-                            if isinstance(chunk_payload, str):
-                                complete_reasoning += chunk_payload
-                            buffered_round_chunks.append(chunk)
-                            should_passthrough_chunk = False
-                        elif chunk_type == "tool_calls":
-                            parsed_calls = _parse_structured_tool_calls_payload(chunk_payload)
-                            structured_tool_calls.extend(parsed_calls)
-                            # 原生 tool_calls 事件不透传给前端，统一由 loop 生成 tool_calls/tool_results 事件
-                            continue
-                        elif chunk_type == "auth_expired":
-                            stream_terminal_error = (
-                                str(chunk_payload).strip() if isinstance(chunk_payload, str) and chunk_payload else "Login expired"
-                            )
-                            stream_terminal_error_reason = "auth_expired"
-                        elif chunk_type == "error":
-                            stream_terminal_error = (
-                                str(chunk_payload).strip() if isinstance(chunk_payload, str) and chunk_payload else "LLM stream error"
-                            )
-                            stream_terminal_error_reason = "llm_stream_error"
-                except Exception as e:
-                    logger.warning(f"[AgenticLoop] 解析流式工具调用失败: {e}")
+            if isinstance(chunk_data, dict):
+                chunk_type = chunk_data.get("type", "content")
+                chunk_payload = chunk_data.get("text", "")
+
+                if chunk_type == "content":
+                    if isinstance(chunk_payload, str):
+                        complete_text += chunk_payload
+                        if not stream_terminal_error:
+                            detected = _extract_terminal_stream_error_text(complete_text)
+                            if detected:
+                                stream_terminal_error = detected
+                                stream_terminal_error_reason = "llm_stream_error"
+                    buffered_round_events.append(chunk_data)
+                    should_passthrough_chunk = False
+                elif chunk_type == "reasoning":
+                    if isinstance(chunk_payload, str):
+                        complete_reasoning += chunk_payload
+                    buffered_round_events.append(chunk_data)
+                    should_passthrough_chunk = False
+                elif chunk_type == "tool_calls":
+                    parsed_calls = _parse_structured_tool_calls_payload(chunk_payload)
+                    structured_tool_calls.extend(parsed_calls)
+                    # 原生 tool_calls 事件不透传给前端，统一由 loop 生成 tool_calls/tool_results 事件
+                    continue
+                elif chunk_type == "auth_expired":
+                    stream_terminal_error = (
+                        str(chunk_payload).strip() if isinstance(chunk_payload, str) and chunk_payload else "Login expired"
+                    )
+                    stream_terminal_error_reason = "auth_expired"
+                elif chunk_type == "error":
+                    stream_terminal_error = (
+                        str(chunk_payload).strip() if isinstance(chunk_payload, str) and chunk_payload else "LLM stream error"
+                    )
+                    stream_terminal_error_reason = "llm_stream_error"
 
             if should_passthrough_chunk:
-                yield chunk
+                if isinstance(chunk_data, dict):
+                    yield chunk_data
+                elif isinstance(chunk, str) and chunk.strip() != "data: [DONE]":
+                    yield _build_loop_event("raw_chunk", {"text": str(chunk)[:2000]})
 
         logger.debug(
             f"[AgenticLoop] Round {round_num} complete_text ({len(complete_text)} chars): {complete_text[:300]!r}"
@@ -3198,7 +3307,7 @@ async def run_agentic_loop(
                 stream_terminal_error_reason = "llm_stream_error"
 
         if stream_terminal_error:
-            for buffered_chunk in _drain_buffered_round_chunks():
+            for buffered_chunk in _drain_buffered_round_events():
                 yield buffered_chunk
             runtime.stop_reason = stream_terminal_error_reason or "llm_stream_error"
             logger.error(
@@ -3236,7 +3345,7 @@ async def run_agentic_loop(
             )
             if verify_error_event:
                 yield verify_error_event
-            yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+            yield _build_loop_event("round_end", {"round": round_num, "has_more": False})
             break
 
         actionable_calls, validation_errors = _convert_structured_tool_calls(
@@ -3280,7 +3389,7 @@ async def run_agentic_loop(
             }
             if contract_gate.reason:
                 guardrail_payload["reason"] = contract_gate.reason
-            yield _format_sse_event("guardrail", guardrail_payload)
+            yield _build_loop_event("guardrail", guardrail_payload)
 
         if submit_result_calls:
             logger.info(
@@ -3298,7 +3407,7 @@ async def run_agentic_loop(
                     latest_user_request=latest_user_request,
                 )
                 if contract_rollout.emit_observability_metadata and isinstance(contract_state, dict):
-                    yield _format_sse_event(
+                    yield _build_loop_event(
                         "contract_state",
                         _build_contract_state_event_payload(
                             contract_state=contract_state,
@@ -3325,7 +3434,7 @@ async def run_agentic_loop(
                     if execution_l1_5:
                         _inject_ephemeral_system_context(messages, execution_l1_5)
                     if contract_rollout.emit_observability_metadata:
-                        yield _format_sse_event(
+                        yield _build_loop_event(
                             "contract_state",
                             _build_contract_state_event_payload(
                                 contract_state=contract_state,
@@ -3338,13 +3447,13 @@ async def run_agentic_loop(
 
         validation_results = _build_validation_results(validation_errors)
 
-        def _build_round_model_output_event(*, fallback_text: str) -> str:
+        def _build_round_model_output_event(*, fallback_text: str) -> Dict[str, Any]:
             output_text = complete_text if isinstance(complete_text, str) else str(complete_text)
             placeholder = False
             if not output_text.strip():
                 placeholder = True
                 output_text = fallback_text
-            return _format_sse_event(
+            return _build_loop_event(
                 "model_output",
                 {
                     "round": round_num,
@@ -3357,7 +3466,7 @@ async def run_agentic_loop(
 
         if has_model_tool_activity:
             yield _build_round_model_output_event(fallback_text="（本轮模型未返回正文，已发起工具调用或状态提交）")
-            for buffered_chunk in _drain_buffered_round_chunks():
+            for buffered_chunk in _drain_buffered_round_events():
                 yield buffered_chunk
             plan_success_event = _format_workflow_stage_event(
                 round_num,
@@ -3422,7 +3531,7 @@ async def run_agentic_loop(
                 yield verify_start_event
 
             if validation_results:
-                for buffered_chunk in _drain_buffered_round_chunks():
+                for buffered_chunk in _drain_buffered_round_events():
                     yield buffered_chunk
                 runtime.consecutive_validation_failures += 1
                 runtime.consecutive_no_tool_rounds = 0
@@ -3444,31 +3553,7 @@ async def run_agentic_loop(
                             rollout=contract_rollout,
                         )
                     }
-                yield _format_sse_event("tool_results", tool_results_payload)
-
-                assistant_content = complete_text if complete_text else "(工具调用参数错误)"
-                repair_start_event = _format_workflow_stage_event(
-                    round_num,
-                    "repair",
-                    "start",
-                    policy=policy,
-                    reason="validation_errors",
-                    details={"validation_errors": len(validation_results)},
-                )
-                if repair_start_event:
-                    yield repair_start_event
-                messages.append({"role": "assistant", "content": assistant_content})
-                messages.append({"role": "user", "content": format_tool_results_for_llm(validation_results)})
-                repair_success_event = _format_workflow_stage_event(
-                    round_num,
-                    "repair",
-                    "success",
-                    policy=policy,
-                    reason="validation_feedback_injected",
-                    details={"validation_errors": len(validation_results)},
-                )
-                if repair_success_event:
-                    yield repair_success_event
+                yield _build_loop_event("tool_results", tool_results_payload)
 
                 if runtime.consecutive_validation_failures >= policy.max_consecutive_validation_failures:
                     runtime.stop_reason = "validation_failures"
@@ -3479,7 +3564,7 @@ async def run_agentic_loop(
                         "error",
                         policy=policy,
                         reason="validation_failures",
-                        decision="summary" if policy.enable_summary_round else "stop",
+                        decision="stop",
                         details={
                             "consecutive_validation_failures": runtime.consecutive_validation_failures,
                             "threshold": policy.max_consecutive_validation_failures,
@@ -3487,14 +3572,33 @@ async def run_agentic_loop(
                     )
                     if verify_error_event:
                         yield verify_error_event
-                    if policy.enable_summary_round:
-                        needs_summary = True
-                        yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
-                    else:
-                        yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+                    yield _build_loop_event("round_end", {"round": round_num, "has_more": False})
                     break
 
                 if round_num < policy.max_rounds:
+                    assistant_content = complete_text if complete_text else "(工具调用参数错误)"
+                    repair_start_event = _format_workflow_stage_event(
+                        round_num,
+                        "repair",
+                        "start",
+                        policy=policy,
+                        reason="validation_errors",
+                        details={"validation_errors": len(validation_results)},
+                    )
+                    if repair_start_event:
+                        yield repair_start_event
+                    messages.append({"role": "assistant", "content": assistant_content})
+                    messages.append({"role": "user", "content": format_tool_results_for_llm(validation_results)})
+                    repair_success_event = _format_workflow_stage_event(
+                        round_num,
+                        "repair",
+                        "success",
+                        policy=policy,
+                        reason="validation_feedback_injected",
+                        details={"validation_errors": len(validation_results)},
+                    )
+                    if repair_success_event:
+                        yield repair_success_event
                     verify_success_event = _format_workflow_stage_event(
                         round_num,
                         "verify",
@@ -3506,7 +3610,7 @@ async def run_agentic_loop(
                     )
                     if verify_success_event:
                         yield verify_success_event
-                    yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
+                    yield _build_loop_event("round_end", {"round": round_num, "has_more": True})
                 else:
                     runtime.stop_reason = "validation_failures"
                     verify_error_event = _format_workflow_stage_event(
@@ -3515,15 +3619,11 @@ async def run_agentic_loop(
                         "error",
                         policy=policy,
                         reason="validation_failures_max_rounds",
-                        decision="summary" if policy.enable_summary_round else "stop",
+                        decision="stop",
                     )
                     if verify_error_event:
                         yield verify_error_event
-                    if policy.enable_summary_round:
-                        needs_summary = True
-                        yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
-                    else:
-                        yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+                    yield _build_loop_event("round_end", {"round": round_num, "has_more": False})
                     break
                 continue
 
@@ -3532,7 +3632,7 @@ async def run_agentic_loop(
 
             if _is_completion_submitted(runtime):
                 yield _build_round_model_output_event(fallback_text="（状态已提交，等待结束）")
-                for buffered_chunk in _drain_buffered_round_chunks():
+                for buffered_chunk in _drain_buffered_round_events():
                     yield buffered_chunk
                 runtime.stop_reason = "submitted_completion"
                 verify_success_event = _format_workflow_stage_event(
@@ -3547,11 +3647,11 @@ async def run_agentic_loop(
                 if verify_success_event:
                     yield verify_success_event
                 logger.info("[AgenticLoop] Round %s: completion gate satisfied, stop loop", round_num)
-                yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+                yield _build_loop_event("round_end", {"round": round_num, "has_more": False})
                 break
 
             yield _build_round_model_output_event(fallback_text="（本轮模型未返回正文）")
-            for buffered_chunk in _drain_buffered_round_chunks():
+            for buffered_chunk in _drain_buffered_round_events():
                 yield buffered_chunk
 
             if round_num >= policy.max_rounds:
@@ -3562,7 +3662,7 @@ async def run_agentic_loop(
                     "error",
                     policy=policy,
                     reason="completion_not_submitted",
-                    decision="summary" if policy.enable_summary_round else "stop",
+                    decision="stop",
                     details={
                         "task_completed": bool(runtime.agent_state.get("task_completed") is True),
                         "submit_result_called": bool(runtime.submit_result_called),
@@ -3570,11 +3670,7 @@ async def run_agentic_loop(
                 )
                 if verify_error_event:
                     yield verify_error_event
-                if policy.enable_summary_round:
-                    needs_summary = True
-                    yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
-                else:
-                    yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+                yield _build_loop_event("round_end", {"round": round_num, "has_more": False})
                 break
 
             can_continue_no_tool = (
@@ -3634,7 +3730,7 @@ async def run_agentic_loop(
                 )
                 if verify_success_event:
                     yield verify_success_event
-                yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
+                yield _build_loop_event("round_end", {"round": round_num, "has_more": True})
                 continue
 
             runtime.stop_reason = "completion_not_submitted"
@@ -3644,7 +3740,7 @@ async def run_agentic_loop(
                 "error",
                 policy=policy,
                 reason="completion_not_submitted",
-                decision="summary" if policy.enable_summary_round else "stop",
+                decision="stop",
                 details={
                     "consecutive_no_tool_rounds": runtime.consecutive_no_tool_rounds,
                     "threshold": policy.max_consecutive_no_tool_rounds,
@@ -3655,11 +3751,7 @@ async def run_agentic_loop(
             )
             if verify_error_event:
                 yield verify_error_event
-            if policy.enable_summary_round:
-                needs_summary = True
-                yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
-            else:
-                yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+            yield _build_loop_event("round_end", {"round": round_num, "has_more": False})
             break
 
         runtime.consecutive_validation_failures = 0
@@ -3687,7 +3779,7 @@ async def run_agentic_loop(
             yield execute_start_event
 
         call_descriptions = _build_tool_call_descriptions(actionable_calls + submit_result_calls)
-        yield _format_sse_event("tool_calls", {"calls": call_descriptions})
+        yield _build_loop_event("tool_calls", {"calls": call_descriptions})
 
         primary_results: List[Dict[str, Any]] = []
         followup_results: List[Dict[str, Any]] = []
@@ -3761,7 +3853,7 @@ async def run_agentic_loop(
                     _get_budget_guard_controller().record_action_payload(signal)
                 except Exception as exc:
                     logger.warning("[AgenticLoop] budget guard state update skipped in round %s: %s", round_num, exc)
-            yield _format_sse_event(
+            yield _build_loop_event(
                 "guardrail",
                 _build_watchdog_guardrail_payload(
                     signal=signal,
@@ -3792,16 +3884,12 @@ async def run_agentic_loop(
                 "error",
                 policy=policy,
                 reason=runtime.stop_reason,
-                decision="summary" if policy.enable_summary_round else "stop",
+                decision="stop",
                 details=watchdog_details,
             )
             if verify_error_event:
                 yield verify_error_event
-            if policy.enable_summary_round:
-                needs_summary = True
-                yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
-            else:
-                yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+            yield _build_loop_event("round_end", {"round": round_num, "has_more": False})
             break
 
         results = validation_results + executed_results
@@ -3846,7 +3934,7 @@ async def run_agentic_loop(
         if execute_finish_event:
             yield execute_finish_event
         if gc_guard_signal and gc_guard_signal.guard_hit:
-            yield _format_sse_event(
+            yield _build_loop_event(
                 "guardrail",
                 {
                     "guard_type": "gc_budget_guard",
@@ -3864,14 +3952,14 @@ async def run_agentic_loop(
         rollout_metadata = _build_contract_observability_metadata(results, rollout=contract_rollout)
         if contract_rollout.emit_observability_metadata:
             tool_results_payload["metadata"] = {"contract_rollout": rollout_metadata}
-        yield _format_sse_event("tool_results", tool_results_payload)
+        yield _build_loop_event("tool_results", tool_results_payload)
 
         if (
             contract_rollout.emit_observability_metadata
             and isinstance(rollout_metadata.get("stats"), dict)
             and int(rollout_metadata["stats"].get("legacy_blocked_count", 0)) > 0
         ):
-            yield _format_sse_event(
+            yield _build_loop_event(
                 "guardrail",
                 {
                     "round": round_num,
@@ -3915,7 +4003,7 @@ async def run_agentic_loop(
             )
             if verify_success_event:
                 yield verify_success_event
-            yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+            yield _build_loop_event("round_end", {"round": round_num, "has_more": False})
             break
 
         arbiter_escalation = next(
@@ -3940,16 +4028,12 @@ async def run_agentic_loop(
                 "error",
                 policy=policy,
                 reason="router_arbiter_escalation",
-                decision="summary" if policy.enable_summary_round else "stop",
+                decision="stop",
                 details=arbiter_escalation,
             )
             if verify_error_event:
                 yield verify_error_event
-            if policy.enable_summary_round:
-                needs_summary = True
-                yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
-            else:
-                yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+            yield _build_loop_event("round_end", {"round": round_num, "has_more": False})
             break
 
         if gc_guard_signal and gc_guard_signal.guard_hit:
@@ -3968,16 +4052,12 @@ async def run_agentic_loop(
                 "error",
                 policy=policy,
                 reason=runtime.stop_reason,
-                decision="summary" if policy.enable_summary_round else "stop",
+                decision="stop",
                 details=gc_guard_signal.to_payload(),
             )
             if verify_error_event:
                 yield verify_error_event
-            if policy.enable_summary_round:
-                needs_summary = True
-                yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
-            else:
-                yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+            yield _build_loop_event("round_end", {"round": round_num, "has_more": False})
             break
 
         if runtime.consecutive_tool_failures >= policy.max_consecutive_tool_failures:
@@ -3991,7 +4071,7 @@ async def run_agentic_loop(
                 "error",
                 policy=policy,
                 reason="tool_failures",
-                decision="summary" if policy.enable_summary_round else "stop",
+                decision="stop",
                 details={
                     "consecutive_tool_failures": runtime.consecutive_tool_failures,
                     "threshold": policy.max_consecutive_tool_failures,
@@ -3999,11 +4079,7 @@ async def run_agentic_loop(
             )
             if verify_error_event:
                 yield verify_error_event
-            if policy.enable_summary_round:
-                needs_summary = True
-                yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
-            else:
-                yield _format_sse_event("round_end", {"round": round_num, "has_more": False})
+            yield _build_loop_event("round_end", {"round": round_num, "has_more": False})
             break
 
         verify_success_event = _format_workflow_stage_event(
@@ -4017,83 +4093,70 @@ async def run_agentic_loop(
         )
         if verify_success_event:
             yield verify_success_event
-        yield _format_sse_event("round_end", {"round": round_num, "has_more": True})
+        yield _build_loop_event("round_end", {"round": round_num, "has_more": True})
         logger.info(f"[AgenticLoop] Round {round_num}: 工具结果已注入，继续下一轮")
     else:
         runtime.stop_reason = "submitted_completion" if _is_completion_submitted(runtime) else "completion_not_submitted"
-        needs_summary = policy.enable_summary_round
+    yield _build_loop_event(
+        "execution_receipt",
+        _build_execution_receipt_payload(
+            session_id=session_id,
+            runtime=runtime,
+            policy=policy,
+        ),
+    )
 
-    if needs_summary and policy.enable_summary_round:
-        summary_round = runtime.round_num + 1 if runtime.round_num > 0 else policy.max_rounds + 1
-        logger.warning(f"[AgenticLoop] 执行最终总结轮, reason={runtime.stop_reason}")
-        yield _format_sse_event("round_start", {"round": summary_round, "summary": True, "reason": runtime.stop_reason})
-        plan_start_event = _format_workflow_stage_event(
-            summary_round,
-            "plan",
-            "start",
-            policy=policy,
-            reason="summary_round",
-        )
-        if plan_start_event:
-            yield plan_start_event
-        messages.append({"role": "user", "content": _build_summary_instruction(runtime, policy.max_rounds)})
-        plan_success_event = _format_workflow_stage_event(
-            summary_round,
-            "plan",
-            "success",
-            policy=policy,
-            reason="summary_round",
-            details={"actionable_calls": 0},
-        )
-        if plan_success_event:
-            yield plan_success_event
-        execute_skip_event = _format_workflow_stage_event(
-            summary_round,
-            "execute",
-            "skip",
-            policy=policy,
-            reason="summary_round",
-        )
-        if execute_skip_event:
-            yield execute_skip_event
-        verify_start_event = _format_workflow_stage_event(
-            summary_round,
-            "verify",
-            "start",
-            policy=policy,
-            reason="summary_round",
-        )
-        if verify_start_event:
-            yield verify_start_event
 
-        async for chunk in llm_service.stream_chat_with_context(
-            messages,
-            get_config().api.temperature,
-            model_override=model_override,
-            tools=tool_definitions,
-            tool_choice="none",
-        ):
-            if chunk.startswith("data: "):
-                try:
-                    data_str = chunk[6:].strip()
-                    if data_str and data_str != "[DONE]":
-                        decoded = base64.b64decode(data_str).decode("utf-8")
-                        payload = json.loads(decoded)
-                        if payload.get("type") == "tool_calls":
-                            # 总结轮不接收工具调用事件
-                            continue
-                except Exception:
-                    pass
-            yield chunk
+def _decode_sse_payload(chunk: str) -> Optional[Dict[str, Any]]:
+    if not isinstance(chunk, str) or not chunk.startswith("data: "):
+        return None
+    payload_text = chunk[6:].strip()
+    if not payload_text or payload_text == "[DONE]":
+        return None
+    try:
+        payload = json.loads(payload_text)
+    except Exception:
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
 
-        verify_success_event = _format_workflow_stage_event(
-            summary_round,
-            "verify",
-            "success",
-            policy=policy,
-            reason="summary_round",
-            decision="stop",
-        )
-        if verify_success_event:
-            yield verify_success_event
-        yield _format_sse_event("round_end", {"round": summary_round, "has_more": False})
+
+async def run_agentic_loop_events(
+    messages: List[Dict[str, Any]],
+    session_id: str,
+    max_rounds: int = 500,
+    model_override: Optional[Dict[str, str]] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Structured event stream for parent-agent orchestration (non-SSE)."""
+    async for event in run_agentic_loop(
+        messages,
+        session_id,
+        max_rounds=max_rounds,
+        model_override=model_override,
+    ):
+        if isinstance(event, dict):
+            yield event
+            continue
+        payload = _decode_sse_payload(str(event))
+        if isinstance(payload, dict):
+            yield payload
+
+
+async def run_agentic_loop_receipt(
+    messages: List[Dict[str, Any]],
+    session_id: str,
+    max_rounds: int = 500,
+    model_override: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Run the loop and return terminal execution receipt."""
+    latest_receipt: Dict[str, Any] = {}
+    async for event in run_agentic_loop_events(
+        messages,
+        session_id,
+        max_rounds=max_rounds,
+        model_override=model_override,
+    ):
+        if str(event.get("type") or "") == "execution_receipt":
+            latest_receipt = dict(event)
+    return latest_receipt

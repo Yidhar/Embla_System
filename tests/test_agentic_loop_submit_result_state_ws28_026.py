@@ -1,23 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import json
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
 import apiserver.agentic_tool_loop as tool_loop
 import apiserver.llm_service as llm_service_module
-
-
-def _decode_sse_payload(chunk: str) -> Dict[str, Any] | None:
-    if not chunk.startswith("data: "):
-        return None
-    payload_text = chunk[6:].strip()
-    if not payload_text or payload_text == "[DONE]":
-        return None
-    decoded = base64.b64decode(payload_text).decode("utf-8")
-    return json.loads(decoded)
 
 
 def _policy(max_rounds: int) -> tool_loop.AgenticLoopPolicy:
@@ -60,14 +48,13 @@ def test_agentic_loop_no_tool_does_not_end_without_submit_result(monkeypatch):
 
     async def _collect_events() -> List[Dict[str, Any]]:
         collected: List[Dict[str, Any]] = []
-        async for chunk in tool_loop.run_agentic_loop(
+        async for event in tool_loop.run_agentic_loop(
             [{"role": "user", "content": "继续推进修复"}],
             session_id="sess-submit-required-1",
             max_rounds=3,
         ):
-            payload = _decode_sse_payload(chunk)
-            if payload:
-                collected.append(payload)
+            if isinstance(event, dict):
+                collected.append(event)
         return collected
 
     events = asyncio.run(_collect_events())
@@ -136,14 +123,13 @@ def test_agentic_loop_stops_when_submit_result_marks_completed(monkeypatch):
 
     async def _collect_events() -> List[Dict[str, Any]]:
         collected: List[Dict[str, Any]] = []
-        async for chunk in tool_loop.run_agentic_loop(
+        async for event in tool_loop.run_agentic_loop(
             [{"role": "user", "content": "修复后提交结果"}],
             session_id="sess-submit-required-2",
             max_rounds=4,
         ):
-            payload = _decode_sse_payload(chunk)
-            if payload:
-                collected.append(payload)
+            if isinstance(event, dict):
+                collected.append(event)
         return collected
 
     events = asyncio.run(_collect_events())
@@ -190,14 +176,13 @@ def test_agentic_loop_honors_no_tool_threshold_before_max_rounds(monkeypatch):
 
     async def _collect_events() -> List[Dict[str, Any]]:
         collected: List[Dict[str, Any]] = []
-        async for chunk in tool_loop.run_agentic_loop(
+        async for event in tool_loop.run_agentic_loop(
             [{"role": "user", "content": "推进但始终无工具调用"}],
             session_id="sess-submit-threshold-1",
             max_rounds=8,
         ):
-            payload = _decode_sse_payload(chunk)
-            if payload:
-                collected.append(payload)
+            if isinstance(event, dict):
+                collected.append(event)
         return collected
 
     events = asyncio.run(_collect_events())
