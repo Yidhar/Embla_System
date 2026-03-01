@@ -1,7 +1,7 @@
 # Runbook Active Index
 
 文档状态：`active_index`  
-最后更新：`2026-02-28`
+最后更新：`2026-03-01`
 
 文档层级：`L2-RUNBOOK`
 
@@ -38,6 +38,7 @@
 - `doc/task/runbooks/killswitch_oob_runbook.md`
 - `doc/task/runbooks/slo_alert_dashboard_runbook.md`
 - `doc/task/runbooks/daily_checkpoint_ws19_007.md`
+- `doc/task/runbooks/neo4j_vector_embedding_setup_ws29_001.md`
 
 ## 2. Archived Runbooks
 

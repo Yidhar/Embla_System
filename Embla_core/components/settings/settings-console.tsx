@@ -12,6 +12,16 @@ type QuickForm = {
   apiProtocol: string;
   apiTemperature: string;
   apiTimeout: string;
+  embeddingApiKey: string;
+  embeddingApiBaseUrl: string;
+  embeddingModel: string;
+  embeddingDimensions: string;
+  embeddingEncodingFormat: string;
+  embeddingMaxInputTokens: string;
+  embeddingRequestTimeoutSeconds: string;
+  gragVectorIndexEnabled: boolean;
+  gragVectorIndexName: string;
+  gragVectorQueryTopK: string;
   autonomousEnabled: boolean;
   autonomousCycleSeconds: string;
   releaseGuardEnabled: boolean;
@@ -45,6 +55,16 @@ const FORM_DEFAULT: QuickForm = {
   apiProtocol: "auto",
   apiTemperature: "0.7",
   apiTimeout: "120",
+  embeddingApiKey: "",
+  embeddingApiBaseUrl: "",
+  embeddingModel: "text-embedding-v4",
+  embeddingDimensions: "1024",
+  embeddingEncodingFormat: "float",
+  embeddingMaxInputTokens: "8192",
+  embeddingRequestTimeoutSeconds: "30",
+  gragVectorIndexEnabled: true,
+  gragVectorIndexName: "entity_embedding_index",
+  gragVectorQueryTopK: "8",
   autonomousEnabled: false,
   autonomousCycleSeconds: "3600",
   releaseGuardEnabled: true,
@@ -67,6 +87,8 @@ const COLLAPSED_DEFAULT: Record<SectionKey, boolean> = {
 
 const SENSITIVE_PATHS: Array<{ id: string; path: string[]; labelKey: string }> = [
   { id: "api.api_key", path: ["api", "api_key"], labelKey: "apiKey" },
+  { id: "embedding.api_key", path: ["embedding", "api_key"], labelKey: "embeddingApiKey" },
+  { id: "grag.neo4j_password", path: ["grag", "neo4j_password"], labelKey: "neo4jPassword" },
   { id: "computer_control.api_key", path: ["computer_control", "api_key"], labelKey: "computerControlApiKey" },
   {
     id: "computer_control.grounding_api_key",
@@ -111,6 +133,16 @@ const PAGE_COPY: Record<
         apiProtocol: string;
         apiTemperature: string;
         apiTimeout: string;
+        embeddingApiKey: string;
+        embeddingApiBaseUrl: string;
+        embeddingModel: string;
+        embeddingDimensions: string;
+        embeddingEncodingFormat: string;
+        embeddingMaxInputTokens: string;
+        embeddingRequestTimeoutSeconds: string;
+        gragVectorIndexEnabled: string;
+        gragVectorIndexName: string;
+        gragVectorQueryTopK: string;
         autonomousEnabled: string;
         autonomousCycleSeconds: string;
         releaseGuardEnabled: string;
@@ -126,6 +158,7 @@ const PAGE_COPY: Record<
         apiTemperature: string;
         releaseMaxErrorRate: string;
         emblaApprovalRequiredScopes: string;
+        embedding: string;
       };
     };
     preview: {
@@ -153,6 +186,8 @@ const PAGE_COPY: Record<
       empty: string;
       labels: {
         apiKey: string;
+        embeddingApiKey: string;
+        neo4jPassword: string;
         computerControlApiKey: string;
         groundingApiKey: string;
       };
@@ -197,6 +232,16 @@ const PAGE_COPY: Record<
         apiProtocol: "Protocol",
         apiTemperature: "Temperature",
         apiTimeout: "Request Timeout (s)",
+        embeddingApiKey: "Embedding API Key",
+        embeddingApiBaseUrl: "Embedding API Base URL",
+        embeddingModel: "Embedding Model",
+        embeddingDimensions: "Embedding Dimensions",
+        embeddingEncodingFormat: "Embedding Encoding Format",
+        embeddingMaxInputTokens: "Embedding Max Input Tokens",
+        embeddingRequestTimeoutSeconds: "Embedding Request Timeout (s)",
+        gragVectorIndexEnabled: "Enable Neo4j Vector Index",
+        gragVectorIndexName: "Vector Index Name",
+        gragVectorQueryTopK: "Vector Query Top-K",
         autonomousEnabled: "Enable Autonomous Runtime",
         autonomousCycleSeconds: "Cycle Interval (s)",
         releaseGuardEnabled: "Enable Release Guard",
@@ -212,6 +257,7 @@ const PAGE_COPY: Record<
         apiTemperature: "Recommended range: 0.0 - 1.5",
         releaseMaxErrorRate: "Recommended range: 0.0 - 1.0",
         emblaApprovalRequiredScopes: "Use comma-separated scope names, for example: core,policy,prompt_dna,tools_registry",
+        embedding: "OpenAI-compatible embedding endpoint. Keep API Base/Key empty to fallback to API settings.",
       },
     },
     preview: {
@@ -239,6 +285,8 @@ const PAGE_COPY: Record<
       empty: "Empty",
       labels: {
         apiKey: "API Key",
+        embeddingApiKey: "Embedding API Key",
+        neo4jPassword: "Neo4j Password",
         computerControlApiKey: "Computer Control API Key",
         groundingApiKey: "Grounding API Key",
       },
@@ -282,6 +330,16 @@ const PAGE_COPY: Record<
         apiProtocol: "Protocol",
         apiTemperature: "Temperature",
         apiTimeout: "请求超时（秒）",
+        embeddingApiKey: "Embedding API 密钥",
+        embeddingApiBaseUrl: "Embedding API Base URL",
+        embeddingModel: "Embedding 模型",
+        embeddingDimensions: "Embedding 维度",
+        embeddingEncodingFormat: "Embedding 编码格式",
+        embeddingMaxInputTokens: "Embedding 最大输入 Token",
+        embeddingRequestTimeoutSeconds: "Embedding 请求超时（秒）",
+        gragVectorIndexEnabled: "启用 Neo4j 向量索引",
+        gragVectorIndexName: "向量索引名称",
+        gragVectorQueryTopK: "向量检索 Top-K",
         autonomousEnabled: "启用自主运行",
         autonomousCycleSeconds: "循环间隔（秒）",
         releaseGuardEnabled: "启用发布门禁",
@@ -297,6 +355,7 @@ const PAGE_COPY: Record<
         apiTemperature: "建议区间：0.0 - 1.5",
         releaseMaxErrorRate: "建议区间：0.0 - 1.0",
         emblaApprovalRequiredScopes: "使用英文逗号分隔，例如：core,policy,prompt_dna,tools_registry",
+        embedding: "OpenAI 兼容 Embedding 接口。若留空 API Base/API Key，将回退到主 API 配置。",
       },
     },
     preview: {
@@ -324,6 +383,8 @@ const PAGE_COPY: Record<
       empty: "为空",
       labels: {
         apiKey: "API 密钥",
+        embeddingApiKey: "Embedding API 密钥",
+        neo4jPassword: "Neo4j 密码",
         computerControlApiKey: "电脑控制 API 密钥",
         groundingApiKey: "Grounding API 密钥",
       },
@@ -396,6 +457,16 @@ function buildQuickForm(config: Record<string, unknown>): QuickForm {
     apiProtocol: getNestedString(config, ["api", "protocol"], "auto"),
     apiTemperature: getNestedString(config, ["api", "temperature"], "0.7"),
     apiTimeout: getNestedString(config, ["api", "request_timeout"], "120"),
+    embeddingApiKey: getNestedString(config, ["embedding", "api_key"], ""),
+    embeddingApiBaseUrl: getNestedString(config, ["embedding", "api_base"], ""),
+    embeddingModel: getNestedString(config, ["embedding", "model"], "text-embedding-v4"),
+    embeddingDimensions: getNestedString(config, ["embedding", "dimensions"], "1024"),
+    embeddingEncodingFormat: getNestedString(config, ["embedding", "encoding_format"], "float"),
+    embeddingMaxInputTokens: getNestedString(config, ["embedding", "max_input_tokens"], "8192"),
+    embeddingRequestTimeoutSeconds: getNestedString(config, ["embedding", "request_timeout_seconds"], "30"),
+    gragVectorIndexEnabled: getNestedBoolean(config, ["grag", "vector_index_enabled"], true),
+    gragVectorIndexName: getNestedString(config, ["grag", "vector_index_name"], "entity_embedding_index"),
+    gragVectorQueryTopK: getNestedString(config, ["grag", "vector_query_top_k"], "8"),
     autonomousEnabled: getNestedBoolean(config, ["autonomous", "enabled"], false),
     autonomousCycleSeconds: getNestedString(config, ["autonomous", "cycle_interval_seconds"], "3600"),
     releaseGuardEnabled: getNestedBoolean(config, ["autonomous", "release", "enabled"], true),
@@ -502,10 +573,24 @@ function formatValueDisplay(value: unknown, lang: AppLang, masked = false): stri
 function buildQuickPayload(form: QuickForm): { ok: true; payload: Record<string, unknown> } | { ok: false } {
   const apiTemperature = Number(form.apiTemperature);
   const apiTimeout = Number(form.apiTimeout);
+  const embeddingDimensions = Number(form.embeddingDimensions);
+  const embeddingMaxInputTokens = Number(form.embeddingMaxInputTokens);
+  const embeddingRequestTimeoutSeconds = Number(form.embeddingRequestTimeoutSeconds);
+  const gragVectorQueryTopK = Number(form.gragVectorQueryTopK);
   const cycleSeconds = Number(form.autonomousCycleSeconds);
   const releaseMaxErrorRate = Number(form.releaseMaxErrorRate);
   const releaseMaxLatencyP95 = Number(form.releaseMaxLatencyP95);
-  const numberValues = [apiTemperature, apiTimeout, cycleSeconds, releaseMaxErrorRate, releaseMaxLatencyP95];
+  const numberValues = [
+    apiTemperature,
+    apiTimeout,
+    embeddingDimensions,
+    embeddingMaxInputTokens,
+    embeddingRequestTimeoutSeconds,
+    gragVectorQueryTopK,
+    cycleSeconds,
+    releaseMaxErrorRate,
+    releaseMaxLatencyP95,
+  ];
   if (numberValues.some((value) => !Number.isFinite(value))) {
     return { ok: false };
   }
@@ -525,6 +610,20 @@ function buildQuickPayload(form: QuickForm): { ok: true; payload: Record<string,
         protocol: form.apiProtocol.trim() || "auto",
         temperature: apiTemperature,
         request_timeout: Math.max(1, Math.round(apiTimeout)),
+      },
+      embedding: {
+        api_key: form.embeddingApiKey.trim(),
+        api_base: form.embeddingApiBaseUrl.trim(),
+        model: form.embeddingModel.trim() || "text-embedding-v4",
+        dimensions: Math.max(0, Math.round(embeddingDimensions)),
+        encoding_format: form.embeddingEncodingFormat.trim() || "float",
+        max_input_tokens: Math.max(1, Math.round(embeddingMaxInputTokens)),
+        request_timeout_seconds: Math.max(1, Math.round(embeddingRequestTimeoutSeconds)),
+      },
+      grag: {
+        vector_index_enabled: form.gragVectorIndexEnabled,
+        vector_index_name: form.gragVectorIndexName.trim() || "entity_embedding_index",
+        vector_query_top_k: Math.max(1, Math.round(gragVectorQueryTopK)),
       },
       system: {
         log_level: form.logLevel.trim() || "INFO",
@@ -853,6 +952,108 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
                     />
                   </label>
                 </div>
+
+                <article className="rounded-2xl border border-gray-200/60 bg-white/80 p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">Embedding (OpenAI-Compatible)</p>
+                  <p className="mt-1 text-[10px] text-gray-500">{copy.quick.hints.embedding}</p>
+                  <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.embeddingApiKey}</p>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={form.embeddingApiKey}
+                        onChange={(event) => setField("embeddingApiKey", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.embeddingApiBaseUrl}</p>
+                      <input
+                        value={form.embeddingApiBaseUrl}
+                        onChange={(event) => setField("embeddingApiBaseUrl", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.embeddingModel}</p>
+                      <input
+                        value={form.embeddingModel}
+                        onChange={(event) => setField("embeddingModel", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.embeddingEncodingFormat}</p>
+                      <input
+                        value={form.embeddingEncodingFormat}
+                        onChange={(event) => setField("embeddingEncodingFormat", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.embeddingDimensions}</p>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={form.embeddingDimensions}
+                        onChange={(event) => setField("embeddingDimensions", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.embeddingMaxInputTokens}</p>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={form.embeddingMaxInputTokens}
+                        onChange={(event) => setField("embeddingMaxInputTokens", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.embeddingRequestTimeoutSeconds}</p>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={form.embeddingRequestTimeoutSeconds}
+                        onChange={(event) => setField("embeddingRequestTimeoutSeconds", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between rounded-xl bg-white/90 px-3 py-2 text-xs text-gray-700 md:col-span-2">
+                      <span>{copy.quick.fields.gragVectorIndexEnabled}</span>
+                      <input
+                        type="checkbox"
+                        checked={form.gragVectorIndexEnabled}
+                        onChange={(event) => setField("gragVectorIndexEnabled", event.target.checked)}
+                        className="h-4 w-4"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.gragVectorIndexName}</p>
+                      <input
+                        value={form.gragVectorIndexName}
+                        onChange={(event) => setField("gragVectorIndexName", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.gragVectorQueryTopK}</p>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={form.gragVectorQueryTopK}
+                        onChange={(event) => setField("gragVectorQueryTopK", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                  </div>
+                </article>
               </div>
             )}
           </article>
