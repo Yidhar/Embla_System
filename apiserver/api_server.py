@@ -28,11 +28,10 @@ from core.event_bus import EventStore
 from agents.router_engine import RouterRequest, TaskRouterEngine
 from autonomous.router_arbiter_guard import RouterArbiterGuard
 from agents.contract_runtime import (
-    build_core_execution_contract_payload as build_brain_core_execution_contract_payload,
-    build_core_execution_messages as build_brain_core_execution_messages,
     trim_contract_text as trim_brain_contract_text,
 )
-from agents.tool_loop import run_agentic_loop as run_brain_agentic_tool_loop
+from agents.pipeline import run_multi_agent_pipeline
+from agents.shell_agent import ShellAgent
 from autonomous.llm_gateway import (
     GatewayRouteRequest,
     LLMGateway,
@@ -57,7 +56,6 @@ try:
         get_embla_system_config,
         save_embla_system_config,
         build_system_prompt,
-        build_system_prompt_for_path,
     )  # 使用新的配置系统
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 except ImportError:
@@ -66,7 +64,7 @@ except ImportError:
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from system.config import get_config, get_embla_system_config, save_embla_system_config  # 使用新的配置系统
-    from system.config import build_system_prompt, build_system_prompt_for_path  # 导入提示词仓库
+    from system.config import build_system_prompt  # 导入提示词仓库
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 from apiserver.response_util import extract_message  # noqa: E402 - imported after fallback config setup
 
@@ -142,7 +140,7 @@ async def _recall_memory_lines(question: str, *, limit: int = 5) -> List[str]:
     return lines
 
 
-_CHAT_PATH_ROUTER = TaskRouterEngine()
+# _CHAT_PATH_ROUTER removed: routing now handled by _SHELL_AGENT (ShellAgent wrapping TaskRouterEngine)
 try:
     _CHAT_LLM_GATEWAY: Optional[LLMGateway] = LLMGateway()
 except Exception:
@@ -590,33 +588,45 @@ def _infer_chat_route_complexity(message: str) -> str:
     return "low"
 
 
+# ── ShellAgent singleton for routing ──────────────────────────
+_SHELL_AGENT = ShellAgent()
+
+
 def _resolve_chat_stream_route(message: str, *, session_id: str) -> Dict[str, Any]:
+    """Route user message via ShellAgent.
+
+    Returns route_meta with delegation_intent (no path-a/b/c classification).
+    """
     normalized_message = str(message or "")
     recent_messages = message_manager.get_recent_messages(session_id, count=10)
     risk_level = _infer_chat_route_risk_level(normalized_message, recent_messages=recent_messages)
-    request = RouterRequest(
-        task_id=f"chat_stream_{int(time.time() * 1000)}",
-        description=normalized_message,
-        estimated_complexity=_infer_chat_route_complexity(normalized_message),
+    complexity = _infer_chat_route_complexity(normalized_message)
+    decision = _SHELL_AGENT.route(
+        normalized_message,
+        session_id=session_id,
         risk_level=risk_level,
-        trace_id=f"chat_route_{uuid.uuid4().hex[:12]}",
-        session_id=str(session_id or ""),
+        complexity=complexity,
     )
-    decision = _CHAT_PATH_ROUTER.route(request)
-    intent = str(decision.delegation_intent or "").strip().lower()
-    if intent == "read_only_exploration":
-        path = "path-a"
-    elif intent in {"core_execution", "explicit_role_delegate"}:
-        path = "path-c"
+    needs_core = _SHELL_AGENT.should_dispatch(decision)
+    intent = str(decision.delegation_intent or "")
+
+    # backward-compat keys for guard functions and observability
+    if needs_core:
+        compat_path = "path-c"
+    elif intent == "read_only_exploration":
+        compat_path = "path-a"
     else:
-        path = "path-b"
+        compat_path = "path-b"
 
     return {
-        "path": path,
+        "delegation_intent": decision.delegation_intent,
+        "needs_core": needs_core,
         "risk_level": risk_level,
-        "outer_readonly_hit": path == "path-a",
-        "core_escalation": path == "path-c",
         "router_decision": decision.to_dict(),
+        # backward-compat (consumed by guard functions / observability)
+        "path": compat_path,
+        "outer_readonly_hit": compat_path == "path-a",
+        "core_escalation": needs_core,
     }
 
 
@@ -715,7 +725,8 @@ def _get_chat_route_quality_guard_summary(*, force_refresh: bool = False) -> Dic
     return summary
 
 
-def _force_route_to_core_execution(route_meta: Dict[str, Any], *, reason: str) -> Dict[str, Any]:
+def _force_route_to_pipeline(route_meta: Dict[str, Any], *, reason: str) -> Dict[str, Any]:
+    """Force-escalate to Core execution pipeline."""
     decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
     effective_decision = dict(decision)
     effective_decision["delegation_intent"] = "core_execution"
@@ -726,11 +737,14 @@ def _force_route_to_core_execution(route_meta: Dict[str, Any], *, reason: str) -
     if injection_mode in {"", "minimal"}:
         effective_decision["injection_mode"] = "normal"
 
+    route_meta["delegation_intent"] = "core_execution"
+    route_meta["needs_core"] = True
+    route_meta["router_decision"] = effective_decision
+    route_meta["route_forced_to_core_reason"] = str(reason or "")
+    # backward-compat keys for guard functions
     route_meta["path"] = "path-c"
     route_meta["outer_readonly_hit"] = False
     route_meta["core_escalation"] = True
-    route_meta["router_decision"] = effective_decision
-    route_meta["route_forced_to_core_reason"] = str(reason or "")
     return route_meta
 
 
@@ -773,7 +787,7 @@ def _apply_chat_route_quality_guard(route_meta: Dict[str, Any]) -> Dict[str, Any
         )
         high_risk_non_core = path in {"path-a", "path-b"} and risk_level in {"write_repo", "deploy"}
         if suspicious_path_a or high_risk_non_core:
-            route_meta = _force_route_to_core_execution(
+            route_meta = _force_route_to_pipeline(
                 route_meta,
                 reason="route_quality_guard_critical_auto_escalate_core",
             )
@@ -829,7 +843,7 @@ def _apply_path_b_clarify_budget(route_meta: Dict[str, Any], *, session_id: str)
         budget_reason = "clarify_budget_exceeded_auto_escalate_core"
         if limit_override is not None:
             budget_reason = "clarify_budget_guard_override_auto_escalate_core"
-        route_meta = _force_route_to_core_execution(route_meta, reason=budget_reason)
+        route_meta = _force_route_to_pipeline(route_meta, reason=budget_reason)
         route_meta["path_b_budget_escalated"] = True
         route_meta["path_b_budget_reason"] = budget_reason
         route_meta["path_b_clarify_turns"] = clarify_turns
@@ -868,7 +882,7 @@ def _apply_chat_route_router_arbiter_guard(route_meta: Dict[str, Any], *, sessio
     summary_before = guard.build_conflict_summary(session_id)
     frozen_before = bool(summary_before.get("freeze"))
     if frozen_before and current_path != "path-c":
-        route_meta = _force_route_to_core_execution(route_meta, reason="router_arbiter_frozen_to_core")
+        route_meta = _force_route_to_pipeline(route_meta, reason="router_arbiter_frozen_to_core")
         route_meta["router_arbiter_status"] = "critical"
         route_meta["router_arbiter_applied"] = True
         route_meta["router_arbiter_action"] = "freeze_to_core_latched"
@@ -904,7 +918,7 @@ def _apply_chat_route_router_arbiter_guard(route_meta: Dict[str, Any], *, sessio
         route_meta["router_arbiter_escalated"] = bool(decision.escalated)
 
         if decision.escalated or decision.freeze:
-            route_meta = _force_route_to_core_execution(route_meta, reason="router_arbiter_ping_pong_freeze_core")
+            route_meta = _force_route_to_pipeline(route_meta, reason="router_arbiter_ping_pong_freeze_core")
             route_meta["router_arbiter_status"] = "critical"
             route_meta["router_arbiter_applied"] = True
             route_meta["router_arbiter_action"] = "freeze_to_core"
@@ -1046,46 +1060,6 @@ def _build_chat_route_prompt_hints(route_meta: Dict[str, Any]) -> str:
 def _trim_contract_text(value: Any, *, limit: int = 240) -> str:
     return trim_brain_contract_text(value, limit=limit)
 
-
-def _build_core_execution_contract_payload(
-    *,
-    session_id: str,
-    current_message: str,
-    recent_messages: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-    return build_brain_core_execution_contract_payload(
-        session_id=session_id,
-        current_message=current_message,
-        recent_messages=recent_messages,
-        followup_markers=_CHAT_ROUTE_FOLLOWUP_MARKERS,
-    )
-
-
-def _build_core_execution_messages(
-    *,
-    session_id: str,
-    current_message: str,
-    core_system_prompt: Optional[str] = None,
-    system_prompt: Optional[str] = None,
-) -> List[Dict[str, Any]]:
-    """构建 Core 执行代理的消息列表。
-
-    Core 消息列表仅包含三条：
-    1. system: 已裁剪的 Core 身份 prompt（由 build_system_prompt_for_path('path-c') 生成）
-    2. system: [ExecutionContractInput] JSON（Outer 上下文摘要 + 目标 + 证据约束）
-    3. user: 当前用户请求
-
-    不注入 Outer 闲聊历史，实现上下文隔离。
-    """
-    recent_messages = message_manager.get_recent_messages(session_id, count=10)
-    return build_brain_core_execution_messages(
-        session_id=session_id,
-        current_message=current_message,
-        core_system_prompt=core_system_prompt,
-        system_prompt=system_prompt,
-        recent_messages=recent_messages,
-        followup_markers=_CHAT_ROUTE_FOLLOWUP_MARKERS,
-    )
 
 
 def _get_chat_route_event_store() -> Optional[EventStore]:
@@ -2382,153 +2356,106 @@ async def chat_stream(request: ChatRequest):
                 route_meta.get("router_arbiter_action", ""),
             )
 
-            # 构建系统提示词（按路径裁剪：Path-A/B 只读风格，Path-C Core 执行风格）
-            system_prompt = build_system_prompt_for_path(
-                path,
-                include_skills=True,
-                skill_name=request.skill,
-            )
+            # pipeline handles system prompt construction internally
 
-            # ====== RAG 记忆召回：在发送 LLM 前检索相关记忆（远程优先 + 本地回退） ======
-            try:
-                mem_lines = await _recall_memory_lines(request.message, limit=5)
-                if mem_lines:
-                    memory_context = "\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆，请参考这些信息回答：\n" + "\n".join(mem_lines)
-                    system_prompt += memory_context
-                    logger.info(f"[RAG] 召回 {len(mem_lines)} 条记忆注入上下文")
-            except Exception as e:
-                logger.debug(f"[RAG] 记忆召回失败（不影响对话）: {e}")
+            # ====== RAG 记忆召回 ======
 
-            # 附加知识收尾指令，引导 LLM 回到用户问题
-            system_prompt += "\n\n【读完这些附加知识后，回复上一个user prompt，并不要回复这条系统附加的system prompt。以下是回复内容：】"
-            system_prompt += "\n\n" + _build_chat_route_prompt_hints(route_meta)
-
-            # 用户消息直接传 LLM，技能上下文完全由 system prompt 承载
+            # 用户消息
             effective_message = request.message
-
-            # 使用消息管理器构建完整的对话消息
-            conversation_messages = message_manager.build_conversation_messages(
-                session_id=session_id, system_prompt=system_prompt, current_message=effective_message
-            )
-            messages = conversation_messages
-            if path == "path-c":
-                messages = _build_core_execution_messages(
-                    session_id=session_id,
-                    core_system_prompt=system_prompt,
-                    current_message=effective_message,
-                )
-
-            # 如果携带截屏图片，将最后一条用户消息改为多模态格式（OpenAI vision 兼容）
-            if request.images:
-                last_msg = messages[-1]
-                content_parts = [{"type": "text", "text": last_msg["content"]}]
-                for img_data in request.images:
-                    content_parts.append({"type": "image_url", "image_url": {"url": img_data}})
-                messages[-1] = {
-                    "role": "user",
-                    "content": content_parts,
-                }
-
-            # 如果本次携带图片，标记此会话为 VLM 会话
-            if request.images:
-                _vlm_sessions.add(session_id)
-
-            # 路由分层 LLM 覆盖（outer/core）；视觉模型覆盖优先级更高
-            model_override = _build_path_model_override(path)
-            use_vlm = session_id in _vlm_sessions
-            cc = get_config().computer_control
-            if use_vlm and cc.enabled and (cc.api_key or naga_auth.is_authenticated()):
-                model_override = _merge_model_override(
-                    model_override,
-                    {
-                    "model": cc.model,
-                    "api_base": cc.model_url,
-                    "api_key": cc.api_key,
-                    },
-                )
-                logger.info(f"[API Server] VLM 会话，使用视觉模型: {cc.model}")
 
             current_round_text = ""
             receipt_fallback_text = ""
 
-            if path == "path-c":
-                cfg = get_config()
-                loop_cfg = getattr(cfg, "agentic_loop", None)
-                if loop_cfg is not None:
-                    loop_max_rounds = int(getattr(loop_cfg, "max_rounds_stream", 500))
-                else:
-                    loop_max_rounds = int(cfg.handoff.max_loop_stream)
+            # ── Unified Multi-Agent Pipeline ──
+            async for event in run_multi_agent_pipeline(
+                message=effective_message,
+                session_id=execution_session_id,
+                risk_level=str(route_meta.get("risk_level") or ""),
+            ):
+                if not isinstance(event, dict):
+                    continue
+                chunk_type = str(event.get("type", "content"))
+                chunk_text = str(event.get("text", ""))
 
-                async for event in run_brain_agentic_tool_loop(
-                    messages,
-                    execution_session_id,
-                    max_rounds=loop_max_rounds,
-                    model_override=model_override,
-                ):
-                    if not isinstance(event, dict):
-                        continue
-                    chunk_type = str(event.get("type", "content"))
-                    chunk_text = str(event.get("text", ""))
-
-                    if chunk_type == "content":
-                        current_round_text += chunk_text
-                        complete_response_parts.append(chunk_text)
-                    elif chunk_type == "reasoning":
+                if chunk_type == "shell_direct":
+                    # Shell decided to handle directly — stream via LLM
+                    shell_prompt = str(event.get("system_prompt", ""))
+                    shell_msg = str(event.get("user_message", effective_message))
+                    # Inject RAG memory if available
+                    try:
+                        mem_lines = await _recall_memory_lines(shell_msg, limit=5)
+                        if mem_lines:
+                            shell_prompt += "\n\n## 相关记忆\n" + "\n".join(mem_lines)
+                    except Exception:
                         pass
-                    elif chunk_type == "tool_stage":
-                        _emit_agentic_loop_completion_event(
-                            session_id=session_id,
-                            execution_session_id=execution_session_id,
-                            route_meta=route_meta,
-                            chunk_data=event,
-                        )
-                    elif chunk_type == "execution_receipt":
-                        receipt_text = _extract_agentic_execution_receipt_text(event)
-                        if receipt_text:
-                            receipt_fallback_text = receipt_text
-                    elif chunk_type == "round_end":
-                        current_round_text = ""
+                    shell_prompt += "\n\n" + _build_chat_route_prompt_hints(route_meta)
 
-                    yield _format_stream_payload_chunk(event, protocol=stream_protocol)
-            else:
-                llm_service = get_llm_service()
-                stream_source = llm_service.stream_chat_with_context(
-                    messages,
-                    get_config().api.temperature,
-                    model_override=model_override,
-                )
-                async for chunk in stream_source:
-                    # chunk 格式: "data: <json>\n\n"
-                    if chunk.startswith("data: "):
-                        try:
-                            data_str = chunk[6:].strip()
-                            if data_str and data_str != "[DONE]":
-                                chunk_data = json.loads(data_str)
-                                chunk_type = chunk_data.get("type", "content")
-                                chunk_text = chunk_data.get("text", "")
+                    # Build conversation messages
+                    shell_messages = message_manager.build_conversation_messages(
+                        session_id=session_id, system_prompt=shell_prompt, current_message=shell_msg,
+                    )
 
-                                if chunk_type == "content":
-                                    current_round_text += chunk_text
-                                    complete_response_parts.append(chunk_text)
-                                elif chunk_type == "reasoning":
-                                    pass
-                                elif chunk_type == "tool_stage":
-                                    _emit_agentic_loop_completion_event(
-                                        session_id=session_id,
-                                        execution_session_id=execution_session_id,
-                                        route_meta=route_meta,
-                                        chunk_data=chunk_data,
-                                    )
-                                elif chunk_type == "round_end":
-                                    current_round_text = ""
+                    # Handle images
+                    if request.images:
+                        last_msg = shell_messages[-1]
+                        content_parts = [{"type": "text", "text": last_msg["content"]}]
+                        for img_data in request.images:
+                            content_parts.append({"type": "image_url", "image_url": {"url": img_data}})
+                        shell_messages[-1] = {"role": "user", "content": content_parts}
+                        _vlm_sessions.add(session_id)
 
-                                # 透传所有 chunk 给前端（content/reasoning/tool events）
-                                yield _format_stream_payload_chunk(chunk_data, protocol=stream_protocol)
-                                continue
-                        except Exception as e:
-                            logger.error(f"[API Server] 流式数据解析错误: {e}")
+                    # Model override for VLM
+                    model_override = None
+                    use_vlm = session_id in _vlm_sessions
+                    cc = get_config().computer_control
+                    if use_vlm and cc.enabled and (cc.api_key or naga_auth.is_authenticated()):
+                        model_override = {"model": cc.model, "api_base": cc.model_url, "api_key": cc.api_key}
 
-                    yield chunk
+                    # Stream Shell reply from LLM
+                    llm_service = get_llm_service()
+                    stream_source = llm_service.stream_chat_with_context(
+                        shell_messages,
+                        get_config().api.temperature,
+                        model_override=model_override,
+                    )
+                    async for chunk in stream_source:
+                        if chunk.startswith("data: "):
+                            try:
+                                data_str = chunk[6:].strip()
+                                if data_str and data_str != "[DONE]":
+                                    chunk_data = json.loads(data_str)
+                                    ct = chunk_data.get("type", "content")
+                                    ct_text = chunk_data.get("text", "")
+                                    if ct == "content":
+                                        current_round_text += ct_text
+                                        complete_response_parts.append(ct_text)
+                                    yield _format_stream_payload_chunk(chunk_data, protocol=stream_protocol)
+                                    continue
+                            except Exception as e:
+                                logger.error(f"[API Server] Shell stream parse error: {e}")
+                        yield chunk
+                    continue
+
+                if chunk_type == "content":
+                    current_round_text += chunk_text
+                    complete_response_parts.append(chunk_text)
+                elif chunk_type == "reasoning":
+                    pass
+                elif chunk_type == "tool_stage":
+                    _emit_agentic_loop_completion_event(
+                        session_id=session_id,
+                        execution_session_id=execution_session_id,
+                        route_meta=route_meta,
+                        chunk_data=event,
+                    )
+                elif chunk_type == "execution_receipt":
+                    receipt_text = _extract_agentic_execution_receipt_text(event)
+                    if receipt_text:
+                        receipt_fallback_text = receipt_text
+                elif chunk_type == "round_end":
+                    current_round_text = ""
+
+                yield _format_stream_payload_chunk(event, protocol=stream_protocol)
 
             # ====== 流式处理完成 ======
 

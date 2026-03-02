@@ -1,12 +1,19 @@
+"""Tests for core execution contract payload + messages (ws28-008).
+
+Migrated from api_server wrappers → agents.contract_runtime directly.
+"""
 from __future__ import annotations
 
 import json
 
-import apiserver.api_server as api_server
+from agents.contract_runtime import (
+    build_core_execution_contract_payload,
+    build_core_execution_messages,
+)
 
 
 def test_core_execution_contract_payload_captures_recent_history() -> None:
-    payload = api_server._build_core_execution_contract_payload(
+    payload = build_core_execution_contract_payload(
         session_id="sess-contract",
         current_message="请修复接口并补充回归测试",
         recent_messages=[
@@ -25,7 +32,7 @@ def test_core_execution_contract_payload_captures_recent_history() -> None:
 
 
 def test_core_execution_contract_payload_marks_followup_assumption() -> None:
-    payload = api_server._build_core_execution_contract_payload(
+    payload = build_core_execution_contract_payload(
         session_id="sess-followup",
         current_message="继续",
         recent_messages=[],
@@ -36,20 +43,15 @@ def test_core_execution_contract_payload_marks_followup_assumption() -> None:
     assert any("续写" in item for item in payload["assumptions"])
 
 
-def test_build_core_execution_messages_contract_only_shape(monkeypatch) -> None:
-    monkeypatch.setattr(
-        api_server.message_manager,
-        "get_recent_messages",
-        lambda _session_id, count=10: [
-            {"role": "user", "content": "昨天我们在讨论部署"},
-            {"role": "assistant", "content": "你当时还在闲聊。"},
-        ],
-    )
-
-    messages = api_server._build_core_execution_messages(
+def test_build_core_execution_messages_contract_only_shape() -> None:
+    messages = build_core_execution_messages(
         session_id="sess-core-only",
         core_system_prompt="SYSTEM_PROMPT",
         current_message="请修复当前失败用例",
+        recent_messages=[
+            {"role": "user", "content": "昨天我们在讨论部署"},
+            {"role": "assistant", "content": "你当时还在闲聊。"},
+        ],
     )
 
     assert len(messages) == 3
@@ -64,13 +66,12 @@ def test_build_core_execution_messages_contract_only_shape(monkeypatch) -> None:
     assert payload["recent_user_history"] == ["昨天我们在讨论部署"]
 
 
-def test_build_core_execution_messages_accepts_legacy_system_prompt_alias(monkeypatch) -> None:
-    monkeypatch.setattr(api_server.message_manager, "get_recent_messages", lambda _session_id, count=10: [])
-
-    messages = api_server._build_core_execution_messages(
+def test_build_core_execution_messages_accepts_legacy_system_prompt_alias() -> None:
+    messages = build_core_execution_messages(
         session_id="sess-core-legacy-alias",
         system_prompt="LEGACY_SYSTEM_PROMPT",
         current_message="继续推进",
+        recent_messages=[],
     )
 
     assert len(messages) == 3

@@ -113,8 +113,10 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 
 include = [
+    "agents",
     "apiserver",
     "autonomous",
+    "core",
     "mcpserver",
     "summer_memory",
     "system",
