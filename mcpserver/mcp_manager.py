@@ -36,7 +36,10 @@ class MCPManager:
             self._mcporter_config_path = Path(env_config_path).expanduser()
         else:
             self._mcporter_config_path = Path.home() / ".mcporter" / "config.json"
-        self._service_aliases: Dict[str, List[str]] = {}
+        self._service_aliases: Dict[str, List[str]] = {
+            "open_launcher": ["app_launcher"],
+            "app_launcher": ["open_launcher"],
+        }
 
     async def unified_call(self, service_name: str, tool_call: Dict[str, Any]) -> str:
         """Unified MCP call entrypoint."""
@@ -58,13 +61,14 @@ class MCPManager:
         if not normalized_service:
             return self._json_error("service_name is required", tool_name=tool_name, call_id=call_id)
 
-        local_agent = MCP_REGISTRY.get(normalized_service)
+        resolved_local_service = self._resolve_local_service_name(normalized_service)
+        local_agent = MCP_REGISTRY.get(resolved_local_service)
         if local_agent is not None:
             try:
                 local_result = await local_agent.handle_handoff(normalized_call)
                 self._log_call_finish(
                     call_id=call_id,
-                    service_name=normalized_service,
+                    service_name=resolved_local_service,
                     tool_name=tool_name,
                     route="local",
                     started=started,
@@ -76,13 +80,13 @@ class MCPManager:
                 logger.warning(
                     "[MCPManager] local call failed id=%s service=%s tool=%s error=%s",
                     call_id,
-                    normalized_service,
+                    resolved_local_service,
                     tool_name,
                     exc,
                 )
                 self._log_call_finish(
                     call_id=call_id,
-                    service_name=normalized_service,
+                    service_name=resolved_local_service,
                     tool_name=tool_name,
                     route="local",
                     started=started,
@@ -91,7 +95,7 @@ class MCPManager:
                 )
                 return self._json_error(
                     f"call failed: {exc}",
-                    service_name=normalized_service,
+                    service_name=resolved_local_service,
                     tool_name=tool_name,
                     call_id=call_id,
                 )
@@ -398,6 +402,27 @@ class MCPManager:
         if npx_cmd:
             return [npx_cmd, "-y", "mcporter@latest"]
         return []
+
+    def _resolve_local_service_name(self, service_name: str) -> str:
+        requested = str(service_name or "").strip()
+        if not requested:
+            return ""
+
+        if requested in MCP_REGISTRY:
+            return requested
+
+        lowered_lookup = {name.lower(): name for name in MCP_REGISTRY.keys()}
+        by_lower = lowered_lookup.get(requested.lower())
+        if by_lower:
+            return by_lower
+
+        for alias in self._service_aliases.get(requested, []):
+            if alias in MCP_REGISTRY:
+                return alias
+            alias_by_lower = lowered_lookup.get(alias.lower())
+            if alias_by_lower:
+                return alias_by_lower
+        return requested
 
     def _build_not_found_payload(self, service_name: str, tool_name: str) -> Dict[str, Any]:
         return {

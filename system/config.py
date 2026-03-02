@@ -340,7 +340,7 @@ class APIRouteTargetConfig(BaseModel):
     model: str = Field(default="", description="路由专用模型名（留空回退到 api.model）")
     provider: str = Field(default="", description="路由专用provider（留空回退到 api.provider）")
     protocol: str = Field(default="", description="路由专用协议（留空回退到 api.protocol）")
-    reasoning_effort: str = Field(default="", description="路由专用 reasoning_effort（low/medium/high）")
+    reasoning_effort: str = Field(default="", description="路由专用 reasoning_effort（low/medium/high/xhigh）")
     thinking_intensity: str = Field(default="", description="兼容字段：等价于 reasoning_effort")
 
     @field_validator("reasoning_effort", "thinking_intensity")
@@ -349,7 +349,7 @@ class APIRouteTargetConfig(BaseModel):
         normalized = str(value or "").strip().lower()
         if normalized in {"", "auto", "default"}:
             return ""
-        valid_values = {"low", "medium", "high","xhigh"}
+        valid_values = {"low", "medium", "high", "xhigh"}
         if normalized not in valid_values:
             raise ValueError(f"reasoning_effort 必须是以下之一: {sorted(valid_values)}")
         return normalized
@@ -376,8 +376,8 @@ class APIConfig(BaseModel):
     model: str = Field(default="deepseek-v3.2", description="使用的模型名称")
     provider: str = Field(default="openai_compatible", description="API提供商类型")
     protocol: str = Field(default="auto", description="API协议类型")
-    reasoning_effort: str = Field(default="medium", description="OpenAI兼容推理强度（low/medium/high）")
-    thinking_intensity: str = Field(default="medium", description="思维强度（low/medium/high）")
+    reasoning_effort: str = Field(default="medium", description="OpenAI兼容推理强度（low/medium/high/xhigh）")
+    thinking_intensity: str = Field(default="medium", description="思维强度（low/medium/high/xhigh）")
     google_live_api: bool = Field(default=False, description="Google Live API（BidiGenerateContent）开关")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="温度参数")
     max_tokens: int = Field(default=10000, ge=1, le=32768, description="最大token数")
@@ -400,7 +400,7 @@ class APIConfig(BaseModel):
         normalized = str(value or "").strip().lower()
         if normalized in {"", "auto", "default"}:
             return "medium"
-        valid_values = {"low", "medium", "high","xhigh"}
+        valid_values = {"low", "medium", "high", "xhigh"}
         if normalized not in valid_values:
             raise ValueError(f"reasoning_effort 必须是以下之一: {sorted(valid_values)}")
         return normalized
@@ -748,6 +748,22 @@ class OnlineSearchConfig(BaseModel):
     searxng_url: str = Field(default="http://localhost:8080", description="SearXNG实例URL")
     engines: List[str] = Field(default=["google"], description="默认搜索引擎列表")
     num_results: int = Field(default=5, ge=1, le=20, description="搜索结果数量")
+
+
+class Crawl4AIConfig(BaseModel):
+    """网页抓取配置"""
+
+    headless: bool = Field(default=True, description="抓取时是否使用无头模式（保留字段）")
+    timeout: int = Field(default=30000, ge=1000, le=300000, description="抓取超时时间（毫秒）")
+    user_agent: str = Field(
+        default=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        ),
+        description="抓取请求默认 User-Agent",
+    )
+    viewport_width: int = Field(default=1280, ge=320, le=8192, description="默认视口宽度")
+    viewport_height: int = Field(default=720, ge=240, le=8192, description="默认视口高度")
 
 
 class SystemCheckConfig(BaseModel):
@@ -1415,6 +1431,7 @@ class NagaConfig(BaseModel):
     floating: FloatingConfig = Field(default_factory=FloatingConfig)
     naga_portal: NagaPortalConfig = Field(default_factory=NagaPortalConfig)
     online_search: OnlineSearchConfig = Field(default_factory=OnlineSearchConfig)
+    crawl4ai: Crawl4AIConfig = Field(default_factory=Crawl4AIConfig)
     system_check: SystemCheckConfig = Field(default_factory=SystemCheckConfig)
     computer_control: ComputerControlConfig = Field(default_factory=ComputerControlConfig)
     memory_server: MemoryServerConfig = Field(default_factory=MemoryServerConfig)
