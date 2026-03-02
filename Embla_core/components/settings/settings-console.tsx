@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchSystemConfig, updateSystemConfig } from "@/lib/api/system";
+import { persistClientApiBaseOverride } from "@/lib/api/frontend-api-base";
 import { formatNumber, type AppLang } from "@/lib/i18n";
 
 type QuickForm = {
@@ -21,6 +22,9 @@ type QuickForm = {
   coreApiModel: string;
   coreApiProvider: string;
   coreReasoningEffort: string;
+  visionMultimodalModel: string;
+  visionApiBaseUrl: string;
+  visionApiKey: string;
   apiTemperature: string;
   apiTimeout: string;
   embeddingApiKey: string;
@@ -40,6 +44,7 @@ type QuickForm = {
   releaseMaxLatencyP95: string;
   emblaAuditLedgerFile: string;
   emblaApprovalRequiredScopes: string;
+  frontendApiBase: string;
   userName: string;
   logLevel: string;
   debugMode: boolean;
@@ -75,6 +80,9 @@ const FORM_DEFAULT: QuickForm = {
   coreApiModel: "",
   coreApiProvider: "",
   coreReasoningEffort: "",
+  visionMultimodalModel: "gemini-2.5-flash",
+  visionApiBaseUrl: "",
+  visionApiKey: "",
   apiTemperature: "0.7",
   apiTimeout: "120",
   embeddingApiKey: "",
@@ -94,6 +102,7 @@ const FORM_DEFAULT: QuickForm = {
   releaseMaxLatencyP95: "1500",
   emblaAuditLedgerFile: "scratch/runtime/audit_ledger.jsonl",
   emblaApprovalRequiredScopes: "core,policy,prompt_dna,tools_registry",
+  frontendApiBase: "",
   userName: "",
   logLevel: "INFO",
   debugMode: false,
@@ -124,7 +133,7 @@ const SENSITIVE_PATHS: Array<{ id: string; path: string[]; labelKey: string }> =
 const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR"] as const;
 const API_PROVIDER_OPTIONS = ["openai_compatible", "openai", "google", "gemini", "auto"] as const;
 const API_PROTOCOL_OPTIONS = ["auto", "openai_chat_completions"] as const;
-const API_REASONING_EFFORT_OPTIONS = ["low", "medium", "high"] as const;
+const API_REASONING_EFFORT_OPTIONS = ["low", "medium", "high", "xhigh"] as const;
 
 const PAGE_COPY: Record<
   AppLang,
@@ -167,6 +176,9 @@ const PAGE_COPY: Record<
         coreApiModel: string;
         coreApiProvider: string;
         coreReasoningEffort: string;
+        visionMultimodalModel: string;
+        visionApiBaseUrl: string;
+        visionApiKey: string;
         apiTemperature: string;
         apiTimeout: string;
         embeddingApiKey: string;
@@ -186,6 +198,7 @@ const PAGE_COPY: Record<
         releaseMaxLatencyP95: string;
         emblaAuditLedgerFile: string;
         emblaApprovalRequiredScopes: string;
+        frontendApiBase: string;
         userName: string;
         logLevel: string;
         debugMode: string;
@@ -196,6 +209,8 @@ const PAGE_COPY: Record<
         releaseMaxErrorRate: string;
         emblaApprovalRequiredScopes: string;
         embedding: string;
+        visionMultimodal: string;
+        frontendApiBase: string;
       };
     };
     preview: {
@@ -280,6 +295,9 @@ const PAGE_COPY: Record<
         coreApiModel: "Core Model (Optional)",
         coreApiProvider: "Core Provider (Optional)",
         coreReasoningEffort: "Core Reasoning Effort (Optional)",
+        visionMultimodalModel: "Multimodal Vision Model",
+        visionApiBaseUrl: "Vision API Base URL (Optional)",
+        visionApiKey: "Vision API Key (Optional)",
         apiTemperature: "Temperature",
         apiTimeout: "Request Timeout (s)",
         embeddingApiKey: "Embedding API Key",
@@ -299,6 +317,7 @@ const PAGE_COPY: Record<
         releaseMaxLatencyP95: "Max Latency P95 (ms)",
         emblaAuditLedgerFile: "Audit Ledger File",
         emblaApprovalRequiredScopes: "Approval Required Scopes",
+        frontendApiBase: "Frontend API Base (NEXT_PUBLIC_API_BASE Override)",
         userName: "UI User Name",
         logLevel: "Log Level",
         debugMode: "Debug Mode",
@@ -309,6 +328,8 @@ const PAGE_COPY: Record<
         releaseMaxErrorRate: "Recommended range: 0.0 - 1.0",
         emblaApprovalRequiredScopes: "Use comma-separated scope names, for example: core,policy,prompt_dna,tools_registry",
         embedding: "OpenAI-compatible embedding endpoint. Keep API Base/Key empty to fallback to API settings.",
+        visionMultimodal: "Used by vision/image_qa. Keep API Base/Key empty to fallback to global API settings.",
+        frontendApiBase: "Runtime browser override for API base. Leave empty to use env/default routing.",
       },
     },
     preview: {
@@ -392,6 +413,9 @@ const PAGE_COPY: Record<
         coreApiModel: "内层 Core 模型（可选）",
         coreApiProvider: "内层 Core Provider（可选）",
         coreReasoningEffort: "内层 Core 推理强度（可选）",
+        visionMultimodalModel: "多模态理解模型",
+        visionApiBaseUrl: "Vision API Base URL（可选）",
+        visionApiKey: "Vision API 密钥（可选）",
         apiTemperature: "Temperature",
         apiTimeout: "请求超时（秒）",
         embeddingApiKey: "Embedding API 密钥",
@@ -411,6 +435,7 @@ const PAGE_COPY: Record<
         releaseMaxLatencyP95: "最大 P95 延迟（毫秒）",
         emblaAuditLedgerFile: "审计账本文件路径",
         emblaApprovalRequiredScopes: "需人工审批的范围",
+        frontendApiBase: "前端 API Base（NEXT_PUBLIC_API_BASE 运行时覆盖）",
         userName: "界面用户名",
         logLevel: "日志级别",
         debugMode: "调试模式",
@@ -421,6 +446,8 @@ const PAGE_COPY: Record<
         releaseMaxErrorRate: "建议区间：0.0 - 1.0",
         emblaApprovalRequiredScopes: "使用英文逗号分隔，例如：core,policy,prompt_dna,tools_registry",
         embedding: "OpenAI 兼容 Embedding 接口。若留空 API Base/API Key，将回退到主 API 配置。",
+        visionMultimodal: "用于 vision/image_qa。若留空 API Base/API Key，将回退到主 API 配置。",
+        frontendApiBase: "浏览器运行时 API 地址覆盖。留空则使用环境变量/默认路由。",
       },
     },
     preview: {
@@ -539,6 +566,9 @@ function buildQuickForm(config: Record<string, unknown>): QuickForm {
     coreReasoningEffort:
       getNestedString(config, ["api", "routing", "core", "reasoning_effort"], "") ||
       getNestedString(config, ["api", "routing", "core", "thinking_intensity"], ""),
+    visionMultimodalModel: getNestedString(config, ["computer_control", "model"], "gemini-2.5-flash"),
+    visionApiBaseUrl: getNestedString(config, ["computer_control", "model_url"], ""),
+    visionApiKey: getNestedString(config, ["computer_control", "api_key"], ""),
     apiTemperature: getNestedString(config, ["api", "temperature"], "0.7"),
     apiTimeout: getNestedString(config, ["api", "request_timeout"], "120"),
     embeddingApiKey: getNestedString(config, ["embedding", "api_key"], ""),
@@ -562,6 +592,7 @@ function buildQuickForm(config: Record<string, unknown>): QuickForm {
       "scratch/runtime/audit_ledger.jsonl",
     ),
     emblaApprovalRequiredScopes: emblaScopes,
+    frontendApiBase: getNestedString(config, ["ui", "frontend_api_base"], ""),
     userName: getNestedString(config, ["ui", "user_name"], ""),
     logLevel: getNestedString(config, ["system", "log_level"], "INFO"),
     debugMode: getNestedBoolean(config, ["system", "debug"], false),
@@ -726,6 +757,11 @@ function buildQuickPayload(form: QuickForm): { ok: true; payload: Record<string,
         vector_index_name: form.gragVectorIndexName.trim() || "entity_embedding_index",
         vector_query_top_k: Math.max(1, Math.round(gragVectorQueryTopK)),
       },
+      computer_control: {
+        model: form.visionMultimodalModel.trim() || "gemini-2.5-flash",
+        model_url: form.visionApiBaseUrl.trim(),
+        api_key: form.visionApiKey.trim(),
+      },
       system: {
         log_level: form.logLevel.trim() || "INFO",
         debug: form.debugMode,
@@ -740,6 +776,7 @@ function buildQuickPayload(form: QuickForm): { ok: true; payload: Record<string,
         },
       },
       ui: {
+        frontend_api_base: form.frontendApiBase.trim(),
         user_name: form.userName.trim(),
       },
       embla_system: {
@@ -788,8 +825,10 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
       setLoading(false);
       return;
     }
+    const nextForm = buildQuickForm(snapshot);
     setConfig(snapshot);
-    setForm(buildQuickForm(snapshot));
+    setForm(nextForm);
+    persistClientApiBaseOverride(nextForm.frontendApiBase);
     setLoading(false);
   }, [copy.status.loadFailed]);
 
@@ -877,6 +916,7 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
       setError(`${copy.status.saveFailed} ${result.message}`);
       return;
     }
+    persistClientApiBaseOverride(form.frontendApiBase);
     setMessage(copy.status.saveSuccess);
     await loadConfig();
   };
@@ -1177,6 +1217,33 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
                   <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">Embedding (OpenAI-Compatible)</p>
                   <p className="mt-1 text-[10px] text-gray-500">{copy.quick.hints.embedding}</p>
                   <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <label className="block md:col-span-2">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.visionMultimodalModel}</p>
+                      <input
+                        value={form.visionMultimodalModel}
+                        onChange={(event) => setField("visionMultimodalModel", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.visionApiKey}</p>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={form.visionApiKey}
+                        onChange={(event) => setField("visionApiKey", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                    </label>
+                    <label className="block">
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.visionApiBaseUrl}</p>
+                      <input
+                        value={form.visionApiBaseUrl}
+                        onChange={(event) => setField("visionApiBaseUrl", event.target.value)}
+                        className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                      />
+                      <p className="mt-1 text-[10px] text-gray-500">{copy.quick.hints.visionMultimodal}</p>
+                    </label>
                     <label className="block">
                       <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.embeddingApiKey}</p>
                       <input
@@ -1345,6 +1412,16 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
             {sectionHeader(copy.quick.sections.ui, "ui", collapsed, toggleSection)}
             {collapsed.ui ? null : (
               <div className="space-y-3">
+                <label className="block">
+                  <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.frontendApiBase}</p>
+                  <input
+                    value={form.frontendApiBase}
+                    onChange={(event) => setField("frontendApiBase", event.target.value)}
+                    className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
+                    placeholder="http://127.0.0.1:8000"
+                  />
+                  <p className="mt-1 text-[10px] text-gray-500">{copy.quick.hints.frontendApiBase}</p>
+                </label>
                 <label className="block">
                   <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.userName}</p>
                   <input
