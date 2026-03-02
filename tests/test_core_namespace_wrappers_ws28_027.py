@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from core.event_bus import EventStore, TopicEventBus
-from core.mcp import MCPCallInput, MCPCallOutput
+from core.mcp import MCPCallInput, MCPCallOutput, MCPExecutionContext
 from core.security import ApprovalGate, AuditLedger, BudgetGuardController, KillSwitchController, PolicyFirewall
 from core.supervisor import BrainstemSupervisor, ProcessGuardDaemon, WatchdogDaemon
 
@@ -20,7 +20,12 @@ def test_core_namespace_exports_resolve() -> None:
 
 
 def test_core_mcp_contract_models_construct() -> None:
-    req = MCPCallInput(tool_name="ping", arguments={"message": "hello"})
+    req = MCPCallInput(
+        tool_name="ping",
+        arguments={"message": "hello"},
+        execution_context=MCPExecutionContext(fencing_epoch=3, budget_remaining=99.0),
+    )
     resp = MCPCallOutput(status="success", service_name="demo", tool_name="ping", result={"ok": True})
     assert req.tool_name == "ping"
+    assert req.execution_context.fencing_epoch == 3
     assert resp.status == "success"
