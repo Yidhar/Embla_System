@@ -16,6 +16,10 @@ def test_build_reasoning_effort_params_for_gpt5_family() -> None:
         model_name="openai/gpt-5-mini",
         reasoning_effort="low",
     ) == {"reasoning_effort": "low"}
+    assert service._build_reasoning_effort_params(
+        model_name="openai/gpt-5.2",
+        reasoning_effort="xhigh",
+    ) == {"reasoning_effort": "xhigh"}
 
 
 def test_build_reasoning_effort_params_ignores_invalid_or_unsupported() -> None:
@@ -43,3 +47,9 @@ def test_resolve_reasoning_effort_priority_override_then_global_then_legacy() ->
 
     legacy_only_cfg = SimpleNamespace(reasoning_effort="", thinking_intensity="high")
     assert LLMService._resolve_reasoning_effort(config_api=legacy_only_cfg, override_value=None) == "high"
+
+
+def test_resolve_reasoning_effort_accepts_xhigh() -> None:
+    cfg = SimpleNamespace(reasoning_effort="xhigh", thinking_intensity="medium")
+    assert LLMService._resolve_reasoning_effort(config_api=cfg, override_value=None) == "xhigh"
+    assert LLMService._resolve_reasoning_effort(config_api=cfg, override_value="xhigh") == "xhigh"

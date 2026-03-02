@@ -393,7 +393,7 @@ class LLMService:
         reasoning_effort: Optional[str],
     ) -> Dict[str, Any]:
         intensity = str(reasoning_effort or "").strip().lower()
-        if intensity not in {"low", "medium", "high","xhigh"}:
+        if intensity not in {"low", "medium", "high", "xhigh"}:
             return {}
         lowered_model = str(model_name or "").strip().lower()
         if "gpt-5" not in lowered_model:
@@ -412,7 +412,7 @@ class LLMService:
             getattr(config_api, "thinking_intensity", None),
         ):
             normalized = str(candidate or "").strip().lower()
-            if normalized in {"low", "medium", "high","xhigh"}:
+            if normalized in {"low", "medium", "high", "xhigh"}:
                 return normalized
             if normalized in {"", "auto", "default"}:
                 continue
