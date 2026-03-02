@@ -1,29 +1,25 @@
 version: 1
 profile: pythonic-secure
-
 runtime:
   heartbeat_interval_seconds: 5
   max_rounds_default: 500
   max_task_cost_usd: 5.0
-
 security:
   enforce_dual_lane: true
-  immutable_paths:
-    - core/**
-    - workspace/prompts/immutable_dna.md
   approval_required_scopes:
-    - core
-    - policy
-    - prompt_dna
-    - tools_registry
+  - core
+  - policy
+  - prompt_dna
+  - tools_registry
   audit_ledger_file: scratch/runtime/audit_ledger.jsonl
   audit_signing_key_env: EMBLA_AUDIT_SIGNING_KEY
-
+  immutable_paths:
+  - core/**
+  - workspace/prompts/immutable_dna.md
 watchers:
   prompt_root: workspace/prompts
   tools_registry_root: workspace/tools_registry
   backend: watchdog
-
 ops:
   posture_endpoint: /v1/ops/runtime/posture
   incidents_latest_endpoint: /v1/ops/incidents/latest

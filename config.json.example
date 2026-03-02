@@ -14,7 +14,7 @@
     "model": "deepseek-v3.2", // 使用的模型名称
     "provider": "openai_compatible", // API提供商类型（openai_compatible/google）
     "protocol": "auto", // API protocol (recommended: auto/openai_chat_completions)
-    "reasoning_effort": "medium", // OpenAI兼容推理强度（low/medium/high，主要用于 GPT-5 推理强度）
+    "reasoning_effort": "medium", // OpenAI兼容推理强度（low/medium/high/xhigh，主要用于 GPT-5 推理强度）
     "routing": {
       "outer": {
         "api_key": "", // 外层对话（Path-A/Path-B）专用API Key，留空回退到 api.api_key
@@ -174,7 +174,7 @@
   },
   "computer_control": {
     "enabled": true, // 是否启用计算机控制
-    "model": "gemini-2.5-flash", // 视觉模型
+    "model": "gemini-2.5-flash", // 多模态理解模型（vision/image_qa 使用；设置页字段: Multimodal Vision Model）
     "model_url": "https://open.bigmodel.cn/api/paas/v4", // 模型API URL
     "api_key": "", // 模型API密钥
     "grounding_model": "gemini-2.5-flash", // 基础模型

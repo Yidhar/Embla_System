@@ -363,6 +363,24 @@ npm run build  # Next.js 生产构建
 </details>
 
 <details>
+<summary><b>Vision 多模态理解模型</b></summary>
+
+`vision` MCP Agent 的 `image_qa` 会优先读取 `computer_control.model` 作为多模态理解模型：
+
+```json
+{
+  "computer_control": {
+    "enabled": true,
+    "model": "gemini-2.5-flash"
+  }
+}
+```
+
+设置页对应路径：`Settings -> API & Model -> Multimodal Vision Model`。  
+若该字段留空，运行时会回退到 `api.model`。
+</details>
+
+<details>
 <summary><b>MQTT 物联网</b></summary>
 
 ```json

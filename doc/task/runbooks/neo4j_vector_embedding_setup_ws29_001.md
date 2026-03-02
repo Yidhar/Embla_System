@@ -9,7 +9,7 @@
 在 `Embla_System` 中完成以下闭环：
 
 1. 本机启动 Neo4j 5.x（支持向量索引）。
-2. 配置 `grag` 与 `embedding`（OpenAI 兼容）参数。
+2. 配置 `grag`、`embedding` 与 `computer_control.model`（Vision 多模态）参数。
 3. 通过后端 smoke 脚本验证：
    - Neo4j 连接可用；
    - 五元组可写入/可查询；
@@ -82,6 +82,23 @@ docker run -d \
 1. `embedding.api_base`、`embedding.api_key` 为空时，会回退到 `api.base_url`、`api.api_key`。
 2. 建议将敏感值通过设置页写入，不在脚本或仓库中硬编码。
 
+### 3.3 `computer_control`（Vision 多模态理解模型）
+
+```json
+{
+  "computer_control": {
+    "enabled": true,
+    "model": "gemini-2.5-flash"
+  }
+}
+```
+
+说明：
+
+1. `vision` Agent 的 `image_qa` 默认优先使用 `computer_control.model`。
+2. 若该字段为空，会回退到 `api.model`。
+3. 设置页字段路径：`Settings -> API & Model -> Multimodal Vision Model`。
+
 ## 4. 验收与排障
 
 ### 4.1 运行 smoke
@@ -112,4 +129,3 @@ docker run -d \
 1. `neo4j_connected=false`：Neo4j 未启动或认证错误。
 2. `embedding_ready=false`：Embedding API 配置为空或不完整。
 3. `vector_status_known=false`：索引探测失败，可先执行写入触发索引创建，再复测。
-
