@@ -9,15 +9,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from system.config import get_immutable_dna_locked_prompts
 from system.immutable_dna import DNAFileSpec, ImmutableDNALoader
 
 
-REQUIRED_PROMPT_FILES: tuple[str, ...] = (
-    "conversation_style_prompt.txt",
-    "conversation_analyzer_prompt.txt",
-    "tool_dispatch_prompt.txt",
-    "agentic_tool_prompt.txt",
+REQUIRED_PROMPT_FILES_DEFAULT: tuple[str, ...] = (
+    "conversation_style_prompt.md",
+    "agentic_tool_prompt.md",
 )
+
+
+def _resolve_required_prompt_files() -> List[str]:
+    try:
+        configured = get_immutable_dna_locked_prompts()
+    except Exception:
+        configured = []
+    rows: List[str] = []
+    for item in configured:
+        text = str(item or "").strip()
+        if text and text not in rows:
+            rows.append(text)
+    if rows:
+        return rows
+    return list(REQUIRED_PROMPT_FILES_DEFAULT)
 
 
 def _utc_iso() -> str:
@@ -50,6 +64,7 @@ def run_immutable_dna_gate(
     output_file: Path | None = None,
     bootstrap_if_missing: bool = False,
 ) -> Dict[str, Any]:
+    required_prompt_files = _resolve_required_prompt_files()
     root = prompts_root.resolve()
     manifest = manifest_path.resolve() if manifest_path is not None else (root / "immutable_dna_manifest.spec")
     audit = audit_file.resolve() if audit_file is not None else (Path("scratch/reports/immutable_dna_audit_ws23_003.jsonl").resolve())
@@ -62,13 +77,13 @@ def run_immutable_dna_gate(
             "manifest_path": str(manifest).replace("\\", "/"),
             "audit_file": str(audit).replace("\\", "/"),
             "bootstrapped_manifest": False,
-            "required_prompt_files": list(REQUIRED_PROMPT_FILES),
-            "missing_required_files": list(REQUIRED_PROMPT_FILES),
+            "required_prompt_files": list(required_prompt_files),
+            "missing_required_files": list(required_prompt_files),
             "verify": {
                 "ok": False,
                 "reason": "manifest_extension_not_spec",
                 "mismatch_files": [],
-                "missing_files": list(REQUIRED_PROMPT_FILES),
+                "missing_files": list(required_prompt_files),
             },
             "passed": False,
             "reason": "manifest_extension_not_spec",
@@ -82,7 +97,7 @@ def run_immutable_dna_gate(
 
     loader = ImmutableDNALoader(
         root_dir=root,
-        dna_files=[DNAFileSpec(path=name, required=True) for name in REQUIRED_PROMPT_FILES],
+        dna_files=[DNAFileSpec(path=name, required=True) for name in required_prompt_files],
         manifest_path=manifest,
         audit_file=audit,
     )
@@ -93,7 +108,7 @@ def run_immutable_dna_gate(
 
     verify = loader.verify()
     manifest_files = _load_manifest_files(manifest)
-    missing_required = _missing_required_files(manifest_files, REQUIRED_PROMPT_FILES)
+    missing_required = _missing_required_files(manifest_files, required_prompt_files)
 
     passed = bool(verify.ok) and len(missing_required) == 0
     reason = str(verify.reason)
@@ -108,7 +123,7 @@ def run_immutable_dna_gate(
         "manifest_path": str(manifest).replace("\\", "/"),
         "audit_file": str(audit).replace("\\", "/"),
         "bootstrapped_manifest": bootstrapped,
-        "required_prompt_files": list(REQUIRED_PROMPT_FILES),
+        "required_prompt_files": list(required_prompt_files),
         "missing_required_files": missing_required,
         "verify": verify.to_dict(),
         "passed": passed,

@@ -13,6 +13,9 @@ security:
   - tools_registry
   audit_ledger_file: scratch/runtime/audit_ledger.jsonl
   audit_signing_key_env: EMBLA_AUDIT_SIGNING_KEY
+  immutable_dna_locked_prompts:
+  - conversation_style_prompt.md
+  - agentic_tool_prompt.md
   immutable_paths:
   - core/**
   - workspace/prompts/immutable_dna.md

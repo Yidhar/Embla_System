@@ -19,10 +19,10 @@ def _cleanup_case_root(root: Path) -> None:
 
 def _write_prompt_files(prompts_root: Path) -> None:
     prompts_root.mkdir(parents=True, exist_ok=True)
-    (prompts_root / "conversation_style_prompt.txt").write_text("style-v1\n", encoding="utf-8")
-    (prompts_root / "conversation_analyzer_prompt.txt").write_text("analyzer-v1\n", encoding="utf-8")
-    (prompts_root / "tool_dispatch_prompt.txt").write_text("dispatch-v1\n", encoding="utf-8")
-    (prompts_root / "agentic_tool_prompt.txt").write_text("tool-v1\n", encoding="utf-8")
+    (prompts_root / "conversation_style_prompt.md").write_text("style-v1\n", encoding="utf-8")
+    (prompts_root / "conversation_analyzer_prompt.md").write_text("analyzer-v1\n", encoding="utf-8")
+    (prompts_root / "tool_dispatch_prompt.md").write_text("dispatch-v1\n", encoding="utf-8")
+    (prompts_root / "agentic_tool_prompt.md").write_text("tool-v1\n", encoding="utf-8")
 
 
 def test_immutable_dna_gate_can_bootstrap_and_pass() -> None:
@@ -75,7 +75,7 @@ def test_immutable_dna_gate_detects_prompt_tamper_after_manifest_bootstrap() -> 
             output_file=case_root / "bootstrap.json",
             bootstrap_if_missing=True,
         )
-        (prompts_root / "tool_dispatch_prompt.txt").write_text("dispatch-v2-tampered\n", encoding="utf-8")
+        (prompts_root / "agentic_tool_prompt.md").write_text("tool-v2-tampered\n", encoding="utf-8")
 
         report = run_immutable_dna_gate(
             prompts_root=prompts_root,
@@ -86,7 +86,7 @@ def test_immutable_dna_gate_detects_prompt_tamper_after_manifest_bootstrap() -> 
         )
         assert report["passed"] is False
         assert report["reason"] == "dna_hash_mismatch"
-        assert "tool_dispatch_prompt.txt" in report["verify"]["mismatch_files"]
+        assert "agentic_tool_prompt.md" in report["verify"]["mismatch_files"]
     finally:
         _cleanup_case_root(case_root)
 

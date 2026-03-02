@@ -17,8 +17,8 @@ import system.config as config_module
 def _install_temp_prompt_manager(tmp_path: Path, monkeypatch) -> Path:
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
-    (prompts_dir / "conversation_style_prompt.txt").write_text("STYLE_V1", encoding="utf-8")
-    (prompts_dir / "tool_dispatch_prompt.txt").write_text("DISPATCH_V1", encoding="utf-8")
+    (prompts_dir / "conversation_style_prompt.md").write_text("STYLE_V1", encoding="utf-8")
+    (prompts_dir / "tool_dispatch_prompt.md").write_text("DISPATCH_V1", encoding="utf-8")
     manager = config_module.PromptManager(prompts_dir=str(prompts_dir))
     monkeypatch.setattr(config_module, "_prompt_manager", manager)
     return prompts_dir
@@ -62,10 +62,10 @@ def test_v1_system_prompts_update(monkeypatch, tmp_path: Path) -> None:
     assert isinstance(payload.get("acl"), dict)
     assert payload["acl"]["matched_rule"]["level"] == "S1_CONTROLLED"
 
-    detail = _run(get_system_prompt_template_v1("conversation_style_prompt.txt"))
+    detail = _run(get_system_prompt_template_v1("conversation_style_prompt.md"))
     assert detail.get("content") == "STYLE_V2"
 
-    file_content = (prompts_dir / "conversation_style_prompt.txt").read_text(encoding="utf-8")
+    file_content = (prompts_dir / "conversation_style_prompt.md").read_text(encoding="utf-8")
     assert file_content == "STYLE_V2"
 
 

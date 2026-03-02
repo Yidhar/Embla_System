@@ -81,7 +81,7 @@ def load_all_sessions() -> list:
 
 def load_base_system_prompt() -> str:
     """加载基础系统提示词"""
-    prompt_file = PROMPTS_DIR / "conversation_style_prompt.txt"
+    prompt_file = PROMPTS_DIR / "conversation_style_prompt.md"
     if prompt_file.exists():
         return prompt_file.read_text(encoding='utf-8')
     return "(系统提示词文件不存在)"
@@ -89,7 +89,7 @@ def load_base_system_prompt() -> str:
 
 def load_tool_prompt() -> str:
     """加载工具调用提示词"""
-    prompt_file = PROMPTS_DIR / "agentic_tool_prompt.txt"
+    prompt_file = PROMPTS_DIR / "agentic_tool_prompt.md"
     if prompt_file.exists():
         return prompt_file.read_text(encoding='utf-8')
     return ""
@@ -382,8 +382,8 @@ def run_benchmark():
     base_chars = len(base_prompt)
     tool_chars = len(tool_prompt)
     time_chars = len(build_time_info())
-    print(f"  conversation_style_prompt.txt:  {base_chars:>6} 字符 / {estimate_tokens(base_prompt):>5} token")
-    print(f"  agentic_tool_prompt.txt:        {tool_chars:>6} 字符 / {estimate_tokens(tool_prompt):>5} token")
+    print(f"  conversation_style_prompt.md:  {base_chars:>6} 字符 / {estimate_tokens(base_prompt):>5} token")
+    print(f"  agentic_tool_prompt.md:        {tool_chars:>6} 字符 / {estimate_tokens(tool_prompt):>5} token")
     print(f"  时间信息:                       {time_chars:>6} 字符 / {estimate_tokens(build_time_info()):>5} token")
     print(f"  系统提示词合计:                 {base_chars + tool_chars + time_chars:>6} 字符 / "
           f"{estimate_tokens(base_prompt + tool_prompt + build_time_info()):>5} token")

@@ -457,3 +457,37 @@ def test_chat_stream_rejects_unknown_stream_protocol() -> None:
     assert exc.value.status_code == 400
     assert isinstance(exc.value.detail, dict)
     assert exc.value.detail.get("error") == "unsupported_stream_protocol"
+
+
+def test_extract_agentic_execution_receipt_text_prefers_final_answer() -> None:
+    payload = {
+        "type": "execution_receipt",
+        "agent_state": {
+            "completion_summary": "summary-text",
+            "final_answer": "final-answer-text",
+        },
+    }
+    assert api_server._extract_agentic_execution_receipt_text(payload) == "final-answer-text"
+
+
+def test_extract_agentic_execution_receipt_text_falls_back_to_summary_and_deliverables() -> None:
+    summary_payload = {
+        "type": "execution_receipt",
+        "agent_state": {
+            "completion_summary": "summary-only",
+        },
+    }
+    assert api_server._extract_agentic_execution_receipt_text(summary_payload) == "summary-only"
+
+    deliverables_payload = {
+        "type": "execution_receipt",
+        "agent_state": {
+            "deliverables": ["artifact/a.txt", "artifact/b.txt"],
+        },
+    }
+    assert api_server._extract_agentic_execution_receipt_text(deliverables_payload) == "artifact/a.txt\nartifact/b.txt"
+
+
+def test_extract_agentic_execution_receipt_text_ignores_non_receipt_payload() -> None:
+    payload = {"type": "content", "text": "hello"}
+    assert api_server._extract_agentic_execution_receipt_text(payload) == ""

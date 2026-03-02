@@ -20,12 +20,12 @@ from system.immutable_dna import DNAFileSpec, ImmutableDNALoader
 
 try:
     from scripts.validate_immutable_dna_gate_ws23_003 import (
-        REQUIRED_PROMPT_FILES,
+        _resolve_required_prompt_files,
         run_immutable_dna_gate,
     )
 except ModuleNotFoundError:
     from scripts.validate_immutable_dna_gate_ws23_003 import (  # type: ignore[no-redef]
-        REQUIRED_PROMPT_FILES,
+        _resolve_required_prompt_files,
         run_immutable_dna_gate,
     )
 
@@ -62,6 +62,7 @@ def run_update_immutable_dna_manifest(
     strict_mode: bool = False,
     verify_after_update: bool = True,
 ) -> Dict[str, Any]:
+    required_prompt_files = _resolve_required_prompt_files()
     root = prompts_root.resolve()
     manifest = manifest_path.resolve() if manifest_path is not None else (root / "immutable_dna_manifest.spec")
     audit = (
@@ -79,7 +80,7 @@ def run_update_immutable_dna_manifest(
         "prompts_root": str(root).replace("\\", "/"),
         "manifest_path": str(manifest).replace("\\", "/"),
         "audit_file": str(audit).replace("\\", "/"),
-        "required_prompt_files": list(REQUIRED_PROMPT_FILES),
+        "required_prompt_files": list(required_prompt_files),
         "verify_after_update": bool(verify_after_update),
         "change_reason": normalized_change_reason,
         "strict_mode": bool(strict_mode),
@@ -116,7 +117,7 @@ def run_update_immutable_dna_manifest(
 
     loader = ImmutableDNALoader(
         root_dir=root,
-        dna_files=[DNAFileSpec(path=name, required=True) for name in REQUIRED_PROMPT_FILES],
+        dna_files=[DNAFileSpec(path=name, required=True) for name in required_prompt_files],
         manifest_path=manifest,
         audit_file=audit,
     )

@@ -24,10 +24,10 @@
 
 2. 固定注入顺序
 - 默认顺序固定为：
-  1. `conversation_style_prompt.txt`
-  2. `conversation_analyzer_prompt.txt`
-  3. `tool_dispatch_prompt.txt`
-  4. `agentic_tool_prompt.txt`
+  1. `conversation_style_prompt.md`
+  2. `conversation_analyzer_prompt.md`
+  3. `tool_dispatch_prompt.md`
+  4. `agentic_tool_prompt.md`
 - 支持自定义顺序（显式配置），并在 manifest 中固化。
 
 3. 非授权变更拒绝

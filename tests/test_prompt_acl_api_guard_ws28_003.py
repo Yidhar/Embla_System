@@ -17,8 +17,8 @@ def _run(coro):
 def _install_temp_prompt_manager(tmp_path: Path, monkeypatch, *, acl_spec_text: str = "") -> Path:
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
-    (prompts_dir / "conversation_style_prompt.txt").write_text("STYLE_V1", encoding="utf-8")
-    (prompts_dir / "tool_dispatch_prompt.txt").write_text("DISPATCH_V1", encoding="utf-8")
+    (prompts_dir / "conversation_style_prompt.md").write_text("STYLE_V1", encoding="utf-8")
+    (prompts_dir / "tool_dispatch_prompt.md").write_text("DISPATCH_V1", encoding="utf-8")
     if acl_spec_text:
         (prompts_dir / "prompt_acl.spec").write_text(acl_spec_text, encoding="utf-8")
     manager = config_module.PromptManager(prompts_dir=str(prompts_dir))
@@ -62,7 +62,7 @@ def test_prompt_acl_s0_locked_is_always_rejected(monkeypatch, tmp_path: Path) ->
 
 def test_prompt_acl_s2_flexible_allows_update_without_ticket(monkeypatch, tmp_path: Path) -> None:
     prompts_dir = _install_temp_prompt_manager(tmp_path, monkeypatch)
-    (prompts_dir / "custom_prompt.txt").write_text("CUSTOM_V1", encoding="utf-8")
+    (prompts_dir / "custom_prompt.md").write_text("CUSTOM_V1", encoding="utf-8")
 
     payload = _run(
         update_system_prompt_template_v1(
@@ -74,4 +74,4 @@ def test_prompt_acl_s2_flexible_allows_update_without_ticket(monkeypatch, tmp_pa
     acl = payload.get("acl", {})
     assert acl.get("matched_rule", {}).get("level") == "S2_FLEXIBLE"
     assert acl.get("blocked") is False
-    assert (prompts_dir / "custom_prompt.txt").read_text(encoding="utf-8") == "CUSTOM_V2"
+    assert (prompts_dir / "custom_prompt.md").read_text(encoding="utf-8") == "CUSTOM_V2"

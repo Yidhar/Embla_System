@@ -61,10 +61,10 @@
 为适配当前自主运行 agent 架构，本轮补充了 Prompt 层任务排期协议（TSP-v1）对齐：
 
 1. Prompt 批量重构（4 文件）
-- `system/prompts/conversation_style_prompt.txt`
-- `system/prompts/conversation_analyzer_prompt.txt`
-- `system/prompts/tool_dispatch_prompt.txt`
-- `system/prompts/agentic_tool_prompt.txt`
+- `system/prompts/conversation_style_prompt.md`
+- `system/prompts/conversation_analyzer_prompt.md`
+- `system/prompts/tool_dispatch_prompt.md`
+- `system/prompts/agentic_tool_prompt.md`
 - 统一引入 `T0 发现 -> T1 实施 -> T2 验证 -> T3 证据` 的排期语义与交付口径。
 
 2. 新增 runbook

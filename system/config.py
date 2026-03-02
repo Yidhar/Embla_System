@@ -46,6 +46,10 @@ _EMBLA_SYSTEM_DEFAULT_SECURITY: Dict[str, Any] = {
     "approval_required_scopes": ["core", "policy", "prompt_dna", "tools_registry"],
     "audit_ledger_file": "scratch/runtime/audit_ledger.jsonl",
     "audit_signing_key_env": "EMBLA_AUDIT_SIGNING_KEY",
+    "immutable_dna_locked_prompts": [
+        "conversation_style_prompt.md",
+        "agentic_tool_prompt.md",
+    ],
 }
 _embla_system_config: Dict[str, Any] = {}
 
@@ -123,6 +127,18 @@ def _normalize_embla_system_payload(payload: Dict[str, Any], *, source: str, loa
                 normalized_scopes.append(text)
         security["approval_required_scopes"] = normalized_scopes or list(_EMBLA_SYSTEM_DEFAULT_SECURITY["approval_required_scopes"])
 
+    if not isinstance(security.get("immutable_dna_locked_prompts"), list):
+        security["immutable_dna_locked_prompts"] = list(_EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_dna_locked_prompts"])
+    else:
+        normalized_locked_prompts = []
+        for item in security.get("immutable_dna_locked_prompts", []):
+            text = str(item or "").strip()
+            if text and text not in normalized_locked_prompts:
+                normalized_locked_prompts.append(text)
+        security["immutable_dna_locked_prompts"] = normalized_locked_prompts or list(
+            _EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_dna_locked_prompts"]
+        )
+
     audit_ledger_file = str(security.get("audit_ledger_file") or "").strip()
     if not audit_ledger_file:
         security["audit_ledger_file"] = str(_EMBLA_SYSTEM_DEFAULT_SECURITY["audit_ledger_file"])
@@ -167,6 +183,21 @@ def get_embla_system_config() -> Dict[str, Any]:
     if not isinstance(_embla_system_config, dict) or not _embla_system_config:
         _refresh_embla_system_config()
     return copy.deepcopy(_embla_system_config)
+
+
+def get_immutable_dna_locked_prompts() -> List[str]:
+    payload = get_embla_system_config()
+    security = payload.get("security") if isinstance(payload.get("security"), dict) else {}
+    rows = security.get("immutable_dna_locked_prompts")
+    if isinstance(rows, list):
+        normalized: List[str] = []
+        for item in rows:
+            text = str(item or "").strip()
+            if text and text not in normalized:
+                normalized.append(text)
+        if normalized:
+            return normalized
+    return list(_EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_dna_locked_prompts"])
 
 
 def save_embla_system_config(payload: Dict[str, Any], config_path: str | Path | None = None) -> Dict[str, Any]:
@@ -916,10 +947,10 @@ def _resolve_prompts_dir(prompts_dir: Optional[Path] = None) -> Path:
 _DEFAULT_PROMPT_REGISTRY_SPEC: Dict[str, Any] = {
     "schema_version": "ws28-prompt-registry-v1",
     "entries": [
-        {"prompt_name": "conversation_style_prompt", "path": "conversation_style_prompt.txt", "aliases": ["outer_chat_style"]},
-        {"prompt_name": "conversation_analyzer_prompt", "path": "conversation_analyzer_prompt.txt", "aliases": []},
-        {"prompt_name": "tool_dispatch_prompt", "path": "tool_dispatch_prompt.txt", "aliases": []},
-        {"prompt_name": "agentic_tool_prompt", "path": "agentic_tool_prompt.txt", "aliases": []},
+        {"prompt_name": "conversation_style_prompt", "path": "conversation_style_prompt.md", "aliases": ["outer_chat_style"]},
+        {"prompt_name": "conversation_analyzer_prompt", "path": "conversation_analyzer_prompt.md", "aliases": []},
+        {"prompt_name": "tool_dispatch_prompt", "path": "tool_dispatch_prompt.md", "aliases": []},
+        {"prompt_name": "agentic_tool_prompt", "path": "agentic_tool_prompt.md", "aliases": []},
         {"prompt_name": "immutable_dna_manifest", "path": "immutable_dna_manifest.spec", "aliases": ["immutable_dna_manifest_spec"]},
         {"prompt_name": "prompt_acl", "path": "prompt_acl.spec", "aliases": []},
     ],
@@ -929,8 +960,8 @@ _DEFAULT_PROMPT_REGISTRY_SPEC: Dict[str, Any] = {
 def _normalize_prompt_registry_name(name: str) -> str:
     normalized = str(name or "").strip()
     lower = normalized.lower()
-    if lower.endswith(".txt"):
-        return normalized[:-4]
+    if lower.endswith(".md"):
+        return normalized[:-3]
     if lower.endswith(".spec"):
         return normalized[:-5]
     return normalized
@@ -943,7 +974,7 @@ def _normalize_prompt_registry_entry(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     relative_path = str(raw.get("path") or "").strip()
     if not relative_path:
-        relative_path = f"{prompt_name}.txt"
+        relative_path = f"{prompt_name}.md"
 
     aliases: List[str] = []
     alias_rows = raw.get("aliases")
@@ -1032,10 +1063,10 @@ def resolve_prompt_registry_entry(*, prompt_name: str, prompts_dir: Optional[Pat
     canonical_name = alias_to_name.get(requested_name, requested_name)
     entry = entries_map.get(canonical_name)
     if entry is not None:
-        relative_path = str(entry.get("path") or f"{canonical_name}.txt")
+        relative_path = str(entry.get("path") or f"{canonical_name}.md")
         aliases = list(entry.get("aliases") or [])
     else:
-        relative_path = f"{canonical_name}.txt"
+        relative_path = f"{canonical_name}.md"
         aliases = []
 
     absolute_path = (resolved_prompts_dir / relative_path).resolve()
@@ -1063,7 +1094,7 @@ _DEFAULT_PROMPT_ACL_SPEC: Dict[str, Any] = {
             "allow_ai_direct_write": False,
         },
         {
-            "path_pattern": "conversation_style_prompt.txt",
+            "path_pattern": "conversation_style_prompt.md",
             "level": "S1_CONTROLLED",
             "require_ticket": True,
             "require_manifest_refresh": True,
@@ -1071,7 +1102,23 @@ _DEFAULT_PROMPT_ACL_SPEC: Dict[str, Any] = {
             "allow_ai_direct_write": False,
         },
         {
-            "path_pattern": "conversation_analyzer_prompt.txt",
+            "path_pattern": "conversation_analyzer_prompt.md",
+            "level": "S2_FLEXIBLE",
+            "require_ticket": False,
+            "require_manifest_refresh": False,
+            "require_gate_verify": False,
+            "allow_ai_direct_write": True,
+        },
+        {
+            "path_pattern": "tool_dispatch_prompt.md",
+            "level": "S2_FLEXIBLE",
+            "require_ticket": False,
+            "require_manifest_refresh": False,
+            "require_gate_verify": False,
+            "allow_ai_direct_write": True,
+        },
+        {
+            "path_pattern": "agentic_tool_prompt.md",
             "level": "S1_CONTROLLED",
             "require_ticket": True,
             "require_manifest_refresh": True,
@@ -1079,23 +1126,7 @@ _DEFAULT_PROMPT_ACL_SPEC: Dict[str, Any] = {
             "allow_ai_direct_write": False,
         },
         {
-            "path_pattern": "tool_dispatch_prompt.txt",
-            "level": "S1_CONTROLLED",
-            "require_ticket": True,
-            "require_manifest_refresh": True,
-            "require_gate_verify": True,
-            "allow_ai_direct_write": False,
-        },
-        {
-            "path_pattern": "agentic_tool_prompt.txt",
-            "level": "S1_CONTROLLED",
-            "require_ticket": True,
-            "require_manifest_refresh": True,
-            "require_gate_verify": True,
-            "allow_ai_direct_write": False,
-        },
-        {
-            "path_pattern": "*.txt",
+            "path_pattern": "*.md",
             "level": "S2_FLEXIBLE",
             "require_ticket": False,
             "require_manifest_refresh": False,
@@ -1178,7 +1209,7 @@ def evaluate_prompt_acl(
     spec = load_prompt_acl_spec(prompts_dir=prompts_dir)
     rules = list(spec.get("rules", [])) if isinstance(spec.get("rules"), list) else []
     matched_rule = {
-        "path_pattern": "*.txt",
+        "path_pattern": "*.md",
         "level": "S2_FLEXIBLE",
         "require_ticket": False,
         "require_manifest_refresh": False,
@@ -1355,7 +1386,7 @@ def build_system_prompt_for_path(
 
         # path-c: Core 执行路径
         # 使用精简的 Core 身份 prompt 替代闲聊风格 prompt
-        core_prompt_file = Path(__file__).parent / "prompts" / "agents" / "core_exec" / "core_exec_base.txt"
+        core_prompt_file = Path(__file__).parent / "prompts" / "agents" / "core_exec" / "core_exec_base.md"
         if core_prompt_file.exists():
             base_prompt = core_prompt_file.read_text(encoding="utf-8").strip()
         else:

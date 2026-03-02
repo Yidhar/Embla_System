@@ -11,6 +11,7 @@ import traceback
 import os
 import logging
 import time
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, AsyncGenerator, Any, Callable
@@ -205,6 +206,10 @@ _BRAINSTEM_AUTOSTOP_OUTPUT = Path("scratch/reports/brainstem_control_plane_autos
 _GLOBAL_MUTEX_BOOTSTRAP_TTL_SECONDS = 10.0
 _BUDGET_GUARD_BOOTSTRAP_STATE_FILE = Path("scratch/runtime/budget_guard_state_ws28_028.json")
 _IMMUTABLE_DNA_PREFLIGHT_REQUIRED_ENV = "NAGA_IMMUTABLE_DNA_PREFLIGHT_REQUIRED"
+_IMMUTABLE_DNA_MONITOR_ENABLED_ENV = "NAGA_IMMUTABLE_DNA_MONITOR_ENABLED"
+_IMMUTABLE_DNA_MONITOR_INTERVAL_SECONDS_ENV = "NAGA_IMMUTABLE_DNA_MONITOR_INTERVAL_SECONDS"
+_IMMUTABLE_DNA_MONITOR_ALLOW_HASH_ROTATION_ENV = "NAGA_IMMUTABLE_DNA_MONITOR_ALLOW_HASH_ROTATION"
+_IMMUTABLE_DNA_MONITOR_STATE_FILE = Path("scratch/runtime/immutable_dna_integrity_state_ws30_001.json")
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -402,6 +407,102 @@ def _bootstrap_immutable_dna_preflight() -> Dict[str, Any]:
         report["reason"] = "immutable_dna_preflight_exception"
         report["error"] = f"{type(exc).__name__}:{exc}"
         logger.error("[immutable_dna_bootstrap] preflight exception: %s", exc)
+    return report
+
+
+def _bootstrap_immutable_dna_monitor_startup(*, repo_root: Optional[Path] = None) -> Dict[str, Any]:
+    root = (repo_root or _ops_repo_root()).resolve()
+    state_file = (root / _IMMUTABLE_DNA_MONITOR_STATE_FILE).resolve()
+    interval_seconds = max(5.0, _env_float(_IMMUTABLE_DNA_MONITOR_INTERVAL_SECONDS_ENV, 30.0))
+    enabled = _env_flag(_IMMUTABLE_DNA_MONITOR_ENABLED_ENV, True)
+    allow_hash_rotation = _env_flag(_IMMUTABLE_DNA_MONITOR_ALLOW_HASH_ROTATION_ENV, False)
+    report: Dict[str, Any] = {
+        "enabled": enabled,
+        "state_file": str(state_file).replace("\\", "/"),
+        "interval_seconds": float(interval_seconds),
+        "allow_manifest_hash_rotation": bool(allow_hash_rotation),
+        "passed": False,
+    }
+    if not enabled:
+        report["passed"] = True
+        report["reason"] = "immutable_dna_monitor_disabled"
+        return report
+
+    try:
+        llm = get_llm_service()
+        loader = llm.get_immutable_dna_loader()
+        if loader is None:
+            report["reason"] = "immutable_dna_loader_unavailable"
+            return report
+
+        from core.security import ImmutableDNAIntegrityMonitor
+
+        event_store = EventStore(file_path=(root / "logs" / "autonomous" / "events.jsonl").resolve())
+        monitor = ImmutableDNAIntegrityMonitor(
+            loader=loader,
+            event_emitter=event_store,
+            state_file=state_file,
+            interval_seconds=interval_seconds,
+            allow_manifest_hash_rotation=allow_hash_rotation,
+        )
+        first_observation = monitor.run_once()
+        stop_event = threading.Event()
+        thread = threading.Thread(
+            target=monitor.run_daemon,
+            kwargs={
+                "stop_event": stop_event,
+                "interval_seconds": interval_seconds,
+            },
+            daemon=True,
+            name="immutable_dna_integrity_monitor",
+        )
+        thread.start()
+
+        app.state.immutable_dna_integrity_monitor = monitor
+        app.state.immutable_dna_integrity_monitor_stop_event = stop_event
+        app.state.immutable_dna_integrity_monitor_thread = thread
+        app.state.immutable_dna_integrity_state_file = str(state_file).replace("\\", "/")
+
+        report["initial_state"] = first_observation
+        report["passed"] = str(first_observation.get("status") or "").strip().lower() != "critical"
+        report["reason"] = str(first_observation.get("reason_code") or "")
+        if report["passed"]:
+            logger.info("[immutable_dna_monitor] startup succeeded")
+        else:
+            logger.error("[immutable_dna_monitor] startup detected critical state: %s", report.get("reason"))
+    except Exception as exc:
+        report["passed"] = False
+        report["reason"] = "immutable_dna_monitor_startup_exception"
+        report["error"] = f"{type(exc).__name__}:{exc}"
+        logger.error("[immutable_dna_monitor] startup exception: %s", exc)
+
+    return report
+
+
+def _bootstrap_immutable_dna_monitor_shutdown() -> Dict[str, Any]:
+    report: Dict[str, Any] = {
+        "enabled": True,
+        "passed": True,
+        "reason": "",
+    }
+    stop_event = getattr(app.state, "immutable_dna_integrity_monitor_stop_event", None)
+    thread = getattr(app.state, "immutable_dna_integrity_monitor_thread", None)
+    if stop_event is None and thread is None:
+        report["reason"] = "immutable_dna_monitor_not_started"
+        return report
+    try:
+        if isinstance(stop_event, threading.Event):
+            stop_event.set()
+        if isinstance(thread, threading.Thread):
+            thread.join(timeout=2.0)
+            report["thread_alive"] = bool(thread.is_alive())
+            report["passed"] = not bool(thread.is_alive())
+        report["reason"] = "ok" if report.get("passed") else "immutable_dna_monitor_thread_alive"
+    except Exception as exc:
+        report["passed"] = False
+        report["reason"] = "immutable_dna_monitor_shutdown_exception"
+        report["error"] = f"{type(exc).__name__}:{exc}"
+        logger.error("[immutable_dna_monitor] shutdown exception: %s", exc)
     return report
 
 
@@ -1227,6 +1328,33 @@ def _emit_agentic_loop_completion_event(
     store.emit(event_type, payload, source="apiserver.chat_stream")
 
 
+def _extract_agentic_execution_receipt_text(chunk_data: Dict[str, Any]) -> str:
+    """Extract user-facing completion text from structured agentic execution receipt."""
+    if not isinstance(chunk_data, dict):
+        return ""
+    if str(chunk_data.get("type") or "").strip().lower() != "execution_receipt":
+        return ""
+    agent_state = chunk_data.get("agent_state")
+    if not isinstance(agent_state, dict):
+        return ""
+
+    final_answer = str(agent_state.get("final_answer") or "").strip()
+    if final_answer:
+        return final_answer
+
+    completion_summary = str(agent_state.get("completion_summary") or "").strip()
+    if completion_summary:
+        return completion_summary
+
+    deliverables = agent_state.get("deliverables")
+    if isinstance(deliverables, list):
+        cleaned = [str(item).strip() for item in deliverables if str(item).strip()]
+        if cleaned:
+            return "\n".join(cleaned[:8])
+
+    return ""
+
+
 def _read_chat_route_event_rows(*, limit: int = 2000) -> List[Dict[str, Any]]:
     event_file = Path(__file__).resolve().parent.parent / "logs" / "autonomous" / "events.jsonl"
     if not event_file.exists() or limit <= 0:
@@ -1428,6 +1556,10 @@ async def lifespan(app: FastAPI):
                 "Immutable DNA startup preflight failed: "
                 f"{str(immutable_dna_preflight.get('reason') or 'unknown')}"
             )
+        immutable_dna_monitor_bootstrap = _bootstrap_immutable_dna_monitor_startup()
+        app.state.immutable_dna_monitor_bootstrap = immutable_dna_monitor_bootstrap
+        if bool(immutable_dna_monitor_bootstrap.get("enabled")) and not bool(immutable_dna_monitor_bootstrap.get("passed", True)):
+            print("[WARN] Immutable DNA monitor 启动未通过，篡改告警可能不可用")
         # 对话核心功能已集成到apiserver
         brainstem_bootstrap = _bootstrap_brainstem_control_plane_startup()
         app.state.brainstem_bootstrap = brainstem_bootstrap
@@ -1442,6 +1574,7 @@ async def lifespan(app: FastAPI):
     finally:
         print("[INFO] 正在清理资源...")
         # MCP服务现在由mcpserver独立管理，无需清理
+        app.state.immutable_dna_monitor_shutdown = _bootstrap_immutable_dna_monitor_shutdown()
         app.state.brainstem_shutdown = _bootstrap_brainstem_control_plane_shutdown()
 
 
@@ -1881,8 +2014,8 @@ async def update_system_prompt(payload: Dict[str, Any]):
 
 def _normalize_prompt_template_name(name: str) -> str:
     normalized = str(name or "").strip()
-    if normalized.lower().endswith(".txt"):
-        normalized = normalized[:-4]
+    if normalized.lower().endswith(".md"):
+        normalized = normalized[:-3]
     if not normalized:
         raise HTTPException(status_code=400, detail="提示词名称不能为空")
     if len(normalized) > 128:
@@ -1925,7 +2058,7 @@ def _list_prompt_template_metas() -> List[Dict[str, Any]]:
     prompts_dir = Path(manager.prompts_dir)
     prompts_dir.mkdir(parents=True, exist_ok=True)
     items: List[Dict[str, Any]] = []
-    for item in sorted(prompts_dir.glob("*.txt"), key=lambda p: p.name.lower()):
+    for item in sorted(prompts_dir.glob("*.md"), key=lambda p: p.name.lower()):
         if not item.is_file():
             continue
         items.append(_build_prompt_template_meta(item))
@@ -1950,11 +2083,12 @@ async def list_system_prompts_v1():
 @app.get("/system/prompts/{name}")
 async def get_system_prompt_template(name: str):
     try:
-        from system.config import get_prompt_manager
+        from system.config import get_prompt_manager, resolve_prompt_registry_entry
 
         normalized = _normalize_prompt_template_name(name)
         manager = get_prompt_manager()
-        prompt_file = Path(manager.prompts_dir) / f"{normalized}.txt"
+        resolved = resolve_prompt_registry_entry(prompt_name=normalized, prompts_dir=Path(manager.prompts_dir))
+        prompt_file = Path(resolved["path"])
         if not prompt_file.exists():
             raise HTTPException(status_code=404, detail=f"提示词不存在: {normalized}")
         content = prompt_file.read_text(encoding="utf-8")
@@ -2315,6 +2449,7 @@ async def chat_stream(request: ChatRequest):
                 logger.info(f"[API Server] VLM 会话，使用视觉模型: {cc.model}")
 
             current_round_text = ""
+            receipt_fallback_text = ""
 
             if path == "path-c":
                 cfg = get_config()
@@ -2347,6 +2482,10 @@ async def chat_stream(request: ChatRequest):
                             route_meta=route_meta,
                             chunk_data=event,
                         )
+                    elif chunk_type == "execution_receipt":
+                        receipt_text = _extract_agentic_execution_receipt_text(event)
+                        if receipt_text:
+                            receipt_fallback_text = receipt_text
                     elif chunk_type == "round_end":
                         current_round_text = ""
 
@@ -2399,6 +2538,18 @@ async def chat_stream(request: ChatRequest):
             # fallback: 如果没有累积到文本，使用最后一轮的 current_round_text
             if not complete_response and current_round_text:
                 complete_response = current_round_text
+
+            # Path-C fallback: some models finish via SubmitResult_Tool without emitting plain content tokens.
+            if path == "path-c" and not complete_response and receipt_fallback_text:
+                complete_response = receipt_fallback_text
+                yield _format_stream_payload_chunk(
+                    {
+                        "type": "content",
+                        "text": receipt_fallback_text,
+                        "source": "execution_receipt_fallback",
+                    },
+                    protocol=stream_protocol,
+                )
 
             # 统一保存对话历史与日志
             _save_conversation_and_logs(session_id, user_message, complete_response)
@@ -2895,6 +3046,7 @@ _OPS_INCIDENT_EVENT_SEVERITY: Dict[str, str] = {
     "ReleaseRollbackFailed": "critical",
     "RuntimeFuseTriggeredCritical": "critical",
     "AgenticLoopCompletionNotSubmitted": "critical",
+    "ImmutableDNATamperDetected": "critical",
     "SubAgentRuntimeFailOpenBlocked": "warning",
     "SubAgentRuntimeFailOpen": "warning",
     "RouteQualityGuardEscalatedWarning": "warning",
@@ -3195,18 +3347,52 @@ def _ops_build_budget_guard_summary(repo_root: Path) -> Dict[str, Any]:
 
 def _ops_build_immutable_dna_summary() -> Dict[str, Any]:
     preflight = getattr(app.state, "immutable_dna_preflight", None)
+    monitor_state_file_raw = str(getattr(app.state, "immutable_dna_integrity_state_file", "") or "").strip()
+    if monitor_state_file_raw:
+        monitor_state_file = Path(monitor_state_file_raw)
+    else:
+        monitor_state_file = (_ops_repo_root() / _IMMUTABLE_DNA_MONITOR_STATE_FILE).resolve()
+
+    monitor_state: Dict[str, Any]
+    try:
+        from core.security import ImmutableDNAIntegrityMonitor
+
+        monitor_state = ImmutableDNAIntegrityMonitor.read_state(monitor_state_file)
+    except Exception as exc:
+        monitor_state = {
+            "status": "warning",
+            "reason_code": "IMMUTABLE_DNA_MONITOR_STATE_READ_FAILED",
+            "reason_text": f"immutable DNA monitor state read failed: {exc}",
+            "state_file": str(monitor_state_file).replace("\\", "/"),
+        }
+    monitor_status = _ops_status_to_severity(str(monitor_state.get("status") or "unknown"))
+
     if not isinstance(preflight, dict):
+        reason_code = "IMMUTABLE_DNA_PREFLIGHT_MISSING"
+        reason_text = "Immutable DNA startup preflight is missing."
+        status = "unknown"
+        if monitor_status == "critical":
+            status = "critical"
+            reason_code = str(monitor_state.get("reason_code") or "IMMUTABLE_DNA_MONITOR_CRITICAL")
+            reason_text = str(monitor_state.get("reason_text") or "Immutable DNA monitor detected integrity violation.")
+        elif monitor_status == "warning":
+            status = "warning"
+            reason_code = str(monitor_state.get("reason_code") or "IMMUTABLE_DNA_MONITOR_WARNING")
+            reason_text = str(monitor_state.get("reason_text") or "Immutable DNA monitor requires attention.")
         return {
-            "status": "unknown",
-            "reason_code": "IMMUTABLE_DNA_PREFLIGHT_MISSING",
-            "reason_text": "Immutable DNA startup preflight is missing.",
+            "status": _ops_status_to_severity(status),
+            "reason_code": reason_code,
+            "reason_text": reason_text,
             "enabled": True,
             "required": True,
             "passed": False,
             "exists": False,
             "manifest_path": "",
             "audit_file": "",
+            "manifest_hash": str(monitor_state.get("manifest_hash") or ""),
             "verify": {},
+            "monitor_status": monitor_status,
+            "monitor": monitor_state,
         }
 
     enabled = bool(preflight.get("enabled", True))
@@ -3216,7 +3402,12 @@ def _ops_build_immutable_dna_summary() -> Dict[str, Any]:
     manifest_path = str(preflight.get("manifest_path") or "")
     audit_file = str(preflight.get("audit_file") or "")
     verify = preflight.get("verify") if isinstance(preflight.get("verify"), dict) else {}
-    manifest_hash = str(preflight.get("manifest_hash") or verify.get("manifest_hash") or "")
+    manifest_hash = str(
+        preflight.get("manifest_hash")
+        or verify.get("manifest_hash")
+        or monitor_state.get("manifest_hash")
+        or ""
+    )
 
     if not enabled:
         status = "warning"
@@ -3235,6 +3426,15 @@ def _ops_build_immutable_dna_summary() -> Dict[str, Any]:
         reason_code = "IMMUTABLE_DNA_PREFLIGHT_FAILED_OPTIONAL"
         reason_text = f"Immutable DNA preflight failed (non-blocking): {reason or 'unknown'}"
 
+    if monitor_status == "critical":
+        status = "critical"
+        reason_code = str(monitor_state.get("reason_code") or "IMMUTABLE_DNA_MONITOR_CRITICAL")
+        reason_text = str(monitor_state.get("reason_text") or "Immutable DNA monitor detected integrity violation.")
+    elif monitor_status == "warning" and _ops_status_to_severity(status) == "ok":
+        status = "warning"
+        reason_code = str(monitor_state.get("reason_code") or "IMMUTABLE_DNA_MONITOR_WARNING")
+        reason_text = str(monitor_state.get("reason_text") or "Immutable DNA monitor requires attention.")
+
     return {
         "status": _ops_status_to_severity(status),
         "reason_code": reason_code,
@@ -3247,6 +3447,8 @@ def _ops_build_immutable_dna_summary() -> Dict[str, Any]:
         "audit_file": audit_file,
         "manifest_hash": manifest_hash,
         "verify": verify,
+        "monitor_status": monitor_status,
+        "monitor": monitor_state,
     }
 
 
@@ -3502,6 +3704,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         source_reports.append(str(immutable_dna.get("manifest_path") or ""))
     if str(immutable_dna.get("audit_file") or "").strip():
         source_reports.append(str(immutable_dna.get("audit_file") or ""))
+    immutable_dna_monitor = immutable_dna.get("monitor") if isinstance(immutable_dna.get("monitor"), dict) else {}
+    if str(immutable_dna_monitor.get("state_file") or "").strip():
+        source_reports.append(str(immutable_dna_monitor.get("state_file") or ""))
     if bool(audit_ledger.get("exists")) and str(audit_ledger.get("ledger_file") or "").strip():
         source_reports.append(str(audit_ledger.get("ledger_file") or ""))
 
@@ -5011,6 +5216,48 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
                     "tool_name": str(budget_guard.get("tool_name") or ""),
                 },
                 "report_path": str(budget_guard.get("state_file") or ""),
+                "gate_level": "hard",
+            }
+        )
+
+    immutable_dna_summary = _ops_build_immutable_dna_summary()
+    immutable_dna_status = str(immutable_dna_summary.get("status") or "")
+    immutable_dna_reason_code = str(immutable_dna_summary.get("reason_code") or "")
+    if immutable_dna_status in {"warning", "critical"}:
+        immutable_event_type = "ImmutableDNAIntegrityIssue"
+        if immutable_dna_reason_code in {
+            "IMMUTABLE_DNA_TAMPER_DETECTED",
+            "IMMUTABLE_DNA_MANIFEST_HASH_CHANGED",
+            "IMMUTABLE_DNA_MONITOR_CRITICAL",
+        }:
+            immutable_event_type = "ImmutableDNATamperDetected"
+        event_counters[immutable_event_type] = int(event_counters.get(immutable_event_type, 0)) + 1
+        immutable_monitor = (
+            immutable_dna_summary.get("monitor")
+            if isinstance(immutable_dna_summary.get("monitor"), dict)
+            else {}
+        )
+        incidents.append(
+            {
+                "source": "report",
+                "severity": immutable_dna_status,
+                "timestamp": str(
+                    immutable_monitor.get("generated_at")
+                    or immutable_dna_summary.get("generated_at")
+                    or ""
+                ),
+                "event_type": immutable_event_type,
+                "summary": str(
+                    immutable_dna_summary.get("reason_text")
+                    or "Immutable DNA integrity monitor reports issue."
+                ),
+                "payload_excerpt": {
+                    "reason_code": immutable_dna_reason_code,
+                    "monitor_reason_code": str(immutable_monitor.get("reason_code") or ""),
+                    "monitor_status": str(immutable_dna_summary.get("monitor_status") or ""),
+                    "manifest_hash": str(immutable_dna_summary.get("manifest_hash") or ""),
+                },
+                "report_path": str(immutable_monitor.get("state_file") or immutable_dna_summary.get("manifest_path") or ""),
                 "gate_level": "hard",
             }
         )

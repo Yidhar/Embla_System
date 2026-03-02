@@ -27,7 +27,7 @@ def test_dna_change_audit_full_approval_flow_is_traceable() -> None:
     try:
         ledger = DNAChangeAuditLedger(ledger_file=case_root / "dna_change_audit.jsonl")
         change_id = ledger.request_change(
-            file_path="system/prompts/tool_dispatch_prompt.txt",
+            file_path="system/prompts/tool_dispatch_prompt.md",
             old_hash="sha256_old",
             new_hash="sha256_new",
             requested_by="agent-security",
@@ -71,7 +71,7 @@ def test_dna_change_audit_rejected_flow_keeps_ticket_and_owner() -> None:
     try:
         ledger = DNAChangeAuditLedger(ledger_file=case_root / "dna_change_audit.jsonl")
         change_id = ledger.request_change(
-            file_path="system/prompts/conversation_style_prompt.txt",
+            file_path="system/prompts/conversation_style_prompt.md",
             old_hash="hash_a",
             new_hash="hash_b",
             requested_by="agent-a",
@@ -104,7 +104,7 @@ def test_dna_change_audit_enforces_tickets_and_state_transitions() -> None:
 
         with pytest.raises(ValueError, match="request_ticket is required"):
             ledger.request_change(
-                file_path="system/prompts/agentic_tool_prompt.txt",
+                file_path="system/prompts/agentic_tool_prompt.md",
                 old_hash="hash_1",
                 new_hash="hash_2",
                 requested_by="agent-a",
@@ -112,7 +112,7 @@ def test_dna_change_audit_enforces_tickets_and_state_transitions() -> None:
             )
 
         change_id = ledger.request_change(
-            file_path="system/prompts/agentic_tool_prompt.txt",
+            file_path="system/prompts/agentic_tool_prompt.md",
             old_hash="hash_1",
             new_hash="hash_2",
             requested_by="agent-a",

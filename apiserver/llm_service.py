@@ -23,8 +23,8 @@ from litellm import acompletion
 # Add project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from system.config import get_config
-from system.immutable_dna import DNAFileSpec, ImmutableDNALoader
+from system.config import get_config, get_immutable_dna_locked_prompts
+from core.security import DNAFileSpec, ImmutableDNALoader
 from . import naga_auth
 
 logger = logging.getLogger("LLMService")
@@ -53,11 +53,9 @@ class LLMService:
     DNA_PROMPTS_ROOT_ENV = "NAGA_IMMUTABLE_DNA_PROMPTS_ROOT"
     DNA_MANIFEST_PATH_ENV = "NAGA_IMMUTABLE_DNA_MANIFEST_PATH"
     DNA_AUDIT_PATH_ENV = "NAGA_IMMUTABLE_DNA_AUDIT_PATH"
-    DNA_REQUIRED_FILES = (
-        "conversation_style_prompt.txt",
-        "conversation_analyzer_prompt.txt",
-        "tool_dispatch_prompt.txt",
-        "agentic_tool_prompt.txt",
+    DNA_REQUIRED_FILES_DEFAULT = (
+        "conversation_style_prompt.md",
+        "agentic_tool_prompt.md",
     )
 
     OPENAI_HINTS = {"openai", "openai_compatible"}
@@ -67,6 +65,7 @@ class LLMService:
     def __init__(self):
         self._initialized = False
         self._immutable_dna_enabled = self._resolve_immutable_dna_runtime_enabled()
+        self._immutable_dna_required_files = self._resolve_immutable_dna_required_files()
         self._immutable_dna_loader: Optional[ImmutableDNALoader] = None
         self._initialize_client()
 
@@ -100,7 +99,7 @@ class LLMService:
             audit_path = Path(str(audit_path_raw)).expanduser().resolve()
             return ImmutableDNALoader(
                 root_dir=prompts_root,
-                dna_files=[DNAFileSpec(path=name, required=True) for name in self.DNA_REQUIRED_FILES],
+                dna_files=[DNAFileSpec(path=name, required=True) for name in self._immutable_dna_required_files],
                 manifest_path=manifest_path,
                 audit_file=audit_path,
             )
@@ -113,6 +112,9 @@ class LLMService:
             self._immutable_dna_loader = self._build_immutable_dna_loader()
         return self._immutable_dna_loader
 
+    def get_immutable_dna_loader(self) -> Optional[ImmutableDNALoader]:
+        return self._ensure_immutable_dna_loader()
+
     def immutable_dna_preflight(self) -> Dict[str, Any]:
         """Run startup-time immutable DNA verification for fail-fast bootstrap."""
         enabled = bool(self._immutable_dna_enabled)
@@ -120,6 +122,7 @@ class LLMService:
             "enabled": enabled,
             "passed": False,
             "reason": "uninitialized",
+            "required_prompt_files": list(self._immutable_dna_required_files),
         }
         if not enabled:
             report["passed"] = True
@@ -141,6 +144,21 @@ class LLMService:
         if verify_payload.get("manifest_hash"):
             report["manifest_hash"] = str(verify_payload["manifest_hash"])
         return report
+
+    def _resolve_immutable_dna_required_files(self) -> List[str]:
+        try:
+            configured = get_immutable_dna_locked_prompts()
+        except Exception:
+            configured = []
+
+        rows: List[str] = []
+        for item in configured:
+            text = str(item or "").strip()
+            if text and text not in rows:
+                rows.append(text)
+        if rows:
+            return rows
+        return list(self.DNA_REQUIRED_FILES_DEFAULT)
 
     def _is_dna_runtime_system_message(self, message: Dict[str, Any]) -> bool:
         if str(message.get("role") or "") != "system":

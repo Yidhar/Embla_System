@@ -225,8 +225,24 @@ export async function sendDebugChatMessage(params: {
         content += text;
       } else if (type === "reasoning") {
         reasoning += text;
+      } else if (type === "model_output") {
+        const placeholder = Boolean(payload.placeholder);
+        if (!placeholder && !content && text) {
+          content += text;
+        }
       } else if (type === "route_decision") {
         routeDecision = payload as unknown as DebugRouteDecision;
+      } else if (type === "execution_receipt") {
+        const agentState =
+          payload.agent_state && typeof payload.agent_state === "object" && !Array.isArray(payload.agent_state)
+            ? (payload.agent_state as Record<string, unknown>)
+            : null;
+        const finalAnswer = String(agentState?.final_answer || "").trim();
+        const completionSummary = String(agentState?.completion_summary || "").trim();
+        const fallbackText = finalAnswer || completionSummary;
+        if (!content && fallbackText) {
+          content = fallbackText;
+        }
       } else if (type === "error") {
         streamError = text || streamError;
       }

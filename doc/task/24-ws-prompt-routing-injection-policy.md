@@ -306,10 +306,10 @@
 2. `S1_CONTROLLED`（可改但强管控）
 - 允许 AI 生成变更，但必须审批票据+DNA 重算+gate 通过。
 - 文件（当前 4/4）：
-  - `system/prompts/conversation_style_prompt.txt`
-  - `system/prompts/conversation_analyzer_prompt.txt`
-  - `system/prompts/tool_dispatch_prompt.txt`
-  - `system/prompts/agentic_tool_prompt.txt`
+  - `system/prompts/conversation_style_prompt.md`
+  - `system/prompts/conversation_analyzer_prompt.md`
+  - `system/prompts/tool_dispatch_prompt.md`
+  - `system/prompts/agentic_tool_prompt.md`
 
 3. `S2_FLEXIBLE`（可放任修改）
 - 非核心专家 prompt、实验型角色 prompt、可回退模板。

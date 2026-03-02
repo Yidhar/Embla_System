@@ -140,9 +140,9 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
     - `python -m py_compile apiserver/agentic_tool_loop.py` passed
     - `cd frontend && npm run build` still blocked by pre-existing type issue in `frontend/src/components/LoginDialog.vue` (`accessToken` mismatch), unrelated to this change
 46. Removed AgentServer call guidance from prompt stack:
-    - `system/prompts/agentic_tool_prompt.txt` removed `AgentServer_call` callable/function guidance
-    - `system/prompts/tool_dispatch_prompt.txt` removed AgentServer coexistence/priority rules
-    - `system/prompts/conversation_analyzer_prompt.txt` removed AgentServer output schema and all AgentServer-specific dispatch rules
+    - `system/prompts/agentic_tool_prompt.md` removed `AgentServer_call` callable/function guidance
+    - `system/prompts/tool_dispatch_prompt.md` removed AgentServer coexistence/priority rules
+    - `system/prompts/conversation_analyzer_prompt.md` removed AgentServer output schema and all AgentServer-specific dispatch rules
     - prompt policy now routes external/network capabilities via `mcp` services or native tools only
 47. Prompt verification for this round:
     - `rg -n "(?i)AgentServer" system/prompts -S` returned no matches

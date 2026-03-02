@@ -20,20 +20,20 @@ def _cleanup_case_root(root: Path) -> None:
 
 
 def _write_required_prompts(root: Path) -> None:
-    (root / "conversation_style_prompt.txt").write_text("STYLE_PROMPT", encoding="utf-8")
-    (root / "conversation_analyzer_prompt.txt").write_text("ANALYZER_PROMPT", encoding="utf-8")
-    (root / "tool_dispatch_prompt.txt").write_text("DISPATCH_PROMPT", encoding="utf-8")
-    (root / "agentic_tool_prompt.txt").write_text("AGENTIC_PROMPT", encoding="utf-8")
+    (root / "conversation_style_prompt.md").write_text("STYLE_PROMPT", encoding="utf-8")
+    (root / "conversation_analyzer_prompt.md").write_text("ANALYZER_PROMPT", encoding="utf-8")
+    (root / "tool_dispatch_prompt.md").write_text("DISPATCH_PROMPT", encoding="utf-8")
+    (root / "agentic_tool_prompt.md").write_text("AGENTIC_PROMPT", encoding="utf-8")
 
 
 def _bootstrap_manifest(prompts_root: Path, manifest_path: Path, audit_path: Path) -> None:
     loader = ImmutableDNALoader(
         root_dir=prompts_root,
         dna_files=[
-            DNAFileSpec(path="conversation_style_prompt.txt", required=True),
-            DNAFileSpec(path="conversation_analyzer_prompt.txt", required=True),
-            DNAFileSpec(path="tool_dispatch_prompt.txt", required=True),
-            DNAFileSpec(path="agentic_tool_prompt.txt", required=True),
+            DNAFileSpec(path="conversation_style_prompt.md", required=True),
+            DNAFileSpec(path="conversation_analyzer_prompt.md", required=True),
+            DNAFileSpec(path="tool_dispatch_prompt.md", required=True),
+            DNAFileSpec(path="agentic_tool_prompt.md", required=True),
         ],
         manifest_path=manifest_path,
         audit_file=audit_path,
@@ -108,7 +108,7 @@ def test_llm_service_blocks_chat_when_immutable_dna_verification_fails(monkeypat
         _bootstrap_manifest(prompts_root, manifest_path, audit_path)
 
         # Tamper after manifest bootstrap; runtime injection must fail closed.
-        (prompts_root / "tool_dispatch_prompt.txt").write_text("DISPATCH_PROMPT_TAMPERED", encoding="utf-8")
+        (prompts_root / "agentic_tool_prompt.md").write_text("AGENTIC_PROMPT_TAMPERED", encoding="utf-8")
 
         monkeypatch.setenv(llm_service_module.LLMService.DNA_RUNTIME_ENABLED_ENV, "1")
         monkeypatch.setenv(llm_service_module.LLMService.DNA_PROMPTS_ROOT_ENV, str(prompts_root))
@@ -178,7 +178,7 @@ def test_llm_service_immutable_dna_preflight_reports_failure_on_mismatch(monkeyp
         audit_path = case_root / "immutable_dna_runtime_injection_audit.jsonl"
         _write_required_prompts(prompts_root)
         _bootstrap_manifest(prompts_root, manifest_path, audit_path)
-        (prompts_root / "agentic_tool_prompt.txt").write_text("AGENTIC_PROMPT_TAMPERED", encoding="utf-8")
+        (prompts_root / "agentic_tool_prompt.md").write_text("AGENTIC_PROMPT_TAMPERED", encoding="utf-8")
 
         monkeypatch.setenv(llm_service_module.LLMService.DNA_RUNTIME_ENABLED_ENV, "1")
         monkeypatch.setenv(llm_service_module.LLMService.DNA_PROMPTS_ROOT_ENV, str(prompts_root))
@@ -194,6 +194,6 @@ def test_llm_service_immutable_dna_preflight_reports_failure_on_mismatch(monkeyp
         verify = report.get("verify")
         assert isinstance(verify, dict)
         assert verify.get("ok") is False
-        assert "agentic_tool_prompt.txt" in list(verify.get("mismatch_files") or [])
+        assert "agentic_tool_prompt.md" in list(verify.get("mismatch_files") or [])
     finally:
         _cleanup_case_root(case_root)

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from scripts.update_immutable_dna_manifest_ws23_003 import run_update_immutable_dna_manifest
-from scripts.validate_immutable_dna_gate_ws23_003 import REQUIRED_PROMPT_FILES, run_immutable_dna_gate
+from scripts.validate_immutable_dna_gate_ws23_003 import _resolve_required_prompt_files, run_immutable_dna_gate
 
 
 DEFAULT_OUTPUT = Path("scratch/reports/ws28_005_dna_spec_gate.json")
@@ -33,7 +33,7 @@ def _prepare_runtime_prompts(repo_root: Path, runtime_root: Path) -> Path:
     src = repo_root / "system" / "prompts"
     dst = runtime_root / "prompts"
     dst.mkdir(parents=True, exist_ok=True)
-    for name in REQUIRED_PROMPT_FILES:
+    for name in _resolve_required_prompt_files():
         source = src / name
         target = dst / name
         if source.exists():

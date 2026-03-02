@@ -3,22 +3,22 @@
   "entries": [
     {
       "prompt_name": "conversation_style_prompt",
-      "path": "conversation_style_prompt.txt",
+      "path": "conversation_style_prompt.md",
       "aliases": ["outer_chat_style"]
     },
     {
       "prompt_name": "conversation_analyzer_prompt",
-      "path": "conversation_analyzer_prompt.txt",
+      "path": "conversation_analyzer_prompt.md",
       "aliases": []
     },
     {
       "prompt_name": "tool_dispatch_prompt",
-      "path": "tool_dispatch_prompt.txt",
+      "path": "tool_dispatch_prompt.md",
       "aliases": []
     },
     {
       "prompt_name": "agentic_tool_prompt",
-      "path": "agentic_tool_prompt.txt",
+      "path": "agentic_tool_prompt.md",
       "aliases": []
     },
     {

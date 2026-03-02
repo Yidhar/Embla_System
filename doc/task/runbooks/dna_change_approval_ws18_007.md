@@ -29,7 +29,7 @@ ledger = DNAChangeAuditLedger(
 )
 
 change_id = ledger.request_change(
-    file_path="system/prompts/tool_dispatch_prompt.txt",
+    file_path="system/prompts/tool_dispatch_prompt.md",
     old_hash="sha256_old",
     new_hash="sha256_new",
     requested_by="agent-security",

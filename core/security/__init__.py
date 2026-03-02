@@ -3,6 +3,13 @@
 from .approval_gate import ApprovalDecision, ApprovalGate, ApprovalRequest
 from .audit_ledger import AuditLedger, AuditLedgerRecord, AuditLedgerVerifyReport
 from .budget_guard import BudgetGuardController, BudgetGuardState
+from .immutable_dna import (
+    DNAFileSpec,
+    DNAManifest,
+    DNAVerificationResult,
+    ImmutableDNAIntegrityMonitor,
+    ImmutableDNALoader,
+)
 from .lease_fencing import (
     GlobalMutexManager,
     LeaseFencingController,
@@ -23,6 +30,11 @@ __all__ = [
     "AuditLedgerVerifyReport",
     "BudgetGuardController",
     "BudgetGuardState",
+    "DNAFileSpec",
+    "DNAManifest",
+    "DNAVerificationResult",
+    "ImmutableDNALoader",
+    "ImmutableDNAIntegrityMonitor",
     "LeaseHandle",
     "GlobalMutexManager",
     "get_global_mutex_manager",

@@ -23,10 +23,10 @@ def _cleanup_case_root(root: Path) -> None:
 
 
 def _write_prompts(root: Path) -> None:
-    (root / "conversation_style_prompt.txt").write_text("STYLE_PROMPT", encoding="utf-8")
-    (root / "conversation_analyzer_prompt.txt").write_text("ANALYZER_PROMPT", encoding="utf-8")
-    (root / "tool_dispatch_prompt.txt").write_text("DISPATCH_PROMPT", encoding="utf-8")
-    (root / "agentic_tool_prompt.txt").write_text("AGENTIC_PROMPT", encoding="utf-8")
+    (root / "conversation_style_prompt.md").write_text("STYLE_PROMPT", encoding="utf-8")
+    (root / "conversation_analyzer_prompt.md").write_text("ANALYZER_PROMPT", encoding="utf-8")
+    (root / "tool_dispatch_prompt.md").write_text("DISPATCH_PROMPT", encoding="utf-8")
+    (root / "agentic_tool_prompt.md").write_text("AGENTIC_PROMPT", encoding="utf-8")
 
 
 def test_immutable_dna_bootstrap_verify_and_inject_order() -> None:
@@ -36,10 +36,8 @@ def test_immutable_dna_bootstrap_verify_and_inject_order() -> None:
         loader = ImmutableDNALoader(root_dir=case_root)
         manifest = loader.bootstrap_manifest()
         assert manifest.injection_order == [
-            "conversation_style_prompt.txt",
-            "conversation_analyzer_prompt.txt",
-            "tool_dispatch_prompt.txt",
-            "agentic_tool_prompt.txt",
+            "conversation_style_prompt.md",
+            "agentic_tool_prompt.md",
         ]
 
         verify = loader.verify()
@@ -48,8 +46,8 @@ def test_immutable_dna_bootstrap_verify_and_inject_order() -> None:
         injected = loader.inject()
         assert injected["schema_version"] == loader.MANIFEST_SCHEMA_VERSION
         assert injected["injection_order"] == manifest.injection_order
-        assert "[DNA:conversation_style_prompt.txt]" in injected["dna_text"]
-        assert "[DNA:agentic_tool_prompt.txt]" in injected["dna_text"]
+        assert "[DNA:conversation_style_prompt.md]" in injected["dna_text"]
+        assert "[DNA:agentic_tool_prompt.md]" in injected["dna_text"]
         assert injected["dna_hash"]
     finally:
         _cleanup_case_root(case_root)
@@ -63,10 +61,10 @@ def test_immutable_dna_rejects_unauthorized_tamper() -> None:
         loader.bootstrap_manifest()
 
         # Tamper prompt after manifest sealed.
-        (case_root / "tool_dispatch_prompt.txt").write_text("DISPATCH_PROMPT_TAMPERED", encoding="utf-8")
+        (case_root / "agentic_tool_prompt.md").write_text("AGENTIC_PROMPT_TAMPERED", encoding="utf-8")
         verify = loader.verify()
         assert verify.ok is False
-        assert "tool_dispatch_prompt.txt" in verify.mismatch_files
+        assert "agentic_tool_prompt.md" in verify.mismatch_files
 
         with pytest.raises(PermissionError):
             loader.inject()
@@ -95,15 +93,15 @@ def test_immutable_dna_supports_custom_file_order() -> None:
     try:
         _write_prompts(case_root)
         custom = [
-            DNAFileSpec(path="tool_dispatch_prompt.txt"),
-            DNAFileSpec(path="conversation_style_prompt.txt"),
+            DNAFileSpec(path="tool_dispatch_prompt.md"),
+            DNAFileSpec(path="conversation_style_prompt.md"),
         ]
         loader = ImmutableDNALoader(root_dir=case_root, dna_files=custom)
         manifest = loader.bootstrap_manifest()
-        assert manifest.injection_order == ["tool_dispatch_prompt.txt", "conversation_style_prompt.txt"]
+        assert manifest.injection_order == ["tool_dispatch_prompt.md", "conversation_style_prompt.md"]
         injected = loader.inject()
-        first_idx = injected["dna_text"].find("[DNA:tool_dispatch_prompt.txt]")
-        second_idx = injected["dna_text"].find("[DNA:conversation_style_prompt.txt]")
+        first_idx = injected["dna_text"].find("[DNA:tool_dispatch_prompt.md]")
+        second_idx = injected["dna_text"].find("[DNA:conversation_style_prompt.md]")
         assert first_idx >= 0 and second_idx > first_idx
     finally:
         _cleanup_case_root(case_root)

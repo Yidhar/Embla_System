@@ -13,7 +13,7 @@
       "allow_ai_direct_write": false
     },
     {
-      "path_pattern": "conversation_style_prompt.txt",
+      "path_pattern": "conversation_style_prompt.md",
       "level": "S1_CONTROLLED",
       "require_ticket": true,
       "require_manifest_refresh": true,
@@ -21,7 +21,23 @@
       "allow_ai_direct_write": false
     },
     {
-      "path_pattern": "conversation_analyzer_prompt.txt",
+      "path_pattern": "conversation_analyzer_prompt.md",
+      "level": "S2_FLEXIBLE",
+      "require_ticket": false,
+      "require_manifest_refresh": false,
+      "require_gate_verify": false,
+      "allow_ai_direct_write": true
+    },
+    {
+      "path_pattern": "tool_dispatch_prompt.md",
+      "level": "S2_FLEXIBLE",
+      "require_ticket": false,
+      "require_manifest_refresh": false,
+      "require_gate_verify": false,
+      "allow_ai_direct_write": true
+    },
+    {
+      "path_pattern": "agentic_tool_prompt.md",
       "level": "S1_CONTROLLED",
       "require_ticket": true,
       "require_manifest_refresh": true,
@@ -29,23 +45,7 @@
       "allow_ai_direct_write": false
     },
     {
-      "path_pattern": "tool_dispatch_prompt.txt",
-      "level": "S1_CONTROLLED",
-      "require_ticket": true,
-      "require_manifest_refresh": true,
-      "require_gate_verify": true,
-      "allow_ai_direct_write": false
-    },
-    {
-      "path_pattern": "agentic_tool_prompt.txt",
-      "level": "S1_CONTROLLED",
-      "require_ticket": true,
-      "require_manifest_refresh": true,
-      "require_gate_verify": true,
-      "allow_ai_direct_write": false
-    },
-    {
-      "path_pattern": "*.txt",
+      "path_pattern": "*.md",
       "level": "S2_FLEXIBLE",
       "require_ticket": false,
       "require_manifest_refresh": false,

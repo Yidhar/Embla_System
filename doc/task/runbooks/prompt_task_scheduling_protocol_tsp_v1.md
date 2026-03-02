@@ -7,14 +7,14 @@
 - 工具调用顺序与验收链路一致
 - 结果可追溯到证据路径（报告/日志/产物）
 
-本协议用于约束 `system/prompts/*.txt` 的行为口径，不替代代码层状态机。
+本协议用于约束 `system/prompts/*.md` 的行为口径，不替代代码层状态机。
 
 ## 2. 适用范围
 
-- `system/prompts/conversation_style_prompt.txt`
-- `system/prompts/conversation_analyzer_prompt.txt`
-- `system/prompts/tool_dispatch_prompt.txt`
-- `system/prompts/agentic_tool_prompt.txt`
+- `system/prompts/conversation_style_prompt.md`
+- `system/prompts/conversation_analyzer_prompt.md`
+- `system/prompts/tool_dispatch_prompt.md`
+- `system/prompts/agentic_tool_prompt.md`
 
 ## 3. TSP-v1 字段定义（最小集）
 
