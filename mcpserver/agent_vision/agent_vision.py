@@ -1,4 +1,4 @@
-"""MCP vision agent for image metadata inspection and lightweight Q&A."""
+"""MCP vision agent with OpenAI-compatible multimodal Q&A."""
 
 from __future__ import annotations
 
@@ -7,13 +7,24 @@ import hashlib
 import json
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+from system.config import get_config
 
 
 class VisionAgent:
-    """Inspect local/base64 images and return structured metadata."""
+    """Inspect local/base64 images and answer questions with multimodal LLM."""
 
     name = "Vision Agent"
+
+    def __init__(self) -> None:
+        cfg = get_config()
+        api_cfg = getattr(cfg, "api", None)
+        request_timeout = getattr(api_cfg, "request_timeout", 60) if api_cfg is not None else 60
+        try:
+            self._default_timeout_seconds = max(1.0, min(600.0, float(request_timeout)))
+        except (TypeError, ValueError):
+            self._default_timeout_seconds = 60.0
 
     async def handle_handoff(self, task: Dict[str, Any]) -> str:
         tool_name = str(task.get("tool_name") or "").strip().lower()
@@ -34,20 +45,51 @@ class VisionAgent:
 
         try:
             metadata = self._analyze_image(image_bytes=image_bytes, source=source)
-            answer = ""
-            question = str(task.get("question") or "").strip()
+            payload_data: Dict[str, Any] = {
+                "action": action,
+                "metadata": metadata,
+            }
+
             if action == "image_qa":
-                answer = self._answer_question(question=question, metadata=metadata)
+                question = str(task.get("question") or "").strip()
+                answer = ""
+                qa_mode = "metadata_fallback"
+                llm_error = ""
+                llm_usage: Dict[str, int] = {}
+                llm_runtime = self._resolve_multimodal_runtime(task)
+
+                if question and llm_runtime is not None:
+                    try:
+                        answer, llm_usage = await self._ask_multimodal_qa(
+                            question=question,
+                            image_bytes=image_bytes,
+                            metadata=metadata,
+                            runtime=llm_runtime,
+                        )
+                        qa_mode = "multimodal_llm"
+                    except Exception as exc:
+                        llm_error = self._sanitize_error_text(str(exc), secret=llm_runtime.get("api_key", ""))
+                        answer = self._answer_question(question=question, metadata=metadata)
+                else:
+                    answer = self._answer_question(question=question, metadata=metadata)
+
+                payload_data.update(
+                    {
+                        "question": question,
+                        "answer": answer,
+                        "qa_mode": qa_mode,
+                        "llm_enabled": llm_runtime is not None,
+                        "llm_model": str((llm_runtime or {}).get("model") or ""),
+                        "llm_base_url": str((llm_runtime or {}).get("base_url") or ""),
+                        "llm_usage": llm_usage,
+                        "llm_error": llm_error,
+                    }
+                )
 
             payload = {
                 "status": "ok",
                 "message": "图像分析完成",
-                "data": {
-                    "action": action,
-                    "metadata": metadata,
-                    "question": question,
-                    "answer": answer,
-                },
+                "data": payload_data,
             }
             return json.dumps(payload, ensure_ascii=False)
         except Exception as exc:
@@ -111,6 +153,221 @@ class VisionAgent:
             "mode": mode,
             "mean_luma": mean_luma,
         }
+
+    def _resolve_multimodal_runtime(self, task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        cfg = get_config()
+        api_cfg = getattr(cfg, "api", None)
+        cc_cfg = getattr(cfg, "computer_control", None)
+
+        cc_enabled = bool(getattr(cc_cfg, "enabled", False))
+        api_key = self._first_non_empty(
+            task.get("api_key"),
+            getattr(cc_cfg, "api_key", "") if cc_enabled else "",
+            getattr(api_cfg, "api_key", ""),
+        )
+        if api_key == "sk-placeholder-key-not-set":
+            api_key = ""
+
+        model = self._first_non_empty(
+            task.get("model"),
+            getattr(cc_cfg, "model", "") if cc_enabled else "",
+            getattr(api_cfg, "model", ""),
+        )
+
+        base_url = self._first_non_empty(
+            task.get("base_url"),
+            getattr(cc_cfg, "model_url", "") if cc_enabled else "",
+            getattr(api_cfg, "base_url", ""),
+        )
+
+        if not api_key or not model:
+            return None
+
+        timeout_seconds = self._parse_timeout_seconds(
+            task.get("timeout_seconds"),
+            default_value=self._default_timeout_seconds,
+        )
+
+        max_tokens = self._parse_optional_int(task.get("max_tokens"), fallback=1024, lower=1, upper=16384)
+        temperature = self._parse_optional_float(task.get("temperature"), fallback=0.2, lower=0.0, upper=2.0)
+
+        reasoning_effort = self._first_non_empty(
+            task.get("reasoning_effort"),
+            task.get("thinking_intensity"),
+            getattr(api_cfg, "reasoning_effort", ""),
+            getattr(api_cfg, "thinking_intensity", ""),
+        ).lower()
+        if reasoning_effort not in {"low", "medium", "high", "xhigh"}:
+            reasoning_effort = ""
+
+        extra_headers: Dict[str, Any] = {}
+        if isinstance(getattr(api_cfg, "extra_headers", None), dict):
+            extra_headers = {str(k): v for k, v in getattr(api_cfg, "extra_headers", {}).items()}
+
+        extra_body: Dict[str, Any] = {}
+        if isinstance(getattr(api_cfg, "extra_body", None), dict):
+            extra_body = {str(k): v for k, v in getattr(api_cfg, "extra_body", {}).items()}
+
+        return {
+            "api_key": api_key,
+            "base_url": base_url,
+            "model": model,
+            "timeout_seconds": timeout_seconds,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "reasoning_effort": reasoning_effort,
+            "extra_headers": extra_headers,
+            "extra_body": extra_body,
+        }
+
+    async def _ask_multimodal_qa(
+        self,
+        *,
+        question: str,
+        image_bytes: bytes,
+        metadata: Dict[str, Any],
+        runtime: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, int]]:
+        from openai import AsyncOpenAI
+
+        image_format = str(metadata.get("format") or "").lower()
+        image_mime = self._mime_from_format(image_format)
+        image_base64 = base64.b64encode(image_bytes).decode("ascii")
+        image_data_url = f"data:{image_mime};base64,{image_base64}"
+
+        prompt = (
+            "你是 Embla_system 的视觉分析子代理。"
+            "请结合图像内容和附带元数据回答用户问题，输出简洁中文答案。"
+            "\n\n[用户问题]\n"
+            f"{question}"
+            "\n\n[图像元数据]\n"
+            f"{json.dumps(metadata, ensure_ascii=False)}"
+        )
+
+        default_headers = runtime.get("extra_headers") if isinstance(runtime.get("extra_headers"), dict) else None
+        client = AsyncOpenAI(
+            api_key=str(runtime.get("api_key") or ""),
+            base_url=str(runtime.get("base_url") or "") or None,
+            timeout=float(runtime.get("timeout_seconds") or self._default_timeout_seconds),
+            default_headers=default_headers,
+        )
+
+        request_payload: Dict[str, Any] = {
+            "model": str(runtime.get("model") or ""),
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_data_url}},
+                    ],
+                }
+            ],
+            "max_tokens": int(runtime.get("max_tokens") or 1024),
+            "temperature": float(runtime.get("temperature") or 0.2),
+        }
+
+        reasoning_effort = str(runtime.get("reasoning_effort") or "").strip().lower()
+        model_name = str(runtime.get("model") or "").lower()
+        if reasoning_effort and "gpt-5" in model_name:
+            request_payload["reasoning_effort"] = reasoning_effort
+
+        extra_body = runtime.get("extra_body")
+        if isinstance(extra_body, dict) and extra_body:
+            for key, value in extra_body.items():
+                if key not in request_payload:
+                    request_payload[key] = value
+
+        response = await client.chat.completions.create(**request_payload)
+        answer = self._extract_text_response(response)
+        if not answer:
+            answer = "模型未返回可解析文本。"
+
+        usage = self._extract_usage(response)
+        return answer, usage
+
+    @staticmethod
+    def _extract_text_response(response: Any) -> str:
+        choices = getattr(response, "choices", None)
+        if not choices:
+            return ""
+        first_choice = choices[0]
+        message = getattr(first_choice, "message", None)
+        if message is None:
+            return ""
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            text_parts: List[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    if item.get("type") == "text":
+                        text_parts.append(str(item.get("text") or ""))
+                else:
+                    text = getattr(item, "text", None)
+                    if text is not None:
+                        text_parts.append(str(text))
+            return "".join(text_parts).strip()
+        return str(content or "").strip()
+
+    @staticmethod
+    def _extract_usage(response: Any) -> Dict[str, int]:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return {}
+
+        prompt_tokens = VisionAgent._safe_int(getattr(usage, "prompt_tokens", None))
+        completion_tokens = VisionAgent._safe_int(getattr(usage, "completion_tokens", None))
+        total_tokens = VisionAgent._safe_int(getattr(usage, "total_tokens", None))
+
+        payload: Dict[str, int] = {}
+        if prompt_tokens is not None:
+            payload["prompt_tokens"] = prompt_tokens
+        if completion_tokens is not None:
+            payload["completion_tokens"] = completion_tokens
+        if total_tokens is not None:
+            payload["total_tokens"] = total_tokens
+        return payload
+
+    @staticmethod
+    def _safe_int(value: Any) -> Optional[int]:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed
+
+    @staticmethod
+    def _sanitize_error_text(text: str, *, secret: str) -> str:
+        message = str(text or "")
+        masked_secret = str(secret or "").strip()
+        if masked_secret:
+            message = message.replace(masked_secret, "***")
+        return message
+
+    @staticmethod
+    def _first_non_empty(*values: Any) -> str:
+        for value in values:
+            text = str(value or "").strip()
+            if text:
+                return text
+        return ""
+
+    @staticmethod
+    def _mime_from_format(image_format: str) -> str:
+        lowered = str(image_format or "").strip().lower()
+        if lowered in {"jpg", "jpeg"}:
+            return "image/jpeg"
+        if lowered == "png":
+            return "image/png"
+        if lowered == "gif":
+            return "image/gif"
+        if lowered == "webp":
+            return "image/webp"
+        if lowered == "bmp":
+            return "image/bmp"
+        return "image/png"
 
     @staticmethod
     def _infer_dimensions(image_bytes: bytes) -> Tuple[Optional[int], Optional[int]]:
@@ -178,7 +435,31 @@ class VisionAgent:
                 return f"图像平均亮度约为 {luma}（0-255）。"
             return "当前环境无法计算亮度。"
 
-        return "当前提供的是元数据级视觉分析，如需语义级视觉问答可接入多模态模型。"
+        return "当前未接收到可用视觉模型回答，已回退到元数据级分析。"
+
+    @staticmethod
+    def _parse_timeout_seconds(value: Any, *, default_value: float) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return default_value
+        return max(1.0, min(600.0, parsed))
+
+    @staticmethod
+    def _parse_optional_int(value: Any, *, fallback: int, lower: int, upper: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return fallback
+        return max(lower, min(upper, parsed))
+
+    @staticmethod
+    def _parse_optional_float(value: Any, *, fallback: float, lower: float, upper: float) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return fallback
+        return max(lower, min(upper, parsed))
 
     @staticmethod
     def _json_error(message: str, *, tool_name: str) -> str:

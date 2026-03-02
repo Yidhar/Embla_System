@@ -99,6 +99,55 @@ def test_vision_agent_inspect_image_and_qa() -> None:
     assert inspect_payload["data"]["metadata"]["width"] == 1
     assert inspect_payload["data"]["metadata"]["height"] == 1
 
+
+def test_vision_agent_image_qa_uses_multimodal_when_available(monkeypatch) -> None:
+    agent = VisionAgent()
+    tiny_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO6xg1kAAAAASUVORK5CYII="
+
+    monkeypatch.setattr(
+        agent,
+        "_resolve_multimodal_runtime",
+        lambda task: {
+            "api_key": "sk-test",
+            "base_url": "http://127.0.0.1:9999/v1",
+            "model": "gpt-4o-mini",
+            "timeout_seconds": 30.0,
+            "max_tokens": 256,
+            "temperature": 0.2,
+            "reasoning_effort": "",
+            "extra_headers": {},
+            "extra_body": {},
+        },
+    )
+
+    async def _fake_multimodal_qa(**kwargs):
+        assert kwargs["question"] == "这张图里有什么？"
+        return "这是一个 1x1 的测试图片。", {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
+
+    monkeypatch.setattr(agent, "_ask_multimodal_qa", _fake_multimodal_qa)
+
+    qa_raw = asyncio.run(
+        agent.handle_handoff(
+            {
+                "tool_name": "image_qa",
+                "image_base64": tiny_png,
+                "question": "这张图里有什么？",
+            }
+        )
+    )
+    qa_payload = json.loads(qa_raw)
+    assert qa_payload["status"] == "ok"
+    assert qa_payload["data"]["qa_mode"] == "multimodal_llm"
+    assert qa_payload["data"]["answer"] == "这是一个 1x1 的测试图片。"
+    assert qa_payload["data"]["llm_usage"]["total_tokens"] == 18
+
+
+def test_vision_agent_image_qa_fallback_when_llm_unavailable(monkeypatch) -> None:
+    agent = VisionAgent()
+    tiny_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO6xg1kAAAAASUVORK5CYII="
+
+    monkeypatch.setattr(agent, "_resolve_multimodal_runtime", lambda task: None)
+
     qa_raw = asyncio.run(
         agent.handle_handoff(
             {
@@ -110,6 +159,7 @@ def test_vision_agent_inspect_image_and_qa() -> None:
     )
     qa_payload = json.loads(qa_raw)
     assert qa_payload["status"] == "ok"
+    assert qa_payload["data"]["qa_mode"] == "metadata_fallback"
     assert "1x1" in qa_payload["data"]["answer"]
 
 
