@@ -9,7 +9,11 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from system.config import get_config
+from core.event_bus import EventStore
+from system.config import get_config, logger
+
+
+_VISION_EVENT_STORE: Optional[EventStore] = None
 
 
 class VisionAgent:
@@ -57,6 +61,7 @@ class VisionAgent:
                 llm_error = ""
                 llm_usage: Dict[str, int] = {}
                 llm_runtime = self._resolve_multimodal_runtime(task)
+                fallback_reason = "llm_unavailable"
 
                 if question and llm_runtime is not None:
                     try:
@@ -67,8 +72,10 @@ class VisionAgent:
                             runtime=llm_runtime,
                         )
                         qa_mode = "multimodal_llm"
+                        fallback_reason = ""
                     except Exception as exc:
                         llm_error = self._sanitize_error_text(str(exc), secret=llm_runtime.get("api_key", ""))
+                        fallback_reason = "llm_error"
                         answer = self._answer_question(question=question, metadata=metadata)
                 else:
                     answer = self._answer_question(question=question, metadata=metadata)
@@ -86,6 +93,17 @@ class VisionAgent:
                     }
                 )
 
+                self._emit_observability_event(
+                    qa_mode=qa_mode,
+                    fallback_reason=fallback_reason,
+                    question=question,
+                    answer=answer,
+                    metadata=metadata,
+                    runtime=llm_runtime,
+                    llm_error=llm_error,
+                    task=task,
+                )
+
             payload = {
                 "status": "ok",
                 "message": "图像分析完成",
@@ -94,6 +112,71 @@ class VisionAgent:
             return json.dumps(payload, ensure_ascii=False)
         except Exception as exc:
             return self._json_error(str(exc), tool_name=tool_name)
+
+    def _emit_observability_event(
+        self,
+        *,
+        qa_mode: str,
+        fallback_reason: str,
+        question: str,
+        answer: str,
+        metadata: Dict[str, Any],
+        runtime: Optional[Dict[str, Any]],
+        llm_error: str,
+        task: Dict[str, Any],
+    ) -> None:
+        store = self._get_event_store()
+        if store is None:
+            return
+
+        payload = {
+            "session_id": str(task.get("session_id") or ""),
+            "execution_session_id": str(task.get("execution_session_id") or ""),
+            "question_length": len(question),
+            "answer_length": len(answer),
+            "qa_mode": qa_mode,
+            "fallback_reason": fallback_reason,
+            "llm_enabled": runtime is not None,
+            "model": str((runtime or {}).get("model") or ""),
+            "base_url": str((runtime or {}).get("base_url") or ""),
+            "image_source": str(metadata.get("source") or ""),
+            "image_format": str(metadata.get("format") or ""),
+            "image_width": metadata.get("width"),
+            "image_height": metadata.get("height"),
+            "llm_error": llm_error,
+        }
+
+        event_type = "VisionMultimodalQAFallback"
+        severity = "warning"
+        if qa_mode == "multimodal_llm":
+            event_type = "VisionMultimodalQASucceeded"
+            severity = "info"
+        elif fallback_reason == "llm_error":
+            event_type = "VisionMultimodalQAError"
+            severity = "warning"
+
+        try:
+            store.emit(
+                event_type,
+                payload,
+                source="mcpserver.agent_vision",
+                severity=severity,
+            )
+        except Exception as exc:
+            logger.debug("VisionAgent event emit failed: %s", exc)
+
+    @staticmethod
+    def _get_event_store() -> Optional[EventStore]:
+        global _VISION_EVENT_STORE
+        if _VISION_EVENT_STORE is not None:
+            return _VISION_EVENT_STORE
+        try:
+            event_file = Path(__file__).resolve().parents[2] / "logs" / "autonomous" / "events.jsonl"
+            _VISION_EVENT_STORE = EventStore(file_path=event_file)
+        except Exception as exc:
+            logger.debug("VisionAgent event store init failed: %s", exc)
+            return None
+        return _VISION_EVENT_STORE
 
     def _resolve_image_bytes(self, task: Dict[str, Any]) -> Tuple[bytes, str]:
         image_path = str(task.get("image_path") or task.get("path") or "").strip()

@@ -103,6 +103,11 @@ def test_vision_agent_inspect_image_and_qa() -> None:
 def test_vision_agent_image_qa_uses_multimodal_when_available(monkeypatch) -> None:
     agent = VisionAgent()
     tiny_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO6xg1kAAAAASUVORK5CYII="
+    emitted_events: list[tuple[str, dict]] = []
+
+    class _DummyStore:
+        def emit(self, event_type, payload, **kwargs):  # noqa: ANN001
+            emitted_events.append((str(event_type), dict(payload)))
 
     monkeypatch.setattr(
         agent,
@@ -125,6 +130,7 @@ def test_vision_agent_image_qa_uses_multimodal_when_available(monkeypatch) -> No
         return "这是一个 1x1 的测试图片。", {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 
     monkeypatch.setattr(agent, "_ask_multimodal_qa", _fake_multimodal_qa)
+    monkeypatch.setattr(agent, "_get_event_store", lambda: _DummyStore())
 
     qa_raw = asyncio.run(
         agent.handle_handoff(
@@ -140,13 +146,21 @@ def test_vision_agent_image_qa_uses_multimodal_when_available(monkeypatch) -> No
     assert qa_payload["data"]["qa_mode"] == "multimodal_llm"
     assert qa_payload["data"]["answer"] == "这是一个 1x1 的测试图片。"
     assert qa_payload["data"]["llm_usage"]["total_tokens"] == 18
+    assert emitted_events
+    assert emitted_events[-1][0] == "VisionMultimodalQASucceeded"
 
 
 def test_vision_agent_image_qa_fallback_when_llm_unavailable(monkeypatch) -> None:
     agent = VisionAgent()
     tiny_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO6xg1kAAAAASUVORK5CYII="
+    emitted_events: list[tuple[str, dict]] = []
+
+    class _DummyStore:
+        def emit(self, event_type, payload, **kwargs):  # noqa: ANN001
+            emitted_events.append((str(event_type), dict(payload)))
 
     monkeypatch.setattr(agent, "_resolve_multimodal_runtime", lambda task: None)
+    monkeypatch.setattr(agent, "_get_event_store", lambda: _DummyStore())
 
     qa_raw = asyncio.run(
         agent.handle_handoff(
@@ -161,6 +175,57 @@ def test_vision_agent_image_qa_fallback_when_llm_unavailable(monkeypatch) -> Non
     assert qa_payload["status"] == "ok"
     assert qa_payload["data"]["qa_mode"] == "metadata_fallback"
     assert "1x1" in qa_payload["data"]["answer"]
+    assert emitted_events
+    assert emitted_events[-1][0] == "VisionMultimodalQAFallback"
+
+
+def test_vision_agent_image_qa_emits_error_event_when_llm_call_fails(monkeypatch) -> None:
+    agent = VisionAgent()
+    tiny_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO6xg1kAAAAASUVORK5CYII="
+    emitted_events: list[tuple[str, dict]] = []
+
+    class _DummyStore:
+        def emit(self, event_type, payload, **kwargs):  # noqa: ANN001
+            emitted_events.append((str(event_type), dict(payload)))
+
+    monkeypatch.setattr(
+        agent,
+        "_resolve_multimodal_runtime",
+        lambda task: {
+            "api_key": "sk-secret",
+            "base_url": "https://example.com/v1",
+            "model": "gpt-4o-mini",
+            "timeout_seconds": 20.0,
+            "max_tokens": 128,
+            "temperature": 0.2,
+            "reasoning_effort": "",
+            "extra_headers": {},
+            "extra_body": {},
+        },
+    )
+
+    async def _fake_fail(**kwargs):
+        raise RuntimeError("upstream timeout sk-secret")
+
+    monkeypatch.setattr(agent, "_ask_multimodal_qa", _fake_fail)
+    monkeypatch.setattr(agent, "_get_event_store", lambda: _DummyStore())
+
+    qa_raw = asyncio.run(
+        agent.handle_handoff(
+            {
+                "tool_name": "image_qa",
+                "image_base64": tiny_png,
+                "question": "这张图尺寸是多少？",
+            }
+        )
+    )
+    qa_payload = json.loads(qa_raw)
+    assert qa_payload["status"] == "ok"
+    assert qa_payload["data"]["qa_mode"] == "metadata_fallback"
+    assert qa_payload["data"]["llm_error"]
+    assert "sk-secret" not in qa_payload["data"]["llm_error"]
+    assert emitted_events
+    assert emitted_events[-1][0] == "VisionMultimodalQAError"
 
 
 def test_office_doc_agent_read_docx(tmp_path: Path) -> None:

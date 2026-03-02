@@ -2901,6 +2901,7 @@ _OPS_INCIDENT_EVENT_SEVERITY: Dict[str, str] = {
     "RouteArbiterGuardEscalatedWarning": "warning",
     "ProcessGuardOrphanReaped": "warning",
     "RuntimeFuseTriggeredWarning": "warning",
+    "VisionMultimodalQAError": "warning",
 }
 
 _OPS_BRAINSTEM_HEARTBEAT_RELATIVE_PATH = Path("scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json")
@@ -3428,6 +3429,11 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         limit=max(200, int(events_limit)),
     )
     agentic_loop_completion_status = _ops_status_to_severity(str(agentic_loop_completion.get("status") or "unknown"))
+    vision_multimodal = _ops_build_vision_multimodal_summary(
+        events_file=events_file,
+        limit=max(200, int(events_limit)),
+    )
+    vision_multimodal_status = _ops_status_to_severity(str(vision_multimodal.get("status") or "unknown"))
 
     repo_root = _ops_repo_root()
     brainstem_control_plane = _ops_build_brainstem_control_plane_summary(repo_root)
@@ -3459,6 +3465,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             audit_ledger_status,
             execution_bridge_governance_status,
             agentic_loop_completion_status,
+            vision_multimodal_status,
         ]
     )
     severity = _ops_status_to_severity(overall_status)
@@ -3513,6 +3520,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "execution_bridge_governance_status": execution_bridge_governance_status,
             "execution_bridge_governance_reason_codes": list(execution_bridge_governance.get("reason_codes") or []),
             "agentic_loop_completion_status": agentic_loop_completion_status,
+            "vision_multimodal_status": vision_multimodal_status,
         },
         "metrics": {
             "runtime_rollout": metrics.get("runtime_rollout", {}),
@@ -3608,6 +3616,15 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
                 "total_count": agentic_loop_completion.get("total_count"),
                 "reason_code": agentic_loop_completion.get("reason_code"),
             },
+            "vision_multimodal_fallback_ratio": {
+                "status": vision_multimodal_status,
+                "value": vision_multimodal.get("fallback_ratio"),
+                "success_count": vision_multimodal.get("success_count"),
+                "fallback_count": vision_multimodal.get("fallback_count"),
+                "error_count": vision_multimodal.get("error_count"),
+                "total_count": vision_multimodal.get("total_count"),
+                "reason_code": vision_multimodal.get("reason_code"),
+            },
         },
         "threshold_profile": threshold_profile,
         "sources": sources,
@@ -3620,6 +3637,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         "audit_ledger": audit_ledger,
         "execution_bridge_governance": execution_bridge_governance,
         "agentic_loop_completion": agentic_loop_completion,
+        "vision_multimodal": vision_multimodal,
     }
     if ws26_runtime_report_payload:
         response_data["ws26_runtime_snapshot_report"] = ws26_runtime_report_payload
@@ -3683,6 +3701,12 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     elif agentic_loop_completion_status == "warning":
         reason_code = "AGENTIC_LOOP_COMPLETION_WARNING"
         reason_text = str(agentic_loop_completion.get("reason_text") or "Agentic loop completion signals require attention.")
+    elif vision_multimodal_status == "warning":
+        reason_code = "VISION_MULTIMODAL_WARNING"
+        reason_text = str(
+            vision_multimodal.get("reason_text")
+            or "Vision multimodal QA fallback detected; verify endpoint availability."
+        )
     elif severity == "unknown":
         reason_code = "RUNTIME_SIGNAL_UNKNOWN"
         reason_text = "Runtime posture lacks enough signal coverage; verify events/workflow inputs."
@@ -4336,6 +4360,87 @@ def _ops_build_agentic_loop_completion_summary(
     }
 
 
+def _ops_build_vision_multimodal_summary(
+    *,
+    events_file: Path,
+    limit: int = 5000,
+) -> Dict[str, Any]:
+    rows = _ops_read_event_rows(events_file, limit=max(200, int(limit)))
+    events_db = _ops_resolve_event_db_path(events_file)
+
+    success_count = 0
+    fallback_count = 0
+    error_count = 0
+    latest_timestamp = ""
+    latest_event_type = ""
+    latest_model = ""
+    latest_base_url = ""
+    latest_fallback_reason = ""
+
+    for row in rows:
+        event_type = str(row.get("event_type") or "").strip()
+        if event_type not in {
+            "VisionMultimodalQASucceeded",
+            "VisionMultimodalQAFallback",
+            "VisionMultimodalQAError",
+        }:
+            continue
+
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        if event_type == "VisionMultimodalQASucceeded":
+            success_count += 1
+        elif event_type == "VisionMultimodalQAFallback":
+            fallback_count += 1
+        else:
+            error_count += 1
+
+        if not latest_timestamp:
+            latest_timestamp = str(row.get("timestamp") or "")
+            latest_event_type = event_type
+            latest_model = str(payload.get("model") or "")
+            latest_base_url = str(payload.get("base_url") or "")
+            latest_fallback_reason = str(payload.get("fallback_reason") or "")
+
+    total_count = success_count + fallback_count + error_count
+    fallback_ratio = (float(fallback_count) / float(total_count)) if total_count > 0 else None
+    error_ratio = (float(error_count) / float(total_count)) if total_count > 0 else None
+
+    if total_count <= 0:
+        status = "unknown"
+        reason_code = "VISION_MULTIMODAL_SIGNAL_EMPTY"
+        reason_text = "No vision multimodal QA signal captured in runtime events."
+    elif error_count > 0:
+        status = "warning"
+        reason_code = "VISION_MULTIMODAL_ERROR_PRESENT"
+        reason_text = "Vision multimodal QA errors detected; fallback answer may be used."
+    elif fallback_count > 0:
+        status = "warning"
+        reason_code = "VISION_MULTIMODAL_FALLBACK_PRESENT"
+        reason_text = "Vision QA contains metadata fallback sessions; verify multimodal endpoint coverage."
+    else:
+        status = "ok"
+        reason_code = "OK"
+        reason_text = "Vision QA sessions are served by multimodal endpoint."
+
+    return {
+        "status": _ops_status_to_severity(status),
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "success_count": success_count,
+        "fallback_count": fallback_count,
+        "error_count": error_count,
+        "total_count": total_count,
+        "fallback_ratio": fallback_ratio,
+        "error_ratio": error_ratio,
+        "latest_timestamp": latest_timestamp,
+        "latest_event_type": latest_event_type,
+        "latest_model": latest_model,
+        "latest_base_url": latest_base_url,
+        "latest_fallback_reason": latest_fallback_reason,
+        "events_file": _ops_unix_path(events_db if events_db.exists() else events_file),
+    }
+
+
 def _ops_build_workflow_events_payload(
     *,
     events_limit: int = 5000,
@@ -4367,6 +4472,7 @@ def _ops_build_workflow_events_payload(
         "SubAgentRuntimeAutoDegraded",
         "LeaseLost",
         "IncidentOpened",
+        "VisionMultimodalQAError",
     }
     event_counters = {name: 0 for name in sorted(critical_event_types)}
     recent_critical_events: List[Dict[str, Any]] = []
@@ -4662,6 +4768,10 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
         events_file=events_file,
         limit=max(200, int(limit) * 10),
     )
+    vision_multimodal = _ops_build_vision_multimodal_summary(
+        events_file=events_file,
+        limit=max(200, int(limit) * 10),
+    )
     prompt_safety_summary: Dict[str, Any] = {}
     try:
         from scripts.export_slo_snapshot import build_snapshot
@@ -4702,6 +4812,7 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             "route_quality": _ops_build_route_quality_summary(snapshot_metrics, trend=route_quality_trend),
             "execution_bridge_governance": execution_bridge_governance,
             "agentic_loop_completion": agentic_loop_completion,
+            "vision_multimodal": vision_multimodal,
             "process_guard": process_guard,
             "killswitch_guard": killswitch_guard,
             "budget_guard": budget_guard,
@@ -4712,6 +4823,8 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
         prompt_safety_summary["execution_bridge_governance"] = execution_bridge_governance
     if "agentic_loop_completion" not in prompt_safety_summary:
         prompt_safety_summary["agentic_loop_completion"] = agentic_loop_completion
+    if "vision_multimodal" not in prompt_safety_summary:
+        prompt_safety_summary["vision_multimodal"] = vision_multimodal
     if "process_guard" not in prompt_safety_summary:
         prompt_safety_summary["process_guard"] = process_guard
     if "killswitch_guard" not in prompt_safety_summary:
