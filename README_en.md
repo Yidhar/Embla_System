@@ -134,13 +134,13 @@ A pluggable tool architecture based on the [Model Context Protocol](https://mode
 | Agent | Directory | Function | Status |
 |-------|-----------|----------|--------|
 | `weather_time` | `mcpserver/agent_weather_time/` | Weather queries/forecasts, system time, auto city/IP detection | `available` |
-| `open_launcher` | `mcpserver/agent_open_launcher/` | Scan installed apps, launch programs via natural language | `available` |
-| `online_search` | `mcpserver/agent_online_search/` | Web search via SearXNG | `missing` (directory absent) |
-| `crawl4ai` | `mcpserver/agent_crawl4ai/` | Web content extraction via Crawl4AI | `missing` (directory absent) |
-| `playwright_master` | `mcpserver/agent_playwright_master/` | Browser automation via Playwright | `missing` (directory absent) |
-| `vision` | `mcpserver/agent_vision/` | Screenshot analysis and visual Q&A | `missing` (directory absent) |
+| `app_launcher` (`open_launcher` alias) | `mcpserver/agent_open_launcher/` | Scan installed apps, launch programs via natural language | `available` |
+| `online_search` | `mcpserver/agent_online_search/` | Web search via SearXNG | `available` |
+| `crawl4ai` | `mcpserver/agent_crawl4ai/` | Web crawling and structured content extraction | `available` |
+| `playwright_master` | `mcpserver/agent_playwright_master/` | Browser automation via Playwright | `available` |
+| `vision` | `mcpserver/agent_vision/` | Screenshot analysis and visual Q&A | `available` |
 | `mqtt_tool` | `mcpserver/agent_mqtt_tool/` | IoT device control via MQTT | `missing` (directory absent) |
-| `office_doc` | `mcpserver/agent_office_doc/` | docx/xlsx content extraction | `missing` (directory absent) |
+| `office_doc` | `mcpserver/agent_office_doc/` | docx/xlsx content extraction | `available` |
 
 **Registration & discovery**:
 
@@ -152,6 +152,21 @@ mcpserver/
 ├── agent_open_launcher/
 │   ├── agent-manifest.json
 │   └── agent_app_launcher.py
+├── agent_online_search/
+│   ├── agent-manifest.json
+│   └── agent_online_search.py
+├── agent_crawl4ai/
+│   ├── agent-manifest.json
+│   └── agent_crawl4ai.py
+├── agent_playwright_master/
+│   ├── agent-manifest.json
+│   └── agent_playwright_master.py
+├── agent_vision/
+│   ├── agent-manifest.json
+│   └── agent_vision.py
+├── agent_office_doc/
+│   ├── agent-manifest.json
+│   └── agent_office_doc.py
 └── mcp_registry.py            ← scan_and_register_mcp_agents() globs **/agent-manifest.json
                                    importlib.import_module(module).ClassName() dynamic instantiation
 ```
@@ -244,6 +259,11 @@ NagaAgent/
 │   ├── mcp_manager.py    #   unified_call() routing
 │   ├── agent_weather_time/
 │   ├── agent_open_launcher/
+│   ├── agent_online_search/
+│   ├── agent_crawl4ai/
+│   ├── agent_playwright_master/
+│   ├── agent_vision/
+│   ├── agent_office_doc/
 │   └── (other agents are extension slots)
 ├── summer_memory/        # GRAG knowledge graph
 │   ├── quintuple_extractor.py  #   Quintuple extraction (structured output + JSON fallback)

@@ -134,13 +134,13 @@ GRAG（Graph-RAG）从对话中自动提取五元组 `(主体, 主体类型, 谓
 | Agent | 目录 | 功能 | 状态 |
 |-------|------|------|------|
 | `weather_time` | `mcpserver/agent_weather_time/` | 天气查询/预报、系统时间、自动城市/IP 检测 | `available` |
-| `open_launcher` | `mcpserver/agent_open_launcher/` | 扫描系统已安装应用，自然语言启动程序 | `available` |
-| `online_search` | `mcpserver/agent_online_search/` | 基于 SearXNG 的网络搜索 | `missing`（目录缺失） |
-| `crawl4ai` | `mcpserver/agent_crawl4ai/` | 基于 Crawl4AI 的网页内容提取 | `missing`（目录缺失） |
-| `playwright_master` | `mcpserver/agent_playwright_master/` | 基于 Playwright 的浏览器自动化 | `missing`（目录缺失） |
-| `vision` | `mcpserver/agent_vision/` | 截图分析与视觉问答 | `missing`（目录缺失） |
+| `app_launcher` (`open_launcher` alias) | `mcpserver/agent_open_launcher/` | 扫描系统已安装应用，自然语言启动程序 | `available` |
+| `online_search` | `mcpserver/agent_online_search/` | 基于 SearXNG 的网络搜索 | `available` |
+| `crawl4ai` | `mcpserver/agent_crawl4ai/` | 网页抓取与正文提取 | `available` |
+| `playwright_master` | `mcpserver/agent_playwright_master/` | 基于 Playwright 的浏览器自动化 | `available` |
+| `vision` | `mcpserver/agent_vision/` | 截图分析与视觉问答 | `available` |
 | `mqtt_tool` | `mcpserver/agent_mqtt_tool/` | MQTT 协议 IoT 设备控制 | `missing`（目录缺失） |
-| `office_doc` | `mcpserver/agent_office_doc/` | docx/xlsx 内容提取 | `missing`（目录缺失） |
+| `office_doc` | `mcpserver/agent_office_doc/` | docx/xlsx 内容提取 | `available` |
 
 **注册与发现**：
 
@@ -152,6 +152,21 @@ mcpserver/
 ├── agent_open_launcher/
 │   ├── agent-manifest.json
 │   └── agent_app_launcher.py
+├── agent_online_search/
+│   ├── agent-manifest.json
+│   └── agent_online_search.py
+├── agent_crawl4ai/
+│   ├── agent-manifest.json
+│   └── agent_crawl4ai.py
+├── agent_playwright_master/
+│   ├── agent-manifest.json
+│   └── agent_playwright_master.py
+├── agent_vision/
+│   ├── agent-manifest.json
+│   └── agent_vision.py
+├── agent_office_doc/
+│   ├── agent-manifest.json
+│   └── agent_office_doc.py
 └── mcp_registry.py            ← scan_and_register_mcp_agents() glob 扫描 **/agent-manifest.json
                                    importlib.import_module(module).ClassName() 动态实例化
 ```
@@ -242,6 +257,11 @@ NagaAgent/
 │   ├── mcp_manager.py    #   unified_call() 路由
 │   ├── agent_weather_time/
 │   ├── agent_open_launcher/
+│   ├── agent_online_search/
+│   ├── agent_crawl4ai/
+│   ├── agent_playwright_master/
+│   ├── agent_vision/
+│   ├── agent_office_doc/
 │   └── (其余 Agent 按需扩展)
 ├── summer_memory/        # GRAG 知识图谱
 │   ├── quintuple_extractor.py  #   五元组提取（结构化输出 + JSON 兜底）
