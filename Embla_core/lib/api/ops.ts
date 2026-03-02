@@ -7,16 +7,11 @@ import type {
   RuntimePostureData,
   WorkflowEventsData,
 } from "@/lib/types/ops";
+import { buildApiUrl, getApiBaseCandidates } from "@/lib/api/frontend-api-base";
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "").replace(/\/$/, "");
-
-function withBase(path: string): string {
-  return API_BASE ? `${API_BASE}${path}` : path;
-}
-
-async function fetchOps<TData>(path: string): Promise<OpsEnvelope<TData> | null> {
+async function fetchOnce<TData>(url: string): Promise<OpsEnvelope<TData> | null> {
   try {
-    const response = await fetch(withBase(path), {
+    const response = await fetch(url, {
       cache: "no-store",
       headers: {
         Accept: "application/json",
@@ -29,6 +24,20 @@ async function fetchOps<TData>(path: string): Promise<OpsEnvelope<TData> | null>
   } catch {
     return null;
   }
+}
+
+async function fetchOps<TData>(path: string): Promise<OpsEnvelope<TData> | null> {
+  const candidates = getApiBaseCandidates({
+    includeRelative: true,
+    includeServerInternalFallback: true,
+  });
+  for (const base of candidates) {
+    const payload = await fetchOnce<TData>(buildApiUrl(path, base));
+    if (payload) {
+      return payload;
+    }
+  }
+  return null;
 }
 
 export async function fetchRuntimePosture(): Promise<OpsEnvelope<RuntimePostureData> | null> {

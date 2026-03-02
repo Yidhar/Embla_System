@@ -1,7 +1,23 @@
-const API_BASE = (process.env.NEXT_PUBLIC_API_BASE || "").replace(/\/$/, "");
+import { buildApiUrl, getApiBaseCandidates } from "@/lib/api/frontend-api-base";
 
-function withBase(path: string): string {
-  return API_BASE ? `${API_BASE}${path}` : path;
+async function requestWithFallback(path: string, init?: RequestInit): Promise<Response | null> {
+  let lastResponse: Response | null = null;
+  const candidates = getApiBaseCandidates({
+    includeRelative: true,
+    includeServerInternalFallback: true,
+  });
+  for (const base of candidates) {
+    try {
+      const response = await fetch(buildApiUrl(path, base), init);
+      if (response.ok) {
+        return response;
+      }
+      lastResponse = response;
+    } catch {
+      continue;
+    }
+  }
+  return lastResponse;
 }
 
 export type DebugHealthPayload = {
@@ -122,12 +138,12 @@ export type PromptTemplatePayload = {
 };
 
 export async function fetchDebugHealth(): Promise<DebugHealthPayload | null> {
+  const response = await requestWithFallback("/v1/health", {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
   try {
-    const response = await fetch(withBase("/v1/health"), {
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    });
-    if (!response.ok) {
+    if (!response || !response.ok) {
       return null;
     }
     return (await response.json()) as DebugHealthPayload;
@@ -137,12 +153,12 @@ export async function fetchDebugHealth(): Promise<DebugHealthPayload | null> {
 }
 
 export async function fetchDebugSystemInfo(): Promise<DebugSystemInfoPayload | null> {
+  const response = await requestWithFallback("/v1/system/info", {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
   try {
-    const response = await fetch(withBase("/v1/system/info"), {
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    });
-    if (!response.ok) {
+    if (!response || !response.ok) {
       return null;
     }
     return (await response.json()) as DebugSystemInfoPayload;
@@ -155,25 +171,25 @@ export async function sendDebugChatMessage(params: {
   message: string;
   sessionId?: string;
 }): Promise<{ ok: boolean; data: DebugChatReply | null; error: string }> {
+  const response = await requestWithFallback("/v1/chat/stream", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({
+      message: params.message,
+      stream: true,
+      session_id: params.sessionId || null,
+      disable_tts: true,
+      skip_intent_analysis: true,
+      temporary: true,
+      stream_protocol: "sse_json_v1",
+    }),
+  });
   try {
-    const response = await fetch(withBase("/v1/chat/stream"), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "text/event-stream",
-      },
-      body: JSON.stringify({
-        message: params.message,
-        stream: true,
-        session_id: params.sessionId || null,
-        disable_tts: true,
-        skip_intent_analysis: true,
-        temporary: true,
-        stream_protocol: "sse_json_v1",
-      }),
-    });
-    if (!response.ok) {
-      return { ok: false, data: null, error: `HTTP ${response.status}` };
+    if (!response || !response.ok) {
+      return { ok: false, data: null, error: `HTTP ${response?.status ?? "network"}` };
     }
     if (!response.body) {
       return { ok: false, data: null, error: "empty stream body" };
@@ -270,13 +286,13 @@ export async function fetchDebugRouteBridge(params: {
     return { ok: false, data: null, error: "missing session id" };
   }
   const limit = Number.isFinite(params.limit) ? Math.max(1, Math.trunc(params.limit as number)) : 20;
+  const response = await requestWithFallback(`/v1/chat/route_bridge/${encodeURIComponent(sessionId)}?limit=${limit}`, {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
   try {
-    const response = await fetch(withBase(`/v1/chat/route_bridge/${encodeURIComponent(sessionId)}?limit=${limit}`), {
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    });
-    if (!response.ok) {
-      return { ok: false, data: null, error: `HTTP ${response.status}` };
+    if (!response || !response.ok) {
+      return { ok: false, data: null, error: `HTTP ${response?.status ?? "network"}` };
     }
     const payload = (await response.json()) as DebugRouteBridgePayload;
     if (!payload || payload.status !== "success") {
@@ -289,13 +305,13 @@ export async function fetchDebugRouteBridge(params: {
 }
 
 export async function fetchPromptTemplates(): Promise<{ ok: boolean; prompts: PromptTemplateMeta[]; error: string }> {
+  const response = await requestWithFallback("/v1/system/prompts", {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
   try {
-    const response = await fetch(withBase("/v1/system/prompts"), {
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    });
-    if (!response.ok) {
-      return { ok: false, prompts: [], error: `HTTP ${response.status}` };
+    if (!response || !response.ok) {
+      return { ok: false, prompts: [], error: `HTTP ${response?.status ?? "network"}` };
     }
     const payload = (await response.json()) as { status?: string; prompts?: PromptTemplateMeta[] };
     if (!payload || payload.status !== "success" || !Array.isArray(payload.prompts)) {
@@ -308,13 +324,13 @@ export async function fetchPromptTemplates(): Promise<{ ok: boolean; prompts: Pr
 }
 
 export async function fetchPromptTemplate(name: string): Promise<{ ok: boolean; data: PromptTemplatePayload | null; error: string }> {
+  const response = await requestWithFallback(`/v1/system/prompts/${encodeURIComponent(name)}`, {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+  });
   try {
-    const response = await fetch(withBase(`/v1/system/prompts/${encodeURIComponent(name)}`), {
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    });
-    if (!response.ok) {
-      return { ok: false, data: null, error: `HTTP ${response.status}` };
+    if (!response || !response.ok) {
+      return { ok: false, data: null, error: `HTTP ${response?.status ?? "network"}` };
     }
     const payload = (await response.json()) as PromptTemplatePayload;
     if (!payload || payload.status !== "success") {
@@ -330,17 +346,17 @@ export async function savePromptTemplate(params: {
   name: string;
   content: string;
 }): Promise<{ ok: boolean; error: string }> {
+  const response = await requestWithFallback(`/v1/system/prompts/${encodeURIComponent(params.name)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({ content: params.content }),
+  });
   try {
-    const response = await fetch(withBase(`/v1/system/prompts/${encodeURIComponent(params.name)}`), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ content: params.content }),
-    });
-    if (!response.ok) {
-      return { ok: false, error: `HTTP ${response.status}` };
+    if (!response || !response.ok) {
+      return { ok: false, error: `HTTP ${response?.status ?? "network"}` };
     }
     const payload = (await response.json()) as { status?: string; message?: string };
     if (!payload || payload.status !== "success") {

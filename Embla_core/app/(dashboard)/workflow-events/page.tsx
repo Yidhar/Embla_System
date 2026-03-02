@@ -71,6 +71,7 @@ const PAGE_COPY: Record<
       visible: string;
       idle: string;
       noToolEvent: string;
+      dataSourceOffline: string;
       noCriticalEvents: string;
       noIncidents: string;
       unknown: string;
@@ -142,6 +143,7 @@ const PAGE_COPY: Record<
       visible: "VISIBLE",
       idle: "IDLE",
       noToolEvent: "No active tool event",
+      dataSourceOffline: "Dashboard data source is unavailable. Check backend startup and API base configuration.",
       noCriticalEvents: "No critical events in current scan window.",
       noIncidents: "No incidents in current scan window.",
       unknown: "unknown",
@@ -212,6 +214,7 @@ const PAGE_COPY: Record<
       visible: "可见",
       idle: "空闲",
       noToolEvent: "当前无活动工具事件",
+      dataSourceOffline: "仪表盘数据源不可用，请检查后端是否启动以及 API 地址配置。",
       noCriticalEvents: "当前扫描窗口内无关键事件。",
       noIncidents: "当前扫描窗口内无事件。",
       unknown: "未知",
@@ -338,6 +341,7 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
     fetchIncidentsLatest(),
     fetchRuntimePosture(),
   ]);
+  const dataSourceConnected = Boolean(payload && incidentsPayload && runtimePayload);
   const summary = payload?.data?.summary;
   const toolStatus = payload?.data?.tool_status || {};
   const eventCounters = payload?.data?.event_counters || {};
@@ -401,9 +405,34 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
   const latestIncidentText = formatIsoDateTime(incidentsSummary?.latest_incident_at, lang, "--");
   const eventDbState = toState(String(eventDatabase?.status || summary?.event_db_status || "unknown"));
   const eventDbLatestText = formatIsoDateTime(eventDatabase?.latest_timestamp || summary?.event_db_latest_at, lang, "--");
+  const incidentsTotalValue = formatNumber(incidentsSummary?.total_incidents, lang, {
+    maximumFractionDigits: 0,
+    fallback: "--",
+  });
+  const incidentsCriticalValue = formatNumber(incidentsSummary?.critical_incidents, lang, {
+    maximumFractionDigits: 0,
+    fallback: "--",
+  });
+  const incidentsWarningValue = formatNumber(incidentsSummary?.warning_incidents, lang, {
+    maximumFractionDigits: 0,
+    fallback: "--",
+  });
+  const eventDbRowsValue = formatNumber(eventDatabase?.total_rows ?? summary?.event_db_rows, lang, {
+    maximumFractionDigits: 0,
+    fallback: "--",
+  });
+  const eventDbPartitionsValue = formatNumber(eventDatabase?.partition_count ?? summary?.event_db_partitions, lang, {
+    maximumFractionDigits: 0,
+    fallback: "--",
+  });
 
   return (
     <div className="space-y-6">
+      {!dataSourceConnected && (
+        <article className="rounded-3xl border border-amber-300/60 bg-amber-50/80 px-5 py-4 text-sm text-amber-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.5)]">
+          {copy.words.dataSourceOffline}
+        </article>
+      )}
       <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <SignalCard
           title={copy.cards.outboxPending.title}
@@ -438,21 +467,21 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-4">
         <SignalCard
           title={copy.cards.incidentsTotal.title}
-          value={formatNumber(incidentsSummary?.total_incidents || 0, lang, { maximumFractionDigits: 0 })}
+          value={incidentsTotalValue}
           note={copy.cards.incidentsTotal.note}
           state={incidentsState}
           stateLabel={translateSignalState(incidentsState, lang)}
         />
         <SignalCard
           title={copy.cards.criticalIncidents.title}
-          value={formatNumber(incidentsSummary?.critical_incidents || 0, lang, { maximumFractionDigits: 0 })}
+          value={incidentsCriticalValue}
           note={copy.cards.criticalIncidents.note}
           state={Number(incidentsSummary?.critical_incidents || 0) > 0 ? "critical" : incidentsState}
           stateLabel={translateSignalState(Number(incidentsSummary?.critical_incidents || 0) > 0 ? "critical" : incidentsState, lang)}
         />
         <SignalCard
           title={copy.cards.warningIncidents.title}
-          value={formatNumber(incidentsSummary?.warning_incidents || 0, lang, { maximumFractionDigits: 0 })}
+          value={incidentsWarningValue}
           note={copy.cards.warningIncidents.note}
           state={Number(incidentsSummary?.warning_incidents || 0) > 0 ? "warning" : incidentsState}
           stateLabel={translateSignalState(Number(incidentsSummary?.warning_incidents || 0) > 0 ? "warning" : incidentsState, lang)}
@@ -469,16 +498,14 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
       <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <SignalCard
           title={copy.cards.eventDbRows.title}
-          value={formatNumber(eventDatabase?.total_rows ?? summary?.event_db_rows ?? 0, lang, { maximumFractionDigits: 0 })}
+          value={eventDbRowsValue}
           note={copy.cards.eventDbRows.note}
           state={eventDbState}
           stateLabel={translateSignalState(eventDbState, lang)}
         />
         <SignalCard
           title={copy.cards.eventDbPartitions.title}
-          value={formatNumber(eventDatabase?.partition_count ?? summary?.event_db_partitions ?? 0, lang, {
-            maximumFractionDigits: 0,
-          })}
+          value={eventDbPartitionsValue}
           note={copy.cards.eventDbPartitions.note}
           state={eventDbState}
           stateLabel={translateSignalState(eventDbState, lang)}
