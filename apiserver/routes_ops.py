@@ -13,11 +13,22 @@ import re
 import sqlite3
 import time
 import traceback
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
+from ._shared import (
+    OPS_STATUS_RANK as _OPS_STATUS_RANK,
+    ops_max_status as _ops_max_status,
+    ops_metric_status as _ops_metric_status,
+    ops_parse_iso_datetime as _ops_parse_iso_datetime,
+    ops_read_json_file as _shared_ops_read_json_file,
+    ops_repo_root as _ops_repo_root,
+    ops_safe_int as _ops_safe_int,
+    ops_status_to_severity as _ops_status_to_severity,
+    ops_unix_path as _ops_unix_path,
+    ops_utc_iso_now as _ops_utc_iso_now,
+)
 
 from core.supervisor.watchdog_daemon import WatchdogDaemon
 
@@ -28,6 +39,7 @@ except ImportError:
         return {}
 
 logger = logging.getLogger(__name__)
+_OPS_APP_CONTEXT: Dict[str, Any] = {"app": None}
 
 __all__ = [
     "_OPS_AUDIT_LEDGER_RELATIVE_PATH",
@@ -65,6 +77,7 @@ __all__ = [
     "_ops_build_runtime_posture_payload",
     "_ops_build_vision_multimodal_summary",
     "_ops_build_watchdog_daemon_summary",
+    "_bind_ops_app_context",
     "_ops_build_workflow_events_payload",
     "_ops_collect_required_reports",
     "_ops_compact_event_payload",
@@ -78,6 +91,7 @@ __all__ = [
     "_ops_read_json_file",
     "_ops_repo_root",
     "_ops_resolve_audit_ledger_path",
+    "_ops_resolve_control_plane_mode_summary",
     "_ops_resolve_event_db_path",
     "_ops_route_event_status",
     "_ops_safe_int",
@@ -87,62 +101,15 @@ __all__ = [
 ]
 
 
-# ── Shared utilities (inline for self-containment) ────────────
-
-def _ops_utc_iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _ops_repo_root() -> Path:
-    return Path(__file__).resolve().parent.parent
+def _bind_ops_app_context(app: Any) -> None:
+    """Bind FastAPI app instance to routes_ops to avoid lazy import cycles."""
+    _OPS_APP_CONTEXT["app"] = app
 
 
-def _ops_unix_path(path: Path) -> str:
-    return str(path).replace("\\", "/")
-
-
-def _ops_status_to_severity(status: str) -> str:
-    normalized = str(status or "unknown").strip().lower()
-    if normalized in {"ok", "healthy", "success"}:
-        return "ok"
-    if normalized in {"warning", "warn"}:
-        return "warning"
-    if normalized in {"critical", "error", "failed", "fail"}:
-        return "critical"
-    return "unknown"
-
-
-_OPS_STATUS_RANK: Dict[str, int] = {
-    "unknown": 0,
-    "ok": 1,
-    "warning": 2,
-    "critical": 3,
-}
-
-
-def _ops_metric_status(value: Any) -> str:
-    if not isinstance(value, dict):
-        return "unknown"
-    return _ops_status_to_severity(str(value.get("status") or "unknown"))
-
-
-def _ops_max_status(statuses: List[str]) -> str:
-    current = "unknown"
-    current_rank = _OPS_STATUS_RANK[current]
-    for status in statuses:
-        normalized = _ops_status_to_severity(status)
-        rank = _OPS_STATUS_RANK.get(normalized, 0)
-        if rank > current_rank:
-            current = normalized
-            current_rank = rank
-    return current
-
-
-def _ops_safe_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return int(default)
+def _ops_read_json_file(path: Path) -> Dict[str, Any]:
+    """Compatibility wrapper: always return dict for existing ops call-sites."""
+    payload = _shared_ops_read_json_file(path)
+    return payload if isinstance(payload, dict) else {}
 
 
 router = APIRouter()
@@ -467,32 +434,41 @@ def _ops_resolve_audit_ledger_path(repo_root: Path) -> Path:
     return repo_root / _OPS_AUDIT_LEDGER_RELATIVE_PATH
 
 
-def _ops_read_json_file(path: Path) -> Dict[str, Any]:
-    if not path.exists():
-        return {}
+def _ops_resolve_control_plane_mode_summary() -> Dict[str, Any]:
+    """Resolve runtime control-plane mode (single vs dual)."""
+    legacy_enabled = False
+    source = "config.default"
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    return payload
+        from system.config import get_config
 
+        cfg = get_config()
+        auto_cfg = getattr(cfg, "autonomous", None)
+        if auto_cfg is not None:
+            legacy_enabled = bool(getattr(auto_cfg, "legacy_system_agent_enabled", False))
+            source = "system.config.autonomous.legacy_system_agent_enabled"
+    except Exception:
+        legacy_enabled = False
 
-def _ops_parse_iso_datetime(value: Any) -> Optional[float]:
-    from datetime import datetime
-
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = f"{text[:-1]}+00:00"
-    try:
-        return datetime.fromisoformat(text).timestamp()
-    except ValueError:
-        return None
+    runtime_mode = "dual_control_plane" if legacy_enabled else "single_control_plane"
+    status = "warning" if legacy_enabled else "ok"
+    reason_code = "LEGACY_AUTONOMOUS_ENABLED" if legacy_enabled else "LEGACY_AUTONOMOUS_DISABLED"
+    reason_text = (
+        "legacy autonomous system agent is enabled alongside chat pipeline."
+        if legacy_enabled
+        else "legacy autonomous system agent is disabled; chat pipeline is the single runtime control-plane."
+    )
+    return {
+        "status": status,
+        "runtime_mode": runtime_mode,
+        "single_control_plane": not legacy_enabled,
+        "legacy_autonomous_enabled": legacy_enabled,
+        "legacy_autonomous_status": "enabled" if legacy_enabled else "disabled",
+        "legacy_autonomous": "enabled" if legacy_enabled else "disabled",
+        "chat_pipeline_status": "enabled",
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "source": source,
+    }
 
 
 def _ops_extract_failed_checks(payload: Dict[str, Any]) -> List[str]:
@@ -726,10 +702,19 @@ def _ops_build_budget_guard_summary(repo_root: Path) -> Dict[str, Any]:
 
 
 def _ops_build_immutable_dna_summary() -> Dict[str, Any]:
-    # Lazy import to avoid circular dependency
-    from apiserver.api_server import app
-    preflight = getattr(app.state, "immutable_dna_preflight", None)
-    monitor_state_file_raw = str(getattr(app.state, "immutable_dna_integrity_state_file", "") or "").strip()
+    app_obj = _OPS_APP_CONTEXT.get("app")
+    if app_obj is None:
+        # Fallback path for direct test imports before api_server binds app context.
+        try:
+            import apiserver.api_server as _api  # type: ignore
+
+            app_obj = getattr(_api, "app", None)
+        except Exception:
+            app_obj = None
+
+    app_state = getattr(app_obj, "state", None) if app_obj is not None else None
+    preflight = getattr(app_state, "immutable_dna_preflight", None)
+    monitor_state_file_raw = str(getattr(app_state, "immutable_dna_integrity_state_file", "") or "").strip()
     if monitor_state_file_raw:
         monitor_state_file = Path(monitor_state_file_raw)
     else:
@@ -1022,6 +1007,8 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     repo_root = _ops_repo_root()
     brainstem_control_plane = _ops_build_brainstem_control_plane_summary(repo_root)
     brainstem_status = _ops_status_to_severity(str(brainstem_control_plane.get("status") or "unknown"))
+    control_plane_mode = _ops_resolve_control_plane_mode_summary()
+    control_plane_mode_status = _ops_status_to_severity(str(control_plane_mode.get("status") or "unknown"))
     watchdog_daemon = _ops_build_watchdog_daemon_summary(repo_root)
     watchdog_daemon_status = _ops_status_to_severity(str(watchdog_daemon.get("status") or "unknown"))
     process_guard = _ops_build_process_guard_summary(repo_root)
@@ -1040,6 +1027,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     overall_status = _ops_max_status(
         [
             snapshot_overall_status,
+            control_plane_mode_status,
             brainstem_status,
             watchdog_daemon_status,
             process_guard_status,
@@ -1097,6 +1085,12 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "overall_status": overall_status,
             "metric_status": metric_status,
             "route_quality": _ops_build_route_quality_summary(metrics, trend=route_quality_trend),
+            "control_plane_mode_status": control_plane_mode_status,
+            "control_plane_mode": str(control_plane_mode.get("runtime_mode") or ""),
+            "single_control_plane": bool(control_plane_mode.get("single_control_plane")),
+            "legacy_autonomous_enabled": bool(control_plane_mode.get("legacy_autonomous_enabled")),
+            "legacy_autonomous_status": str(control_plane_mode.get("legacy_autonomous_status") or "unknown"),
+            "legacy_autonomous": str(control_plane_mode.get("legacy_autonomous") or ""),
             "brainstem_control_plane_status": brainstem_status,
             "watchdog_daemon_status": watchdog_daemon_status,
             "process_guard_status": process_guard_status,
@@ -1124,6 +1118,16 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "chat_route_path_distribution": metrics.get("chat_route_path_distribution", {}),
             "path_b_budget_escalation_rate": metrics.get("path_b_budget_escalation_rate", {}),
             "core_session_creation_rate": metrics.get("core_session_creation_rate", {}),
+            "control_plane_mode": {
+                "status": control_plane_mode_status,
+                "value": 0 if bool(control_plane_mode.get("single_control_plane")) else 1,
+                "runtime_mode": str(control_plane_mode.get("runtime_mode") or ""),
+                "single_control_plane": bool(control_plane_mode.get("single_control_plane")),
+                "legacy_autonomous_enabled": bool(control_plane_mode.get("legacy_autonomous_enabled")),
+                "legacy_autonomous_status": str(control_plane_mode.get("legacy_autonomous_status") or "unknown"),
+                "legacy_autonomous": str(control_plane_mode.get("legacy_autonomous") or ""),
+                "reason_code": str(control_plane_mode.get("reason_code") or ""),
+            },
             "brainstem_heartbeat": {
                 "status": brainstem_status,
                 "value": brainstem_control_plane.get("heartbeat_age_seconds"),
@@ -1215,6 +1219,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         },
         "threshold_profile": threshold_profile,
         "sources": sources,
+        "control_plane_mode": control_plane_mode,
         "brainstem_control_plane": brainstem_control_plane,
         "watchdog_daemon": watchdog_daemon,
         "process_guard": process_guard,
@@ -1288,6 +1293,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     elif agentic_loop_completion_status == "warning":
         reason_code = "AGENTIC_LOOP_COMPLETION_WARNING"
         reason_text = str(agentic_loop_completion.get("reason_text") or "Agentic loop completion signals require attention.")
+    elif control_plane_mode_status == "warning":
+        reason_code = "CONTROL_PLANE_MODE_WARNING"
+        reason_text = str(control_plane_mode.get("reason_text") or "Runtime is in dual control-plane mode.")
     elif vision_multimodal_status == "warning":
         reason_code = "VISION_MULTIMODAL_WARNING"
         reason_text = str(
@@ -1389,14 +1397,6 @@ def _ops_build_mcp_fabric_payload() -> Dict[str, Any]:
         reason_code=reason_code,
         reason_text=reason_text,
     )
-
-
-def _ops_safe_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return int(default)
-
 
 def _ops_resolve_event_db_path(events_file: Path) -> Path:
     from core.event_bus.topic_bus import resolve_topic_db_path_from_mirror

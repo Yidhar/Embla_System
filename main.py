@@ -169,7 +169,16 @@ class ServiceManager:
         try:
             auto_cfg = getattr(config, "autonomous", None)
             if auto_cfg is None or not getattr(auto_cfg, "enabled", False):
-                logger.info("[Autonomous] disabled by config")
+                logger.info(
+                    "[RuntimeControlPlane] runtime_mode=single_control_plane legacy_autonomous=disabled "
+                    "chat_pipeline=enabled autonomous_enabled=false"
+                )
+                return
+            if not bool(getattr(auto_cfg, "legacy_system_agent_enabled", False)):
+                logger.info(
+                    "[RuntimeControlPlane] runtime_mode=single_control_plane legacy_autonomous=disabled "
+                    "chat_pipeline=enabled autonomous_enabled=true"
+                )
                 return
 
             from autonomous.system_agent import SystemAgent
@@ -177,7 +186,10 @@ class ServiceManager:
             cfg_payload = auto_cfg.model_dump() if hasattr(auto_cfg, "model_dump") else auto_cfg
             self.system_agent = SystemAgent(cfg_payload, repo_dir=os.getcwd())
             self._autonomous_task = asyncio.create_task(self.system_agent.start())
-            logger.info("[Autonomous] system agent started")
+            logger.info(
+                "[RuntimeControlPlane] runtime_mode=dual_control_plane legacy_autonomous=enabled "
+                "chat_pipeline=enabled autonomous_enabled=true"
+            )
         except Exception as exc:
             logger.error(f"[Autonomous] failed to start: {exc}")
 
