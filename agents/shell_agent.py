@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from agents.prompt_engine import PromptAssembler
 from agents.router_engine import RouterDecision, RouterRequest, TaskRouterEngine
+from agents.shell_tools import get_shell_tool_definitions, handle_shell_tool
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +104,31 @@ class ShellAgent:
         return list(self._config.readonly_tools) + ["dispatch_to_core"]
 
     def get_tool_definitions(self) -> List[Dict[str, Any]]:
-        """Get all tool definitions for the Shell agent."""
-        return [get_dispatch_to_core_definition()]
+        """Get all tool definitions for the Shell agent.
+
+        Returns 5 read-only tool schemas + dispatch_to_core routing tool.
+        """
+        return get_shell_tool_definitions() + [get_dispatch_to_core_definition()]
+
+    def execute_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        *,
+        session_id: str = "",
+    ) -> Dict[str, Any]:
+        """Execute a Shell tool call.
+
+        Routes read-only tools to handle_shell_tool(),
+        dispatch_to_core to the routing pipeline.
+        """
+        if tool_name == "dispatch_to_core":
+            return self.dispatch_to_core(arguments, session_id=session_id)
+
+        if tool_name in self._config.readonly_tools:
+            return handle_shell_tool(tool_name, arguments)
+
+        return {"error": f"Unknown tool: {tool_name}", "status": "error"}
 
     def route(
         self,
