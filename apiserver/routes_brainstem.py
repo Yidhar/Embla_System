@@ -302,7 +302,7 @@ def _bootstrap_immutable_dna_monitor_startup(*, repo_root: Optional[Path] = None
         return report
 
     try:
-        llm = get_llm_service()
+        llm = _get_llm_service()
         loader = llm.get_immutable_dna_loader()
         if loader is None:
             report["reason"] = "immutable_dna_loader_unavailable"
@@ -420,5 +420,4 @@ def _bootstrap_budget_guard_state(
         report["error"] = f"{type(exc).__name__}:{exc}"
         logger.error("[budget_guard_bootstrap] bootstrap error: %s", exc)
     return report
-
 
