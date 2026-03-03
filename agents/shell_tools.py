@@ -421,24 +421,66 @@ def _handle_list_tasks(
 
 
 def _handle_search_web(args: Dict[str, Any]) -> str:
-    """Web search stub — extensible when API is configured."""
+    """Web search via the online_search MCP service (SearXNG backend)."""
     query = str(args.get("query", "")).strip()
     if not query:
         raise ValueError("search_web: 缺少 query 参数")
 
-    # Check for configured search API
-    import os
-    api_key = os.environ.get("NAGA_SEARCH_API_KEY", "")
-    if not api_key:
+    import asyncio
+
+    try:
+        from mcpserver.mcp_manager import get_mcp_manager
+
+        manager = get_mcp_manager()
+        tool_call = {
+            "tool_name": "search_web",
+            "query": query,
+        }
+        # Run async unified_call in sync context
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # Already in async context — create a task
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                result = pool.submit(
+                    lambda: asyncio.run(manager.unified_call("online_search", tool_call))
+                ).result(timeout=30)
+        else:
+            result = asyncio.run(manager.unified_call("online_search", tool_call))
+
+        if result:
+            import json as _json
+            try:
+                parsed = _json.loads(result) if isinstance(result, str) else result
+                if isinstance(parsed, dict) and parsed.get("status") == "ok":
+                    data = parsed.get("data", {})
+                    results_list = data.get("results", [])
+                    lines = [f"## 搜索: {query}", f"共 {len(results_list)} 条结果\n"]
+                    for i, r in enumerate(results_list, 1):
+                        title = r.get("title", "")
+                        url = r.get("url", "")
+                        content = r.get("content", "")[:200]
+                        lines.append(f"{i}. **{title}**\n   {url}\n   {content}\n")
+                    return "\n".join(lines)
+                elif isinstance(parsed, dict) and parsed.get("status") == "error":
+                    return f"## 搜索: {query}\n\n⚠️ 搜索失败: {parsed.get('message', '未知错误')}"
+            except Exception:
+                pass
+            # Return raw result if parsing fails
+            return str(result)[:3000]
+        return f"## 搜索: {query}\n\n搜索服务无返回。"
+    except ImportError:
         return (
             f"## 搜索: {query}\n\n"
-            "⚠️ 在线搜索未配置。\n"
-            "需要设置环境变量 `NAGA_SEARCH_API_KEY` 以启用。\n"
-            "当前可通过 `read_file` 和 `search_memory` 获取本地信息。"
+            "⚠️ MCP 服务未加载（mcpserver 未初始化）。\n"
+            "请确保 MCP Server 已启动。"
         )
-
-    # TODO: Integrate with actual search API (SerpAPI, Brave, etc.)
-    return f"## 搜索: {query}\n\n搜索 API 已配置但集成尚未实现。"
+    except Exception as exc:
+        return f"## 搜索: {query}\n\n⚠️ 搜索失败: {exc}"
 
 
 __all__ = [

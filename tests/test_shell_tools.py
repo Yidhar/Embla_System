@@ -231,10 +231,11 @@ class TestSearchWeb:
         result = handle_shell_tool("search_web", {})
         assert result["status"] == "error"
 
-    def test_returns_config_reminder(self) -> None:
+    def test_returns_result_or_fallback(self) -> None:
         result = handle_shell_tool("search_web", {"query": "python asyncio"})
         assert result["status"] == "success"
-        assert "未配置" in result["result"] or "API" in result["result"]
+        # Should either return search results or a fallback message
+        assert "搜索" in result["result"]
 
 
 # ── Unknown tool ───────────────────────────────────────────────
