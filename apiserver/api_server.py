@@ -26,7 +26,7 @@ from system.coding_intent import contains_direct_coding_signal, has_recent_codin
 from core.supervisor.watchdog_daemon import WatchdogDaemon
 from core.event_bus import EventStore
 from agents.router_engine import RouterRequest, TaskRouterEngine
-from autonomous.router_arbiter_guard import RouterArbiterGuard
+from agents.router_arbiter_guard import RouterArbiterGuard
 from agents.contract_runtime import (
     trim_contract_text as trim_brain_contract_text,
 )
@@ -35,7 +35,7 @@ from agents.shell_agent import ShellAgent
 from agents.runtime.agent_session import AgentSessionStore
 from agents.runtime.mailbox import AgentMailbox
 from agents.runtime.task_board import TaskBoardEngine
-from autonomous.llm_gateway import (
+from agents.llm_gateway import (
     GatewayRouteRequest,
     LLMGateway,
     PromptEnvelopeInput,

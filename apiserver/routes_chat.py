@@ -18,8 +18,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 
 from agents.shell_agent import ShellAgent
-from autonomous.router_arbiter_guard import RouterArbiterGuard
-from autonomous.llm_gateway import LLMGateway
+from agents.router_arbiter_guard import RouterArbiterGuard
+from agents.llm_gateway import LLMGateway
 from core.event_bus import EventStore
 from apiserver.message_manager import message_manager as _default_message_manager
 from system.coding_intent import (
