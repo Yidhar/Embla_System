@@ -181,7 +181,7 @@ class LLMGateway:
         block2_ttl_seconds: int = 3600,
         now_fn: Optional[Any] = None,
         event_log_file: Optional[Path] = Path("logs/autonomous/events.jsonl"),
-        event_source: str = "autonomous.llm_gateway",
+        event_source: str = "agents.llm_gateway",
     ) -> None:
         merged_map = dict(self.DEFAULT_MODEL_MAP)
         if model_map:
@@ -203,7 +203,7 @@ class LLMGateway:
             "block2_hits": 0,
             "block2_misses": 0,
         }
-        self._event_source = str(event_source or "autonomous.llm_gateway")
+        self._event_source = str(event_source or "agents.llm_gateway")
         self._event_store = None
         if event_log_file is not None:
             try:

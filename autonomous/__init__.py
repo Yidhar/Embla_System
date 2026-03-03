@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from autonomous.daily_checkpoint import DailyCheckpointConfig, DailyCheckpointEngine, DailyCheckpointReport
-from autonomous.llm_gateway import (
+from agents.llm_gateway import (
     GatewayPlan,
     GatewayPlanMetrics,
     GatewayRouteDecision,
@@ -17,12 +17,12 @@ from autonomous.llm_gateway import (
 )
 from agents.meta_agent import Goal, MetaAgentRuntime, SubTask, TaskFeedback
 from agents.router_engine import RouterDecision, RouterRequest, TaskRouterEngine
+from agents.router_arbiter_guard import RouterArbiterDecision, RouterArbiterGuard
 from agents.memory.working_memory import (
     MemoryWindowRebalanceResult,
     MemoryWindowThresholds,
     WorkingMemoryWindowManager,
 )
-from autonomous.router_arbiter_guard import RouterArbiterDecision, RouterArbiterGuard
 
 if TYPE_CHECKING:
     from autonomous.system_agent import SystemAgent
