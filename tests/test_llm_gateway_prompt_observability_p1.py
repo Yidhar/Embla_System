@@ -5,7 +5,8 @@ import shutil
 import uuid
 from pathlib import Path
 
-from autonomous.llm_gateway import GatewayRouteRequest, LLMGateway, PromptEnvelopeInput, PromptSlice
+from agents.llm_gateway import GatewayRouteRequest, LLMGateway, PromptEnvelopeInput, PromptSlice
+from core.event_bus import EventStore
 
 
 def _make_case_root(prefix: str) -> Path:
@@ -19,6 +20,14 @@ def _cleanup_case_root(root: Path) -> None:
 
 
 def _read_jsonl(path: Path) -> list[dict]:
+    # TopicEventBus is primary storage; JSONL mirror may be disabled.
+    # Read via EventStore first to stay compatible across storage backends.
+    try:
+        rows = EventStore(file_path=path).read_recent(limit=2000)
+        if rows:
+            return rows
+    except Exception:
+        pass
     if not path.exists():
         return []
     rows = []

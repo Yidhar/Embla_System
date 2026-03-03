@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import apiserver.api_server as api_server
 import pytest
-from autonomous.router_arbiter_guard import RouterArbiterGuard
+from agents.router_arbiter_guard import RouterArbiterGuard
 
 
 def test_chat_route_core_path_selected_for_coding_intent() -> None:

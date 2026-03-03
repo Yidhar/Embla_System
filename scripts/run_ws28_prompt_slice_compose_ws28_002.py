@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from autonomous.llm_gateway import (
+from agents.llm_gateway import (
     LLMGateway,
     GatewayRouteRequest,
     PromptEnvelopeInput,

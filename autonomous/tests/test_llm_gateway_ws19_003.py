@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from autonomous.llm_gateway import LLMGateway, GatewayRouteRequest, PromptEnvelopeInput
+from agents.llm_gateway import LLMGateway, GatewayRouteRequest, PromptEnvelopeInput
 
 
 def test_llm_gateway_routes_by_task_type_severity_and_budget() -> None:

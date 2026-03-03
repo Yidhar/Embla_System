@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from autonomous.llm_gateway import (
+from agents.llm_gateway import (
     LLMGateway,
     GatewayRouteRequest,
     PromptEnvelopeInput,

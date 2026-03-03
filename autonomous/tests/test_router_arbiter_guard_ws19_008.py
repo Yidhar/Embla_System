@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from autonomous.router_arbiter_guard import RouterArbiterGuard
+from agents.router_arbiter_guard import RouterArbiterGuard
 
 
 def test_router_arbiter_guard_escalates_after_max_delegate_turns() -> None:
