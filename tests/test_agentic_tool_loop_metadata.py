@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from apiserver.agentic_tool_loop import _convert_structured_tool_calls
+from agents.tool_loop import _convert_structured_tool_calls
 
 
 def test_convert_structured_tool_calls_injects_context_metadata() -> None:

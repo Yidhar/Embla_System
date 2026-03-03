@@ -1,4 +1,4 @@
-from apiserver.agentic_tool_loop import _apply_coding_route_guard
+from agents.tool_loop import _apply_coding_route_guard
 from system.coding_intent import requires_core_execution_for_messages
 
 

@@ -105,6 +105,7 @@
   },
   "autonomous": {
     "enabled": false, // 是否启用 System Agent 自治循环
+    "legacy_system_agent_enabled": false, // 是否启用 legacy autonomous.system_agent（默认关闭，避免与 chat pipeline 双控制面冲突）
     "cycle_interval_seconds": 3600, // 自治循环周期（秒）
     "cli_tools": {
       "preferred": "claude", // 首选 CLI

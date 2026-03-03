@@ -343,7 +343,7 @@ class TestReviewAgent:
 class TestPipeline:
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        return asyncio.run(coro)
 
     async def _collect_events(self, gen):
         events = []
@@ -368,6 +368,7 @@ class TestPipeline:
         assert "pipeline_start" in types
         assert "route_decision" in types
         assert "core_decomposition" in types
+        assert "tool_stage" in types
         assert "execution_receipt" in types
         assert "content" in types
         assert "pipeline_end" in types
@@ -377,14 +378,19 @@ class TestPipeline:
         assert route_event["needs_core"] is True
         assert route_event["delegation_intent"] == "core_execution"
         assert isinstance(route_event["tool_profile"], list)
+        assert route_event["decision_source"] == "pipeline_router"
 
-        # End event should report completion
+        # End event should reflect delegated-but-not-finished child execution.
         end_event = next(e for e in events if e["type"] == "pipeline_end")
-        assert end_event["reason"] == "completed"
+        assert end_event["reason"] == "delegated_waiting_child_completion"
+
+        stage_event = next(e for e in events if e["type"] == "tool_stage")
+        assert stage_event["reason"] == "completion_not_submitted"
+        assert stage_event["details"]["task_completed"] is False
 
         receipt_event = next(e for e in events if e["type"] == "execution_receipt")
         agent_state = receipt_event.get("agent_state", {})
-        assert agent_state.get("task_completed") is True
+        assert agent_state.get("task_completed") is False
         assert isinstance(agent_state.get("final_answer"), str)
         assert len(str(agent_state.get("final_answer") or "")) > 0
 
@@ -428,3 +434,103 @@ class TestPipeline:
         for ee in expert_events:
             assert "agent_id" in ee
             assert "expert_type" in ee
+
+    def test_pipeline_respects_precomputed_core_route(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        forced_decision = RouterDecision(
+            decision_id="route_forced_001",
+            created_at="2026-03-04T00:00:00+00:00",
+            task_id="chat_forced",
+            trace_id="trace_forced",
+            session_id="forced-sess",
+            task_type="general",
+            selected_role="developer",
+            selected_model_tier="primary",
+            tool_profile=["file_ast", "read_file"],
+            prompt_profile="core_exec_general",
+            injection_mode="standard_exec",
+            delegation_intent="core_execution",
+            risk_level="write_repo",
+            budget_remaining=None,
+            reasoning=["forced_by_guard"],
+            replay_fingerprint="forced_fp",
+            workflow_entry_state="planned",
+            controlled_execution_plan={
+                "entry_state": "planned",
+                "states": ["planned", "delegating", "executing", "verifying", "completed", "failed"],
+            },
+        )
+
+        events = self._run(self._collect_events(
+            run_multi_agent_pipeline(
+                message="只是读状态，但守卫已强制升 Core",
+                session_id="forced-sess__core",
+                risk_level="read_only",
+                route_decision=forced_decision.to_dict(),
+                forced_path="path-c",
+                core_session_id="forced-sess__core",
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+            )
+        ))
+
+        route_event = next(e for e in events if e["type"] == "route_decision")
+        assert route_event["decision_source"] == "precomputed"
+        assert route_event["needs_core"] is True
+        assert route_event["delegation_intent"] == "core_execution"
+        assert "core_decomposition" in [e["type"] for e in events]
+
+    def test_pipeline_executes_child_loops_when_enabled(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, tools, model
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "mock_call_1",
+                        "name": "report_to_parent",
+                        "arguments": {
+                            "type": "completed",
+                            "content": "child work complete",
+                        },
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(self._collect_events(
+            run_multi_agent_pipeline(
+                message="Implement auth endpoint and tests",
+                session_id="test-session-child-exec",
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+            )
+        ))
+
+        event_types = [e.get("type") for e in events]
+        assert "dev_loop_start" in event_types
+        assert "dev_loop_event" in event_types
+        assert "dev_loop_end" in event_types
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        assert receipt_event.get("stop_reason") == "submitted_completion"
+        assert receipt_event.get("agent_state", {}).get("task_completed") is True
+
+        end_event = next(e for e in events if e["type"] == "pipeline_end")
+        assert end_event["reason"] == "completed"

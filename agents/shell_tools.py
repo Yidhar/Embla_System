@@ -102,7 +102,7 @@ TOOL_DEF_LIST_TASKS: Dict[str, Any] = {
         "properties": {
             "status_filter": {
                 "type": "string",
-                "enum": ["all", "pending", "in_progress", "completed"],
+                "enum": ["all", "pending", "in_progress", "blocked", "done", "completed", "failed"],
                 "description": "Filter by task status (default: all).",
             },
         },
@@ -335,8 +335,12 @@ def _handle_search_memory(
                 results.append(f"\n### L1 标签匹配 (tags={tags})")
                 for m in matches[:top_k]:
                     results.append(f"- {m}")
-        # Also search by keyword in index
-        keyword_matches = mgr.scan_index(keyword=query)
+        # Also search by keyword in index entries (best effort).
+        keyword_matches = [
+            entry
+            for entry in mgr.scan_index(top_k=max(top_k * 8, 40))
+            if query.lower() in str(entry).lower()
+        ]
         if keyword_matches:
             results.append(f"\n### L1 关键词匹配")
             for m in keyword_matches[:top_k]:
@@ -361,14 +365,28 @@ def _handle_search_memory(
 
     # C. Semantic graph
     try:
-        from agents.memory.semantic_graph import SemanticGraphStore
-        graph = SemanticGraphStore()
-        graph_results = graph.search(query, top_k=top_k)
-        if graph_results:
-            results.append(f"\n### 语义图谱 ({len(graph_results)} 条)")
-            for gr in graph_results[:top_k]:
-                label = gr.get("label", gr.get("id", "?"))
-                results.append(f"- {label}")
+        from agents.memory.semantic_graph import get_semantic_graph, query_tool_artifact_topology
+
+        graph = get_semantic_graph()
+        co_occurs = graph.query_topic_co_occurrence(query, top_k=top_k)
+        if co_occurs:
+            results.append(f"\n### 语义图谱主题关联 ({len(co_occurs)} 条)")
+            for item in co_occurs[:top_k]:
+                topic = str(item.get("topic") or "").strip()
+                weight = int(item.get("weight") or 0)
+                if topic:
+                    results.append(f"- {topic} (weight={weight})")
+
+        topology = query_tool_artifact_topology(query, top_k_topics=top_k, graph=graph)
+        if topology:
+            results.append(f"\n### 工具-证据拓扑 ({len(topology)} 条)")
+            for row in topology[:top_k]:
+                artifact = str(row.get("artifact") or "").strip()
+                topics = row.get("topics") if isinstance(row.get("topics"), list) else []
+                topic_preview = ", ".join(
+                    str(topic.get("topic") or "").strip() for topic in topics[:3] if isinstance(topic, dict)
+                )
+                results.append(f"- artifact={artifact or '(none)'} topics={topic_preview or '(none)'}")
     except Exception as exc:
         results.append(f"\n### 语义图谱: 搜索失败 ({exc})")
 
@@ -388,15 +406,34 @@ def _handle_list_tasks(
 ) -> str:
     """List tasks from the TaskBoard."""
     status_filter = str(args.get("status_filter", "all")).strip().lower()
+    status_alias = {
+        "completed": "done",
+        "in_progress": "in_progress",
+        "pending": "pending",
+        "blocked": "blocked",
+        "done": "done",
+        "failed": "failed",
+    }
     results: List[str] = ["## 当前任务列表"]
 
+    board: Optional[Any] = None
     try:
         from agents.runtime.task_board import TaskBoardEngine
-        board = TaskBoardEngine()
-        tasks = board.list_tasks()
 
-        if status_filter != "all":
-            tasks = [t for t in tasks if t.get("status", "") == status_filter]
+        board = TaskBoardEngine(
+            boards_dir=str(project_root / "memory" / "working" / "boards"),
+            db_path=str(project_root / "scratch" / "runtime" / "task_boards.db"),
+        )
+        resolved_status = status_alias.get(status_filter, "")
+        if status_filter == "all":
+            tasks = board.query_tasks()
+        elif resolved_status:
+            tasks = board.query_tasks(status=resolved_status)
+        else:
+            tasks = []
+
+        if status_filter != "all" and not resolved_status:
+            results.append(f"\n无效状态过滤器: {status_filter}")
 
         if not tasks:
             results.append(f"\n无{'匹配' if status_filter != 'all' else '活跃'}任务。")
@@ -413,6 +450,12 @@ def _handle_list_tasks(
                 )
     except Exception as exc:
         results.append(f"\nTaskBoard 不可用: {exc}")
+    finally:
+        if board is not None:
+            try:
+                board.close()
+            except Exception:
+                pass
 
     return "\n".join(results)
 
@@ -427,6 +470,32 @@ def _handle_search_web(args: Dict[str, Any]) -> str:
         raise ValueError("search_web: 缺少 query 参数")
 
     import asyncio
+    import concurrent.futures
+
+    def _run_async_blocking(async_fn: Any, *fn_args: Any, timeout: float = 30.0) -> Any:
+        """Run coroutine without mutating the process-global default event loop."""
+
+        def _runner() -> Any:
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(async_fn(*fn_args))
+            finally:
+                try:
+                    loop.run_until_complete(loop.shutdown_asyncgens())
+                except Exception:
+                    pass
+                loop.close()
+
+        try:
+            running_loop = asyncio.get_running_loop()
+            if running_loop and running_loop.is_running():
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="shell-web-search") as pool:
+                    future = pool.submit(_runner)
+                    return future.result(timeout=timeout)
+        except RuntimeError:
+            pass
+
+        return _runner()
 
     try:
         from mcpserver.mcp_manager import get_mcp_manager
@@ -436,21 +505,7 @@ def _handle_search_web(args: Dict[str, Any]) -> str:
             "tool_name": "search_web",
             "query": query,
         }
-        # Run async unified_call in sync context
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop and loop.is_running():
-            # Already in async context — create a task
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                result = pool.submit(
-                    lambda: asyncio.run(manager.unified_call("online_search", tool_call))
-                ).result(timeout=30)
-        else:
-            result = asyncio.run(manager.unified_call("online_search", tool_call))
+        result = _run_async_blocking(manager.unified_call, "online_search", tool_call, timeout=30.0)
 
         if result:
             import json as _json

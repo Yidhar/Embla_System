@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-import apiserver.agentic_tool_loop as tool_loop
+import agents.tool_loop as tool_loop
 
 
 def test_inject_call_context_sets_default_approval_hook_for_write_repo() -> None:

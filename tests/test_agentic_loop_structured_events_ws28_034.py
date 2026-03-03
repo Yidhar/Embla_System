@@ -6,7 +6,7 @@ import json
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
-import apiserver.agentic_tool_loop as tool_loop
+import agents.tool_loop as tool_loop
 import apiserver.llm_service as llm_service_module
 
 

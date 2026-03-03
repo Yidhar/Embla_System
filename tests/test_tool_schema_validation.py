@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-import apiserver.agentic_tool_loop as tool_loop
-from apiserver.agentic_tool_loop import _convert_structured_tool_calls
+import agents.tool_loop as tool_loop
+from agents.tool_loop import _convert_structured_tool_calls
 from core.security import PolicyFirewall
 
 

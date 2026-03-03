@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-import apiserver.agentic_tool_loop as tool_loop
+import agents.tool_loop as tool_loop
 from system.gc_reader_bridge import build_gc_reader_followup_plan
 
 

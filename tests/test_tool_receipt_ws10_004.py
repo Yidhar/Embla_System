@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-import apiserver.agentic_tool_loop as tool_loop
+import agents.tool_loop as tool_loop
 
 
 def test_build_tool_receipt_error_path_uses_context_and_defaults() -> None:

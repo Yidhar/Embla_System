@@ -1,6 +1,6 @@
 import json
 
-from apiserver.agentic_tool_loop import format_tool_results_for_llm
+from agents.tool_loop import format_tool_results_for_llm
 
 
 def test_format_tool_results_uses_memory_index_card_when_ref_present():
