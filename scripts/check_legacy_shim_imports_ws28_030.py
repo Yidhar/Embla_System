@@ -17,6 +17,8 @@ LEGACY_SHIM_MODULES = (
     "system.policy_firewall",
     "system.watchdog_daemon",
     "system.brainstem_supervisor",
+    "autonomous.llm_gateway",
+    "autonomous.router_arbiter_guard",
     "autonomous.event_log.event_schema",
     "autonomous.event_log.event_store",
     "autonomous.event_log.topic_event_bus",

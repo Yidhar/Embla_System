@@ -1,4 +1,4 @@
-"""Legacy shim for LLM gateway.
+"""Archived legacy shim for LLM gateway.
 
 Deprecated path: ``autonomous.llm_gateway``.
 Canonical path: ``agents.llm_gateway``.
@@ -19,7 +19,14 @@ from agents.llm_gateway import (
     PromptSlice,
 )
 
+ARCHIVED_SHIM: bool = True
+ARCHIVED_SINCE: str = "2026-03-04"
+CANONICAL_MODULE: str = "agents.llm_gateway"
+
 __all__ = [
+    "ARCHIVED_SHIM",
+    "ARCHIVED_SINCE",
+    "CANONICAL_MODULE",
     "GatewayRouteRequest",
     "GatewayRouteDecision",
     "PromptEnvelopeInput",
