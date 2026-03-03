@@ -165,30 +165,23 @@ class ServiceManager:
             logger.error(f"后台服务异常: {e}")
 
     async def _try_start_autonomous_agent(self):
-        """Start the autonomous system agent on the background event loop."""
+        """Legacy autonomous runtime is retired; keep single control-plane only."""
         try:
             auto_cfg = getattr(config, "autonomous", None)
-            if auto_cfg is None or not getattr(auto_cfg, "enabled", False):
-                logger.info(
+            auto_enabled = bool(getattr(auto_cfg, "enabled", False)) if auto_cfg is not None else False
+            requested_legacy = bool(getattr(auto_cfg, "legacy_system_agent_enabled", False)) if auto_cfg is not None else False
+            if requested_legacy:
+                logger.warning(
                     "[RuntimeControlPlane] runtime_mode=single_control_plane legacy_autonomous=disabled "
-                    "chat_pipeline=enabled autonomous_enabled=false"
+                    "chat_pipeline=enabled autonomous_enabled=%s requested_legacy_autonomous=true "
+                    "reason=legacy_runtime_removed",
+                    str(auto_enabled).lower(),
                 )
                 return
-            if not bool(getattr(auto_cfg, "legacy_system_agent_enabled", False)):
-                logger.info(
-                    "[RuntimeControlPlane] runtime_mode=single_control_plane legacy_autonomous=disabled "
-                    "chat_pipeline=enabled autonomous_enabled=true"
-                )
-                return
-
-            from autonomous.system_agent import SystemAgent
-
-            cfg_payload = auto_cfg.model_dump() if hasattr(auto_cfg, "model_dump") else auto_cfg
-            self.system_agent = SystemAgent(cfg_payload, repo_dir=os.getcwd())
-            self._autonomous_task = asyncio.create_task(self.system_agent.start())
             logger.info(
-                "[RuntimeControlPlane] runtime_mode=dual_control_plane legacy_autonomous=enabled "
-                "chat_pipeline=enabled autonomous_enabled=true"
+                "[RuntimeControlPlane] runtime_mode=single_control_plane legacy_autonomous=disabled "
+                "chat_pipeline=enabled autonomous_enabled=%s requested_legacy_autonomous=false",
+                str(auto_enabled).lower(),
             )
         except Exception as exc:
             logger.error(f"[Autonomous] failed to start: {exc}")

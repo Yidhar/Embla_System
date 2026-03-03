@@ -435,8 +435,8 @@ def _ops_resolve_audit_ledger_path(repo_root: Path) -> Path:
 
 
 def _ops_resolve_control_plane_mode_summary() -> Dict[str, Any]:
-    """Resolve runtime control-plane mode (single vs dual)."""
-    legacy_enabled = False
+    """Resolve runtime control-plane mode (legacy autonomous runtime retired)."""
+    requested_legacy_enabled = False
     source = "config.default"
     try:
         from system.config import get_config
@@ -444,26 +444,28 @@ def _ops_resolve_control_plane_mode_summary() -> Dict[str, Any]:
         cfg = get_config()
         auto_cfg = getattr(cfg, "autonomous", None)
         if auto_cfg is not None:
-            legacy_enabled = bool(getattr(auto_cfg, "legacy_system_agent_enabled", False))
+            requested_legacy_enabled = bool(getattr(auto_cfg, "legacy_system_agent_enabled", False))
             source = "system.config.autonomous.legacy_system_agent_enabled"
     except Exception:
-        legacy_enabled = False
+        requested_legacy_enabled = False
 
-    runtime_mode = "dual_control_plane" if legacy_enabled else "single_control_plane"
-    status = "warning" if legacy_enabled else "ok"
-    reason_code = "LEGACY_AUTONOMOUS_ENABLED" if legacy_enabled else "LEGACY_AUTONOMOUS_DISABLED"
-    reason_text = (
-        "legacy autonomous system agent is enabled alongside chat pipeline."
-        if legacy_enabled
-        else "legacy autonomous system agent is disabled; chat pipeline is the single runtime control-plane."
-    )
+    # Runtime always enforces single control-plane; legacy autonomous path is retired.
+    legacy_enabled = False
+    runtime_mode = "single_control_plane"
+    status = "ok"
+    reason_code = "LEGACY_AUTONOMOUS_DISABLED"
+    reason_text = "legacy autonomous system agent is disabled; chat pipeline is the single runtime control-plane."
+    if requested_legacy_enabled:
+        reason_code = "LEGACY_AUTONOMOUS_REQUEST_IGNORED"
+        reason_text = "legacy autonomous system agent runtime path is removed; config request is ignored."
     return {
         "status": status,
         "runtime_mode": runtime_mode,
-        "single_control_plane": not legacy_enabled,
+        "single_control_plane": True,
         "legacy_autonomous_enabled": legacy_enabled,
         "legacy_autonomous_status": "enabled" if legacy_enabled else "disabled",
         "legacy_autonomous": "enabled" if legacy_enabled else "disabled",
+        "requested_legacy_autonomous_enabled": requested_legacy_enabled,
         "chat_pipeline_status": "enabled",
         "reason_code": reason_code,
         "reason_text": reason_text,
@@ -1091,6 +1093,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "legacy_autonomous_enabled": bool(control_plane_mode.get("legacy_autonomous_enabled")),
             "legacy_autonomous_status": str(control_plane_mode.get("legacy_autonomous_status") or "unknown"),
             "legacy_autonomous": str(control_plane_mode.get("legacy_autonomous") or ""),
+            "requested_legacy_autonomous_enabled": bool(
+                control_plane_mode.get("requested_legacy_autonomous_enabled")
+            ),
             "brainstem_control_plane_status": brainstem_status,
             "watchdog_daemon_status": watchdog_daemon_status,
             "process_guard_status": process_guard_status,
@@ -1126,6 +1131,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
                 "legacy_autonomous_enabled": bool(control_plane_mode.get("legacy_autonomous_enabled")),
                 "legacy_autonomous_status": str(control_plane_mode.get("legacy_autonomous_status") or "unknown"),
                 "legacy_autonomous": str(control_plane_mode.get("legacy_autonomous") or ""),
+                "requested_legacy_autonomous_enabled": bool(
+                    control_plane_mode.get("requested_legacy_autonomous_enabled")
+                ),
                 "reason_code": str(control_plane_mode.get("reason_code") or ""),
             },
             "brainstem_heartbeat": {

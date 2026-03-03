@@ -611,7 +611,7 @@ class AutonomousConfig(BaseModel):
     enabled: bool = Field(default=False, description="是否启用自治循环")
     legacy_system_agent_enabled: bool = Field(
         default=False,
-        description="是否启用 legacy autonomous.system_agent（默认关闭，避免与新 pipeline 双控制面冲突）",
+        description="废弃字段：legacy autonomous.system_agent 运行时已移除，配置值将被忽略",
     )
     cycle_interval_seconds: int = Field(default=3600, ge=60, le=86400, description="自治循环间隔（秒）")
     cli_tools: AutonomousCliToolsConfig = Field(default_factory=AutonomousCliToolsConfig)

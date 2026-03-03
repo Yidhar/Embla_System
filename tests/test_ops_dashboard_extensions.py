@@ -823,6 +823,47 @@ def test_ops_runtime_posture_payload_marks_legacy_autonomous_disabled(monkeypatc
     assert metric["legacy_autonomous"] == "disabled"
 
 
+def test_ops_runtime_posture_ignores_legacy_autonomous_request(monkeypatch, tmp_path) -> None:
+    repo_root = tmp_path
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "ok", "metric_status": {}},
+            "metrics": {},
+            "threshold_profile": {},
+            "sources": {"events_file": "logs/autonomous/events.jsonl"},
+        }
+
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(
+        "system.config.get_config",
+        lambda: SimpleNamespace(autonomous=SimpleNamespace(legacy_system_agent_enabled=True)),
+    )
+
+    payload = api_server._ops_build_runtime_posture_payload(events_limit=200)
+    assert payload["status"] == "success"
+
+    summary = payload["data"]["summary"]
+    assert summary["control_plane_mode"] == "single_control_plane"
+    assert summary["single_control_plane"] is True
+    assert summary["legacy_autonomous"] == "disabled"
+    assert summary["requested_legacy_autonomous_enabled"] is True
+
+    control_plane_mode = payload["data"]["control_plane_mode"]
+    assert control_plane_mode["runtime_mode"] == "single_control_plane"
+    assert control_plane_mode["reason_code"] == "LEGACY_AUTONOMOUS_REQUEST_IGNORED"
+    assert control_plane_mode["requested_legacy_autonomous_enabled"] is True
+
+    metric = payload["data"]["metrics"]["control_plane_mode"]
+    assert metric["status"] == "ok"
+    assert metric["value"] == 0
+    assert metric["legacy_autonomous"] == "disabled"
+    assert metric["requested_legacy_autonomous_enabled"] is True
+
+
 def test_ops_incidents_latest_payload_includes_control_plane_guard_incidents(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
     now_iso = datetime.now(timezone.utc).isoformat()
