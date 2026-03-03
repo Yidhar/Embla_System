@@ -368,6 +368,8 @@ class TestPipeline:
         assert "pipeline_start" in types
         assert "route_decision" in types
         assert "core_decomposition" in types
+        assert "execution_receipt" in types
+        assert "content" in types
         assert "pipeline_end" in types
 
         # Route should dispatch to Core
@@ -379,6 +381,12 @@ class TestPipeline:
         # End event should report completion
         end_event = next(e for e in events if e["type"] == "pipeline_end")
         assert end_event["reason"] == "completed"
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        agent_state = receipt_event.get("agent_state", {})
+        assert agent_state.get("task_completed") is True
+        assert isinstance(agent_state.get("final_answer"), str)
+        assert len(str(agent_state.get("final_answer") or "")) > 0
 
     def test_pipeline_readonly_bails_early(self, store, mailbox):
         from agents.pipeline import run_multi_agent_pipeline

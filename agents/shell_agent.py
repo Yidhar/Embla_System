@@ -48,6 +48,16 @@ def get_dispatch_to_core_definition() -> Dict[str, Any]:
                     "type": "string",
                     "description": "Clear description of what needs to be accomplished.",
                 },
+                "intent_type": {
+                    "type": "string",
+                    "enum": ["development", "ops", "analysis"],
+                    "description": "Execution intent classification for Core routing.",
+                },
+                "target_repo": {
+                    "type": "string",
+                    "enum": ["self", "external"],
+                    "description": "Whether the task targets framework self-maintenance or external workspace.",
+                },
                 "context_summary": {
                     "type": "string",
                     "description": "Relevant context gathered from conversation and memory.",
@@ -168,6 +178,12 @@ class ShellAgent:
         that CoreAgent can consume.
         """
         goal = arguments.get("goal", "")
+        intent_type = str(arguments.get("intent_type", "") or "").strip().lower()
+        if intent_type not in {"development", "ops", "analysis"}:
+            intent_type = "analysis" if str(risk_level or "").strip().lower() == "read_only" else "development"
+        target_repo = str(arguments.get("target_repo", "") or "").strip().lower()
+        if target_repo not in {"self", "external"}:
+            target_repo = "external"
         decision = self.route(
             goal,
             session_id=session_id,
@@ -178,6 +194,8 @@ class ShellAgent:
         return {
             "dispatched": True,
             "goal": goal,
+            "intent_type": intent_type,
+            "target_repo": target_repo,
             "context_summary": arguments.get("context_summary", ""),
             "relevant_memories": arguments.get("relevant_memories", []),
             "priority": arguments.get("priority", "normal"),
