@@ -49,14 +49,12 @@
 ### 4.1 聊天主链路
 
 1. 前端请求 `POST /chat/stream`（`apiserver`）。
-2. `apiserver/api_server.py` 进入 `run_agentic_loop`。
-3. `apiserver/agentic_tool_loop.py` 只接受结构化函数调用：
-   - `native_call`
-   - `mcp_call`
-4. 工具执行分发：
-   - Native -> `apiserver/native_tools.py` -> `system/native_executor.py`
-   - MCP -> `mcpserver/mcp_manager.py`（本地注册优先，外部 mcporter 兜底）
-5. SSE 回推事件到前端（`tool_calls` / `tool_results` / `tool_stage` / `round_start` / `round_end` 等）。
+2. `apiserver/api_server.py` 先执行聊天路由治理（route quality / arbiter / bridge），随后进入 `agents/pipeline.py::run_multi_agent_pipeline`。
+3. Pipeline 先由 `ShellAgent` 做外层分流：
+   - `shell_direct`：外层直接回答（只读链路）。
+   - `core_execution`：进入 Core/Expert 执行编排并生成 `execution_receipt`。
+4. 执行态工具循环的规范实现位于 `agents/tool_loop.py`（canonical）；`apiserver/agentic_tool_loop.py` 为兼容 shim。
+5. SSE 回推统一结构化事件到前端（`route_decision` / `tool_stage` / `execution_receipt` / `content` / `pipeline_end` 等）。
 
 ### 4.2 MCP 过渡态说明
 
@@ -85,7 +83,8 @@
 当前落点：
 
 - `apiserver/llm_service.py`（LLM client 与路由）
-- `apiserver/agentic_tool_loop.py`（工具循环编排）
+- `agents/pipeline.py`（Shell/Core 多代理编排主入口）
+- `agents/tool_loop.py`（canonical 工具循环；兼容导入由 `apiserver/agentic_tool_loop.py` 提供）
 - `summer_memory/`（记忆检索）
 
 ### 5.3 Limbs（工具与执行层）
@@ -105,15 +104,15 @@
 - 相关语义仅保留在历史任务文档与归档记录中
 
 **弃用原因**：
-- OpenClaw 旧执行链路已被 `apiserver + agentic_tool_loop + native/mcp` 主链替代
+- OpenClaw 旧执行链路已被 `apiserver + agents/pipeline + agents/tool_loop + native/mcp` 主链替代
 - 架构简化：减少服务依赖，统一执行入口
 
 **替代方案**：
-- 工具调用：`apiserver/agentic_tool_loop.py` + `native_tools.py` / `mcp_manager.py`
+- 工具调用：`agents/tool_loop.py`（canonical） + `native_tools.py` / `mcp_manager.py`
 - 自治执行：`autonomous/system_agent.py` + `autonomous/tools/execution_bridge.py`（内生执行桥）
 
 **注意**：
-- 新增能力应走 `apiserver + agentic_tool_loop + native/mcp` 主链
+- 新增能力应走 `apiserver + agents/pipeline + agents/tool_loop + native/mcp` 主链
 - 历史文档若仍出现 `agentserver/` 路径，按“归档语义”理解，不代表当前可运行模块
 
 ## 7. 与目标态差距（简版）

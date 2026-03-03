@@ -82,7 +82,7 @@ AgenticLoop converts calls into actionable execution arrays (with concurrency li
  Tool results inject into the message list, triggering the next inference round
 ```
 
-Source: [`apiserver/llm_service.py`](apiserver/llm_service.py), [`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py), [`apiserver/native_tools.py`](apiserver/native_tools.py)
+Source: [`apiserver/llm_service.py`](apiserver/llm_service.py), [`agents/tool_loop.py`](agents/tool_loop.py) (canonical; `apiserver/agentic_tool_loop.py` is a compatibility shim), [`apiserver/native_tools.py`](apiserver/native_tools.py)
 
 ---
 
@@ -245,10 +245,16 @@ Source: [`autonomous/`](autonomous/)
 ```
 NagaAgent/
 ├── apiserver/            # API Server — Dialogue, Native tools, Auth, Config
-│   ├── api_server.py     #   FastAPI Main App
-│   ├── agentic_tool_loop.py  #   Multi-round native tool call loop
+│   ├── api_server.py     #   FastAPI Main App (route entry + SSE adapter)
+│   ├── agentic_tool_loop.py  #   Compatibility shim → agents/tool_loop.py
 │   ├── native_tools.py   #   Local-First interception tools
 │   └── llm_service.py    #   LiteLLM Unified Caller & tool_calls stream
+├── agents/               # Brain layer — production multi-agent runtime
+│   ├── pipeline.py       #   Unified Shell/Core pipeline entry
+│   ├── tool_loop.py      #   Canonical structured tool loop
+│   ├── shell_agent.py    #   Outer Shell routing + readonly tools
+│   ├── core_agent.py     #   Core decomposition/orchestration
+│   └── runtime/          #   TaskBoard / Session / Mailbox runtime
 ├── autonomous/           # All-new Autonomous SDLC Agent
 │   ├── system_agent.py   #   Single Active Orchestrator
 │   ├── planner.py        #   Strategy decomposition

@@ -45,12 +45,12 @@
 
 ```
 dispatch_to_core(
-    intent_type:  "development" | "ops" | "analysis"
-    target_repo:  "self" | "external"
-    goal:         string
-    context_summary:   string    # Shell 聚合的上下文摘要
-    relevant_memories: string[]  # Shell 检索到的相关记忆
-    priority:     "low" | "normal" | "high"
+    goal:              string                                  # 必填
+    intent_type:       "development" | "ops" | "analysis"     # 可选，默认按路由推断
+    target_repo:       "self" | "external"                    # 可选，默认 external
+    context_summary:   string                                  # Shell 聚合的上下文摘要
+    relevant_memories: string[]                                # Shell 检索到的相关记忆
+    priority:          "low" | "normal" | "high"
 )
 ```
 
