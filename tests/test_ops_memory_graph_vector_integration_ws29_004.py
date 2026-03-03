@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-import apiserver.api_server as api_server
+import apiserver.api_server
+from apiserver import routes_ops as api_server
 
 
 def test_ops_memory_graph_payload_contains_vector_index(monkeypatch):

@@ -21,7 +21,6 @@
 - `autonomous/`：System Agent 自治闭环（已实现，可配置启停）。
 - `mcpserver/`：MCP Host + Tool Registry + 外部 mcporter 接入。
 - `summer_memory/`：GRAG 记忆、五元组抽取、Neo4j 检索。
-- `guide_engine/`：游戏攻略 RAG 与计算服务。
 - `Embla_core/`：Next.js 运维与调试前端（当前主链前端）。
 - `scripts/`：构建与发布脚本。
 
@@ -88,7 +87,6 @@
 - `apiserver/llm_service.py`（LLM client 与路由）
 - `apiserver/agentic_tool_loop.py`（工具循环编排）
 - `summer_memory/`（记忆检索）
-- `guide_engine/`（领域策略/计算）
 
 ### 5.3 Limbs（工具与执行层）
 

@@ -5,7 +5,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-import apiserver.api_server as api_server
+import apiserver.api_server
+from apiserver import routes_ops as api_server
 from core.security import AuditLedger
 
 

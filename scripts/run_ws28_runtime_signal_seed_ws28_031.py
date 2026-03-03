@@ -12,7 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-import apiserver.api_server as api_server
+import apiserver.api_server  # noqa: F401 — triggers FastAPI app init
+from apiserver import routes_ops
 from autonomous.system_agent import SystemAgent
 from autonomous.types import OptimizationTask
 from core.event_bus import EventStore
@@ -178,13 +179,13 @@ def run_ws28_runtime_signal_seed_ws28_031(
         and str(row["payload"].get("execution_session_id") or "") == execution_session_id
     ]
 
-    original_repo_root = api_server._ops_repo_root  # noqa: SLF001
+    original_repo_root = routes_ops._ops_repo_root  # noqa: SLF001
     try:
-        api_server._ops_repo_root = lambda: root  # type: ignore[assignment]  # noqa: SLF001
-        posture_payload = api_server._ops_build_runtime_posture_payload(events_limit=max(200, int(events_limit)))  # noqa: SLF001
-        incidents_payload = api_server._ops_build_incidents_latest_payload(limit=50)  # noqa: SLF001
+        routes_ops._ops_repo_root = lambda: root  # type: ignore[assignment]  # noqa: SLF001
+        posture_payload = routes_ops._ops_build_runtime_posture_payload(events_limit=max(200, int(events_limit)))  # noqa: SLF001
+        incidents_payload = routes_ops._ops_build_incidents_latest_payload(limit=50)  # noqa: SLF001
     finally:
-        api_server._ops_repo_root = original_repo_root  # type: ignore[assignment]  # noqa: SLF001
+        routes_ops._ops_repo_root = original_repo_root  # type: ignore[assignment]  # noqa: SLF001
 
     posture_data = posture_payload.get("data") if isinstance(posture_payload.get("data"), dict) else {}
     posture_summary = posture_data.get("summary") if isinstance(posture_data.get("summary"), dict) else {}

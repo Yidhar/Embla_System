@@ -81,10 +81,10 @@ def test_run_ws28_execution_governance_gate_passes_when_within_budget(monkeypatc
         repo_root.mkdir(parents=True, exist_ok=True)
         _write_semantic_guard_spec(repo_root)
 
-        import apiserver.api_server as api_server
+        from apiserver import routes_ops
 
         monkeypatch.setattr(
-            api_server,
+            routes_ops,
             "_ops_build_runtime_posture_payload",
             lambda events_limit=5000: {
                 "status": "success",
@@ -100,7 +100,7 @@ def test_run_ws28_execution_governance_gate_passes_when_within_budget(monkeypatc
             },
         )
         monkeypatch.setattr(
-            api_server,
+            routes_ops,
             "_ops_build_incidents_latest_payload",
             lambda limit=50: {
                 "status": "success",
@@ -163,10 +163,10 @@ def test_run_ws28_execution_governance_gate_fails_when_critical_present(monkeypa
         repo_root.mkdir(parents=True, exist_ok=True)
         _write_semantic_guard_spec(repo_root)
 
-        import apiserver.api_server as api_server
+        from apiserver import routes_ops
 
         monkeypatch.setattr(
-            api_server,
+            routes_ops,
             "_ops_build_runtime_posture_payload",
             lambda events_limit=5000: {
                 "status": "success",
@@ -182,7 +182,7 @@ def test_run_ws28_execution_governance_gate_fails_when_critical_present(monkeypa
             },
         )
         monkeypatch.setattr(
-            api_server,
+            routes_ops,
             "_ops_build_incidents_latest_payload",
             lambda limit=50: {
                 "status": "success",
@@ -231,10 +231,10 @@ def test_run_ws28_execution_governance_gate_fails_when_semantic_spec_missing(mon
         repo_root = case_root / "repo"
         repo_root.mkdir(parents=True, exist_ok=True)
 
-        import apiserver.api_server as api_server
+        from apiserver import routes_ops
 
         monkeypatch.setattr(
-            api_server,
+            routes_ops,
             "_ops_build_runtime_posture_payload",
             lambda events_limit=5000: {
                 "status": "success",
@@ -250,7 +250,7 @@ def test_run_ws28_execution_governance_gate_fails_when_semantic_spec_missing(mon
             },
         )
         monkeypatch.setattr(
-            api_server,
+            routes_ops,
             "_ops_build_incidents_latest_payload",
             lambda limit=50: {
                 "status": "success",

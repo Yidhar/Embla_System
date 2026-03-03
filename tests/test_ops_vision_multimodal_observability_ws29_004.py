@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import apiserver.api_server as api_server
+import apiserver.api_server
+from apiserver import routes_ops as api_server
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:

@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-import apiserver.api_server as api_server
+import apiserver.api_server
+from apiserver import routes_ops as api_server
 
 
 DEFAULT_OUTPUT = Path("scratch/reports/ws28_012_route_quality_guard_enforcement.json")

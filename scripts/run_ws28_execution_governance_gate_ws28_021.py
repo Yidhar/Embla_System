@@ -253,15 +253,15 @@ def run_ws28_execution_governance_gate_ws28_021(
     output_path = _resolve_path(root, output_file)
     semantic_guard_spec_path = _resolve_path(root, semantic_guard_spec)
 
-    import apiserver.api_server as api_server
+    from apiserver import routes_ops
 
-    original_repo_root = api_server._ops_repo_root  # noqa: SLF001
+    original_repo_root = routes_ops._ops_repo_root  # noqa: SLF001
     try:
-        api_server._ops_repo_root = lambda: root  # type: ignore[assignment]  # noqa: SLF001
-        runtime_posture_payload = api_server._ops_build_runtime_posture_payload(events_limit=max(1, int(events_limit)))  # noqa: SLF001
-        incidents_payload = api_server._ops_build_incidents_latest_payload(limit=max(1, int(incidents_limit)))  # noqa: SLF001
+        routes_ops._ops_repo_root = lambda: root  # type: ignore[assignment]  # noqa: SLF001
+        runtime_posture_payload = routes_ops._ops_build_runtime_posture_payload(events_limit=max(1, int(events_limit)))  # noqa: SLF001
+        incidents_payload = routes_ops._ops_build_incidents_latest_payload(limit=max(1, int(incidents_limit)))  # noqa: SLF001
     finally:
-        api_server._ops_repo_root = original_repo_root  # type: ignore[assignment]  # noqa: SLF001
+        routes_ops._ops_repo_root = original_repo_root  # type: ignore[assignment]  # noqa: SLF001
 
     _write_json(runtime_output_path, runtime_posture_payload)
     _write_json(incidents_output_path, incidents_payload)
