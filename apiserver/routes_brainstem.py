@@ -18,23 +18,60 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+_BRAINSTEM_RUNTIME_CONTEXT: Dict[str, Any] = {
+    "app": None,
+    "app_getter": None,
+    "llm_service_getter": None,
+    "event_store_class_getter": None,
+}
 
 # ── Import shared utilities ──────────────────────────────────
 from apiserver._shared import ops_repo_root as _ops_repo_root
 
 
 # ── Lazy cross-module accessors (avoid circular import) ──────
+def _bind_brainstem_runtime_context(
+    *,
+    app: Any = None,
+    app_getter: Any = None,
+    llm_service_getter: Any = None,
+    event_store_class_getter: Any = None,
+) -> None:
+    """Bind runtime dependencies to reduce api_server import coupling."""
+    if app is not None:
+        _BRAINSTEM_RUNTIME_CONTEXT["app"] = app
+    if app_getter is not None:
+        _BRAINSTEM_RUNTIME_CONTEXT["app_getter"] = app_getter
+    if llm_service_getter is not None:
+        _BRAINSTEM_RUNTIME_CONTEXT["llm_service_getter"] = llm_service_getter
+    if event_store_class_getter is not None:
+        _BRAINSTEM_RUNTIME_CONTEXT["event_store_class_getter"] = event_store_class_getter
+
+
 def _get_llm_service():
+    getter = _BRAINSTEM_RUNTIME_CONTEXT.get("llm_service_getter")
+    if callable(getter):
+        return getter()
     from apiserver.llm_service import get_llm_service
     return get_llm_service()
 
 def _get_event_store_class():
+    getter = _BRAINSTEM_RUNTIME_CONTEXT.get("event_store_class_getter")
+    if callable(getter):
+        return getter()
     from core.event_bus import EventStore
     return EventStore
 
 def _get_app():
-    import apiserver.api_server as _api
-    return _api.app
+    app = _BRAINSTEM_RUNTIME_CONTEXT.get("app")
+    if app is not None:
+        return app
+    getter = _BRAINSTEM_RUNTIME_CONTEXT.get("app_getter")
+    if callable(getter):
+        app = getter()
+        if app is not None:
+            return app
+    raise RuntimeError("brainstem runtime app context is not bound")
 
 __all__ = [
     "_BRAINSTEM_AUTOSTART_DEFAULT",
@@ -59,6 +96,7 @@ __all__ = [
     "_bootstrap_immutable_dna_monitor_shutdown",
     "_bootstrap_immutable_dna_monitor_startup",
     "_bootstrap_immutable_dna_preflight",
+    "_bind_brainstem_runtime_context",
     "_brainstem_bootstrap_owned_by_external",
     "_brainstem_bootstrap_owner",
     "_env_flag",
@@ -420,4 +458,3 @@ def _bootstrap_budget_guard_state(
         report["error"] = f"{type(exc).__name__}:{exc}"
         logger.error("[budget_guard_bootstrap] bootstrap error: %s", exc)
     return report
-

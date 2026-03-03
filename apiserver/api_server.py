@@ -32,6 +32,9 @@ from agents.contract_runtime import (
 )
 from agents.pipeline import run_multi_agent_pipeline
 from agents.shell_agent import ShellAgent
+from agents.runtime.agent_session import AgentSessionStore
+from agents.runtime.mailbox import AgentMailbox
+from agents.runtime.task_board import TaskBoardEngine
 from autonomous.llm_gateway import (
     GatewayRouteRequest,
     LLMGateway,
@@ -44,35 +47,51 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from .message_manager import message_manager  # noqa: E402 - keep script-mode compatibility path setup
 
 from .llm_service import get_llm_service, llm_app  # noqa: E402 - mounted below
+from .native_tools import get_native_tool_executor  # noqa: E402
 from . import naga_auth  # noqa: E402 - keep script-mode compatibility path setup
 
-# ── Backward-compat re-exports from extracted routes_ops ──────
-from apiserver.routes_ops import *  # noqa: F401,F403 — re-export _ops_* symbols
+# ── Backward-compat module delegation for extracted routes ─────
 import apiserver.routes_ops as _routes_ops  # noqa: E402
+import apiserver.routes_chat as _routes_chat  # noqa: E402
+import apiserver.routes_brainstem as _routes_brainstem  # noqa: E402
+_CHAT_LLM_GATEWAY = getattr(_routes_chat, "_CHAT_LLM_GATEWAY", None)
 
 def __getattr__(name: str):  # noqa: N807
     """Delegate attribute lookup to extracted modules for backward compatibility."""
-    for _mod in (_routes_ops,):
+    for _mod in (_routes_ops, _routes_chat, _routes_brainstem):
         try:
             return getattr(_mod, name)
         except AttributeError:
             continue
-    # Also try routes_chat and routes_brainstem via lazy import
-    import apiserver.routes_chat as _rc
-    try:
-        return getattr(_rc, name)
-    except AttributeError:
-        pass
-    import apiserver.routes_brainstem as _rb
-    try:
-        return getattr(_rb, name)
-    except AttributeError:
-        pass
     raise AttributeError(f"module 'apiserver.api_server' has no attribute {name!r}")
 
 
 # 记录哪些会话曾发送过图片，后续消息继续走 VLM 直到新会话
 _vlm_sessions: set = set()
+
+# Multi-agent runtime persistence handles (shared across requests).
+_PIPELINE_RUNTIME_LOCK = threading.Lock()
+_PIPELINE_SESSION_STORE: Optional[AgentSessionStore] = None
+_PIPELINE_MAILBOX: Optional[AgentMailbox] = None
+_PIPELINE_TASK_BOARD: Optional[TaskBoardEngine] = None
+
+
+def _get_pipeline_runtime_handles() -> tuple[AgentSessionStore, AgentMailbox, TaskBoardEngine]:
+    global _PIPELINE_SESSION_STORE, _PIPELINE_MAILBOX, _PIPELINE_TASK_BOARD
+    if _PIPELINE_SESSION_STORE is not None and _PIPELINE_MAILBOX is not None and _PIPELINE_TASK_BOARD is not None:
+        return _PIPELINE_SESSION_STORE, _PIPELINE_MAILBOX, _PIPELINE_TASK_BOARD
+
+    with _PIPELINE_RUNTIME_LOCK:
+        if _PIPELINE_SESSION_STORE is None:
+            runtime_dir = Path("scratch/runtime")
+            runtime_dir.mkdir(parents=True, exist_ok=True)
+            _PIPELINE_SESSION_STORE = AgentSessionStore(db_path=runtime_dir / "agent_sessions.db")
+            _PIPELINE_MAILBOX = AgentMailbox(db_path=runtime_dir / "agent_mailbox.db")
+            _PIPELINE_TASK_BOARD = TaskBoardEngine(
+                boards_dir=Path("memory/working/boards"),
+                db_path=runtime_dir / "task_boards.db",
+            )
+    return _PIPELINE_SESSION_STORE, _PIPELINE_MAILBOX, _PIPELINE_TASK_BOARD
 
 # 导入配置系统
 try:
@@ -165,17 +184,64 @@ async def _recall_memory_lines(question: str, *, limit: int = 5) -> List[str]:
     return lines
 
 
-# Chat-route constants extracted to routes_chat.py
+# Brainstem bootstrap bindings
+_bootstrap_global_mutex_lease_state = _routes_brainstem._bootstrap_global_mutex_lease_state
+_bootstrap_budget_guard_state = _routes_brainstem._bootstrap_budget_guard_state
+_bootstrap_immutable_dna_preflight = _routes_brainstem._bootstrap_immutable_dna_preflight
+_bootstrap_immutable_dna_monitor_startup = _routes_brainstem._bootstrap_immutable_dna_monitor_startup
+_bootstrap_brainstem_control_plane_startup = _routes_brainstem._bootstrap_brainstem_control_plane_startup
+_bootstrap_immutable_dna_monitor_shutdown = _routes_brainstem._bootstrap_immutable_dna_monitor_shutdown
+_bootstrap_brainstem_control_plane_shutdown = _routes_brainstem._bootstrap_brainstem_control_plane_shutdown
 
-# Brainstem bootstrap constants extracted to routes_brainstem.py
-from apiserver.routes_brainstem import *  # noqa: F401,F403
+# Chat-route bindings
+_resolve_chat_stream_route = _routes_chat._resolve_chat_stream_route
+_apply_chat_route_quality_guard = _routes_chat._apply_chat_route_quality_guard
+_apply_path_b_clarify_budget = _routes_chat._apply_path_b_clarify_budget
+_apply_chat_route_router_arbiter_guard = _routes_chat._apply_chat_route_router_arbiter_guard
+_apply_outer_core_session_bridge = _routes_chat._apply_outer_core_session_bridge
+_get_chat_route_quality_guard_summary = _routes_chat._get_chat_route_quality_guard_summary
+_read_chat_route_event_rows = _routes_chat._read_chat_route_event_rows
+_collect_chat_route_bridge_events = _routes_chat._collect_chat_route_bridge_events
+_build_chat_route_bridge_payload = _routes_chat._build_chat_route_bridge_payload
+_CHAT_ROUTE_STATE_KEY = _routes_chat._CHAT_ROUTE_STATE_KEY
+_emit_chat_route_prompt_event = _routes_chat._emit_chat_route_prompt_event
+_emit_chat_route_guard_event = _routes_chat._emit_chat_route_guard_event
+_emit_chat_route_arbiter_event = _routes_chat._emit_chat_route_arbiter_event
+_sanitize_route_quality_reason_codes = _routes_chat._sanitize_route_quality_reason_codes
+_sanitize_router_arbiter_reason_codes = _routes_chat._sanitize_router_arbiter_reason_codes
+_build_chat_route_prompt_hints = _routes_chat._build_chat_route_prompt_hints
+_build_path_model_override = _routes_chat._build_path_model_override
+_emit_agentic_loop_completion_event = _routes_chat._emit_agentic_loop_completion_event
+_extract_agentic_execution_receipt_text = _routes_chat._extract_agentic_execution_receipt_text
+_format_sse_payload_chunk_json = _routes_chat._format_sse_payload_chunk_json
+_CHAT_ROUTE_PATH_B_CLARIFY_LIMIT = _routes_chat._CHAT_ROUTE_PATH_B_CLARIFY_LIMIT
+_CHAT_ROUTE_ARBITER_GUARD = _routes_chat._CHAT_ROUTE_ARBITER_GUARD
 
-
-
-# Brainstem bootstrap functions extracted to routes_brainstem.py
-
-# ── Chat-route functions extracted to routes_chat.py ──────────
-from apiserver.routes_chat import *  # noqa: F401,F403
+if hasattr(_routes_chat, "_bind_chat_runtime_context"):
+    _routes_chat._bind_chat_runtime_context(
+        message_manager=message_manager,
+        message_manager_getter=lambda: message_manager,
+        config_getter=lambda: get_config(),
+        route_arbiter_guard_getter=lambda: _CHAT_ROUTE_ARBITER_GUARD,
+        event_store_getter=lambda: _CHAT_ROUTE_EVENT_STORE,
+        event_store_factory=lambda file_path: EventStore(file_path=file_path),
+        quality_guard_summary_getter=lambda force_refresh=False: (
+            _get_chat_route_quality_guard_summary(force_refresh=force_refresh)
+            if _get_chat_route_quality_guard_summary is not _routes_chat._get_chat_route_quality_guard_summary
+            else None
+        ),
+        event_rows_reader=lambda limit=2000: (
+            _read_chat_route_event_rows(limit=limit)
+            if _read_chat_route_event_rows is not _routes_chat._read_chat_route_event_rows
+            else None
+        ),
+    )
+if hasattr(_routes_brainstem, "_bind_brainstem_runtime_context"):
+    _routes_brainstem._bind_brainstem_runtime_context(
+        app_getter=lambda: globals().get("app"),
+        llm_service_getter=get_llm_service,
+        event_store_class_getter=lambda: EventStore,
+    )
 
 
 
@@ -269,6 +335,10 @@ async def lifespan(app: FastAPI):
 
 # 创建FastAPI应用
 app = FastAPI(title="NagaAgent API", description="智能对话助手API服务", version="5.0.0", lifespan=lifespan)
+if hasattr(_routes_ops, "_bind_ops_app_context"):
+    _routes_ops._bind_ops_app_context(app)
+if hasattr(_routes_brainstem, "_bind_brainstem_runtime_context"):
+    _routes_brainstem._bind_brainstem_runtime_context(app=app)
 
 # 配置CORS
 app.add_middleware(
@@ -1080,12 +1150,72 @@ async def chat_stream(request: ChatRequest):
 
             current_round_text = ""
             receipt_fallback_text = ""
+            session_store, agent_mailbox, task_board_engine = _get_pipeline_runtime_handles()
+            child_loop_llm_service = get_llm_service()
+            child_loop_model_override = _build_path_model_override("path-c")
+            native_tool_executor = get_native_tool_executor()
+
+            async def _pipeline_child_llm_call(
+                messages: List[Dict[str, Any]],
+                tools: List[Dict[str, Any]],
+                model_name: str,
+            ) -> Dict[str, Any]:
+                del model_name  # model tier is already encoded in route-level override
+                content_parts: List[str] = []
+                collected_tool_calls: List[Dict[str, Any]] = []
+                stream_source = child_loop_llm_service.stream_chat_with_context(
+                    messages,
+                    get_config().api.temperature,
+                    model_override=child_loop_model_override,
+                    tools=tools,
+                    tool_choice="auto",
+                )
+                async for chunk in stream_source:
+                    if not isinstance(chunk, str) or not chunk.startswith("data: "):
+                        continue
+                    data_str = chunk[6:].strip()
+                    if not data_str or data_str == "[DONE]":
+                        continue
+                    try:
+                        payload = json.loads(data_str)
+                    except Exception:
+                        continue
+                    payload_type = str(payload.get("type", ""))
+                    payload_text = payload.get("text")
+                    if payload_type == "content":
+                        content_parts.append(str(payload_text or ""))
+                    elif payload_type == "tool_calls" and isinstance(payload_text, list):
+                        collected_tool_calls = [dict(item) for item in payload_text if isinstance(item, dict)]
+                return {
+                    "content": "".join(content_parts),
+                    "tool_calls": collected_tool_calls,
+                }
+
+            async def _pipeline_child_tool_executor(
+                tool_name: str,
+                arguments: Dict[str, Any],
+                child_session_id: str,
+            ) -> Dict[str, Any]:
+                call_payload = dict(arguments) if isinstance(arguments, dict) else {}
+                call_payload["tool_name"] = str(tool_name or "")
+                call_payload["_session_id"] = child_session_id
+                call_payload["session_id"] = child_session_id
+                return await native_tool_executor.execute(call_payload, session_id=child_session_id)
 
             # ── Unified Multi-Agent Pipeline ──
             async for event in run_multi_agent_pipeline(
                 message=effective_message,
                 session_id=execution_session_id,
                 risk_level=str(route_meta.get("risk_level") or ""),
+                route_decision=route_decision,
+                forced_path=path,
+                core_session_id=str(route_meta.get("core_session_id") or execution_session_id),
+                child_llm_call=_pipeline_child_llm_call,
+                child_tool_executor=_pipeline_child_tool_executor,
+                enable_child_execution=True,
+                store=session_store,
+                mailbox=agent_mailbox,
+                task_board_engine=task_board_engine,
             ):
                 if not isinstance(event, dict):
                     continue
@@ -1093,7 +1223,7 @@ async def chat_stream(request: ChatRequest):
                 chunk_text = str(event.get("text", ""))
 
                 if chunk_type == "shell_direct":
-                    # Shell decided to handle directly — stream via LLM
+                    # Shell decided to handle directly — run a read-only tool loop.
                     shell_prompt = str(event.get("system_prompt", ""))
                     shell_msg = str(event.get("user_message", effective_message))
                     # Inject RAG memory if available
@@ -1126,29 +1256,109 @@ async def chat_stream(request: ChatRequest):
                     if use_vlm and cc.enabled and (cc.api_key or naga_auth.is_authenticated()):
                         model_override = {"model": cc.model, "api_base": cc.model_url, "api_key": cc.api_key}
 
-                    # Stream Shell reply from LLM
+                    shell_agent = ShellAgent()
+                    shell_tool_defs = shell_agent.get_tool_definitions()
+
+                    # Stream Shell reply from LLM with tool support.
                     llm_service = get_llm_service()
-                    stream_source = llm_service.stream_chat_with_context(
-                        shell_messages,
-                        get_config().api.temperature,
-                        model_override=model_override,
-                    )
-                    async for chunk in stream_source:
-                        if chunk.startswith("data: "):
-                            try:
-                                data_str = chunk[6:].strip()
-                                if data_str and data_str != "[DONE]":
-                                    chunk_data = json.loads(data_str)
-                                    ct = chunk_data.get("type", "content")
-                                    ct_text = chunk_data.get("text", "")
-                                    if ct == "content":
-                                        current_round_text += ct_text
-                                        complete_response_parts.append(ct_text)
-                                    yield _format_stream_payload_chunk(chunk_data, protocol=stream_protocol)
-                                    continue
-                            except Exception as e:
-                                logger.error(f"[API Server] Shell stream parse error: {e}")
-                        yield chunk
+                    shell_max_rounds = 4
+                    shell_round = 0
+                    while shell_round < shell_max_rounds:
+                        pending_tool_calls: List[Dict[str, Any]] = []
+                        assistant_content_parts: List[str] = []
+                        stream_source = llm_service.stream_chat_with_context(
+                            shell_messages,
+                            get_config().api.temperature,
+                            model_override=model_override,
+                            tools=shell_tool_defs,
+                            tool_choice="auto",
+                        )
+                        async for chunk in stream_source:
+                            if chunk.startswith("data: "):
+                                try:
+                                    data_str = chunk[6:].strip()
+                                    if data_str and data_str != "[DONE]":
+                                        chunk_data = json.loads(data_str)
+                                        ct = str(chunk_data.get("type", "content"))
+                                        ct_text = chunk_data.get("text", "")
+                                        if ct == "content":
+                                            text_piece = str(ct_text or "")
+                                            assistant_content_parts.append(text_piece)
+                                            current_round_text += text_piece
+                                            complete_response_parts.append(text_piece)
+                                        elif ct == "tool_calls" and isinstance(ct_text, list):
+                                            pending_tool_calls = [dict(item) for item in ct_text if isinstance(item, dict)]
+                                        yield _format_stream_payload_chunk(chunk_data, protocol=stream_protocol)
+                                        continue
+                                except Exception as e:
+                                    logger.error(f"[API Server] Shell stream parse error: {e}")
+                            yield chunk
+
+                        if not pending_tool_calls:
+                            break
+
+                        assistant_msg: Dict[str, Any] = {
+                            "role": "assistant",
+                            "content": "".join(assistant_content_parts),
+                        }
+                        assistant_tool_calls: List[Dict[str, Any]] = []
+                        for idx, call in enumerate(pending_tool_calls):
+                            call_id = str(call.get("id") or f"shell_call_{shell_round}_{idx}")
+                            tool_name = str(call.get("name") or "")
+                            tool_args = call.get("arguments")
+                            if not isinstance(tool_args, dict):
+                                tool_args = {}
+                            assistant_tool_calls.append(
+                                {
+                                    "id": call_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_name,
+                                        "arguments": json.dumps(tool_args, ensure_ascii=False),
+                                    },
+                                }
+                            )
+                        assistant_msg["tool_calls"] = assistant_tool_calls
+                        shell_messages.append(assistant_msg)
+
+                        for idx, call in enumerate(pending_tool_calls):
+                            call_id = str(call.get("id") or f"shell_call_{shell_round}_{idx}")
+                            tool_name = str(call.get("name") or "")
+                            tool_args = call.get("arguments")
+                            if not isinstance(tool_args, dict):
+                                tool_args = {}
+                            tool_result = shell_agent.execute_tool(
+                                tool_name,
+                                tool_args,
+                                session_id=session_id,
+                            )
+                            shell_messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": call_id,
+                                    "content": json.dumps(tool_result, ensure_ascii=False, default=str),
+                                }
+                            )
+                            yield _format_stream_payload_chunk(
+                                {
+                                    "type": "tool_result",
+                                    "tool_name": tool_name,
+                                    "tool_call_id": call_id,
+                                    "result": tool_result,
+                                },
+                                protocol=stream_protocol,
+                            )
+                        shell_round += 1
+
+                    if shell_round >= shell_max_rounds:
+                        yield _format_stream_payload_chunk(
+                            {
+                                "type": "warning",
+                                "text": "shell_tool_loop_max_rounds_reached",
+                                "max_rounds": shell_max_rounds,
+                            },
+                            protocol=stream_protocol,
+                        )
                     continue
 
                 if chunk_type == "content":
@@ -1377,11 +1587,6 @@ from apiserver._shared import (
     ops_parse_iso_datetime as _ops_parse_iso_datetime,
 )
 from apiserver._shared import OPS_STATUS_RANK as _OPS_STATUS_RANK
-
-# Re-export ALL ops symbols for backward compat (tests/scripts use api_server._ops_*)
-from apiserver.routes_ops import *  # noqa: F401,F403,E402
-
-
 
 class McpImportRequest(BaseModel):
     name: str

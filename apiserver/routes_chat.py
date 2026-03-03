@@ -21,6 +21,7 @@ from agents.shell_agent import ShellAgent
 from autonomous.router_arbiter_guard import RouterArbiterGuard
 from autonomous.llm_gateway import LLMGateway
 from core.event_bus import EventStore
+from apiserver.message_manager import message_manager as _default_message_manager
 from system.coding_intent import (
     contains_direct_coding_signal,
     has_recent_coding_context,
@@ -36,18 +37,101 @@ from apiserver.routes_ops import (
 )
 
 logger = logging.getLogger(__name__)
+_CHAT_RUNTIME_CONTEXT: Dict[str, Any] = {
+    "message_manager": None,
+    "message_manager_getter": None,
+    "config_getter": None,
+    "route_arbiter_guard": None,
+    "route_arbiter_guard_getter": None,
+    "event_store": None,
+    "event_store_getter": None,
+    "event_store_factory": None,
+    "quality_guard_summary_getter": None,
+    "event_rows_reader": None,
+}
+
+
+def _bind_chat_runtime_context(
+    *,
+    message_manager: Any = None,
+    message_manager_getter: Any = None,
+    config_getter: Any = None,
+    route_arbiter_guard: Any = None,
+    route_arbiter_guard_getter: Any = None,
+    event_store: Any = None,
+    event_store_getter: Any = None,
+    event_store_factory: Any = None,
+    quality_guard_summary_getter: Any = None,
+    event_rows_reader: Any = None,
+) -> None:
+    """Bind runtime dependencies to reduce cross-module import coupling."""
+    if message_manager is not None:
+        _CHAT_RUNTIME_CONTEXT["message_manager"] = message_manager
+    if message_manager_getter is not None:
+        _CHAT_RUNTIME_CONTEXT["message_manager_getter"] = message_manager_getter
+    if config_getter is not None:
+        _CHAT_RUNTIME_CONTEXT["config_getter"] = config_getter
+    if route_arbiter_guard is not None:
+        _CHAT_RUNTIME_CONTEXT["route_arbiter_guard"] = route_arbiter_guard
+    if route_arbiter_guard_getter is not None:
+        _CHAT_RUNTIME_CONTEXT["route_arbiter_guard_getter"] = route_arbiter_guard_getter
+    if event_store is not None:
+        _CHAT_RUNTIME_CONTEXT["event_store"] = event_store
+    if event_store_getter is not None:
+        _CHAT_RUNTIME_CONTEXT["event_store_getter"] = event_store_getter
+    if event_store_factory is not None:
+        _CHAT_RUNTIME_CONTEXT["event_store_factory"] = event_store_factory
+    if quality_guard_summary_getter is not None:
+        _CHAT_RUNTIME_CONTEXT["quality_guard_summary_getter"] = quality_guard_summary_getter
+    if event_rows_reader is not None:
+        _CHAT_RUNTIME_CONTEXT["event_rows_reader"] = event_rows_reader
 
 
 # ── Lazy cross-module accessors (avoid circular import) ──────
 def _get_message_manager():
-    """Lazy accessor for message_manager from api_server."""
-    import apiserver.api_server as _api
-    return _api.message_manager
+    """Accessor for message_manager with runtime context binding."""
+    manager = _CHAT_RUNTIME_CONTEXT.get("message_manager")
+    if manager is not None:
+        return manager
+    getter = _CHAT_RUNTIME_CONTEXT.get("message_manager_getter")
+    if callable(getter):
+        resolved = getter()
+        if resolved is not None:
+            return resolved
+    return _default_message_manager
 
 def _get_config():
-    """Lazy accessor for get_config from system.config."""
+    """Accessor for get_config with runtime context binding."""
+    getter = _CHAT_RUNTIME_CONTEXT.get("config_getter")
+    if callable(getter):
+        return getter()
+
     from system.config import get_config as _gc
+
     return _gc()
+
+
+def _get_chat_route_arbiter_guard() -> Optional[RouterArbiterGuard]:
+    """Resolve router arbiter guard with runtime context binding."""
+    getter = _CHAT_RUNTIME_CONTEXT.get("route_arbiter_guard_getter")
+    if callable(getter):
+        injected = getter()
+        if injected is not None:
+            return injected
+    injected_ctx = _CHAT_RUNTIME_CONTEXT.get("route_arbiter_guard")
+    if injected_ctx is not None:
+        return injected_ctx
+    return _CHAT_ROUTE_ARBITER_GUARD
+
+
+def _router_arbiter_max_delegate_turns() -> int:
+    guard = _get_chat_route_arbiter_guard()
+    if guard is None:
+        return 0
+    try:
+        return int(getattr(guard, "max_delegate_turns", 0) or 0)
+    except Exception:
+        return 0
 
 __all__ = [
     "_CHAT_ROUTE_ARBITER_GUARD",
@@ -69,6 +153,7 @@ __all__ = [
     "_build_chat_route_prompt_event_payload",
     "_build_chat_route_prompt_hints",
     "_build_chat_route_quality_guard_summary",
+    "_bind_chat_runtime_context",
     "_build_path_model_override",
     "_collect_chat_route_bridge_events",
     "_emit_agentic_loop_completion_event",
@@ -315,6 +400,15 @@ def _build_chat_route_quality_guard_summary() -> Dict[str, Any]:
 
 
 def _get_chat_route_quality_guard_summary(*, force_refresh: bool = False) -> Dict[str, Any]:
+    override = _CHAT_RUNTIME_CONTEXT.get("quality_guard_summary_getter")
+    if callable(override):
+        try:
+            payload = override(force_refresh=force_refresh)
+            if isinstance(payload, dict):
+                return payload
+        except Exception:
+            pass
+
     now_ms = int(time.time() * 1000)
     cached = _CHAT_ROUTE_GUARD_CACHE
     expires_at = int(cached.get("expires_at_ms") or 0)
@@ -471,13 +565,16 @@ def _apply_chat_route_router_arbiter_guard(route_meta: Dict[str, Any], *, sessio
     route_meta["router_arbiter_path_before"] = previous_path
     route_meta["router_arbiter_path_after"] = current_path
     route_meta["router_arbiter_delegate_turns"] = 0
-    route_meta["router_arbiter_max_delegate_turns"] = int(_CHAT_ROUTE_ARBITER_GUARD.max_delegate_turns)
+    guard_for_limit = _get_chat_route_arbiter_guard()
+    route_meta["router_arbiter_max_delegate_turns"] = int(
+        guard_for_limit.max_delegate_turns if guard_for_limit is not None else 0
+    )
     route_meta["router_arbiter_conflict_ticket"] = ""
     route_meta["router_arbiter_freeze"] = False
     route_meta["router_arbiter_hitl"] = False
     route_meta["router_arbiter_escalated"] = False
 
-    guard = _CHAT_ROUTE_ARBITER_GUARD
+    guard = _get_chat_route_arbiter_guard()
     if guard is None:
         state["last_router_path"] = str(route_meta.get("path") or current_path)
         return route_meta
@@ -667,11 +764,35 @@ def _trim_contract_text(value: Any, *, limit: int = 240) -> str:
 
 def _get_chat_route_event_store() -> Optional[EventStore]:
     global _CHAT_ROUTE_EVENT_STORE
+    getter = _CHAT_RUNTIME_CONTEXT.get("event_store_getter")
+    if callable(getter):
+        try:
+            injected = getter()
+            if injected is not None:
+                _CHAT_ROUTE_EVENT_STORE = injected
+                _CHAT_RUNTIME_CONTEXT["event_store"] = injected
+                return _CHAT_ROUTE_EVENT_STORE
+        except Exception:
+            pass
+
+    bound_store = _CHAT_RUNTIME_CONTEXT.get("event_store")
+    if bound_store is not None:
+        _CHAT_ROUTE_EVENT_STORE = bound_store
+        return _CHAT_ROUTE_EVENT_STORE
+
     if _CHAT_ROUTE_EVENT_STORE is not None:
         return _CHAT_ROUTE_EVENT_STORE
     try:
         event_file = Path(__file__).resolve().parent.parent / "logs" / "autonomous" / "events.jsonl"
-        _CHAT_ROUTE_EVENT_STORE = EventStore(file_path=event_file)
+        factory = _CHAT_RUNTIME_CONTEXT.get("event_store_factory")
+        if callable(factory):
+            try:
+                _CHAT_ROUTE_EVENT_STORE = factory(file_path=event_file)
+            except TypeError:
+                _CHAT_ROUTE_EVENT_STORE = factory(event_file)
+        else:
+            _CHAT_ROUTE_EVENT_STORE = EventStore(file_path=event_file)
+        _CHAT_RUNTIME_CONTEXT["event_store"] = _CHAT_ROUTE_EVENT_STORE
     except Exception as exc:
         logger.debug(f"初始化 chat route event store 失败: {exc}")
         return None
@@ -747,7 +868,7 @@ def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[s
         "router_arbiter_path_after": str(route_meta.get("router_arbiter_path_after") or ""),
         "router_arbiter_delegate_turns": int(route_meta.get("router_arbiter_delegate_turns") or 0),
         "router_arbiter_max_delegate_turns": int(
-            route_meta.get("router_arbiter_max_delegate_turns") or _CHAT_ROUTE_ARBITER_GUARD.max_delegate_turns
+            route_meta.get("router_arbiter_max_delegate_turns") or _router_arbiter_max_delegate_turns()
         ),
         "router_arbiter_conflict_ticket": str(route_meta.get("router_arbiter_conflict_ticket") or ""),
         "router_arbiter_freeze": bool(route_meta.get("router_arbiter_freeze")),
@@ -846,7 +967,7 @@ def _emit_chat_route_arbiter_event(route_meta: Dict[str, Any], *, session_id: st
         "router_arbiter_conflict_ticket": str(route_meta.get("router_arbiter_conflict_ticket") or ""),
         "router_arbiter_delegate_turns": int(route_meta.get("router_arbiter_delegate_turns") or 0),
         "router_arbiter_max_delegate_turns": int(
-            route_meta.get("router_arbiter_max_delegate_turns") or _CHAT_ROUTE_ARBITER_GUARD.max_delegate_turns
+            route_meta.get("router_arbiter_max_delegate_turns") or _router_arbiter_max_delegate_turns()
         ),
         "router_arbiter_freeze": bool(route_meta.get("router_arbiter_freeze")),
         "router_arbiter_hitl": bool(route_meta.get("router_arbiter_hitl")),
@@ -933,6 +1054,15 @@ def _extract_agentic_execution_receipt_text(chunk_data: Dict[str, Any]) -> str:
 
 
 def _read_chat_route_event_rows(*, limit: int = 2000) -> List[Dict[str, Any]]:
+    override = _CHAT_RUNTIME_CONTEXT.get("event_rows_reader")
+    if callable(override):
+        try:
+            rows = override(limit=limit)
+            if isinstance(rows, list):
+                return rows
+        except Exception:
+            pass
+
     event_file = Path(__file__).resolve().parent.parent / "logs" / "autonomous" / "events.jsonl"
     if not event_file.exists() or limit <= 0:
         return []
@@ -1017,7 +1147,7 @@ def _collect_chat_route_bridge_events(*, session_ids: List[str], limit: int = 20
                 "router_arbiter_path_after": str(payload.get("router_arbiter_path_after") or ""),
                 "router_arbiter_delegate_turns": int(payload.get("router_arbiter_delegate_turns") or 0),
                 "router_arbiter_max_delegate_turns": int(
-                    payload.get("router_arbiter_max_delegate_turns") or _CHAT_ROUTE_ARBITER_GUARD.max_delegate_turns
+                    payload.get("router_arbiter_max_delegate_turns") or _router_arbiter_max_delegate_turns()
                 ),
                 "router_arbiter_conflict_ticket": str(payload.get("router_arbiter_conflict_ticket") or ""),
                 "router_arbiter_freeze": bool(payload.get("router_arbiter_freeze")),
@@ -1065,4 +1195,3 @@ def _build_chat_route_bridge_payload(session_id: str, *, limit: int = 20) -> Dic
 
 def _format_sse_payload_chunk_json(payload: Dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
