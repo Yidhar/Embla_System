@@ -15,7 +15,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +47,36 @@ class L1MemoryManager:
         self._working_dir = self._root / "working"
         self._episodic_dir = self._root / "episodic"
         self._domain_dir = self._root / "domain"
+        self._post_write_hooks: List[Callable[[Path, List[str]], None]] = []
 
     @property
     def root(self) -> Path:
         return self._root
+
+    @property
+    def episodic_dir(self) -> Path:
+        return self._episodic_dir
+
+    @property
+    def domain_dir(self) -> Path:
+        return self._domain_dir
+
+    def register_post_write_hook(
+        self, hook: Callable[[Path, List[str]], None]
+    ) -> None:
+        """Register a callback invoked after each write_experience().
+
+        Args:
+            hook: callable(episodic_dir, tags) — called after write.
+                  Use this for auto-triggering compression or distillation.
+        """
+        self._post_write_hooks.append(hook)
+
+    def episodic_file_count(self) -> int:
+        """Count experience files in the episodic directory."""
+        if not self._episodic_dir.exists():
+            return 0
+        return sum(1 for _ in self._episodic_dir.glob("exp_*.md"))
 
     # ── Working Memory (per-session) ───────────────────────────
 
@@ -184,6 +210,14 @@ class L1MemoryManager:
         self._update_episodic_index(filename, tags or [], title)
 
         logger.info("Wrote experience: %s (tags=%s)", filename, tags)
+
+        # Fire post-write hooks (compression/distillation triggers)
+        tag_list = list(tags) if tags else []
+        for hook in self._post_write_hooks:
+            try:
+                hook(self._episodic_dir, tag_list)
+            except Exception as exc:
+                logger.warning("Post-write hook failed: %s", exc)
         return filepath
 
     @staticmethod

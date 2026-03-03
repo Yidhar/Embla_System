@@ -10,6 +10,17 @@ from agents.memory.episodic_memory import (
 )
 from agents.memory.gc_pipeline import GCPipelineConfig, GCPipelineReport, run_gc_pipeline
 from agents.memory.l1_memory import L1MemoryManager
+from agents.memory.memory_agents import (
+    CompressionReport,
+    ConvertedExperience,
+    DistillationResult,
+    ExperienceDistiller,
+    FormatConverter,
+    LogScrubber,
+    MemoryCompressor,
+    ScrubResult,
+    run_post_task_pipeline,
+)
 from agents.memory.semantic_graph import (
     SemanticGraphStore,
     get_semantic_graph,
