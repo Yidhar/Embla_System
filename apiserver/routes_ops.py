@@ -382,7 +382,6 @@ _OPS_REQUIRED_REPORT_DEFINITIONS: List[Dict[str, Any]] = [
 
 _OPS_INCIDENT_EVENT_SEVERITY: Dict[str, str] = {
     "IncidentOpened": "critical",
-    "SubAgentRuntimeAutoDegraded": "critical",
     "LeaseLost": "critical",
     "RouteQualityGuardEscalatedCritical": "critical",
     "RouteArbiterGuardEscalatedCritical": "critical",
@@ -394,14 +393,18 @@ _OPS_INCIDENT_EVENT_SEVERITY: Dict[str, str] = {
     "RuntimeFuseTriggeredCritical": "critical",
     "AgenticLoopCompletionNotSubmitted": "critical",
     "ImmutableDNATamperDetected": "critical",
-    "SubAgentRuntimeFailOpenBlocked": "warning",
-    "SubAgentRuntimeFailOpen": "warning",
     "RouteQualityGuardEscalatedWarning": "warning",
     "RouteArbiterGuardEscalatedWarning": "warning",
     "ProcessGuardOrphanReaped": "warning",
     "RuntimeFuseTriggeredWarning": "warning",
     "VisionMultimodalQAError": "warning",
 }
+_OPS_ARCHIVED_LEGACY_EVENT_PREFIX = "SubAgentRuntime"
+_OPS_ARCHIVED_LEGACY_EVENT_NAMESPACE = "archived_legacy"
+_OPS_ARCHIVED_LEGACY_EVENT_NOTE = (
+    "SubAgentRuntime* telemetry is archived legacy evidence only and is excluded "
+    "from active single-control-plane incident severity."
+)
 
 _OPS_BRAINSTEM_HEARTBEAT_RELATIVE_PATH = Path("scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json")
 _OPS_BRAINSTEM_HEARTBEAT_STALE_WARNING_SECONDS = 120.0
@@ -432,6 +435,40 @@ def _ops_resolve_audit_ledger_path(repo_root: Path) -> Path:
             return candidate
         return repo_root / candidate
     return repo_root / _OPS_AUDIT_LEDGER_RELATIVE_PATH
+
+
+def _ops_is_archived_legacy_event(event_type: str) -> bool:
+    return str(event_type or "").strip().startswith(_OPS_ARCHIVED_LEGACY_EVENT_PREFIX)
+
+
+def _ops_collect_archived_legacy_namespace(event_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    counters: Dict[str, int] = {}
+    latest_timestamp = ""
+    latest_event_type = ""
+    latest_ts = 0.0
+    for row in event_rows:
+        event_type = str(row.get("event_type") or "").strip()
+        if not _ops_is_archived_legacy_event(event_type):
+            continue
+        counters[event_type] = int(counters.get(event_type, 0)) + 1
+        row_ts = _ops_parse_iso_datetime(row.get("timestamp")) or 0.0
+        if row_ts >= latest_ts:
+            latest_ts = row_ts
+            latest_timestamp = str(row.get("timestamp") or "")
+            latest_event_type = event_type
+
+    legacy_event_total = sum(counters.values())
+    return {
+        "status": _OPS_ARCHIVED_LEGACY_EVENT_NAMESPACE,
+        "namespace": f"{_OPS_ARCHIVED_LEGACY_EVENT_PREFIX}*",
+        "legacy_event_total": legacy_event_total,
+        "event_counters": {name: int(counters[name]) for name in sorted(counters.keys())},
+        "latest_timestamp": latest_timestamp,
+        "latest_event_type": latest_event_type,
+        "included_in_incident_severity": False,
+        "included_in_workflow_critical_counters": False,
+        "note": _OPS_ARCHIVED_LEGACY_EVENT_NOTE,
+    }
 
 
 def _ops_resolve_control_plane_mode_summary() -> Dict[str, Any]:
@@ -988,6 +1025,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     events_file = Path(events_file_raw) if events_file_raw else Path("__missing_events_file__.jsonl")
     if events_file_raw and not events_file.is_absolute():
         events_file = _ops_repo_root() / events_file
+    legacy_namespace = _ops_collect_archived_legacy_namespace(
+        _ops_read_event_rows(events_file, limit=max(200, int(events_limit)))
+    )
     route_quality_trend = _ops_build_route_quality_trend(events_file, window_size=20, max_windows=6)
     execution_bridge_governance = _ops_build_execution_bridge_governance_summary(
         events_file=events_file,
@@ -1087,6 +1127,13 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "overall_status": overall_status,
             "metric_status": metric_status,
             "route_quality": _ops_build_route_quality_summary(metrics, trend=route_quality_trend),
+            "legacy_event_namespace_status": str(legacy_namespace.get("status") or "unknown"),
+            "legacy_event_namespace": str(legacy_namespace.get("namespace") or ""),
+            "legacy_subagent_runtime_events_detected": _ops_safe_int(
+                legacy_namespace.get("legacy_event_total"),
+                default=0,
+            ),
+            "legacy_subagent_runtime_note": str(legacy_namespace.get("note") or ""),
             "control_plane_mode_status": control_plane_mode_status,
             "control_plane_mode": str(control_plane_mode.get("runtime_mode") or ""),
             "single_control_plane": bool(control_plane_mode.get("single_control_plane")),
@@ -1235,6 +1282,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         "budget_guard": budget_guard,
         "immutable_dna": immutable_dna,
         "audit_ledger": audit_ledger,
+        "legacy_event_namespace": legacy_namespace,
         "execution_bridge_governance": execution_bridge_governance,
         "agentic_loop_completion": agentic_loop_completion,
         "vision_multimodal": vision_multimodal,
@@ -2059,12 +2107,10 @@ def _ops_build_workflow_events_payload(
     events_file_raw = str(sources.get("events_file") or "").strip()
     events_file = Path(events_file_raw) if events_file_raw else Path("")
     event_rows = _ops_read_event_rows(events_file, limit=max(100, int(events_limit)))
+    legacy_namespace = _ops_collect_archived_legacy_namespace(event_rows)
     event_database = _ops_build_event_database_summary(events_file)
 
     critical_event_types = {
-        "SubAgentRuntimeFailOpen",
-        "SubAgentRuntimeFailOpenBlocked",
-        "SubAgentRuntimeAutoDegraded",
         "LeaseLost",
         "IncidentOpened",
         "VisionMultimodalQAError",
@@ -2125,6 +2171,13 @@ def _ops_build_workflow_events_payload(
             "outbox_pending": queue_depth.get("value"),
             "oldest_pending_age_seconds": queue_depth.get("oldest_pending_age_seconds"),
             "critical_events_total": sum(event_counters.values()),
+            "legacy_event_namespace_status": str(legacy_namespace.get("status") or "unknown"),
+            "legacy_event_namespace": str(legacy_namespace.get("namespace") or ""),
+            "legacy_subagent_runtime_events_detected": _ops_safe_int(
+                legacy_namespace.get("legacy_event_total"),
+                default=0,
+            ),
+            "legacy_subagent_runtime_note": str(legacy_namespace.get("note") or ""),
             "event_db_rows": _ops_safe_int(event_database.get("total_rows"), default=0),
             "event_db_partitions": _ops_safe_int(event_database.get("partition_count"), default=0),
             "event_db_latest_at": str(event_database.get("latest_timestamp") or ""),
@@ -2134,6 +2187,7 @@ def _ops_build_workflow_events_payload(
         "lock_status": lock_status,
         "runtime_lease": runtime_lease,
         "event_counters": event_counters,
+        "legacy_event_namespace": legacy_namespace,
         "recent_critical_events": recent_critical_events,
         "event_database": event_database,
         "log_context_statistics": context_stats,
@@ -2352,6 +2406,7 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
     events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
     events_db = _ops_resolve_event_db_path(events_file)
     event_rows = _ops_read_event_rows(events_file, limit=max(200, int(limit) * 10))
+    legacy_namespace = _ops_collect_archived_legacy_namespace(event_rows)
     route_quality_trend = _ops_build_route_quality_trend(events_file, window_size=20, max_windows=6)
     execution_bridge_governance = _ops_build_execution_bridge_governance_summary(
         events_file=events_file,
@@ -2436,6 +2491,8 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
 
     for row in event_rows:
         event_type = str(row.get("event_type") or "").strip()
+        if _ops_is_archived_legacy_event(event_type):
+            continue
         severity = _OPS_INCIDENT_EVENT_SEVERITY.get(event_type)
         if not severity:
             continue
@@ -2756,10 +2813,18 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             "critical_incidents": critical_count,
             "warning_incidents": warning_count,
             "latest_incident_at": latest_incident_at,
+            "legacy_event_namespace_status": str(legacy_namespace.get("status") or "unknown"),
+            "legacy_event_namespace": str(legacy_namespace.get("namespace") or ""),
+            "legacy_subagent_runtime_events_detected": _ops_safe_int(
+                legacy_namespace.get("legacy_event_total"),
+                default=0,
+            ),
+            "legacy_subagent_runtime_note": str(legacy_namespace.get("note") or ""),
             "runtime_prompt_safety": prompt_safety_summary,
             "execution_bridge_governance": execution_bridge_governance,
         },
         "event_counters": event_counters,
+        "legacy_event_namespace": legacy_namespace,
         "events_scanned": len(event_rows),
         "incidents": incidents,
     }

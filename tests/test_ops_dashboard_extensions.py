@@ -201,12 +201,16 @@ def test_ops_incidents_latest_payload_merges_events_and_report_issues(tmp_path, 
     assert payload["severity"] == "critical"
     assert payload["data"]["events_scanned"] == 2
     assert payload["data"]["event_counters"]["LeaseLost"] == 1
-    assert payload["data"]["event_counters"]["SubAgentRuntimeFailOpen"] == 1
+    legacy_namespace = payload["data"]["legacy_event_namespace"]
+    assert legacy_namespace["status"] == "archived_legacy"
+    assert legacy_namespace["legacy_event_total"] == 1
+    assert legacy_namespace["event_counters"]["SubAgentRuntimeFailOpen"] == 1
 
     incidents = payload["data"]["incidents"]
     assert any(item["source"] == "events" for item in incidents)
     assert any(item["source"] == "report" for item in incidents)
     assert any(item["event_type"] == "EvidenceGateIssue" for item in incidents)
+    assert all(item["event_type"] != "SubAgentRuntimeFailOpen" for item in incidents)
     assert any(path.endswith("events.jsonl") for path in payload["source_reports"])
 
     runtime_prompt_safety = payload["data"]["summary"]["runtime_prompt_safety"]
@@ -280,6 +284,8 @@ def test_ops_workflow_events_payload_includes_event_database_summary(tmp_path, m
     assert summary["event_db_partitions"] == 2
     assert summary["event_db_status"] == "ok"
     assert summary["event_db_latest_at"] == "2026-03-01T06:05:00+00:00"
+    assert summary["legacy_event_namespace_status"] == "archived_legacy"
+    assert summary["legacy_subagent_runtime_events_detected"] == 1
 
     event_db = payload["data"]["event_database"]
     assert event_db["exists"] is True
@@ -292,6 +298,8 @@ def test_ops_workflow_events_payload_includes_event_database_summary(tmp_path, m
     assert event_db["partitions"][0]["row_count"] == 2
     assert len(event_db["top_topics"]) >= 1
     assert any(path.endswith("events_topics.db") for path in payload["source_reports"])
+    legacy_namespace = payload["data"]["legacy_event_namespace"]
+    assert legacy_namespace["event_counters"]["SubAgentRuntimeFailOpen"] == 1
 
 
 def test_ops_incidents_latest_payload_includes_brainstem_stale_incident(tmp_path, monkeypatch) -> None:
@@ -1063,6 +1071,8 @@ def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_pa
     assert "CORE_SESSION_CREATION_WARNING" in payload["data"]["summary"]["route_quality"]["reason_codes"]
     assert payload["data"]["summary"]["route_quality"]["trend"]["status"] == "unknown"
     assert payload["data"]["summary"]["route_quality"]["trend"]["windows"] == []
+    assert payload["data"]["summary"]["legacy_event_namespace_status"] == "archived_legacy"
+    assert payload["data"]["summary"]["legacy_subagent_runtime_events_detected"] == 0
 
     assert any(path.endswith("ws26_runtime_snapshot_ws26_002.json") for path in payload["source_reports"])
 

@@ -267,12 +267,14 @@ def test_build_snapshot_schema_and_values() -> None:
         assert metrics["runtime_rollout"]["subagent_decisions"] == 2
         assert metrics["runtime_rollout"]["legacy_decisions"] == 0
         assert metrics["runtime_rollout"]["value"] == pytest.approx(1.0)
+        assert metrics["runtime_rollout"]["namespace_status"] == "archived_legacy"
 
         assert metrics["runtime_fail_open"]["subagent_attempt_count"] == 2
         assert metrics["runtime_fail_open"]["fail_open_count"] == 1
         assert metrics["runtime_fail_open"]["fail_open_blocked_count"] == 0
         assert metrics["runtime_fail_open"]["value"] == pytest.approx(0.5)
         assert metrics["runtime_fail_open"]["budget_exhausted"] is False
+        assert metrics["runtime_fail_open"]["namespace_status"] == "archived_legacy"
 
         assert metrics["runtime_lease"]["lease_acquired_count"] == 1
         assert metrics["runtime_lease"]["lease_lost_count"] == 1
