@@ -36,6 +36,7 @@ ChildLLMCallFn = Callable[[List[Dict[str, Any]], List[Dict[str, Any]], str], Awa
 ChildToolExecutorFn = Callable[[str, Dict[str, Any], str], Awaitable[Dict[str, Any]]]
 
 _CORE_PARENT_TOOL_ALLOWLIST = {
+    "spawn_child_agent",
     "poll_child_status",
     "resume_child_agent",
     "destroy_child_agent",
@@ -315,7 +316,11 @@ def _build_core_loop_initial_task(
     return "\n".join(
         [
             "You are the Core lifecycle orchestrator for this pipeline run.",
-            "Decide child lifecycle using only parent tools: poll_child_status / resume_child_agent / destroy_child_agent.",
+            (
+                "Decide child lifecycle using only parent tools: "
+                "spawn_child_agent / poll_child_status / resume_child_agent / destroy_child_agent."
+            ),
+            "When spawning in this phase, only spawn role=dev.",
             "Do not use any other tools.",
             f"Pipeline ID: {pipeline_id}",
             f"Core Session ID: {core_session_id}",
@@ -860,6 +865,7 @@ async def run_multi_agent_pipeline(
     core_loop_summary: Dict[str, Any] = {}
     core_loop_tool_call_count = 0
     core_loop_tool_names: List[str] = []
+    spawned_child_ids: set[str] = set()
     resumed_child_ids: set[str] = set()
     destroyed_child_ids: set[str] = set()
     resume_exec_dev_count = 0
@@ -918,7 +924,22 @@ async def run_multi_agent_pipeline(
                     "status": "blocked",
                     "allowed_tools": sorted(core_allowed_tools),
                 }
-            safe_arguments = arguments if isinstance(arguments, dict) else {}
+            safe_arguments = dict(arguments) if isinstance(arguments, dict) else {}
+            if normalized_name == "spawn_child_agent":
+                requested_role = str(safe_arguments.get("role") or "").strip().lower()
+                if not requested_role:
+                    safe_arguments["role"] = "dev"
+                    requested_role = "dev"
+                if requested_role != "dev":
+                    return {
+                        "error": f"unsupported_spawn_role:{requested_role}",
+                        "status": "blocked",
+                        "allowed_role": "dev",
+                    }
+                raw_metadata = safe_arguments.get("metadata")
+                metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+                metadata["pipeline_id"] = str(pipeline_id or "").strip()
+                safe_arguments["metadata"] = metadata
             return handle_parent_tool_call(
                 normalized_name,
                 safe_arguments,
@@ -960,7 +981,9 @@ async def run_multi_agent_pipeline(
                 if isinstance(result_payload, dict):
                     child_id = str(result_payload.get("agent_id") or "").strip()
                     status_text = str(result_payload.get("status") or "").strip().lower()
-                    if tool_name == "resume_child_agent" and child_id and status_text == "running":
+                    if tool_name == "spawn_child_agent" and child_id and status_text == "running":
+                        spawned_child_ids.add(child_id)
+                    elif tool_name == "resume_child_agent" and child_id and status_text == "running":
                         resumed_child_ids.add(child_id)
                     elif tool_name == "destroy_child_agent" and child_id and status_text == "destroyed":
                         destroyed_child_ids.add(child_id)
@@ -986,6 +1009,7 @@ async def run_multi_agent_pipeline(
             core_loop_summary["stop_reason"] = "unknown"
         core_loop_summary["tool_call_count"] = int(core_loop_tool_call_count)
         core_loop_summary["tool_names"] = list(core_loop_tool_names)
+        core_loop_summary["spawned_child_ids"] = sorted(spawned_child_ids)
         core_loop_summary["resumed_child_ids"] = sorted(resumed_child_ids)
         core_loop_summary["destroyed_child_ids"] = sorted(destroyed_child_ids)
         yield {
@@ -995,33 +1019,60 @@ async def run_multi_agent_pipeline(
             "summary": dict(core_loop_summary),
         }
 
-    # Execute resumed child sessions in-band (Phase-5B), so Core lifecycle
+    # Execute selected child sessions in-band (Phase-5B), so Core lifecycle
     # actions produce immediate, observable effects in this request.
+    followup_child_ids = sorted((spawned_child_ids | resumed_child_ids) - destroyed_child_ids)
     if (
-        resumed_child_ids
+        followup_child_ids
         and child_execution_enabled
         and child_llm_call is not None
         and child_tool_executor is not None
     ):
         refreshed_expert_ids: set[str] = set()
-        for resumed_child_id in sorted(resumed_child_ids):
-            resumed_session = _store.get(resumed_child_id)
+        for target_child_id in followup_child_ids:
+            source = "spawn" if target_child_id in spawned_child_ids else "resume"
+            if source == "spawn":
+                start_event_type = "dev_loop_spawn_start"
+                event_event_type = "dev_loop_spawn_event"
+                end_event_type = "dev_loop_spawn_end"
+                skip_event_type = "dev_loop_spawn_skipped"
+            else:
+                start_event_type = "dev_loop_resume_start"
+                event_event_type = "dev_loop_resume_event"
+                end_event_type = "dev_loop_resume_end"
+                skip_event_type = "dev_loop_resume_skipped"
+
+            resumed_session = _store.get(target_child_id)
             if resumed_session is None:
-                resume_exec_skips.append({"agent_id": resumed_child_id, "reason": "missing_or_destroyed"})
+                resume_exec_skips.append(
+                    {
+                        "agent_id": target_child_id,
+                        "reason": "missing_or_destroyed",
+                        "source": source,
+                    }
+                )
                 yield {
-                    "type": "dev_loop_resume_skipped",
+                    "type": skip_event_type,
                     "pipeline_id": pipeline_id,
-                    "agent_id": resumed_child_id,
+                    "agent_id": target_child_id,
+                    "source": source,
                     "reason": "missing_or_destroyed",
                 }
                 continue
 
             if resumed_session.status != AgentStatus.RUNNING:
-                resume_exec_skips.append({"agent_id": resumed_child_id, "reason": "not_running"})
+                resume_exec_skips.append(
+                    {
+                        "agent_id": target_child_id,
+                        "reason": "not_running",
+                        "source": source,
+                    }
+                )
                 yield {
-                    "type": "dev_loop_resume_skipped",
+                    "type": skip_event_type,
                     "pipeline_id": pipeline_id,
-                    "agent_id": resumed_child_id,
+                    "agent_id": target_child_id,
+                    "source": source,
                     "reason": "not_running",
                     "status": str(resumed_session.status.value),
                 }
@@ -1030,15 +1081,17 @@ async def run_multi_agent_pipeline(
             if str(resumed_session.role or "").strip().lower() != "dev":
                 resume_exec_skips.append(
                     {
-                        "agent_id": resumed_child_id,
+                        "agent_id": target_child_id,
                         "reason": "unsupported_role",
+                        "source": source,
                         "role": str(resumed_session.role or ""),
                     }
                 )
                 yield {
-                    "type": "dev_loop_resume_skipped",
+                    "type": skip_event_type,
                     "pipeline_id": pipeline_id,
-                    "agent_id": resumed_child_id,
+                    "agent_id": target_child_id,
+                    "source": source,
                     "reason": "unsupported_role",
                     "role": str(resumed_session.role or ""),
                 }
@@ -1061,7 +1114,7 @@ async def run_multi_agent_pipeline(
                     tool_subset=dev_tool_subset,
                     prompts_root="system/prompts",
                 ),
-                session_id=resumed_child_id,
+                session_id=target_child_id,
                 store=_store,
                 mailbox=_mailbox,
             )
@@ -1071,7 +1124,7 @@ async def run_multi_agent_pipeline(
                 arguments: Dict[str, Any],
                 *,
                 _allowed_tools: List[str] = dev_tool_subset,
-                _dev_session_id: str = resumed_child_id,
+                _dev_session_id: str = target_child_id,
             ) -> Dict[str, Any]:
                 normalized_tool = str(tool_name or "").strip()
                 if _allowed_tools and normalized_tool not in _allowed_tools:
@@ -1084,16 +1137,17 @@ async def run_multi_agent_pipeline(
                 return await child_tool_executor(normalized_tool, safe_arguments, _dev_session_id)
 
             yield {
-                "type": "dev_loop_resume_start",
+                "type": start_event_type,
                 "pipeline_id": pipeline_id,
                 "expert_id": expert_id,
                 "expert_type": expert_type,
-                "agent_id": resumed_child_id,
+                "agent_id": target_child_id,
+                "source": source,
                 "tool_subset": dev_tool_subset,
             }
 
             async for resumed_event in run_mini_loop(
-                session_id=resumed_child_id,
+                session_id=target_child_id,
                 store=_store,
                 mailbox=_mailbox,
                 llm_call=child_llm_call,
@@ -1104,29 +1158,31 @@ async def run_multi_agent_pipeline(
                 config=loop_config,
             ):
                 yield {
-                    "type": "dev_loop_resume_event",
+                    "type": event_event_type,
                     "pipeline_id": pipeline_id,
                     "expert_id": expert_id,
                     "expert_type": expert_type,
-                    "agent_id": resumed_child_id,
+                    "agent_id": target_child_id,
+                    "source": source,
                     "event": resumed_event,
                 }
 
-            final_resumed_session = _store.get(resumed_child_id)
+            final_resumed_session = _store.get(target_child_id)
             final_status = str(final_resumed_session.status.value) if final_resumed_session is not None else "missing"
             completion_report = ""
             if final_resumed_session is not None:
                 completion_report = str(final_resumed_session.metadata.get("completion_report") or "").strip()
 
             resume_exec_dev_count += 1
-            if expert_id:
+            if expert_id and expert_type == "expert":
                 refreshed_expert_ids.add(expert_id)
             yield {
-                "type": "dev_loop_resume_end",
+                "type": end_event_type,
                 "pipeline_id": pipeline_id,
                 "expert_id": expert_id,
                 "expert_type": expert_type,
-                "agent_id": resumed_child_id,
+                "agent_id": target_child_id,
+                "source": source,
                 "status": final_status,
                 "completion_report": completion_report,
             }

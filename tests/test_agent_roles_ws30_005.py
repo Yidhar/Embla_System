@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
-from pathlib import Path
 
 import pytest
 
-from agents.router_engine import RouterDecision, RouterRequest, TaskRouterEngine
+from agents.router_engine import RouterDecision
 from agents.runtime.agent_session import AgentSessionStore, AgentStatus
 from agents.runtime.mailbox import AgentMailbox
 from agents.runtime.task_board import TaskBoardEngine, TaskItem, TaskStatus
@@ -750,13 +748,24 @@ class TestPipeline:
                         "content": "",
                         "tool_calls": [
                             {
+                                "id": "core_spawn_1",
+                                "name": "spawn_child_agent",
+                                "arguments": {"role": "dev", "task_description": "run quick verify"},
+                            }
+                        ],
+                    }
+                if idx == 1:
+                    return {
+                        "content": "",
+                        "tool_calls": [
+                            {
                                 "id": "core_poll_1",
                                 "name": "poll_child_status",
                                 "arguments": {"agent_id": "missing-child"},
                             }
                         ],
                     }
-                if idx == 1:
+                if idx == 2:
                     return {
                         "content": "",
                         "tool_calls": [
@@ -767,7 +776,7 @@ class TestPipeline:
                             }
                         ],
                     }
-                if idx == 2:
+                if idx == 3:
                     return {
                         "content": "",
                         "tool_calls": [
@@ -820,6 +829,8 @@ class TestPipeline:
         event_types = [str(item.get("type") or "") for item in events if isinstance(item, dict)]
         assert "core_loop_start" in event_types
         assert "core_loop_end" in event_types
+        assert "dev_loop_spawn_start" in event_types
+        assert "dev_loop_spawn_end" in event_types
 
         core_loop_events = [item for item in events if item.get("type") == "core_loop_event"]
         invoked_tools = [
@@ -827,15 +838,23 @@ class TestPipeline:
             for item in core_loop_events
             if isinstance(item.get("event"), dict) and str(item["event"].get("type") or "") == "tool_call"
         ]
+        assert "spawn_child_agent" in invoked_tools
         assert "poll_child_status" in invoked_tools
         assert "resume_child_agent" in invoked_tools
         assert "destroy_child_agent" in invoked_tools
 
         receipt = next(item for item in events if item.get("type") == "execution_receipt")
         agent_state = receipt.get("agent_state", {})
-        assert int(agent_state.get("core_loop_tool_calls") or 0) >= 3
+        assert int(agent_state.get("core_loop_tool_calls") or 0) >= 4
         used_tools = set(agent_state.get("core_loop_tools_used") or [])
-        assert {"poll_child_status", "resume_child_agent", "destroy_child_agent"}.issubset(used_tools)
+        assert {
+            "spawn_child_agent",
+            "poll_child_status",
+            "resume_child_agent",
+            "destroy_child_agent",
+        }.issubset(used_tools)
+        core_loop_state = agent_state.get("core_loop", {}) if isinstance(agent_state.get("core_loop"), dict) else {}
+        assert len(core_loop_state.get("spawned_child_ids") or []) >= 1
 
     def test_pipeline_core_loop_resume_runs_child_loop_in_band(self, store, mailbox, task_board_engine):
         from agents.pipeline import run_multi_agent_pipeline
