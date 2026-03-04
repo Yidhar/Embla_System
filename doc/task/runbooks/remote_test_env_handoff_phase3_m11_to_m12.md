@@ -21,7 +21,7 @@
 
 3. `NGA-WS26-003` fail-open 预算超限自动降级
 - 代码：`agents/pipeline.py`
-- 关键事件：`SubAgentRuntimeAutoDegraded`, `ReleaseGateRejected(gate=fail_open_budget)`
+- 关键事件：`SubAgentRuntimeAutoDegraded`（archived_legacy 历史事件命名空间）, `ReleaseGateRejected(gate=fail_open_budget)`（active）
 
 4. `NGA-WS26-004` 锁泄漏清道夫与 fencing 联动
 - 代码：`apiserver/agentic_tool_loop.py`

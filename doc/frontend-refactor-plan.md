@@ -132,7 +132,7 @@
 核心指标：
 
 1. Outbox 积压（pending 数、最老待处理时长）
-2. 关键事件计数（`SubAgentRuntimeFailOpen`、`SubAgentRuntimeFailOpenBlocked`、`LeaseLost`）
+2. 关键事件计数（active: `LeaseLost`; archived_legacy: `SubAgentRuntimeFailOpen`、`SubAgentRuntimeFailOpenBlocked`）
 3. 日志上下文统计（会话负载）
 4. 当前工具执行态（`tool_status`）
 

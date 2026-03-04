@@ -194,7 +194,7 @@
 - `NGA-WS26-001` 已落地写路径强制收敛：
   - `SubAgentRuntimeConfig` 增加写路径门禁开关（默认强制、默认不允许 write fail-open 回退 legacy）
   - `SystemAgent` 新增写意图识别与 `gate=write_path` 拒绝链路，阻断绕过 Scaffold/Txn 的默认路径
-  - write 任务 fail-open 默认触发 `SubAgentRuntimeFailOpenBlocked`（可通过显式开关兼容）
+  - write 任务 fail-open 默认触发 `SubAgentRuntimeFailOpenBlocked`（archived_legacy 历史事件命名空间 可通过显式开关兼容）
   - 新增回归：`tests/test_native_tools_runtime_hardening.py`
 - `NGA-WS26-002` 已落地 rollout/fail-open/lease 统一指标导出：
   - `scripts/export_slo_snapshot.py` 新增 `runtime_rollout/runtime_fail_open/runtime_lease` 三组指标
@@ -203,7 +203,7 @@
   - 新增回归：`tests/test_slo_snapshot_export.py`、`tests/test_export_ws26_runtime_snapshot_ws26_002.py`
 - `NGA-WS26-003` 已落地 fail-open 预算超限自动降级：
   - `SystemAgent` 新增 fail-open 预算状态机（attempt/fail_open/ratio/budget/degraded）
-  - 预算超限触发 `SubAgentRuntimeAutoDegraded` + `ReleaseGateRejected(gate=fail_open_budget)` + `alert.runtime` 告警
+  - 预算超限触发 `SubAgentRuntimeAutoDegraded`（archived_legacy） + `ReleaseGateRejected(gate=fail_open_budget)` + `alert.runtime` 告警
   - 运行模式决策支持 `decision_reason=fail_open_budget_exhausted_auto_degrade`
   - 与 WS26-001 兼容：写路径任务仍保持 `write_path_enforced -> subagent`
   - 新增回归：`tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py`

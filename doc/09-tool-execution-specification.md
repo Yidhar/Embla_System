@@ -64,6 +64,7 @@
 3. **降级策略（切换后）**：
    - legacy CLI 回退已退役，fail-open 不再切回外部 CLI。
    - fail-open 推荐场景统一走 `SubAgentRuntimeFailOpenBlocked + ReleaseGateRejected` 并进入治理告警。
+     其中 `SubAgentRuntime*` 已归档为 `archived_legacy` 历史事件命名空间。
 
 **实现位置**：
 - `agents/pipeline.py`：主循环路由与 `runtime_mode` 决策

@@ -1,5 +1,7 @@
 # Sub-Agent 内生执行链路图谱（时序 + Gate 决策）
 
+> 状态标记：`archived_legacy`（`SubAgentRuntime*` 事件名仅保留为历史证据命名空间，不再作为当前单控制面的活跃健康判定信号）
+
 最后更新：2026-02-27  
 适用范围：`modifier/naga` 分支当前实现（WS22/WS28 增量）  
 目标：用于排障与 onboarding，快速回答“当前子代理是怎么跑的、在哪个 gate 被拒绝、为什么不会再回落到 CLI”。
@@ -121,7 +123,7 @@ flowchart TD
 | `SubTaskExecutionCompleted` | 子任务执行完成主事件 | 新主语义事件（报表应优先读这个） |
 | `TaskExecutionCompleted` | 任务级执行完成事件（含 `runtime_mode/executor`） | 报表错误率/延迟应统一读取该事件 |
 | `SubAgentScaffoldGateFailed` | Scaffold 提交失败或缺补丁 | 常见于 patch intent 缺失/冲突 |
-| `SubAgentRuntimeFailOpenBlocked` | fail-open 被策略阻断 | 当前配置禁用 legacy 回退时必看 |
+| `SubAgentRuntimeFailOpenBlocked` | fail-open 被策略阻断（archived_legacy） | 历史证据字段 当前活跃告警请优先看 `ReleaseGateRejected` |
 | `ReleaseGateRejected` | 发布门禁拒绝统一出口 | 看 `gate` 字段快速分类（contract/scaffold/runtime/write_path/execution_bridge） |
 
 ## 5. 最小排障路径
@@ -132,7 +134,7 @@ flowchart TD
 rg -n "SubTaskExecutionBridgeReceipt|SubTaskExecutionCompleted|TaskExecutionCompleted|SubAgentScaffoldGateFailed|SubAgentRuntimeFailOpenBlocked|ReleaseGateRejected" logs/autonomous/events.jsonl
 ```
 
-2. 若出现 `SubAgentRuntimeFailOpenBlocked`，检查是否因子任务缺补丁或执行桥策略拒绝：
+2. 若出现 `SubAgentRuntimeFailOpenBlocked`（archived_legacy 历史命名空间），检查是否因子任务缺补丁或执行桥策略拒绝：
 
 ```bash
 rg -n "SubAgentRuntimeFailOpenBlocked|legacy_runtime_retired|subagent_fail_open_blocked|execution_bridge_missing_patch_intent" logs/autonomous/events.jsonl agents/pipeline.py

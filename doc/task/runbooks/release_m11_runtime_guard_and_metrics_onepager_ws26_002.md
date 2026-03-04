@@ -27,7 +27,7 @@
 
 1. 写路径门禁
 - 观察 `ReleaseGateRejected` 中 `gate=write_path` 是否可追踪到具体 `decision_reason`。
-- 观察 `SubAgentRuntimeFailOpenBlocked` 是否在默认策略下触发（write 任务 fail-open 阻断）。
+- 观察 `SubAgentRuntimeFailOpenBlocked`（archived_legacy 历史事件命名空间）是否在默认策略下触发（write 任务 fail-open 阻断）。
 
 2. rollout 灰度命中
 - `metrics.runtime_rollout.value`：subagent 命中率。
