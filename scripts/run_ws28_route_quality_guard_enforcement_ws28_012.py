@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-import apiserver.api_server
-from apiserver import routes_ops as api_server
+import apiserver.api_server as api_server
+from apiserver import routes_ops as ops_routes
 
 
 DEFAULT_OUTPUT = Path("scratch/reports/ws28_012_route_quality_guard_enforcement.json")
@@ -156,8 +156,8 @@ def run_ws28_route_quality_guard_enforcement_ws28_012(
             and "RouteQualityGuardEscalatedCritical" in event_types
         ),
         "incident_severity_map_covers_guard_events": (
-            api_server._OPS_INCIDENT_EVENT_SEVERITY.get("RouteQualityGuardEscalatedWarning") == "warning"
-            and api_server._OPS_INCIDENT_EVENT_SEVERITY.get("RouteQualityGuardEscalatedCritical") == "critical"
+            ops_routes._OPS_INCIDENT_EVENT_SEVERITY.get("RouteQualityGuardEscalatedWarning") == "warning"
+            and ops_routes._OPS_INCIDENT_EVENT_SEVERITY.get("RouteQualityGuardEscalatedCritical") == "critical"
         ),
     }
     passed = all(checks.values())

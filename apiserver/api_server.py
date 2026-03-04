@@ -227,10 +227,10 @@ _bind_route_exports(
 _bind_route_exports(
     _routes_chat,
     [
-        "_resolve_chat_stream_route",
-        "_apply_chat_route_quality_guard",
-        "_apply_path_b_clarify_budget",
-        "_apply_chat_route_router_arbiter_guard",
+        # NOTE: legacy pre-route helpers (_resolve/_apply_* path-a|b|c chain)
+        # are intentionally not eagerly bound into api_server globals.
+        # Runtime chat_stream is dispatch_to_core_only and should not couple to
+        # pre-route decision helpers.
         "_apply_outer_core_session_bridge",
         "_get_chat_route_quality_guard_summary",
         "_read_chat_route_event_rows",
@@ -249,8 +249,6 @@ _bind_route_exports(
         "_emit_core_child_spawn_deferred_event",
         "_extract_agentic_execution_receipt_text",
         "_format_sse_payload_chunk_json",
-        "_CHAT_ROUTE_PATH_B_CLARIFY_LIMIT",
-        "_CHAT_ROUTE_ARBITER_GUARD",
     ],
 )
 
@@ -259,18 +257,33 @@ if hasattr(_routes_chat, "_bind_chat_runtime_context"):
         message_manager=message_manager,
         message_manager_getter=lambda: message_manager,
         config_getter=lambda: get_config(),
-        route_arbiter_guard_getter=lambda: _CHAT_ROUTE_ARBITER_GUARD,
-        event_store_getter=lambda: _CHAT_ROUTE_EVENT_STORE,
+        route_arbiter_guard_getter=lambda: (
+            globals().get("_CHAT_ROUTE_ARBITER_GUARD")
+            if globals().get("_CHAT_ROUTE_ARBITER_GUARD") is not None
+            else getattr(_routes_chat, "_CHAT_ROUTE_ARBITER_GUARD", None)
+        ),
+        event_store_getter=lambda: (
+            globals().get("_CHAT_ROUTE_EVENT_STORE")
+            if globals().get("_CHAT_ROUTE_EVENT_STORE") is not None
+            else getattr(_routes_chat, "_CHAT_ROUTE_EVENT_STORE", None)
+        ),
         event_store_factory=lambda file_path: EventStore(file_path=file_path),
         quality_guard_summary_getter=lambda force_refresh=False: (
-            _get_chat_route_quality_guard_summary(force_refresh=force_refresh)
-            if _get_chat_route_quality_guard_summary is not _routes_chat._get_chat_route_quality_guard_summary
-            else None
+            globals()["_get_chat_route_quality_guard_summary"](force_refresh=force_refresh)
+            if (
+                callable(globals().get("_get_chat_route_quality_guard_summary"))
+                and globals().get("_get_chat_route_quality_guard_summary")
+                is not _routes_chat._get_chat_route_quality_guard_summary
+            )
+            else _routes_chat._get_chat_route_quality_guard_summary(force_refresh=force_refresh)
         ),
         event_rows_reader=lambda limit=2000: (
-            _read_chat_route_event_rows(limit=limit)
-            if _read_chat_route_event_rows is not _routes_chat._read_chat_route_event_rows
-            else None
+            globals()["_read_chat_route_event_rows"](limit=limit)
+            if (
+                callable(globals().get("_read_chat_route_event_rows"))
+                and globals().get("_read_chat_route_event_rows") is not _routes_chat._read_chat_route_event_rows
+            )
+            else _routes_chat._read_chat_route_event_rows(limit=limit)
         ),
     )
 if hasattr(_routes_brainstem, "_bind_brainstem_runtime_context"):

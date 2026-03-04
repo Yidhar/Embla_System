@@ -9,6 +9,15 @@ import pytest
 from agents.router_arbiter_guard import RouterArbiterGuard
 
 
+def test_api_server_legacy_pre_route_helpers_not_eagerly_bound() -> None:
+    # Runtime chat_stream is dispatch_to_core_only; pre-route helpers should
+    # not be eagerly imported into api_server globals.
+    assert "_resolve_chat_stream_route" not in api_server.__dict__
+    assert "_apply_chat_route_quality_guard" not in api_server.__dict__
+    assert "_apply_path_b_clarify_budget" not in api_server.__dict__
+    assert "_apply_chat_route_router_arbiter_guard" not in api_server.__dict__
+
+
 def test_chat_route_core_path_selected_for_coding_intent() -> None:
     route = api_server._resolve_chat_stream_route(
         "请修复 apiserver/api_server.py 并补充回归测试",
