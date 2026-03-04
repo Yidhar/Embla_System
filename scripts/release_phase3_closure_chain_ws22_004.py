@@ -15,18 +15,18 @@ from typing import Callable, Dict, List, Sequence
 
 
 PHASE3_TEST_TARGETS: Sequence[str] = (
-    "autonomous/tests/test_subagent_runtime_ws21_002.py",
-    "autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py",
-    "autonomous/tests/test_subagent_runtime_chaos_ws21_006.py",
-    "autonomous/tests/test_scaffold_engine_ws21_001.py",
-    "autonomous/tests/test_contract_negotiation_ws21_004.py",
-    "autonomous/tests/test_scaffold_verify_pipeline_ws21_005.py",
-    "autonomous/tests/test_system_agent_subagent_bridge_ws22_001.py",
-    "autonomous/tests/test_system_agent_lease_guard_ws22_004.py",
-    "autonomous/tests/test_system_agent_subagent_rollout_ws22_006.py",
-    "autonomous/tests/test_system_agent_longrun_baseline_ws22_004.py",
-    "autonomous/tests/test_subagent_runtime_spec_validation_ws22_005.py",
-    "autonomous/tests/test_ws22_release_gate.py",
+    "tests/test_subagent_contract.py",
+    "tests/test_agent_runtime_session_ws30_002.py",
+    "tests/test_agent_roles_ws30_005.py",
+    "tests/test_mini_loop_ws30_004.py",
+    "tests/test_task_board_engine_ws30_003.py",
+    "tests/test_agentic_loop_submit_result_state_ws28_026.py",
+    "tests/test_agentic_loop_watchdog_guard_ws28_022.py",
+    "tests/test_agentic_loop_structured_events_ws28_034.py",
+    "tests/test_tool_loop_shim_ws28_033.py",
+    "tests/test_run_ws28_execution_governance_gate_ws28_021.py",
+    "tests/test_core_approval_gate_ws28_027.py",
+    "tests/test_core_lease_fencing_ws28_029.py",
 )
 
 

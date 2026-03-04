@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from autonomous.ws25_event_gc_quality_baseline import WS25EventGCQualityConfig, run_ws25_event_gc_quality_baseline
+from agents.runtime.ws25_event_gc_quality_baseline import WS25EventGCQualityConfig, run_ws25_event_gc_quality_baseline
 
 
 def parse_args() -> argparse.Namespace:

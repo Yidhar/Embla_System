@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from autonomous.ws22_release_gate import evaluate_ws22_phase3_closure_gate
+from agents.release_gates.ws22_release_gate import evaluate_ws22_phase3_closure_gate
 
 
 def main() -> int:

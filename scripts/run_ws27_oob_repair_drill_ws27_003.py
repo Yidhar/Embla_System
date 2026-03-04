@@ -88,7 +88,7 @@ class DrillCaseResult:
 def _run_case_snapshot_recovery(*, case_root: Path, rollback_window_minutes: int) -> DrillCaseResult:
     started = time.time()
     repo_root = case_root / "repo"
-    config_rel = Path("autonomous/config/autonomous_config.yaml")
+    config_rel = Path("config/autonomous_runtime.yaml")
     runtime_snapshot_rel = Path("scratch/reports/ws26_runtime_snapshot_ws26_002.json")
     rollback_snapshot_rel = Path("scratch/reports/ws27_drill_snapshot_recovery.json")
 
@@ -166,7 +166,7 @@ def _run_case_snapshot_recovery(*, case_root: Path, rollback_window_minutes: int
 def _run_case_safe_baseline_without_snapshot(*, case_root: Path) -> DrillCaseResult:
     started = time.time()
     repo_root = case_root / "repo"
-    config_rel = Path("autonomous/config/autonomous_config.yaml")
+    config_rel = Path("config/autonomous_runtime.yaml")
     runtime_snapshot_rel = Path("scratch/reports/ws26_runtime_snapshot_ws26_002.json")
 
     _write_runtime_config(

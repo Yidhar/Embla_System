@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from autonomous.state import WorkflowStore
+from agents.runtime.workflow_store import WorkflowStore
 from scripts.export_slo_snapshot import build_snapshot, export_snapshot
 from system.artifact_store import ArtifactStore, ArtifactStoreConfig, ContentType
 
@@ -67,7 +67,7 @@ def test_build_snapshot_schema_and_values() -> None:
 
     try:
         _write_autonomous_config(
-            repo_root / "autonomous" / "config" / "autonomous_config.yaml",
+            repo_root / "config" / "autonomous_runtime.yaml",
             max_error_rate=0.2,
             max_latency_p95_ms=300.0,
             batch_size=1,
@@ -322,7 +322,7 @@ def test_build_snapshot_fallback_to_canary_windows() -> None:
 
     try:
         _write_autonomous_config(
-            repo_root / "autonomous" / "config" / "autonomous_config.yaml",
+            repo_root / "config" / "autonomous_runtime.yaml",
             max_error_rate=0.25,
             max_latency_p95_ms=260.0,
             batch_size=5,
@@ -378,7 +378,7 @@ def test_build_snapshot_lock_status_idle_state_is_ok() -> None:
     now_dt = datetime.now(timezone.utc)
     try:
         _write_autonomous_config(
-            repo_root / "autonomous" / "config" / "autonomous_config.yaml",
+            repo_root / "config" / "autonomous_runtime.yaml",
             max_error_rate=0.2,
             max_latency_p95_ms=300.0,
             batch_size=5,

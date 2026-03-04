@@ -1,0 +1,20 @@
+autonomous:
+  release:
+    max_error_rate: 0.2
+    max_latency_p95_ms: 300.0
+  outbox_dispatch:
+    batch_size: 100
+  lease:
+    lease_name: global_orchestrator
+    ttl_seconds: 10
+  subagent_runtime:
+    enabled: true
+    max_subtasks: 16
+    rollout_percent: 100
+    fail_open: true
+    fail_open_budget_ratio: 0.15
+    enforce_scaffold_txn_for_write: true
+    allow_legacy_fail_open_for_write: false
+    require_contract_negotiation: true
+    require_scaffold_patch: true
+    fail_fast_on_subtask_error: true

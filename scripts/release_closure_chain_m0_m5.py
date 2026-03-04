@@ -42,16 +42,16 @@ T3_TEST_TARGETS: tuple[str, ...] = (
 )
 
 T4_TEST_TARGETS: tuple[str, ...] = (
-    "autonomous/tests/test_event_store_ws18_001.py",
-    "autonomous/tests/test_workflow_store.py",
-    "autonomous/tests/test_meta_agent_runtime_ws19_001.py",
-    "autonomous/tests/test_router_engine_ws19_002.py",
-    "autonomous/tests/test_llm_gateway_ws19_003.py",
-    "autonomous/tests/test_working_memory_manager_ws19_004.py",
-    "autonomous/tests/test_daily_checkpoint_ws19_007.py",
-    "autonomous/tests/test_router_arbiter_guard_ws19_008.py",
-    "autonomous/tests/test_event_replay_tool_ws18_003.py",
-    "autonomous/tests/test_system_agent_release_flow.py",
+    "tests/test_memory_agents.py",
+    "tests/test_l1_memory.py",
+    "tests/test_l2_l3_memory.py",
+    "tests/test_episodic_memory.py",
+    "tests/test_semantic_graph.py",
+    "tests/test_router_engine_prompt_profile_ws28_001.py",
+    "tests/test_run_ws28_router_prompt_profile_ws28_001.py",
+    "tests/test_llm_gateway_prompt_slice_ws28_002.py",
+    "tests/test_run_ws28_prompt_slice_compose_ws28_002.py",
+    "tests/test_core_event_bus_consumers_ws28_029.py",
 )
 
 
@@ -152,7 +152,7 @@ def _build_steps(
         steps.append(
             ChainStep(
                 step_id="T4",
-                description="Autonomous core regression suite",
+                description="Agent core regression suite",
                 command=[python_exe, "-m", "pytest", "-q", *T4_TEST_TARGETS, "-p", "no:tmpdir"],
             )
         )
@@ -270,7 +270,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-t1", action="store_true", help="Skip T1 runtime regression suite")
     parser.add_argument("--skip-t2", action="store_true", help="Skip T2 contract/evidence regression suite")
     parser.add_argument("--skip-t3", action="store_true", help="Skip T3 API regression suite")
-    parser.add_argument("--skip-t4", action="store_true", help="Skip T4 autonomous core regression suite")
+    parser.add_argument("--skip-t4", action="store_true", help="Skip T4 agent core regression suite")
     parser.add_argument("--skip-t5", action="store_true", help="Skip T5 release work-order artifact steps")
     parser.add_argument("--continue-on-failure", action="store_true", help="Continue remaining steps after failure")
     parser.add_argument("--timeout-seconds", type=int, default=2400, help="Per-step timeout")

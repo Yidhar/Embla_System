@@ -41,7 +41,7 @@ def test_release_closure_chain_runs_all_steps_with_green_runner() -> None:
         assert "test_native_executor_guards.py" in " ".join(seen_commands[2])
         assert "test_tool_contract.py" in " ".join(seen_commands[3])
         assert "test_mcp_status_snapshot.py" in " ".join(seen_commands[4])
-        assert "test_event_store_ws18_001.py" in " ".join(seen_commands[5])
+        assert "test_memory_agents.py" in " ".join(seen_commands[5])
         assert "export_slo_snapshot.py" in " ".join(seen_commands[6])
         assert "embla_core_release_compat_gate.py" in " ".join(seen_commands[7])
         assert "canary_rollback_drill.py" in " ".join(seen_commands[8])

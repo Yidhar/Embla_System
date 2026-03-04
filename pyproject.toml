@@ -115,7 +115,6 @@ build-backend = "hatchling.build"
 include = [
     "agents",
     "apiserver",
-    "autonomous",
     "core",
     "mcpserver",
     "summer_memory",
@@ -150,7 +149,6 @@ test = [
 # Only run project-owned unit tests by default.
 addopts = "-q -p no:cacheprovider"
 testpaths = [
-  "autonomous/tests",
   "tests",
 ]
 python_files = ["test_*.py", "*_test.py"]

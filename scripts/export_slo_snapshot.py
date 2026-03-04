@@ -47,7 +47,7 @@ class SnapshotPaths:
             events_db=resolve_topic_db_path_from_mirror(root / "logs" / "autonomous" / "events.jsonl"),
             workflow_db=root / "logs" / "autonomous" / "workflow.db",
             global_mutex_state=root / "logs" / "runtime" / "global_mutex_lease.json",
-            autonomous_config=root / "autonomous" / "config" / "autonomous_config.yaml",
+            autonomous_config=root / "config" / "autonomous_runtime.yaml",
         )
 
 

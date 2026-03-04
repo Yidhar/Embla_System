@@ -1037,7 +1037,7 @@ def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_pa
                 "events_file": "logs/autonomous/events.jsonl",
                 "workflow_db": "logs/autonomous/workflow.db",
                 "global_mutex_state": "logs/runtime/global_mutex_lease.json",
-                "autonomous_config": "autonomous/config/autonomous_config.yaml",
+                "autonomous_config": "config/autonomous_runtime.yaml",
             },
         }
 
@@ -1152,7 +1152,7 @@ def test_ops_runtime_posture_payload_brainstem_heartbeat_healthy_signal(tmp_path
                 "events_file": "logs/autonomous/events.jsonl",
                 "workflow_db": "logs/autonomous/workflow.db",
                 "global_mutex_state": "logs/runtime/global_mutex_lease.json",
-                "autonomous_config": "autonomous/config/autonomous_config.yaml",
+                "autonomous_config": "config/autonomous_runtime.yaml",
             },
         }
 

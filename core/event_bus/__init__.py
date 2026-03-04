@@ -8,6 +8,7 @@ from .event_schema import (
     normalize_event_envelope,
 )
 from .event_store import EventStore
+from .replay_tool import EventReplayTool, ReplayRequest, ReplayResult
 from .topic_bus import TopicEventBus
 
 __all__ = [
@@ -17,5 +18,8 @@ __all__ = [
     "is_event_envelope",
     "normalize_event_envelope",
     "EventStore",
+    "EventReplayTool",
+    "ReplayRequest",
+    "ReplayResult",
     "TopicEventBus",
 ]

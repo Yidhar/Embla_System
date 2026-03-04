@@ -5,7 +5,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from autonomous.release import CanaryThresholds
+from agents.release import CanaryThresholds
 from scripts.canary_rollback_drill import parse_args, run_drill
 
 

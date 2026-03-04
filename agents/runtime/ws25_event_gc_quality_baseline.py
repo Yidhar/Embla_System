@@ -37,7 +37,7 @@ def _run_replay_idempotency_drill(case_root: Path, *, replay_event_count: int) -
                 "seq": idx,
             },
             event_type="ReplayDrillEvent",
-            source="autonomous.ws25.quality",
+            source="agents.runtime.ws25.quality",
             idempotency_key=f"ws25-replay-{idx:03d}",
         )
 

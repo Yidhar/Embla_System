@@ -15,8 +15,8 @@ from typing import Callable, Dict, List, Sequence
 
 
 M11_TEST_TARGETS: Sequence[str] = (
-    "autonomous/tests/test_system_agent_fail_open_budget_ws26_003.py",
-    "autonomous/tests/test_ws26_release_gate.py",
+    "tests/test_core_lease_fencing_ws28_029.py",
+    "tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py",
     "tests/test_agentic_loop_contract_and_mutex.py",
     "tests/test_chaos_lock_failover.py",
     "tests/test_chaos_sleep_watch.py",

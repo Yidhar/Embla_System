@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from autonomous.ws24_release_gate import evaluate_ws24_m9_closure_gate
+from agents.release_gates.ws24_release_gate import evaluate_ws24_m9_closure_gate
 
 
 def main() -> int:

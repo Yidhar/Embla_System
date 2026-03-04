@@ -8,8 +8,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from core.event_bus import EventStore
-
-from autonomous.event_log.replay_tool import EventReplayTool, ReplayRequest
+from core.event_bus.replay_tool import EventReplayTool, ReplayRequest
 
 
 def _default_event_log() -> Path:

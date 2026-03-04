@@ -16,11 +16,11 @@ from typing import Callable, Dict, List, Sequence
 
 M8_TEST_TARGETS: Sequence[str] = (
     "tests/test_brainstem_supervisor_entry_ws23_001.py",
-    "autonomous/tests/test_system_agent_watchdog_gate_ws23_002.py",
+    "tests/test_run_watchdog_daemon_ws28_025.py",
     "tests/test_ws23_003_immutable_dna_gate.py",
     "tests/test_export_killswitch_oob_bundle_ws23_004.py",
     "tests/test_brainstem_event_bridge_ws23_005.py",
-    "autonomous/tests/test_system_agent_outbox_bridge_ws23_005.py",
+    "tests/test_core_event_bus_consumers_ws28_029.py",
 )
 
 DEFAULT_BRAINSTEM_REPORT = Path("scratch/reports/brainstem_supervisor_entry_ws23_001.json")
@@ -292,4 +292,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

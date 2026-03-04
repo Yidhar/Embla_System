@@ -10,7 +10,7 @@ from pathlib import Path
 
 def main() -> int:
     # ---- WorkflowStore: idempotency / outbox-inbox / lease-fencing ----
-    from autonomous.state import WorkflowStore
+    from agents.runtime.workflow_store import WorkflowStore
 
     tmp_root = Path("logs") / "self_check"
     tmp_root.mkdir(parents=True, exist_ok=True)
@@ -60,7 +60,7 @@ def main() -> int:
     assert lease_b.is_owner is False and lease_b.owner_id == "agent-A"
 
     # ---- ReleaseController: canary decision should promote on synthetic windows ----
-    from autonomous.release import ReleaseController
+    from agents.release import ReleaseController
 
     rc = ReleaseController(repo_dir=str(Path(".")), policy_path=Path("policy/gate_policy.yaml"))
     decision = rc.evaluate_canary(observations=None)

@@ -8,10 +8,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_SCAN_DIRS = ("apiserver", "system", "scripts")
 
 FORBIDDEN_PATTERNS = (
-    "from autonomous.router_engine import",
-    "from autonomous.meta_agent_runtime import",
-    "from autonomous.gc_pipeline import",
-    "from autonomous.working_memory_manager import",
+    "from autonomous.",
+    "from autonomous import",
+    "import autonomous.",
+    "import autonomous",
     "from system.episodic_memory import",
     "from system.semantic_graph import",
     "from apiserver.agentic_tool_loop import",

@@ -11,17 +11,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from autonomous.tools.execution_bridge import (
-    DEFAULT_ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC,
-    ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC_SCHEMA,
-)
 from core.security import AuditLedger
 
 
 DEFAULT_OUTPUT = Path("scratch/reports/ws28_execution_governance_gate_ws28_021.json")
 DEFAULT_RUNTIME_POSTURE_OUTPUT = Path("scratch/reports/ws28_execution_governance_runtime_posture_ws28_021.json")
 DEFAULT_INCIDENTS_OUTPUT = Path("scratch/reports/ws28_execution_governance_incidents_ws28_021.json")
-DEFAULT_SEMANTIC_GUARD_SPEC = DEFAULT_ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC
+DEFAULT_SEMANTIC_GUARD_SPEC = Path("policy/role_executor_semantic_guard.spec")
+ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC_SCHEMA = "ws28-role-executor-semantic-guard-v1"
 _REQUIRED_SEMANTIC_ROLES = ("frontend", "backend", "ops")
 
 

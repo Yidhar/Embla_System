@@ -17,6 +17,21 @@ LEGACY_SHIM_MODULES = (
     "system.policy_firewall",
     "system.watchdog_daemon",
     "system.brainstem_supervisor",
+    "autonomous.state",
+    "autonomous.release",
+    "autonomous.daily_checkpoint",
+    "autonomous.event_log.replay_tool",
+    "autonomous.ws22_release_gate",
+    "autonomous.ws23_release_gate",
+    "autonomous.ws24_release_gate",
+    "autonomous.ws25_release_gate",
+    "autonomous.ws26_release_gate",
+    "autonomous.ws25_event_gc_quality_baseline",
+    "autonomous.ws27_longrun_endurance",
+    "autonomous.tools.execution_bridge",
+    "autonomous.system_agent",
+    "autonomous.tools.subagent_runtime",
+    "autonomous.types",
     "autonomous.llm_gateway",
     "autonomous.router_arbiter_guard",
     "autonomous.event_log.event_schema",
@@ -26,10 +41,10 @@ LEGACY_SHIM_MODULES = (
 
 DEFAULT_SCAN_ROOTS = (
     "apiserver",
-    "autonomous",
     "system",
     "scripts",
     "core",
+    "agents",
 )
 DEFAULT_OUTPUT = Path("scratch/reports/ws28_legacy_shim_imports_check_ws28_030.json")
 

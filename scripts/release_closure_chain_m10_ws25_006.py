@@ -15,10 +15,10 @@ from typing import Callable, Dict, List, Sequence
 
 
 M10_TEST_TARGETS: Sequence[str] = (
-    "autonomous/tests/test_topic_event_bus_ws25_001.py",
-    "autonomous/tests/test_cron_alert_producer_ws25_002.py",
-    "autonomous/tests/test_topic_event_bus_replay_idempotency_ws25_003.py",
-    "autonomous/tests/test_ws25_event_gc_quality_baseline.py",
+    "tests/test_core_event_bus_consumers_ws28_029.py",
+    "tests/test_event_store_db_partition_ws29_005.py",
+    "tests/test_gc_pipeline_ws28_028.py",
+    "tests/test_gc_quality_eval.py",
     "tests/test_run_event_gc_quality_baseline_ws25_005.py",
     "tests/test_tool_contract.py",
     "tests/test_episodic_memory.py",

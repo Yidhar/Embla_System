@@ -41,7 +41,7 @@ class TestBaselineConfig:
 
         return cls(
             golden_suite_dirs={
-                "autonomous/tests",  # 自治系统测试
+                "tests/critical",    # 关键守护测试（如存在）
                 "tests/golden",      # Golden 测试套件（如果存在）
             },
             workspace_test_dirs={

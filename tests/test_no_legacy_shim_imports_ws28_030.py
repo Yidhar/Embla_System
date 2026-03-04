@@ -70,3 +70,24 @@ def test_checker_flags_archived_autonomous_gateway_imports_when_tests_included(t
     modules = {str(hit.get("module") or "") for hit in report["hits"]}
     assert "autonomous.llm_gateway" in modules
     assert "autonomous.router_arbiter_guard" in modules
+
+
+def test_checker_flags_runtime_autonomous_state_imports_as_legacy(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    (repo_root / "scripts").mkdir(parents=True, exist_ok=True)
+    (repo_root / "scripts" / "legacy_state_import.py").write_text(
+        "from autonomous.state import WorkflowStore\n",
+        encoding="utf-8",
+    )
+
+    report = run_check_legacy_shim_imports_ws28_030(
+        repo_root=repo_root,
+        output_file=repo_root / "scratch/reports/runtime_legacy_state_import.json",
+        roots=["scripts"],
+        include_tests=False,
+    )
+    assert report["passed"] is False
+    assert int(report["hit_count"]) == 1
+    hit = report["hits"][0]
+    assert hit["module"] == "autonomous.state"
+    assert hit["file_path"] == "scripts/legacy_state_import.py"

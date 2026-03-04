@@ -48,7 +48,7 @@ DEFAULT_WS28_EXECUTION_GOVERNANCE_INCIDENTS_OUTPUT = Path(
     "scratch/reports/ws28_execution_governance_incidents_ws28_021.json"
 )
 DEFAULT_WS28_LEGACY_IMPORTS_CHECK_OUTPUT = Path("scratch/reports/ws28_legacy_shim_imports_check_ws28_030.json")
-DEFAULT_AUTONOMOUS_CONFIG = Path("autonomous/config/autonomous_config.yaml")
+DEFAULT_AUTONOMOUS_CONFIG = Path("config/autonomous_runtime.yaml")
 
 
 def _utc_iso_now() -> str:

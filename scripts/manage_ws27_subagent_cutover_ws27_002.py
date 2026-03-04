@@ -13,7 +13,7 @@ from typing import Any, Dict, List
 import yaml
 
 
-DEFAULT_CONFIG_PATH = Path("autonomous/config/autonomous_config.yaml")
+DEFAULT_CONFIG_PATH = Path("config/autonomous_runtime.yaml")
 DEFAULT_RUNTIME_SNAPSHOT_REPORT = Path("scratch/reports/ws26_runtime_snapshot_ws26_002.json")
 DEFAULT_ROLLBACK_SNAPSHOT = Path("scratch/reports/ws27_subagent_cutover_rollback_snapshot_ws27_002.json")
 DEFAULT_OUTPUT_REPORT = Path("scratch/reports/ws27_subagent_cutover_ws27_002.json")
@@ -415,7 +415,7 @@ def parse_args() -> argparse.Namespace:
         help="Action: generate plan, apply rollout, rollback, or query status",
     )
     parser.add_argument("--repo-root", type=Path, default=Path("."), help="Repository root path")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH, help="Autonomous config YAML path")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH, help="Runtime config YAML path")
     parser.add_argument(
         "--runtime-snapshot-report",
         type=Path,

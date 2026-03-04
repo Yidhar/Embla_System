@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from autonomous.state import WorkflowStore
+from agents.runtime.workflow_store import WorkflowStore
 from scripts.export_ws26_runtime_snapshot_ws26_002 import main
 
 
@@ -25,10 +25,10 @@ def test_export_ws26_runtime_snapshot_cli_main_smoke(monkeypatch) -> None:
     try:
         repo_root = case_root / "repo"
         repo_root.mkdir(parents=True, exist_ok=True)
-        (repo_root / "autonomous" / "config").mkdir(parents=True, exist_ok=True)
+        (repo_root / "config").mkdir(parents=True, exist_ok=True)
         (repo_root / "logs" / "autonomous").mkdir(parents=True, exist_ok=True)
 
-        (repo_root / "autonomous" / "config" / "autonomous_config.yaml").write_text(
+        (repo_root / "config" / "autonomous_runtime.yaml").write_text(
             "\n".join(
                 [
                     "autonomous:",

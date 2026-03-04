@@ -11,11 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from autonomous.tools.execution_bridge import DEFAULT_ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC
 from core.security import ApprovalGate, ApprovalRequest, AuditLedger
 
 
 DEFAULT_OUTPUT = Path("scratch/reports/ws28_role_executor_semantic_guard_change_register.json")
+DEFAULT_ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC = Path("policy/role_executor_semantic_guard.spec")
 
 
 def _utc_iso_now() -> str:

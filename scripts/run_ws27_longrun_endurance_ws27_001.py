@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from autonomous.ws27_longrun_endurance import WS27LongRunConfig, run_ws27_72h_endurance_baseline
+from agents.runtime.ws27_longrun_endurance import WS27LongRunConfig, run_ws27_72h_endurance_baseline
 
 
 def parse_args() -> argparse.Namespace:

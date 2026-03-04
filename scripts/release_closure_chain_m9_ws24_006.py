@@ -17,7 +17,7 @@ from typing import Callable, Dict, List, Sequence
 M9_TEST_TARGETS: Sequence[str] = (
     "tests/test_mcp_plugin_isolation_ws24_001.py",
     "tests/test_run_plugin_isolation_chaos_suite_ws24_005.py",
-    "autonomous/tests/test_ws24_release_gate.py",
+    "tests/test_core_mcp_isolated_worker_runtime_ws28_028.py",
 )
 
 DEFAULT_PLUGIN_CHAOS_REPORT = Path("scratch/reports/plugin_isolation_chaos_ws24_005.json")

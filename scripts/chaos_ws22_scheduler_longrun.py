@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from autonomous.ws22_longrun_baseline import WS22LongRunConfig, run_ws22_longrun_baseline
+from agents.runtime.ws22_longrun_baseline import WS22LongRunConfig, run_ws22_longrun_baseline
 
 
 def main() -> int:

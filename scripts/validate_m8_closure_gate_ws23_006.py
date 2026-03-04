@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from autonomous.ws23_release_gate import evaluate_ws23_m8_closure_gate
+from agents.release_gates.ws23_release_gate import evaluate_ws23_m8_closure_gate
 
 
 def main() -> int:
@@ -72,4 +72,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

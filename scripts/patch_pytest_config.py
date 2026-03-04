@@ -20,7 +20,7 @@ def main() -> int:
 addopts = "-q"
 # Only run project-owned unit tests by default.
 testpaths = [
-  "autonomous/tests",
+  "tests",
 ]
 python_files = ["test_*.py", "*_test.py"]
 

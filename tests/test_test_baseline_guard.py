@@ -37,7 +37,7 @@ class TestTestBaselineGuard:
         """测试默认配置"""
         config = TestBaselineConfig.default()
 
-        assert "autonomous/tests" in config.golden_suite_dirs
+        assert "tests/critical" in config.golden_suite_dirs
         assert "tests" in config.workspace_test_dirs
         assert len(config.approval_whitelist) == 0
 
@@ -47,7 +47,7 @@ class TestTestBaselineGuard:
         guard = TestBaselineGuard(config)
 
         # Golden Suite 路径
-        golden_path = workspace_tmp_path / "autonomous" / "tests" / "test_example.py"
+        golden_path = workspace_tmp_path / "tests" / "critical" / "test_example.py"
         assert guard.is_golden_suite_path(golden_path)
 
         # 非 Golden Suite 路径
@@ -83,7 +83,7 @@ class TestTestBaselineGuard:
         config = TestBaselineConfig.default(project_root=workspace_tmp_path)
         guard = TestBaselineGuard(config)
 
-        golden_test = workspace_tmp_path / "autonomous" / "tests" / "test_example.py"
+        golden_test = workspace_tmp_path / "tests" / "critical" / "test_example.py"
         allowed, reason = guard.check_modification_allowed(golden_test)
 
         assert allowed is False
@@ -98,7 +98,7 @@ class TestTestBaselineGuard:
         # 添加到白名单
         guard.add_to_whitelist("admin_user")
 
-        golden_test = workspace_tmp_path / "autonomous" / "tests" / "test_example.py"
+        golden_test = workspace_tmp_path / "tests" / "critical" / "test_example.py"
         allowed, reason = guard.check_modification_allowed(golden_test, requester="admin_user")
 
         assert allowed is True
@@ -111,7 +111,7 @@ class TestTestBaselineGuard:
 
         changed_files = [
             workspace_tmp_path / "tests" / "test_a.py",  # 允许
-            workspace_tmp_path / "autonomous" / "tests" / "test_b.py",  # 阻止
+            workspace_tmp_path / "tests" / "critical" / "test_b.py",  # 阻止
             workspace_tmp_path / "src" / "main.py",  # 非测试文件，允许
         ]
 
@@ -219,7 +219,7 @@ def test_normal():
     def test_compliance_check_golden_blocked(self, workspace_tmp_path):
         """测试 Golden Suite 修改被阻止"""
         # 创建 Golden Suite 测试文件
-        test_file = workspace_tmp_path / "autonomous" / "tests" / "test_example.py"
+        test_file = workspace_tmp_path / "tests" / "critical" / "test_example.py"
         test_file.parent.mkdir(parents=True, exist_ok=True)
         test_file.write_text("""
 def test_normal():

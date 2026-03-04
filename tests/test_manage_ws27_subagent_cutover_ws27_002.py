@@ -64,7 +64,7 @@ def _write_runtime_snapshot(path: Path, *, passed: bool = True) -> None:
 def test_cutover_plan_contains_rollout_phases_and_rollback_window() -> None:
     case_root = _make_case_root("test_manage_ws27_subagent_cutover_ws27_002")
     try:
-        config_path = case_root / "repo" / "autonomous" / "config" / "autonomous_config.yaml"
+        config_path = case_root / "repo" / "config" / "autonomous_runtime.yaml"
         runtime_snapshot = case_root / "repo" / "scratch" / "reports" / "ws26_snapshot.json"
         output = case_root / "repo" / "scratch" / "reports" / "ws27_cutover_plan.json"
         _write_config(config_path, enabled=True, rollout_percent=40)
@@ -95,7 +95,7 @@ def test_cutover_apply_and_rollback_restore_previous_runtime_config() -> None:
     case_root = _make_case_root("test_manage_ws27_subagent_cutover_ws27_002")
     try:
         repo_root = case_root / "repo"
-        config_path = repo_root / "autonomous" / "config" / "autonomous_config.yaml"
+        config_path = repo_root / "config" / "autonomous_runtime.yaml"
         runtime_snapshot = repo_root / "scratch" / "reports" / "ws26_snapshot.json"
         snapshot = repo_root / "scratch" / "reports" / "ws27_cutover_snapshot.json"
         output_apply = repo_root / "scratch" / "reports" / "ws27_apply.json"
@@ -142,7 +142,7 @@ def test_cutover_rollback_without_snapshot_uses_safe_baseline_mode() -> None:
     case_root = _make_case_root("test_manage_ws27_subagent_cutover_ws27_002")
     try:
         repo_root = case_root / "repo"
-        config_path = repo_root / "autonomous" / "config" / "autonomous_config.yaml"
+        config_path = repo_root / "config" / "autonomous_runtime.yaml"
         runtime_snapshot = repo_root / "scratch" / "reports" / "ws26_snapshot.json"
         output = repo_root / "scratch" / "reports" / "ws27_rollback_no_snapshot.json"
         _write_config(config_path, enabled=True, rollout_percent=100, fail_open=True)
@@ -169,7 +169,7 @@ def test_cutover_cli_status_returns_nonzero_when_not_full_cutover(monkeypatch) -
     case_root = _make_case_root("test_manage_ws27_subagent_cutover_ws27_002")
     try:
         repo_root = case_root / "repo"
-        config_path = repo_root / "autonomous" / "config" / "autonomous_config.yaml"
+        config_path = repo_root / "config" / "autonomous_runtime.yaml"
         runtime_snapshot = repo_root / "scratch" / "reports" / "ws26_snapshot.json"
         output = repo_root / "scratch" / "reports" / "ws27_status.json"
         _write_config(config_path, enabled=True, rollout_percent=75, fail_open=True)
@@ -202,7 +202,7 @@ def test_cutover_apply_preserves_non_runtime_yaml_layout() -> None:
     case_root = _make_case_root("test_manage_ws27_subagent_cutover_ws27_002")
     try:
         repo_root = case_root / "repo"
-        config_path = repo_root / "autonomous" / "config" / "autonomous_config.yaml"
+        config_path = repo_root / "config" / "autonomous_runtime.yaml"
         runtime_snapshot = repo_root / "scratch" / "reports" / "ws26_snapshot.json"
         output = repo_root / "scratch" / "reports" / "ws27_apply_preserve_layout.json"
         config_path.parent.mkdir(parents=True, exist_ok=True)

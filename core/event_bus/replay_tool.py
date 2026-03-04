@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core.event_bus import EventStore
+from core.event_bus.event_store import EventStore
 
 
 def _utc_iso() -> str:

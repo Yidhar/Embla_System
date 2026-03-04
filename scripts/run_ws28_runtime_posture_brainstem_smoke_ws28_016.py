@@ -85,7 +85,7 @@ def run_ws28_runtime_posture_brainstem_smoke_ws28_016(
                 "events_file": _to_unix(events_file),
                 "workflow_db": _to_unix(fake_repo / "logs" / "autonomous" / "workflow.db"),
                 "global_mutex_state": _to_unix(fake_repo / "logs" / "runtime" / "global_mutex_lease.json"),
-                "autonomous_config": _to_unix(fake_repo / "autonomous" / "config" / "autonomous_config.yaml"),
+                "autonomous_config": _to_unix(fake_repo / "config" / "autonomous_runtime.yaml"),
             },
         }
 

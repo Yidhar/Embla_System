@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-from autonomous.release import CanaryThresholds, ReleaseController
+from agents.release import CanaryThresholds, ReleaseController
 
 
 def _scenario_observations(name: str) -> List[Dict[str, Any]]:

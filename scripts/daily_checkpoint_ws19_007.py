@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from autonomous.daily_checkpoint import DailyCheckpointConfig, DailyCheckpointEngine
+from agents.runtime.daily_checkpoint import DailyCheckpointConfig, DailyCheckpointEngine
 
 
 def main() -> int:
