@@ -492,6 +492,99 @@ def test_chat_stream_rejects_unknown_stream_protocol() -> None:
     assert exc.value.detail.get("error") == "unsupported_stream_protocol"
 
 
+def test_chat_stream_dispatch_to_core_triggers_real_core_pipeline(monkeypatch) -> None:
+    class _FakeLLMService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def stream_chat_with_context(self, messages, temperature, model_override=None, tools=None, tool_choice="auto"):
+            del messages, temperature, model_override, tools, tool_choice
+            self.calls += 1
+
+            async def _gen():
+                if self.calls == 1:
+                    yield (
+                        'data: {"type":"tool_calls","text":[{"id":"call_1","name":"dispatch_to_core",'
+                        '"arguments":{"goal":"修复后端bug","intent_type":"development","target_repo":"external"}}]}\n\n'
+                    )
+                yield "data: [DONE]\n\n"
+
+            return _gen()
+
+    fake_llm = _FakeLLMService()
+    pipeline_calls = []
+
+    async def _fake_run_multi_agent_pipeline(**kwargs):
+        pipeline_calls.append(dict(kwargs))
+        assert str(kwargs.get("forced_path") or "") == "path-c"
+        yield {
+            "type": "execution_receipt",
+            "agent_state": {
+                "task_completed": True,
+                "final_answer": "core pipeline finished",
+            },
+        }
+        yield {
+            "type": "pipeline_end",
+            "reason": "completed",
+        }
+
+    async def _collect_payloads(response):
+        rows = []
+        async for chunk in response.body_iterator:
+            text = chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)
+            for line in text.splitlines():
+                if not line.startswith("data: "):
+                    continue
+                raw = line[6:].strip()
+                if not raw or raw == "[DONE]":
+                    continue
+                rows.append(json.loads(raw))
+        return rows
+
+    monkeypatch.setattr(api_server, "get_llm_service", lambda: fake_llm)
+    monkeypatch.setattr(api_server, "run_multi_agent_pipeline", _fake_run_multi_agent_pipeline)
+
+    async def _no_memory(_question: str, *, limit: int = 5):
+        del limit
+        return []
+
+    monkeypatch.setattr(api_server, "_recall_memory_lines", _no_memory)
+
+    req = api_server.ChatRequest(
+        message="请修复一个后端 bug 并提交",
+        stream=True,
+        session_id="dispatch-only-route-session",
+        stream_protocol="sse_json_v1",
+        temporary=True,
+    )
+    response = asyncio.run(api_server.chat_stream(req))
+    payloads = asyncio.run(_collect_payloads(response))
+
+    tool_results = [item for item in payloads if item.get("type") == "tool_result"]
+    assert any(item.get("tool_name") == "dispatch_to_core" for item in tool_results)
+
+    route_events = [item for item in payloads if item.get("type") == "route_decision"]
+    assert len(route_events) >= 2
+    assert route_events[0].get("routing_mode") == "dispatch_to_core_only"
+    assert any(
+        item.get("routing_mode") == "dispatch_to_core_tool" and item.get("handoff_source") == "dispatch_to_core"
+        for item in route_events
+    )
+
+    assert len(pipeline_calls) == 1
+    assert str(pipeline_calls[0].get("forced_path") or "") == "path-c"
+
+    fallback_content_rows = [
+        item for item in payloads if item.get("type") == "content" and item.get("source") == "execution_receipt_fallback"
+    ]
+    assert fallback_content_rows
+    assert fallback_content_rows[-1].get("text") == "core pipeline finished"
+
+    api_server.message_manager.delete_session("dispatch-only-route-session")
+    api_server.message_manager.delete_session("dispatch-only-route-session__core")
+
+
 def test_extract_agentic_execution_receipt_text_prefers_final_answer() -> None:
     payload = {
         "type": "execution_receipt",

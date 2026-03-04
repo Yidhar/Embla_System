@@ -244,6 +244,7 @@ _bind_route_exports(
         "_sanitize_router_arbiter_reason_codes",
         "_build_chat_route_prompt_hints",
         "_build_path_model_override",
+        "_merge_model_override",
         "_emit_agentic_loop_completion_event",
         "_extract_agentic_execution_receipt_text",
         "_format_sse_payload_chunk_json",
@@ -1253,40 +1254,46 @@ async def chat_stream(request: ChatRequest):
                 protocol=stream_protocol,
             )
 
-            route_meta = _resolve_chat_stream_route(request.message, session_id=session_id)
-            route_meta = _apply_chat_route_quality_guard(route_meta)
-            route_meta = _apply_path_b_clarify_budget(route_meta, session_id=session_id)
-            route_meta = _apply_chat_route_router_arbiter_guard(route_meta, session_id=session_id)
-            route_meta = _apply_outer_core_session_bridge(route_meta, outer_session_id=session_id)
-            route_decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
-            path = str(route_meta.get("path") or "path-c")
+            # Dispatch-to-core only mode:
+            # - Shell LLM always starts first and decides whether to call dispatch_to_core.
+            # - API server only runs Core pipeline when dispatch_to_core tool is actually called.
+            route_meta: Dict[str, Any] = {
+                "path": "path-a",
+                "risk_level": "read_only",
+                "outer_readonly_hit": True,
+                "core_escalation": False,
+                "router_decision": {},
+                "outer_session_id": session_id,
+                "core_session_id": "",
+                "execution_session_id": session_id,
+                "routing_mode": "dispatch_to_core_only",
+            }
+            route_decision: Dict[str, Any] = {}
+            path = str(route_meta.get("path") or "path-a")
             execution_session_id = str(route_meta.get("execution_session_id") or session_id)
-            precomposed_shell_prompt = ""
-            if path in {"path-a", "path-b"}:
-                precomposed_memory_lines: List[str] = []
-                try:
-                    precomposed_memory_lines = await _recall_memory_lines(request.message, limit=5)
-                except Exception:
-                    precomposed_memory_lines = []
-                shell_base_prompt = ""
-                try:
-                    shell_base_prompt = str(ShellAgent().build_system_prompt() or "")
-                except Exception as _shell_prompt_exc:
-                    logger.debug("[prompt_gateway] shell base prompt build fallback: %s", _shell_prompt_exc)
 
-                precomposed_shell_prompt = _build_shell_system_prompt_with_gateway(
-                    route_meta=route_meta,
-                    base_system_prompt=shell_base_prompt,
-                    memory_lines=precomposed_memory_lines,
-                )
-                route_meta["_shell_memory_lines"] = list(precomposed_memory_lines)
-                route_meta["_shell_prompt_composed"] = bool(precomposed_shell_prompt.strip())
-                if precomposed_shell_prompt.strip():
-                    route_meta["_shell_prompt_value"] = precomposed_shell_prompt
+            precomposed_memory_lines: List[str] = []
+            try:
+                precomposed_memory_lines = await _recall_memory_lines(request.message, limit=5)
+            except Exception:
+                precomposed_memory_lines = []
+
+            shell_base_prompt = ""
+            try:
+                shell_base_prompt = str(ShellAgent().build_system_prompt() or "")
+            except Exception as _shell_prompt_exc:
+                logger.debug("[prompt_gateway] shell base prompt build fallback: %s", _shell_prompt_exc)
+            precomposed_shell_prompt = _build_shell_system_prompt_with_gateway(
+                route_meta=route_meta,
+                base_system_prompt=shell_base_prompt,
+                memory_lines=precomposed_memory_lines,
+            )
+            route_meta["_shell_memory_lines"] = list(precomposed_memory_lines)
+            route_meta["_shell_prompt_composed"] = bool(precomposed_shell_prompt.strip())
+            if precomposed_shell_prompt.strip():
+                route_meta["_shell_prompt_value"] = precomposed_shell_prompt
 
             _emit_chat_route_prompt_event(route_meta, session_id=session_id)
-            _emit_chat_route_guard_event(route_meta, session_id=session_id)
-            _emit_chat_route_arbiter_event(route_meta, session_id=session_id)
             yield _format_stream_payload_chunk(
                 {
                     "type": "route_decision",
@@ -1294,48 +1301,14 @@ async def chat_stream(request: ChatRequest):
                     "risk_level": route_meta.get("risk_level"),
                     "outer_readonly_hit": bool(route_meta.get("outer_readonly_hit")),
                     "core_escalation": bool(route_meta.get("core_escalation")),
-                    "prompt_profile": route_decision.get("prompt_profile", ""),
-                    "injection_mode": route_decision.get("injection_mode", ""),
-                    "delegation_intent": route_decision.get("delegation_intent", ""),
-                    "path_b_clarify_turns": int(route_meta.get("path_b_clarify_turns") or 0),
-                    "path_b_clarify_limit": int(route_meta.get("path_b_clarify_limit") or _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT),
-                    "path_b_clarify_limit_override": route_meta.get("path_b_clarify_limit_override"),
-                    "path_b_budget_escalated": bool(route_meta.get("path_b_budget_escalated")),
-                    "path_b_budget_reason": str(route_meta.get("path_b_budget_reason") or ""),
-                    "route_quality_guard_status": _ops_status_to_severity(
-                        str(route_meta.get("route_quality_guard_status") or "unknown")
-                    ),
-                    "route_quality_guard_applied": bool(route_meta.get("route_quality_guard_applied")),
-                    "route_quality_guard_action": str(route_meta.get("route_quality_guard_action") or ""),
-                    "route_quality_guard_reason": str(route_meta.get("route_quality_guard_reason") or ""),
-                    "route_quality_guard_reason_codes": _sanitize_route_quality_reason_codes(
-                        route_meta.get("route_quality_guard_reason_codes")
-                    ),
-                    "route_quality_guard_path_before": str(route_meta.get("route_quality_guard_path_before") or ""),
-                    "route_quality_guard_path_after": str(route_meta.get("route_quality_guard_path_after") or ""),
-                    "router_arbiter_status": _ops_status_to_severity(
-                        str(route_meta.get("router_arbiter_status") or "unknown")
-                    ),
-                    "router_arbiter_applied": bool(route_meta.get("router_arbiter_applied")),
-                    "router_arbiter_action": str(route_meta.get("router_arbiter_action") or ""),
-                    "router_arbiter_reason": str(route_meta.get("router_arbiter_reason") or ""),
-                    "router_arbiter_reason_codes": _sanitize_router_arbiter_reason_codes(
-                        route_meta.get("router_arbiter_reason_codes")
-                    ),
-                    "router_arbiter_path_before": str(route_meta.get("router_arbiter_path_before") or ""),
-                    "router_arbiter_path_after": str(route_meta.get("router_arbiter_path_after") or ""),
-                    "router_arbiter_delegate_turns": int(route_meta.get("router_arbiter_delegate_turns") or 0),
-                    "router_arbiter_max_delegate_turns": int(
-                        route_meta.get("router_arbiter_max_delegate_turns") or _CHAT_ROUTE_ARBITER_GUARD.max_delegate_turns
-                    ),
-                    "router_arbiter_conflict_ticket": str(route_meta.get("router_arbiter_conflict_ticket") or ""),
-                    "router_arbiter_freeze": bool(route_meta.get("router_arbiter_freeze")),
-                    "router_arbiter_hitl": bool(route_meta.get("router_arbiter_hitl")),
-                    "router_arbiter_escalated": bool(route_meta.get("router_arbiter_escalated")),
+                    "prompt_profile": "",
+                    "injection_mode": "",
+                    "delegation_intent": "shell_dispatch_only",
                     "outer_session_id": str(route_meta.get("outer_session_id") or ""),
                     "core_session_id": str(route_meta.get("core_session_id") or ""),
                     "execution_session_id": execution_session_id,
-                    "core_session_created": bool(route_meta.get("core_session_created")),
+                    "core_session_created": False,
+                    "routing_mode": "dispatch_to_core_only",
                     "selected_slice_count": int(route_meta.get("_slice_selected_count") or 0),
                     "dropped_slice_count": int(route_meta.get("_slice_dropped_count") or 0),
                     "prefix_hash": str(route_meta.get("_slice_prefix_hash") or ""),
@@ -1344,19 +1317,12 @@ async def chat_stream(request: ChatRequest):
                 protocol=stream_protocol,
             )
             logger.info(
-                "[API Server] chat route decided outer_session=%s execution_session=%s path=%s intent=%s profile=%s guard=%s action=%s arbiter=%s arbiter_action=%s",
+                "[API Server] chat route decided outer_session=%s execution_session=%s path=%s mode=%s",
                 session_id,
                 execution_session_id,
                 path,
-                route_decision.get("delegation_intent", ""),
-                route_decision.get("prompt_profile", ""),
-                route_meta.get("route_quality_guard_status", "unknown"),
-                route_meta.get("route_quality_guard_action", ""),
-                route_meta.get("router_arbiter_status", "unknown"),
-                route_meta.get("router_arbiter_action", ""),
+                "dispatch_to_core_only",
             )
-
-            # pipeline handles system prompt construction internally
 
             # ====== RAG 记忆召回 ======
 
@@ -1418,195 +1384,230 @@ async def chat_stream(request: ChatRequest):
                 call_payload["session_id"] = child_session_id
                 return await native_tool_executor.execute(call_payload, session_id=child_session_id)
 
-            # ── Unified Multi-Agent Pipeline ──
-            async for event in run_multi_agent_pipeline(
-                message=effective_message,
-                session_id=execution_session_id,
-                risk_level=str(route_meta.get("risk_level") or ""),
-                route_decision=route_decision,
-                forced_path=path,
-                core_session_id=str(route_meta.get("core_session_id") or execution_session_id),
-                child_llm_call=_pipeline_child_llm_call,
-                child_tool_executor=_pipeline_child_tool_executor,
-                enable_child_execution=True,
-                child_session_cleanup_mode=str(child_session_cleanup_policy.get("mode") or "retain"),
-                child_session_cleanup_ttl_seconds=int(child_session_cleanup_policy.get("ttl_seconds") or 0),
-                store=session_store,
-                mailbox=agent_mailbox,
-                task_board_engine=task_board_engine,
-            ):
-                if not isinstance(event, dict):
-                    continue
-                chunk_type = str(event.get("type", "content"))
-                chunk_text = str(event.get("text", ""))
+            # ── Shell loop first: the model decides whether to dispatch_to_core ──
+            shell_prompt = str(route_meta.get("_shell_prompt_value") or "")
+            if not shell_prompt:
+                shell_prompt = _build_shell_system_prompt_with_gateway(
+                    route_meta=route_meta,
+                    base_system_prompt=shell_base_prompt,
+                    memory_lines=precomposed_memory_lines,
+                )
+            shell_messages = message_manager.build_conversation_messages(
+                session_id=session_id,
+                system_prompt=shell_prompt,
+                current_message=effective_message,
+            )
+            if request.images:
+                last_msg = shell_messages[-1]
+                content_parts = [{"type": "text", "text": last_msg["content"]}]
+                for img_data in request.images:
+                    content_parts.append({"type": "image_url", "image_url": {"url": img_data}})
+                shell_messages[-1] = {"role": "user", "content": content_parts}
+                _vlm_sessions.add(session_id)
 
-                if chunk_type == "shell_direct":
-                    # Shell decided to handle directly — run a read-only tool loop.
-                    shell_prompt = str(route_meta.get("_shell_prompt_value") or "")
-                    if not shell_prompt:
-                        shell_prompt = str(event.get("system_prompt", ""))
-                    shell_msg = str(event.get("user_message", effective_message))
-                    if not str(route_meta.get("_shell_prompt_value") or "").strip():
-                        mem_lines: List[str] = []
-                        if isinstance(route_meta.get("_shell_memory_lines"), list):
-                            mem_lines = [str(item or "") for item in route_meta.get("_shell_memory_lines") if str(item or "").strip()]
-                        if not mem_lines:
-                            try:
-                                mem_lines = await _recall_memory_lines(shell_msg, limit=5)
-                            except Exception:
-                                mem_lines = []
-                        shell_prompt = _build_shell_system_prompt_with_gateway(
-                            route_meta=route_meta,
-                            base_system_prompt=shell_prompt,
-                            memory_lines=mem_lines,
-                        )
+            shell_model_override = _build_path_model_override("path-a")
+            use_vlm = session_id in _vlm_sessions
+            cc = get_config().computer_control
+            if use_vlm and cc.enabled and (cc.api_key or naga_auth.is_authenticated()):
+                shell_model_override = _merge_model_override(
+                    shell_model_override,
+                    {"model": cc.model, "api_base": cc.model_url, "api_key": cc.api_key},
+                )
 
-                    # Build conversation messages
-                    shell_messages = message_manager.build_conversation_messages(
-                        session_id=session_id, system_prompt=shell_prompt, current_message=shell_msg,
-                    )
+            shell_agent = ShellAgent()
+            shell_tool_defs = shell_agent.get_tool_definitions()
+            llm_service = get_llm_service()
+            shell_max_rounds = 4
+            shell_round = 0
+            dispatch_payload: Dict[str, Any] = {}
+            while shell_round < shell_max_rounds:
+                pending_tool_calls: List[Dict[str, Any]] = []
+                assistant_content_parts: List[str] = []
+                stream_source = llm_service.stream_chat_with_context(
+                    shell_messages,
+                    get_config().api.temperature,
+                    model_override=shell_model_override,
+                    tools=shell_tool_defs,
+                    tool_choice="auto",
+                )
+                async for chunk in stream_source:
+                    if chunk.startswith("data: "):
+                        try:
+                            data_str = chunk[6:].strip()
+                            if data_str and data_str != "[DONE]":
+                                chunk_data = json.loads(data_str)
+                                ct = str(chunk_data.get("type", "content"))
+                                ct_text = chunk_data.get("text", "")
+                                if ct == "content":
+                                    text_piece = str(ct_text or "")
+                                    assistant_content_parts.append(text_piece)
+                                    current_round_text += text_piece
+                                    complete_response_parts.append(text_piece)
+                                elif ct == "tool_calls" and isinstance(ct_text, list):
+                                    pending_tool_calls = [dict(item) for item in ct_text if isinstance(item, dict)]
+                                yield _format_stream_payload_chunk(chunk_data, protocol=stream_protocol)
+                                continue
+                        except Exception as e:
+                            logger.error(f"[API Server] Shell stream parse error: {e}")
+                    yield chunk
 
-                    # Handle images
-                    if request.images:
-                        last_msg = shell_messages[-1]
-                        content_parts = [{"type": "text", "text": last_msg["content"]}]
-                        for img_data in request.images:
-                            content_parts.append({"type": "image_url", "image_url": {"url": img_data}})
-                        shell_messages[-1] = {"role": "user", "content": content_parts}
-                        _vlm_sessions.add(session_id)
+                if not pending_tool_calls:
+                    break
 
-                    # Model override for VLM
-                    model_override = None
-                    use_vlm = session_id in _vlm_sessions
-                    cc = get_config().computer_control
-                    if use_vlm and cc.enabled and (cc.api_key or naga_auth.is_authenticated()):
-                        model_override = {"model": cc.model, "api_base": cc.model_url, "api_key": cc.api_key}
-
-                    shell_agent = ShellAgent()
-                    shell_tool_defs = shell_agent.get_tool_definitions()
-
-                    # Stream Shell reply from LLM with tool support.
-                    llm_service = get_llm_service()
-                    shell_max_rounds = 4
-                    shell_round = 0
-                    while shell_round < shell_max_rounds:
-                        pending_tool_calls: List[Dict[str, Any]] = []
-                        assistant_content_parts: List[str] = []
-                        stream_source = llm_service.stream_chat_with_context(
-                            shell_messages,
-                            get_config().api.temperature,
-                            model_override=model_override,
-                            tools=shell_tool_defs,
-                            tool_choice="auto",
-                        )
-                        async for chunk in stream_source:
-                            if chunk.startswith("data: "):
-                                try:
-                                    data_str = chunk[6:].strip()
-                                    if data_str and data_str != "[DONE]":
-                                        chunk_data = json.loads(data_str)
-                                        ct = str(chunk_data.get("type", "content"))
-                                        ct_text = chunk_data.get("text", "")
-                                        if ct == "content":
-                                            text_piece = str(ct_text or "")
-                                            assistant_content_parts.append(text_piece)
-                                            current_round_text += text_piece
-                                            complete_response_parts.append(text_piece)
-                                        elif ct == "tool_calls" and isinstance(ct_text, list):
-                                            pending_tool_calls = [dict(item) for item in ct_text if isinstance(item, dict)]
-                                        yield _format_stream_payload_chunk(chunk_data, protocol=stream_protocol)
-                                        continue
-                                except Exception as e:
-                                    logger.error(f"[API Server] Shell stream parse error: {e}")
-                            yield chunk
-
-                        if not pending_tool_calls:
-                            break
-
-                        assistant_msg: Dict[str, Any] = {
-                            "role": "assistant",
-                            "content": "".join(assistant_content_parts),
-                        }
-                        assistant_tool_calls: List[Dict[str, Any]] = []
-                        for idx, call in enumerate(pending_tool_calls):
-                            call_id = str(call.get("id") or f"shell_call_{shell_round}_{idx}")
-                            tool_name = str(call.get("name") or "")
-                            tool_args = call.get("arguments")
-                            if not isinstance(tool_args, dict):
-                                tool_args = {}
-                            assistant_tool_calls.append(
-                                {
-                                    "id": call_id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": tool_name,
-                                        "arguments": json.dumps(tool_args, ensure_ascii=False),
-                                    },
-                                }
-                            )
-                        assistant_msg["tool_calls"] = assistant_tool_calls
-                        shell_messages.append(assistant_msg)
-
-                        for idx, call in enumerate(pending_tool_calls):
-                            call_id = str(call.get("id") or f"shell_call_{shell_round}_{idx}")
-                            tool_name = str(call.get("name") or "")
-                            tool_args = call.get("arguments")
-                            if not isinstance(tool_args, dict):
-                                tool_args = {}
-                            tool_result = shell_agent.execute_tool(
-                                tool_name,
-                                tool_args,
-                                session_id=session_id,
-                            )
-                            shell_messages.append(
-                                {
-                                    "role": "tool",
-                                    "tool_call_id": call_id,
-                                    "content": json.dumps(tool_result, ensure_ascii=False, default=str),
-                                }
-                            )
-                            yield _format_stream_payload_chunk(
-                                {
-                                    "type": "tool_result",
-                                    "tool_name": tool_name,
-                                    "tool_call_id": call_id,
-                                    "result": tool_result,
-                                },
-                                protocol=stream_protocol,
-                            )
-                        shell_round += 1
-
-                    if shell_round >= shell_max_rounds:
-                        yield _format_stream_payload_chunk(
-                            {
-                                "type": "warning",
-                                "text": "shell_tool_loop_max_rounds_reached",
-                                "max_rounds": shell_max_rounds,
+                assistant_msg: Dict[str, Any] = {
+                    "role": "assistant",
+                    "content": "".join(assistant_content_parts),
+                }
+                assistant_tool_calls: List[Dict[str, Any]] = []
+                for idx, call in enumerate(pending_tool_calls):
+                    call_id = str(call.get("id") or f"shell_call_{shell_round}_{idx}")
+                    tool_name = str(call.get("name") or "")
+                    tool_args = call.get("arguments")
+                    if not isinstance(tool_args, dict):
+                        tool_args = {}
+                    assistant_tool_calls.append(
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": tool_name,
+                                "arguments": json.dumps(tool_args, ensure_ascii=False),
                             },
-                            protocol=stream_protocol,
-                        )
-                    continue
-
-                if chunk_type == "content":
-                    current_round_text += chunk_text
-                    complete_response_parts.append(chunk_text)
-                elif chunk_type == "reasoning":
-                    pass
-                elif chunk_type == "tool_stage":
-                    _emit_agentic_loop_completion_event(
-                        session_id=session_id,
-                        execution_session_id=execution_session_id,
-                        route_meta=route_meta,
-                        chunk_data=event,
+                        }
                     )
-                elif chunk_type == "execution_receipt":
-                    receipt_text = _extract_agentic_execution_receipt_text(event)
-                    if receipt_text:
-                        receipt_fallback_text = receipt_text
-                elif chunk_type == "round_end":
-                    current_round_text = ""
+                assistant_msg["tool_calls"] = assistant_tool_calls
+                shell_messages.append(assistant_msg)
 
-                yield _format_stream_payload_chunk(event, protocol=stream_protocol)
+                should_break_shell_loop = False
+                for idx, call in enumerate(pending_tool_calls):
+                    call_id = str(call.get("id") or f"shell_call_{shell_round}_{idx}")
+                    tool_name = str(call.get("name") or "")
+                    tool_args = call.get("arguments")
+                    if not isinstance(tool_args, dict):
+                        tool_args = {}
+                    tool_result = shell_agent.execute_tool(
+                        tool_name,
+                        tool_args,
+                        session_id=session_id,
+                    )
+                    shell_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "content": json.dumps(tool_result, ensure_ascii=False, default=str),
+                        }
+                    )
+                    yield _format_stream_payload_chunk(
+                        {
+                            "type": "tool_result",
+                            "tool_name": tool_name,
+                            "tool_call_id": call_id,
+                            "result": tool_result,
+                        },
+                        protocol=stream_protocol,
+                    )
+                    if (
+                        tool_name == "dispatch_to_core"
+                        and isinstance(tool_result, dict)
+                        and bool(tool_result.get("dispatched"))
+                        and isinstance(tool_result.get("router_decision"), dict)
+                    ):
+                        dispatch_payload = dict(tool_result)
+                        should_break_shell_loop = True
+                        break
+
+                shell_round += 1
+                if should_break_shell_loop:
+                    break
+
+            if shell_round >= shell_max_rounds:
+                yield _format_stream_payload_chunk(
+                    {
+                        "type": "warning",
+                        "text": "shell_tool_loop_max_rounds_reached",
+                        "max_rounds": shell_max_rounds,
+                    },
+                    protocol=stream_protocol,
+                )
+
+            # ── Core handoff only happens when Shell explicitly dispatches. ──
+            if dispatch_payload:
+                route_decision = dict(dispatch_payload.get("router_decision") or {})
+                core_session_id = str(route_meta.get("core_session_id") or "").strip() or f"{session_id}__core"
+                core_session_created = message_manager.get_session(core_session_id) is None
+                message_manager.create_session(core_session_id, temporary=request.temporary)
+                execution_session_id = core_session_id
+                path = "path-c"
+                route_meta["path"] = path
+                route_meta["risk_level"] = str(route_decision.get("risk_level") or "write_repo")
+                route_meta["outer_readonly_hit"] = False
+                route_meta["core_escalation"] = True
+                route_meta["router_decision"] = dict(route_decision)
+                route_meta["core_session_id"] = core_session_id
+                route_meta["execution_session_id"] = execution_session_id
+                route_meta["core_session_created"] = core_session_created
+
+                yield _format_stream_payload_chunk(
+                    {
+                        "type": "route_decision",
+                        "path": path,
+                        "risk_level": route_meta.get("risk_level"),
+                        "outer_readonly_hit": False,
+                        "core_escalation": True,
+                        "prompt_profile": route_decision.get("prompt_profile", ""),
+                        "injection_mode": route_decision.get("injection_mode", ""),
+                        "delegation_intent": route_decision.get("delegation_intent", ""),
+                        "outer_session_id": session_id,
+                        "core_session_id": core_session_id,
+                        "execution_session_id": execution_session_id,
+                        "core_session_created": core_session_created,
+                        "routing_mode": "dispatch_to_core_tool",
+                        "handoff_source": "dispatch_to_core",
+                    },
+                    protocol=stream_protocol,
+                )
+
+                async for event in run_multi_agent_pipeline(
+                    message=effective_message,
+                    session_id=execution_session_id,
+                    risk_level=str(route_meta.get("risk_level") or "write_repo"),
+                    route_decision=route_decision,
+                    forced_path=path,
+                    core_session_id=core_session_id,
+                    child_llm_call=_pipeline_child_llm_call,
+                    child_tool_executor=_pipeline_child_tool_executor,
+                    enable_child_execution=True,
+                    child_session_cleanup_mode=str(child_session_cleanup_policy.get("mode") or "retain"),
+                    child_session_cleanup_ttl_seconds=int(child_session_cleanup_policy.get("ttl_seconds") or 0),
+                    store=session_store,
+                    mailbox=agent_mailbox,
+                    task_board_engine=task_board_engine,
+                ):
+                    if not isinstance(event, dict):
+                        continue
+                    chunk_type = str(event.get("type", "content"))
+                    chunk_text = str(event.get("text", ""))
+
+                    if chunk_type == "content":
+                        current_round_text += chunk_text
+                        complete_response_parts.append(chunk_text)
+                    elif chunk_type == "reasoning":
+                        pass
+                    elif chunk_type == "tool_stage":
+                        _emit_agentic_loop_completion_event(
+                            session_id=session_id,
+                            execution_session_id=execution_session_id,
+                            route_meta=route_meta,
+                            chunk_data=event,
+                        )
+                    elif chunk_type == "execution_receipt":
+                        receipt_text = _extract_agentic_execution_receipt_text(event)
+                        if receipt_text:
+                            receipt_fallback_text = receipt_text
+                    elif chunk_type == "round_end":
+                        current_round_text = ""
+
+                    yield _format_stream_payload_chunk(event, protocol=stream_protocol)
 
             # ====== 流式处理完成 ======
 
