@@ -25,7 +25,7 @@
 
 3. 新增 smoke + 回归覆盖
    - 新增 `scripts/run_outbox_brainstem_bridge_smoke_ws23_005.py`，产出 `NGA-WS23-005` 报告。
-   - 新增 `autonomous/tests/test_system_agent_outbox_bridge_ws23_005.py`（链路级）。
+   - 新增 `tests/test_system_agent_outbox_bridge_ws23_005.py`（链路级）。
    - 新增 `tests/test_brainstem_event_bridge_ws23_005.py`（适配器单元）。
 
 ## 3. 变更文件
@@ -33,14 +33,14 @@
 - `system/brainstem_event_bridge.py`
 - `autonomous/system_agent.py`
 - `scripts/run_outbox_brainstem_bridge_smoke_ws23_005.py`
-- `autonomous/tests/test_system_agent_outbox_bridge_ws23_005.py`
+- `tests/test_system_agent_outbox_bridge_ws23_005.py`
 - `tests/test_brainstem_event_bridge_ws23_005.py`
 - `doc/task/23-phase3-full-target-task-list.md`
 
 ## 4. 验证记录
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q tests/test_brainstem_event_bridge_ws23_005.py autonomous/tests/test_system_agent_outbox_bridge_ws23_005.py -p no:tmpdir
+.\.venv\Scripts\python.exe -m pytest -q tests/test_brainstem_event_bridge_ws23_005.py tests/test_system_agent_outbox_bridge_ws23_005.py -p no:tmpdir
 ```
 
 ## 5. 结果

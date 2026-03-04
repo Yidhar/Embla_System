@@ -66,10 +66,10 @@
 2. `tests/test_run_watchdog_daemon_ws28_025.py`
 - 新增脚本 `run/status` CLI smoke。
 
-3. `autonomous/tests/test_system_agent_watchdog_gate_ws23_002.py`
+3. `tests/test_system_agent_watchdog_gate_ws23_002.py`
 - 新增 daemon 状态消费路径测试（验证阻断不依赖 `run_once`）。
 
-4. `autonomous/tests/test_system_agent_config.py`
+4. `tests/test_system_agent_config.py`
 - 新增 watchdog daemon 配置字段的默认值与覆盖值断言。
 
 5. `tests/test_ops_dashboard_extensions.py`
@@ -87,8 +87,8 @@
   system/watchdog_daemon.py \
   scripts/run_watchdog_daemon_ws28_025.py \
   autonomous/system_agent.py \
-  autonomous/tests/test_system_agent_watchdog_gate_ws23_002.py \
-  autonomous/tests/test_system_agent_config.py \
+  tests/test_system_agent_watchdog_gate_ws23_002.py \
+  tests/test_system_agent_config.py \
   tests/test_watchdog_daemon_ws18_004.py \
   tests/test_run_watchdog_daemon_ws28_025.py \
   tests/test_ops_dashboard_extensions.py
@@ -96,8 +96,8 @@
 .venv/bin/pytest -q \
   tests/test_watchdog_daemon_ws18_004.py \
   tests/test_run_watchdog_daemon_ws28_025.py \
-  autonomous/tests/test_system_agent_watchdog_gate_ws23_002.py \
-  autonomous/tests/test_system_agent_config.py \
+  tests/test_system_agent_watchdog_gate_ws23_002.py \
+  tests/test_system_agent_config.py \
   tests/test_ops_dashboard_extensions.py
 
 .venv/bin/python scripts/run_watchdog_daemon_ws28_025.py --mode run --interval-seconds 0 --max-ticks 1 --strict

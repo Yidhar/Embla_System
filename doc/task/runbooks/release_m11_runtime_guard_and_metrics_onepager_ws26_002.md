@@ -10,8 +10,8 @@
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q `
-  autonomous/tests/test_system_agent_write_path_ws26_001.py `
-  autonomous/tests/test_system_agent_config.py `
+  tests/test_system_agent_write_path_ws26_001.py `
+  tests/test_system_agent_config.py `
   tests/test_slo_snapshot_export.py `
   tests/test_export_ws26_runtime_snapshot_ws26_002.py
 ```

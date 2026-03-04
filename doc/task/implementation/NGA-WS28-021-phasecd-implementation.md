@@ -61,7 +61,7 @@
 
 ## 3. 测试更新
 
-1. `autonomous/tests/test_execution_bridge_role_executors_ws28_014.py`
+1. `tests/test_execution_bridge_role_executors_ws28_014.py`
 - 新增 spec 驱动策略生效测试。
 - 新增 spec 非法回退测试。
 
@@ -90,18 +90,18 @@
   autonomous/tools/subagent_runtime.py \
   scripts/run_ws28_execution_governance_gate_ws28_021.py \
   scripts/release_closure_chain_full_m0_m12.py \
-  autonomous/tests/test_execution_bridge_role_executors_ws28_014.py \
-  autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py \
+  tests/test_execution_bridge_role_executors_ws28_014.py \
+  tests/test_subagent_runtime_eventbus_ws21_003.py \
   tests/test_run_ws28_execution_governance_gate_ws28_021.py \
   tests/test_release_closure_chain_full_m0_m12.py \
   tests/test_ops_dashboard_extensions.py
 
 .venv/bin/pytest -q \
-  autonomous/tests/test_execution_bridge_native_ws28_013.py \
-  autonomous/tests/test_execution_bridge_role_executors_ws28_014.py \
-  autonomous/tests/test_subagent_runtime_ws21_002.py \
-  autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py \
-  autonomous/tests/test_system_agent_execution_bridge_cutover_ws28_013.py \
+  tests/test_execution_bridge_native_ws28_013.py \
+  tests/test_execution_bridge_role_executors_ws28_014.py \
+  tests/test_subagent_runtime_ws21_002.py \
+  tests/test_subagent_runtime_eventbus_ws21_003.py \
+  tests/test_system_agent_execution_bridge_cutover_ws28_013.py \
   tests/test_run_ws28_execution_governance_gate_ws28_021.py \
   tests/test_release_closure_chain_full_m0_m12.py \
   tests/test_ops_dashboard_extensions.py

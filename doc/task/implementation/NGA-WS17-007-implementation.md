@@ -39,22 +39,22 @@
   - 输出结构化 JSON 演练报告（stdout + 可落盘）
 
 4. 测试覆盖
-- `autonomous/tests/test_release_controller.py`
+- `tests/test_release_controller.py`
   - 阈值快照、触发窗口、自动回滚开关行为
-- `autonomous/tests/test_system_agent_release_flow.py`
+- `tests/test_system_agent_release_flow.py`
   - 回滚事件包含 decision 审计字段
 - `tests/test_canary_rollback_drill.py`
   - 演练脚本在 auto rollback 开/关下输出正确结果
 
 ## 验证命令
-- `uv --cache-dir .uv_cache run python -m pytest -q autonomous/tests/test_release_controller.py autonomous/tests/test_system_agent_release_flow.py tests/test_canary_rollback_drill.py`
+- `uv --cache-dir .uv_cache run python -m pytest -q tests/test_release_controller.py tests/test_system_agent_release_flow.py tests/test_canary_rollback_drill.py`
   - 结果: `7 passed`
-- `uv --cache-dir .uv_cache run python -m ruff check autonomous/release/controller.py autonomous/system_agent.py scripts/canary_rollback_drill.py autonomous/tests/test_release_controller.py autonomous/tests/test_system_agent_release_flow.py tests/test_canary_rollback_drill.py`
+- `uv --cache-dir .uv_cache run python -m ruff check autonomous/release/controller.py autonomous/system_agent.py scripts/canary_rollback_drill.py tests/test_release_controller.py tests/test_system_agent_release_flow.py tests/test_canary_rollback_drill.py`
   - 结果: `All checks passed`
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `autonomous/release/controller.py; autonomous/system_agent.py; scripts/canary_rollback_drill.py; autonomous/tests/test_release_controller.py; autonomous/tests/test_system_agent_release_flow.py; tests/test_canary_rollback_drill.py; doc/task/implementation/NGA-WS17-007-implementation.md`
+  - `autonomous/release/controller.py; autonomous/system_agent.py; scripts/canary_rollback_drill.py; tests/test_release_controller.py; tests/test_system_agent_release_flow.py; tests/test_canary_rollback_drill.py; doc/task/implementation/NGA-WS17-007-implementation.md`
 - `notes`:
   - `canary rollback closure shipped with threshold/policy snapshots, trigger-window stats, drill runner script, and regression tests proving rollback decision plus auto-rollback toggle behavior`
 

@@ -12,7 +12,7 @@
 ## 2. 预检
 
 ```bash
-python -m pytest -q tests/test_mcp_plugin_isolation_ws24_001.py tests/test_run_plugin_isolation_chaos_suite_ws24_005.py autonomous/tests/test_ws24_release_gate.py
+python -m pytest -q tests/test_mcp_plugin_isolation_ws24_001.py tests/test_run_plugin_isolation_chaos_suite_ws24_005.py tests/test_ws24_release_gate.py
 ```
 
 ## 3. 运行 M9 收口链

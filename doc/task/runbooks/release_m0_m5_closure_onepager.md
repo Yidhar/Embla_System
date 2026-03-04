@@ -17,7 +17,7 @@
 | M0 | 任务模型完整、契约边界收敛、关键风险有归属 | `WS10/WS16` 全 done；`99-task-backlog.csv` + `09-execution-board.csv` 完整 | 通过 |
 | M1 | `raw_result_ref` 可读、KillSwitch OOB、Artifact 配额保护 | `WS11-002/003/004/005` done；`WS14-009/010` done；`tests/test_native_tools_artifact_and_guard.py`、`tests/test_native_tools_ws11_003.py`、`tests/test_native_executor_guards.py` 通过 | 通过 |
 | M2 | file_ast 并发治理、Sub-Agent 契约门禁、Double-Fork 回收 | `WS12-*`、`WS13-*`、`WS14-006` done；`tests/test_agentic_loop_contract_and_mutex.py`、`tests/test_workspace_txn_e2e_regression.py`、`tests/test_process_lineage.py` 通过 | 通过 |
-| M3 | GC 证据链与预算守门生效 | `WS15-*`、`WS19-001..006/008` done；`tests/test_gc_*`、`autonomous/tests/test_working_memory_manager_ws19_004.py`、`autonomous/tests/test_router_arbiter_guard_ws19_008.py` 通过 | 通过 |
+| M3 | GC 证据链与预算守门生效 | `WS15-*`、`WS19-001..006/008` done；`tests/test_gc_*`、`tests/test_working_memory_manager_ws19_004.py`、`tests/test_router_arbiter_guard_ws19_008.py` 通过 | 通过 |
 | M4 | 迁移收尾、兼容回退窗口、弃用路径审计 | `WS16-001..006` done；`WS20-004` done；`WS18-008` done；`tests/test_contract_rollout_ws16_005.py`、`tests/test_agentserver_deprecation_guard_ws16_002.py`、`tests/test_mcp_status_snapshot.py` 通过 | 通过 |
 | M5 | 混沌演练、Canary 回滚、SLO/Runbook 完整 | `WS17-*` done；`WS20-006` archived（legacy 已退役）；`tests/test_chaos_lock_failover.py`、`tests/test_chaos_sleep_watch.py`、`tests/test_chaos_runtime_storage.py`、`tests/test_canary_rollback_drill.py`、`tests/test_slo_snapshot_export.py`、`tests/test_embla_core_release_compat_gate.py` 通过 | 通过 |
 
@@ -43,7 +43,7 @@ CI 摘要产物：`scratch/reports/release_closure_summary.md`（并写入 `GITH
 4. T3 API/BFF 与迁移回归  
    `python -m pytest -q tests/test_mcp_status_snapshot.py tests/test_contract_rollout_ws16_005.py tests/test_doc_consistency_ws16_006.py tests/test_sync_risk_verify_mapping_ws16_006.py tests/test_sync_risk_closure_ledger_ws16_006.py -p no:tmpdir`
 5. T4 Autonomous 核心回归  
-   `python -m pytest -q autonomous/tests/test_event_store_ws18_001.py autonomous/tests/test_workflow_store.py autonomous/tests/test_meta_agent_runtime_ws19_001.py autonomous/tests/test_router_engine_ws19_002.py autonomous/tests/test_llm_gateway_ws19_003.py autonomous/tests/test_working_memory_manager_ws19_004.py autonomous/tests/test_daily_checkpoint_ws19_007.py autonomous/tests/test_router_arbiter_guard_ws19_008.py autonomous/tests/test_event_replay_tool_ws18_003.py autonomous/tests/test_system_agent_release_flow.py -p no:tmpdir`
+   `python -m pytest -q tests/test_event_store_ws18_001.py tests/test_workflow_store.py tests/test_meta_agent_runtime_ws19_001.py tests/test_router_engine_ws19_002.py tests/test_llm_gateway_ws19_003.py tests/test_working_memory_manager_ws19_004.py tests/test_daily_checkpoint_ws19_007.py tests/test_router_arbiter_guard_ws19_008.py tests/test_event_replay_tool_ws18_003.py tests/test_system_agent_release_flow.py -p no:tmpdir`
 6. T5 发布运行工单产物  
    `python scripts/export_slo_snapshot.py`  
    `python scripts/embla_core_release_compat_gate.py --strict`  

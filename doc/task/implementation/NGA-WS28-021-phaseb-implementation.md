@@ -60,11 +60,11 @@
 
 ## 3. 测试更新
 
-1. `autonomous/tests/test_execution_bridge_role_executors_ws28_014.py`
+1. `tests/test_execution_bridge_role_executors_ws28_014.py`
 - 新增语义守卫阻断断言。
 - 新增结构化治理字段断言（path violation / ops ticket / warning）。
 
-2. `autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py`
+2. `tests/test_subagent_runtime_eventbus_ws21_003.py`
 - 新增治理字段透传断言（completed/receipt/rejected）。
 
 3. `tests/test_ops_dashboard_extensions.py`
@@ -77,16 +77,16 @@
 .venv/bin/ruff check \
   autonomous/tools/execution_bridge.py \
   autonomous/tools/subagent_runtime.py \
-  autonomous/tests/test_execution_bridge_role_executors_ws28_014.py \
-  autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py \
+  tests/test_execution_bridge_role_executors_ws28_014.py \
+  tests/test_subagent_runtime_eventbus_ws21_003.py \
   tests/test_ops_dashboard_extensions.py
 
 .venv/bin/pytest -q \
-  autonomous/tests/test_execution_bridge_role_executors_ws28_014.py \
-  autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py \
-  autonomous/tests/test_subagent_runtime_ws21_002.py \
-  autonomous/tests/test_execution_bridge_native_ws28_013.py \
-  autonomous/tests/test_system_agent_execution_bridge_cutover_ws28_013.py \
+  tests/test_execution_bridge_role_executors_ws28_014.py \
+  tests/test_subagent_runtime_eventbus_ws21_003.py \
+  tests/test_subagent_runtime_ws21_002.py \
+  tests/test_execution_bridge_native_ws28_013.py \
+  tests/test_system_agent_execution_bridge_cutover_ws28_013.py \
   tests/test_ops_dashboard_extensions.py
 ```
 

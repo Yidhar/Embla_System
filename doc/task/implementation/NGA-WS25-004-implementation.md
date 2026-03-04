@@ -67,7 +67,7 @@
 M10 事件链路兼容回归：
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_topic_event_bus_ws25_001.py autonomous/tests/test_cron_alert_producer_ws25_002.py autonomous/tests/test_topic_event_bus_replay_idempotency_ws25_003.py autonomous/tests/test_system_agent_topic_bus_ws25_001.py autonomous/tests/test_system_agent_cron_alert_ws25_002.py autonomous/tests/test_system_agent_release_flow.py autonomous/tests/test_system_agent_outbox_bridge_ws23_005.py autonomous/tests/test_event_store_ws18_001.py autonomous/tests/test_event_replay_tool_ws18_003.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_topic_event_bus_ws25_001.py tests/test_cron_alert_producer_ws25_002.py tests/test_topic_event_bus_replay_idempotency_ws25_003.py tests/test_system_agent_topic_bus_ws25_001.py tests/test_system_agent_cron_alert_ws25_002.py tests/test_system_agent_release_flow.py tests/test_system_agent_outbox_bridge_ws23_005.py tests/test_event_store_ws18_001.py tests/test_event_replay_tool_ws18_003.py
 ```
 
 ## 5. 结果

@@ -76,7 +76,7 @@
 - priority: P1
 - phase: M7
 - owner_role: qa
-- scope: autonomous/tests + system tests
+- scope: tests + system tests
 - inputs: `doc/10#2`, `doc/13`
 - deliverables: 并发冲突、锁切换、杀进程恢复、日志轮转等混沌回归集
 - acceptance: 关键链路 24h 回归无死锁/脏写/假死

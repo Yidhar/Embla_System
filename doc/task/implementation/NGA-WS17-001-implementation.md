@@ -22,7 +22,7 @@
 #### 1.1 TestBaselineConfig
 
 配置类，定义：
-- **Golden Suite 目录**: 只读保护的测试目录（如 `autonomous/tests`）
+- **Golden Suite 目录**: 只读保护的测试目录（如 `tests`）
 - **工作区测试目录**: 允许修改的测试目录（如 `tests`）
 - **审批白名单**: 允许修改 Golden Suite 的特殊用户
 - **项目根目录**: 用于路径解析
@@ -108,7 +108,7 @@
 ### ✅ 验收标准达成
 
 1. **Golden Suite 只读保护**:
-   - ✅ `autonomous/tests` 目录默认只读
+   - ✅ `tests` 目录默认只读
    - ✅ 修改尝试被拦截并返回明确错误信息
    - ✅ 错误信息包含 "test poisoning" 警告
 
@@ -156,7 +156,7 @@ from system.test_baseline_guard import check_test_baseline_compliance
 # 检查文件修改合规性
 changed_files = [
     "tests/test_new_feature.py",  # 工作区测试，允许
-    "autonomous/tests/test_core.py",  # Golden Suite，阻止
+    "tests/test_core.py",  # Golden Suite，阻止
 ]
 
 compliant, report = check_test_baseline_compliance(changed_files)

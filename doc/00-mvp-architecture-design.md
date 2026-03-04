@@ -807,7 +807,7 @@ async def _try_start_autonomous_agent(self):
 ## Verification Plan
 
 ### Automated Tests
-- `python -m pytest autonomous/tests/ -v`（新建单元测试）
+- `python -m pytest tests/ -v`（新建单元测试）
 - `ruff check autonomous/`（代码质量）
 - 端到端：System Agent 启动→感知→生成任务→CLI 执行→评估→工作流状态迁移
 - 降级链路：模拟主 CLI 不可用，验证触发 `ask-codex` 并写入 `VerificationDegradedToCodexMCP`

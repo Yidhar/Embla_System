@@ -52,21 +52,21 @@
 - `autonomous/event_log/topic_event_bus.py`
 - `autonomous/event_log/event_store.py`
 - `autonomous/event_log/__init__.py`
-- `autonomous/tests/test_topic_event_bus_ws25_001.py`
-- `autonomous/tests/test_system_agent_topic_bus_ws25_001.py`
+- `tests/test_topic_event_bus_ws25_001.py`
+- `tests/test_system_agent_topic_bus_ws25_001.py`
 - `doc/task/23-phase3-full-target-task-list.md`
 - `doc/00-omni-operator-architecture.md`
 
 ## 4. 验证记录
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_topic_event_bus_ws25_001.py autonomous/tests/test_event_store_ws18_001.py autonomous/tests/test_event_replay_tool_ws18_003.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_topic_event_bus_ws25_001.py tests/test_event_store_ws18_001.py tests/test_event_replay_tool_ws18_003.py
 ```
 
 并对 SystemAgent 主路径做兼容回归：
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_system_agent_outbox_bridge_ws23_005.py autonomous/tests/test_system_agent_release_flow.py autonomous/tests/test_system_agent_watchdog_gate_ws23_002.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_outbox_bridge_ws23_005.py tests/test_system_agent_release_flow.py tests/test_system_agent_watchdog_gate_ws23_002.py
 ```
 
 ## 5. 结果

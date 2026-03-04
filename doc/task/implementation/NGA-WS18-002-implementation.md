@@ -38,16 +38,16 @@
   - 成功投递继续走 `complete_outbox_for_consumer(...)`，保持 inbox 去重语义。
 
 3. 故障注入与回归验证
-- `autonomous/tests/test_workflow_store.py`
+- `tests/test_workflow_store.py`
   - 新增 outbox 失败重试与 dead-letter 测试。
-- `autonomous/tests/test_system_agent_release_flow.py`
+- `tests/test_system_agent_release_flow.py`
   - 新增 outbox 业务处理异常下的重试调度测试。
   - 新增重试耗尽进入 dead-letter 测试。
 
 ## 验证命令
-- `python -m ruff check autonomous/state/workflow_store.py autonomous/system_agent.py autonomous/tests/test_workflow_store.py autonomous/tests/test_system_agent_release_flow.py`
+- `python -m ruff check autonomous/state/workflow_store.py autonomous/system_agent.py tests/test_workflow_store.py tests/test_system_agent_release_flow.py`
   - 结果: `All checks passed`
-- `python -m pytest -q autonomous/tests/test_workflow_store.py autonomous/tests/test_system_agent_release_flow.py autonomous/tests/test_event_store_ws18_001.py`
+- `python -m pytest -q tests/test_workflow_store.py tests/test_system_agent_release_flow.py tests/test_event_store_ws18_001.py`
   - 结果: `12 passed`
 - `python -m pytest -q tests/test_agentserver_deprecation_guard_ws16_002.py tests/test_native_executor_guards.py tests/test_policy_firewall.py tests/test_global_mutex.py tests/test_process_lineage.py tests/test_native_tools_runtime_hardening.py tests/test_agentic_loop_contract_and_mutex.py`
   - 结果: `58 passed`（含警告，无失败）
@@ -60,7 +60,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `autonomous/state/schema.sql; autonomous/state/workflow_store.py; autonomous/system_agent.py; autonomous/tests/test_workflow_store.py; autonomous/tests/test_system_agent_release_flow.py; doc/task/implementation/NGA-WS18-002-implementation.md`
+  - `autonomous/state/schema.sql; autonomous/state/workflow_store.py; autonomous/system_agent.py; tests/test_workflow_store.py; tests/test_system_agent_release_flow.py; doc/task/implementation/NGA-WS18-002-implementation.md`
 - `notes`:
   - `outbox delivery now tracks attempts/backoff/dead-letter state, system_agent emits retry/dead-letter/dedup events, and fault-injection tests verify no-loss/no-dup compensation semantics`
 

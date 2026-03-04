@@ -122,7 +122,7 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
 41. Verification for Codex-first chain:
     - py_compile passed on updated routing/config modules
     - runtime smoke passed: `_execute_mcp_call({"tool_name":"ask-codex","message":"..."})` auto-routed to `codex-cli` and returned model output
-    - `uv run python -m pytest autonomous/tests/test_system_agent_config.py -q` passed
+    - `uv run python -m pytest tests/test_system_agent_config.py -q` passed
     - `scripts/dod_check.ps1` passed
 42. Fixed tools loop no-tool completion semantics in `apiserver/agentic_tool_loop.py`:
     - added explicit completion marker detection (`不需要工具`) for immediate loop termination

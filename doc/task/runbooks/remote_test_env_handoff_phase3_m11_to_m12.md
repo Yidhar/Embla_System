@@ -83,7 +83,7 @@ uv sync
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q `
-  autonomous/tests/test_ws26_release_gate.py `
+  tests/test_ws26_release_gate.py `
   tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py `
   tests/test_release_closure_chain_m11_ws26_006.py `
   tests/test_release_closure_chain_full_m0_m7.py -p no:tmpdir

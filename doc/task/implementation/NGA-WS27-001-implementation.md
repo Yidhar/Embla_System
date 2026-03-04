@@ -36,7 +36,7 @@
 
 3. 自动化回归
 - 文件:
-  - `autonomous/tests/test_ws27_longrun_endurance_ws27_001.py`
+  - `tests/test_ws27_longrun_endurance_ws27_001.py`
   - `tests/test_run_ws27_longrun_endurance_ws27_001.py`
 - 变更:
   - baseline 回归覆盖报告结构与关键检查结果。
@@ -59,7 +59,7 @@
 ## 验证命令
 
 1. WS27-001 baseline + CLI 回归
-- `python3 -m pytest -q autonomous/tests/test_ws27_longrun_endurance_ws27_001.py tests/test_run_ws27_longrun_endurance_ws27_001.py -p no:tmpdir`
+- `python3 -m pytest -q tests/test_ws27_longrun_endurance_ws27_001.py tests/test_run_ws27_longrun_endurance_ws27_001.py -p no:tmpdir`
 
 2. 单独运行 WS27-001 脚本（快速演练）
 - `python3 scripts/run_ws27_longrun_endurance_ws27_001.py --target-hours 0.02 --virtual-round-seconds 6 --artifact-payload-kb 256 --max-total-size-mb 1 --max-single-artifact-mb 1 --max-artifact-count 256 --high-watermark-ratio 0.8 --low-watermark-ratio 0.5 --critical-reserve-ratio 0.1 --normal-priority-every 3 --high-priority-every 8`

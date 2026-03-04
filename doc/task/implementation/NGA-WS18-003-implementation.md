@@ -38,16 +38,16 @@
   - 使用示例、审计要求、恢复建议、回退与排障。
 
 4. 测试覆盖
-- 新增 `autonomous/tests/test_event_replay_tool_ws18_003.py`
+- 新增 `tests/test_event_replay_tool_ws18_003.py`
   - trace + 时间窗口过滤
   - recovery_plan 生成
   - audit 落盘
   - 无过滤器请求拒绝
 
 ## 验证命令
-- `python -m ruff check autonomous/event_log/replay_tool.py scripts/event_replay_ws18_003.py autonomous/tests/test_event_replay_tool_ws18_003.py`
+- `python -m ruff check autonomous/event_log/replay_tool.py scripts/event_replay_ws18_003.py tests/test_event_replay_tool_ws18_003.py`
   - 结果: `All checks passed`
-- `python -m pytest -q autonomous/tests/test_event_replay_tool_ws18_003.py autonomous/tests/test_event_store_ws18_001.py autonomous/tests/test_workflow_store.py autonomous/tests/test_system_agent_release_flow.py`
+- `python -m pytest -q tests/test_event_replay_tool_ws18_003.py tests/test_event_store_ws18_001.py tests/test_workflow_store.py tests/test_system_agent_release_flow.py`
   - 结果: `passed`
 
 ## 交付结果与验收对应
@@ -58,7 +58,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `autonomous/event_log/replay_tool.py; scripts/event_replay_ws18_003.py; autonomous/tests/test_event_replay_tool_ws18_003.py; doc/task/runbooks/event_replay_recovery_ws18_003.md; doc/task/implementation/NGA-WS18-003-implementation.md`
+  - `autonomous/event_log/replay_tool.py; scripts/event_replay_ws18_003.py; tests/test_event_replay_tool_ws18_003.py; doc/task/runbooks/event_replay_recovery_ws18_003.md; doc/task/implementation/NGA-WS18-003-implementation.md`
 - `notes`:
   - `event replay tooling now supports trace/workflow/window filters with read-only recovery plans and audit jsonl records for every replay request`
 

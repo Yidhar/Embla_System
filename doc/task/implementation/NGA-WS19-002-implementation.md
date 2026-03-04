@@ -33,16 +33,16 @@
   - 导出 `TaskRouterEngine`、`RouterRequest`、`RouterDecision`
 
 3. 测试覆盖
-- 新增 `autonomous/tests/test_router_engine_ws19_002.py`
+- 新增 `tests/test_router_engine_ws19_002.py`
   - 高风险运维任务路由到 `sys_admin + primary`
   - 预算分层（低预算 local / 中预算 secondary）
   - 决策可重放一致性（fingerprint）
   - 决策审计日志落盘
 
 ## 验证命令
-- `python -m ruff check autonomous/router_engine.py autonomous/__init__.py autonomous/tests/test_router_engine_ws19_002.py`
+- `python -m ruff check autonomous/router_engine.py autonomous/__init__.py tests/test_router_engine_ws19_002.py`
   - 结果: `All checks passed`
-- `python -m pytest -q autonomous/tests/test_router_engine_ws19_002.py autonomous/tests/test_meta_agent_runtime_ws19_001.py autonomous/tests/test_event_replay_tool_ws18_003.py`
+- `python -m pytest -q tests/test_router_engine_ws19_002.py tests/test_meta_agent_runtime_ws19_001.py tests/test_event_replay_tool_ws18_003.py`
   - 结果: `passed`
 
 ## 交付结果与验收对应
@@ -54,7 +54,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `autonomous/router_engine.py; autonomous/__init__.py; autonomous/tests/test_router_engine_ws19_002.py; doc/task/implementation/NGA-WS19-002-implementation.md`
+  - `autonomous/router_engine.py; autonomous/__init__.py; tests/test_router_engine_ws19_002.py; doc/task/implementation/NGA-WS19-002-implementation.md`
 - `notes`:
   - `router engine now performs deterministic role/model routing by task type risk and budget, emits explainable reasoning, and supports replay fingerprint verification with decision audit logging`
 

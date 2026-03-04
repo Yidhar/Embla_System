@@ -50,7 +50,7 @@
   - `doc/task/runbooks/release_m11_lock_fencing_closure_onepager_ws26_006.md`
   - `doc/task/23-phase3-full-target-task-list.md`
   - `doc/00-omni-operator-architecture.md`
-  - `autonomous/tests/test_ws26_release_gate.py`
+  - `tests/test_ws26_release_gate.py`
   - `tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py`
   - `tests/test_release_closure_chain_m11_ws26_006.py`
   - `tests/test_release_closure_chain_full_m0_m7.py`
@@ -62,13 +62,13 @@
 ## 验证命令
 
 1. WS26 门禁与收口链单测
-- `.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_ws26_release_gate.py tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py tests/test_release_closure_chain_m11_ws26_006.py tests/test_release_closure_chain_full_m0_m7.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_ws26_release_gate.py tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py tests/test_release_closure_chain_m11_ws26_006.py tests/test_release_closure_chain_full_m0_m7.py`
 
 2. 关键 M11 回归
-- `.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_system_agent_fail_open_budget_ws26_003.py tests/test_agentic_loop_contract_and_mutex.py tests/test_chaos_lock_failover.py tests/test_chaos_sleep_watch.py tests/test_process_lineage.py tests/test_export_ws26_runtime_snapshot_ws26_002.py -p no:tmpdir`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_fail_open_budget_ws26_003.py tests/test_agentic_loop_contract_and_mutex.py tests/test_chaos_lock_failover.py tests/test_chaos_sleep_watch.py tests/test_process_lineage.py tests/test_export_ws26_runtime_snapshot_ws26_002.py -p no:tmpdir`
 
 3. 静态检查
-- `.\.venv\Scripts\python.exe -m ruff check autonomous/ws26_release_gate.py scripts/validate_m11_closure_gate_ws26_006.py scripts/run_ws26_m11_runtime_chaos_suite_ws26_006.py scripts/release_closure_chain_m11_ws26_006.py scripts/release_closure_chain_full_m0_m7.py autonomous/tests/test_ws26_release_gate.py tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py tests/test_release_closure_chain_m11_ws26_006.py tests/test_release_closure_chain_full_m0_m7.py`
+- `.\.venv\Scripts\python.exe -m ruff check autonomous/ws26_release_gate.py scripts/validate_m11_closure_gate_ws26_006.py scripts/run_ws26_m11_runtime_chaos_suite_ws26_006.py scripts/release_closure_chain_m11_ws26_006.py scripts/release_closure_chain_full_m0_m7.py tests/test_ws26_release_gate.py tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py tests/test_release_closure_chain_m11_ws26_006.py tests/test_release_closure_chain_full_m0_m7.py`
 
 ## 结果摘要
 

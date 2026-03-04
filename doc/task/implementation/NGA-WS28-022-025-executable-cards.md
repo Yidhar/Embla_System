@@ -153,7 +153,7 @@
 1. `tests/test_watchdog_daemon_ws18_004.py`
 - 新增 daemon loop 运行、停止、快照产出、stale 判定覆盖。
 
-2. `autonomous/tests/test_system_agent_watchdog_gate_ws23_002.py`
+2. `tests/test_system_agent_watchdog_gate_ws23_002.py`
 - 增加“读取常驻 watchdog 状态”分支断言。
 
 3. `tests/test_run_watchdog_daemon_ws28_025.py`（新增）
@@ -166,11 +166,11 @@
   system/watchdog_daemon.py \
   scripts/run_watchdog_daemon_ws28_025.py \
   tests/test_watchdog_daemon_ws18_004.py \
-  autonomous/tests/test_system_agent_watchdog_gate_ws23_002.py \
+  tests/test_system_agent_watchdog_gate_ws23_002.py \
   tests/test_run_watchdog_daemon_ws28_025.py
 
 .venv/bin/pytest -q \
   tests/test_watchdog_daemon_ws18_004.py \
-  autonomous/tests/test_system_agent_watchdog_gate_ws23_002.py \
+  tests/test_system_agent_watchdog_gate_ws23_002.py \
   tests/test_run_watchdog_daemon_ws28_025.py
 ```

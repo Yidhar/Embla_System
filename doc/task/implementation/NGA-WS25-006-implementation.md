@@ -56,7 +56,7 @@
 - `scripts/release_closure_chain_full_m0_m7.py`
 - `scripts/render_release_closure_summary.py`
 - `doc/task/runbooks/release_m10_event_gc_closure_onepager_ws25_006.md`
-- `autonomous/tests/test_ws25_release_gate.py`
+- `tests/test_ws25_release_gate.py`
 - `tests/test_release_closure_chain_m10_ws25_006.py`
 - `tests/test_release_closure_chain_full_m0_m7.py`
 - `tests/test_render_release_closure_summary.py`
@@ -67,7 +67,7 @@
 ## 4. 验证记录
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_ws25_release_gate.py tests/test_release_closure_chain_m10_ws25_006.py tests/test_release_closure_chain_full_m0_m7.py tests/test_render_release_closure_summary.py autonomous/tests/test_ws25_event_gc_quality_baseline.py tests/test_run_event_gc_quality_baseline_ws25_005.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_ws25_release_gate.py tests/test_release_closure_chain_m10_ws25_006.py tests/test_release_closure_chain_full_m0_m7.py tests/test_render_release_closure_summary.py tests/test_ws25_event_gc_quality_baseline.py tests/test_run_event_gc_quality_baseline_ws25_005.py
 ```
 
 ## 5. 结果

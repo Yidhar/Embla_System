@@ -15,7 +15,7 @@ python scripts/release_closure_chain_m11_ws26_006.py
 若分步执行，按以下顺序：
 
 ```bash
-python -m pytest -q autonomous/tests/test_system_agent_fail_open_budget_ws26_003.py autonomous/tests/test_ws26_release_gate.py tests/test_agentic_loop_contract_and_mutex.py tests/test_chaos_lock_failover.py tests/test_chaos_sleep_watch.py tests/test_process_lineage.py tests/test_export_ws26_runtime_snapshot_ws26_002.py -p no:tmpdir
+python -m pytest -q tests/test_system_agent_fail_open_budget_ws26_003.py tests/test_ws26_release_gate.py tests/test_agentic_loop_contract_and_mutex.py tests/test_chaos_lock_failover.py tests/test_chaos_sleep_watch.py tests/test_process_lineage.py tests/test_export_ws26_runtime_snapshot_ws26_002.py -p no:tmpdir
 python scripts/export_ws26_runtime_snapshot_ws26_002.py --output scratch/reports/ws26_runtime_snapshot_ws26_002.json
 python scripts/run_ws26_m11_runtime_chaos_suite_ws26_006.py --output scratch/reports/ws26_m11_runtime_chaos_ws26_006.json
 python scripts/validate_m11_closure_gate_ws26_006.py --runtime-snapshot-report scratch/reports/ws26_runtime_snapshot_ws26_002.json --m11-chaos-report scratch/reports/ws26_m11_runtime_chaos_ws26_006.json --output-json scratch/reports/ws26_m11_closure_gate_result.json

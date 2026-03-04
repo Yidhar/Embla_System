@@ -48,7 +48,7 @@
 - `python3 -m pytest -q tests/test_run_ws27_oob_repair_drill_ws27_003.py -p no:tmpdir`
 
 2. M12 当前最小联合回归（WS27-001/002/003）
-- `python3 -m pytest -q autonomous/tests/test_ws27_longrun_endurance_ws27_001.py tests/test_run_ws27_longrun_endurance_ws27_001.py tests/test_manage_ws27_subagent_cutover_ws27_002.py tests/test_run_ws27_oob_repair_drill_ws27_003.py -p no:tmpdir`
+- `python3 -m pytest -q tests/test_ws27_longrun_endurance_ws27_001.py tests/test_run_ws27_longrun_endurance_ws27_001.py tests/test_manage_ws27_subagent_cutover_ws27_002.py tests/test_run_ws27_oob_repair_drill_ws27_003.py -p no:tmpdir`
 
 ## 结果摘要
 

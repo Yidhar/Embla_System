@@ -43,15 +43,15 @@
   - 结果：旧消费链不改业务读取路径，也可逐步迁移到完整 envelope。
 
 4. 测试覆盖
-- 新增 `autonomous/tests/test_event_store_ws18_001.py`
+- 新增 `tests/test_event_store_ws18_001.py`
   - 覆盖 envelope 字段落盘、replay 过滤、legacy 归一化。
-- 更新 `autonomous/tests/test_workflow_store.py`
+- 更新 `tests/test_workflow_store.py`
   - 覆盖 outbox 读取时 `schema_version` 与 `event_envelope` 字段。
 
 ## 验证命令
-- `python -m ruff check autonomous/event_log/event_schema.py autonomous/event_log/event_store.py autonomous/state/workflow_store.py autonomous/tests/test_event_store_ws18_001.py autonomous/tests/test_workflow_store.py`
+- `python -m ruff check autonomous/event_log/event_schema.py autonomous/event_log/event_store.py autonomous/state/workflow_store.py tests/test_event_store_ws18_001.py tests/test_workflow_store.py`
   - 结果: `All checks passed`
-- `python -m pytest -q autonomous/tests/test_system_agent_release_flow.py`
+- `python -m pytest -q tests/test_system_agent_release_flow.py`
   - 结果: `passed`
 - 本地功能烟测（脚本执行）
   - 覆盖 `EventStore.emit/read_recent` 与 `WorkflowStore.enqueue_outbox/read_pending_outbox` 的 ws18 envelope 行为
@@ -63,7 +63,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `autonomous/event_log/event_schema.py; autonomous/event_log/event_store.py; autonomous/state/workflow_store.py; autonomous/tests/test_event_store_ws18_001.py; autonomous/tests/test_workflow_store.py; doc/task/implementation/NGA-WS18-001-implementation.md`
+  - `autonomous/event_log/event_schema.py; autonomous/event_log/event_store.py; autonomous/state/workflow_store.py; tests/test_event_store_ws18_001.py; tests/test_workflow_store.py; doc/task/implementation/NGA-WS18-001-implementation.md`
 - `notes`:
   - `event bus records now use ws18-001 envelope (event_id/schema_version/source/severity/idempotency_key/data), event_store replay supports event/trace/workflow filters, and workflow outbox read path normalizes legacy payloads while keeping payload compatibility`
 

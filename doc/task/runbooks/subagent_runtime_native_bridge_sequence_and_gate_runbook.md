@@ -156,7 +156,7 @@ rg -n "SubAgentRuntimeFailOpenBlocked|legacy_runtime_retired|subagent_fail_open_
 
 ```bash
 .venv/bin/pytest -q \
-  autonomous/tests/test_execution_bridge_native_ws28_013.py \
-  autonomous/tests/test_system_agent_execution_bridge_cutover_ws28_013.py \
-  autonomous/tests/test_subagent_runtime_eventbus_ws21_003.py
+  tests/test_execution_bridge_native_ws28_013.py \
+  tests/test_system_agent_execution_bridge_cutover_ws28_013.py \
+  tests/test_subagent_runtime_eventbus_ws21_003.py
 ```

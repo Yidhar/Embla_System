@@ -57,7 +57,7 @@
 - priority: P1
 - phase: M7
 - owner_role: qa
-- scope: `autonomous/tests`
+- scope: `tests`
 - inputs: `doc/10#2`, `doc/11#6`
 - deliverables:
   - 子任务链路的 lease 丢失、fail_open、重试预算、事件重放混沌回归

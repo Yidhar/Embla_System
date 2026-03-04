@@ -53,7 +53,7 @@
     - `auto_degraded_to_legacy`
 
 4. 回归测试
-- 文件: `autonomous/tests/test_system_agent_fail_open_budget_ws26_003.py`（新增）
+- 文件: `tests/test_system_agent_fail_open_budget_ws26_003.py`（新增）
 - 覆盖:
   - fail-open 预算超限后，后续非写任务自动切到 legacy；
   - 触发自动降级事件与告警；
@@ -62,13 +62,13 @@
 ## 验证命令
 
 1. 核心回归
-- `.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_system_agent_fail_open_budget_ws26_003.py autonomous/tests/test_system_agent_write_path_ws26_001.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_fail_open_budget_ws26_003.py tests/test_system_agent_write_path_ws26_001.py`
 
 2. 关联回归
-- `.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_system_agent_subagent_rollout_ws22_006.py autonomous/tests/test_system_agent_lease_guard_ws22_004.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_subagent_rollout_ws22_006.py tests/test_system_agent_lease_guard_ws22_004.py`
 
 3. 全量 SystemAgent 回归集合
-- `.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_system_agent_config.py autonomous/tests/test_system_agent_cron_alert_ws25_002.py autonomous/tests/test_system_agent_lease_guard_ws22_004.py autonomous/tests/test_system_agent_longrun_baseline_ws22_004.py autonomous/tests/test_system_agent_outbox_bridge_ws23_005.py autonomous/tests/test_system_agent_release_flow.py autonomous/tests/test_system_agent_subagent_bridge_ws22_001.py autonomous/tests/test_system_agent_subagent_rollout_ws22_006.py autonomous/tests/test_system_agent_topic_bus_ws25_001.py autonomous/tests/test_system_agent_watchdog_gate_ws23_002.py autonomous/tests/test_system_agent_write_path_ws26_001.py autonomous/tests/test_system_agent_fail_open_budget_ws26_003.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_config.py tests/test_system_agent_cron_alert_ws25_002.py tests/test_system_agent_lease_guard_ws22_004.py tests/test_system_agent_longrun_baseline_ws22_004.py tests/test_system_agent_outbox_bridge_ws23_005.py tests/test_system_agent_release_flow.py tests/test_system_agent_subagent_bridge_ws22_001.py tests/test_system_agent_subagent_rollout_ws22_006.py tests/test_system_agent_topic_bus_ws25_001.py tests/test_system_agent_watchdog_gate_ws23_002.py tests/test_system_agent_write_path_ws26_001.py tests/test_system_agent_fail_open_budget_ws26_003.py`
 
 ## 结果摘要
 

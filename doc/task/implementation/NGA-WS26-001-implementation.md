@@ -40,9 +40,9 @@
 
 3. 回归与兼容
 - 文件:
-  - `autonomous/tests/test_system_agent_write_path_ws26_001.py`（新增）
-  - `autonomous/tests/test_system_agent_config.py`
-  - `autonomous/tests/test_system_agent_subagent_bridge_ws22_001.py`
+  - `tests/test_system_agent_write_path_ws26_001.py`（新增）
+  - `tests/test_system_agent_config.py`
+  - `tests/test_system_agent_subagent_bridge_ws22_001.py`
   - `autonomous/ws22_longrun_baseline.py`
 - 变更:
   - 新增 WS26 核心回归：
@@ -55,10 +55,10 @@
 ## 验证命令
 
 1. WS26 写路径门禁回归
-- `.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_system_agent_write_path_ws26_001.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_write_path_ws26_001.py`
 
 2. 关联配置与桥接回归
-- `.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_system_agent_config.py autonomous/tests/test_system_agent_subagent_bridge_ws22_001.py autonomous/tests/test_system_agent_subagent_rollout_ws22_006.py autonomous/tests/test_system_agent_lease_guard_ws22_004.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_config.py tests/test_system_agent_subagent_bridge_ws22_001.py tests/test_system_agent_subagent_rollout_ws22_006.py tests/test_system_agent_lease_guard_ws22_004.py`
 
 ## 结果摘要
 

@@ -48,7 +48,7 @@ WS23-001~005 能力虽已具备，但缺少统一的 M8 门禁执行链与出场
 - `scripts/release_closure_chain_m8_ws23_006.py`
 - `scripts/release_closure_chain_full_m0_m7.py`
 - `scripts/render_release_closure_summary.py`
-- `autonomous/tests/test_ws23_release_gate.py`
+- `tests/test_ws23_release_gate.py`
 - `tests/test_release_closure_chain_m8_ws23_006.py`
 - `tests/test_release_closure_chain_full_m0_m7.py`
 - `tests/test_render_release_closure_summary.py`
@@ -60,7 +60,7 @@ WS23-001~005 能力虽已具备，但缺少统一的 M8 门禁执行链与出场
 ## 4. 验证记录
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_ws23_release_gate.py tests/test_release_closure_chain_m8_ws23_006.py tests/test_release_closure_chain_full_m0_m7.py tests/test_render_release_closure_summary.py -p no:tmpdir
+.\.venv\Scripts\python.exe -m pytest -q tests/test_ws23_release_gate.py tests/test_release_closure_chain_m8_ws23_006.py tests/test_release_closure_chain_full_m0_m7.py tests/test_render_release_closure_summary.py -p no:tmpdir
 ```
 
 ## 5. 结果

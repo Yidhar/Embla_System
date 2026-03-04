@@ -36,7 +36,7 @@
      - `decision_reason`
 
 4. 测试与发布链更新
-   - 新增 `autonomous/tests/test_system_agent_subagent_rollout_ws22_006.py`：
+   - 新增 `tests/test_system_agent_subagent_rollout_ws22_006.py`：
      - `rollout_percent=0` 时即便启用 runtime 也走 legacy
      - 任务级强制 `runtime_mode=subagent` 可覆盖 `rollout_percent=0`
    - 将该测试纳入 `scripts/release_phase3_closure_chain_ws22_004.py` 的 T0 回归集合。
@@ -45,8 +45,8 @@
 
 - `autonomous/tools/subagent_runtime.py`
 - `autonomous/system_agent.py`
-- `autonomous/tests/test_system_agent_config.py`
-- `autonomous/tests/test_system_agent_subagent_rollout_ws22_006.py`
+- `tests/test_system_agent_config.py`
+- `tests/test_system_agent_subagent_rollout_ws22_006.py`
 - `scripts/release_phase3_closure_chain_ws22_004.py`
 - `doc/task/runbooks/release_m6_m7_phase3_closure_onepager.md`
 - `doc/task/22-ws-phase3-scheduler-bridge-and-rollout.md`
@@ -55,12 +55,12 @@
 
 1. 语法检查
 ```bash
-.\.venv\Scripts\python.exe -m py_compile autonomous/system_agent.py autonomous/tools/subagent_runtime.py autonomous/tests/test_system_agent_subagent_rollout_ws22_006.py scripts/release_phase3_closure_chain_ws22_004.py
+.\.venv\Scripts\python.exe -m py_compile autonomous/system_agent.py autonomous/tools/subagent_runtime.py tests/test_system_agent_subagent_rollout_ws22_006.py scripts/release_phase3_closure_chain_ws22_004.py
 ```
 
 2. 回归测试
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q autonomous/tests/test_system_agent_subagent_rollout_ws22_006.py autonomous/tests/test_system_agent_subagent_bridge_ws22_001.py autonomous/tests/test_system_agent_lease_guard_ws22_004.py autonomous/tests/test_system_agent_config.py autonomous/tests/test_subagent_runtime_spec_validation_ws22_005.py tests/test_release_phase3_closure_chain_ws22_004.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_subagent_rollout_ws22_006.py tests/test_system_agent_subagent_bridge_ws22_001.py tests/test_system_agent_lease_guard_ws22_004.py tests/test_system_agent_config.py tests/test_subagent_runtime_spec_validation_ws22_005.py tests/test_release_phase3_closure_chain_ws22_004.py
 ```
 
 3. 发布链路验证（跳过长稳）
