@@ -102,8 +102,8 @@ uvicorn apiserver.llm_service:llm_app --host 127.0.0.1 --port 8001 --reload
 `/chat/stream` 返回 `text/event-stream`。
 
 - 默认协议：结构化 JSON SSE（`data: <json-object>`，`stream_protocol=sse_json_v1`）
-- Legacy Base64 协议已下线：请求 `stream_protocol="sse_base64"` / `legacy` 会返回 `410`.
-- 未知 `stream_protocol` 会返回 `400`（不再自动回落兼容）。
+- 仅允许 `stream_protocol=sse_json_v1` 或留空（默认 `sse_json_v1`）。
+- 任何其他 `stream_protocol`（含 legacy/base64 别名）都会返回 `400`。
 
 常见事件类型包括：
 

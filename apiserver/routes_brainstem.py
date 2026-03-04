@@ -26,6 +26,8 @@ _BRAINSTEM_RUNTIME_CONTEXT: Dict[str, Any] = {
 }
 
 # ── Import shared utilities ──────────────────────────────────
+from apiserver._shared import env_flag as _env_flag
+from apiserver._shared import env_float as _env_float
 from apiserver._shared import ops_repo_root as _ops_repo_root
 
 
@@ -123,26 +125,6 @@ _IMMUTABLE_DNA_MONITOR_STATE_FILE = Path("scratch/runtime/immutable_dna_integrit
 
 
 # ── Brainstem bootstrap functions ─────────────────────────────
-def _env_flag(name: str, default: bool) -> bool:
-    raw = os.environ.get(str(name))
-    if raw is None:
-        return bool(default)
-    normalized = str(raw).strip().lower()
-    if not normalized:
-        return bool(default)
-    return normalized in {"1", "true", "yes", "on", "y"}
-
-
-def _env_float(name: str, default: float) -> float:
-    raw = os.environ.get(str(name))
-    if raw is None:
-        return float(default)
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return float(default)
-
-
 def _brainstem_bootstrap_owner() -> str:
     return str(os.environ.get(_BRAINSTEM_BOOTSTRAP_OWNER_ENV) or "").strip().lower()
 

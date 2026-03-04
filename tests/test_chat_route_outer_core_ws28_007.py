@@ -410,28 +410,16 @@ def test_route_decision_sse_chunk_json_protocol() -> None:
     assert decoded == payload
 
 
-def test_resolve_stream_protocol_aliases() -> None:
+def test_resolve_stream_protocol_is_strict() -> None:
     assert api_server._resolve_stream_protocol(None) == "sse_json_v1"
     assert api_server._resolve_stream_protocol("") == "sse_json_v1"
     assert api_server._resolve_stream_protocol("sse_json_v1") == "sse_json_v1"
-    assert api_server._resolve_stream_protocol("json") == "sse_json_v1"
-    assert api_server._resolve_stream_protocol("structured") == "sse_json_v1"
-
-
-def test_legacy_stream_protocol_requests_are_detected() -> None:
-    assert api_server._is_legacy_stream_protocol_requested("sse_base64")
-    assert api_server._is_legacy_stream_protocol_requested("legacy")
-    assert api_server._is_legacy_stream_protocol_requested("compat")
-    assert not api_server._is_legacy_stream_protocol_requested("sse_json_v1")
-
-
-def test_supported_stream_protocol_validation() -> None:
-    assert api_server._is_supported_stream_protocol_requested(None)
-    assert api_server._is_supported_stream_protocol_requested("")
-    assert api_server._is_supported_stream_protocol_requested("sse_json_v1")
-    assert api_server._is_supported_stream_protocol_requested("json")
-    assert api_server._is_supported_stream_protocol_requested("legacy")
-    assert not api_server._is_supported_stream_protocol_requested("protobuf_v9")
+    with pytest.raises(ValueError):
+        api_server._resolve_stream_protocol("json")
+    with pytest.raises(ValueError):
+        api_server._resolve_stream_protocol("legacy")
+    with pytest.raises(ValueError):
+        api_server._resolve_stream_protocol("protobuf_v9")
 
 
 def test_build_stream_response_headers_sets_protocol_header_only() -> None:
@@ -441,13 +429,13 @@ def test_build_stream_response_headers_sets_protocol_header_only() -> None:
     assert "Sunset" not in headers
 
 
-def test_chat_stream_rejects_legacy_stream_protocol() -> None:
+def test_chat_stream_rejects_legacy_stream_protocol_as_unsupported() -> None:
     request = api_server.ChatRequest(message="hello", stream=True, stream_protocol="legacy")
     with pytest.raises(api_server.HTTPException) as exc:
         asyncio.run(api_server.chat_stream(request))
-    assert exc.value.status_code == 410
+    assert exc.value.status_code == 400
     assert isinstance(exc.value.detail, dict)
-    assert exc.value.detail.get("error") == "legacy_stream_protocol_decommissioned"
+    assert exc.value.detail.get("error") == "unsupported_stream_protocol"
 
 
 def test_chat_stream_rejects_unknown_stream_protocol() -> None:

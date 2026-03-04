@@ -246,26 +246,15 @@ if hasattr(_routes_brainstem, "_bind_brainstem_runtime_context"):
 
 
 STREAM_PROTOCOL_JSON_V1 = "sse_json_v1"
-STREAM_PROTOCOL_LEGACY_ALIASES = {"sse_base64", "base64", "legacy", "compat", "compatibility"}
-STREAM_PROTOCOL_JSON_ALIASES = {"sse_json", "sse-json", "json", "structured", STREAM_PROTOCOL_JSON_V1}
-STREAM_PROTOCOL_LEGACY_DECOMMISSIONED_AT = "2026-03-01"
 
 
 def _resolve_stream_protocol(raw_value: Optional[str]) -> str:
     value = str(raw_value or "").strip().lower()
-    if not value or value in STREAM_PROTOCOL_JSON_ALIASES:
+    if not value:
         return STREAM_PROTOCOL_JSON_V1
-    return STREAM_PROTOCOL_JSON_V1
-
-
-def _is_legacy_stream_protocol_requested(raw_value: Optional[str]) -> bool:
-    value = str(raw_value or "").strip().lower()
-    return value in STREAM_PROTOCOL_LEGACY_ALIASES
-
-
-def _is_supported_stream_protocol_requested(raw_value: Optional[str]) -> bool:
-    value = str(raw_value or "").strip().lower()
-    return (not value) or (value in STREAM_PROTOCOL_JSON_ALIASES) or (value in STREAM_PROTOCOL_LEGACY_ALIASES)
+    if value == STREAM_PROTOCOL_JSON_V1:
+        return STREAM_PROTOCOL_JSON_V1
+    raise ValueError("unsupported_stream_protocol")
 
 
 def _build_stream_response_headers(*, protocol: str) -> Dict[str, str]:
@@ -527,7 +516,7 @@ class ChatRequest(BaseModel):
     skill: Optional[str] = None  # 用户主动选择的技能名称，注入完整指令到系统提示词
     images: Optional[List[str]] = None  # 截屏图片 base64 数据列表（data:image/png;base64,...）
     temporary: bool = False  # 临时会话标记，临时会话不持久化到磁盘
-    stream_protocol: Optional[str] = None  # 仅支持 sse_json_v1（legacy 已下线）
+    stream_protocol: Optional[str] = None  # 仅允许空值（默认）或 sse_json_v1
 
 
 class ChatResponse(BaseModel):
@@ -1000,26 +989,17 @@ async def chat_stream(request: ChatRequest):
 
     # 用户消息保持干净，技能上下文完全由 system prompt 承载
     user_message = request.message
-    if _is_legacy_stream_protocol_requested(request.stream_protocol):
-        raise HTTPException(
-            status_code=410,
-            detail={
-                "error": "legacy_stream_protocol_decommissioned",
-                "message": "Legacy stream protocol is decommissioned. Use stream_protocol=sse_json_v1.",
-                "replacement": STREAM_PROTOCOL_JSON_V1,
-                "decommissioned_at": STREAM_PROTOCOL_LEGACY_DECOMMISSIONED_AT,
-            },
-        )
-    if not _is_supported_stream_protocol_requested(request.stream_protocol):
+    try:
+        stream_protocol = _resolve_stream_protocol(request.stream_protocol)
+    except ValueError:
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "unsupported_stream_protocol",
-                "message": "Unsupported stream_protocol. Use stream_protocol=sse_json_v1.",
+                "message": "Unsupported stream_protocol. Use empty/default or stream_protocol=sse_json_v1.",
                 "supported": [STREAM_PROTOCOL_JSON_V1],
             },
         )
-    stream_protocol = _resolve_stream_protocol(request.stream_protocol)
 
     async def generate_response() -> AsyncGenerator[str, None]:
         complete_response_parts: List[str] = []
