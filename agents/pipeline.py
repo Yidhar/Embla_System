@@ -326,7 +326,11 @@ async def run_multi_agent_pipeline(
     if not resolved_core_session_id:
         resolved_core_session_id = f"core_{pipeline_id}"
 
-    expert_results = core.spawn_experts(decomposition, core_session_id=resolved_core_session_id)
+    expert_results = core.spawn_experts(
+        decomposition,
+        core_session_id=resolved_core_session_id,
+        pipeline_id=pipeline_id,
+    )
 
     for er in expert_results:
         yield {
@@ -599,7 +603,7 @@ async def run_multi_agent_pipeline(
 
     # ── Phase 5: Collect results ───────────────────────────────
 
-    reports = core.collect_reports(resolved_core_session_id)
+    reports = core.collect_reports(resolved_core_session_id, pipeline_id=pipeline_id)
     for report in reports:
         yield {
             "type": "expert_report",

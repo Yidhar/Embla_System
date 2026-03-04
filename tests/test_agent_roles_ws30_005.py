@@ -544,3 +544,80 @@ class TestPipeline:
 
         end_event = next(e for e in events if e["type"] == "pipeline_end")
         assert end_event["reason"] == "completed"
+
+    def test_pipeline_report_collection_is_scoped_to_current_pipeline_run(
+        self,
+        store,
+        mailbox,
+        task_board_engine,
+    ):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, tools, model
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "mock_call_1",
+                        "name": "report_to_parent",
+                        "arguments": {
+                            "type": "completed",
+                            "content": "child work complete",
+                        },
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        core_session_id = "outer-session__core"
+
+        first_events = self._run(self._collect_events(
+            run_multi_agent_pipeline(
+                message="Implement auth endpoint and tests",
+                session_id=core_session_id,
+                core_session_id=core_session_id,
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+            )
+        ))
+        first_receipt = next(e for e in first_events if e["type"] == "execution_receipt")
+        first_expert_count = int(first_receipt.get("agent_state", {}).get("expert_count") or 0)
+        first_reports = [e for e in first_events if e.get("type") == "expert_report"]
+        assert len(first_reports) == first_expert_count
+
+        second_events = self._run(self._collect_events(
+            run_multi_agent_pipeline(
+                message="Implement auth endpoint and tests",
+                session_id=core_session_id,
+                core_session_id=core_session_id,
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+            )
+        ))
+        second_receipt = next(e for e in second_events if e["type"] == "execution_receipt")
+        second_expert_count = int(second_receipt.get("agent_state", {}).get("expert_count") or 0)
+        second_reports = [e for e in second_events if e.get("type") == "expert_report"]
+        assert len(second_reports) == second_expert_count
+
+        # Runtime store keeps historical children, but report collection should
+        # be scoped to the current pipeline run instead of all non-destroyed children.
+        all_children = store.list_children(core_session_id)
+        assert len(all_children) >= first_expert_count + second_expert_count

@@ -259,6 +259,23 @@ class TestParentTools:
         assert poll["status"] == "running"
         assert poll["role"] == "dev"
 
+    def test_spawn_child_agent_passes_metadata(self, store, mailbox):
+        result = handle_parent_tool_call(
+            "spawn_child_agent",
+            {
+                "role": "dev",
+                "task_description": "write code",
+                "metadata": {"pipeline_id": "pipe_001", "trace_id": "trace_001"},
+            },
+            parent_session_id="parent-1",
+            store=store,
+            mailbox=mailbox,
+        )
+        session = store.get(result["agent_id"])
+        assert session is not None
+        assert session.metadata["pipeline_id"] == "pipe_001"
+        assert session.metadata["trace_id"] == "trace_001"
+
     def test_terminate_and_resume(self, store, mailbox):
         spawn = handle_parent_tool_call(
             "spawn_child_agent",

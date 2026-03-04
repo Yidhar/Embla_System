@@ -145,10 +145,15 @@ class CoreAgent:
         decomposition: Dict[str, Any],
         *,
         core_session_id: str = "core",
+        pipeline_id: str = "",
     ) -> List[Dict[str, Any]]:
         """Spawn Expert agents based on decomposition result."""
         results = []
         for assignment in decomposition.get("expert_assignments", []):
+            metadata: Dict[str, Any] = {}
+            normalized_pipeline_id = str(pipeline_id or "").strip()
+            if normalized_pipeline_id:
+                metadata["pipeline_id"] = normalized_pipeline_id
             result = handle_parent_tool_call(
                 "spawn_child_agent",
                 {
@@ -156,6 +161,7 @@ class CoreAgent:
                     "task_description": assignment.get("scope", ""),
                     "prompt_blocks": assignment.get("prompt_blocks", []),
                     "tool_subset": assignment.get("tool_subset", []),
+                    "metadata": metadata,
                 },
                 parent_session_id=core_session_id,
                 store=self._store,
@@ -167,9 +173,16 @@ class CoreAgent:
             results.append(result)
         return results
 
-    def collect_reports(self, core_session_id: str = "core") -> List[Dict[str, Any]]:
+    def collect_reports(self, core_session_id: str = "core", *, pipeline_id: str = "") -> List[Dict[str, Any]]:
         """Collect completion reports from all Expert children."""
         children = self._store.list_children(core_session_id)
+        normalized_pipeline_id = str(pipeline_id or "").strip()
+        if normalized_pipeline_id:
+            children = [
+                child
+                for child in children
+                if str(child.metadata.get("pipeline_id") or "").strip() == normalized_pipeline_id
+            ]
         reports = []
         for child in children:
             status = child.to_status_summary()

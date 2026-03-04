@@ -201,12 +201,15 @@ def _handle_spawn(
     store: AgentSessionStore,
     mailbox: AgentMailbox,
 ) -> Dict[str, Any]:
+    raw_metadata = args.get("metadata")
+    metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
     session = store.create(
         role=args.get("role", "dev"),
         parent_id=parent_session_id,
         task_description=args.get("task_description", ""),
         prompt_blocks=args.get("prompt_blocks"),
         tool_subset=args.get("tool_subset"),
+        metadata=metadata,
     )
     return {
         "agent_id": session.session_id,
