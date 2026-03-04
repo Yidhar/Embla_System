@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from autonomous.ws27_longrun_endurance import WS27LongRunConfig, run_ws27_72h_endurance_baseline
+from agents.runtime.ws27_longrun_endurance import WS27LongRunConfig, run_ws27_72h_endurance_baseline
 from scripts.check_legacy_shim_imports_ws28_030 import run_check_legacy_shim_imports_ws28_030
 from scripts.export_slo_snapshot import build_snapshot
 from scripts.export_ws26_runtime_snapshot_ws26_002 import _build_ws26_report

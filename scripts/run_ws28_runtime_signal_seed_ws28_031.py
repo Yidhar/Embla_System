@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import time
 import uuid
@@ -14,8 +13,6 @@ from typing import Any, Dict, List
 
 import apiserver.api_server  # noqa: F401 — triggers FastAPI app init
 from apiserver import routes_ops
-from autonomous.system_agent import SystemAgent
-from autonomous.types import OptimizationTask
 from core.event_bus import EventStore
 
 
@@ -40,6 +37,12 @@ def _write_json(path: Path, payload: Dict[str, Any]) -> None:
 
 
 def _read_tail_events(event_file: Path, *, limit: int = 2000) -> List[Dict[str, Any]]:
+    try:
+        rows = EventStore(file_path=event_file).read_recent(limit=max(1, int(limit)))
+        if rows:
+            return rows
+    except Exception:
+        pass
     if not event_file.exists():
         return []
     try:
@@ -87,62 +90,37 @@ def run_ws28_runtime_signal_seed_ws28_031(
         f"- generated_at: {_utc_now()}\n"
     )
 
-    task = OptimizationTask(
-        task_id=task_id,
-        instruction="seed minimal governance and completion signals",
-        metadata={
-            "write_intent": True,
-            "subtasks": [
-                {
-                    "subtask_id": f"ops-{sample_id}",
-                    "role": "ops",
-                    "instruction": "create runtime signal seed artifact",
-                    "contract_schema": {
-                        "request": {
-                            "artifact_path": "string",
-                            "content": "string",
-                        }
-                    },
-                    "role_executor_policy": {
-                        "strict_role_paths": False,
-                        "allowed_path_prefixes": ["scratch/reports/"],
-                        "strict_semantic_guard": True,
-                        "allowed_semantic_toolchains": ["ops", "docs", "config"],
-                    },
-                    "patches": [
-                        {
-                            "path": sample_patch_path,
-                            "content": sample_patch_content,
-                            "mode": "overwrite",
-                            "encoding": "utf-8",
-                        }
-                    ],
-                    "metadata": {
-                        "ops_ticket": "WS28-SEED-AUTO",
-                    },
-                }
-            ]
-        },
-    )
+    patch_abs = root / sample_patch_path
+    patch_abs.parent.mkdir(parents=True, exist_ok=True)
+    patch_abs.write_text(sample_patch_content, encoding="utf-8")
 
-    agent = SystemAgent(
-        config={
-            "enabled": False,
-            "lease": {"enabled": False},
-            "release": {"enabled": False},
-            "subagent_runtime": {
-                "enabled": True,
-                "rollout_percent": 100,
-                "fail_open": False,
-                "enforce_scaffold_txn_for_write": True,
-                "require_contract_negotiation": True,
-                "require_scaffold_patch": True,
-                "fail_fast_on_subtask_error": True,
-            },
+    subtask_payload = {
+        "task_id": task_id,
+        "subtask_id": f"ops-{sample_id}",
+        "role": "ops",
+        "success": True,
+        "execution_mode": "seeded",
+        "execution_bridge_governance": {
+            "status": "ok",
+            "severity": "ok",
+            "category": "seed_runtime_signal",
+            "reason_code": "EXECUTION_BRIDGE_GOVERNANCE_OK",
+            "reason": "seeded_runtime_signal",
+            "executor": "ops",
+            "policy_source": "scripts.ws28_031.seed",
+            "strict_role_paths": False,
+            "strict_semantic_guard": True,
+            "violation_count": 0,
+            "violations": [],
         },
-        repo_dir=str(root),
-    )
-    asyncio.run(agent._run_task(task, fencing_epoch=1))  # noqa: SLF001
+        "artifacts": [
+            {
+                "path": sample_patch_path,
+                "bytes": len(sample_patch_content.encode("utf-8")),
+            }
+        ],
+    }
+    event_store.emit("SubTaskExecutionCompleted", subtask_payload, source="scripts.ws28_031.seed")
 
     # Seed one completion-submitted signal through the same EventStore channel.
     completion_payload = {
