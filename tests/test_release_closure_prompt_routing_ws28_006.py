@@ -51,5 +51,23 @@ def test_release_closure_prompt_routing_cli_main_smoke(monkeypatch) -> None:
             "ws28_011",
             "ws28_012",
         } <= groups
+        lifecycle_by_group = {
+            str(item.get("group_id")): str(item.get("lifecycle") or "")
+            for item in payload.get("group_results", [])
+            if isinstance(item, dict)
+        }
+        assert lifecycle_by_group.get("ws28_007") == "archived_legacy"
+        assert lifecycle_by_group.get("ws28_009") == "archived_legacy"
+        assert lifecycle_by_group.get("ws28_012") == "archived_legacy"
+
+        group_by_id = {
+            str(item.get("group_id")): item
+            for item in payload.get("group_results", [])
+            if isinstance(item, dict)
+        }
+        assert group_by_id["ws28_007"]["skipped"] is True
+        assert group_by_id["ws28_009"]["skipped"] is True
+        assert group_by_id["ws28_012"]["skipped"] is True
+        assert payload.get("failed_groups") == []
     finally:
         _cleanup_case_root(case_root)

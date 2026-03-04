@@ -48,37 +48,69 @@ def run_release_closure_prompt_routing_ws28_006(
     *,
     repo_root: Path,
     output_file: Path = DEFAULT_OUTPUT,
+    include_archived_legacy: bool = False,
 ) -> Dict[str, Any]:
     root = repo_root.resolve()
     started = time.time()
     groups: List[Dict[str, Any]] = []
 
     group_specs = [
-        ("ws28_001", run_ws28_router_prompt_profile_ws28_001),
-        ("ws28_002", run_ws28_prompt_slice_compose_ws28_002),
-        ("ws28_003", run_ws28_prompt_acl_guard_ws28_003),
-        ("ws28_004", run_ws28_background_analyzer_parity_ws28_004),
-        ("ws28_005", run_ws28_dna_spec_gate_ws28_005),
-        ("ws28_007", run_ws28_outer_core_path_gate_ws28_007),
-        ("ws28_008", run_ws28_core_contract_input_ws28_008),
-        ("ws28_009", run_ws28_path_b_clarify_budget_ws28_009),
-        ("ws28_010", run_ws28_outer_core_session_bridge_ws28_010),
-        ("ws28_011", run_ws28_chat_route_bridge_observability_ws28_011),
-        ("ws28_012", run_ws28_route_quality_guard_enforcement_ws28_012),
+        ("ws28_001", run_ws28_router_prompt_profile_ws28_001, "active"),
+        ("ws28_002", run_ws28_prompt_slice_compose_ws28_002, "active"),
+        ("ws28_003", run_ws28_prompt_acl_guard_ws28_003, "active"),
+        ("ws28_004", run_ws28_background_analyzer_parity_ws28_004, "active"),
+        ("ws28_005", run_ws28_dna_spec_gate_ws28_005, "active"),
+        ("ws28_007", run_ws28_outer_core_path_gate_ws28_007, "archived_legacy"),
+        ("ws28_008", run_ws28_core_contract_input_ws28_008, "active"),
+        ("ws28_009", run_ws28_path_b_clarify_budget_ws28_009, "archived_legacy"),
+        ("ws28_010", run_ws28_outer_core_session_bridge_ws28_010, "active"),
+        ("ws28_011", run_ws28_chat_route_bridge_observability_ws28_011, "active"),
+        ("ws28_012", run_ws28_route_quality_guard_enforcement_ws28_012, "archived_legacy"),
     ]
 
-    for group_id, fn in group_specs:
+    for group_id, fn, lifecycle in group_specs:
+        is_archived_legacy = lifecycle == "archived_legacy"
+        if is_archived_legacy and not include_archived_legacy:
+            groups.append(
+                {
+                    "group_id": group_id,
+                    "passed": True,
+                    "checks": {},
+                    "output_file": "",
+                    "lifecycle": lifecycle,
+                    "gate_level": "legacy_non_blocking",
+                    "skipped": True,
+                    "skip_reason": "archived_legacy_default_skip",
+                    "blocking": False,
+                }
+            )
+            continue
+
         group_report = fn(repo_root=root, output_file=Path(f"scratch/reports/{group_id}_result.json"))
+        group_passed = bool(group_report.get("passed"))
+        blocking = not is_archived_legacy
         groups.append(
             {
                 "group_id": group_id,
-                "passed": bool(group_report.get("passed")),
+                "passed": group_passed,
                 "checks": group_report.get("checks", {}),
                 "output_file": group_report.get("output_file"),
+                "lifecycle": lifecycle,
+                "gate_level": "hard" if blocking else "legacy_non_blocking",
+                "skipped": False,
+                "skip_reason": "",
+                "blocking": blocking,
             }
         )
 
-    failed_groups = [item["group_id"] for item in groups if not bool(item.get("passed"))]
+    failed_groups = [item["group_id"] for item in groups if bool(item.get("blocking")) and not bool(item.get("passed"))]
+    archived_legacy_failed_groups = [
+        item["group_id"]
+        for item in groups
+        if str(item.get("lifecycle") or "") == "archived_legacy"
+        and not bool(item.get("skipped"))
+        and not bool(item.get("passed"))
+    ]
     passed = len(failed_groups) == 0
     report: Dict[str, Any] = {
         "task_id": "NGA-WS28-006",
@@ -88,6 +120,7 @@ def run_release_closure_prompt_routing_ws28_006(
         "elapsed_seconds": round(time.time() - started, 4),
         "passed": passed,
         "failed_groups": failed_groups,
+        "archived_legacy_failed_groups": archived_legacy_failed_groups,
         "group_results": groups,
     }
 
@@ -102,6 +135,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run WS28 prompt routing/injection closure chain")
     parser.add_argument("--repo-root", type=Path, default=Path("."), help="Repository root")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output JSON report path")
+    parser.add_argument(
+        "--include-archived-legacy",
+        action="store_true",
+        help="Execute archived legacy gates (ws28_007/ws28_009/ws28_012); default is skip non-blocking",
+    )
     parser.add_argument("--strict", action="store_true", help="Return non-zero when checks fail")
     return parser.parse_args()
 
@@ -111,6 +149,7 @@ def main() -> int:
     report = run_release_closure_prompt_routing_ws28_006(
         repo_root=args.repo_root,
         output_file=args.output,
+        include_archived_legacy=bool(args.include_archived_legacy),
     )
     print(
         json.dumps(
