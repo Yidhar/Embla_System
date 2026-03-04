@@ -42,6 +42,8 @@ _CORE_PARENT_TOOL_ALLOWLIST = {
     "destroy_child_agent",
 }
 
+_CORE_SPAWN_ROLE_ALLOWLIST = {"dev", "expert", "review"}
+
 
 def _trim_text(value: Any, *, limit: int = 220) -> str:
     text = str(value or "").strip()
@@ -320,7 +322,8 @@ def _build_core_loop_initial_task(
                 "Decide child lifecycle using only parent tools: "
                 "spawn_child_agent / poll_child_status / resume_child_agent / destroy_child_agent."
             ),
-            "When spawning in this phase, only spawn role=dev.",
+            "Allowed spawn roles in this phase: dev, expert, review.",
+            "For expert/review spawns, runtime may defer execution to later requests.",
             "Do not use any other tools.",
             f"Pipeline ID: {pipeline_id}",
             f"Core Session ID: {core_session_id}",
@@ -868,6 +871,7 @@ async def run_multi_agent_pipeline(
     spawned_child_ids: set[str] = set()
     resumed_child_ids: set[str] = set()
     destroyed_child_ids: set[str] = set()
+    deferred_child_ids: set[str] = set()
     resume_exec_dev_count = 0
     resume_exec_skips: List[Dict[str, Any]] = []
     core_loop_enabled = bool(
@@ -930,11 +934,11 @@ async def run_multi_agent_pipeline(
                 if not requested_role:
                     safe_arguments["role"] = "dev"
                     requested_role = "dev"
-                if requested_role != "dev":
+                if requested_role not in _CORE_SPAWN_ROLE_ALLOWLIST:
                     return {
                         "error": f"unsupported_spawn_role:{requested_role}",
                         "status": "blocked",
-                        "allowed_role": "dev",
+                        "allowed_roles": sorted(_CORE_SPAWN_ROLE_ALLOWLIST),
                     }
                 raw_metadata = safe_arguments.get("metadata")
                 metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
@@ -1012,6 +1016,7 @@ async def run_multi_agent_pipeline(
         core_loop_summary["spawned_child_ids"] = sorted(spawned_child_ids)
         core_loop_summary["resumed_child_ids"] = sorted(resumed_child_ids)
         core_loop_summary["destroyed_child_ids"] = sorted(destroyed_child_ids)
+        core_loop_summary["deferred_child_ids"] = sorted(deferred_child_ids)
         yield {
             "type": "core_loop_end",
             "pipeline_id": pipeline_id,
@@ -1078,7 +1083,31 @@ async def run_multi_agent_pipeline(
                 }
                 continue
 
-            if str(resumed_session.role or "").strip().lower() != "dev":
+            session_role = str(resumed_session.role or "").strip().lower()
+            if session_role != "dev":
+                if source == "spawn" and session_role in {"expert", "review"}:
+                    try:
+                        _store.update_status(target_child_id, AgentStatus.WAITING)
+                    except Exception:
+                        logger.debug("Failed to defer spawned child session: %s", target_child_id, exc_info=True)
+                    deferred_child_ids.add(target_child_id)
+                    resume_exec_skips.append(
+                        {
+                            "agent_id": target_child_id,
+                            "reason": "spawn_deferred_role",
+                            "source": source,
+                            "role": session_role,
+                        }
+                    )
+                    yield {
+                        "type": "child_spawn_deferred",
+                        "pipeline_id": pipeline_id,
+                        "agent_id": target_child_id,
+                        "source": source,
+                        "reason": "spawn_deferred_role",
+                        "role": session_role,
+                    }
+                    continue
                 resume_exec_skips.append(
                     {
                         "agent_id": target_child_id,
@@ -1220,6 +1249,7 @@ async def run_multi_agent_pipeline(
             core_loop_summary["resume_exec_dev_count"] = int(resume_exec_dev_count)
             core_loop_summary["resume_exec_skip_count"] = len(resume_exec_skips)
             core_loop_summary["resume_exec_skips"] = list(resume_exec_skips[:20])
+            core_loop_summary["deferred_child_ids"] = sorted(deferred_child_ids)
 
     # ── Phase 6: Collect results ───────────────────────────────
 

@@ -939,3 +939,84 @@ class TestPipeline:
         agent_state = receipt.get("agent_state", {})
         core_loop_state = agent_state.get("core_loop", {}) if isinstance(agent_state.get("core_loop"), dict) else {}
         assert int(core_loop_state.get("resume_exec_dev_count") or 0) >= 1
+
+    def test_pipeline_core_loop_spawn_review_is_deferred(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        core_tool_round = {"value": 0}
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, model
+            tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+            if "poll_child_status" in tool_names:
+                idx = int(core_tool_round["value"])
+                core_tool_round["value"] = idx + 1
+                if idx == 0:
+                    return {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "core_spawn_review_1",
+                                "name": "spawn_child_agent",
+                                "arguments": {
+                                    "role": "review",
+                                    "task_description": "defer review to follow-up request",
+                                },
+                            }
+                        ],
+                    }
+                return {"content": "", "tool_calls": []}
+
+            # Dev loops complete in one round.
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "dev_done_1",
+                        "name": "report_to_parent",
+                        "arguments": {"type": "completed", "content": "child work complete"},
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(
+            self._collect_events(
+                run_multi_agent_pipeline(
+                    message="Implement auth endpoint and tests",
+                    session_id="core-loop-spawn-review",
+                    core_session_id="core-loop-spawn-review__core",
+                    risk_level="write_repo",
+                    enable_child_execution=True,
+                    child_llm_call=_mock_child_llm,
+                    child_tool_executor=_mock_tool_executor,
+                    store=store,
+                    mailbox=mailbox,
+                    task_board_engine=task_board_engine,
+                )
+            )
+        )
+
+        deferred_events = [item for item in events if item.get("type") == "child_spawn_deferred"]
+        assert deferred_events
+        assert any(str(item.get("role") or "") == "review" for item in deferred_events)
+
+        deferred_agent_id = str(deferred_events[-1].get("agent_id") or "")
+        assert deferred_agent_id
+        deferred_session = store.get(deferred_agent_id)
+        assert deferred_session is not None
+        assert deferred_session.status == AgentStatus.WAITING
+        assert deferred_session.role == "review"
+
+        receipt = next(item for item in events if item.get("type") == "execution_receipt")
+        agent_state = receipt.get("agent_state", {})
+        core_loop_state = agent_state.get("core_loop", {}) if isinstance(agent_state.get("core_loop"), dict) else {}
+        deferred_ids = core_loop_state.get("deferred_child_ids") or []
+        assert deferred_agent_id in deferred_ids
