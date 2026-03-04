@@ -262,7 +262,7 @@ Block 3（动态窗口）：
 
 - 总览：`./01-module-overview.md`
 - 工具执行管线：`./06-structured-tool-calls-and-local-first-native.md`
-- 自治 SDLC：`./07-autonomous-agent-sdlc-architecture.md`
+- 自治 SDLC（历史归档）：`./07-archived-autonomous-agent-sdlc-architecture.md`
 - 目标契约参考：`./00-omni-operator-architecture.md`
 - 安全盲区与加固基线：`./13-security-blindspots-and-hardening.md`
 

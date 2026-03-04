@@ -33,8 +33,8 @@
    - `L0-RUNTIME`：开发启动 runbook、端口基线与排障清单。
 8. `doc/06-structured-tool-calls-and-local-first-native.md`
    - `L0-RUNTIME`：结构化工具调用链路与本地优先执行策略。
-9. `doc/07-autonomous-agent-sdlc-architecture.md`
-   - `L1-TARGET`：自治 SDLC 架构、状态机与治理对齐。
+9. `doc/07-archived-autonomous-agent-sdlc-architecture.md`
+   - `L3-ARCHIVE`：历史自治 SDLC 架构与迁移演进记录（非当前主链）。
 10. `doc/08-frontend-backend-separation-plan.md`
     - `L0/L1`：前后端边界收敛与分阶段解耦方案（含现状与目标）。
 11. `doc/09-tool-execution-specification.md`

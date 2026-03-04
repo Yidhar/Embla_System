@@ -453,4 +453,4 @@
 2. 脑干守门职责：`./10-brainstem-layer-modules.md`
 3. 大脑验证与反思职责：`./11-brain-layer-modules.md`
 4. 手脚工具执行职责：`./12-limbs-layer-modules.md`
-5. 当前实现边界：`./07-autonomous-agent-sdlc-architecture.md`
+5. 当前实现边界（历史归档参考）：`./07-archived-autonomous-agent-sdlc-architecture.md`

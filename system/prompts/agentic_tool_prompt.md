@@ -76,7 +76,7 @@
 
 - `doc/09-工具调用与任务执行规范.md`
 - `doc/06-structured-tool-calls-and-local-first-native.md`
-- `doc/07-autonomous-agent-sdlc-architecture.md`
+- `doc/07-archived-autonomous-agent-sdlc-architecture.md`
 - `doc/task/23-phase3-full-target-task-list.md`
 - `doc/task/runbooks/`
 

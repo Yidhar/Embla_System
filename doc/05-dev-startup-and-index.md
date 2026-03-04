@@ -146,4 +146,4 @@ curl http://127.0.0.1:8003/status
 - 总览：`./01-module-overview.md`
 - 协议与代理：`./04-api-protocol-proxy-guide.md`
 - 工具调用：`./06-structured-tool-calls-and-local-first-native.md`
-- 自治 SDLC：`./07-autonomous-agent-sdlc-architecture.md`
+- 自治 SDLC（历史归档）：`./07-archived-autonomous-agent-sdlc-architecture.md`

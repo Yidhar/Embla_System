@@ -79,7 +79,7 @@
 ## 5. 参考文档
 
 - `doc/01-module-overview.md`
-- `doc/07-autonomous-agent-sdlc-architecture.md`
+- `doc/07-archived-autonomous-agent-sdlc-architecture.md`（historical archive）
 - `doc/09-tool-execution-specification.md`
 - `doc/10-brainstem-layer-modules.md`
 - `doc/11-brain-layer-modules.md`

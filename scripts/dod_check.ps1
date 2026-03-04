@@ -82,7 +82,7 @@ function Invoke-FullClosureChain {
 Set-Location $RepoRoot
 
 $requiredFiles = @(
-  "doc/07-autonomous-agent-sdlc-architecture.md",
+  "doc/07-archived-autonomous-agent-sdlc-architecture.md",
   "memory/schema.sql",
   "storage_schema/brainstem_event_workflow.sql",
   "policy/gate_policy.yaml",
@@ -101,9 +101,9 @@ Assert-FileContains "storage_schema/brainstem_event_workflow.sql" "tenant_id"
 Assert-FileContains "storage_schema/brainstem_event_workflow.sql" "project_id"
 Assert-FileContains "storage_schema/brainstem_event_workflow.sql" "event_seq"
 Assert-FileContains "memory/schema.sql" "storage_schema/brainstem_event_workflow.sql"
-Assert-FileContains "doc/07-autonomous-agent-sdlc-architecture.md" "FailedExhausted"
-Assert-FileContains "doc/07-autonomous-agent-sdlc-architecture.md" "FailedHard"
-Assert-FileContains "doc/07-autonomous-agent-sdlc-architecture.md" "Killed"
+Assert-FileContains "doc/07-archived-autonomous-agent-sdlc-architecture.md" "FailedExhausted"
+Assert-FileContains "doc/07-archived-autonomous-agent-sdlc-architecture.md" "FailedHard"
+Assert-FileContains "doc/07-archived-autonomous-agent-sdlc-architecture.md" "Killed"
 Assert-FileContains "policy/gate_policy.yaml" "burn_rate_windows"
 Assert-FileContains "policy/gate_policy.yaml" "min_sample_count"
 Assert-FileContains "runbooks/rollback.md" "Trigger Conditions"

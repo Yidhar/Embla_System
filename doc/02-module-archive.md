@@ -139,4 +139,4 @@ Embla_system 在当前项目的集成层由三块组成：
 - 总览：`./01-module-overview.md`
 - 启动与环境：`./05-dev-startup-and-index.md`
 - 工具调用管线：`./06-structured-tool-calls-and-local-first-native.md`
-- 自治 SDLC：`./07-autonomous-agent-sdlc-architecture.md`
+- 自治 SDLC（历史归档）：`./07-archived-autonomous-agent-sdlc-architecture.md`

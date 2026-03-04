@@ -1,19 +1,19 @@
 ---
-**文档类型**：As-Is + Target-Aligned（混合文档）
-**实施状态**：Phase 3 桥接主链已落地（Sub-Agent + NativeExecutionBridge），Phase 3 Full 持续收口
-**最后更新**：2026-02-27
+**文档类型**：Historical Archive（archived/legacy）
+**实施状态**：归档（不作为当前主链设计与运行基线）
+**最后更新**：2026-03-04
 **历史实现基线**：autonomous/（archived/legacy，已退役；能力已迁移至 agents/core）
 **目标态参考**：00-omni-operator-architecture.md (Phase 3)
 ---
 
-# 07 Autonomous Agent SDLC 架构（开发预备对齐版）
+# 07 Archived Autonomous Agent SDLC 架构（历史归档）
 
 
 > Migration Note (archived/legacy)
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
-文档状态：开发预备（As-Is + Target-Aligned）
-最后更新：2026-02-27
+文档状态：Historical Archive（archived/legacy）
+最后更新：2026-03-04
 
 ## 1. 文档定位
 

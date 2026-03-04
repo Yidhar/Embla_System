@@ -146,7 +146,7 @@
 - 模型协议与代理：`./04-api-protocol-proxy-guide.md`
 - 启动与开发环境：`./05-dev-startup-and-index.md`
 - 工具调用管线：`./06-structured-tool-calls-and-local-first-native.md`
-- 自治 SDLC 对齐：`./07-autonomous-agent-sdlc-architecture.md`
+- 自治 SDLC（历史归档）：`./07-archived-autonomous-agent-sdlc-architecture.md`
 - 前后端分离：`./08-frontend-backend-separation-plan.md`
 - 工具治理规范：`./09-tool-execution-specification.md`
 - 目标架构蓝图（仅目标态参考）：`./00-omni-operator-architecture.md`、`./10-brainstem-layer-modules.md`、`./11-brain-layer-modules.md`、`./12-limbs-layer-modules.md`

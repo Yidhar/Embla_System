@@ -29,10 +29,10 @@
 
 | 平面 | 职责 | 文档引用 |
 |------|------|----------|
-| **控制面** | 编排、策略、质量门禁 | [07 文档（总体架构）](./07-autonomous-agent-sdlc-architecture.md) |
-| **执行面** | 沙箱执行、工具调用、测试 | [07 文档（工具治理）](./07-autonomous-agent-sdlc-architecture.md) |
-| **记忆面** | 事件溯源、投影裁决 | [07 文档（状态与记忆）](./07-autonomous-agent-sdlc-architecture.md) |
-| **运维面** | 可观测、评测、审计 | [07 文档（运维与发布）](./07-autonomous-agent-sdlc-architecture.md) |
+| **控制面** | 编排、策略、质量门禁 | [07 归档文档（历史总体架构）](./07-archived-autonomous-agent-sdlc-architecture.md) |
+| **执行面** | 沙箱执行、工具调用、测试 | [07 归档文档（历史工具治理）](./07-archived-autonomous-agent-sdlc-architecture.md) |
+| **记忆面** | 事件溯源、投影裁决 | [07 归档文档（历史状态与记忆）](./07-archived-autonomous-agent-sdlc-architecture.md) |
+| **运维面** | 可观测、评测、审计 | [07 归档文档（历史运维与发布）](./07-archived-autonomous-agent-sdlc-architecture.md) |
 
 ### 1.2 Gap Analysis
 
@@ -672,7 +672,7 @@ NagaAgent/
 │   └── event_log/                    # 轻量事件存储
 │       └── event_store.py            # SQLite/JSON事件存储
 ├── doc/
-│   ├── 07-autonomous-agent-sdlc-architecture.md
+│   ├── 07-archived-autonomous-agent-sdlc-architecture.md  # historical archive
 │   └── 00-mvp-architecture-design.md  # [NEW] 本文档
 └── ...
 ```

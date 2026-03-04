@@ -172,6 +172,6 @@ function buildToolResult(raw: string, contentType: string): ToolResultEnvelope {
 
 - 总览：`./01-module-overview.md`
 - 启动与调试：`./05-dev-startup-and-index.md`
-- 自治 SDLC：`./07-autonomous-agent-sdlc-architecture.md`
+- 自治 SDLC（历史归档）：`./07-archived-autonomous-agent-sdlc-architecture.md`
 - 工具治理规范：`./09-tool-execution-specification.md`
 - 安全盲区与加固基线：`./13-security-blindspots-and-hardening.md`
