@@ -231,6 +231,10 @@ class TestExpertAgent:
 
 class TestDevAgent:
 
+    def test_dev_default_prompts_root_matches_system_prompts(self):
+        from agents.dev_agent import DevAgentConfig
+        assert DevAgentConfig().prompts_root == "system/prompts"
+
     def test_dev_system_prompt(self, tmp_path):
         from agents.dev_agent import DevAgent, DevAgentConfig
         block_path = tmp_path / "prompts" / "roles" / "backend.md"

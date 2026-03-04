@@ -3,8 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from agents import (
+    CoreAgent,
+    DevAgent,
+    ExpertAgent,
     Goal,
     MetaAgentRuntime,
+    MiniLoopConfig,
+    PromptAssembler,
     ReviewAgent,
     ReviewResult,
     RouterRequest,
@@ -48,6 +53,11 @@ def test_agents_namespace_owns_brain_implementations() -> None:
     assert TaskRouterEngine.__module__.startswith("agents.")
     assert RouterRequest.__module__.startswith("agents.")
     assert Goal.__module__.startswith("agents.")
+    assert CoreAgent.__module__.startswith("agents.")
+    assert ExpertAgent.__module__.startswith("agents.")
+    assert DevAgent.__module__.startswith("agents.")
+    assert PromptAssembler.__module__.startswith("agents.")
+    assert MiniLoopConfig.__module__.startswith("agents.")
     assert ReviewAgent.__module__.startswith("agents.")
     assert ReviewResult.__module__.startswith("agents.")
 
