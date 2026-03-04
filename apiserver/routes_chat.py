@@ -157,6 +157,7 @@ __all__ = [
     "_build_path_model_override",
     "_collect_chat_route_bridge_events",
     "_emit_agentic_loop_completion_event",
+    "_emit_core_child_spawn_deferred_event",
     "_emit_chat_route_arbiter_event",
     "_emit_chat_route_guard_event",
     "_emit_chat_route_prompt_event",
@@ -1028,6 +1029,40 @@ def _emit_agentic_loop_completion_event(
         "submit_result_round": int(details.get("submit_result_round") or 0),
     }
     store.emit(event_type, payload, source="apiserver.chat_stream")
+
+
+def _emit_core_child_spawn_deferred_event(
+    *,
+    session_id: str,
+    execution_session_id: str,
+    route_meta: Dict[str, Any],
+    chunk_data: Dict[str, Any],
+) -> None:
+    if not isinstance(chunk_data, dict):
+        return
+    if str(chunk_data.get("type") or "").strip().lower() != "child_spawn_deferred":
+        return
+
+    store = _get_chat_route_event_store()
+    if store is None:
+        return
+
+    decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
+    payload = {
+        "session_id": str(session_id or ""),
+        "execution_session_id": str(execution_session_id or ""),
+        "outer_session_id": str(route_meta.get("outer_session_id") or ""),
+        "core_session_id": str(route_meta.get("core_session_id") or ""),
+        "trace_id": str(decision.get("trace_id") or ""),
+        "workflow_id": str(decision.get("task_id") or ""),
+        "path": str(route_meta.get("path") or ""),
+        "pipeline_id": str(chunk_data.get("pipeline_id") or ""),
+        "agent_id": str(chunk_data.get("agent_id") or ""),
+        "role": str(chunk_data.get("role") or ""),
+        "source": str(chunk_data.get("source") or ""),
+        "reason": str(chunk_data.get("reason") or ""),
+    }
+    store.emit("CoreChildSpawnDeferred", payload, source="apiserver.chat_stream")
 
 
 def _extract_agentic_execution_receipt_text(chunk_data: Dict[str, Any]) -> str:

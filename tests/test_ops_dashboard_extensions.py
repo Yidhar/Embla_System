@@ -721,6 +721,107 @@ def test_ops_incidents_latest_payload_includes_agentic_loop_completion_not_submi
     assert item["payload_excerpt"]["session_id"] == "sess-loop-001"
 
 
+def test_ops_runtime_posture_payload_includes_core_child_spawn_deferred_summary(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    _write_jsonl(
+        events_file,
+        [
+            {
+                "timestamp": "2026-03-05T01:00:00+00:00",
+                "event_type": "CoreChildSpawnDeferred",
+                "payload": {
+                    "session_id": "outer-001",
+                    "execution_session_id": "outer-001__core",
+                    "agent_id": "review-child-001",
+                    "role": "review",
+                    "source": "spawn",
+                    "reason": "spawn_deferred_role",
+                },
+            }
+        ],
+    )
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "ok", "metric_status": {}},
+            "metrics": {},
+            "threshold_profile": {},
+            "sources": {"events_file": "logs/autonomous/events.jsonl"},
+        }
+
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+
+    payload = api_server._ops_build_runtime_posture_payload(events_limit=200)
+    assert payload["status"] == "success"
+
+    summary = payload["data"]["summary"]
+    assert summary["core_child_spawn_deferred_status"] == "ok"
+
+    deferred = payload["data"]["core_child_spawn_deferred"]
+    assert deferred["status"] == "ok"
+    assert deferred["deferred_count"] == 1
+    assert deferred["latest_role"] == "review"
+    assert deferred["latest_reason"] == "spawn_deferred_role"
+    assert deferred["execution_session_count"] == 1
+
+    metric = payload["data"]["metrics"]["core_child_spawn_deferred_count"]
+    assert metric["status"] == "ok"
+    assert metric["value"] == 1
+    assert metric["execution_session_count"] == 1
+    assert metric["latest_role"] == "review"
+    assert metric["reason_code"] == "CORE_CHILD_SPAWN_DEFERRED_OBSERVED"
+
+
+def test_ops_incidents_latest_payload_includes_core_child_spawn_deferred(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    _write_jsonl(
+        events_file,
+        [
+            {
+                "timestamp": "2026-03-05T01:10:00+00:00",
+                "event_type": "CoreChildSpawnDeferred",
+                "payload": {
+                    "session_id": "outer-002",
+                    "execution_session_id": "outer-002__core",
+                    "agent_id": "expert-child-002",
+                    "role": "expert",
+                    "source": "spawn",
+                    "reason": "spawn_deferred_role",
+                },
+            }
+        ],
+    )
+
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(api_server, "_ops_collect_required_reports", lambda _repo_root: [])
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", lambda **_kwargs: {"metrics": {}})
+
+    payload = api_server._ops_build_incidents_latest_payload(limit=20)
+    assert payload["status"] == "success"
+    assert payload["severity"] == "warning"
+    assert payload["data"]["event_counters"]["CoreChildSpawnDeferred"] == 1
+
+    summary = payload["data"]["summary"]
+    prompt_safety = summary["runtime_prompt_safety"]
+    assert prompt_safety["core_child_spawn_deferred"]["status"] == "ok"
+    assert prompt_safety["core_child_spawn_deferred"]["deferred_count"] == 1
+
+    incidents = payload["data"]["incidents"]
+    deferred_incidents = [item for item in incidents if str(item.get("event_type")) == "CoreChildSpawnDeferred"]
+    assert len(deferred_incidents) == 1
+    incident = deferred_incidents[0]
+    assert incident["severity"] == "warning"
+    assert incident["payload_excerpt"]["role"] == "expert"
+    assert incident["payload_excerpt"]["reason"] == "spawn_deferred_role"
+
+
 def test_ops_runtime_posture_payload_includes_control_plane_guard_summaries(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
     now_iso = datetime.now(timezone.utc).isoformat()

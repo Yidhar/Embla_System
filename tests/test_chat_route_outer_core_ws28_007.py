@@ -513,10 +513,19 @@ def test_chat_stream_dispatch_to_core_triggers_real_core_pipeline(monkeypatch) -
 
     fake_llm = _FakeLLMService()
     pipeline_calls = []
+    deferred_emits = []
 
     async def _fake_run_multi_agent_pipeline(**kwargs):
         pipeline_calls.append(dict(kwargs))
         assert str(kwargs.get("forced_path") or "") == "path-c"
+        yield {
+            "type": "child_spawn_deferred",
+            "pipeline_id": "pipe-test-001",
+            "agent_id": "review-child-001",
+            "source": "spawn",
+            "role": "review",
+            "reason": "spawn_deferred_role",
+        }
         yield {
             "type": "execution_receipt",
             "agent_state": {
@@ -544,6 +553,11 @@ def test_chat_stream_dispatch_to_core_triggers_real_core_pipeline(monkeypatch) -
 
     monkeypatch.setattr(api_server, "get_llm_service", lambda: fake_llm)
     monkeypatch.setattr(api_server, "run_multi_agent_pipeline", _fake_run_multi_agent_pipeline)
+    monkeypatch.setattr(
+        api_server,
+        "_emit_core_child_spawn_deferred_event",
+        lambda **kwargs: deferred_emits.append(dict(kwargs)),
+    )
 
     async def _no_memory(_question: str, *, limit: int = 5):
         del limit
@@ -574,6 +588,9 @@ def test_chat_stream_dispatch_to_core_triggers_real_core_pipeline(monkeypatch) -
 
     assert len(pipeline_calls) == 1
     assert str(pipeline_calls[0].get("forced_path") or "") == "path-c"
+    assert len(deferred_emits) == 1
+    assert str(deferred_emits[0]["chunk_data"].get("agent_id") or "") == "review-child-001"
+    assert str(deferred_emits[0]["chunk_data"].get("reason") or "") == "spawn_deferred_role"
 
     fallback_content_rows = [
         item for item in payloads if item.get("type") == "content" and item.get("source") == "execution_receipt_fallback"

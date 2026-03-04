@@ -246,6 +246,7 @@ _bind_route_exports(
         "_build_path_model_override",
         "_merge_model_override",
         "_emit_agentic_loop_completion_event",
+        "_emit_core_child_spawn_deferred_event",
         "_extract_agentic_execution_receipt_text",
         "_format_sse_payload_chunk_json",
         "_CHAT_ROUTE_PATH_B_CLARIFY_LIMIT",
@@ -1595,6 +1596,13 @@ async def chat_stream(request: ChatRequest):
                         pass
                     elif chunk_type == "tool_stage":
                         _emit_agentic_loop_completion_event(
+                            session_id=session_id,
+                            execution_session_id=execution_session_id,
+                            route_meta=route_meta,
+                            chunk_data=event,
+                        )
+                    elif chunk_type == "child_spawn_deferred":
+                        _emit_core_child_spawn_deferred_event(
                             session_id=session_id,
                             execution_session_id=execution_session_id,
                             route_meta=route_meta,

@@ -63,6 +63,7 @@ __all__ = [
     "_ops_build_audit_ledger_summary",
     "_ops_build_brainstem_control_plane_summary",
     "_ops_build_budget_guard_summary",
+    "_ops_build_core_child_spawn_deferred_summary",
     "_ops_build_event_database_summary",
     "_ops_build_evidence_index_payload",
     "_ops_build_execution_bridge_governance_summary",
@@ -398,6 +399,7 @@ _OPS_INCIDENT_EVENT_SEVERITY: Dict[str, str] = {
     "ProcessGuardOrphanReaped": "warning",
     "RuntimeFuseTriggeredWarning": "warning",
     "VisionMultimodalQAError": "warning",
+    "CoreChildSpawnDeferred": "warning",
 }
 _OPS_ARCHIVED_LEGACY_EVENT_PREFIX = "SubAgentRuntime"
 _OPS_ARCHIVED_LEGACY_EVENT_NAMESPACE = "archived_legacy"
@@ -1040,6 +1042,13 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         limit=max(200, int(events_limit)),
     )
     agentic_loop_completion_status = _ops_status_to_severity(str(agentic_loop_completion.get("status") or "unknown"))
+    core_child_spawn_deferred = _ops_build_core_child_spawn_deferred_summary(
+        events_file=events_file,
+        limit=max(200, int(events_limit)),
+    )
+    core_child_spawn_deferred_status = _ops_status_to_severity(
+        str(core_child_spawn_deferred.get("status") or "unknown")
+    )
     vision_multimodal = _ops_build_vision_multimodal_summary(
         events_file=events_file,
         limit=max(200, int(events_limit)),
@@ -1079,6 +1088,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             audit_ledger_status,
             execution_bridge_governance_status,
             agentic_loop_completion_status,
+            core_child_spawn_deferred_status,
             vision_multimodal_status,
         ]
     )
@@ -1153,6 +1163,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "execution_bridge_governance_status": execution_bridge_governance_status,
             "execution_bridge_governance_reason_codes": list(execution_bridge_governance.get("reason_codes") or []),
             "agentic_loop_completion_status": agentic_loop_completion_status,
+            "core_child_spawn_deferred_status": core_child_spawn_deferred_status,
             "vision_multimodal_status": vision_multimodal_status,
         },
         "metrics": {
@@ -1262,6 +1273,14 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
                 "total_count": agentic_loop_completion.get("total_count"),
                 "reason_code": agentic_loop_completion.get("reason_code"),
             },
+            "core_child_spawn_deferred_count": {
+                "status": core_child_spawn_deferred_status,
+                "value": core_child_spawn_deferred.get("deferred_count"),
+                "execution_session_count": core_child_spawn_deferred.get("execution_session_count"),
+                "latest_role": core_child_spawn_deferred.get("latest_role"),
+                "latest_reason": core_child_spawn_deferred.get("latest_reason"),
+                "reason_code": core_child_spawn_deferred.get("reason_code"),
+            },
             "vision_multimodal_fallback_ratio": {
                 "status": vision_multimodal_status,
                 "value": vision_multimodal.get("fallback_ratio"),
@@ -1285,6 +1304,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         "legacy_event_namespace": legacy_namespace,
         "execution_bridge_governance": execution_bridge_governance,
         "agentic_loop_completion": agentic_loop_completion,
+        "core_child_spawn_deferred": core_child_spawn_deferred,
         "vision_multimodal": vision_multimodal,
     }
     if ws26_runtime_report_payload:
@@ -2003,6 +2023,73 @@ def _ops_build_agentic_loop_completion_summary(
     }
 
 
+def _ops_build_core_child_spawn_deferred_summary(
+    *,
+    events_file: Path,
+    limit: int = 5000,
+) -> Dict[str, Any]:
+    rows = _ops_read_event_rows(events_file, limit=max(200, int(limit)))
+    events_db = _ops_resolve_event_db_path(events_file)
+
+    deferred_count = 0
+    latest_timestamp = ""
+    latest_agent_id = ""
+    latest_role = ""
+    latest_reason = ""
+    role_counts: Dict[str, int] = {}
+    reason_counts: Dict[str, int] = {}
+    source_counts: Dict[str, int] = {}
+    unique_execution_sessions: set[str] = set()
+
+    for row in rows:
+        event_type = str(row.get("event_type") or "").strip()
+        if event_type != "CoreChildSpawnDeferred":
+            continue
+        deferred_count += 1
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+
+        latest_timestamp = str(row.get("timestamp") or "")
+        latest_agent_id = str(payload.get("agent_id") or "")
+        latest_role = str(payload.get("role") or "")
+        latest_reason = str(payload.get("reason") or "")
+
+        role_key = latest_role or "unknown"
+        role_counts[role_key] = int(role_counts.get(role_key, 0)) + 1
+        reason_key = latest_reason or "unknown"
+        reason_counts[reason_key] = int(reason_counts.get(reason_key, 0)) + 1
+        source_key = str(payload.get("source") or "").strip() or "unknown"
+        source_counts[source_key] = int(source_counts.get(source_key, 0)) + 1
+
+        execution_session_id = str(payload.get("execution_session_id") or "").strip()
+        if execution_session_id:
+            unique_execution_sessions.add(execution_session_id)
+
+    if deferred_count <= 0:
+        status = "unknown"
+        reason_code = "CORE_CHILD_SPAWN_DEFERRED_SIGNAL_EMPTY"
+        reason_text = "No Core child spawn deferred signal captured in runtime events."
+    else:
+        status = "ok"
+        reason_code = "CORE_CHILD_SPAWN_DEFERRED_OBSERVED"
+        reason_text = "Observed deferred child spawns emitted by Core lifecycle orchestration."
+
+    return {
+        "status": _ops_status_to_severity(status),
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "deferred_count": deferred_count,
+        "execution_session_count": len(unique_execution_sessions),
+        "latest_timestamp": latest_timestamp,
+        "latest_agent_id": latest_agent_id,
+        "latest_role": latest_role,
+        "latest_reason": latest_reason,
+        "role_counts": role_counts,
+        "reason_counts": reason_counts,
+        "source_counts": source_counts,
+        "events_file": _ops_unix_path(events_db if events_db.exists() else events_file),
+    }
+
+
 def _ops_build_vision_multimodal_summary(
     *,
     events_file: Path,
@@ -2420,6 +2507,10 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
         events_file=events_file,
         limit=max(200, int(limit) * 10),
     )
+    core_child_spawn_deferred = _ops_build_core_child_spawn_deferred_summary(
+        events_file=events_file,
+        limit=max(200, int(limit) * 10),
+    )
     vision_multimodal = _ops_build_vision_multimodal_summary(
         events_file=events_file,
         limit=max(200, int(limit) * 10),
@@ -2464,6 +2555,7 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             "route_quality": _ops_build_route_quality_summary(snapshot_metrics, trend=route_quality_trend),
             "execution_bridge_governance": execution_bridge_governance,
             "agentic_loop_completion": agentic_loop_completion,
+            "core_child_spawn_deferred": core_child_spawn_deferred,
             "vision_multimodal": vision_multimodal,
             "process_guard": process_guard,
             "killswitch_guard": killswitch_guard,
@@ -2475,6 +2567,8 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
         prompt_safety_summary["execution_bridge_governance"] = execution_bridge_governance
     if "agentic_loop_completion" not in prompt_safety_summary:
         prompt_safety_summary["agentic_loop_completion"] = agentic_loop_completion
+    if "core_child_spawn_deferred" not in prompt_safety_summary:
+        prompt_safety_summary["core_child_spawn_deferred"] = core_child_spawn_deferred
     if "vision_multimodal" not in prompt_safety_summary:
         prompt_safety_summary["vision_multimodal"] = vision_multimodal
     if "process_guard" not in prompt_safety_summary:
