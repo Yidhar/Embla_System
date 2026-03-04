@@ -565,6 +565,9 @@ class NativeToolExecutor:
                 result = await self._search_keyword(call)
             elif tool_name == "query_docs":
                 result = await self._query_docs(call)
+            # NOTE:
+            # - Web retrieval belongs to Shell's read-only toolchain (`agents/shell_tools.py:search_web`).
+            # - Native executor stays local/sandbox-focused to keep capability boundaries explicit.
             elif tool_name == "list_files":
                 result = await self._list_files(call)
             elif tool_name == "git_status":

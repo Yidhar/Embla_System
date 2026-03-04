@@ -185,38 +185,52 @@ async def _recall_memory_lines(question: str, *, limit: int = 5) -> List[str]:
     return lines
 
 
-# Brainstem bootstrap bindings
-_bootstrap_global_mutex_lease_state = _routes_brainstem._bootstrap_global_mutex_lease_state
-_bootstrap_budget_guard_state = _routes_brainstem._bootstrap_budget_guard_state
-_bootstrap_immutable_dna_preflight = _routes_brainstem._bootstrap_immutable_dna_preflight
-_bootstrap_immutable_dna_monitor_startup = _routes_brainstem._bootstrap_immutable_dna_monitor_startup
-_bootstrap_brainstem_control_plane_startup = _routes_brainstem._bootstrap_brainstem_control_plane_startup
-_bootstrap_immutable_dna_monitor_shutdown = _routes_brainstem._bootstrap_immutable_dna_monitor_shutdown
-_bootstrap_brainstem_control_plane_shutdown = _routes_brainstem._bootstrap_brainstem_control_plane_shutdown
+def _bind_route_exports(module: Any, names: List[str]) -> None:
+    namespace = globals()
+    for export_name in names:
+        namespace[export_name] = getattr(module, export_name)
 
-# Chat-route bindings
-_resolve_chat_stream_route = _routes_chat._resolve_chat_stream_route
-_apply_chat_route_quality_guard = _routes_chat._apply_chat_route_quality_guard
-_apply_path_b_clarify_budget = _routes_chat._apply_path_b_clarify_budget
-_apply_chat_route_router_arbiter_guard = _routes_chat._apply_chat_route_router_arbiter_guard
-_apply_outer_core_session_bridge = _routes_chat._apply_outer_core_session_bridge
-_get_chat_route_quality_guard_summary = _routes_chat._get_chat_route_quality_guard_summary
-_read_chat_route_event_rows = _routes_chat._read_chat_route_event_rows
-_collect_chat_route_bridge_events = _routes_chat._collect_chat_route_bridge_events
-_build_chat_route_bridge_payload = _routes_chat._build_chat_route_bridge_payload
-_CHAT_ROUTE_STATE_KEY = _routes_chat._CHAT_ROUTE_STATE_KEY
-_emit_chat_route_prompt_event = _routes_chat._emit_chat_route_prompt_event
-_emit_chat_route_guard_event = _routes_chat._emit_chat_route_guard_event
-_emit_chat_route_arbiter_event = _routes_chat._emit_chat_route_arbiter_event
-_sanitize_route_quality_reason_codes = _routes_chat._sanitize_route_quality_reason_codes
-_sanitize_router_arbiter_reason_codes = _routes_chat._sanitize_router_arbiter_reason_codes
-_build_chat_route_prompt_hints = _routes_chat._build_chat_route_prompt_hints
-_build_path_model_override = _routes_chat._build_path_model_override
-_emit_agentic_loop_completion_event = _routes_chat._emit_agentic_loop_completion_event
-_extract_agentic_execution_receipt_text = _routes_chat._extract_agentic_execution_receipt_text
-_format_sse_payload_chunk_json = _routes_chat._format_sse_payload_chunk_json
-_CHAT_ROUTE_PATH_B_CLARIFY_LIMIT = _routes_chat._CHAT_ROUTE_PATH_B_CLARIFY_LIMIT
-_CHAT_ROUTE_ARBITER_GUARD = _routes_chat._CHAT_ROUTE_ARBITER_GUARD
+
+_bind_route_exports(
+    _routes_brainstem,
+    [
+        "_bootstrap_global_mutex_lease_state",
+        "_bootstrap_budget_guard_state",
+        "_bootstrap_immutable_dna_preflight",
+        "_bootstrap_immutable_dna_monitor_startup",
+        "_bootstrap_brainstem_control_plane_startup",
+        "_bootstrap_immutable_dna_monitor_shutdown",
+        "_bootstrap_brainstem_control_plane_shutdown",
+    ],
+)
+
+_bind_route_exports(
+    _routes_chat,
+    [
+        "_resolve_chat_stream_route",
+        "_apply_chat_route_quality_guard",
+        "_apply_path_b_clarify_budget",
+        "_apply_chat_route_router_arbiter_guard",
+        "_apply_outer_core_session_bridge",
+        "_get_chat_route_quality_guard_summary",
+        "_read_chat_route_event_rows",
+        "_collect_chat_route_bridge_events",
+        "_build_chat_route_bridge_payload",
+        "_CHAT_ROUTE_STATE_KEY",
+        "_emit_chat_route_prompt_event",
+        "_emit_chat_route_guard_event",
+        "_emit_chat_route_arbiter_event",
+        "_sanitize_route_quality_reason_codes",
+        "_sanitize_router_arbiter_reason_codes",
+        "_build_chat_route_prompt_hints",
+        "_build_path_model_override",
+        "_emit_agentic_loop_completion_event",
+        "_extract_agentic_execution_receipt_text",
+        "_format_sse_payload_chunk_json",
+        "_CHAT_ROUTE_PATH_B_CLARIFY_LIMIT",
+        "_CHAT_ROUTE_ARBITER_GUARD",
+    ],
+)
 
 if hasattr(_routes_chat, "_bind_chat_runtime_context"):
     _routes_chat._bind_chat_runtime_context(
@@ -964,16 +978,58 @@ def _build_prompt_template_meta(path: Path) -> Dict[str, Any]:
 
 
 def _list_prompt_template_metas() -> List[Dict[str, Any]]:
-    from system.config import get_prompt_manager
+    from system.config import get_prompt_manager, load_prompt_registry_spec
 
     manager = get_prompt_manager()
     prompts_dir = Path(manager.prompts_dir)
     prompts_dir.mkdir(parents=True, exist_ok=True)
+
+    seen_paths: set[str] = set()
+    seen_names: set[str] = set()
     items: List[Dict[str, Any]] = []
-    for item in sorted(prompts_dir.glob("*.md"), key=lambda p: p.name.lower()):
-        if not item.is_file():
-            continue
-        items.append(_build_prompt_template_meta(item))
+
+    registry = load_prompt_registry_spec(prompts_dir=prompts_dir)
+    entries_map = registry.get("entries_map", {})
+    if isinstance(entries_map, dict):
+        for prompt_name in sorted(entries_map.keys(), key=lambda s: str(s).lower()):
+            row = entries_map.get(prompt_name)
+            if not isinstance(row, dict):
+                continue
+            relative_path = str(row.get("path") or "").strip().replace("\\", "/")
+            if not relative_path:
+                continue
+            item = (prompts_dir / relative_path).resolve()
+            if not item.exists() or not item.is_file():
+                continue
+            key = str(item).replace("\\", "/")
+            if key in seen_paths:
+                continue
+            meta = _build_prompt_template_meta(item)
+            meta["name"] = str(prompt_name)
+            meta["relative_path"] = relative_path
+            meta["source"] = "registry"
+            items.append(meta)
+            seen_paths.add(key)
+            seen_names.add(str(prompt_name))
+
+    for pattern in ("**/*.md", "**/*.spec"):
+        for item in sorted(prompts_dir.rglob(pattern), key=lambda p: str(p).lower()):
+            if not item.is_file():
+                continue
+            key = str(item.resolve()).replace("\\", "/")
+            if key in seen_paths:
+                continue
+            stem = item.stem
+            if stem in seen_names:
+                continue
+            meta = _build_prompt_template_meta(item)
+            meta["relative_path"] = str(item.relative_to(prompts_dir)).replace("\\", "/")
+            meta["source"] = "scan"
+            items.append(meta)
+            seen_paths.add(key)
+            seen_names.add(stem)
+
+    items.sort(key=lambda row: str(row.get("relative_path") or row.get("filename") or "").lower())
     return items
 
 
