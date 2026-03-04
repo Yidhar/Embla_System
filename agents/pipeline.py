@@ -27,12 +27,19 @@ from agents.expert_agent import ExpertAgent, ExpertAgentConfig
 from agents.dev_agent import DevAgent, DevAgentConfig
 from agents.review_agent import ReviewAgent
 from agents.runtime.mini_loop import MiniLoopConfig, run_mini_loop
+from agents.runtime.parent_tools import get_parent_tool_definitions, handle_parent_tool_call
 
 logger = logging.getLogger(__name__)
 
 
 ChildLLMCallFn = Callable[[List[Dict[str, Any]], List[Dict[str, Any]], str], Awaitable[Dict[str, Any]]]
 ChildToolExecutorFn = Callable[[str, Dict[str, Any], str], Awaitable[Dict[str, Any]]]
+
+_CORE_PARENT_TOOL_ALLOWLIST = {
+    "poll_child_status",
+    "resume_child_agent",
+    "destroy_child_agent",
+}
 
 
 def _trim_text(value: Any, *, limit: int = 220) -> str:
@@ -45,7 +52,7 @@ def _trim_text(value: Any, *, limit: int = 220) -> str:
 def _extract_report_text(report: Dict[str, Any]) -> str:
     rows = report.get("reports")
     if isinstance(rows, list):
-        for item in rows:
+        for item in reversed(rows):
             if isinstance(item, str) and item.strip():
                 return _trim_text(item)
             if isinstance(item, dict):
@@ -220,6 +227,104 @@ def _build_runtime_tool_definitions(tool_names: List[str]) -> List[Dict[str, Any
             }
         )
     return definitions
+
+
+def _ensure_core_runtime_session(
+    *,
+    store: AgentSessionStore,
+    core_session_id: str,
+    goal: str,
+    pipeline_id: str,
+) -> None:
+    existing = store.get(core_session_id)
+    if existing is None:
+        metadata = {"pipeline_id": str(pipeline_id or "").strip()}
+        store.create(
+            session_id=core_session_id,
+            role="core",
+            parent_id="",
+            task_description=str(goal or "").strip(),
+            metadata=metadata,
+        )
+        return
+    if existing.status != AgentStatus.RUNNING:
+        try:
+            store.update_status(core_session_id, AgentStatus.RUNNING)
+        except Exception:
+            logger.debug("Failed to set core runtime session running: %s", core_session_id, exc_info=True)
+    try:
+        store.update_metadata(core_session_id, {"pipeline_id": str(pipeline_id or "").strip()})
+    except Exception:
+        logger.debug("Failed to update core runtime session metadata: %s", core_session_id, exc_info=True)
+
+
+def _build_core_parent_tool_definitions() -> List[Dict[str, Any]]:
+    allowed = set(_CORE_PARENT_TOOL_ALLOWLIST)
+    definitions: List[Dict[str, Any]] = []
+    for item in get_parent_tool_definitions():
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if name in allowed:
+            definitions.append(dict(item))
+    return definitions
+
+
+def _collect_core_descendant_status_snapshot(
+    *,
+    store: AgentSessionStore,
+    core_session_id: str,
+) -> List[Dict[str, Any]]:
+    root_children = store.list_children(core_session_id)
+    root_ids = [str(getattr(item, "session_id", "") or "").strip() for item in root_children]
+    descendant_ids = _collect_descendant_session_ids(
+        store=store,
+        root_session_ids=[item for item in root_ids if item],
+    )
+    snapshot: List[Dict[str, Any]] = []
+    for session_id in descendant_ids:
+        session = store.get(session_id)
+        if session is None:
+            continue
+        row = session.to_status_summary()
+        row["parent_id"] = str(session.parent_id or "")
+        snapshot.append(row)
+    return snapshot
+
+
+def _build_core_loop_initial_task(
+    *,
+    message: str,
+    core_session_id: str,
+    pipeline_id: str,
+    children_snapshot: List[Dict[str, Any]],
+) -> str:
+    roster_lines: List[str] = []
+    for child in children_snapshot[:36]:
+        child_id = str(child.get("agent_id") or "").strip()
+        role = str(child.get("role") or "").strip()
+        status = str(child.get("status") or "").strip()
+        parent_id = str(child.get("parent_id") or "").strip()
+        task_desc = _trim_text(child.get("task_description") or "", limit=120)
+        parent_text = f" | parent={parent_id}" if parent_id else ""
+        roster_lines.append(f"- {child_id} | role={role} | status={status}{parent_text} | task={task_desc}")
+
+    if not roster_lines:
+        roster_lines.append("- no_active_children")
+
+    return "\n".join(
+        [
+            "You are the Core lifecycle orchestrator for this pipeline run.",
+            "Decide child lifecycle using only parent tools: poll_child_status / resume_child_agent / destroy_child_agent.",
+            "Do not use any other tools.",
+            f"Pipeline ID: {pipeline_id}",
+            f"Core Session ID: {core_session_id}",
+            f"Goal: {str(message or '').strip()}",
+            "Current descendant roster:",
+            *roster_lines,
+            "If no action is needed, return without tool calls.",
+        ]
+    ).strip()
 
 
 def _build_core_execution_receipt(
@@ -468,6 +573,12 @@ async def run_multi_agent_pipeline(
     resolved_core_session_id = str(core_session_id or "").strip() or str(session_id or "").strip()
     if not resolved_core_session_id:
         resolved_core_session_id = f"core_{pipeline_id}"
+    _ensure_core_runtime_session(
+        store=_store,
+        core_session_id=resolved_core_session_id,
+        goal=message,
+        pipeline_id=pipeline_id,
+    )
 
     expert_results = core.spawn_experts(
         decomposition,
@@ -744,7 +855,317 @@ async def run_multi_agent_pipeline(
         }
         expert_instances.append(expert)
 
-    # ── Phase 5: Collect results ───────────────────────────────
+    # ── Phase 5: Core lifecycle loop (LLM-driven parent management) ──
+
+    core_loop_summary: Dict[str, Any] = {}
+    core_loop_tool_call_count = 0
+    core_loop_tool_names: List[str] = []
+    resumed_child_ids: set[str] = set()
+    destroyed_child_ids: set[str] = set()
+    resume_exec_dev_count = 0
+    resume_exec_skips: List[Dict[str, Any]] = []
+    core_loop_enabled = bool(
+        child_execution_enabled and child_llm_call is not None and child_tool_executor is not None
+    )
+    if core_loop_enabled and child_llm_call is not None:
+        children_snapshot = _collect_core_descendant_status_snapshot(
+            store=_store,
+            core_session_id=resolved_core_session_id,
+        )
+        core_loop_initial_task = _build_core_loop_initial_task(
+            message=message,
+            core_session_id=resolved_core_session_id,
+            pipeline_id=pipeline_id,
+            children_snapshot=children_snapshot,
+        )
+        core_tool_defs = _build_core_parent_tool_definitions()
+        core_allowed_tools = {str(item.get("name") or "").strip() for item in core_tool_defs}
+        core_loop_config = MiniLoopConfig(
+            max_rounds=max(1, min(int(child_max_rounds), 6)),
+            poll_parent_every_n=max(1, min(3, int(child_max_rounds) if int(child_max_rounds) > 0 else 3)),
+            include_child_tools=False,
+        )
+
+        async def _core_llm_call(
+            messages: List[Dict[str, Any]],
+            tools: List[Dict[str, Any]],
+            model_name: str,
+        ) -> Dict[str, Any]:
+            raw = await child_llm_call(messages, tools, model_name)
+            payload = raw if isinstance(raw, dict) else {}
+            raw_tool_calls = payload.get("tool_calls")
+            normalized_calls: List[Dict[str, Any]] = []
+            if isinstance(raw_tool_calls, list):
+                for item in raw_tool_calls:
+                    if not isinstance(item, dict):
+                        continue
+                    tool_name = str(item.get("name") or "").strip()
+                    if tool_name in core_allowed_tools:
+                        normalized_calls.append(dict(item))
+            return {
+                "content": str(payload.get("content") or ""),
+                "tool_calls": normalized_calls,
+            }
+
+        async def _core_parent_tool_executor(
+            tool_name: str,
+            arguments: Dict[str, Any],
+        ) -> Dict[str, Any]:
+            normalized_name = str(tool_name or "").strip()
+            if normalized_name not in core_allowed_tools:
+                return {
+                    "error": f"tool_not_allowed:{normalized_name}",
+                    "status": "blocked",
+                    "allowed_tools": sorted(core_allowed_tools),
+                }
+            safe_arguments = arguments if isinstance(arguments, dict) else {}
+            return handle_parent_tool_call(
+                normalized_name,
+                safe_arguments,
+                parent_session_id=resolved_core_session_id,
+                store=_store,
+                mailbox=_mailbox,
+            )
+
+        yield {
+            "type": "core_loop_start",
+            "pipeline_id": pipeline_id,
+            "core_session_id": resolved_core_session_id,
+            "tool_subset": sorted(core_allowed_tools),
+            "child_count": len(children_snapshot),
+        }
+
+        async for core_event in run_mini_loop(
+            session_id=resolved_core_session_id,
+            store=_store,
+            mailbox=_mailbox,
+            llm_call=_core_llm_call,
+            tool_executor=_core_parent_tool_executor,
+            tool_definitions=core_tool_defs,
+            system_prompt=core.build_system_prompt(str(decomposition.get("prompt_profile") or "")),
+            initial_task=core_loop_initial_task,
+            config=core_loop_config,
+        ):
+            if not isinstance(core_event, dict):
+                continue
+            event_type = str(core_event.get("type") or "")
+            if event_type == "tool_call":
+                tool_name = str(core_event.get("name") or "").strip()
+                if tool_name:
+                    core_loop_tool_call_count += 1
+                    core_loop_tool_names.append(tool_name)
+            elif event_type == "tool_result":
+                tool_name = str(core_event.get("name") or "").strip()
+                result_payload = core_event.get("result")
+                if isinstance(result_payload, dict):
+                    child_id = str(result_payload.get("agent_id") or "").strip()
+                    status_text = str(result_payload.get("status") or "").strip().lower()
+                    if tool_name == "resume_child_agent" and child_id and status_text == "running":
+                        resumed_child_ids.add(child_id)
+                    elif tool_name == "destroy_child_agent" and child_id and status_text == "destroyed":
+                        destroyed_child_ids.add(child_id)
+            elif event_type == "loop_end":
+                state_payload = core_event.get("state")
+                if isinstance(state_payload, dict):
+                    core_loop_summary.update(state_payload)
+                core_loop_summary["stop_reason"] = str(core_event.get("reason") or "")
+            yield {
+                "type": "core_loop_event",
+                "pipeline_id": pipeline_id,
+                "core_session_id": resolved_core_session_id,
+                "event": core_event,
+            }
+
+        if _store.get(resolved_core_session_id) is not None:
+            try:
+                _store.update_status(resolved_core_session_id, AgentStatus.WAITING)
+            except Exception:
+                logger.debug("Failed to set core runtime session waiting: %s", resolved_core_session_id, exc_info=True)
+
+        if "stop_reason" not in core_loop_summary:
+            core_loop_summary["stop_reason"] = "unknown"
+        core_loop_summary["tool_call_count"] = int(core_loop_tool_call_count)
+        core_loop_summary["tool_names"] = list(core_loop_tool_names)
+        core_loop_summary["resumed_child_ids"] = sorted(resumed_child_ids)
+        core_loop_summary["destroyed_child_ids"] = sorted(destroyed_child_ids)
+        yield {
+            "type": "core_loop_end",
+            "pipeline_id": pipeline_id,
+            "core_session_id": resolved_core_session_id,
+            "summary": dict(core_loop_summary),
+        }
+
+    # Execute resumed child sessions in-band (Phase-5B), so Core lifecycle
+    # actions produce immediate, observable effects in this request.
+    if (
+        resumed_child_ids
+        and child_execution_enabled
+        and child_llm_call is not None
+        and child_tool_executor is not None
+    ):
+        refreshed_expert_ids: set[str] = set()
+        for resumed_child_id in sorted(resumed_child_ids):
+            resumed_session = _store.get(resumed_child_id)
+            if resumed_session is None:
+                resume_exec_skips.append({"agent_id": resumed_child_id, "reason": "missing_or_destroyed"})
+                yield {
+                    "type": "dev_loop_resume_skipped",
+                    "pipeline_id": pipeline_id,
+                    "agent_id": resumed_child_id,
+                    "reason": "missing_or_destroyed",
+                }
+                continue
+
+            if resumed_session.status != AgentStatus.RUNNING:
+                resume_exec_skips.append({"agent_id": resumed_child_id, "reason": "not_running"})
+                yield {
+                    "type": "dev_loop_resume_skipped",
+                    "pipeline_id": pipeline_id,
+                    "agent_id": resumed_child_id,
+                    "reason": "not_running",
+                    "status": str(resumed_session.status.value),
+                }
+                continue
+
+            if str(resumed_session.role or "").strip().lower() != "dev":
+                resume_exec_skips.append(
+                    {
+                        "agent_id": resumed_child_id,
+                        "reason": "unsupported_role",
+                        "role": str(resumed_session.role or ""),
+                    }
+                )
+                yield {
+                    "type": "dev_loop_resume_skipped",
+                    "pipeline_id": pipeline_id,
+                    "agent_id": resumed_child_id,
+                    "reason": "unsupported_role",
+                    "role": str(resumed_session.role or ""),
+                }
+                continue
+
+            expert_id = str(resumed_session.parent_id or "").strip()
+            expert_type = "expert"
+            expert_session = _store.get(expert_id) if expert_id else None
+            if expert_session is not None:
+                expert_type = str(expert_session.role or "expert").strip() or "expert"
+
+            dev_tool_subset = list(resumed_session.tool_subset or [])
+            dev_prompt_blocks = list(resumed_session.prompt_blocks or [])
+            dev_initial_task = str(resumed_session.task_description or "").strip()
+            runtime_tool_defs = _build_runtime_tool_definitions(dev_tool_subset)
+            loop_config = MiniLoopConfig(max_rounds=max(1, int(child_max_rounds)), poll_parent_every_n=3)
+            dev_agent = DevAgent(
+                config=DevAgentConfig(
+                    prompt_blocks=dev_prompt_blocks,
+                    tool_subset=dev_tool_subset,
+                    prompts_root="system/prompts",
+                ),
+                session_id=resumed_child_id,
+                store=_store,
+                mailbox=_mailbox,
+            )
+
+            async def _execute_resumed_dev_tool(
+                tool_name: str,
+                arguments: Dict[str, Any],
+                *,
+                _allowed_tools: List[str] = dev_tool_subset,
+                _dev_session_id: str = resumed_child_id,
+            ) -> Dict[str, Any]:
+                normalized_tool = str(tool_name or "").strip()
+                if _allowed_tools and normalized_tool not in _allowed_tools:
+                    return {
+                        "error": f"tool_not_allowed:{normalized_tool}",
+                        "status": "blocked",
+                        "tool_name": normalized_tool,
+                    }
+                safe_arguments = arguments if isinstance(arguments, dict) else {}
+                return await child_tool_executor(normalized_tool, safe_arguments, _dev_session_id)
+
+            yield {
+                "type": "dev_loop_resume_start",
+                "pipeline_id": pipeline_id,
+                "expert_id": expert_id,
+                "expert_type": expert_type,
+                "agent_id": resumed_child_id,
+                "tool_subset": dev_tool_subset,
+            }
+
+            async for resumed_event in run_mini_loop(
+                session_id=resumed_child_id,
+                store=_store,
+                mailbox=_mailbox,
+                llm_call=child_llm_call,
+                tool_executor=_execute_resumed_dev_tool,
+                tool_definitions=runtime_tool_defs,
+                system_prompt=dev_agent.build_system_prompt(),
+                initial_task=dev_initial_task,
+                config=loop_config,
+            ):
+                yield {
+                    "type": "dev_loop_resume_event",
+                    "pipeline_id": pipeline_id,
+                    "expert_id": expert_id,
+                    "expert_type": expert_type,
+                    "agent_id": resumed_child_id,
+                    "event": resumed_event,
+                }
+
+            final_resumed_session = _store.get(resumed_child_id)
+            final_status = str(final_resumed_session.status.value) if final_resumed_session is not None else "missing"
+            completion_report = ""
+            if final_resumed_session is not None:
+                completion_report = str(final_resumed_session.metadata.get("completion_report") or "").strip()
+
+            resume_exec_dev_count += 1
+            if expert_id:
+                refreshed_expert_ids.add(expert_id)
+            yield {
+                "type": "dev_loop_resume_end",
+                "pipeline_id": pipeline_id,
+                "expert_id": expert_id,
+                "expert_type": expert_type,
+                "agent_id": resumed_child_id,
+                "status": final_status,
+                "completion_report": completion_report,
+            }
+
+        for expert_id in sorted(refreshed_expert_ids):
+            expert_session = _store.get(expert_id)
+            if expert_session is None:
+                continue
+            expert = ExpertAgent(
+                config=ExpertAgentConfig(
+                    expert_type=str(expert_session.role or "expert").strip() or "expert",
+                    prompt_blocks=list(expert_session.prompt_blocks or []),
+                    tool_subset=list(expert_session.tool_subset or []),
+                ),
+                session_id=expert_id,
+                store=_store,
+                mailbox=_mailbox,
+                task_board_engine=task_board_engine,
+            )
+            refreshed_report = expert.aggregate_results()
+            _mailbox.send(
+                expert_id,
+                resolved_core_session_id,
+                refreshed_report,
+                message_type="report",
+            )
+            yield {
+                "type": "expert_report_refresh",
+                "pipeline_id": pipeline_id,
+                "expert_id": expert_id,
+                "core_session_id": resolved_core_session_id,
+            }
+
+        if core_loop_summary:
+            core_loop_summary["resume_exec_dev_count"] = int(resume_exec_dev_count)
+            core_loop_summary["resume_exec_skip_count"] = len(resume_exec_skips)
+            core_loop_summary["resume_exec_skips"] = list(resume_exec_skips[:20])
+
+    # ── Phase 6: Collect results ───────────────────────────────
 
     reports = core.collect_reports(resolved_core_session_id, pipeline_id=pipeline_id)
     for report in reports:
@@ -785,6 +1206,12 @@ async def run_multi_agent_pipeline(
         task_completed=task_completed,
         stop_reason=stop_reason,
     )
+    if core_loop_summary:
+        state = receipt_event.get("agent_state")
+        if isinstance(state, dict):
+            state["core_loop"] = dict(core_loop_summary)
+            state["core_loop_tool_calls"] = int(core_loop_tool_call_count)
+            state["core_loop_tools_used"] = list(core_loop_tool_names)
 
     # Emit a tool-loop compatible verify-stage signal so posture/incidents
     # collectors can consume completion semantics from the unified pipeline.

@@ -66,7 +66,8 @@ def mailbox():
 
 def _collect_events(gen) -> List[Dict[str, Any]]:
     """Run async generator and collect all yielded events."""
-    return asyncio.get_event_loop().run_until_complete(_async_collect(gen))
+    # Use an isolated loop per invocation to avoid cross-test loop state pollution.
+    return asyncio.run(_async_collect(gen))
 
 
 async def _async_collect(gen) -> List[Dict[str, Any]]:

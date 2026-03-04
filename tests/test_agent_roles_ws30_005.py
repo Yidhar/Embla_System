@@ -733,3 +733,190 @@ class TestPipeline:
         assert cleanup["ttl_seconds"] == 0
         assert cleanup["destroyed_count"] >= 2
         assert len(store.list_children(core_session_id)) == 0
+
+    def test_pipeline_core_loop_exposes_parent_lifecycle_tools(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        core_tool_round = {"value": 0}
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, model
+            tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+            if "poll_child_status" in tool_names:
+                idx = int(core_tool_round["value"])
+                core_tool_round["value"] = idx + 1
+                if idx == 0:
+                    return {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "core_poll_1",
+                                "name": "poll_child_status",
+                                "arguments": {"agent_id": "missing-child"},
+                            }
+                        ],
+                    }
+                if idx == 1:
+                    return {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "core_resume_1",
+                                "name": "resume_child_agent",
+                                "arguments": {"agent_id": "missing-child", "instruction": "retry"},
+                            }
+                        ],
+                    }
+                if idx == 2:
+                    return {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "core_destroy_1",
+                                "name": "destroy_child_agent",
+                                "arguments": {"agent_id": "missing-child", "reason": "cleanup"},
+                            }
+                        ],
+                    }
+                return {"content": "", "tool_calls": []}
+
+            # Dev loops complete in one round.
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "dev_done_1",
+                        "name": "report_to_parent",
+                        "arguments": {"type": "completed", "content": "child work complete"},
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(
+            self._collect_events(
+                run_multi_agent_pipeline(
+                    message="Implement auth endpoint and tests",
+                    session_id="core-loop-parent-tools",
+                    core_session_id="core-loop-parent-tools__core",
+                    risk_level="write_repo",
+                    enable_child_execution=True,
+                    child_llm_call=_mock_child_llm,
+                    child_tool_executor=_mock_tool_executor,
+                    store=store,
+                    mailbox=mailbox,
+                    task_board_engine=task_board_engine,
+                )
+            )
+        )
+
+        event_types = [str(item.get("type") or "") for item in events if isinstance(item, dict)]
+        assert "core_loop_start" in event_types
+        assert "core_loop_end" in event_types
+
+        core_loop_events = [item for item in events if item.get("type") == "core_loop_event"]
+        invoked_tools = [
+            str(item.get("event", {}).get("name") or "")
+            for item in core_loop_events
+            if isinstance(item.get("event"), dict) and str(item["event"].get("type") or "") == "tool_call"
+        ]
+        assert "poll_child_status" in invoked_tools
+        assert "resume_child_agent" in invoked_tools
+        assert "destroy_child_agent" in invoked_tools
+
+        receipt = next(item for item in events if item.get("type") == "execution_receipt")
+        agent_state = receipt.get("agent_state", {})
+        assert int(agent_state.get("core_loop_tool_calls") or 0) >= 3
+        used_tools = set(agent_state.get("core_loop_tools_used") or [])
+        assert {"poll_child_status", "resume_child_agent", "destroy_child_agent"}.issubset(used_tools)
+
+    def test_pipeline_core_loop_resume_runs_child_loop_in_band(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        resumed_once = {"value": False}
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, model
+            tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+            if "resume_child_agent" in tool_names:
+                if resumed_once["value"]:
+                    return {"content": "", "tool_calls": []}
+                waiting_dev_id = ""
+                for expert in store.list_children("core-loop-resume__core"):
+                    for child in store.list_children(expert.session_id):
+                        if child.role == "dev" and child.status == AgentStatus.WAITING:
+                            waiting_dev_id = child.session_id
+                            break
+                    if waiting_dev_id:
+                        break
+                if waiting_dev_id:
+                    resumed_once["value"] = True
+                    return {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "core_resume_real_1",
+                                "name": "resume_child_agent",
+                                "arguments": {"agent_id": waiting_dev_id, "instruction": "rerun verification"},
+                            }
+                        ],
+                    }
+                return {"content": "", "tool_calls": []}
+
+            # Dev loop: finish quickly via child completion report.
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "dev_report_done_1",
+                        "name": "report_to_parent",
+                        "arguments": {"type": "completed", "content": "dev resumed and finished"},
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(
+            self._collect_events(
+                run_multi_agent_pipeline(
+                    message="Implement auth endpoint and tests",
+                    session_id="core-loop-resume__core",
+                    core_session_id="core-loop-resume__core",
+                    risk_level="write_repo",
+                    enable_child_execution=True,
+                    child_llm_call=_mock_child_llm,
+                    child_tool_executor=_mock_tool_executor,
+                    store=store,
+                    mailbox=mailbox,
+                    task_board_engine=task_board_engine,
+                )
+            )
+        )
+
+        event_types = [str(item.get("type") or "") for item in events if isinstance(item, dict)]
+        assert "core_loop_start" in event_types
+        assert "dev_loop_resume_start" in event_types
+        assert "dev_loop_resume_end" in event_types
+        assert "expert_report_refresh" in event_types
+
+        resume_events = [item for item in events if item.get("type") == "dev_loop_resume_end"]
+        assert any(str(item.get("status") or "") == "waiting" for item in resume_events)
+
+        receipt = next(item for item in events if item.get("type") == "execution_receipt")
+        agent_state = receipt.get("agent_state", {})
+        core_loop_state = agent_state.get("core_loop", {}) if isinstance(agent_state.get("core_loop"), dict) else {}
+        assert int(core_loop_state.get("resume_exec_dev_count") or 0) >= 1

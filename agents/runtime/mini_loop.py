@@ -36,6 +36,7 @@ class MiniLoopConfig:
     max_rounds: int = 500         # soft hint, not enforced
     poll_parent_every_n: int = 5  # check parent messages every N rounds
     model_name: str = ""          # override model; empty = use default
+    include_child_tools: bool = True  # disable for parent/core loops
 
 
 @dataclass
@@ -124,9 +125,12 @@ async def run_mini_loop(
     if session.messages:
         messages = list(session.messages)
 
-    # Merge child built-in tools with configured tool subset
-    from agents.runtime.child_tools import get_child_tool_definitions
-    all_tool_defs = list(tool_definitions) + get_child_tool_definitions()
+    # Merge child built-in tools with configured tool subset.
+    all_tool_defs = list(tool_definitions)
+    if bool(cfg.include_child_tools):
+        from agents.runtime.child_tools import get_child_tool_definitions
+
+        all_tool_defs.extend(get_child_tool_definitions())
 
     for round_num in range(1, cfg.max_rounds + 1):
         state.round_num = round_num
@@ -218,7 +222,7 @@ async def run_mini_loop(
 
             # Route to correct handler
             try:
-                if tool_name in _CHILD_TOOL_NAMES:
+                if bool(cfg.include_child_tools) and tool_name in _CHILD_TOOL_NAMES:
                     result = handle_child_tool_call(
                         tool_name,
                         tool_args,
