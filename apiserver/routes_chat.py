@@ -803,6 +803,10 @@ def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[s
     decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
     path = str(route_meta.get("path") or "path-c")
     delegation_intent = str(decision.get("delegation_intent") or "").strip()
+    selected_layers = route_meta.get("_slice_selected_layers") or []
+    selected_layer_counts = route_meta.get("_slice_selected_layer_counts") or {}
+    dropped_slice_count = int(route_meta.get("_slice_dropped_count") or 0)
+    dropped_conflict_count = int(route_meta.get("_slice_dropped_conflict_count") or dropped_slice_count)
     return {
         "task_type": str(decision.get("task_type") or ""),
         "severity": str(route_meta.get("risk_level") or ""),
@@ -823,20 +827,20 @@ def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[s
         "selected_slices": route_meta.get("_slice_selected") or [],
         "dropped_slices": route_meta.get("_slice_dropped") or [],
         "selected_slice_count": int(route_meta.get("_slice_selected_count") or 0),
-        "dropped_slice_count": int(route_meta.get("_slice_dropped_count") or 0),
-        "dropped_conflict_count": 0,
-        "selected_layers": route_meta.get("_slice_selected_layers") or [],
-        "selected_layer_counts": {},
-        "recovery_hit": False,
+        "dropped_slice_count": dropped_slice_count,
+        "dropped_conflict_count": dropped_conflict_count,
+        "selected_layers": selected_layers,
+        "selected_layer_counts": selected_layer_counts,
+        "recovery_hit": bool(route_meta.get("_slice_recovery_hit")),
         "prefix_hash": str(route_meta.get("_slice_prefix_hash") or ""),
         "tail_hash": str(route_meta.get("_slice_tail_hash") or ""),
-        "prefix_cache_hit": False,
-        "block1_cache_hit": False,
-        "block2_cache_hit": False,
-        "token_budget_before": 0,
-        "token_budget_after": 0,
-        "model_tier": str(decision.get("selected_model_tier") or ""),
-        "model_id": "",
+        "prefix_cache_hit": bool(route_meta.get("_slice_prefix_cache_hit")),
+        "block1_cache_hit": bool(route_meta.get("_slice_block1_cache_hit")),
+        "block2_cache_hit": bool(route_meta.get("_slice_block2_cache_hit")),
+        "token_budget_before": int(route_meta.get("_slice_token_budget_before") or 0),
+        "token_budget_after": int(route_meta.get("_slice_token_budget_after") or 0),
+        "model_tier": str(route_meta.get("_slice_model_tier") or decision.get("selected_model_tier") or ""),
+        "model_id": str(route_meta.get("_slice_model_id") or ""),
         "path_b_clarify_turns": int(route_meta.get("path_b_clarify_turns") or 0),
         "path_b_clarify_limit": int(route_meta.get("path_b_clarify_limit") or _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT),
         "path_b_clarify_limit_override": route_meta.get("path_b_clarify_limit_override"),

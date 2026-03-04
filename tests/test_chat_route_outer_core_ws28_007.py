@@ -89,6 +89,51 @@ def test_chat_route_prompt_event_payload_keeps_outer_core_observability_fields()
     assert core_payload["core_escalation"] is True
 
 
+def test_chat_route_prompt_event_payload_prefers_gateway_compose_metrics() -> None:
+    payload = api_server._build_chat_route_prompt_event_payload(
+        {
+            "path": "path-a",
+            "risk_level": "read_only",
+            "_slice_selected": ["outer_shell_base", "outer_memory_recall", "outer_route_contract"],
+            "_slice_dropped": ["outer_write_tool_contract"],
+            "_slice_selected_count": 3,
+            "_slice_dropped_count": 1,
+            "_slice_dropped_conflict_count": 1,
+            "_slice_selected_layers": ["L0_DNA", "L1_5_EPISODIC_MEMORY", "L2_ROLE"],
+            "_slice_selected_layer_counts": {"L0_DNA": 1, "L1_5_EPISODIC_MEMORY": 1, "L2_ROLE": 1},
+            "_slice_recovery_hit": True,
+            "_slice_prefix_hash": "abc123",
+            "_slice_tail_hash": "tail456",
+            "_slice_prefix_cache_hit": True,
+            "_slice_block1_cache_hit": True,
+            "_slice_block2_cache_hit": True,
+            "_slice_token_budget_before": 2800,
+            "_slice_token_budget_after": 1920,
+            "_slice_model_tier": "secondary",
+            "_slice_model_id": "gpt-4.1-mini",
+            "router_decision": {
+                "delegation_intent": "read_only_exploration",
+                "prompt_profile": "outer_readonly_general",
+                "injection_mode": "minimal",
+                "selected_model_tier": "primary",
+            },
+        }
+    )
+
+    assert payload["selected_slice_count"] == 3
+    assert payload["dropped_slice_count"] == 1
+    assert payload["dropped_conflict_count"] == 1
+    assert payload["selected_layer_counts"] == {"L0_DNA": 1, "L1_5_EPISODIC_MEMORY": 1, "L2_ROLE": 1}
+    assert payload["recovery_hit"] is True
+    assert payload["prefix_cache_hit"] is True
+    assert payload["block1_cache_hit"] is True
+    assert payload["block2_cache_hit"] is True
+    assert payload["token_budget_before"] == 2800
+    assert payload["token_budget_after"] == 1920
+    assert payload["model_tier"] == "secondary"
+    assert payload["model_id"] == "gpt-4.1-mini"
+
+
 def test_build_path_model_override_resolves_outer_and_core_targets(monkeypatch) -> None:
     fake_cfg = SimpleNamespace(
         api=SimpleNamespace(
@@ -479,3 +524,58 @@ def test_extract_agentic_execution_receipt_text_falls_back_to_summary_and_delive
 def test_extract_agentic_execution_receipt_text_ignores_non_receipt_payload() -> None:
     payload = {"type": "content", "text": "hello"}
     assert api_server._extract_agentic_execution_receipt_text(payload) == ""
+
+
+def test_build_shell_system_prompt_with_gateway_updates_slice_metadata() -> None:
+    route_meta = {
+        "path": "path-a",
+        "risk_level": "read_only",
+        "router_decision": {
+            "task_type": "research",
+            "prompt_profile": "outer_readonly_research",
+            "injection_mode": "minimal",
+            "delegation_intent": "read_only_exploration",
+            "trace_id": "trace-shell-gw",
+        },
+    }
+    prompt = api_server._build_shell_system_prompt_with_gateway(
+        route_meta=route_meta,
+        base_system_prompt="SHELL_BASE_PROMPT",
+        memory_lines=["- 记忆A", "- 记忆B"],
+    )
+
+    assert "SHELL_BASE_PROMPT" in prompt
+    assert "PromptRouteDecision" in prompt
+    assert "Route policy: Outer Direct Read-Only" in prompt
+    assert "## 相关记忆" in prompt
+    assert route_meta.get("_slice_selected_count", 0) >= 2
+    assert "outer_shell_base" in route_meta.get("_slice_selected", [])
+    assert str(route_meta.get("_slice_prefix_hash") or "").strip()
+
+
+def test_build_shell_system_prompt_with_gateway_falls_back_when_gateway_missing(monkeypatch) -> None:
+    route_meta = {
+        "path": "path-b",
+        "risk_level": "unknown",
+        "router_decision": {
+            "task_type": "general",
+            "prompt_profile": "outer_general",
+            "injection_mode": "standard",
+            "delegation_intent": "general_assistance",
+        },
+    }
+    original_gateway = api_server._CHAT_LLM_GATEWAY
+    monkeypatch.setattr(api_server, "_CHAT_LLM_GATEWAY", None)
+    try:
+        prompt = api_server._build_shell_system_prompt_with_gateway(
+            route_meta=route_meta,
+            base_system_prompt="FALLBACK_BASE",
+            memory_lines=["- memory line"],
+        )
+    finally:
+        monkeypatch.setattr(api_server, "_CHAT_LLM_GATEWAY", original_gateway)
+
+    assert "FALLBACK_BASE" in prompt
+    assert "PromptRouteDecision" in prompt
+    assert "Route policy: Outer Clarify" in prompt
+    assert "## 相关记忆" in prompt
