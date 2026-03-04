@@ -951,18 +951,18 @@ def _resolve_prompts_dir(prompts_dir: Optional[Path] = None) -> Path:
 _DEFAULT_PROMPT_REGISTRY_SPEC: Dict[str, Any] = {
     "schema_version": "ws28-prompt-registry-v1",
     "entries": [
-        {"prompt_name": "conversation_style_prompt", "path": "conversation_style_prompt.md", "aliases": ["outer_chat_style"]},
-        {"prompt_name": "conversation_analyzer_prompt", "path": "conversation_analyzer_prompt.md", "aliases": []},
-        {"prompt_name": "tool_dispatch_prompt", "path": "tool_dispatch_prompt.md", "aliases": []},
-        {"prompt_name": "agentic_tool_prompt", "path": "agentic_tool_prompt.md", "aliases": []},
+        {"prompt_name": "conversation_style_prompt", "path": "core/dna/conversation_style_prompt.md", "aliases": ["outer_chat_style"]},
+        {"prompt_name": "conversation_analyzer_prompt", "path": "core/routing/conversation_analyzer_prompt.md", "aliases": []},
+        {"prompt_name": "tool_dispatch_prompt", "path": "core/routing/tool_dispatch_prompt.md", "aliases": []},
+        {"prompt_name": "agentic_tool_prompt", "path": "core/dna/agentic_tool_prompt.md", "aliases": []},
         {"prompt_name": "immutable_dna_manifest", "path": "immutable_dna_manifest.spec", "aliases": ["immutable_dna_manifest_spec"]},
-        {"prompt_name": "prompt_acl", "path": "prompt_acl.spec", "aliases": []},
+        {"prompt_name": "prompt_acl", "path": "specs/prompt_acl.spec", "aliases": []},
         {"prompt_name": "core_exec_base", "path": "agents/core_exec/core_exec_base.md", "aliases": ["core_exec_general"]},
         {"prompt_name": "core_exec_ops", "path": "agents/core_exec/core_exec_ops.md", "aliases": []},
         {"prompt_name": "core_exec_dev", "path": "agents/core_exec/core_exec_dev.md", "aliases": []},
-        {"prompt_name": "outer_readonly_research", "path": "agents/core_exec/outer_readonly_research.md", "aliases": []},
-        {"prompt_name": "outer_readonly_general", "path": "agents/core_exec/outer_readonly_general.md", "aliases": []},
-        {"prompt_name": "explicit_role_delegate", "path": "agents/core_exec/explicit_role_delegate.md", "aliases": []},
+        {"prompt_name": "outer_readonly_research", "path": "agents/outer/outer_readonly_research.md", "aliases": []},
+        {"prompt_name": "outer_readonly_general", "path": "agents/outer/outer_readonly_general.md", "aliases": []},
+        {"prompt_name": "explicit_role_delegate", "path": "agents/outer/explicit_role_delegate.md", "aliases": []},
     ],
 }
 
@@ -1104,7 +1104,7 @@ _DEFAULT_PROMPT_ACL_SPEC: Dict[str, Any] = {
             "allow_ai_direct_write": False,
         },
         {
-            "path_pattern": "conversation_style_prompt.md",
+            "path_pattern": "core/dna/conversation_style_prompt.md",
             "level": "S1_CONTROLLED",
             "require_ticket": True,
             "require_manifest_refresh": True,
@@ -1112,7 +1112,7 @@ _DEFAULT_PROMPT_ACL_SPEC: Dict[str, Any] = {
             "allow_ai_direct_write": False,
         },
         {
-            "path_pattern": "conversation_analyzer_prompt.md",
+            "path_pattern": "core/routing/conversation_analyzer_prompt.md",
             "level": "S2_FLEXIBLE",
             "require_ticket": False,
             "require_manifest_refresh": False,
@@ -1120,7 +1120,7 @@ _DEFAULT_PROMPT_ACL_SPEC: Dict[str, Any] = {
             "allow_ai_direct_write": True,
         },
         {
-            "path_pattern": "tool_dispatch_prompt.md",
+            "path_pattern": "core/routing/tool_dispatch_prompt.md",
             "level": "S2_FLEXIBLE",
             "require_ticket": False,
             "require_manifest_refresh": False,
@@ -1128,7 +1128,7 @@ _DEFAULT_PROMPT_ACL_SPEC: Dict[str, Any] = {
             "allow_ai_direct_write": True,
         },
         {
-            "path_pattern": "agentic_tool_prompt.md",
+            "path_pattern": "core/dna/agentic_tool_prompt.md",
             "level": "S1_CONTROLLED",
             "require_ticket": True,
             "require_manifest_refresh": True,
@@ -1170,16 +1170,23 @@ def _normalize_prompt_acl_rule(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 def load_prompt_acl_spec(*, prompts_dir: Optional[Path] = None) -> Dict[str, Any]:
     resolved_prompts_dir = _resolve_prompts_dir(prompts_dir)
-    spec_path = resolved_prompts_dir / "prompt_acl.spec"
-    if not spec_path.exists():
-        return dict(_DEFAULT_PROMPT_ACL_SPEC)
+    candidate_paths = [
+        resolved_prompts_dir / "specs" / "prompt_acl.spec",
+        resolved_prompts_dir / "prompt_acl.spec",  # legacy fallback
+    ]
+    payload: Dict[str, Any] = {}
+    for spec_path in candidate_paths:
+        if not spec_path.exists():
+            continue
+        try:
+            loaded = json5.loads(spec_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                payload = loaded
+                break
+        except Exception as e:
+            logging.getLogger(__name__).warning("load prompt_acl.spec failed: %s", e)
 
-    try:
-        payload = json5.loads(spec_path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            return dict(_DEFAULT_PROMPT_ACL_SPEC)
-    except Exception as e:
-        logging.getLogger(__name__).warning("load prompt_acl.spec failed: %s", e)
+    if not payload:
         return dict(_DEFAULT_PROMPT_ACL_SPEC)
 
     rules = []

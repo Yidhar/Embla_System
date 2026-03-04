@@ -33,9 +33,10 @@ def _prepare_runtime_prompts(repo_root: Path, runtime_root: Path) -> Path:
     src = repo_root / "system" / "prompts"
     dst = runtime_root / "prompts"
     dst.mkdir(parents=True, exist_ok=True)
-    for name in _resolve_required_prompt_files():
+    for name in _resolve_required_prompt_files(prompts_root=src):
         source = src / name
         target = dst / name
+        target.parent.mkdir(parents=True, exist_ok=True)
         if source.exists():
             target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
         else:

@@ -81,17 +81,25 @@ def load_all_sessions() -> list:
 
 def load_base_system_prompt() -> str:
     """加载基础系统提示词"""
-    prompt_file = PROMPTS_DIR / "conversation_style_prompt.md"
-    if prompt_file.exists():
-        return prompt_file.read_text(encoding='utf-8')
+    candidates = [
+        PROMPTS_DIR / "core" / "dna" / "conversation_style_prompt.md",
+        PROMPTS_DIR / "conversation_style_prompt.md",  # legacy fallback
+    ]
+    for prompt_file in candidates:
+        if prompt_file.exists():
+            return prompt_file.read_text(encoding='utf-8')
     return "(系统提示词文件不存在)"
 
 
 def load_tool_prompt() -> str:
     """加载工具调用提示词"""
-    prompt_file = PROMPTS_DIR / "agentic_tool_prompt.md"
-    if prompt_file.exists():
-        return prompt_file.read_text(encoding='utf-8')
+    candidates = [
+        PROMPTS_DIR / "core" / "dna" / "agentic_tool_prompt.md",
+        PROMPTS_DIR / "agentic_tool_prompt.md",  # legacy fallback
+    ]
+    for prompt_file in candidates:
+        if prompt_file.exists():
+            return prompt_file.read_text(encoding='utf-8')
     return ""
 
 

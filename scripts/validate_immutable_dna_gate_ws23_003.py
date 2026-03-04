@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-from system.config import get_immutable_dna_locked_prompts
+from system.config import get_immutable_dna_locked_prompts, resolve_prompt_registry_entry
 from system.immutable_dna import DNAFileSpec, ImmutableDNALoader
 
 
@@ -19,7 +19,8 @@ REQUIRED_PROMPT_FILES_DEFAULT: tuple[str, ...] = (
 )
 
 
-def _resolve_required_prompt_files() -> List[str]:
+def _resolve_required_prompt_files(*, prompts_root: Path | None = None) -> List[str]:
+    resolved_prompts_root = prompts_root.resolve() if prompts_root is not None else (Path("system/prompts").resolve())
     try:
         configured = get_immutable_dna_locked_prompts()
     except Exception:
@@ -27,8 +28,25 @@ def _resolve_required_prompt_files() -> List[str]:
     rows: List[str] = []
     for item in configured:
         text = str(item or "").strip()
-        if text and text not in rows:
-            rows.append(text)
+        if not text:
+            continue
+        resolved_path = text
+        try:
+            resolved = resolve_prompt_registry_entry(
+                prompt_name=text,
+                prompts_dir=resolved_prompts_root,
+            )
+            candidate = str(resolved.get("relative_path") or text).strip() or text
+            candidate_path = (resolved_prompts_root / candidate).resolve()
+            legacy_path = (resolved_prompts_root / text).resolve()
+            if candidate_path.exists() or not legacy_path.exists():
+                resolved_path = candidate
+            else:
+                resolved_path = text
+        except Exception:
+            resolved_path = text
+        if resolved_path and resolved_path not in rows:
+            rows.append(resolved_path)
     if rows:
         return rows
     return list(REQUIRED_PROMPT_FILES_DEFAULT)
@@ -64,8 +82,8 @@ def run_immutable_dna_gate(
     output_file: Path | None = None,
     bootstrap_if_missing: bool = False,
 ) -> Dict[str, Any]:
-    required_prompt_files = _resolve_required_prompt_files()
     root = prompts_root.resolve()
+    required_prompt_files = _resolve_required_prompt_files(prompts_root=root)
     manifest = manifest_path.resolve() if manifest_path is not None else (root / "immutable_dna_manifest.spec")
     audit = audit_file.resolve() if audit_file is not None else (Path("scratch/reports/immutable_dna_audit_ws23_003.jsonl").resolve())
     if manifest.suffix.lower() != ".spec":

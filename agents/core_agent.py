@@ -38,9 +38,9 @@ PROMPT_PROFILE_MAP = {
     "core_exec_ops": "agents/core_exec/core_exec_ops.md",
     "core_exec_dev": "agents/core_exec/core_exec_dev.md",
     "core_exec_general": "agents/core_exec/core_exec_base.md",
-    "outer_readonly_research": "agents/core_exec/outer_readonly_research.md",
-    "outer_readonly_general": "agents/core_exec/outer_readonly_general.md",
-    "explicit_role_delegate": "agents/core_exec/explicit_role_delegate.md",
+    "outer_readonly_research": "agents/outer/outer_readonly_research.md",
+    "outer_readonly_general": "agents/outer/outer_readonly_general.md",
+    "explicit_role_delegate": "agents/outer/explicit_role_delegate.md",
     "outer_general": "agents/core_exec/core_exec_base.md",
 }
 

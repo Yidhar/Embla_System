@@ -17,8 +17,10 @@ import system.config as config_module
 def _install_temp_prompt_manager(tmp_path: Path, monkeypatch) -> Path:
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
-    (prompts_dir / "conversation_style_prompt.md").write_text("STYLE_V1", encoding="utf-8")
-    (prompts_dir / "tool_dispatch_prompt.md").write_text("DISPATCH_V1", encoding="utf-8")
+    (prompts_dir / "core" / "dna").mkdir(parents=True, exist_ok=True)
+    (prompts_dir / "core" / "routing").mkdir(parents=True, exist_ok=True)
+    (prompts_dir / "core" / "dna" / "conversation_style_prompt.md").write_text("STYLE_V1", encoding="utf-8")
+    (prompts_dir / "core" / "routing" / "tool_dispatch_prompt.md").write_text("DISPATCH_V1", encoding="utf-8")
     manager = config_module.PromptManager(prompts_dir=str(prompts_dir))
     monkeypatch.setattr(config_module, "_prompt_manager", manager)
     return prompts_dir
@@ -44,6 +46,41 @@ def test_v1_system_prompts_list_and_get(monkeypatch, tmp_path: Path) -> None:
     assert isinstance(detail.get("meta"), dict)
 
 
+def test_v1_system_prompts_list_prefers_registry_nested_paths(monkeypatch, tmp_path: Path) -> None:
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    nested = prompts_dir / "layers" / "core"
+    nested.mkdir(parents=True, exist_ok=True)
+    (nested / "conversation_style_prompt.md").write_text("STYLE_NESTED_V1", encoding="utf-8")
+    (prompts_dir / "tool_dispatch_prompt.md").write_text("DISPATCH_V1", encoding="utf-8")
+    spec_dir = prompts_dir / "specs"
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    (spec_dir / "prompt_registry.spec").write_text(
+        """
+        {
+          "schema_version": "ws28-prompt-registry-v1",
+          "entries": [
+            {"prompt_name": "conversation_style_prompt", "path": "layers/core/conversation_style_prompt.md", "aliases": []},
+            {"prompt_name": "tool_dispatch_prompt", "path": "tool_dispatch_prompt.md", "aliases": []}
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+    manager = config_module.PromptManager(prompts_dir=str(prompts_dir))
+    monkeypatch.setattr(config_module, "_prompt_manager", manager)
+
+    payload = _run(list_system_prompts_v1())
+    prompts = payload.get("prompts", [])
+    style_rows = [item for item in prompts if str(item.get("name") or "") == "conversation_style_prompt"]
+    assert style_rows
+    assert style_rows[0].get("relative_path") == "layers/core/conversation_style_prompt.md"
+    assert style_rows[0].get("source") == "registry"
+
+    detail = _run(get_system_prompt_template_v1("conversation_style_prompt"))
+    assert detail.get("content") == "STYLE_NESTED_V1"
+
+
 def test_v1_system_prompts_update(monkeypatch, tmp_path: Path) -> None:
     prompts_dir = _install_temp_prompt_manager(tmp_path, monkeypatch)
 
@@ -65,7 +102,7 @@ def test_v1_system_prompts_update(monkeypatch, tmp_path: Path) -> None:
     detail = _run(get_system_prompt_template_v1("conversation_style_prompt.md"))
     assert detail.get("content") == "STYLE_V2"
 
-    file_content = (prompts_dir / "conversation_style_prompt.md").read_text(encoding="utf-8")
+    file_content = (prompts_dir / "core" / "dna" / "conversation_style_prompt.md").read_text(encoding="utf-8")
     assert file_content == "STYLE_V2"
 
 

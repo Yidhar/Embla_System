@@ -23,7 +23,7 @@ from litellm import acompletion
 # Add project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from system.config import get_config, get_immutable_dna_locked_prompts
+from system.config import get_config, get_immutable_dna_locked_prompts, resolve_prompt_registry_entry
 from core.security import DNAFileSpec, ImmutableDNALoader
 from . import naga_auth
 
@@ -146,6 +146,12 @@ class LLMService:
         return report
 
     def _resolve_immutable_dna_required_files(self) -> List[str]:
+        repo_root = Path(__file__).resolve().parent.parent
+        prompts_root_raw = os.environ.get(
+            self.DNA_PROMPTS_ROOT_ENV,
+            str(repo_root / "system" / "prompts"),
+        )
+        prompts_dir = Path(str(prompts_root_raw)).expanduser().resolve()
         try:
             configured = get_immutable_dna_locked_prompts()
         except Exception:
@@ -154,8 +160,25 @@ class LLMService:
         rows: List[str] = []
         for item in configured:
             text = str(item or "").strip()
-            if text and text not in rows:
-                rows.append(text)
+            if not text:
+                continue
+            resolved_path = text
+            try:
+                resolved = resolve_prompt_registry_entry(
+                    prompt_name=text,
+                    prompts_dir=prompts_dir,
+                )
+                candidate = str(resolved.get("relative_path") or text).strip() or text
+                candidate_path = (prompts_dir / candidate).resolve()
+                legacy_path = (prompts_dir / text).resolve()
+                if candidate_path.exists() or not legacy_path.exists():
+                    resolved_path = candidate
+                else:
+                    resolved_path = text
+            except Exception:
+                resolved_path = text
+            if resolved_path and resolved_path not in rows:
+                rows.append(resolved_path)
         if rows:
             return rows
         return list(self.DNA_REQUIRED_FILES_DEFAULT)

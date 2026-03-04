@@ -87,6 +87,21 @@ def test_prompt_acl_evaluation_uses_registry_canonical_mapping(monkeypatch, tmp_
     assert decision["matched_rule"]["path_pattern"] == "conversation_style_prompt.md"
 
 
+def test_prompt_acl_loader_prefers_specs_path(monkeypatch, tmp_path: Path) -> None:
+    prompts_dir, _manager = _install_temp_prompt_manager_with_registry(tmp_path, monkeypatch)
+    (prompts_dir / "prompt_acl.spec").write_text(
+        json.dumps({"enforcement_mode": "shadow", "rules": []}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (prompts_dir / "specs" / "prompt_acl.spec").write_text(
+        json.dumps({"enforcement_mode": "block", "rules": []}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    acl_spec = config_module.load_prompt_acl_spec(prompts_dir=prompts_dir)
+    assert acl_spec["enforcement_mode"] == "block"
+
+
 def test_prompt_registry_missing_entry_defaults_to_markdown(monkeypatch, tmp_path: Path) -> None:
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)

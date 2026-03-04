@@ -3,22 +3,22 @@
   "entries": [
     {
       "prompt_name": "conversation_style_prompt",
-      "path": "conversation_style_prompt.md",
+      "path": "core/dna/conversation_style_prompt.md",
       "aliases": ["outer_chat_style"]
     },
     {
       "prompt_name": "conversation_analyzer_prompt",
-      "path": "conversation_analyzer_prompt.md",
+      "path": "core/routing/conversation_analyzer_prompt.md",
       "aliases": []
     },
     {
       "prompt_name": "tool_dispatch_prompt",
-      "path": "tool_dispatch_prompt.md",
+      "path": "core/routing/tool_dispatch_prompt.md",
       "aliases": []
     },
     {
       "prompt_name": "agentic_tool_prompt",
-      "path": "agentic_tool_prompt.md",
+      "path": "core/dna/agentic_tool_prompt.md",
       "aliases": []
     },
     {
@@ -28,7 +28,7 @@
     },
     {
       "prompt_name": "prompt_acl",
-      "path": "prompt_acl.spec",
+      "path": "specs/prompt_acl.spec",
       "aliases": []
     },
     {
@@ -48,17 +48,17 @@
     },
     {
       "prompt_name": "outer_readonly_research",
-      "path": "agents/core_exec/outer_readonly_research.md",
+      "path": "agents/outer/outer_readonly_research.md",
       "aliases": []
     },
     {
       "prompt_name": "outer_readonly_general",
-      "path": "agents/core_exec/outer_readonly_general.md",
+      "path": "agents/outer/outer_readonly_general.md",
       "aliases": []
     },
     {
       "prompt_name": "explicit_role_delegate",
-      "path": "agents/core_exec/explicit_role_delegate.md",
+      "path": "agents/outer/explicit_role_delegate.md",
       "aliases": []
     }
   ]

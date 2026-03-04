@@ -62,8 +62,8 @@ def run_update_immutable_dna_manifest(
     strict_mode: bool = False,
     verify_after_update: bool = True,
 ) -> Dict[str, Any]:
-    required_prompt_files = _resolve_required_prompt_files()
     root = prompts_root.resolve()
+    required_prompt_files = _resolve_required_prompt_files(prompts_root=root)
     manifest = manifest_path.resolve() if manifest_path is not None else (root / "immutable_dna_manifest.spec")
     audit = (
         audit_file.resolve()
