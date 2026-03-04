@@ -50,7 +50,7 @@
 - `python -m pytest -q tests/test_manage_ws27_subagent_cutover_ws27_002.py -p no:tmpdir`
 
 2. 联合 WS27 最小回归
-- `python -m pytest -q tests/test_ws27_longrun_endurance_ws27_001.py tests/test_run_ws27_longrun_endurance_ws27_001.py tests/test_manage_ws27_subagent_cutover_ws27_002.py -p no:tmpdir`
+- `python -m pytest -q tests/test_run_ws27_longrun_endurance_ws27_001.py tests/test_run_ws27_longrun_endurance_ws27_001.py tests/test_manage_ws27_subagent_cutover_ws27_002.py -p no:tmpdir`
 
 ## 结果摘要
 

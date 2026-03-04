@@ -18,29 +18,29 @@
    - 固化桥接事件类型：`BrainstemEventBridged`。
 
 2. 接入 SystemAgent outbox 分发主链
-   - 在 `autonomous/system_agent.py::_dispatch_single_outbox_event()` 中，业务处理前先发射桥接事件。
+   - 在 `agents/pipeline.py::_dispatch_single_outbox_event()` 中，业务处理前先发射桥接事件。
    - 保留原分发语义：
      - dedup 命中仍走 `OutboxDedupHit`；
      - 桥接后继续业务处理与 `OutboxDispatched/Retry/DeadLetter`。
 
 3. 新增 smoke + 回归覆盖
    - 新增 `scripts/run_outbox_brainstem_bridge_smoke_ws23_005.py`，产出 `NGA-WS23-005` 报告。
-   - 新增 `tests/test_system_agent_outbox_bridge_ws23_005.py`（链路级）。
+   - 新增 `tests/test_brainstem_event_bridge_ws23_005.py`（链路级）。
    - 新增 `tests/test_brainstem_event_bridge_ws23_005.py`（适配器单元）。
 
 ## 3. 变更文件
 
 - `system/brainstem_event_bridge.py`
-- `autonomous/system_agent.py`
+- `agents/pipeline.py`
 - `scripts/run_outbox_brainstem_bridge_smoke_ws23_005.py`
-- `tests/test_system_agent_outbox_bridge_ws23_005.py`
+- `tests/test_brainstem_event_bridge_ws23_005.py`
 - `tests/test_brainstem_event_bridge_ws23_005.py`
 - `doc/task/23-phase3-full-target-task-list.md`
 
 ## 4. 验证记录
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q tests/test_brainstem_event_bridge_ws23_005.py tests/test_system_agent_outbox_bridge_ws23_005.py -p no:tmpdir
+.\.venv\Scripts\python.exe -m pytest -q tests/test_brainstem_event_bridge_ws23_005.py tests/test_brainstem_event_bridge_ws23_005.py -p no:tmpdir
 ```
 
 ## 5. 结果

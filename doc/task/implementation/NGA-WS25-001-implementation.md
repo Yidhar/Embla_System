@@ -18,7 +18,7 @@
 ## 2. 实施内容
 
 1. 新增 Topic Event Bus 核心
-   - 文件：`autonomous/event_log/topic_event_bus.py`
+   - 文件：`core/event_bus/topic_bus.py`
    - 提供能力：
      - `publish(topic, payload, ...)`
      - `subscribe(pattern, handler, ...)`
@@ -34,7 +34,7 @@
    - 同时镜像写入 JSONL（兼容既有读取路径）。
 
 3. EventStore 接入 TopicBus
-   - 文件：`autonomous/event_log/event_store.py`
+   - 文件：`core/event_bus/event_store.py`
    - `emit()` 改为走 TopicBus 发布；
    - 保留 `read_recent()/replay()` 的 JSONL 兼容行为；
    - 新增：
@@ -49,24 +49,24 @@
 
 ## 3. 变更文件
 
-- `autonomous/event_log/topic_event_bus.py`
-- `autonomous/event_log/event_store.py`
+- `core/event_bus/topic_bus.py`
+- `core/event_bus/event_store.py`
 - `autonomous/event_log/__init__.py`
-- `tests/test_topic_event_bus_ws25_001.py`
-- `tests/test_system_agent_topic_bus_ws25_001.py`
+- `tests/test_core_event_bus_consumers_ws28_029.py`
+- `tests/test_core_event_bus_consumers_ws28_029.py`
 - `doc/task/23-phase3-full-target-task-list.md`
 - `doc/00-omni-operator-architecture.md`
 
 ## 4. 验证记录
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q tests/test_topic_event_bus_ws25_001.py tests/test_event_store_ws18_001.py tests/test_event_replay_tool_ws18_003.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_core_event_bus_consumers_ws28_029.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_core_event_bus_consumers_ws28_029.py
 ```
 
 并对 SystemAgent 主路径做兼容回归：
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_outbox_bridge_ws23_005.py tests/test_system_agent_release_flow.py tests/test_system_agent_watchdog_gate_ws23_002.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_brainstem_event_bridge_ws23_005.py tests/test_canary_rollback_drill.py tests/test_run_watchdog_daemon_ws28_025.py
 ```
 
 ## 5. 结果

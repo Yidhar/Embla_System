@@ -18,7 +18,7 @@
 ## 2. 实施内容
 
 1. 新增 M10 gate 评估器
-   - 文件：`autonomous/ws25_release_gate.py`
+   - 文件：`agents/release_gates/ws25_release_gate.py`
    - 校验维度：
      - `WS25-005` 报告通过（task_id/scenario/passed）
      - 任务文档快照包含 `NGA-WS25-003/004/005/006`
@@ -50,13 +50,13 @@
 
 ## 3. 变更文件
 
-- `autonomous/ws25_release_gate.py`
+- `agents/release_gates/ws25_release_gate.py`
 - `scripts/validate_m10_closure_gate_ws25_006.py`
 - `scripts/release_closure_chain_m10_ws25_006.py`
 - `scripts/release_closure_chain_full_m0_m7.py`
 - `scripts/render_release_closure_summary.py`
 - `doc/task/runbooks/release_m10_event_gc_closure_onepager_ws25_006.md`
-- `tests/test_ws25_release_gate.py`
+- `tests/test_release_closure_chain_m10_ws25_006.py`
 - `tests/test_release_closure_chain_m10_ws25_006.py`
 - `tests/test_release_closure_chain_full_m0_m7.py`
 - `tests/test_render_release_closure_summary.py`
@@ -67,7 +67,7 @@
 ## 4. 验证记录
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q tests/test_ws25_release_gate.py tests/test_release_closure_chain_m10_ws25_006.py tests/test_release_closure_chain_full_m0_m7.py tests/test_render_release_closure_summary.py tests/test_ws25_event_gc_quality_baseline.py tests/test_run_event_gc_quality_baseline_ws25_005.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_release_closure_chain_m10_ws25_006.py tests/test_release_closure_chain_m10_ws25_006.py tests/test_release_closure_chain_full_m0_m7.py tests/test_render_release_closure_summary.py tests/test_run_event_gc_quality_baseline_ws25_005.py tests/test_run_event_gc_quality_baseline_ws25_005.py
 ```
 
 ## 5. 结果

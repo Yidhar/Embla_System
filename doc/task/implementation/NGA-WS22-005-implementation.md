@@ -27,8 +27,8 @@
 
 ## 3. 变更文件
 
-- `autonomous/tools/subagent_runtime.py`
-- `tests/test_subagent_runtime_spec_validation_ws22_005.py`
+- `agents/runtime/mini_loop.py`
+- `tests/test_subagent_contract.py`
 - `scripts/release_phase3_closure_chain_ws22_004.py`
 - `doc/task/runbooks/release_m6_m7_phase3_closure_onepager.md`
 - `doc/task/22-ws-phase3-scheduler-bridge-and-rollout.md`
@@ -37,12 +37,12 @@
 
 1. 语法校验
 ```bash
-.\.venv\Scripts\python.exe -m py_compile autonomous/tools/subagent_runtime.py tests/test_subagent_runtime_spec_validation_ws22_005.py scripts/release_phase3_closure_chain_ws22_004.py
+.\.venv\Scripts\python.exe -m py_compile agents/runtime/mini_loop.py tests/test_subagent_contract.py scripts/release_phase3_closure_chain_ws22_004.py
 ```
 
 2. Phase3 关键回归
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q tests/test_subagent_runtime_spec_validation_ws22_005.py tests/test_subagent_runtime_ws21_002.py tests/test_subagent_runtime_eventbus_ws21_003.py tests/test_subagent_runtime_chaos_ws21_006.py tests/test_system_agent_subagent_bridge_ws22_001.py tests/test_system_agent_lease_guard_ws22_004.py tests/test_system_agent_longrun_baseline_ws22_004.py tests/test_release_phase3_closure_chain_ws22_004.py tests/test_ws22_release_gate.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_subagent_contract.py tests/test_subagent_contract.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_mini_loop_ws30_004.py tests/test_agent_runtime_session_ws30_002.py tests/test_core_lease_fencing_ws28_029.py tests/test_run_ws27_longrun_endurance_ws27_001.py tests/test_release_phase3_closure_chain_ws22_004.py tests/test_release_phase3_closure_chain_ws22_004.py
 ```
 
 3. 发布链路脚本验证（跳过长稳）

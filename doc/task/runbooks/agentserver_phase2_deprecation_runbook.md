@@ -24,7 +24,7 @@
 
 2. 自治执行链路
 - 旧链路：`agentserver` 内调度逻辑
-- 新链路：`autonomous/system_agent.py` + `autonomous/state/workflow_store.py`（lease/fencing + outbox/inbox）
+- 新链路：`agents/pipeline.py` + `agents/runtime/workflow_store.py`（lease/fencing + outbox/inbox）
 
 ## 4. Phase-2 分阶段执行顺序
 1. D0 冻结新增依赖（当前轮落地）
@@ -65,7 +65,7 @@
 - `python -m pytest -q tests/test_agentserver_deprecation_guard_ws16_002.py`
 
 2. 核心链路冒烟
-- `python -m pytest -q tests/test_api_contract_ws20_001.py tests/test_mcp_status_snapshot.py`
+- `python -m pytest -q tests/test_embla_core_release_compat_gate.py tests/test_mcp_status_snapshot.py`
 
 3. 迁移脚本/配置兼容
 - `python -m pytest -q tests/test_config_migration_ws16_004.py tests/test_contract_rollout_ws16_005.py`

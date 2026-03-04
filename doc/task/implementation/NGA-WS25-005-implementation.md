@@ -18,7 +18,7 @@
 ## 2. 实施内容
 
 1. 新增 M10 质量基线 harness
-   - 文件：`autonomous/ws25_event_gc_quality_baseline.py`
+   - 文件：`agents/runtime/ws25_event_gc_quality_baseline.py`
    - 输出报告项：
      - replay idempotency drill
      - critical evidence preservation drill
@@ -49,9 +49,9 @@
 
 ## 3. 变更文件
 
-- `autonomous/ws25_event_gc_quality_baseline.py`
+- `agents/runtime/ws25_event_gc_quality_baseline.py`
 - `scripts/run_event_gc_quality_baseline_ws25_005.py`
-- `tests/test_ws25_event_gc_quality_baseline.py`
+- `tests/test_run_event_gc_quality_baseline_ws25_005.py`
 - `tests/test_run_event_gc_quality_baseline_ws25_005.py`
 - `doc/task/23-phase3-full-target-task-list.md`
 - `doc/00-omni-operator-architecture.md`
@@ -60,7 +60,7 @@
 ## 4. 验证记录
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q tests/test_ws25_event_gc_quality_baseline.py tests/test_run_event_gc_quality_baseline_ws25_005.py tests/test_gc_quality_eval.py tests/test_topic_event_bus_replay_idempotency_ws25_003.py tests/test_tool_contract.py tests/test_episodic_memory.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_run_event_gc_quality_baseline_ws25_005.py tests/test_run_event_gc_quality_baseline_ws25_005.py tests/test_gc_quality_eval.py tests/test_event_store_db_partition_ws29_005.py tests/test_tool_contract.py tests/test_episodic_memory.py
 ```
 
 ## 5. 结果

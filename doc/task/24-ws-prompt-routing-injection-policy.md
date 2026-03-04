@@ -83,11 +83,11 @@
 - 基于 `immutable_dna_manifest.spec` 的 `injection_order` 做顺序装配与 hash 校验（发布门禁同源）。
 
 2. 三段式 Prompt Envelope：
-- `autonomous/llm_gateway.py`
+- `agents/llm_gateway.py`
 - `block1(static_header) + block2(long_term_summary) + block3(dynamic_messages)`，并具备缓存和 token 估算。
 
 3. 动态窗口治理：
-- `autonomous/working_memory_manager.py`
+- `agents/memory/working_memory.py`
 - soft/hard 双阈值 + critical marker 保留。
 
 4. 记忆回注：
@@ -112,7 +112,7 @@
 |---|---|---|
 | 三路径准入（Path-A/B/C） | 部分具备（逻辑上可区分，未形成统一路由判定层） | 可先落地 P0 逻辑隔离 |
 | 多 Agent Prompt 路由 | 部分具备（role/tool profile 有基础） | 需补 `prompt_profile/injection_mode` |
-| Prompt Slice 组合引擎 | 未落地 | 需在 `autonomous/llm_gateway.py` 实现 |
+| Prompt Slice 组合引擎 | 未落地 | 需在 `agents/llm_gateway.py` 实现 |
 | Prompt ACL（按文件/层级权限） | 未落地 | 必须优先补齐 |
 | Outer/Core 物理隔离 | 未落地 | 先逻辑隔离，后进程隔离 |
 | DNA 门禁一致性 | 已具备（`.spec`） | 作为核心不可降级约束 |
@@ -522,11 +522,11 @@ class PromptACLRule:
 
 ### 10.1 P0（先可用）
 
-1. 在 `autonomous/router_engine.py` 输出中增加：
+1. 在 `agents/router_engine.py` 输出中增加：
 - `prompt_profile`（role/tool-policy class）
 - `injection_mode`（minimal/normal/hardened/recovery）
 
-2. 在 `autonomous/llm_gateway.py` 增加：
+2. 在 `agents/llm_gateway.py` 增加：
 - `PromptSlice` 输入
 - `compose()` 逻辑与 `PromptComposeDecision` 回执
 - `enforcement_mode: shadow | block`
@@ -593,11 +593,11 @@ class PromptACLRule:
 
 为支持“多 Agent Prompt + 可控改写”，需改造以下模块：
 
-1. `autonomous/router_engine.py`
+1. `agents/router_engine.py`
 - 增加：`prompt_profile`、`injection_mode`、`delegation_intent`。
 - 输出路由决策时携带 prompt 侧约束元数据。
 
-2. `autonomous/llm_gateway.py`
+2. `agents/llm_gateway.py`
 - 增加：`PromptSlice` 输入结构、`resolve()` 与 `serialize_for_cache()` 双阶段组合。
 - 增加：`PromptComposeDecision` 回执与 `prefix_hash/tail_hash` 观测。
 
@@ -630,10 +630,10 @@ class PromptACLRule:
 - phase: `M13`
 - owner_role: `backend`
 - scope: `RouterDecision` 输出契约扩展；不改变现有调用方默认行为
-- inputs: `doc/task/24-ws-prompt-routing-injection-policy.md` §5/§10.6；`autonomous/router_engine.py`
+- inputs: `doc/task/24-ws-prompt-routing-injection-policy.md` §5/§10.6；`agents/router_engine.py`
 - depends_on: `-`
 - deliverables:
-  - 代码文件：`autonomous/router_engine.py`
+  - 代码文件：`agents/router_engine.py`
   - 测试文件：`tests/test_router_engine_prompt_profile_ws28_001.py`
   - 报告产物：`scratch/reports/ws28_001_router_prompt_profile.json`
 - acceptance:
@@ -652,10 +652,10 @@ class PromptACLRule:
 - phase: `M13`
 - owner_role: `backend`
 - scope: `LLM Gateway` 的 prompt 组合核心；支持逻辑裁剪与缓存友好序列化解耦
-- inputs: `doc/task/24-ws-prompt-routing-injection-policy.md` §6/§9/§10.6；`autonomous/llm_gateway.py`
+- inputs: `doc/task/24-ws-prompt-routing-injection-policy.md` §6/§9/§10.6；`agents/llm_gateway.py`
 - depends_on: `NGA-WS28-001`
 - deliverables:
-  - 代码文件：`autonomous/llm_gateway.py`
+  - 代码文件：`agents/llm_gateway.py`
   - 可选新增：`autonomous/prompt_slices.py`（若需独立结构定义）
   - 测试文件：`tests/test_llm_gateway_prompt_slice_ws28_002.py`
   - 报告产物：`scratch/reports/ws28_002_prompt_slice_compose.json`
@@ -855,8 +855,8 @@ status: `done`；锚点：`apiserver/api_server.py`（`brainstem_control_plane` 
 <https://raw.githubusercontent.com/Piebald-AI/claude-code-system-prompts/main/system-prompts/agent-prompt-task-tool.md>
 7. 本项目锚点：
 - `system/immutable_dna.py`
-- `autonomous/llm_gateway.py`
-- `autonomous/router_engine.py`
-- `autonomous/working_memory_manager.py`
+- `agents/llm_gateway.py`
+- `agents/router_engine.py`
+- `agents/memory/working_memory.py`
 - `apiserver/agentic_tool_loop.py`
 - `system/config.py`

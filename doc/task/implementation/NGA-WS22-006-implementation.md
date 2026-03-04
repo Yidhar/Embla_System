@@ -36,17 +36,17 @@
      - `decision_reason`
 
 4. 测试与发布链更新
-   - 新增 `tests/test_system_agent_subagent_rollout_ws22_006.py`：
+   - 新增 `tests/test_manage_ws27_subagent_cutover_ws27_002.py`：
      - `rollout_percent=0` 时即便启用 runtime 也走 legacy
      - 任务级强制 `runtime_mode=subagent` 可覆盖 `rollout_percent=0`
    - 将该测试纳入 `scripts/release_phase3_closure_chain_ws22_004.py` 的 T0 回归集合。
 
 ## 3. 变更文件
 
-- `autonomous/tools/subagent_runtime.py`
-- `autonomous/system_agent.py`
-- `tests/test_system_agent_config.py`
-- `tests/test_system_agent_subagent_rollout_ws22_006.py`
+- `agents/runtime/mini_loop.py`
+- `agents/pipeline.py`
+- `tests/test_main_brainstem_bootstrap_ws28_024.py`
+- `tests/test_manage_ws27_subagent_cutover_ws27_002.py`
 - `scripts/release_phase3_closure_chain_ws22_004.py`
 - `doc/task/runbooks/release_m6_m7_phase3_closure_onepager.md`
 - `doc/task/22-ws-phase3-scheduler-bridge-and-rollout.md`
@@ -55,12 +55,12 @@
 
 1. 语法检查
 ```bash
-.\.venv\Scripts\python.exe -m py_compile autonomous/system_agent.py autonomous/tools/subagent_runtime.py tests/test_system_agent_subagent_rollout_ws22_006.py scripts/release_phase3_closure_chain_ws22_004.py
+.\.venv\Scripts\python.exe -m py_compile agents/pipeline.py agents/runtime/mini_loop.py tests/test_manage_ws27_subagent_cutover_ws27_002.py scripts/release_phase3_closure_chain_ws22_004.py
 ```
 
 2. 回归测试
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_subagent_rollout_ws22_006.py tests/test_system_agent_subagent_bridge_ws22_001.py tests/test_system_agent_lease_guard_ws22_004.py tests/test_system_agent_config.py tests/test_subagent_runtime_spec_validation_ws22_005.py tests/test_release_phase3_closure_chain_ws22_004.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_manage_ws27_subagent_cutover_ws27_002.py tests/test_agent_runtime_session_ws30_002.py tests/test_core_lease_fencing_ws28_029.py tests/test_main_brainstem_bootstrap_ws28_024.py tests/test_subagent_contract.py tests/test_release_phase3_closure_chain_ws22_004.py
 ```
 
 3. 发布链路验证（跳过长稳）

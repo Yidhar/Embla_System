@@ -6,7 +6,7 @@
 
 ## 2. 工具入口
 - CLI 脚本：`scripts/event_replay_ws18_003.py`
-- 核心模块：`autonomous/event_log/replay_tool.py`
+- 核心模块：`core/event_bus/replay_tool.py`
 
 ## 3. 快速使用
 1. 按 trace 重放

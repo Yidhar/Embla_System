@@ -21,7 +21,7 @@
 
 1. `.spec` 外置（Phase C）
 - 新增 `policy/role_executor_semantic_guard.spec`。
-- `autonomous/tools/execution_bridge.py` 新增：
+- `agents/tool_loop.py` 新增：
   - `DEFAULT_ROLE_EXECUTOR_SEMANTIC_GUARD_SPEC`
   - spec 路径解析与加载（缺失/非法回退）
   - role 级策略解析（`strict_semantic_guard` / `allowed_semantic_toolchains` / 默认值）
@@ -61,7 +61,7 @@
 
 ## 3. 测试更新
 
-1. `tests/test_execution_bridge_role_executors_ws28_014.py`
+1. `tests/test_agent_roles_ws30_005.py`
 - 新增 spec 驱动策略生效测试。
 - 新增 spec 非法回退测试。
 
@@ -86,22 +86,22 @@
 
 ```bash
 .venv/bin/ruff check \
-  autonomous/tools/execution_bridge.py \
-  autonomous/tools/subagent_runtime.py \
+  agents/tool_loop.py \
+  agents/runtime/mini_loop.py \
   scripts/run_ws28_execution_governance_gate_ws28_021.py \
   scripts/release_closure_chain_full_m0_m12.py \
-  tests/test_execution_bridge_role_executors_ws28_014.py \
-  tests/test_subagent_runtime_eventbus_ws21_003.py \
+  tests/test_agent_roles_ws30_005.py \
+  tests/test_core_event_bus_consumers_ws28_029.py \
   tests/test_run_ws28_execution_governance_gate_ws28_021.py \
   tests/test_release_closure_chain_full_m0_m12.py \
   tests/test_ops_dashboard_extensions.py
 
 .venv/bin/pytest -q \
-  tests/test_execution_bridge_native_ws28_013.py \
-  tests/test_execution_bridge_role_executors_ws28_014.py \
-  tests/test_subagent_runtime_ws21_002.py \
-  tests/test_subagent_runtime_eventbus_ws21_003.py \
-  tests/test_system_agent_execution_bridge_cutover_ws28_013.py \
+  tests/test_run_ws28_execution_governance_gate_ws28_021.py \
+  tests/test_agent_roles_ws30_005.py \
+  tests/test_subagent_contract.py \
+  tests/test_core_event_bus_consumers_ws28_029.py \
+  tests/test_run_ws28_execution_governance_gate_ws28_021.py \
   tests/test_run_ws28_execution_governance_gate_ws28_021.py \
   tests/test_release_closure_chain_full_m0_m12.py \
   tests/test_ops_dashboard_extensions.py

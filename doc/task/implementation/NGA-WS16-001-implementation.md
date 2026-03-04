@@ -126,7 +126,7 @@ Autonomous System Agent → CLI Adapter → Codex/Claude/Gemini
 ```
 
 **关键文件**:
-- `autonomous/system_agent.py` - 主循环
+- `agents/pipeline.py` - 主循环
 - `autonomous/tools/cli_adapter.py` - CLI 统一适配器
 - `autonomous/tools/codex_adapter.py` - Codex 主执行器
 

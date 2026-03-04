@@ -62,10 +62,10 @@ Embla_system 在当前项目的集成层由三块组成：
   - canary 判定与自动回滚
   - Verifying 阶段统一结构化门禁与重试决策（legacy 外部降级已退役）
 - 关键文件：
-  - `autonomous/system_agent.py`
-  - `autonomous/state/workflow_store.py`
-  - `autonomous/event_log/event_store.py`
-  - `autonomous/release/controller.py`
+  - `agents/pipeline.py`
+  - `agents/runtime/workflow_store.py`
+  - `core/event_bus/event_store.py`
+  - `agents/release/controller.py`
 - Embla_system 对齐：Brainstem 控制器与治理执行枢纽。
 
 ### 3.5 MCP 主机与注册中心

@@ -13,7 +13,7 @@
 ## 变更范围
 
 1. 配置与默认门禁
-- 文件: `autonomous/tools/subagent_runtime.py`
+- 文件: `agents/runtime/mini_loop.py`
 - 变更:
   - `SubAgentRuntimeConfig` 新增:
     - `enforce_scaffold_txn_for_write`（默认 `true`）
@@ -21,7 +21,7 @@
   - 同步补充 `fail_open_budget_ratio`（为 WS26-002 指标预算使用）。
 
 2. SystemAgent 写路径收敛逻辑
-- 文件: `autonomous/system_agent.py`
+- 文件: `agents/pipeline.py`
 - 变更:
   - 新增 `_task_requires_scaffold_txn(task)` 写意图识别：
     - `metadata.write_intent == true`
@@ -40,10 +40,10 @@
 
 3. 回归与兼容
 - 文件:
-  - `tests/test_system_agent_write_path_ws26_001.py`（新增）
-  - `tests/test_system_agent_config.py`
-  - `tests/test_system_agent_subagent_bridge_ws22_001.py`
-  - `autonomous/ws22_longrun_baseline.py`
+  - `tests/test_native_tools_runtime_hardening.py`（新增）
+  - `tests/test_main_brainstem_bootstrap_ws28_024.py`
+  - `tests/test_agent_runtime_session_ws30_002.py`
+  - `agents/runtime/ws22_longrun_baseline.py`
 - 变更:
   - 新增 WS26 核心回归：
     - 强制 legacy 的 write 任务被收敛到 subagent；
@@ -55,10 +55,10 @@
 ## 验证命令
 
 1. WS26 写路径门禁回归
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_write_path_ws26_001.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_native_tools_runtime_hardening.py`
 
 2. 关联配置与桥接回归
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_config.py tests/test_system_agent_subagent_bridge_ws22_001.py tests/test_system_agent_subagent_rollout_ws22_006.py tests/test_system_agent_lease_guard_ws22_004.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_main_brainstem_bootstrap_ws28_024.py tests/test_agent_runtime_session_ws30_002.py tests/test_manage_ws27_subagent_cutover_ws27_002.py tests/test_core_lease_fencing_ws28_029.py`
 
 ## 结果摘要
 

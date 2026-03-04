@@ -22,7 +22,7 @@
      - 事件发布到 `alert.*` 主题。
 
 2. 接入 SystemAgent 主链路
-   - 文件：`autonomous/system_agent.py`
+   - 文件：`agents/pipeline.py`
    - 初始化阶段挂载：
      - `self.cron_event_producer`
      - `self.alert_event_producer`
@@ -37,22 +37,22 @@
 
 - `autonomous/event_log/cron_alert_producer.py`
 - `autonomous/event_log/__init__.py`
-- `autonomous/system_agent.py`
-- `tests/test_cron_alert_producer_ws25_002.py`
-- `tests/test_system_agent_cron_alert_ws25_002.py`
+- `agents/pipeline.py`
+- `tests/test_core_event_bus_consumers_ws28_029.py`
+- `tests/test_ops_dashboard_extensions.py`
 - `doc/task/23-phase3-full-target-task-list.md`
 - `doc/00-omni-operator-architecture.md`
 
 ## 4. 验证记录
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q tests/test_cron_alert_producer_ws25_002.py tests/test_system_agent_cron_alert_ws25_002.py tests/test_system_agent_watchdog_gate_ws23_002.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_core_event_bus_consumers_ws28_029.py tests/test_ops_dashboard_extensions.py tests/test_run_watchdog_daemon_ws28_025.py
 ```
 
 扩展兼容回归：
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q tests/test_event_store_ws18_001.py tests/test_event_replay_tool_ws18_003.py tests/test_topic_event_bus_ws25_001.py tests/test_system_agent_outbox_bridge_ws23_005.py tests/test_system_agent_release_flow.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_core_event_bus_consumers_ws28_029.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_brainstem_event_bridge_ws23_005.py tests/test_canary_rollback_drill.py
 ```
 
 ## 5. 结果

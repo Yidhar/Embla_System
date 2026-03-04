@@ -12,7 +12,7 @@
 
 ## 本次范围（仅 WS18-001）
 1. 统一 Event Bus 事件 Envelope（含版本字段）
-- `autonomous/event_log/event_schema.py`
+- `core/event_bus/event_schema.py`
   - 新增 `EVENT_SCHEMA_VERSION=ws18-001-v1`
   - 新增统一构造与归一化：
     - `build_event_envelope`
@@ -29,13 +29,13 @@
     - `data`
 
 2. EventStore 接入统一 Schema + 回放过滤
-- `autonomous/event_log/event_store.py`
+- `core/event_bus/event_store.py`
   - `emit(...)` 写入统一 envelope，并保留 `payload` 兼容别名（指向 `data`）。
   - `read_recent(...)` 对 legacy 行与新行统一归一化。
   - 新增 `replay(...)`，支持按 `event_type` / `workflow_id` / `trace_id` 过滤回放。
 
 3. Workflow Outbox 接入统一 Schema（保持旧消费兼容）
-- `autonomous/state/workflow_store.py`
+- `agents/runtime/workflow_store.py`
   - `enqueue_outbox(...)` 统一写入 envelope 到 `payload_json`。
   - `read_pending_outbox(...)` 自动识别新旧 payload：
     - `payload` 继续返回业务数据（兼容旧调用）
@@ -43,15 +43,15 @@
   - 结果：旧消费链不改业务读取路径，也可逐步迁移到完整 envelope。
 
 4. 测试覆盖
-- 新增 `tests/test_event_store_ws18_001.py`
+- 新增 `tests/test_core_event_bus_consumers_ws28_029.py`
   - 覆盖 envelope 字段落盘、replay 过滤、legacy 归一化。
-- 更新 `tests/test_workflow_store.py`
+- 更新 `tests/test_slo_snapshot_export.py`
   - 覆盖 outbox 读取时 `schema_version` 与 `event_envelope` 字段。
 
 ## 验证命令
-- `python -m ruff check autonomous/event_log/event_schema.py autonomous/event_log/event_store.py autonomous/state/workflow_store.py tests/test_event_store_ws18_001.py tests/test_workflow_store.py`
+- `python -m ruff check core/event_bus/event_schema.py core/event_bus/event_store.py agents/runtime/workflow_store.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_slo_snapshot_export.py`
   - 结果: `All checks passed`
-- `python -m pytest -q tests/test_system_agent_release_flow.py`
+- `python -m pytest -q tests/test_canary_rollback_drill.py`
   - 结果: `passed`
 - 本地功能烟测（脚本执行）
   - 覆盖 `EventStore.emit/read_recent` 与 `WorkflowStore.enqueue_outbox/read_pending_outbox` 的 ws18 envelope 行为
@@ -63,7 +63,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `autonomous/event_log/event_schema.py; autonomous/event_log/event_store.py; autonomous/state/workflow_store.py; tests/test_event_store_ws18_001.py; tests/test_workflow_store.py; doc/task/implementation/NGA-WS18-001-implementation.md`
+  - `core/event_bus/event_schema.py; core/event_bus/event_store.py; agents/runtime/workflow_store.py; tests/test_core_event_bus_consumers_ws28_029.py; tests/test_slo_snapshot_export.py; doc/task/implementation/NGA-WS18-001-implementation.md`
 - `notes`:
   - `event bus records now use ws18-001 envelope (event_id/schema_version/source/severity/idempotency_key/data), event_store replay supports event/trace/workflow filters, and workflow outbox read path normalizes legacy payloads while keeping payload compatibility`
 

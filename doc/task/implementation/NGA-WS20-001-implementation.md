@@ -42,23 +42,23 @@
   - `GET /` 和 `GET /system/info` 的版本号改为读取配置版本（不再硬编码）
 
 4. 回归测试
-- 新增 `tests/test_api_contract_ws20_001.py`
+- 新增 `tests/test_embla_core_release_compat_gate.py`
   - 契约快照字段检查
   - 弃用策略映射检查
   - v1 路由注册检查
   - 响应头注入检查（版本头 + 弃用头）
 
 ## 验证命令
-- `.\.venv\Scripts\python.exe -m ruff check tests/test_api_contract_ws20_001.py`
+- `.\.venv\Scripts\python.exe -m ruff check tests/test_embla_core_release_compat_gate.py`
   - 结果: `All checks passed`
-- `powershell -ExecutionPolicy Bypass -File scripts/run_tests_safe.ps1 tests/test_api_contract_ws20_001.py tests/test_mcp_status_snapshot.py`
+- `powershell -ExecutionPolicy Bypass -File scripts/run_tests_safe.ps1 tests/test_embla_core_release_compat_gate.py tests/test_mcp_status_snapshot.py`
   - 结果: `6 passed`
-- `powershell -ExecutionPolicy Bypass -File scripts/run_tests_safe.ps1 tests/test_api_contract_ws20_001.py tests/test_risk_gate_ws10_005.py tests/test_tool_receipt_ws10_004.py tests/test_policy_firewall.py tests/test_agentic_loop_contract_and_mutex.py tests/test_global_mutex.py tests/test_native_executor_guards.py tests/test_process_lineage.py tests/test_native_tools_runtime_hardening.py tests/test_gc_memory_card_injection.py tests/test_mcp_status_snapshot.py`
+- `powershell -ExecutionPolicy Bypass -File scripts/run_tests_safe.ps1 tests/test_embla_core_release_compat_gate.py tests/test_risk_gate_ws10_005.py tests/test_tool_receipt_ws10_004.py tests/test_policy_firewall.py tests/test_agentic_loop_contract_and_mutex.py tests/test_global_mutex.py tests/test_native_executor_guards.py tests/test_process_lineage.py tests/test_native_tools_runtime_hardening.py tests/test_gc_memory_card_injection.py tests/test_mcp_status_snapshot.py`
   - 结果: `75 passed`
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `apiserver/api_server.py; tests/test_api_contract_ws20_001.py; doc/task/implementation/NGA-WS20-001-implementation.md`
+  - `apiserver/api_server.py; tests/test_embla_core_release_compat_gate.py; doc/task/implementation/NGA-WS20-001-implementation.md`
 - `notes`:
   - `api contract freeze now exposes v1 strategy and compatibility window, adds versioned aliases for key routes, and injects deprecation/sunset/successor headers for unversioned legacy endpoints`
 

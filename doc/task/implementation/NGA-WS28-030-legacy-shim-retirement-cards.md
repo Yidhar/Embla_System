@@ -14,9 +14,9 @@
 3. 最后改测试并补门禁。
 
 ## 退役范围（当前 shim）
-- `autonomous/event_log/event_schema.py`
-- `autonomous/event_log/event_store.py`
-- `autonomous/event_log/topic_event_bus.py`
+- `core/event_bus/event_schema.py`
+- `core/event_bus/event_store.py`
+- `core/event_bus/topic_bus.py`
 - `system/global_mutex.py`
 - `system/policy_firewall.py`
 - `system/watchdog_daemon.py`
@@ -24,9 +24,9 @@
 
 ## 当前引用基线（扫描结果）
 运行路径/脚本路径仍有 legacy 引用：
-- `autonomous/system_agent.py`（`autonomous.event_log`）
+- `agents/pipeline.py`（`autonomous.event_log`）
 - `autonomous/event_log/cron_alert_producer.py`（`autonomous.event_log.event_store`）
-- `autonomous/event_log/replay_tool.py`（`autonomous.event_log.event_store`）
+- `core/event_bus/replay_tool.py`（`autonomous.event_log.event_store`）
 - `scripts/event_replay_ws18_003.py`（`autonomous.event_log`）
 - `scripts/chaos_lock_failover.py`（`system.global_mutex`）
 - `scripts/export_brainstem_service_template_ws18_008.py`（`system.brainstem_supervisor`）
@@ -42,11 +42,11 @@
 - `tests/test_brainstem_supervisor_entry_ws23_001.py`
 - `tests/test_agentic_loop_contract_and_mutex.py`
 - `tests/test_core_lease_fencing_ws28_029.py`
-- `tests/test_event_store_ws18_001.py`
-- `tests/test_topic_event_bus_ws25_001.py`
-- `tests/test_topic_event_bus_replay_idempotency_ws25_003.py`
-- `tests/test_cron_alert_producer_ws25_002.py`
-- `tests/test_event_replay_tool_ws18_003.py`
+- `tests/test_core_event_bus_consumers_ws28_029.py`
+- `tests/test_core_event_bus_consumers_ws28_029.py`
+- `tests/test_event_store_db_partition_ws29_005.py`
+- `tests/test_core_event_bus_consumers_ws28_029.py`
+- `tests/test_core_event_bus_consumers_ws28_029.py`
 
 ---
 
@@ -56,9 +56,9 @@
 `优先级: P0`
 
 `代码点`
-- `autonomous/system_agent.py`
+- `agents/pipeline.py`
 - `autonomous/event_log/cron_alert_producer.py`
-- `autonomous/event_log/replay_tool.py`
+- `core/event_bus/replay_tool.py`
 - `autonomous/event_log/__init__.py`
 - `scripts/event_replay_ws18_003.py`
 
@@ -73,7 +73,7 @@
 
 `验收命令`
 - `rg -n "from autonomous\\.event_log\\.event_store|from autonomous\\.event_log\\.event_schema" autonomous apiserver scripts --glob '!**/tests/**'`
-- `.venv/bin/pytest -q tests/test_event_store_ws18_001.py tests/test_topic_event_bus_ws25_001.py tests/test_topic_event_bus_replay_idempotency_ws25_003.py tests/test_event_replay_tool_ws18_003.py`
+- `.venv/bin/pytest -q tests/test_core_event_bus_consumers_ws28_029.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_event_store_db_partition_ws29_005.py tests/test_core_event_bus_consumers_ws28_029.py`
 
 `完成标准`
 - 非测试路径不再直接 import `autonomous.event_log.event_store|event_schema`。
@@ -158,9 +158,9 @@
 `优先级: P0`
 
 `代码点`
-- 删除：`autonomous/event_log/event_schema.py`
-- 删除：`autonomous/event_log/event_store.py`
-- 删除：`autonomous/event_log/topic_event_bus.py`
+- 删除：`core/event_bus/event_schema.py`
+- 删除：`core/event_bus/event_store.py`
+- 删除：`core/event_bus/topic_bus.py`
 - 修改：`autonomous/event_log/__init__.py`
 
 `实施动作`
@@ -174,7 +174,7 @@
 
 `验收命令`
 - `rg -n "autonomous/event_log/(event_schema|event_store|topic_event_bus)\\.py" -S`
-- `.venv/bin/pytest -q tests/test_event_store_ws18_001.py tests/test_topic_event_bus_ws25_001.py tests/test_topic_event_bus_replay_idempotency_ws25_003.py tests/test_cron_alert_producer_ws25_002.py`
+- `.venv/bin/pytest -q tests/test_core_event_bus_consumers_ws28_029.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_event_store_db_partition_ws29_005.py tests/test_core_event_bus_consumers_ws28_029.py`
 
 `完成标准`
 - shim 文件已删除。
@@ -219,11 +219,11 @@
 - `tests/test_brainstem_supervisor_entry_ws23_001.py`
 - `tests/test_agentic_loop_contract_and_mutex.py`
 - `tests/test_core_lease_fencing_ws28_029.py`
-- `tests/test_event_store_ws18_001.py`
-- `tests/test_topic_event_bus_ws25_001.py`
-- `tests/test_topic_event_bus_replay_idempotency_ws25_003.py`
-- `tests/test_cron_alert_producer_ws25_002.py`
-- `tests/test_event_replay_tool_ws18_003.py`
+- `tests/test_core_event_bus_consumers_ws28_029.py`
+- `tests/test_core_event_bus_consumers_ws28_029.py`
+- `tests/test_event_store_db_partition_ws29_005.py`
+- `tests/test_core_event_bus_consumers_ws28_029.py`
+- `tests/test_core_event_bus_consumers_ws28_029.py`
 
 `实施动作`
 - 测试导入统一为 `core.event_bus`、`core.security`、`core.supervisor`。
@@ -234,7 +234,7 @@
 - 新增无 shim 场景不回退。
 
 `验收命令`
-- `.venv/bin/pytest -q tests/test_policy_firewall.py tests/test_global_mutex.py tests/test_chaos_lock_failover.py tests/test_watchdog_daemon_ws18_004.py tests/test_brainstem_supervisor_ws18_008.py tests/test_brainstem_supervisor_entry_ws23_001.py tests/test_agentic_loop_contract_and_mutex.py tests/test_core_lease_fencing_ws28_029.py tests/test_event_store_ws18_001.py tests/test_topic_event_bus_ws25_001.py tests/test_topic_event_bus_replay_idempotency_ws25_003.py tests/test_cron_alert_producer_ws25_002.py tests/test_event_replay_tool_ws18_003.py`
+- `.venv/bin/pytest -q tests/test_policy_firewall.py tests/test_global_mutex.py tests/test_chaos_lock_failover.py tests/test_watchdog_daemon_ws18_004.py tests/test_brainstem_supervisor_ws18_008.py tests/test_brainstem_supervisor_entry_ws23_001.py tests/test_agentic_loop_contract_and_mutex.py tests/test_core_lease_fencing_ws28_029.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_event_store_db_partition_ws29_005.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_core_event_bus_consumers_ws28_029.py`
 
 `完成标准`
 - 所有核心测试不再引用 legacy shim。

@@ -39,7 +39,7 @@
     - `scenario = runtime_rollout_fail_open_lease_unified_snapshot`
 
 3. 配置样例补齐
-- 文件: `autonomous/config/autonomous_config.yaml`
+- 文件: `config/autonomous_runtime.yaml`
 - 新增 `subagent_runtime` 段默认项:
   - `enforce_scaffold_txn_for_write`
   - `allow_legacy_fail_open_for_write`

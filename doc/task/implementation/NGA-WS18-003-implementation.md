@@ -12,7 +12,7 @@
 
 ## 本次范围（仅 WS18-003）
 1. Replay 工具核心实现
-- 新增 `autonomous/event_log/replay_tool.py`
+- 新增 `core/event_bus/replay_tool.py`
   - `ReplayRequest`：trace/workflow/event_type + 时间窗口 + operator/reason
   - `EventReplayTool.replay(...)`：
     - 按过滤器读取事件链
@@ -38,16 +38,16 @@
   - 使用示例、审计要求、恢复建议、回退与排障。
 
 4. 测试覆盖
-- 新增 `tests/test_event_replay_tool_ws18_003.py`
+- 新增 `tests/test_core_event_bus_consumers_ws28_029.py`
   - trace + 时间窗口过滤
   - recovery_plan 生成
   - audit 落盘
   - 无过滤器请求拒绝
 
 ## 验证命令
-- `python -m ruff check autonomous/event_log/replay_tool.py scripts/event_replay_ws18_003.py tests/test_event_replay_tool_ws18_003.py`
+- `python -m ruff check core/event_bus/replay_tool.py scripts/event_replay_ws18_003.py tests/test_core_event_bus_consumers_ws28_029.py`
   - 结果: `All checks passed`
-- `python -m pytest -q tests/test_event_replay_tool_ws18_003.py tests/test_event_store_ws18_001.py tests/test_workflow_store.py tests/test_system_agent_release_flow.py`
+- `python -m pytest -q tests/test_core_event_bus_consumers_ws28_029.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_slo_snapshot_export.py tests/test_canary_rollback_drill.py`
   - 结果: `passed`
 
 ## 交付结果与验收对应
@@ -58,7 +58,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `autonomous/event_log/replay_tool.py; scripts/event_replay_ws18_003.py; tests/test_event_replay_tool_ws18_003.py; doc/task/runbooks/event_replay_recovery_ws18_003.md; doc/task/implementation/NGA-WS18-003-implementation.md`
+  - `core/event_bus/replay_tool.py; scripts/event_replay_ws18_003.py; tests/test_core_event_bus_consumers_ws28_029.py; doc/task/runbooks/event_replay_recovery_ws18_003.md; doc/task/implementation/NGA-WS18-003-implementation.md`
 - `notes`:
   - `event replay tooling now supports trace/workflow/window filters with read-only recovery plans and audit jsonl records for every replay request`
 

@@ -12,7 +12,7 @@
 
 ## 本次范围（仅 WS19-001）
 1. Meta-Agent Runtime 骨架
-- 新增 `autonomous/meta_agent_runtime.py`
+- 新增 `agents/meta_agent.py`
   - 目标接收：`accept_goal`
   - 目标拆解：`decompose_goal`
   - 优先级排序：`prioritize`
@@ -32,15 +32,15 @@
   - 导出 `MetaAgentRuntime` 与核心数据结构，便于后续 Router/Memory 任务接入。
 
 3. 测试覆盖
-- 新增 `tests/test_meta_agent_runtime_ws19_001.py`
+- 新增 `tests/test_agent_roles_ws30_005.py`
   - 验证典型故障目标可拆解为可派发子任务。
   - 验证分发过程遵守依赖顺序。
   - 验证反思结果与恢复入口可重建运行态。
 
 ## 验证命令
-- `python -m ruff check autonomous/meta_agent_runtime.py autonomous/__init__.py tests/test_meta_agent_runtime_ws19_001.py`
+- `python -m ruff check agents/meta_agent.py autonomous/__init__.py tests/test_agent_roles_ws30_005.py`
   - 结果: `All checks passed`
-- `python -m pytest -q tests/test_meta_agent_runtime_ws19_001.py tests/test_workflow_store.py tests/test_system_agent_release_flow.py tests/test_event_store_ws18_001.py`
+- `python -m pytest -q tests/test_agent_roles_ws30_005.py tests/test_slo_snapshot_export.py tests/test_canary_rollback_drill.py tests/test_core_event_bus_consumers_ws28_029.py`
   - 结果: `15 passed`
 - `python -m pytest -q tests/test_agentserver_deprecation_guard_ws16_002.py tests/test_native_executor_guards.py tests/test_policy_firewall.py tests/test_global_mutex.py tests/test_process_lineage.py tests/test_native_tools_runtime_hardening.py tests/test_agentic_loop_contract_and_mutex.py`
   - 结果: `58 passed`（含第三方库警告）
@@ -53,7 +53,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `autonomous/meta_agent_runtime.py; autonomous/__init__.py; tests/test_meta_agent_runtime_ws19_001.py; doc/task/implementation/NGA-WS19-001-implementation.md`
+  - `agents/meta_agent.py; autonomous/__init__.py; tests/test_agent_roles_ws30_005.py; doc/task/implementation/NGA-WS19-001-implementation.md`
 - `notes`:
   - `meta-agent runtime skeleton now supports goal decomposition, dependency-aware dispatch, reflection, and snapshot recovery entrypoints with focused regression tests`
 

@@ -11,7 +11,7 @@
 - priority: P0
 - phase: M7
 - owner_role: backend
-- scope: `autonomous/system_agent.py`
+- scope: `agents/pipeline.py`
 - inputs: `doc/11#1,#2`, `doc/12#8`
 - deliverables:
   - `SystemAgent` 可切换为 `Sub-Agent Runtime` 驱动的子任务执行模式
@@ -27,7 +27,7 @@
 - priority: P0
 - phase: M7
 - owner_role: backend
-- scope: `autonomous/system_agent.py`, `autonomous/tools/subagent_runtime.py`
+- scope: `agents/pipeline.py`, `agents/runtime/mini_loop.py`
 - inputs: `doc/10#1`, `doc/11#8`
 - deliverables:
   - 子任务事件链：`SubTaskDispatching/SubTaskExecutionCompleted/SubTaskApproved/SubTaskRejected`
@@ -43,7 +43,7 @@
 - priority: P1
 - phase: M7
 - owner_role: backend
-- scope: `autonomous/system_agent.py`, `autonomous/scaffold_engine.py`
+- scope: `agents/pipeline.py`, `autonomous/scaffold_engine.py`
 - inputs: `doc/12#8.4`, `doc/09#11`
 - deliverables:
   - 当 `scaffold_result/negotiation_result` 失败时，统一映射到发布门禁拒绝路径

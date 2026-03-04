@@ -678,7 +678,7 @@ NagaAgent/
 ## 7. 配置模板
 
 ```yaml
-# autonomous/config/autonomous_config.yaml
+# config/autonomous_runtime.yaml
 autonomous:
   enabled: false                      # 默认关闭
   cycle_interval_seconds: 3600        # 优化周期(秒)
@@ -758,7 +758,7 @@ async def _try_start_autonomous_agent(self):
 | 规则 | 约束 |
 |------|------|
 | **Native 执行边界** | `system/native_executor.py` 负责根目录边界、危险 token、路径穿越与超时控制 |
-| **自治单活保护** | `autonomous/system_agent.py` + `workflow_store.py` 已实现 lease/fencing 防双主写入 |
+| **自治单活保护** | `agents/pipeline.py` + `workflow_store.py` 已实现 lease/fencing 防双主写入 |
 | **Codex-first 编码路由** | 编码任务优先走 Codex（CLI/MCP），Claude/Gemini 仅做降级备选 |
 | **Git 分支隔离** | `auto/*` 分支隔离是目标态建议，当前实现未强制所有任务自动分支 |
 | **KillSwitch** | 尚未实现独立物理 KillSwitch（目标态能力） |
@@ -798,7 +798,7 @@ async def _try_start_autonomous_agent(self):
 | D3-D4 | 实现 Sensor (ruff + pytest 扫描) | `autonomous/sensor.py` |
 | D5-D6 | 实现 Planner (LLM 辅助任务生成) | `autonomous/planner.py` |
 | D7-D8 | 实现 Evaluator + Git Operator | `autonomous/evaluator.py` |
-| D9-D10 | 实现 System Agent 主循环 + ServiceManager 集成 | `autonomous/system_agent.py` |
+| D9-D10 | 实现 System Agent 主循环 + ServiceManager 集成 | `agents/pipeline.py` |
 | D11-D12 | Codex + Gemini 适配器 | 完整 CLI 支持 |
 | D13-D14 | 端到端测试 + 安全验证 | 可交付 MVP |
 

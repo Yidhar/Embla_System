@@ -111,7 +111,7 @@
     - M8 闭环门禁校验入口（汇总 WS23-001/003/004/005 报告 + 文档 + runbook）。
 38. `scripts/run_outbox_brainstem_bridge_smoke_ws23_005.py`
     - WS23-005 outbox->Brainstem 桥接 smoke 产物生成脚本。
-39. `autonomous/ws23_release_gate.py`
+39. `agents/release_gates/ws23_release_gate.py`
     - WS23 M8 门禁评估器（报告规则、文档规则、runbook 规则）。
 40. `doc/task/runbooks/release_m8_phase3_closure_onepager_ws23_006.md`
     - M8 发布收口一页清单（T0-T6 执行顺序、放行条件、产物归档）。

@@ -22,7 +22,7 @@
 - `apiserver/native_tools.py`
 - `system/native_executor.py`
 - `mcpserver/mcp_manager.py`
-- `autonomous/system_agent.py`（自治流程中的工具与命令治理）
+- `agents/pipeline.py`（自治流程中的工具与命令治理）
 
 ## 2. 执行总原则
 
@@ -66,11 +66,11 @@
    - fail-open 推荐场景统一走 `SubAgentRuntimeFailOpenBlocked + ReleaseGateRejected` 并进入治理告警。
 
 **实现位置**：
-- `autonomous/system_agent.py`：主循环路由与 `runtime_mode` 决策
-- `autonomous/tools/subagent_runtime.py`：子任务调度与契约门禁
-- `autonomous/tools/execution_bridge.py`：内生执行桥与治理回执
+- `agents/pipeline.py`：主循环路由与 `runtime_mode` 决策
+- `agents/runtime/mini_loop.py`：子任务调度与契约门禁
+- `agents/tool_loop.py`：内生执行桥与治理回执
 - `policy/role_executor_semantic_guard.spec`：语义级门禁策略
-- `autonomous/config/autonomous_config.yaml`：`disable_legacy_cli_fallback` 等运行策略
+- `config/autonomous_runtime.yaml`：`disable_legacy_cli_fallback` 等运行策略
 
 ## 4. Tool Contract（统一契约）
 

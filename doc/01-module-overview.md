@@ -36,7 +36,7 @@
 
 1. 启动 API 服务（`apiserver`，默认端口 `8000`）。
 2. 启动 MCP 服务（`mcpserver`，默认端口 `8003`）。
-3. 后台事件循环按 `config.autonomous.enabled` 条件启动 `autonomous/system_agent.py`。
+3. 后台事件循环按 `config.autonomous.enabled` 条件启动 `agents/pipeline.py`。
 
 端口默认值来源：`system/config.py`（`ServerPortsConfig`）。
 
@@ -73,7 +73,7 @@
 - `main.py`（服务编排）
 - `system/config.py`（统一配置）
 - `apiserver/`（BFF 入口）
-- `autonomous/system_agent.py`（单活自治控制）
+- `agents/pipeline.py`（单活自治控制）
   - 已支持可配置子代理桥接（`subagent_runtime.enabled`）用于 Phase 3 渐进接管。
 
 说明：Legacy `agentserver` 旧执行链已移出仓库，不再作为控制面路径。
@@ -93,7 +93,7 @@
 
 - `apiserver/native_tools.py` + `system/native_executor.py`
 - `mcpserver/mcp_registry.py` + `mcpserver/mcp_manager.py`
-- `autonomous/tools/subagent_runtime.py`（子代理依赖调度、契约协商前置与统一提交）
+- `agents/runtime/mini_loop.py`（子代理依赖调度、契约协商前置与统一提交）
 - `autonomous/scaffold_engine.py`（契约门禁 + verify pipeline + 多文件事务回滚）
 
 ## 6. Legacy AgentServer 状态（已移除）
@@ -109,7 +109,7 @@
 
 **替代方案**：
 - 工具调用：`agents/tool_loop.py`（canonical） + `native_tools.py` / `mcp_manager.py`
-- 自治执行：`autonomous/system_agent.py` + `autonomous/tools/execution_bridge.py`（内生执行桥）
+- 自治执行：`agents/pipeline.py` + `agents/tool_loop.py`（内生执行桥）
 
 **注意**：
 - 新增能力应走 `apiserver + agents/pipeline + agents/tool_loop + native/mcp` 主链

@@ -17,7 +17,7 @@
 - `--strict` 模式可作为发布门禁（失败即非 0 退出）
 
 2. 新增 WS20-006 回归测试
-- 新增 `tests/test_desktop_release_compat_ws20_006.py`
+- 新增 `tests/test_embla_core_release_compat_gate.py`
 - 覆盖：
   - 兼容报告结构与关键检查项完整
   - 场景矩阵（配置/网络/权限）完整
@@ -28,7 +28,7 @@
 - 定义自动化入口、场景矩阵、手工补充验证与 M5 出场条件
 
 ## 验证命令
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_desktop_release_compat_ws20_006.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_embla_core_release_compat_gate.py`
 - `.\.venv\Scripts\python.exe scripts/desktop_release_compat_ws20_006.py --strict`
 
 ## 交付结果与验收对应

@@ -22,7 +22,7 @@
 `.\.venv\Scripts\python.exe scripts/release_closure_chain_full_m0_m7.py`
 
 1. T0 执行 WS23 目标回归
-`.\.venv\Scripts\python.exe -m pytest -q tests/test_brainstem_supervisor_entry_ws23_001.py tests/test_system_agent_watchdog_gate_ws23_002.py tests/test_ws23_003_immutable_dna_gate.py tests/test_export_killswitch_oob_bundle_ws23_004.py tests/test_brainstem_event_bridge_ws23_005.py tests/test_system_agent_outbox_bridge_ws23_005.py -p no:tmpdir`
+`.\.venv\Scripts\python.exe -m pytest -q tests/test_brainstem_supervisor_entry_ws23_001.py tests/test_run_watchdog_daemon_ws28_025.py tests/test_ws23_003_immutable_dna_gate.py tests/test_export_killswitch_oob_bundle_ws23_004.py tests/test_brainstem_event_bridge_ws23_005.py tests/test_brainstem_event_bridge_ws23_005.py -p no:tmpdir`
 
 2. T1 生成 Brainstem Supervisor 干运行报告
 `.\.venv\Scripts\python.exe scripts/run_brainstem_supervisor_ws23_001.py --mode ensure --dry-run --state-file scratch/runtime/brainstem_supervisor_state_ws23_001.json --output scratch/reports/brainstem_supervisor_entry_ws23_001.json`

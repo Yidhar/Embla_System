@@ -13,7 +13,7 @@
 ## 变更范围
 
 1. SystemAgent 预算状态机
-- 文件: `autonomous/system_agent.py`
+- 文件: `agents/pipeline.py`
 - 变更:
   - 新增 `_subagent_fail_open_budget` 运行时状态：
     - `subagent_attempt_count`
@@ -36,7 +36,7 @@
       - `action=degrade_to_legacy`
 
 2. 运行模式自动降级接入
-- 文件: `autonomous/system_agent.py`
+- 文件: `agents/pipeline.py`
 - 变更:
   - `_resolve_runtime_mode(task)` 接入降级判定：
     - 当预算已超限且任务非写路径强制任务时，自动返回 `legacy`。
@@ -45,7 +45,7 @@
     - 写路径强制任务仍保持 `write_path_enforced -> subagent`，不绕过 Scaffold/Txn。
 
 3. 事件可观测增强
-- 文件: `autonomous/system_agent.py`
+- 文件: `agents/pipeline.py`
 - 变更:
   - `SubAgentRuntimeRolloutDecision` 事件新增预算快照字段：
     - `fail_open_budget_ratio`
@@ -53,7 +53,7 @@
     - `auto_degraded_to_legacy`
 
 4. 回归测试
-- 文件: `tests/test_system_agent_fail_open_budget_ws26_003.py`（新增）
+- 文件: `tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py`（新增）
 - 覆盖:
   - fail-open 预算超限后，后续非写任务自动切到 legacy；
   - 触发自动降级事件与告警；
@@ -62,13 +62,13 @@
 ## 验证命令
 
 1. 核心回归
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_fail_open_budget_ws26_003.py tests/test_system_agent_write_path_ws26_001.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py tests/test_native_tools_runtime_hardening.py`
 
 2. 关联回归
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_subagent_rollout_ws22_006.py tests/test_system_agent_lease_guard_ws22_004.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_manage_ws27_subagent_cutover_ws27_002.py tests/test_core_lease_fencing_ws28_029.py`
 
 3. 全量 SystemAgent 回归集合
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_config.py tests/test_system_agent_cron_alert_ws25_002.py tests/test_system_agent_lease_guard_ws22_004.py tests/test_system_agent_longrun_baseline_ws22_004.py tests/test_system_agent_outbox_bridge_ws23_005.py tests/test_system_agent_release_flow.py tests/test_system_agent_subagent_bridge_ws22_001.py tests/test_system_agent_subagent_rollout_ws22_006.py tests/test_system_agent_topic_bus_ws25_001.py tests/test_system_agent_watchdog_gate_ws23_002.py tests/test_system_agent_write_path_ws26_001.py tests/test_system_agent_fail_open_budget_ws26_003.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_main_brainstem_bootstrap_ws28_024.py tests/test_ops_dashboard_extensions.py tests/test_core_lease_fencing_ws28_029.py tests/test_run_ws27_longrun_endurance_ws27_001.py tests/test_brainstem_event_bridge_ws23_005.py tests/test_canary_rollback_drill.py tests/test_agent_runtime_session_ws30_002.py tests/test_manage_ws27_subagent_cutover_ws27_002.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_run_watchdog_daemon_ws28_025.py tests/test_native_tools_runtime_hardening.py tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py`
 
 ## 结果摘要
 

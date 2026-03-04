@@ -52,7 +52,7 @@
 
 ### 2.1 System Agent 主循环
 
-核心实现：`autonomous/system_agent.py`
+核心实现：`agents/pipeline.py`
 
 - 按配置周期执行自治循环。
 - 默认通过 `runtime_mode=subagent` 进入 `Sub-Agent Runtime + NativeExecutionBridge`。
@@ -71,7 +71,7 @@
 
 ### 2.2 状态机与工作流持久化
 
-核心实现：`autonomous/state/workflow_store.py`
+核心实现：`agents/runtime/workflow_store.py`
 
 - 工作流创建与状态迁移。
 - 命令幂等（`workflow_command + idempotency_key`）。
@@ -89,7 +89,7 @@
 
 核心实现：
 
-- `autonomous/event_log/event_store.py`
+- `core/event_bus/event_store.py`
 - `outbox_event` + `inbox_dedup` 机制
 
 能力点：
@@ -100,7 +100,7 @@
 
 ### 2.5 发布治理
 
-核心实现：`autonomous/release/controller.py`
+核心实现：`agents/release/controller.py`
 
 - canary 观察窗口判定。
 - 阈值策略评估（错误率、延迟、KPI）。
@@ -110,7 +110,7 @@
 
 | 目标能力 | 当前状态 | 当前落点 | 说明 |
 |---|---|---|---|
-| Single Active + Lease/Fencing | 已实现 | `autonomous/system_agent.py` + `workflow_store.py` | 可运行 |
+| Single Active + Lease/Fencing | 已实现 | `agents/pipeline.py` + `workflow_store.py` | 可运行 |
 | Workflow + Command 幂等 | 已实现 | `workflow_store.py` | 已有 `idempotency_key` |
 | Outbox/Inbox 可靠分发 | 已实现 | `workflow_store.py` | 已具备去重与补偿入口 |
 | Canary + Rollback | 已实现 | `release/controller.py` | 支持阈值判定 |

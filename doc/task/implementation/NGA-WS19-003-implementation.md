@@ -12,7 +12,7 @@
 
 ## 本次范围（仅 WS19-003）
 1. LLM Gateway 核心模块
-- 新增 `autonomous/llm_gateway.py`
+- 新增 `agents/llm_gateway.py`
   - 路由输入：`GatewayRouteRequest`
   - 路由输出：`GatewayRouteDecision`
   - Prompt 封装输入：`PromptEnvelopeInput`
@@ -50,7 +50,7 @@
 - 更新 `autonomous/__init__.py` 暴露 Gateway 类型，便于后续 WS19-004/WS19-008 接入。
 
 ## 测试覆盖
-- 新增 `tests/test_llm_gateway_ws19_003.py`
+- 新增 `tests/test_llm_gateway_prompt_slice_ws28_002.py`
   - 路由策略覆盖（主/次/本地）
   - 三段缓存策略字段覆盖（Block1/2/3）
   - Block3 软阈值门禁触发（primary -> secondary）
@@ -58,11 +58,11 @@
   - 本地 tier 成本估算为 0
 
 ## 验证命令
-- `.\.venv\Scripts\python.exe -m ruff check autonomous/llm_gateway.py tests/test_llm_gateway_ws19_003.py autonomous/__init__.py`
+- `.\.venv\Scripts\python.exe -m ruff check agents/llm_gateway.py tests/test_llm_gateway_prompt_slice_ws28_002.py autonomous/__init__.py`
   - 结果: `All checks passed!`
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_llm_gateway_ws19_003.py tests/test_router_engine_ws19_002.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_llm_gateway_prompt_slice_ws28_002.py tests/test_router_engine_prompt_profile_ws28_001.py`
   - 结果: `passed`
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_agentserver_deprecation_guard_ws16_002.py tests/test_native_executor_guards.py tests/test_policy_firewall.py tests/test_global_mutex.py tests/test_process_lineage.py tests/test_native_tools_runtime_hardening.py tests/test_agentic_loop_contract_and_mutex.py tests/test_dna_change_audit_ws18_007.py tests/test_immutable_dna_ws18_006.py tests/test_loop_cost_guard_ws18_005.py tests/test_watchdog_daemon_ws18_004.py tests/test_router_engine_ws19_002.py tests/test_event_replay_tool_ws18_003.py tests/test_llm_gateway_ws19_003.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_agentserver_deprecation_guard_ws16_002.py tests/test_native_executor_guards.py tests/test_policy_firewall.py tests/test_global_mutex.py tests/test_process_lineage.py tests/test_native_tools_runtime_hardening.py tests/test_agentic_loop_contract_and_mutex.py tests/test_dna_change_audit_ws18_007.py tests/test_immutable_dna_ws18_006.py tests/test_loop_cost_guard_ws18_005.py tests/test_watchdog_daemon_ws18_004.py tests/test_router_engine_prompt_profile_ws28_001.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_llm_gateway_prompt_slice_ws28_002.py`
   - 结果: `84 passed, 0 failed`
 
 ## 交付结果与验收对应
@@ -72,7 +72,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `autonomous/llm_gateway.py; tests/test_llm_gateway_ws19_003.py; autonomous/__init__.py; doc/task/implementation/NGA-WS19-003-implementation.md`
+  - `agents/llm_gateway.py; tests/test_llm_gateway_prompt_slice_ws28_002.py; autonomous/__init__.py; doc/task/implementation/NGA-WS19-003-implementation.md`
 - `notes`:
   - `llm gateway now supports primary-secondary-local tier routing, block1/block2 ephemeral cache with block3 uncached policy, soft-limit guardrail, and cost-latency estimation for plan comparison`
 

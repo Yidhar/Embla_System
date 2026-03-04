@@ -15,7 +15,7 @@ python scripts/release_closure_chain_m10_ws25_006.py
 若分步执行，按以下顺序：
 
 ```bash
-python -m pytest -q tests/test_topic_event_bus_ws25_001.py tests/test_cron_alert_producer_ws25_002.py tests/test_topic_event_bus_replay_idempotency_ws25_003.py tests/test_ws25_event_gc_quality_baseline.py tests/test_run_event_gc_quality_baseline_ws25_005.py tests/test_tool_contract.py tests/test_episodic_memory.py -p no:tmpdir
+python -m pytest -q tests/test_core_event_bus_consumers_ws28_029.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_event_store_db_partition_ws29_005.py tests/test_run_event_gc_quality_baseline_ws25_005.py tests/test_run_event_gc_quality_baseline_ws25_005.py tests/test_tool_contract.py tests/test_episodic_memory.py -p no:tmpdir
 python scripts/run_event_gc_quality_baseline_ws25_005.py --output scratch/reports/ws25_event_gc_quality_baseline.json
 python scripts/validate_m10_closure_gate_ws25_006.py --event-gc-quality-report scratch/reports/ws25_event_gc_quality_baseline.json --output-json scratch/reports/ws25_m10_closure_gate_result.json
 python scripts/validate_doc_consistency_ws16_006.py --strict

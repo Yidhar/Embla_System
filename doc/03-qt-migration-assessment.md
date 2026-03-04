@@ -22,7 +22,7 @@
 - 单入口 BFF：`apiserver`
 - 结构化事件流：`/chat/stream` 返回 `tool_calls/tool_results/tool_stage/round_*` 事件
 - 工具执行治理：`agentic_tool_loop + native/mcp`
-- 可选自治循环：`autonomous/system_agent.py`
+- 可选自治循环：`agents/pipeline.py`
 
 这意味着 Qt 前端可以作为“纯事件消费者”接入，不必理解内部微服务拓扑。
 

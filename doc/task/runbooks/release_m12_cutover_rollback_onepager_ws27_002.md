@@ -11,7 +11,7 @@
 ## 2. 关键脚本
 
 - 主脚本：`scripts/manage_ws27_subagent_cutover_ws27_002.py`
-- 默认配置文件：`autonomous/config/autonomous_config.yaml`
+- 默认配置文件：`config/autonomous_runtime.yaml`
 - 默认回滚快照：`scratch/reports/ws27_subagent_cutover_rollback_snapshot_ws27_002.json`
 - 默认报告输出：`scratch/reports/ws27_subagent_cutover_ws27_002.json`
 
@@ -72,5 +72,5 @@
 ## 6. 风险与回退说明
 
 - 若回滚快照缺失，`rollback` 会执行安全降级：强制 `enabled=false` 且 `rollout_percent=0`。
-- `apply/rollback` 默认仅更新 `subagent_runtime` 目标键，尽量保留配置文件既有布局；建议仍在提交前核对 `autonomous/config/autonomous_config.yaml` diff。
+- `apply/rollback` 默认仅更新 `subagent_runtime` 目标键，尽量保留配置文件既有布局；建议仍在提交前核对 `config/autonomous_runtime.yaml` diff。
 - 真实放行前仍需结合 `WS27-001` 真实墙钟 72h 验收记录进行最终签署，不仅依赖虚拟等效脚本结果。

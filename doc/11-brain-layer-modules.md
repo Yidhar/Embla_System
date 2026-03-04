@@ -2,7 +2,7 @@
 **文档类型**：🎯 目标态架构设计（Target Architecture - Phase 3）
 **实施状态**：Phase 3 目标态对齐中（当前为 Phase 0 + 增量桥接混合态）
 **最后更新**：2026-02-27
-**当前替代方案**：System Agent (autonomous/system_agent.py) + Router/Memory 增量实现 + Sub-Agent Runtime / NativeExecutionBridge
+**当前替代方案**：System Agent (agents/pipeline.py) + Router/Memory 增量实现 + Sub-Agent Runtime / NativeExecutionBridge
 **实施路径**：Phase 0 (System Agent) → Phase 1-2 (增强) → Phase 3 (本文档)
 ---
 
@@ -16,9 +16,9 @@
 > - 🔴 **Phase 3 目标态**：Meta-Agent、Router、完整三维记忆（本文档）
 >
 > **当前实现映射**：
-> - Meta-Agent → `autonomous/meta_agent_runtime.py` + `autonomous/system_agent.py`（桥接）
-> - Router → `autonomous/router_engine.py`（主）+ `autonomous/tools/cli_selector.py`（历史兼容）
-> - Working Memory → `autonomous/working_memory_manager.py` + 对话上下文（`apiserver/llm_service.py`）
+> - Meta-Agent → `agents/meta_agent.py` + `agents/pipeline.py`（桥接）
+> - Router → `agents/router_engine.py`（主）+ `autonomous/tools/cli_selector.py`（历史兼容）
+> - Working Memory → `agents/memory/working_memory.py` + 对话上下文（`apiserver/llm_service.py`）
 > - Episodic Memory → `system/episodic_memory.py`（增量）
 > - Semantic Graph → `system/semantic_graph.py`（增量）
 >

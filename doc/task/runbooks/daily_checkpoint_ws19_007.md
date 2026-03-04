@@ -5,7 +5,7 @@
 - 汇总最近窗口的 session/tool/artifact 关键信息，支持次日快速恢复。
 
 ## 2. 入口
-- 引擎模块：`autonomous/daily_checkpoint.py`
+- 引擎模块：`agents/runtime/daily_checkpoint.py`
 - 执行脚本：`scripts/daily_checkpoint_ws19_007.py`
 
 ## 3. 标准执行命令

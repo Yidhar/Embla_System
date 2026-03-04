@@ -27,7 +27,7 @@
 - priority: P0
 - phase: M6
 - owner_role: backend
-- scope: `autonomous/tools/subagent_runtime.py`
+- scope: `agents/runtime/mini_loop.py`
 - inputs: `doc/12#8.2,#8.3,#8.4`
 - deliverables:
   - 子任务依赖调度（dependency-aware）

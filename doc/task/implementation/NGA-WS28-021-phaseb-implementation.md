@@ -19,7 +19,7 @@
 
 ## 2. 代码改动
 
-1. `autonomous/tools/execution_bridge.py`
+1. `agents/tool_loop.py`
 - 扩展 `RoleExecutionPolicy`：
   - `strict_semantic_guard`
   - `allowed_semantic_toolchains`
@@ -34,7 +34,7 @@
   - `executor`
 - `ExecutionBridgeReceipt` 增加 `governance` 字段，保证审计同源。
 
-2. `autonomous/tools/subagent_runtime.py`
+2. `agents/runtime/mini_loop.py`
 - 将治理字段透传到标准事件：
   - `SubTaskExecutionBridgeReceipt`
   - `SubTaskExecutionCompleted`
@@ -60,11 +60,11 @@
 
 ## 3. 测试更新
 
-1. `tests/test_execution_bridge_role_executors_ws28_014.py`
+1. `tests/test_agent_roles_ws30_005.py`
 - 新增语义守卫阻断断言。
 - 新增结构化治理字段断言（path violation / ops ticket / warning）。
 
-2. `tests/test_subagent_runtime_eventbus_ws21_003.py`
+2. `tests/test_core_event_bus_consumers_ws28_029.py`
 - 新增治理字段透传断言（completed/receipt/rejected）。
 
 3. `tests/test_ops_dashboard_extensions.py`
@@ -75,18 +75,18 @@
 
 ```bash
 .venv/bin/ruff check \
-  autonomous/tools/execution_bridge.py \
-  autonomous/tools/subagent_runtime.py \
-  tests/test_execution_bridge_role_executors_ws28_014.py \
-  tests/test_subagent_runtime_eventbus_ws21_003.py \
+  agents/tool_loop.py \
+  agents/runtime/mini_loop.py \
+  tests/test_agent_roles_ws30_005.py \
+  tests/test_core_event_bus_consumers_ws28_029.py \
   tests/test_ops_dashboard_extensions.py
 
 .venv/bin/pytest -q \
-  tests/test_execution_bridge_role_executors_ws28_014.py \
-  tests/test_subagent_runtime_eventbus_ws21_003.py \
-  tests/test_subagent_runtime_ws21_002.py \
-  tests/test_execution_bridge_native_ws28_013.py \
-  tests/test_system_agent_execution_bridge_cutover_ws28_013.py \
+  tests/test_agent_roles_ws30_005.py \
+  tests/test_core_event_bus_consumers_ws28_029.py \
+  tests/test_subagent_contract.py \
+  tests/test_run_ws28_execution_governance_gate_ws28_021.py \
+  tests/test_run_ws28_execution_governance_gate_ws28_021.py \
   tests/test_ops_dashboard_extensions.py
 ```
 

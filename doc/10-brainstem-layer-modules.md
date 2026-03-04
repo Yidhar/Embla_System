@@ -16,7 +16,7 @@
 > - 🔴 **Phase 3 目标态**：Immutable DNA、KillSwitch、完整守护进程
 >
 > **当前实现映射**：
-> - Event Bus → Event Store (autonomous/event_log/event_store.py)
+> - Event Bus → Event Store (core/event_bus/event_store.py)
 > - Watchdog → 无（目标态）
 > - Immutable DNA → Prompt 文件 (system/prompts/)
 > - Security Kernel → Native Executor (system/native_executor.py)

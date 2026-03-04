@@ -27,7 +27,7 @@
 - `frontend/src/views/MessageView.vue` 与 `frontend/src/views/FloatingView.vue` 不再直接依赖 `@/api/core`
 
 3. 新增边界回归测试
-- 新增 `tests/test_frontend_domain_boundaries_ws20_003.py`
+- 新增 `tests/test_embla_core_release_compat_gate.py`
 - 覆盖：
   - 四个域路由模块存在且覆盖预期 path
   - 主路由改为聚合入口
@@ -35,7 +35,7 @@
   - 视图层禁止 `@/views/*` 互相导入
 
 ## 验证命令
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_frontend_domain_boundaries_ws20_003.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_embla_core_release_compat_gate.py`
 - `cd frontend; npm run build`
 
 ## 交付结果与验收对应

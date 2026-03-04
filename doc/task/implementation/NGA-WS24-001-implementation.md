@@ -49,7 +49,7 @@
 ## 4. 验证记录
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q tests/test_mcp_plugin_isolation_ws24_001.py tests/test_mcp_status_snapshot.py tests/test_frontend_bff_regression_ws20_005.py -p no:tmpdir
+.\.venv\Scripts\python.exe -m pytest -q tests/test_mcp_plugin_isolation_ws24_001.py tests/test_mcp_status_snapshot.py tests/test_embla_core_release_compat_gate.py -p no:tmpdir
 ```
 
 ## 5. 结果

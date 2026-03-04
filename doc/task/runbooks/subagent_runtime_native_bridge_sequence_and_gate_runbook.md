@@ -6,12 +6,12 @@
 
 ## 1. 代码锚点
 
-- 调度入口：`autonomous/system_agent.py:684`
-- 运行时编排：`autonomous/tools/subagent_runtime.py:93`
-- 内生执行桥：`autonomous/tools/execution_bridge.py:48`
-- 运行模式决策：`autonomous/system_agent.py:1033`
-- fail-open 预算与阻断：`autonomous/system_agent.py:1083`
-- 当前配置（subagent-only）：`autonomous/config/autonomous_config.yaml:54`
+- 调度入口：`agents/pipeline.py:684`
+- 运行时编排：`agents/runtime/mini_loop.py:93`
+- 内生执行桥：`agents/tool_loop.py:48`
+- 运行模式决策：`agents/pipeline.py:1033`
+- fail-open 预算与阻断：`agents/pipeline.py:1083`
+- 当前配置（subagent-only）：`config/autonomous_runtime.yaml:54`
 
 ## 2. 事件时序图（主链路）
 
@@ -135,7 +135,7 @@ rg -n "SubTaskExecutionBridgeReceipt|SubTaskExecutionCompleted|TaskExecutionComp
 2. 若出现 `SubAgentRuntimeFailOpenBlocked`，检查是否因子任务缺补丁或执行桥策略拒绝：
 
 ```bash
-rg -n "SubAgentRuntimeFailOpenBlocked|legacy_runtime_retired|subagent_fail_open_blocked|execution_bridge_missing_patch_intent" logs/autonomous/events.jsonl autonomous/system_agent.py
+rg -n "SubAgentRuntimeFailOpenBlocked|legacy_runtime_retired|subagent_fail_open_blocked|execution_bridge_missing_patch_intent" logs/autonomous/events.jsonl agents/pipeline.py
 ```
 
 3. 若出现 `missing_scaffold_patch_intents` 或 `execution_bridge_missing_patch_intent`，检查任务 `metadata.subtasks[*].patches` 或 `metadata.patch_intents` 是否存在。
@@ -148,15 +148,15 @@ rg -n "SubAgentRuntimeFailOpenBlocked|legacy_runtime_retired|subagent_fail_open_
 
 1. 阅读本文件两张图，先建立执行主链路模型。  
 2. 对照源码阅读 4 个函数：
-- `_resolve_runtime_mode`：`autonomous/system_agent.py:1033`
-- `_execute_subagent_attempt`：`autonomous/system_agent.py:684`
-- `SubAgentRuntime.run`：`autonomous/tools/subagent_runtime.py:93`
-- `NativeExecutionBridge.execute_subtask`：`autonomous/tools/execution_bridge.py:55`
+- `_resolve_runtime_mode`：`agents/pipeline.py:1033`
+- `_execute_subagent_attempt`：`agents/pipeline.py:684`
+- `SubAgentRuntime.run`：`agents/runtime/mini_loop.py:93`
+- `NativeExecutionBridge.execute_subtask`：`agents/tool_loop.py:55`
 3. 跑定向回归：
 
 ```bash
 .venv/bin/pytest -q \
-  tests/test_execution_bridge_native_ws28_013.py \
-  tests/test_system_agent_execution_bridge_cutover_ws28_013.py \
-  tests/test_subagent_runtime_eventbus_ws21_003.py
+  tests/test_run_ws28_execution_governance_gate_ws28_021.py \
+  tests/test_run_ws28_execution_governance_gate_ws28_021.py \
+  tests/test_core_event_bus_consumers_ws28_029.py
 ```

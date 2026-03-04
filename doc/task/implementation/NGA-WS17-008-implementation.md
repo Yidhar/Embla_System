@@ -30,7 +30,7 @@
 - `logs/autonomous/workflow.db`（pending 队列深度）
 - `logs/runtime/global_mutex_lease.json`（锁到期状态）
 - `ArtifactStore` 指标（artifact 容量与水位）
-- `autonomous/config/autonomous_config.yaml`（阈值配置）
+- `config/autonomous_runtime.yaml`（阈值配置）
 
 3. 值班 runbook
 - 一页式指标阈值定义、触发规则、分项排障动作、恢复验收与交接模板。

@@ -12,7 +12,7 @@
 
 ## 本次范围（仅 WS19-004）
 1. Working Memory 管理模块
-- 新增 `autonomous/working_memory_manager.py`
+- 新增 `agents/memory/working_memory.py`
   - 阈值配置：`MemoryWindowThresholds`
     - `soft_limit_tokens`（软阈值）
     - `hard_limit_tokens`（硬阈值）
@@ -39,17 +39,17 @@
   - `WorkingMemoryWindowManager`
 
 ## 测试覆盖
-- 新增 `tests/test_working_memory_manager_ws19_004.py`
+- 新增 `tests/test_memory_agents.py`
   - 软阈值触发 + 回调触发 + 消息收敛验证
   - 关键上下文（trace_id）保留验证
   - 硬阈值触发后截断/丢弃路径验证
 
 ## 验证命令
-- `.\.venv\Scripts\python.exe -m ruff check autonomous/working_memory_manager.py tests/test_working_memory_manager_ws19_004.py autonomous/__init__.py`
+- `.\.venv\Scripts\python.exe -m ruff check agents/memory/working_memory.py tests/test_memory_agents.py autonomous/__init__.py`
   - 结果: `All checks passed!`
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_working_memory_manager_ws19_004.py tests/test_llm_gateway_ws19_003.py tests/test_router_engine_ws19_002.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_memory_agents.py tests/test_llm_gateway_prompt_slice_ws28_002.py tests/test_router_engine_prompt_profile_ws28_001.py`
   - 结果: `passed`
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_agentserver_deprecation_guard_ws16_002.py tests/test_native_executor_guards.py tests/test_policy_firewall.py tests/test_global_mutex.py tests/test_process_lineage.py tests/test_native_tools_runtime_hardening.py tests/test_agentic_loop_contract_and_mutex.py tests/test_dna_change_audit_ws18_007.py tests/test_immutable_dna_ws18_006.py tests/test_loop_cost_guard_ws18_005.py tests/test_watchdog_daemon_ws18_004.py tests/test_router_engine_ws19_002.py tests/test_event_replay_tool_ws18_003.py tests/test_llm_gateway_ws19_003.py tests/test_working_memory_manager_ws19_004.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_agentserver_deprecation_guard_ws16_002.py tests/test_native_executor_guards.py tests/test_policy_firewall.py tests/test_global_mutex.py tests/test_process_lineage.py tests/test_native_tools_runtime_hardening.py tests/test_agentic_loop_contract_and_mutex.py tests/test_dna_change_audit_ws18_007.py tests/test_immutable_dna_ws18_006.py tests/test_loop_cost_guard_ws18_005.py tests/test_watchdog_daemon_ws18_004.py tests/test_router_engine_prompt_profile_ws28_001.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_llm_gateway_prompt_slice_ws28_002.py tests/test_memory_agents.py`
   - 结果: `87 passed, 0 failed`
 
 ## 交付结果与验收对应
@@ -59,7 +59,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `autonomous/working_memory_manager.py; tests/test_working_memory_manager_ws19_004.py; autonomous/__init__.py; doc/task/implementation/NGA-WS19-004-implementation.md`
+  - `agents/memory/working_memory.py; tests/test_memory_agents.py; autonomous/__init__.py; doc/task/implementation/NGA-WS19-004-implementation.md`
 - `notes`:
   - `working memory manager now enforces soft-hard token thresholds with callback hooks, preserves critical troubleshooting context markers, and trims/truncates noncritical history to control token peaks`
 

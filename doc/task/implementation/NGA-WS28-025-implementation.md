@@ -28,7 +28,7 @@
 - 默认状态文件：`scratch/runtime/watchdog_daemon_state_ws28_025.json`
 - 默认报告：`scratch/reports/watchdog_daemon_ws28_025.json`
 
-3. `autonomous/system_agent.py`
+3. `agents/pipeline.py`
 - `watchdog` 配置新增 daemon 状态字段：
   - `prefer_daemon_state`
   - `daemon_state_file`
@@ -47,7 +47,7 @@
   - `WatchdogDaemonThresholdExceeded`
   - `WatchdogDaemonIssue`
 
-5. `autonomous/config/autonomous_config.yaml`
+5. `config/autonomous_runtime.yaml`
 - 增补 watchdog daemon 默认配置字段。
 
 6. `scripts/manage_brainstem_control_plane_ws28_017.py` + `scripts/release_closure_chain_full_m0_m12.py`
@@ -66,10 +66,10 @@
 2. `tests/test_run_watchdog_daemon_ws28_025.py`
 - 新增脚本 `run/status` CLI smoke。
 
-3. `tests/test_system_agent_watchdog_gate_ws23_002.py`
+3. `tests/test_run_watchdog_daemon_ws28_025.py`
 - 新增 daemon 状态消费路径测试（验证阻断不依赖 `run_once`）。
 
-4. `tests/test_system_agent_config.py`
+4. `tests/test_main_brainstem_bootstrap_ws28_024.py`
 - 新增 watchdog daemon 配置字段的默认值与覆盖值断言。
 
 5. `tests/test_ops_dashboard_extensions.py`
@@ -86,9 +86,9 @@
 .venv/bin/ruff check \
   system/watchdog_daemon.py \
   scripts/run_watchdog_daemon_ws28_025.py \
-  autonomous/system_agent.py \
-  tests/test_system_agent_watchdog_gate_ws23_002.py \
-  tests/test_system_agent_config.py \
+  agents/pipeline.py \
+  tests/test_run_watchdog_daemon_ws28_025.py \
+  tests/test_main_brainstem_bootstrap_ws28_024.py \
   tests/test_watchdog_daemon_ws18_004.py \
   tests/test_run_watchdog_daemon_ws28_025.py \
   tests/test_ops_dashboard_extensions.py
@@ -96,8 +96,8 @@
 .venv/bin/pytest -q \
   tests/test_watchdog_daemon_ws18_004.py \
   tests/test_run_watchdog_daemon_ws28_025.py \
-  tests/test_system_agent_watchdog_gate_ws23_002.py \
-  tests/test_system_agent_config.py \
+  tests/test_run_watchdog_daemon_ws28_025.py \
+  tests/test_main_brainstem_bootstrap_ws28_024.py \
   tests/test_ops_dashboard_extensions.py
 
 .venv/bin/python scripts/run_watchdog_daemon_ws28_025.py --mode run --interval-seconds 0 --max-ticks 1 --strict

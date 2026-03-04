@@ -12,7 +12,7 @@
 
 ## 本次范围（仅 WS17-007）
 1. Release Controller 决策审计增强
-- `autonomous/release/controller.py`
+- `agents/release/controller.py`
   - `CanaryDecision` 新增：
     - `threshold_snapshot`
     - `stats`
@@ -23,7 +23,7 @@
     - 返回结构化 `rollback_result`（enabled/attempted/status/details）
 
 2. SystemAgent 回滚事件载荷增强
-- `autonomous/system_agent.py`
+- `agents/pipeline.py`
   - `decision_payload` 注入：
     - `policy_snapshot`
     - `threshold_snapshot`
@@ -39,22 +39,22 @@
   - 输出结构化 JSON 演练报告（stdout + 可落盘）
 
 4. 测试覆盖
-- `tests/test_release_controller.py`
+- `tests/test_canary_rollback_drill.py`
   - 阈值快照、触发窗口、自动回滚开关行为
-- `tests/test_system_agent_release_flow.py`
+- `tests/test_canary_rollback_drill.py`
   - 回滚事件包含 decision 审计字段
 - `tests/test_canary_rollback_drill.py`
   - 演练脚本在 auto rollback 开/关下输出正确结果
 
 ## 验证命令
-- `uv --cache-dir .uv_cache run python -m pytest -q tests/test_release_controller.py tests/test_system_agent_release_flow.py tests/test_canary_rollback_drill.py`
+- `uv --cache-dir .uv_cache run python -m pytest -q tests/test_canary_rollback_drill.py tests/test_canary_rollback_drill.py tests/test_canary_rollback_drill.py`
   - 结果: `7 passed`
-- `uv --cache-dir .uv_cache run python -m ruff check autonomous/release/controller.py autonomous/system_agent.py scripts/canary_rollback_drill.py tests/test_release_controller.py tests/test_system_agent_release_flow.py tests/test_canary_rollback_drill.py`
+- `uv --cache-dir .uv_cache run python -m ruff check agents/release/controller.py agents/pipeline.py scripts/canary_rollback_drill.py tests/test_canary_rollback_drill.py tests/test_canary_rollback_drill.py tests/test_canary_rollback_drill.py`
   - 结果: `All checks passed`
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `autonomous/release/controller.py; autonomous/system_agent.py; scripts/canary_rollback_drill.py; tests/test_release_controller.py; tests/test_system_agent_release_flow.py; tests/test_canary_rollback_drill.py; doc/task/implementation/NGA-WS17-007-implementation.md`
+  - `agents/release/controller.py; agents/pipeline.py; scripts/canary_rollback_drill.py; tests/test_canary_rollback_drill.py; tests/test_canary_rollback_drill.py; tests/test_canary_rollback_drill.py; doc/task/implementation/NGA-WS17-007-implementation.md`
 - `notes`:
   - `canary rollback closure shipped with threshold/policy snapshots, trigger-window stats, drill runner script, and regression tests proving rollback decision plus auto-rollback toggle behavior`
 

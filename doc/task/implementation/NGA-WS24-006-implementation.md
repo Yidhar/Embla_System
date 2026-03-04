@@ -13,7 +13,7 @@ M9 目标要求“插件隔离能力必须进入发布收口链”。
 ## 2. 实施内容
 
 1. 新增 M9 门禁评估器
-   - `autonomous/ws24_release_gate.py`
+   - `agents/release_gates/ws24_release_gate.py`
    - 校验项：
      - WS24-005 混沌演练报告存在且通过
      - 任务文档包含 WS24-002~006 已落地快照
@@ -40,8 +40,8 @@ M9 目标要求“插件隔离能力必须进入发布收口链”。
 
 ## 3. 变更文件
 
-- `autonomous/ws24_release_gate.py`
-- `tests/test_ws24_release_gate.py`
+- `agents/release_gates/ws24_release_gate.py`
+- `tests/test_release_closure_chain_m9_ws24_006.py`
 - `scripts/validate_m9_closure_gate_ws24_006.py`
 - `scripts/release_closure_chain_m9_ws24_006.py`
 - `tests/test_release_closure_chain_m9_ws24_006.py`
@@ -54,7 +54,7 @@ M9 目标要求“插件隔离能力必须进入发布收口链”。
 ## 4. 验证记录
 
 ```bash
-.\.venv\Scripts\python.exe -m pytest -q tests/test_ws24_release_gate.py tests/test_release_closure_chain_m9_ws24_006.py tests/test_release_closure_chain_full_m0_m7.py tests/test_render_release_closure_summary.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_release_closure_chain_m9_ws24_006.py tests/test_release_closure_chain_m9_ws24_006.py tests/test_release_closure_chain_full_m0_m7.py tests/test_render_release_closure_summary.py
 ```
 
 ## 5. 结果

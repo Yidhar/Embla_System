@@ -13,7 +13,7 @@
 ## 交付物
 
 1. 长稳基线 Harness
-- 文件: `autonomous/ws22_longrun_baseline.py`
+- 文件: `agents/runtime/ws22_longrun_baseline.py`
 - 能力:
   - 复用 `SystemAgent -> SubAgentRuntime -> Scaffold` 实际链路
   - 注入周期性 fail-open 场景（缺失 patch intent）并验证 fallback 稳定性
@@ -21,7 +21,7 @@
   - 自动落盘报告: `scratch/reports/ws22_scheduler_longrun_baseline.json`
 
 2. 基线测试
-- 文件: `tests/test_system_agent_longrun_baseline_ws22_004.py`
+- 文件: `tests/test_run_ws27_longrun_endurance_ws27_001.py`
 - 用例:
   - `test_ws22_longrun_equivalent_baseline_report`
 - 断言:
@@ -46,7 +46,7 @@
 ## 验证命令
 
 1. 新增链路回归
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_system_agent_longrun_baseline_ws22_004.py tests/test_system_agent_lease_guard_ws22_004.py tests/test_system_agent_subagent_bridge_ws22_001.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_run_ws27_longrun_endurance_ws27_001.py tests/test_core_lease_fencing_ws28_029.py tests/test_agent_runtime_session_ws30_002.py`
 
 2. 演练脚本执行
 - `.\.venv\Scripts\python.exe scripts/chaos_ws22_scheduler_longrun.py --rounds 120 --virtual-round-seconds 5 --fail-open-every 15 --lease-renew-every 20`

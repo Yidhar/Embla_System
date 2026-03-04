@@ -37,13 +37,13 @@
 
 | 能力项 | 目标态定义（预定设定） | 当前实现 | 状态 | 代码锚点 | 验证证据 |
 |---|---|---|---|---|---|
-| Sub-Agent Runtime 依赖调度 | FE/BE/Ops 子任务依赖感知编排 + 统一执行门禁 | 已具备依赖调度、子任务规范校验、fail-fast | `BRIDGE_DONE` | `autonomous/tools/subagent_runtime.py` | `tests/test_subagent_runtime_ws21_002.py`, `tests/test_subagent_runtime_spec_validation_ws22_005.py` |
-| Contract Gate（协商前置） | FE/BE 并行前冻结 `contract_id + checksum` | 已具备协商前置与 mismatch 拒绝链 | `BRIDGE_DONE` | `autonomous/tools/subagent_runtime.py`, `autonomous/contract_negotiation.py` | `tests/test_contract_negotiation_ws21_004.py`, `tests/test_subagent_runtime_ws21_002.py` |
-| Scaffold 原子提交 | 多文件补丁事务化提交 + verify 失败回滚 | 已具备事务提交、verify pipeline、回滚票据 | `BRIDGE_DONE` | `autonomous/scaffold_engine.py`, `autonomous/scaffold_verify_pipeline.py` | `tests/test_scaffold_engine_ws21_001.py`, `tests/test_scaffold_verify_pipeline_ws21_005.py`, `tests/test_workspace_txn_e2e_regression.py` |
-| SystemAgent 调度桥接 | 主链可灰度接管 Runtime，失败可回退 | 已切到 subagent-only；保留 `runtime_mode` 遥测与 fail-open 预算阻断，不再回退 legacy CLI | `BRIDGE_DONE` | `autonomous/system_agent.py` | `tests/test_system_agent_subagent_bridge_ws22_001.py`, `tests/test_system_agent_subagent_rollout_ws22_006.py`, `tests/test_system_agent_fail_open_budget_ws26_003.py` |
+| Sub-Agent Runtime 依赖调度 | FE/BE/Ops 子任务依赖感知编排 + 统一执行门禁 | 已具备依赖调度、子任务规范校验、fail-fast | `BRIDGE_DONE` | `agents/runtime/mini_loop.py` | `tests/test_subagent_contract.py`, `tests/test_subagent_contract.py` |
+| Contract Gate（协商前置） | FE/BE 并行前冻结 `contract_id + checksum` | 已具备协商前置与 mismatch 拒绝链 | `BRIDGE_DONE` | `agents/runtime/mini_loop.py`, `system/subagent_contract.py` | `tests/test_subagent_contract.py`, `tests/test_subagent_contract.py` |
+| Scaffold 原子提交 | 多文件补丁事务化提交 + verify 失败回滚 | 已具备事务提交、verify pipeline、回滚票据 | `BRIDGE_DONE` | `autonomous/scaffold_engine.py`, `autonomous/scaffold_verify_pipeline.py` | `tests/test_workspace_txn_e2e_regression.py`, `tests/test_workspace_txn_e2e_regression.py`, `tests/test_workspace_txn_e2e_regression.py` |
+| SystemAgent 调度桥接 | 主链可灰度接管 Runtime，失败可回退 | 已切到 subagent-only；保留 `runtime_mode` 遥测与 fail-open 预算阻断，不再回退 legacy CLI | `BRIDGE_DONE` | `agents/pipeline.py` | `tests/test_agent_runtime_session_ws30_002.py`, `tests/test_manage_ws27_subagent_cutover_ws27_002.py`, `tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py` |
 | M12 Full Cutover 运营能力 | 可执行全量切换与回滚窗 | 已具备 `plan/apply/status/rollback` 管理脚本 | `BRIDGE_DONE` | `scripts/manage_ws27_subagent_cutover_ws27_002.py` | `tests/test_manage_ws27_subagent_cutover_ws27_002.py`, `doc/task/implementation/NGA-WS27-002-implementation.md` |
-| FE/BE/Ops 子代理执行面（内生） | 非黑盒的内生子代理进程执行器，具备统一可控审计 | 已切到内生 `NativeExecutionBridge`，并落地 FE/BE/Ops 角色专用执行器 v1（路径策略 + strict 门禁 + 审计回执） | `BRIDGE_DONE` | `autonomous/system_agent.py`, `autonomous/tools/execution_bridge.py` | `tests/test_execution_bridge_native_ws28_013.py`, `tests/test_execution_bridge_role_executors_ws28_014.py`, `tests/test_system_agent_execution_bridge_cutover_ws28_013.py` |
-| Execution Bridge 终态 | 子代理输出到执行动作的内建可审计桥，不依赖外部黑盒 | 已落地 `SubTaskExecutionBridgeReceipt + SubTaskExecutionCompleted`，并完成旧别名事件退役 | `BRIDGE_DONE` | `autonomous/tools/execution_bridge.py`, `autonomous/tools/subagent_runtime.py`, `autonomous/system_agent.py` | `tests/test_subagent_runtime_eventbus_ws21_003.py`, `tests/test_execution_bridge_native_ws28_013.py` |
+| FE/BE/Ops 子代理执行面（内生） | 非黑盒的内生子代理进程执行器，具备统一可控审计 | 已切到内生 `NativeExecutionBridge`，并落地 FE/BE/Ops 角色专用执行器 v1（路径策略 + strict 门禁 + 审计回执） | `BRIDGE_DONE` | `agents/pipeline.py`, `agents/tool_loop.py` | `tests/test_run_ws28_execution_governance_gate_ws28_021.py`, `tests/test_agent_roles_ws30_005.py`, `tests/test_run_ws28_execution_governance_gate_ws28_021.py` |
+| Execution Bridge 终态 | 子代理输出到执行动作的内建可审计桥，不依赖外部黑盒 | 已落地 `SubTaskExecutionBridgeReceipt + SubTaskExecutionCompleted`，并完成旧别名事件退役 | `BRIDGE_DONE` | `agents/tool_loop.py`, `agents/runtime/mini_loop.py`, `agents/pipeline.py` | `tests/test_core_event_bus_consumers_ws28_029.py`, `tests/test_run_ws28_execution_governance_gate_ws28_021.py` |
 | Brainstem 控制面独立化（P0） | 脑干守护链路独立进程可启动、可心跳、可健康探针 | `WS23-001` 入口已补齐 `daemon` 模式与心跳快照契约（仍未到目标态“不可变脑干进程部署”） | `BRIDGE_DONE` | `scripts/run_brainstem_supervisor_ws23_001.py`, `system/brainstem_supervisor.py` | `tests/test_brainstem_supervisor_entry_ws23_001.py`, `tests/test_brainstem_supervisor_ws18_008.py` |
 
 ---
@@ -151,9 +151,9 @@
 - status: `done`（2026-02-28）
 - scope: 在现有路径策略/strict 门禁基础上，补语义级工具链与更细粒度策略
 - expected anchors:
-  - `autonomous/tools/execution_bridge.py`
-  - `autonomous/system_agent.py`
-  - `autonomous/tools/subagent_runtime.py`
+  - `agents/tool_loop.py`
+  - `agents/pipeline.py`
+  - `agents/runtime/mini_loop.py`
 - progress snapshot:
   - 已完成 Phase A：`role_executor_policy` 从任务 contract 侧透传为标准事件字段（`SubTaskDispatching` / `SubTaskExecutionCompleted`），不再依赖手填 metadata。
   - 已完成 Phase B：执行桥新增 FE/BE/Ops 语义工具链守卫（semantic toolchain guard），并将结构化拒绝原因（`reason_code/category/severity/violations/policy_source`）接入 `SubTaskExecutionCompleted/SubTaskRejected` 事件与 `/v1/ops/runtime/posture`、`/v1/ops/incidents/latest` 聚合视图。

@@ -19,7 +19,7 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
 ## Task Status
 
 - [x] Create `autonomous/` package structure.
-- [x] Implement event log skeleton (`autonomous/event_log/event_store.py`).
+- [x] Implement event log skeleton (`core/event_bus/event_store.py`).
 - [x] Implement CLI adapter contracts and subprocess adapters.
 - [x] Implement CLI selector and dispatcher skeleton.
 - [x] Implement sensor/planner/evaluator skeleton.
@@ -27,7 +27,7 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
 - [x] Add Codex MCP verification fallback adapter placeholder.
 - [x] Add autonomous config model to `system/config.py`.
 - [x] Add background startup hook in `main.py` (`_try_start_autonomous_agent`).
-- [x] Add initial config template (`autonomous/config/autonomous_config.yaml`).
+- [x] Add initial config template (`config/autonomous_runtime.yaml`).
 - [x] Add `config.json.example` autonomous section.
 - [x] Add DoD baseline artifacts (`memory/`, `policy/`, `config/`, `runbooks/`, `scripts/dod_check.ps1`).
 - [ ] Add full observability metrics/traces.
@@ -49,7 +49,7 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
 5. Added config model (`autonomous`) and startup wiring in background service loop.
 6. Added minimal tests for system agent config parsing.
 7. Verified syntax compile for `autonomous/`, `system/config.py`, and `main.py`.
-8. Added SQLite workflow store and schema (`autonomous/state/schema.sql`, `autonomous/state/workflow_store.py`).
+8. Added SQLite workflow store and schema (`agents/runtime/schema.sql`, `agents/runtime/workflow_store.py`).
 9. Wired `SystemAgent` task execution to durable workflow transitions and command logs.
 10. Added unit tests for workflow store state/outbox behavior.
 11. Added DoD check script and baseline runbooks/policy/schema artifacts.
@@ -61,7 +61,7 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
 17. Added inbox/outbox idempotent completion path (`is_inbox_processed`, `complete_outbox_for_consumer`).
 18. Refactored `SystemAgent` to lease-aware single-active loop and fenced writes.
 19. Added outbox async consumer in `SystemAgent`, wired `TaskApproved` to business handler.
-20. Added release controller (`autonomous/release/controller.py`) for canary decision + rollback execution hook.
+20. Added release controller (`agents/release/controller.py`) for canary decision + rollback execution hook.
 21. Updated workflow path to `ReleaseCandidate -> CanaryRunning -> Promoted/RolledBack`.
 22. Extended autonomous config models with `lease`, `outbox_dispatch`, `release`.
 23. Added CI workflow `.github/workflows/dod-check.yml`.
@@ -117,12 +117,12 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
     - `system/background_analyzer.py`: same codex default routing when planner emits MCP calls without `service_name`
     - `mcpserver/mcp_manager.py`: support nested `arguments` merge + default codex execution params for external mcporter calls
 40. Changed autonomous CLI default execution target to Codex:
-    - `system/config.py`, `autonomous/system_agent.py`, `autonomous/dispatcher.py`, `autonomous/tools/cli_selector.py`, `autonomous/config/autonomous_config.yaml`, `config.json.example`
+    - `system/config.py`, `agents/pipeline.py`, `autonomous/dispatcher.py`, `autonomous/tools/cli_selector.py`, `config/autonomous_runtime.yaml`, `config.json.example`
     - defaults now `preferred=codex`, fallback `claude -> gemini`
 41. Verification for Codex-first chain:
     - py_compile passed on updated routing/config modules
     - runtime smoke passed: `_execute_mcp_call({"tool_name":"ask-codex","message":"..."})` auto-routed to `codex-cli` and returned model output
-    - `uv run python -m pytest tests/test_system_agent_config.py -q` passed
+    - `uv run python -m pytest tests/test_main_brainstem_bootstrap_ws28_024.py -q` passed
     - `scripts/dod_check.ps1` passed
 42. Fixed tools loop no-tool completion semantics in `apiserver/agentic_tool_loop.py`:
     - added explicit completion marker detection (`不需要工具`) for immediate loop termination

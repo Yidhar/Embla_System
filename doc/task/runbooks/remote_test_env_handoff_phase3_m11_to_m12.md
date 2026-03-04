@@ -13,14 +13,14 @@
 ## 2. 当前已完成范围（落地状态）
 
 1. `NGA-WS26-001` 写路径强制收敛到 `Scaffold/Txn`
-- 代码：`autonomous/system_agent.py`, `autonomous/tools/subagent_runtime.py`
-- 配置：`autonomous/config/autonomous_config.yaml`
+- 代码：`agents/pipeline.py`, `agents/runtime/mini_loop.py`
+- 配置：`config/autonomous_runtime.yaml`
 
 2. `NGA-WS26-002` rollout/fail-open/lease 指标统一导出
 - 代码：`scripts/export_slo_snapshot.py`, `scripts/export_ws26_runtime_snapshot_ws26_002.py`
 
 3. `NGA-WS26-003` fail-open 预算超限自动降级
-- 代码：`autonomous/system_agent.py`
+- 代码：`agents/pipeline.py`
 - 关键事件：`SubAgentRuntimeAutoDegraded`, `ReleaseGateRejected(gate=fail_open_budget)`
 
 4. `NGA-WS26-004` 锁泄漏清道夫与 fencing 联动
@@ -32,14 +32,14 @@
 - 行为：detached 命令在 root kill 成功时仍执行 signature cleanup
 
 6. `NGA-WS26-006` M11 混沌门禁（本轮完成）
-- 门禁评估器：`autonomous/ws26_release_gate.py`
+- 门禁评估器：`agents/release_gates/ws26_release_gate.py`
 - 混沌报告脚本：`scripts/run_ws26_m11_runtime_chaos_suite_ws26_006.py`
 - 门禁校验入口：`scripts/validate_m11_closure_gate_ws26_006.py`
 - M11 收口链：`scripts/release_closure_chain_m11_ws26_006.py`
 - 全量链扩展：`scripts/release_closure_chain_full_m0_m7.py`（目标域已到 `M0-M11`）
 
 7. `NGA-WS27-001` 72h 长稳 + 磁盘配额压测（首版已落地）
-- baseline harness：`autonomous/ws27_longrun_endurance.py`
+- baseline harness：`agents/runtime/ws27_longrun_endurance.py`
 - 执行入口：`scripts/run_ws27_longrun_endurance_ws27_001.py`
 - 说明：当前为“虚拟 72h 等效执行”基线，远程环境仍需补真实墙钟验收记录
 
@@ -83,7 +83,7 @@ uv sync
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q `
-  tests/test_ws26_release_gate.py `
+  tests/test_release_closure_chain_m11_ws26_006.py `
   tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py `
   tests/test_release_closure_chain_m11_ws26_006.py `
   tests/test_release_closure_chain_full_m0_m7.py -p no:tmpdir

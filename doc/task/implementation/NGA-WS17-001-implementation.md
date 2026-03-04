@@ -155,8 +155,8 @@ from system.test_baseline_guard import check_test_baseline_compliance
 
 # 检查文件修改合规性
 changed_files = [
-    "tests/test_new_feature.py",  # 工作区测试，允许
-    "tests/test_core.py",  # Golden Suite，阻止
+    "tests/test_test_baseline_guard.py",  # 工作区测试，允许
+    "tests/test_test_baseline_guard.py",  # Golden Suite，阻止
 ]
 
 compliant, report = check_test_baseline_compliance(changed_files)

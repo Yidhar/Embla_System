@@ -12,7 +12,7 @@
 
 ## 本次范围（仅 WS20-005）
 1. 新增联调回归测试套件
-- 新增 `tests/test_frontend_bff_regression_ws20_005.py`
+- 新增 `tests/test_embla_core_release_compat_gate.py`
 - 覆盖三类回归能力：
   - 合同测试（API version/contract headers/deprecation 链路）
   - SSE 协议回归（schema_version/event_ts/tool_result preview）
@@ -26,17 +26,17 @@
 
 3. 与既有 WS20 测试协同
 - 复用并联跑：
-  - `tests/test_api_contract_ws20_001.py`
-  - `tests/test_sse_event_protocol_ws20_002.py`
+  - `tests/test_embla_core_release_compat_gate.py`
+  - `tests/test_llm_stream_json_protocol_ws28_035.py`
   - `tests/test_mcp_status_snapshot.py`
 - 形成“合同 + 协议 + 状态 + 错误”一体化回归入口。
 
 ## 验证命令
-- `.\.venv\Scripts\python.exe -m ruff check tests/test_frontend_bff_regression_ws20_005.py`
+- `.\.venv\Scripts\python.exe -m ruff check tests/test_embla_core_release_compat_gate.py`
   - 结果: `All checks passed!`
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_frontend_bff_regression_ws20_005.py tests/test_api_contract_ws20_001.py tests/test_sse_event_protocol_ws20_002.py tests/test_mcp_status_snapshot.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_embla_core_release_compat_gate.py tests/test_embla_core_release_compat_gate.py tests/test_llm_stream_json_protocol_ws28_035.py tests/test_mcp_status_snapshot.py`
   - 结果: `13 passed, 0 failed`
-- `.\.venv\Scripts\python.exe -m pytest -q tests/test_agentserver_deprecation_guard_ws16_002.py tests/test_native_executor_guards.py tests/test_policy_firewall.py tests/test_global_mutex.py tests/test_process_lineage.py tests/test_native_tools_runtime_hardening.py tests/test_agentic_loop_contract_and_mutex.py tests/test_dna_change_audit_ws18_007.py tests/test_immutable_dna_ws18_006.py tests/test_loop_cost_guard_ws18_005.py tests/test_watchdog_daemon_ws18_004.py tests/test_frontend_bff_regression_ws20_005.py tests/test_api_contract_ws20_001.py tests/test_sse_event_protocol_ws20_002.py tests/test_mcp_status_snapshot.py tests/test_router_engine_ws19_002.py tests/test_event_replay_tool_ws18_003.py tests/test_llm_gateway_ws19_003.py tests/test_working_memory_manager_ws19_004.py`
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_agentserver_deprecation_guard_ws16_002.py tests/test_native_executor_guards.py tests/test_policy_firewall.py tests/test_global_mutex.py tests/test_process_lineage.py tests/test_native_tools_runtime_hardening.py tests/test_agentic_loop_contract_and_mutex.py tests/test_dna_change_audit_ws18_007.py tests/test_immutable_dna_ws18_006.py tests/test_loop_cost_guard_ws18_005.py tests/test_watchdog_daemon_ws18_004.py tests/test_embla_core_release_compat_gate.py tests/test_embla_core_release_compat_gate.py tests/test_llm_stream_json_protocol_ws28_035.py tests/test_mcp_status_snapshot.py tests/test_router_engine_prompt_profile_ws28_001.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_llm_gateway_prompt_slice_ws28_002.py tests/test_memory_agents.py`
   - 结果: `100 passed, 0 failed`
 
 ## 交付结果与验收对应
@@ -46,7 +46,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `tests/test_frontend_bff_regression_ws20_005.py; tests/test_api_contract_ws20_001.py; tests/test_sse_event_protocol_ws20_002.py; tests/test_mcp_status_snapshot.py; doc/task/implementation/NGA-WS20-005-implementation.md`
+  - `tests/test_embla_core_release_compat_gate.py; tests/test_embla_core_release_compat_gate.py; tests/test_llm_stream_json_protocol_ws28_035.py; tests/test_mcp_status_snapshot.py; doc/task/implementation/NGA-WS20-005-implementation.md`
 - `notes`:
   - `frontend-bff integration regression suite now gates api-contract headers, sse envelope compatibility, mcp runtime snapshot consistency, and schema error scenarios for invalid tool calls/results`
 

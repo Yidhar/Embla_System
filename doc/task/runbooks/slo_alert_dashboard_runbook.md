@@ -16,7 +16,7 @@
 | 锁状态 `lock_status` | `logs/runtime/global_mutex_lease.json` | `seconds_to_expiry = expires_at - now` | `seconds_to_expiry <= max(2, ttl*0.2)` | `seconds_to_expiry <= 0` |
 
 阈值配置来源:
-- `autonomous/config/autonomous_config.yaml`
+- `config/autonomous_runtime.yaml`
 - `ArtifactStoreConfig`（`system/artifact_store.py`）
 
 ## 3. 快照导出（本地可执行）

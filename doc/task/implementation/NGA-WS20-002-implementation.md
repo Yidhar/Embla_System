@@ -35,15 +35,15 @@
   - `calls/results` 类型与后端统一协议对齐（稳定键 + 可选兼容键）
 
 5. 协议回归测试
-- 新增 `tests/test_sse_event_protocol_ws20_002.py`
+- 新增 `tests/test_llm_stream_json_protocol_ws28_035.py`
   - 事件信封版本字段校验
   - `tool_calls` 标准字段校验
   - `tool_results.preview` 稳定字段校验
 
 ## 验证命令
-- `.\.venv\Scripts\python.exe -m ruff check apiserver/agentic_tool_loop.py tests/test_sse_event_protocol_ws20_002.py`
+- `.\.venv\Scripts\python.exe -m ruff check apiserver/agentic_tool_loop.py tests/test_llm_stream_json_protocol_ws28_035.py`
   - 结果: `All checks passed`
-- `powershell -ExecutionPolicy Bypass -File scripts/run_tests_safe.ps1 tests/test_sse_event_protocol_ws20_002.py tests/test_tool_receipt_ws10_004.py tests/test_risk_gate_ws10_005.py tests/test_gc_memory_card_injection.py tests/test_contract_rollout_ws16_005.py tests/test_agentic_loop_contract_and_mutex.py`
+- `powershell -ExecutionPolicy Bypass -File scripts/run_tests_safe.ps1 tests/test_llm_stream_json_protocol_ws28_035.py tests/test_tool_receipt_ws10_004.py tests/test_risk_gate_ws10_005.py tests/test_gc_memory_card_injection.py tests/test_contract_rollout_ws16_005.py tests/test_agentic_loop_contract_and_mutex.py`
   - 结果: `28 passed`
 - `cd frontend; npx eslint src/utils/encoding.ts`
   - 结果: `passed`
@@ -51,7 +51,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `apiserver/agentic_tool_loop.py; frontend/src/utils/encoding.ts; tests/test_sse_event_protocol_ws20_002.py; doc/task/implementation/NGA-WS20-002-implementation.md`
+  - `apiserver/agentic_tool_loop.py; frontend/src/utils/encoding.ts; tests/test_llm_stream_json_protocol_ws28_035.py; doc/task/implementation/NGA-WS20-002-implementation.md`
 - `notes`:
   - `sse protocol now carries schema_version+event_ts envelope, tool_calls payload is key-stable, and tool_results always includes preview for frontend single-branch rendering`
 
