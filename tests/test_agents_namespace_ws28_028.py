@@ -5,6 +5,8 @@ from pathlib import Path
 from agents import (
     Goal,
     MetaAgentRuntime,
+    ReviewAgent,
+    ReviewResult,
     RouterRequest,
     TaskRouterEngine,
     convert_structured_tool_calls,
@@ -46,6 +48,8 @@ def test_agents_namespace_owns_brain_implementations() -> None:
     assert TaskRouterEngine.__module__.startswith("agents.")
     assert RouterRequest.__module__.startswith("agents.")
     assert Goal.__module__.startswith("agents.")
+    assert ReviewAgent.__module__.startswith("agents.")
+    assert ReviewResult.__module__.startswith("agents.")
 
 
 def test_agents_router_request_contract_rejects_unknown_field() -> None:

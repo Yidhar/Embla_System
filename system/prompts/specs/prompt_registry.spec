@@ -30,6 +30,36 @@
       "prompt_name": "prompt_acl",
       "path": "prompt_acl.spec",
       "aliases": []
+    },
+    {
+      "prompt_name": "core_exec_base",
+      "path": "agents/core_exec/core_exec_base.md",
+      "aliases": ["core_exec_general"]
+    },
+    {
+      "prompt_name": "core_exec_ops",
+      "path": "agents/core_exec/core_exec_ops.md",
+      "aliases": []
+    },
+    {
+      "prompt_name": "core_exec_dev",
+      "path": "agents/core_exec/core_exec_dev.md",
+      "aliases": []
+    },
+    {
+      "prompt_name": "outer_readonly_research",
+      "path": "agents/core_exec/outer_readonly_research.md",
+      "aliases": []
+    },
+    {
+      "prompt_name": "outer_readonly_general",
+      "path": "agents/core_exec/outer_readonly_general.md",
+      "aliases": []
+    },
+    {
+      "prompt_name": "explicit_role_delegate",
+      "path": "agents/core_exec/explicit_role_delegate.md",
+      "aliases": []
     }
   ]
 }

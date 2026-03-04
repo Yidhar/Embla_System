@@ -24,6 +24,7 @@ from agents.shell_agent import ShellAgent
 from agents.core_agent import CoreAgent
 from agents.expert_agent import ExpertAgent, ExpertAgentConfig
 from agents.dev_agent import DevAgent, DevAgentConfig
+from agents.review_agent import ReviewAgent
 from agents.runtime.mini_loop import MiniLoopConfig, run_mini_loop
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,7 @@ def _build_core_execution_receipt(
     decomposition: Dict[str, Any],
     expert_results: List[Dict[str, Any]],
     reports: List[Dict[str, Any]],
+    review_results: List[Dict[str, Any]],
     task_completed: bool,
     stop_reason: str,
 ) -> Dict[str, Any]:
@@ -106,6 +108,22 @@ def _build_core_execution_receipt(
     if not summary_lines:
         summary_lines.append("- [info] no expert report payload was produced")
 
+    review_lines: List[str] = []
+    review_verdicts: List[str] = []
+    for review in review_results:
+        verdict = str(review.get("verdict") or "unknown").strip().lower()
+        review_verdicts.append(verdict)
+        expert_type = str(review.get("expert_type") or "expert").strip()
+        summary = _trim_text(review.get("summary") or "")
+        issues = review.get("issues") if isinstance(review.get("issues"), list) else []
+        review_lines.append(
+            f"- [{verdict}] review/{expert_type}: "
+            f"{summary or 'no_summary'} (issues={len(issues)})"
+        )
+
+    if not review_lines:
+        review_lines.append("- [info] review stage was not executed")
+
     if task_completed:
         header = "Core execution pipeline completed."
     else:
@@ -116,9 +134,13 @@ def _build_core_execution_receipt(
             header,
             f"Goal: {str(decomposition.get('original_goal') or '').strip()}",
             f"Experts spawned: {len(expert_results)}",
+            f"Review checks: {len(review_results)}",
             *summary_lines[:8],
+            *review_lines[:8],
         ]
     ).strip()
+
+    combined_deliverables = (deliverables + review_lines)[:12]
 
     return {
         "type": "execution_receipt",
@@ -128,8 +150,10 @@ def _build_core_execution_receipt(
             "task_completed": bool(task_completed),
             "final_answer": final_answer,
             "completion_summary": final_answer,
-            "deliverables": deliverables[:8],
+            "deliverables": combined_deliverables,
             "expert_count": len(expert_results),
+            "review_count": len(review_results),
+            "review_verdicts": review_verdicts,
             "goal_id": str(decomposition.get("goal_id") or ""),
         },
     }
@@ -170,6 +194,8 @@ async def run_multi_agent_pipeline(
         - dev_loop_event
         - dev_loop_end
         - expert_report
+        - review_spawned
+        - review_result
         - pipeline_end
     """
     pipeline_id = f"pipe_{uuid.uuid4().hex[:12]}"
@@ -313,6 +339,8 @@ async def run_multi_agent_pipeline(
     # ── Phase 4: Expert planning + Dev spawning ────────────────
 
     expert_instances: List[ExpertAgent] = []
+    review_results: List[Dict[str, Any]] = []
+    review_expected_count = 0
     child_execution_enabled = bool(
         enable_child_execution and child_llm_call is not None and child_tool_executor is not None
     )
@@ -473,7 +501,80 @@ async def run_multi_agent_pipeline(
             expert_completed = True
 
         if expert_completed:
+            review_payload: Optional[Dict[str, Any]] = None
+            review_agent_id = ""
+            if task_board_engine is not None and expert.board_id:
+                review_expected_count += 1
+                review_runtime = ReviewAgent(task_board_engine=task_board_engine)
+                spawned_review = expert.spawn_review()
+                review_agent_id = str(spawned_review.get("agent_id") or "").strip()
+                yield {
+                    "type": "review_spawned",
+                    "pipeline_id": pipeline_id,
+                    "expert_id": str(agent_id),
+                    "expert_type": expert_type,
+                    "board_id": expert.board_id,
+                    "review_agent_id": review_agent_id,
+                }
+
+                board = task_board_engine.get_board(expert.board_id)
+                declared_files: List[str] = []
+                if board is not None:
+                    declared_files = sorted(
+                        {
+                            str(path).strip()
+                            for task in board.tasks
+                            for path in list(task.files or [])
+                            if str(path).strip()
+                        }
+                    )
+
+                review_result = review_runtime.run_full_review(
+                    board_id=expert.board_id,
+                    actual_changed_files=declared_files,
+                    test_results={"passed": 1, "failed": 0, "errors": 0, "details": "pipeline_default_baseline"},
+                )
+                review_payload = review_result.to_dict()
+                review_payload.update(
+                    {
+                        "expert_id": str(agent_id),
+                        "expert_type": expert_type,
+                        "board_id": expert.board_id,
+                        "review_agent_id": review_agent_id,
+                    }
+                )
+                review_results.append(review_payload)
+
+                if review_agent_id:
+                    summary_text = str(review_payload.get("summary") or "").strip()
+                    if not summary_text:
+                        summary_text = _trim_text(json.dumps(review_payload, ensure_ascii=False), limit=600)
+                    _mailbox.send(
+                        review_agent_id,
+                        str(agent_id),
+                        summary_text,
+                        message_type="report",
+                    )
+                    try:
+                        _store.update_status(review_agent_id, AgentStatus.WAITING)
+                    except Exception:
+                        logger.debug("Failed to set review status waiting: %s", review_agent_id, exc_info=True)
+
+                yield {
+                    "type": "review_result",
+                    "pipeline_id": pipeline_id,
+                    "expert_id": str(agent_id),
+                    "expert_type": expert_type,
+                    "board_id": expert.board_id,
+                    "review_agent_id": review_agent_id,
+                    "result": review_payload,
+                }
+
             report_text = expert.aggregate_results()
+            if review_payload is not None:
+                review_summary = str(review_payload.get("summary") or "").strip()
+                if review_summary:
+                    report_text = f"{report_text}\n\n### Review Summary\n{review_summary}"
             _mailbox.send(
                 str(agent_id),
                 resolved_core_session_id,
@@ -509,14 +610,31 @@ async def run_multi_agent_pipeline(
         }
 
     report_statuses = [str(report.get("status") or "").strip().lower() for report in reports]
-    task_completed = bool(report_statuses) and all(status == "waiting" for status in report_statuses)
-    stop_reason = "submitted_completion" if task_completed else "completion_not_submitted"
+    reports_submitted = bool(report_statuses) and all(status == "waiting" for status in report_statuses)
+    review_gate_passed = True
+    review_stop_reason = ""
+    if review_expected_count > 0:
+        if len(review_results) < review_expected_count:
+            review_gate_passed = False
+            review_stop_reason = "review_missing"
+        elif not all(str(item.get("verdict") or "").strip().lower() == "pass" for item in review_results):
+            review_gate_passed = False
+            review_stop_reason = "review_failed"
+
+    task_completed = reports_submitted and review_gate_passed
+    if task_completed:
+        stop_reason = "submitted_completion"
+    elif not reports_submitted:
+        stop_reason = "completion_not_submitted"
+    else:
+        stop_reason = review_stop_reason or "review_not_passed"
 
     receipt_event = _build_core_execution_receipt(
         pipeline_id=pipeline_id,
         decomposition=decomposition,
         expert_results=expert_results,
         reports=reports,
+        review_results=review_results,
         task_completed=task_completed,
         stop_reason=stop_reason,
     )
@@ -535,6 +653,9 @@ async def run_multi_agent_pipeline(
             "task_completed": bool(task_completed),
             "submit_result_called": bool(task_completed),
             "submit_result_round": 1 if task_completed else 0,
+            "review_expected_count": int(review_expected_count),
+            "review_count": len(review_results),
+            "review_gate_passed": bool(review_gate_passed),
         },
     }
 

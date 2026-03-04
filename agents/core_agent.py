@@ -79,7 +79,7 @@ class CoreAgent:
         self._task_board = task_board_engine
         self._values_prompt: str = ""
         self._meta_runtime = MetaAgentRuntime()
-        self._assembler = PromptAssembler()
+        self._assembler = PromptAssembler(prompts_root=self._config.prompts_root)
         self._load_values()
 
     @property
@@ -193,6 +193,12 @@ class CoreAgent:
                 template_path = Path(self._config.prompts_root) / template_rel
                 if template_path.exists():
                     blocks.append(template_rel)
+                else:
+                    logger.warning(
+                        "Core prompt profile template missing: profile=%s path=%s",
+                        prompt_profile,
+                        template_path,
+                    )
 
         core_duties = (
             "\n## 核心职责\n"
@@ -202,11 +208,13 @@ class CoreAgent:
             "4. 汇总结果返回给 Shell\n"
         )
         try:
-            return self._assembler.assemble(
-                dna="core_values",
+            body = self._assembler.assemble(
                 blocks=blocks if blocks else None,
                 extra_sections=[core_duties],
             )
+            if self._values_prompt.strip():
+                return "\n\n".join([self._values_prompt.strip(), body]).strip()
+            return body
         except Exception:
             # Fallback: use loaded values prompt
             parts: List[str] = []

@@ -39,6 +39,7 @@ from agents.llm_gateway import (
     GatewayRouteRequest,
     LLMGateway,
     PromptEnvelopeInput,
+    PromptSlice,
 )
 
 # 添加项目根目录到Python路径
@@ -272,6 +273,169 @@ def _build_stream_response_headers(*, protocol: str) -> Dict[str, str]:
 def _format_stream_payload_chunk(payload: Dict[str, Any], *, protocol: str) -> str:
     _ = protocol
     return _format_sse_payload_chunk_json(payload)
+
+
+def _build_gateway_route_request_from_route_meta(route_meta: Dict[str, Any]) -> GatewayRouteRequest:
+    decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
+    return GatewayRouteRequest(
+        task_type=str(decision.get("task_type") or ""),
+        severity=str(route_meta.get("risk_level") or ""),
+        path=str(route_meta.get("path") or "path-c"),
+        prompt_profile=str(decision.get("prompt_profile") or ""),
+        injection_mode=str(decision.get("injection_mode") or ""),
+        delegation_intent=str(decision.get("delegation_intent") or ""),
+        trace_id=str(decision.get("trace_id") or ""),
+    )
+
+
+def _apply_gateway_compose_to_route_meta(
+    route_meta: Dict[str, Any],
+    compose_decision: Any,
+    *,
+    prompt_slices: Optional[List[PromptSlice]] = None,
+) -> None:
+    if compose_decision is None:
+        return
+    try:
+        selected_slices = list(getattr(compose_decision, "selected_slices", []) or [])
+        dropped_slices = list(getattr(compose_decision, "dropped_slices", []) or [])
+        route_meta["_slice_selected"] = selected_slices
+        route_meta["_slice_dropped"] = dropped_slices
+        route_meta["_slice_selected_count"] = len(selected_slices)
+        route_meta["_slice_dropped_count"] = len(dropped_slices)
+        route_meta["_slice_prefix_hash"] = str(getattr(compose_decision, "prefix_hash", "") or "")
+        route_meta["_slice_tail_hash"] = str(getattr(compose_decision, "tail_hash", "") or "")
+        route_meta["_slice_dropped_conflict_count"] = len(dropped_slices)
+        route_meta["_slice_token_budget_before"] = int(getattr(compose_decision, "token_budget_before", 0) or 0)
+        route_meta["_slice_token_budget_after"] = int(getattr(compose_decision, "token_budget_after", 0) or 0)
+        route_meta["_slice_recovery_hit"] = False
+        if isinstance(prompt_slices, list) and prompt_slices:
+            layer_by_uid = {str(item.slice_uid): str(item.layer or "") for item in prompt_slices}
+            selected_layers: List[str] = []
+            selected_layer_counts: Dict[str, int] = {}
+            for slice_uid in selected_slices:
+                layer = layer_by_uid.get(str(slice_uid), "").strip()
+                if layer and layer not in selected_layers:
+                    selected_layers.append(layer)
+                if layer:
+                    selected_layer_counts[layer] = selected_layer_counts.get(layer, 0) + 1
+                if layer.upper().startswith("L4"):
+                    route_meta["_slice_recovery_hit"] = True
+            route_meta["_slice_selected_layers"] = selected_layers
+            route_meta["_slice_selected_layer_counts"] = selected_layer_counts
+    except Exception:
+        return
+
+
+def _compose_system_prompt_from_gateway_plan(plan: Any) -> str:
+    envelope = getattr(plan, "prompt_envelope", None)
+    if envelope is None:
+        return ""
+
+    block1_text = str(getattr(envelope, "block1_text", "") or "").strip()
+    block2_text = str(getattr(envelope, "block2_text", "") or "").strip()
+    parts: List[str] = []
+    if block1_text:
+        parts.append(block1_text)
+    if block2_text:
+        parts.append(block2_text)
+
+    block3_messages = getattr(envelope, "block3_messages", None)
+    if isinstance(block3_messages, list) and block3_messages:
+        lines: List[str] = []
+        for row in block3_messages:
+            if not isinstance(row, dict):
+                continue
+            role = str(row.get("role") or "user").strip()
+            content = str(row.get("content") or "").strip()
+            if content:
+                lines.append(f"[{role}] {content}")
+        if lines:
+            parts.append("## 动态上下文\n" + "\n".join(lines))
+
+    return "\n\n".join(part for part in parts if str(part).strip()).strip()
+
+
+def _build_shell_system_prompt_with_gateway(
+    *,
+    route_meta: Dict[str, Any],
+    base_system_prompt: str,
+    memory_lines: Optional[List[str]] = None,
+) -> str:
+    route_hints = _build_chat_route_prompt_hints(route_meta)
+    fallback_parts: List[str] = [str(base_system_prompt or "").strip()]
+    if memory_lines:
+        fallback_parts.append("## 相关记忆\n" + "\n".join(str(line or "") for line in memory_lines if str(line or "").strip()))
+    if route_hints:
+        fallback_parts.append(route_hints)
+    fallback_prompt = "\n\n".join(part for part in fallback_parts if str(part).strip()).strip()
+
+    if _CHAT_LLM_GATEWAY is None:
+        return fallback_prompt
+
+    prompt_slices: List[PromptSlice] = [
+        PromptSlice(
+            slice_uid="outer_shell_base",
+            layer="L0_DNA",
+            text=str(base_system_prompt or ""),
+            owner="system",
+            cache_segment="prefix_static",
+            priority=10,
+        ),
+        PromptSlice(
+            slice_uid="outer_route_contract",
+            layer="L2_ROLE",
+            text=str(route_hints or ""),
+            owner="router",
+            cache_segment="prefix_session",
+            priority=20,
+        ),
+    ]
+
+    if memory_lines:
+        prompt_slices.append(
+            PromptSlice(
+                slice_uid="outer_memory_recall",
+                layer="L1_5_EPISODIC_MEMORY",
+                text="## 相关记忆\n" + "\n".join(
+                    str(line or "") for line in memory_lines if str(line or "").strip()
+                ),
+                owner="memory",
+                cache_segment="prefix_session",
+                priority=15,
+            )
+        )
+
+    gateway_request = _build_gateway_route_request_from_route_meta(route_meta)
+    gateway_input = PromptEnvelopeInput(
+        static_header="",
+        long_term_summary="",
+        dynamic_messages=[],
+        prompt_slices=prompt_slices,
+    )
+    try:
+        plan = _CHAT_LLM_GATEWAY.build_plan(request=gateway_request, prompt_input=gateway_input)
+        _apply_gateway_compose_to_route_meta(
+            route_meta,
+            getattr(plan, "compose_decision", None),
+            prompt_slices=prompt_slices,
+        )
+        cache_outcome = getattr(plan, "cache_outcome", None)
+        if cache_outcome is not None:
+            block1_hit = bool(getattr(cache_outcome, "block1_hit", False))
+            block2_hit = bool(getattr(cache_outcome, "block2_hit", False))
+            route_meta["_slice_prefix_cache_hit"] = bool(block1_hit and block2_hit)
+            route_meta["_slice_block1_cache_hit"] = block1_hit
+            route_meta["_slice_block2_cache_hit"] = block2_hit
+        route_decision = getattr(plan, "route", None)
+        if route_decision is not None:
+            route_meta["_slice_model_tier"] = str(getattr(route_decision, "model_tier", "") or "")
+            route_meta["_slice_model_id"] = str(getattr(route_decision, "model_id", "") or "")
+        composed_prompt = _compose_system_prompt_from_gateway_plan(plan)
+        return composed_prompt or fallback_prompt
+    except Exception as exc:
+        logger.debug("[prompt_gateway] shell prompt compose fallback: %s", exc)
+        return fallback_prompt
 
 
 # 历史流式文本切分器已移除，流式处理统一由 chat_stream 主循环管理
@@ -1021,33 +1185,28 @@ async def chat_stream(request: ChatRequest):
             route_decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
             path = str(route_meta.get("path") or "path-c")
             execution_session_id = str(route_meta.get("execution_session_id") or session_id)
-            # ====== Prompt Slice 引擎：resolve + serialize ======
-            try:
-                if _CHAT_LLM_GATEWAY is not None:
-                    _gw_request = GatewayRouteRequest(
-                        task_type=str(route_decision.get("task_type") or ""),
-                        severity=str(route_meta.get("risk_level") or ""),
-                        path=path,
-                        prompt_profile=str(route_decision.get("prompt_profile") or ""),
-                        injection_mode=str(route_decision.get("injection_mode") or ""),
-                        delegation_intent=str(route_decision.get("delegation_intent") or ""),
-                    )
-                    _gw_prompt_input = PromptEnvelopeInput(static_header="", long_term_summary="")
-                    _gw_resolve = _CHAT_LLM_GATEWAY.resolve(request=_gw_request, prompt_input=_gw_prompt_input)
-                    _gw_selected = _gw_resolve.get("selected") or []
-                    _gw_dropped = _gw_resolve.get("dropped") or []
-                    _gw_cache = _CHAT_LLM_GATEWAY.serialize_for_cache(selected_slices=_gw_selected)
-                    route_meta["_slice_selected"] = [s.slice_uid for s in _gw_selected if hasattr(s, "slice_uid")]
-                    route_meta["_slice_dropped"] = [s.slice_uid for s in _gw_dropped if hasattr(s, "slice_uid")]
-                    route_meta["_slice_selected_count"] = len(_gw_selected)
-                    route_meta["_slice_dropped_count"] = len(_gw_dropped)
-                    route_meta["_slice_prefix_hash"] = str(_gw_cache.get("prefix_hash") or "")
-                    route_meta["_slice_tail_hash"] = str(_gw_cache.get("tail_hash") or "")
-                    route_meta["_slice_selected_layers"] = sorted(set(
-                        str(getattr(s, "layer", "")) for s in _gw_selected if getattr(s, "layer", "")
-                    ))
-            except Exception as _gw_exc:
-                logger.debug("[prompt_slice] gateway resolve/serialize 降级: %s", _gw_exc)
+            precomposed_shell_prompt = ""
+            if path in {"path-a", "path-b"}:
+                precomposed_memory_lines: List[str] = []
+                try:
+                    precomposed_memory_lines = await _recall_memory_lines(request.message, limit=5)
+                except Exception:
+                    precomposed_memory_lines = []
+                shell_base_prompt = ""
+                try:
+                    shell_base_prompt = str(ShellAgent().build_system_prompt() or "")
+                except Exception as _shell_prompt_exc:
+                    logger.debug("[prompt_gateway] shell base prompt build fallback: %s", _shell_prompt_exc)
+
+                precomposed_shell_prompt = _build_shell_system_prompt_with_gateway(
+                    route_meta=route_meta,
+                    base_system_prompt=shell_base_prompt,
+                    memory_lines=precomposed_memory_lines,
+                )
+                route_meta["_shell_memory_lines"] = list(precomposed_memory_lines)
+                route_meta["_shell_prompt_composed"] = bool(precomposed_shell_prompt.strip())
+                if precomposed_shell_prompt.strip():
+                    route_meta["_shell_prompt_value"] = precomposed_shell_prompt
 
             _emit_chat_route_prompt_event(route_meta, session_id=session_id)
             _emit_chat_route_guard_event(route_meta, session_id=session_id)
@@ -1204,16 +1363,24 @@ async def chat_stream(request: ChatRequest):
 
                 if chunk_type == "shell_direct":
                     # Shell decided to handle directly — run a read-only tool loop.
-                    shell_prompt = str(event.get("system_prompt", ""))
+                    shell_prompt = str(route_meta.get("_shell_prompt_value") or "")
+                    if not shell_prompt:
+                        shell_prompt = str(event.get("system_prompt", ""))
                     shell_msg = str(event.get("user_message", effective_message))
-                    # Inject RAG memory if available
-                    try:
-                        mem_lines = await _recall_memory_lines(shell_msg, limit=5)
-                        if mem_lines:
-                            shell_prompt += "\n\n## 相关记忆\n" + "\n".join(mem_lines)
-                    except Exception:
-                        pass
-                    shell_prompt += "\n\n" + _build_chat_route_prompt_hints(route_meta)
+                    if not str(route_meta.get("_shell_prompt_value") or "").strip():
+                        mem_lines: List[str] = []
+                        if isinstance(route_meta.get("_shell_memory_lines"), list):
+                            mem_lines = [str(item or "") for item in route_meta.get("_shell_memory_lines") if str(item or "").strip()]
+                        if not mem_lines:
+                            try:
+                                mem_lines = await _recall_memory_lines(shell_msg, limit=5)
+                            except Exception:
+                                mem_lines = []
+                        shell_prompt = _build_shell_system_prompt_with_gateway(
+                            route_meta=route_meta,
+                            base_system_prompt=shell_prompt,
+                            memory_lines=mem_lines,
+                        )
 
                     # Build conversation messages
                     shell_messages = message_manager.build_conversation_messages(

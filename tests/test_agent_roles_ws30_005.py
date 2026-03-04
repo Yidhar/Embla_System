@@ -527,10 +527,16 @@ class TestPipeline:
         assert "dev_loop_start" in event_types
         assert "dev_loop_event" in event_types
         assert "dev_loop_end" in event_types
+        assert "review_spawned" in event_types
+        assert "review_result" in event_types
 
         receipt_event = next(e for e in events if e["type"] == "execution_receipt")
         assert receipt_event.get("stop_reason") == "submitted_completion"
         assert receipt_event.get("agent_state", {}).get("task_completed") is True
+        assert receipt_event.get("agent_state", {}).get("review_count", 0) >= 1
+
+        review_event = next(e for e in events if e["type"] == "review_result")
+        assert review_event.get("result", {}).get("verdict") == "pass"
 
         end_event = next(e for e in events if e["type"] == "pipeline_end")
         assert end_event["reason"] == "completed"
