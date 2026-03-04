@@ -5,6 +5,10 @@
 
 # NGA-WS25-001 实施记录（Topic 化 Event Bus 抽象层）
 
+
+> Migration Note (archived/legacy)
+> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+
 ## 1. 背景
 
 此前 `EventStore` 主要是 JSONL 追加日志模式，缺少：
@@ -51,7 +55,7 @@
 
 - `core/event_bus/topic_bus.py`
 - `core/event_bus/event_store.py`
-- `autonomous/event_log/__init__.py`
+- `autonomous/event_log/__init__.py`（archived/legacy）
 - `tests/test_core_event_bus_consumers_ws28_029.py`
 - `tests/test_core_event_bus_consumers_ws28_029.py`
 - `doc/task/23-phase3-full-target-task-list.md`

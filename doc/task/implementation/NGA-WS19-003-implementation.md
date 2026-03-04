@@ -5,6 +5,10 @@
 
 # NGA-WS19-003 实施记录（LLM Gateway 分层路由与缓存）
 
+
+> Migration Note (archived/legacy)
+> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+
 ## 任务信息
 - Task ID: `NGA-WS19-003`
 - Title: LLM Gateway 分层路由与缓存
@@ -47,7 +51,7 @@
 - 缓存命中时有效 token 降低，成本/延迟指标同步下降
 
 5. 对外导出
-- 更新 `autonomous/__init__.py` 暴露 Gateway 类型，便于后续 WS19-004/WS19-008 接入。
+- 更新 `autonomous/__init__.py`（archived/legacy） 暴露 Gateway 类型，便于后续 WS19-004/WS19-008 接入。
 
 ## 测试覆盖
 - 新增 `tests/test_llm_gateway_prompt_slice_ws28_002.py`
@@ -58,7 +62,7 @@
   - 本地 tier 成本估算为 0
 
 ## 验证命令
-- `.\.venv\Scripts\python.exe -m ruff check agents/llm_gateway.py tests/test_llm_gateway_prompt_slice_ws28_002.py autonomous/__init__.py`
+- `.\.venv\Scripts\python.exe -m ruff check agents/llm_gateway.py tests/test_llm_gateway_prompt_slice_ws28_002.py autonomous/__init__.py`（archived/legacy path in command）
   - 结果: `All checks passed!`
 - `.\.venv\Scripts\python.exe -m pytest -q tests/test_llm_gateway_prompt_slice_ws28_002.py tests/test_router_engine_prompt_profile_ws28_001.py`
   - 结果: `passed`
@@ -72,7 +76,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `agents/llm_gateway.py; tests/test_llm_gateway_prompt_slice_ws28_002.py; autonomous/__init__.py; doc/task/implementation/NGA-WS19-003-implementation.md`
+  - `agents/llm_gateway.py; tests/test_llm_gateway_prompt_slice_ws28_002.py; autonomous/__init__.py [archived/legacy]; doc/task/implementation/NGA-WS19-003-implementation.md`
 - `notes`:
   - `llm gateway now supports primary-secondary-local tier routing, block1/block2 ephemeral cache with block3 uncached policy, soft-limit guardrail, and cost-latency estimation for plan comparison`
 

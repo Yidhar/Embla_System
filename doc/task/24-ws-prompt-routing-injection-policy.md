@@ -1,5 +1,9 @@
 # WS24x 设计讨论稿：Prompt 路由注入与多职能 Agent 注入时机
 
+
+> Migration Note (archived/legacy)
+> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+
 文档状态：设计稿（Executable Draft）  
 最后更新：2026-02-26  
 适用范围：`SystemAgent / Router / LLM Gateway / Agentic Loop / Sub-Agent Runtime`  
@@ -301,7 +305,7 @@
   - `system/workspace_transaction.py`
   - `system/global_mutex.py`
   - `system/process_lineage.py`
-  - `autonomous/policy/gate_policy.yaml`
+  - `autonomous/policy/gate_policy.yaml`（archived/legacy）
 
 2. `S1_CONTROLLED`（可改但强管控）
 - 允许 AI 生成变更，但必须审批票据+DNA 重算+gate 通过。
@@ -656,7 +660,7 @@ class PromptACLRule:
 - depends_on: `NGA-WS28-001`
 - deliverables:
   - 代码文件：`agents/llm_gateway.py`
-  - 可选新增：`autonomous/prompt_slices.py`（若需独立结构定义）
+  - 可选新增：`autonomous/prompt_slices.py`（archived/legacy）（若需独立结构定义）
   - 测试文件：`tests/test_llm_gateway_prompt_slice_ws28_002.py`
   - 报告产物：`scratch/reports/ws28_002_prompt_slice_compose.json`
 - acceptance:

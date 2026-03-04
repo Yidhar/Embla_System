@@ -5,6 +5,10 @@
 
 # NGA-WS16-002 实施记录（AgentServer 弃用路径 Phase 2 设计）
 
+
+> Migration Note (archived/legacy)
+> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+
 ## 任务信息
 - Task ID: `NGA-WS16-002`
 - Title: AgentServer 弃用路径 Phase 2 设计
@@ -15,7 +19,7 @@
 - 新增 `doc/task/runbooks/agentserver_phase2_deprecation_runbook.md`
   - 明确当前耦合基线（启动、配置、兼容 helper）
   - 给出 Phase-2 删除顺序（D0~D4）
-  - 对齐替代链路（`apiserver + agentic_tool_loop + native/mcp` 与 `autonomous/system_agent`）
+  - 对齐替代链路（`apiserver + agentic_tool_loop + native/mcp` 与 `autonomous/system_agent`（archived/legacy））
   - 明确阶段门禁与回退动作
 
 2. “不新增 agentserver 依赖”自动化守门

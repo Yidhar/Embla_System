@@ -1,3 +1,7 @@
+
+> Migration Note (archived/legacy)
+> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+
 ﻿# NagaAgent 多Agent自治架构设计文档（修订版）
 
 > `DOC_LAYER: L3_ARCHIVE_PHASE0`  
@@ -121,7 +125,7 @@ flowchart TB
 ### 3.1 适配器接口定义
 
 ```python
-# autonomous/tools/cli_adapter.py
+# autonomous/tools/cli_adapter.py（archived/legacy）
 
 @dataclass
 class CliTaskSpec:
@@ -193,10 +197,10 @@ class AgentCliAdapter(ABC):
 
 ### 3.3 CLI 选择策略（Codex-first 实现）
 
-> 说明：以下为策略伪代码（目标态表达）。当前实际实现以 `autonomous/tools/cli_selector.py` 为准，核心规则是 `preferred + complexity + fallback_order`。
+> 说明：以下为策略伪代码（目标态表达）。当前实际实现以 `autonomous/tools/cli_selector.py`（archived/legacy） 为准，核心规则是 `preferred + complexity + fallback_order`。
 
 ```python
-# autonomous/tools/cli_selector.py
+# autonomous/tools/cli_selector.py（archived/legacy）
 
 class CliSelectionStrategy:
     """根据任务特性和可用性选择最优 CLI（Codex-first）"""
@@ -490,7 +494,7 @@ sequenceDiagram
 
     Note over SA,EL: === 自修改安全检查 ===
 
-    SA->>SA: identify_self_improvement(target=autonomous/)
+    SA->>SA: identify_self_improvement(target=autonomous/（archived/legacy）)
     SA->>Policy: check_self_modify_allowed(target_paths)
 
     Policy->>Policy: validate_whitelist(paths)
@@ -643,7 +647,7 @@ stateDiagram-v2
 
 ```text
 NagaAgent/
-├── autonomous/                       # [NEW] 自治Agent框架
+├── autonomous/（archived/legacy）    # [HIST] 历史自治Agent框架
 │   ├── __init__.py
 │   ├── system_agent.py               # System Agent 主类
 │   ├── sensor.py                     # 感知器
@@ -794,10 +798,10 @@ async def _try_start_autonomous_agent(self):
 
 | 天 | 任务 | 产物 |
 |----|------|------|
-| D1-D2 | 实现 CLI Adapter 基类 + Claude 适配器 + Monitor | `autonomous/tools/` + `autonomous/monitor.py` |
-| D3-D4 | 实现 Sensor (ruff + pytest 扫描) | `autonomous/sensor.py` |
-| D5-D6 | 实现 Planner (LLM 辅助任务生成) | `autonomous/planner.py` |
-| D7-D8 | 实现 Evaluator + Git Operator | `autonomous/evaluator.py` |
+| D1-D2 | 实现 CLI Adapter 基类 + Claude 适配器 + Monitor | `autonomous/tools/`（archived/legacy） + `autonomous/monitor.py`（archived/legacy） |
+| D3-D4 | 实现 Sensor (ruff + pytest 扫描) | `autonomous/sensor.py`（archived/legacy） |
+| D5-D6 | 实现 Planner (LLM 辅助任务生成) | `autonomous/planner.py`（archived/legacy） |
+| D7-D8 | 实现 Evaluator + Git Operator | `autonomous/evaluator.py`（archived/legacy） |
 | D9-D10 | 实现 System Agent 主循环 + ServiceManager 集成 | `agents/pipeline.py` |
 | D11-D12 | Codex + Gemini 适配器 | 完整 CLI 支持 |
 | D13-D14 | 端到端测试 + 安全验证 | 可交付 MVP |
@@ -808,7 +812,7 @@ async def _try_start_autonomous_agent(self):
 
 ### Automated Tests
 - `python -m pytest tests/ -v`（新建单元测试）
-- `ruff check autonomous/`（代码质量）
+- `ruff check autonomous/`（archived/legacy，历史命令示例）
 - 端到端：System Agent 启动→感知→生成任务→CLI 执行→评估→工作流状态迁移
 - 降级链路：模拟主 CLI 不可用，验证触发 `ask-codex` 并写入 `VerificationDegradedToCodexMCP`
 

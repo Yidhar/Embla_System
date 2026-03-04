@@ -1,5 +1,9 @@
 # Autonomous Skeleton Task Tracker
 
+
+> Migration Note (archived/legacy)
+> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+
 > `DOC_LAYER: L3_ARCHIVE_IMPLEMENTATION`  
 > `作用：历史实施记录（自治骨架早期阶段）`  
 > `约束：不作为当前执行主链依据`  
@@ -14,11 +18,11 @@
 
 Last updated: 2026-02-20
 Owner: Codex
-Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal runtime entry points.
+Scope: Bootstrap the `autonomous/`（archived/legacy）implementation skeleton and connect minimal runtime entry points.
 
 ## Task Status
 
-- [x] Create `autonomous/` package structure.
+- [x] Create `autonomous/`（archived/legacy） package structure.
 - [x] Implement event log skeleton (`core/event_bus/event_store.py`).
 - [x] Implement CLI adapter contracts and subprocess adapters.
 - [x] Implement CLI selector and dispatcher skeleton.
@@ -48,7 +52,7 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
 4. Added evaluator and fallback invocation path for Codex MCP in verification stage.
 5. Added config model (`autonomous`) and startup wiring in background service loop.
 6. Added minimal tests for system agent config parsing.
-7. Verified syntax compile for `autonomous/`, `system/config.py`, and `main.py`.
+7. Verified syntax compile for `autonomous/`（archived/legacy）, `system/config.py`, and `main.py`.
 8. Added SQLite workflow store and schema (`agents/runtime/schema.sql`, `agents/runtime/workflow_store.py`).
 9. Wired `SystemAgent` task execution to durable workflow transitions and command logs.
 10. Added unit tests for workflow store state/outbox behavior.
@@ -117,7 +121,7 @@ Scope: Bootstrap the `autonomous/` implementation skeleton and connect minimal r
     - `system/background_analyzer.py`: same codex default routing when planner emits MCP calls without `service_name`
     - `mcpserver/mcp_manager.py`: support nested `arguments` merge + default codex execution params for external mcporter calls
 40. Changed autonomous CLI default execution target to Codex:
-    - `system/config.py`, `agents/pipeline.py`, `autonomous/dispatcher.py`, `autonomous/tools/cli_selector.py`, `config/autonomous_runtime.yaml`, `config.json.example`
+    - `system/config.py`, `agents/pipeline.py`, `autonomous/dispatcher.py`（archived/legacy）, `autonomous/tools/cli_selector.py`（archived/legacy）, `config/autonomous_runtime.yaml`, `config.json.example`
     - defaults now `preferred=codex`, fallback `claude -> gemini`
 41. Verification for Codex-first chain:
     - py_compile passed on updated routing/config modules

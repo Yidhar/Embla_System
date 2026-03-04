@@ -5,6 +5,10 @@
 
 ## 1. 目标
 
+
+> Migration Note (archived/legacy)
+> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+
 本文用于统一 NagaAgent 当前可运行架构与 Embla_system 目标架构之间的语义。
 
 本文件只描述 **当前代码已实现** 与 **已确认的过渡态**，并将目标态映射到三层模型：
@@ -18,7 +22,7 @@
 - `main.py`：后端总入口，负责服务编排与生命周期管理。
 - `system/`：配置、日志、系统检查、提示词、基础策略工具。
 - `apiserver/`：统一 BFF（前后端唯一入口），提供 REST/SSE。
-- `autonomous/`：System Agent 自治闭环（已实现，可配置启停）。
+- `autonomous/`（archived/legacy）：历史 System Agent 自治闭环实现（已退役，保留文档追溯）。
 - `mcpserver/`：MCP Host + Tool Registry + 外部 mcporter 接入。
 - `summer_memory/`：GRAG 记忆、五元组抽取、Neo4j 检索。
 - `Embla_core/`：Next.js 运维与调试前端（当前主链前端）。
@@ -94,7 +98,7 @@
 - `apiserver/native_tools.py` + `system/native_executor.py`
 - `mcpserver/mcp_registry.py` + `mcpserver/mcp_manager.py`
 - `agents/runtime/mini_loop.py`（子代理依赖调度、契约协商前置与统一提交）
-- `autonomous/scaffold_engine.py`（契约门禁 + verify pipeline + 多文件事务回滚）
+- `autonomous/scaffold_engine.py`（archived/legacy）（契约门禁 + verify pipeline + 多文件事务回滚）
 
 ## 6. Legacy AgentServer 状态（已移除）
 

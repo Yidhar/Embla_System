@@ -5,6 +5,10 @@
 
 ## 1. 归档规则
 
+
+> Migration Note (archived/legacy)
+> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+
 本归档按“模块职责 + 当前状态 + Embla_system 对齐”统一表达。
 
 状态标签：
@@ -20,7 +24,7 @@ Embla_system 在当前项目的集成层由三块组成：
 
 1. BFF 入口：`apiserver/`
 2. MCP Host + Tool Registry：`mcpserver/`
-3. 自治控制代理：`autonomous/`
+3. 自治控制代理（历史实现归档）：`autonomous/`（archived/legacy）
 
 该集成层负责把前端请求、模型调用、工具执行与自治闭环收敛到统一控制面。
 
@@ -31,7 +35,7 @@ Embla_system 在当前项目的集成层由三块组成：
 模块：`main.py`（`已实现`）
 
 - 职责：统一启动 API/MCP、后台循环、代理环境、可选自治循环。
-- 关键事实：运行主链已收敛为 `apiserver + mcpserver + autonomous`。
+- 关键事实：运行主链已收敛为 `apiserver + mcpserver + agents/core`。
 - Embla_system 对齐：承担 Brainstem 的运行时编排职责。
 
 ### 3.2 系统基础能力
@@ -51,22 +55,17 @@ Embla_system 在当前项目的集成层由三块组成：
 - 过渡点：`/mcp/status`、`/mcp/tasks` 当前为快照语义，仍需与底层 `mcpserver` 状态口径持续对齐。
 - Embla_system 对齐：Brainstem 入口 + Brain 编排核心。
 
-### 3.4 自治系统代理（新增归档）
+### 3.4 自治系统代理（历史实现归档）
 
-模块：`autonomous/`（`已实现`，持续增强中）
+模块：`autonomous/`（archived/legacy，目录已退役）
 
-- 职责：System Agent 循环、任务编排、事件日志、命令幂等、发布治理。
-- 已有能力：
-  - lease/fencing 单活控制
-  - outbox/inbox 去重分发
-  - canary 判定与自动回滚
-  - Verifying 阶段统一结构化门禁与重试决策（legacy 外部降级已退役）
-- 关键文件：
+- 职责（历史）：System Agent 循环、任务编排、事件日志、命令幂等、发布治理。
+- 当前承接：
   - `agents/pipeline.py`
   - `agents/runtime/workflow_store.py`
   - `core/event_bus/event_store.py`
   - `agents/release/controller.py`
-- Embla_system 对齐：Brainstem 控制器与治理执行枢纽。
+- Embla_system 对齐：上述承接模块构成当前 Brainstem 控制与治理主链；`autonomous/`（archived/legacy）仅保留历史语义。
 
 ### 3.5 MCP 主机与注册中心
 

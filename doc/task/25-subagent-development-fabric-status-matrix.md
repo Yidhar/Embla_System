@@ -1,5 +1,9 @@
 # 25 子代理开发执行面分层状态矩阵（Target vs Bridge）
 
+
+> Migration Note (archived/legacy)
+> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+
 文档状态：执行对齐（Consistency Baseline）  
 最后更新：2026-02-26  
 适用范围：`Sub-Agent Runtime / Scaffold Engine / Execution Bridge / SystemAgent rollout`
@@ -39,7 +43,7 @@
 |---|---|---|---|---|---|
 | Sub-Agent Runtime 依赖调度 | FE/BE/Ops 子任务依赖感知编排 + 统一执行门禁 | 已具备依赖调度、子任务规范校验、fail-fast | `BRIDGE_DONE` | `agents/runtime/mini_loop.py` | `tests/test_subagent_contract.py`, `tests/test_subagent_contract.py` |
 | Contract Gate（协商前置） | FE/BE 并行前冻结 `contract_id + checksum` | 已具备协商前置与 mismatch 拒绝链 | `BRIDGE_DONE` | `agents/runtime/mini_loop.py`, `system/subagent_contract.py` | `tests/test_subagent_contract.py`, `tests/test_subagent_contract.py` |
-| Scaffold 原子提交 | 多文件补丁事务化提交 + verify 失败回滚 | 已具备事务提交、verify pipeline、回滚票据 | `BRIDGE_DONE` | `autonomous/scaffold_engine.py`, `autonomous/scaffold_verify_pipeline.py` | `tests/test_workspace_txn_e2e_regression.py`, `tests/test_workspace_txn_e2e_regression.py`, `tests/test_workspace_txn_e2e_regression.py` |
+| Scaffold 原子提交 | 多文件补丁事务化提交 + verify 失败回滚 | 已具备事务提交、verify pipeline、回滚票据 | `BRIDGE_DONE` | `autonomous/scaffold_engine.py`（archived/legacy）, `autonomous/scaffold_verify_pipeline.py`（archived/legacy） | `tests/test_workspace_txn_e2e_regression.py`, `tests/test_workspace_txn_e2e_regression.py`, `tests/test_workspace_txn_e2e_regression.py` |
 | SystemAgent 调度桥接 | 主链可灰度接管 Runtime，失败可回退 | 已切到 subagent-only；保留 `runtime_mode` 遥测与 fail-open 预算阻断，不再回退 legacy CLI | `BRIDGE_DONE` | `agents/pipeline.py` | `tests/test_agent_runtime_session_ws30_002.py`, `tests/test_manage_ws27_subagent_cutover_ws27_002.py`, `tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py` |
 | M12 Full Cutover 运营能力 | 可执行全量切换与回滚窗 | 已具备 `plan/apply/status/rollback` 管理脚本 | `BRIDGE_DONE` | `scripts/manage_ws27_subagent_cutover_ws27_002.py` | `tests/test_manage_ws27_subagent_cutover_ws27_002.py`, `doc/task/implementation/NGA-WS27-002-implementation.md` |
 | FE/BE/Ops 子代理执行面（内生） | 非黑盒的内生子代理进程执行器，具备统一可控审计 | 已切到内生 `NativeExecutionBridge`，并落地 FE/BE/Ops 角色专用执行器 v1（路径策略 + strict 门禁 + 审计回执） | `BRIDGE_DONE` | `agents/pipeline.py`, `agents/tool_loop.py` | `tests/test_run_ws28_execution_governance_gate_ws28_021.py`, `tests/test_agent_roles_ws30_005.py`, `tests/test_run_ws28_execution_governance_gate_ws28_021.py` |

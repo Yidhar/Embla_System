@@ -8,6 +8,10 @@
 
 # 11 - 大脑层模块详细架构 (Brain Layer Modules)
 
+
+> Migration Note (archived/legacy)
+> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+
 > **定位**：大脑层是 Embla_system 的认知中枢，负责推理、记忆、路由和状态管理。属于工作空间层中的高级逻辑区域。
 >
 > **实施状态**：
@@ -17,7 +21,7 @@
 >
 > **当前实现映射**：
 > - Meta-Agent → `agents/meta_agent.py` + `agents/pipeline.py`（桥接）
-> - Router → `agents/router_engine.py`（主）+ `autonomous/tools/cli_selector.py`（历史兼容）
+> - Router → `agents/router_engine.py`（主）+ `autonomous/tools/cli_selector.py`（archived/legacy）（历史兼容）
 > - Working Memory → `agents/memory/working_memory.py` + 对话上下文（`apiserver/llm_service.py`）
 > - Episodic Memory → `system/episodic_memory.py`（增量）
 > - Semantic Graph → `system/semantic_graph.py`（增量）

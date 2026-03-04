@@ -1,5 +1,9 @@
 # 23 M7 之后到 Embla_system 全目标态（Phase3 Full）任务清单
 
+
+> Migration Note (archived/legacy)
+> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+
 ## 1. 目标与边界
 
 - 目标: 在 `M7` 已完成（WS21/WS22）的基础上，继续推进到 `doc/00-omni-operator-architecture.md` 的全目标态。
@@ -159,7 +163,7 @@
   - 新增回归：`tests/test_core_event_bus_consumers_ws28_029.py`、`tests/test_core_event_bus_consumers_ws28_029.py`
   - 兼容回归通过：`tests/test_core_event_bus_consumers_ws28_029.py`、`tests/test_core_event_bus_consumers_ws28_029.py`
 - `NGA-WS25-002` 已落地 Cron/Alert 生产者接入：
-  - 新增生产者模块：`autonomous/event_log/cron_alert_producer.py`（`CronEventProducer` / `AlertEventProducer`）
+  - 新增生产者模块：`autonomous/event_log/cron_alert_producer.py`（archived/legacy）（`CronEventProducer` / `AlertEventProducer`）
   - `SystemAgent` 挂载 cron/alert producer：
     - cycle 触发 `cron.system_agent.cycle`
     - watchdog 门禁触发 `alert.watchdog`

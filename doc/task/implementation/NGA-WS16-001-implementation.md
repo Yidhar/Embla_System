@@ -5,6 +5,10 @@
 
 # NagaAgent 迁移资产清单与依赖盘点
 
+
+> Migration Note (archived/legacy)
+> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+
 > 文档状态：Historical Archive（M0 快照）
 > 
 > 本文档用于保留 WS16 初期盘点证据，其中包含 Voice/Frontend/CLI 等历史阶段信息，不代表当前系统默认架构。
@@ -34,7 +38,7 @@
 | **API Server** | `apiserver/` | ✅ 活跃 | 是 | 8000 | 主执行链路，BFF 入口 |
 | **MCP Server** | `mcpserver/` | ✅ 活跃 | 是 | 8003 | MCP 工具注册与调度 |
 | **Voice Service** | `voice/` | ✅ 活跃 | 是 | 5048 | TTS/ASR/实时语音 |
-| **Autonomous** | `autonomous/` | ✅ 活跃 | 可选 | - | System Agent 自治循环 |
+| **Autonomous** | `autonomous/`（archived/legacy） | 📦 归档 | 否 | - | 历史 System Agent 自治循环（已迁移至 `agents/*`/`core/*`） |
 | **Agent Server** | `agentserver/` | ⚠️ 已弃用 | 否 | 8001 | Legacy 执行链路 |
 
 ### 1.2 支撑模块
@@ -127,8 +131,8 @@ Autonomous System Agent → CLI Adapter → Codex/Claude/Gemini
 
 **关键文件**:
 - `agents/pipeline.py` - 主循环
-- `autonomous/tools/cli_adapter.py` - CLI 统一适配器
-- `autonomous/tools/codex_adapter.py` - Codex 主执行器
+- `autonomous/tools/cli_adapter.py`（archived/legacy） - CLI 统一适配器
+- `autonomous/tools/codex_adapter.py`（archived/legacy） - Codex 主执行器
 
 ## 4. 端口占用清单
 

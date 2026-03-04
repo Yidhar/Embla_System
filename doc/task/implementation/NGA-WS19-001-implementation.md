@@ -5,6 +5,10 @@
 
 # NGA-WS19-001 实施记录（Meta-Agent 服务骨架落地）
 
+
+> Migration Note (archived/legacy)
+> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+
 ## 任务信息
 - Task ID: `NGA-WS19-001`
 - Title: Meta-Agent 服务骨架落地
@@ -28,7 +32,7 @@
     - `DispatchReceipt`
 
 2. 包级导出
-- 更新 `autonomous/__init__.py`
+- 更新 `autonomous/__init__.py`（archived/legacy）
   - 导出 `MetaAgentRuntime` 与核心数据结构，便于后续 Router/Memory 任务接入。
 
 3. 测试覆盖
@@ -38,7 +42,7 @@
   - 验证反思结果与恢复入口可重建运行态。
 
 ## 验证命令
-- `python -m ruff check agents/meta_agent.py autonomous/__init__.py tests/test_agent_roles_ws30_005.py`
+- `python -m ruff check agents/meta_agent.py autonomous/__init__.py tests/test_agent_roles_ws30_005.py`（archived/legacy path in command）
   - 结果: `All checks passed`
 - `python -m pytest -q tests/test_agent_roles_ws30_005.py tests/test_slo_snapshot_export.py tests/test_canary_rollback_drill.py tests/test_core_event_bus_consumers_ws28_029.py`
   - 结果: `15 passed`
@@ -53,7 +57,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `agents/meta_agent.py; autonomous/__init__.py; tests/test_agent_roles_ws30_005.py; doc/task/implementation/NGA-WS19-001-implementation.md`
+  - `agents/meta_agent.py; autonomous/__init__.py [archived/legacy]; tests/test_agent_roles_ws30_005.py; doc/task/implementation/NGA-WS19-001-implementation.md`
 - `notes`:
   - `meta-agent runtime skeleton now supports goal decomposition, dependency-aware dispatch, reflection, and snapshot recovery entrypoints with focused regression tests`
 

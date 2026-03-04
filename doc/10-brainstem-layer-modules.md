@@ -2,11 +2,15 @@
 **文档类型**：🎯 目标态架构设计（Target Architecture - Phase 2-3）
 **实施状态**：Phase 2-3 规划（当前 Phase 0 轻量实现）
 **最后更新**：2026-02-22
-**当前替代方案**：Event Store (autonomous/event_log/) + Native Executor (system/)
+**当前替代方案**：Event Store (`core/event_bus/event_store.py`，原 `autonomous/event_log/` 为 archived/legacy) + Native Executor (system/)
 **实施路径**：Phase 0 (轻量事件) → Phase 1-2 (本文档) → Phase 3 (完整守护)
 ---
 
 # 10 - 脑干层模块详细架构 (Brainstem Layer Modules)
+
+
+> Migration Note (archived/legacy)
+> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
 > **定位**：脑干层是 Embla_system 的不可变守护进程区。Agent 无法修改该层的任何代码。所有模块编译后打包为二进制运行，由人类工程师维护。
 >
