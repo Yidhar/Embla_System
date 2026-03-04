@@ -592,6 +592,19 @@ def test_chat_stream_dispatch_to_core_triggers_real_core_pipeline(monkeypatch) -
     assert str(deferred_emits[0]["chunk_data"].get("agent_id") or "") == "review-child-001"
     assert str(deferred_emits[0]["chunk_data"].get("reason") or "") == "spawn_deferred_role"
 
+    bridge_payload = api_server._build_chat_route_bridge_payload("dispatch-only-route-session", limit=20)
+    assert bridge_payload["outer_session_id"] == "dispatch-only-route-session"
+    assert str(bridge_payload["core_session_id"]).endswith("__core")
+    assert bridge_payload["execution_session_id"] == bridge_payload["core_session_id"]
+    assert bridge_payload["core_session_exists"] is True
+    assert isinstance(bridge_payload["recent_route_events"], list)
+    assert len(bridge_payload["recent_route_events"]) >= 1
+    assert any(str(item.get("path") or "") == "path-c" for item in bridge_payload["recent_route_events"])
+    assert any(
+        str(item.get("core_session_id") or "") == str(bridge_payload["core_session_id"])
+        for item in bridge_payload["recent_route_events"]
+    )
+
     fallback_content_rows = [
         item for item in payloads if item.get("type") == "content" and item.get("source") == "execution_receipt_fallback"
     ]

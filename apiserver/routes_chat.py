@@ -1214,6 +1214,53 @@ def _build_chat_route_bridge_payload(session_id: str, *, limit: int = 20) -> Dic
     if core_session_id:
         session_ids.append(core_session_id)
     route_events = _collect_chat_route_bridge_events(session_ids=session_ids, limit=max(1, int(limit)))
+    if not route_events:
+        fallback_path = "path-c" if core_session_id else "path-a"
+        route_events = [
+            {
+                "timestamp": _ops_utc_iso_now(),
+                "event_type": "RouteBridgeStateFallback",
+                "session_id": str(session_id),
+                "execution_session_id": execution_session_id,
+                "outer_session_id": str(session_id),
+                "core_session_id": core_session_id,
+                "path": fallback_path,
+                "trigger": fallback_path,
+                "risk_level": "write_repo" if fallback_path == "path-c" else "read_only",
+                "outer_readonly_hit": fallback_path == "path-a",
+                "core_escalation": fallback_path == "path-c",
+                "delegation_intent": "core_execution" if fallback_path == "path-c" else "read_only_exploration",
+                "prompt_profile": "",
+                "injection_mode": "",
+                "path_b_budget_escalated": False,
+                "path_b_budget_reason": "",
+                "path_b_clarify_turns": int(state.get("path_b_clarify_turns") or 0),
+                "path_b_clarify_limit": _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT,
+                "path_b_clarify_limit_override": None,
+                "route_quality_guard_status": "unknown",
+                "route_quality_guard_applied": False,
+                "route_quality_guard_action": "",
+                "route_quality_guard_reason": "",
+                "route_quality_guard_reason_codes": [],
+                "route_quality_guard_path_before": "",
+                "route_quality_guard_path_after": "",
+                "router_arbiter_status": "unknown",
+                "router_arbiter_applied": False,
+                "router_arbiter_action": "",
+                "router_arbiter_reason": "",
+                "router_arbiter_reason_codes": [],
+                "router_arbiter_path_before": "",
+                "router_arbiter_path_after": "",
+                "router_arbiter_delegate_turns": 0,
+                "router_arbiter_max_delegate_turns": int(_router_arbiter_max_delegate_turns() or 0),
+                "router_arbiter_conflict_ticket": "",
+                "router_arbiter_freeze": False,
+                "router_arbiter_hitl": False,
+                "router_arbiter_escalated": False,
+                "core_session_created": False,
+                "source": "state_fallback",
+            }
+        ]
 
     return {
         "status": "success",

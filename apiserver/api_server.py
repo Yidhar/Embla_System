@@ -1269,6 +1269,7 @@ async def chat_stream(request: ChatRequest):
                 "execution_session_id": session_id,
                 "routing_mode": "dispatch_to_core_only",
             }
+            route_meta = _apply_outer_core_session_bridge(route_meta, outer_session_id=session_id)
             route_decision: Dict[str, Any] = {}
             path = str(route_meta.get("path") or "path-a")
             execution_session_id = str(route_meta.get("execution_session_id") or session_id)
@@ -1534,19 +1535,22 @@ async def chat_stream(request: ChatRequest):
             # ── Core handoff only happens when Shell explicitly dispatches. ──
             if dispatch_payload:
                 route_decision = dict(dispatch_payload.get("router_decision") or {})
-                core_session_id = str(route_meta.get("core_session_id") or "").strip() or f"{session_id}__core"
-                core_session_created = message_manager.get_session(core_session_id) is None
-                message_manager.create_session(core_session_id, temporary=request.temporary)
-                execution_session_id = core_session_id
                 path = "path-c"
                 route_meta["path"] = path
                 route_meta["risk_level"] = str(route_decision.get("risk_level") or "write_repo")
                 route_meta["outer_readonly_hit"] = False
                 route_meta["core_escalation"] = True
                 route_meta["router_decision"] = dict(route_decision)
-                route_meta["core_session_id"] = core_session_id
-                route_meta["execution_session_id"] = execution_session_id
-                route_meta["core_session_created"] = core_session_created
+                route_meta["routing_mode"] = "dispatch_to_core_tool"
+                route_meta["handoff_source"] = "dispatch_to_core"
+                route_meta = _apply_outer_core_session_bridge(route_meta, outer_session_id=session_id)
+                core_session_id = str(route_meta.get("core_session_id") or "")
+                execution_session_id = str(route_meta.get("execution_session_id") or core_session_id)
+                core_session_created = bool(route_meta.get("core_session_created"))
+
+                # Emit a second prompt-route composition snapshot after handoff so
+                # route_bridge can observe the finalized outer->core bridge state.
+                _emit_chat_route_prompt_event(route_meta, session_id=session_id)
 
                 yield _format_stream_payload_chunk(
                     {
