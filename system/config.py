@@ -98,6 +98,10 @@ def _embla_system_default_payload() -> Dict[str, Any]:
             "heartbeat_interval_seconds": 5,
             "max_rounds_default": 500,
             "max_task_cost_usd": 5.0,
+            "child_session_cleanup": {
+                "mode": "retain",
+                "ttl_seconds": 86400,
+            },
         },
         "security": copy.deepcopy(_EMBLA_SYSTEM_DEFAULT_SECURITY),
         "watchers": {
@@ -114,6 +118,28 @@ def _embla_system_default_payload() -> Dict[str, Any]:
 
 def _normalize_embla_system_payload(payload: Dict[str, Any], *, source: str, loaded: bool) -> Dict[str, Any]:
     merged = _deep_merge_dict(_embla_system_default_payload(), payload if isinstance(payload, dict) else {})
+    runtime = merged.get("runtime") if isinstance(merged.get("runtime"), dict) else {}
+    merged["runtime"] = runtime
+    child_cleanup = runtime.get("child_session_cleanup") if isinstance(runtime.get("child_session_cleanup"), dict) else {}
+    runtime["child_session_cleanup"] = child_cleanup
+    mode = str(child_cleanup.get("mode") or "retain").strip().lower()
+    mode_aliases = {
+        "off": "retain",
+        "none": "retain",
+        "disabled": "retain",
+        "destroy_on_end": "destroy",
+        "immediate_destroy": "destroy",
+    }
+    mode = mode_aliases.get(mode, mode)
+    if mode not in {"retain", "destroy", "ttl"}:
+        mode = "retain"
+    child_cleanup["mode"] = mode
+    try:
+        ttl_seconds = int(child_cleanup.get("ttl_seconds", 86400))
+    except (TypeError, ValueError):
+        ttl_seconds = 86400
+    child_cleanup["ttl_seconds"] = max(0, min(2592000, ttl_seconds))
+
     security = merged.get("security") if isinstance(merged.get("security"), dict) else {}
     merged["security"] = security
 

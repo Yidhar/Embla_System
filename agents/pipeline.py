@@ -13,6 +13,7 @@ import json
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
 
 from agents.router_engine import RouterDecision
@@ -53,6 +54,144 @@ def _extract_report_text(report: Dict[str, Any]) -> str:
                 except Exception:
                     continue
     return ""
+
+
+def _normalize_child_session_cleanup_mode(mode: str) -> str:
+    normalized = str(mode or "").strip().lower()
+    aliases = {
+        "": "retain",
+        "off": "retain",
+        "none": "retain",
+        "disabled": "retain",
+        "keep": "retain",
+        "destroy_on_end": "destroy",
+        "destroyed": "destroy",
+        "immediate_destroy": "destroy",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in {"retain", "destroy", "ttl"}:
+        return "retain"
+    return normalized
+
+
+def _parse_iso_to_timestamp(raw: str) -> Optional[float]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return float(dt.timestamp())
+
+
+def _session_age_seconds(session: Any, *, now_ts: float) -> Optional[float]:
+    updated_at = str(getattr(session, "updated_at", "") or getattr(session, "created_at", "") or "")
+    ts = _parse_iso_to_timestamp(updated_at)
+    if ts is None:
+        return None
+    return max(0.0, float(now_ts - ts))
+
+
+def _collect_descendant_session_ids(
+    *,
+    store: AgentSessionStore,
+    root_session_ids: List[str],
+) -> List[str]:
+    queue: List[str] = [str(item or "").strip() for item in root_session_ids if str(item or "").strip()]
+    collected: List[str] = []
+    visited: set[str] = set()
+    while queue:
+        session_id = queue.pop(0)
+        if not session_id or session_id in visited:
+            continue
+        visited.add(session_id)
+        collected.append(session_id)
+        for child in store.list_children(session_id):
+            child_id = str(getattr(child, "session_id", "") or "").strip()
+            if child_id and child_id not in visited:
+                queue.append(child_id)
+    return collected
+
+
+def _apply_child_session_cleanup(
+    *,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    core_session_id: str,
+    pipeline_id: str,
+    mode: str,
+    ttl_seconds: int,
+) -> Dict[str, Any]:
+    normalized_mode = _normalize_child_session_cleanup_mode(mode)
+    normalized_ttl = max(0, int(ttl_seconds))
+    summary: Dict[str, Any] = {
+        "mode": normalized_mode,
+        "requested_mode": str(mode or ""),
+        "ttl_seconds": normalized_ttl,
+        "core_session_id": str(core_session_id or ""),
+        "pipeline_id": str(pipeline_id or ""),
+        "root_candidates": 0,
+        "destroyed_count": 0,
+        "purged_message_count": 0,
+        "destroyed_session_ids": [],
+    }
+    if normalized_mode == "retain":
+        return summary
+
+    roots = store.list_children(core_session_id)
+    now_ts = time.time()
+    root_ids: List[str] = []
+    for child in roots:
+        child_id = str(getattr(child, "session_id", "") or "").strip()
+        if not child_id:
+            continue
+        metadata = getattr(child, "metadata", {})
+        metadata_dict = metadata if isinstance(metadata, dict) else {}
+        child_pipeline_id = str(metadata_dict.get("pipeline_id") or "").strip()
+        if not child_pipeline_id:
+            continue
+
+        if normalized_mode == "destroy":
+            if child_pipeline_id == str(pipeline_id or "").strip():
+                root_ids.append(child_id)
+            continue
+
+        # ttl mode: clean aged pipeline-scoped roots (current and historical runs).
+        age_seconds = _session_age_seconds(child, now_ts=now_ts)
+        if age_seconds is None:
+            continue
+        if age_seconds >= float(normalized_ttl):
+            root_ids.append(child_id)
+
+    root_ids = sorted(set(root_ids))
+    summary["root_candidates"] = len(root_ids)
+    if not root_ids:
+        return summary
+
+    destroy_ids = _collect_descendant_session_ids(store=store, root_session_ids=root_ids)
+    destroyed_ids: List[str] = []
+    for session_id in destroy_ids:
+        try:
+            store.destroy(session_id, reason=f"pipeline_cleanup:{normalized_mode}:{pipeline_id}")
+            destroyed_ids.append(session_id)
+        except Exception:
+            logger.debug("Failed to destroy child session during cleanup: %s", session_id, exc_info=True)
+
+    purged_message_count = 0
+    if destroyed_ids:
+        try:
+            purged_message_count = mailbox.purge_agent_messages(destroyed_ids)
+        except Exception:
+            logger.debug("Failed to purge mailbox messages during cleanup", exc_info=True)
+
+    summary["destroyed_count"] = len(destroyed_ids)
+    summary["purged_message_count"] = int(purged_message_count)
+    summary["destroyed_session_ids"] = destroyed_ids[:20]
+    return summary
 
 
 def _build_runtime_tool_definitions(tool_names: List[str]) -> List[Dict[str, Any]]:
@@ -171,6 +310,8 @@ async def run_multi_agent_pipeline(
     child_tool_executor: Optional[ChildToolExecutorFn] = None,
     enable_child_execution: bool = False,
     child_max_rounds: int = 12,
+    child_session_cleanup_mode: str = "retain",
+    child_session_cleanup_ttl_seconds: int = 86400,
     store: Optional[AgentSessionStore] = None,
     mailbox: Optional[AgentMailbox] = None,
     task_board_engine: Optional[TaskBoardEngine] = None,
@@ -210,6 +351,8 @@ async def run_multi_agent_pipeline(
         "message": message,
         "session_id": session_id,
         "child_execution_enabled": bool(enable_child_execution),
+        "child_session_cleanup_mode": _normalize_child_session_cleanup_mode(child_session_cleanup_mode),
+        "child_session_cleanup_ttl_seconds": max(0, int(child_session_cleanup_ttl_seconds)),
     }
 
     # ── Phase 1: Shell routes via TaskRouterEngine ─────────────
@@ -672,6 +815,20 @@ async def run_multi_agent_pipeline(
         "text": str(receipt_event.get("agent_state", {}).get("final_answer") or ""),
     }
 
+    cleanup_summary = _apply_child_session_cleanup(
+        store=_store,
+        mailbox=_mailbox,
+        core_session_id=resolved_core_session_id,
+        pipeline_id=pipeline_id,
+        mode=child_session_cleanup_mode,
+        ttl_seconds=int(child_session_cleanup_ttl_seconds),
+    )
+    yield {
+        "type": "pipeline_cleanup",
+        "pipeline_id": pipeline_id,
+        "cleanup": cleanup_summary,
+    }
+
     # ── Done ───────────────────────────────────────────────────
 
     yield {
@@ -681,6 +838,7 @@ async def run_multi_agent_pipeline(
         "duration_ms": int((time.time() - started_at) * 1000),
         "expert_count": len(expert_results),
         "core_session_id": resolved_core_session_id,
+        "child_session_cleanup": cleanup_summary,
     }
 
 

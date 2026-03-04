@@ -4,6 +4,9 @@ runtime:
   heartbeat_interval_seconds: 5
   max_rounds_default: 500
   max_task_cost_usd: 5.0
+  child_session_cleanup:
+    mode: retain
+    ttl_seconds: 86400
 security:
   enforce_dual_lane: true
   approval_required_scopes:

@@ -621,3 +621,115 @@ class TestPipeline:
         # be scoped to the current pipeline run instead of all non-destroyed children.
         all_children = store.list_children(core_session_id)
         assert len(all_children) >= first_expert_count + second_expert_count
+
+    def test_pipeline_cleanup_destroy_mode_reaps_current_run_children(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, tools, model
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "mock_call_1",
+                        "name": "report_to_parent",
+                        "arguments": {
+                            "type": "completed",
+                            "content": "child work complete",
+                        },
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        core_session_id = "cleanup-destroy__core"
+        events = self._run(self._collect_events(
+            run_multi_agent_pipeline(
+                message="Implement auth endpoint and tests",
+                session_id=core_session_id,
+                core_session_id=core_session_id,
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                child_session_cleanup_mode="destroy",
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+            )
+        ))
+
+        end_event = next(e for e in events if e["type"] == "pipeline_end")
+        cleanup = end_event["child_session_cleanup"]
+        assert cleanup["mode"] == "destroy"
+        assert cleanup["destroyed_count"] >= 1
+        assert len(store.list_children(core_session_id)) == 0
+
+    def test_pipeline_cleanup_ttl_mode_reaps_expired_history_children(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, tools, model
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "mock_call_1",
+                        "name": "report_to_parent",
+                        "arguments": {
+                            "type": "completed",
+                            "content": "child work complete",
+                        },
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        core_session_id = "cleanup-ttl__core"
+        old_child = store.create(
+            role="expert",
+            parent_id=core_session_id,
+            task_description="historical child",
+            metadata={"pipeline_id": "pipe_historical_old"},
+        )
+        store.update_status(old_child.session_id, AgentStatus.WAITING)
+        mailbox.send(old_child.session_id, core_session_id, "historical report", message_type="report")
+        assert len(store.list_children(core_session_id)) == 1
+
+        events = self._run(self._collect_events(
+            run_multi_agent_pipeline(
+                message="Implement auth endpoint and tests",
+                session_id=core_session_id,
+                core_session_id=core_session_id,
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                child_session_cleanup_mode="ttl",
+                child_session_cleanup_ttl_seconds=0,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+            )
+        ))
+
+        end_event = next(e for e in events if e["type"] == "pipeline_end")
+        cleanup = end_event["child_session_cleanup"]
+        assert cleanup["mode"] == "ttl"
+        assert cleanup["ttl_seconds"] == 0
+        assert cleanup["destroyed_count"] >= 2
+        assert len(store.list_children(core_session_id)) == 0

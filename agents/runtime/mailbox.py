@@ -175,6 +175,27 @@ class AgentMailbox:
             row = cursor.fetchone()
         return row[0] if row else 0
 
+    def purge_agent_messages(self, agent_ids: List[str]) -> int:
+        """Delete messages sent from/to the given agent IDs. Returns deleted row count."""
+        normalized_ids = sorted({str(item or "").strip() for item in list(agent_ids or []) if str(item or "").strip()})
+        if not normalized_ids:
+            return 0
+
+        placeholders = ",".join(["?"] * len(normalized_ids))
+        sql = (
+            f"DELETE FROM agent_messages "
+            f"WHERE from_id IN ({placeholders}) OR to_id IN ({placeholders})"
+        )
+        params = tuple(normalized_ids + normalized_ids)
+        with self._lock:
+            before = self._db.total_changes
+            self._db.execute(sql, params)
+            self._db.commit()
+            after = self._db.total_changes
+        deleted = max(0, int(after - before))
+        logger.info("Purged %d mailbox messages for %d agent IDs", deleted, len(normalized_ids))
+        return deleted
+
     def close(self) -> None:
         """Close the SQLite connection."""
         self._db.close()

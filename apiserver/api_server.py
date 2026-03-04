@@ -94,6 +94,26 @@ def _get_pipeline_runtime_handles() -> tuple[AgentSessionStore, AgentMailbox, Ta
             )
     return _PIPELINE_SESSION_STORE, _PIPELINE_MAILBOX, _PIPELINE_TASK_BOARD
 
+
+def _resolve_pipeline_child_session_cleanup_policy() -> Dict[str, Any]:
+    policy = {"mode": "retain", "ttl_seconds": 86400}
+    try:
+        embla_cfg = get_embla_system_config()
+    except Exception:
+        embla_cfg = {}
+    runtime_cfg = embla_cfg.get("runtime") if isinstance(embla_cfg, dict) else {}
+    cleanup_cfg = runtime_cfg.get("child_session_cleanup") if isinstance(runtime_cfg, dict) else {}
+    if isinstance(cleanup_cfg, dict):
+        mode = str(cleanup_cfg.get("mode") or "").strip()
+        if mode:
+            policy["mode"] = mode
+        try:
+            ttl_seconds = int(cleanup_cfg.get("ttl_seconds", policy["ttl_seconds"]))
+        except (TypeError, ValueError):
+            ttl_seconds = int(policy["ttl_seconds"])
+        policy["ttl_seconds"] = max(0, ttl_seconds)
+    return policy
+
 # 导入配置系统
 try:
     from system.config import (
@@ -1346,6 +1366,7 @@ async def chat_stream(request: ChatRequest):
             current_round_text = ""
             receipt_fallback_text = ""
             session_store, agent_mailbox, task_board_engine = _get_pipeline_runtime_handles()
+            child_session_cleanup_policy = _resolve_pipeline_child_session_cleanup_policy()
             child_loop_llm_service = get_llm_service()
             child_loop_model_override = _build_path_model_override("path-c")
             native_tool_executor = get_native_tool_executor()
@@ -1408,6 +1429,8 @@ async def chat_stream(request: ChatRequest):
                 child_llm_call=_pipeline_child_llm_call,
                 child_tool_executor=_pipeline_child_tool_executor,
                 enable_child_execution=True,
+                child_session_cleanup_mode=str(child_session_cleanup_policy.get("mode") or "retain"),
+                child_session_cleanup_ttl_seconds=int(child_session_cleanup_policy.get("ttl_seconds") or 0),
                 store=session_store,
                 mailbox=agent_mailbox,
                 task_board_engine=task_board_engine,

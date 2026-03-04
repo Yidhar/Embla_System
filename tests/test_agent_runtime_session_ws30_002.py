@@ -221,6 +221,20 @@ class TestAgentMailbox:
         assert len(reports) == 1
         assert reports[0].content == "done!"
 
+    def test_purge_agent_messages(self, mailbox):
+        mailbox.send("parent-1", "agent-a", "to a")
+        mailbox.send("agent-a", "parent-1", "from a")
+        mailbox.send("parent-1", "agent-b", "to b")
+        mailbox.send("agent-b", "parent-1", "from b")
+
+        purged = mailbox.purge_agent_messages(["agent-a"])
+        assert purged == 2
+        assert len(mailbox.read("agent-a")) == 0
+
+        parent_msgs = mailbox.read("parent-1")
+        assert len(parent_msgs) == 1
+        assert parent_msgs[0].from_id == "agent-b"
+
 
 # ── Parent Tools Tests ─────────────────────────────────────────
 
