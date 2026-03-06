@@ -54,6 +54,7 @@ const PAGE_COPY: Record<
       failOpenUsage: string;
       readonlyWriteExposure: string;
       pathCRouteShare: string;
+      shellToCoreDispatch: string;
       pathBBudgetEscalation: string;
       coreSessionCreation: string;
       queuePressure: string;
@@ -73,9 +74,10 @@ const PAGE_COPY: Record<
       escalatedCount: string;
       createdCount: string;
       outerReadonlyHitRate: string;
-      pathARatio: string;
-      pathBRatio: string;
-      pathCRatio: string;
+      dispatchToCoreRate: string;
+      shellReadonlyRatio: string;
+      shellClarifyRatio: string;
+      coreExecutionRatio: string;
       eventsScanned: string;
       missing: string;
       failed: string;
@@ -118,7 +120,7 @@ const PAGE_COPY: Record<
     cards: {
       runtimeRollout: { title: "Runtime Rollout", note: "SubAgent decision hit ratio" },
       failOpen: { title: "Fail Open", note: "Current fail-open ratio" },
-      readonlyExposure: { title: "Readonly Write Exposure", note: "Path-A write-tool leakage ratio" },
+      readonlyExposure: { title: "Readonly Write Exposure", note: "Shell readonly write-tool leakage ratio" },
       routeQuality: { title: "Route Quality", note: "Unified route-quality guard status" },
       brainstemControlPlane: { title: "Brainstem Control Plane", note: "Daemon heartbeat and managed hosting gate" },
       lease: { title: "Lease", note: "Global orchestrator lease state" },
@@ -141,9 +143,10 @@ const PAGE_COPY: Record<
       rolloutHitRatio: "Rollout Hit Ratio",
       failOpenUsage: "Fail-Open Usage",
       readonlyWriteExposure: "Readonly Write Exposure",
-      pathCRouteShare: "Path-C Route Share",
-      pathBBudgetEscalation: "Path-B Budget Escalation",
-      coreSessionCreation: "Core Session Creation",
+      pathCRouteShare: "Core Execution Route Share",
+      shellToCoreDispatch: "Shell to Core Dispatch",
+      pathBBudgetEscalation: "Shell Clarify Budget Escalation",
+      coreSessionCreation: "Core Execution Session Creation",
       queuePressure: "Queue Pressure",
       diskUsage: "Disk Usage",
       evidenceCoverage: "Evidence Coverage",
@@ -160,10 +163,11 @@ const PAGE_COPY: Record<
       exposureCount: "Exposure count",
       escalatedCount: "Escalated count",
       createdCount: "Created count",
-      outerReadonlyHitRate: "Outer readonly hit rate",
-      pathARatio: "Path-A",
-      pathBRatio: "Path-B",
-      pathCRatio: "Path-C",
+      outerReadonlyHitRate: "Shell readonly hit rate",
+      dispatchToCoreRate: "Dispatch to core",
+      shellReadonlyRatio: "Shell Readonly",
+      shellClarifyRatio: "Shell Clarify",
+      coreExecutionRatio: "Core Execution",
       eventsScanned: "events_scanned",
       missing: "Missing",
       failed: "Failed",
@@ -205,7 +209,7 @@ const PAGE_COPY: Record<
     cards: {
       runtimeRollout: { title: "运行分流命中率", note: "SubAgent 决策命中比例" },
       failOpen: { title: "Fail-Open 比例", note: "当前降级放行占比" },
-      readonlyExposure: { title: "只读写工具暴露率", note: "Path-A 写工具泄露占比" },
+      readonlyExposure: { title: "只读写工具暴露率", note: "Shell 只读写工具泄露占比" },
       routeQuality: { title: "路由质量", note: "统一路由质量门禁状态" },
       brainstemControlPlane: { title: "脑干管控面", note: "守护心跳与托管门禁状态" },
       lease: { title: "租约状态", note: "全局调度租约健康状态" },
@@ -228,9 +232,10 @@ const PAGE_COPY: Record<
       rolloutHitRatio: "分流命中率",
       failOpenUsage: "Fail-Open 使用率",
       readonlyWriteExposure: "只读写工具暴露率",
-      pathCRouteShare: "Path-C 路由占比",
-      pathBBudgetEscalation: "Path-B 预算升级率",
-      coreSessionCreation: "Core 会话新建率",
+      pathCRouteShare: "Core 执行路由占比",
+      shellToCoreDispatch: "Shell 到 Core 转交率",
+      pathBBudgetEscalation: "Shell 澄清预算升级率",
+      coreSessionCreation: "Core 执行会话新建率",
       queuePressure: "队列压力",
       diskUsage: "磁盘使用情况",
       evidenceCoverage: "证据覆盖率",
@@ -247,10 +252,11 @@ const PAGE_COPY: Record<
       exposureCount: "暴露次数",
       escalatedCount: "升级次数",
       createdCount: "新建次数",
-      outerReadonlyHitRate: "外层只读命中率",
-      pathARatio: "Path-A",
-      pathBRatio: "Path-B",
-      pathCRatio: "Path-C",
+      outerReadonlyHitRate: "Shell 只读命中率",
+      dispatchToCoreRate: "转交 Core 比例",
+      shellReadonlyRatio: "Shell 只读",
+      shellClarifyRatio: "Shell 澄清",
+      coreExecutionRatio: "Core 执行",
       eventsScanned: "events_scanned",
       missing: "缺失",
       failed: "失败",
@@ -433,11 +439,12 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
   const queueDepth = asRecord(metrics.queue_depth);
   const lockStatus = asRecord(metrics.lock_status);
   const diskWatermark = asRecord(metrics.disk_watermark_ratio);
-  const outerReadonlyHitRate = asRecord(metrics.outer_readonly_hit_rate);
+  const shellReadonlyHitRate = asRecord(metrics.shell_readonly_hit_rate);
   const readonlyWriteToolExposure = asRecord(metrics.readonly_write_tool_exposure_rate);
-  const chatRoutePathDistribution = asRecord(metrics.chat_route_path_distribution);
-  const pathBBudgetEscalation = asRecord(metrics.path_b_budget_escalation_rate);
-  const coreSessionCreation = asRecord(metrics.core_session_creation_rate);
+  const routeSemanticDistribution = asRecord(metrics.agent_route_semantic_distribution);
+  const shellToCoreDispatch = asRecord(metrics.shell_to_core_dispatch_rate);
+  const shellClarifyBudgetEscalation = asRecord(metrics.shell_clarify_budget_escalation_rate);
+  const coreExecutionSessionCreation = asRecord(metrics.core_execution_session_creation_rate);
   const sources = asRecord(payload?.data?.sources);
   const postureSummary = asRecord(payload?.data?.summary);
   const brainstemControlPlane = asRecord(payload?.data?.brainstem_control_plane);
@@ -463,20 +470,21 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
   const failOpenValue = asNumber(runtimeFailOpen.value);
   const failOpenBudget = asNumber(runtimeFailOpen.configured_budget_ratio);
   const diskUsage = asNumber(diskWatermark.value);
-  const outerReadonlyHitValue = asNumber(outerReadonlyHitRate.value);
+  const shellReadonlyHitValue = asNumber(shellReadonlyHitRate.value);
   const readonlyWriteExposureValue = asNumber(readonlyWriteToolExposure.value);
   const readonlyWriteExposureSampleCount = asNumber(readonlyWriteToolExposure.sample_count);
   const readonlyWriteExposureCount = asNumber(readonlyWriteToolExposure.exposure_count);
-  const pathRatios = asRecord(chatRoutePathDistribution.path_ratios);
-  const pathARatio = asNumber(pathRatios["path-a"]);
-  const pathBRatio = asNumber(pathRatios["path-b"]);
-  const pathCRatio = asNumber(pathRatios["path-c"]);
-  const pathBBudgetEscalationValue = asNumber(pathBBudgetEscalation.value);
-  const pathBBudgetEscalatedCount = asNumber(pathBBudgetEscalation.escalated_count);
-  const pathBBudgetSampleCount = asNumber(pathBBudgetEscalation.sample_count);
-  const coreSessionCreationValue = asNumber(coreSessionCreation.value);
-  const coreSessionCreatedCount = asNumber(coreSessionCreation.created_count);
-  const coreSessionSampleCount = asNumber(coreSessionCreation.sample_count);
+  const routeSemanticRatios = asRecord(routeSemanticDistribution.route_semantic_ratios);
+  const shellReadonlyRatio = asNumber(routeSemanticRatios.shell_readonly);
+  const shellClarifyRatio = asNumber(routeSemanticRatios.shell_clarify);
+  const coreExecutionRatio = asNumber(routeSemanticRatios.core_execution);
+  const shellToCoreDispatchValue = asNumber(shellToCoreDispatch.value);
+  const pathBBudgetEscalationValue = asNumber(shellClarifyBudgetEscalation.value);
+  const pathBBudgetEscalatedCount = asNumber(shellClarifyBudgetEscalation.escalated_count);
+  const pathBBudgetSampleCount = asNumber(shellClarifyBudgetEscalation.sample_count);
+  const coreSessionCreationValue = asNumber(coreExecutionSessionCreation.value);
+  const coreSessionCreatedCount = asNumber(coreExecutionSessionCreation.created_count);
+  const coreSessionSampleCount = asNumber(coreExecutionSessionCreation.sample_count);
   const routeQualityStatusText = asText(routeQuality.status, "unknown");
   const routeQualityReason = asText(routeQuality.reason_text, "");
   const routeQualityDirection = asText(routeQualityTrend.direction, "unknown");
@@ -622,20 +630,27 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
                   {copy.words.sampleCount} {toNumber(readonlyWriteExposureSampleCount, lang)}
                 </span>
               }
-              hint={`${copy.words.exposureCount}: ${toNumber(readonlyWriteExposureCount, lang)} · ${copy.words.outerReadonlyHitRate}: ${toPercent(outerReadonlyHitValue, lang)}`}
+              hint={`${copy.words.exposureCount}: ${toNumber(readonlyWriteExposureCount, lang)} · ${copy.words.outerReadonlyHitRate}: ${toPercent(shellReadonlyHitValue, lang)}`}
             />
             <MetricBar
               label={copy.metricLabels.pathCRouteShare}
-              value={toPercent(pathCRatio, lang)}
-              ratio={pathCRatio}
-              tone={toTone(toState(chatRoutePathDistribution.status))}
-              hint={`${copy.words.pathARatio}: ${toPercent(pathARatio, lang)} · ${copy.words.pathBRatio}: ${toPercent(pathBRatio, lang)} · ${copy.words.pathCRatio}: ${toPercent(pathCRatio, lang)}`}
+              value={toPercent(coreExecutionRatio, lang)}
+              ratio={coreExecutionRatio}
+              tone={toTone(toState(routeSemanticDistribution.status))}
+              hint={`${copy.words.shellReadonlyRatio}: ${toPercent(shellReadonlyRatio, lang)} · ${copy.words.shellClarifyRatio}: ${toPercent(shellClarifyRatio, lang)} · ${copy.words.coreExecutionRatio}: ${toPercent(coreExecutionRatio, lang)}`}
+            />
+            <MetricBar
+              label={copy.metricLabels.shellToCoreDispatch}
+              value={toPercent(shellToCoreDispatchValue, lang)}
+              ratio={shellToCoreDispatchValue}
+              tone={toTone(toState(shellToCoreDispatch.status))}
+              hint={`${copy.words.dispatchToCoreRate}: ${toPercent(shellToCoreDispatchValue, lang)}`}
             />
             <MetricBar
               label={copy.metricLabels.pathBBudgetEscalation}
               value={toPercent(pathBBudgetEscalationValue, lang)}
               ratio={pathBBudgetEscalationValue}
-              tone={toTone(toState(pathBBudgetEscalation.status))}
+              tone={toTone(toState(shellClarifyBudgetEscalation.status))}
               right={
                 <span>
                   {copy.words.sampleCount} {toNumber(pathBBudgetSampleCount, lang)}
@@ -647,7 +662,7 @@ export default async function RuntimePosturePage({ searchParams }: RuntimePagePr
               label={copy.metricLabels.coreSessionCreation}
               value={toPercent(coreSessionCreationValue, lang)}
               ratio={coreSessionCreationValue}
-              tone={toTone(toState(coreSessionCreation.status))}
+              tone={toTone(toState(coreExecutionSessionCreation.status))}
               right={
                 <span>
                   {copy.words.sampleCount} {toNumber(coreSessionSampleCount, lang)}

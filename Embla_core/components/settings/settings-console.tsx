@@ -12,11 +12,11 @@ type QuickForm = {
   apiProvider: string;
   apiProtocol: string;
   apiReasoningEffort: string;
-  outerApiKey: string;
-  outerApiBaseUrl: string;
-  outerApiModel: string;
-  outerApiProvider: string;
-  outerReasoningEffort: string;
+  shellApiKey: string;
+  shellApiBaseUrl: string;
+  shellApiModel: string;
+  shellApiProvider: string;
+  shellReasoningEffort: string;
   coreApiKey: string;
   coreApiBaseUrl: string;
   coreApiModel: string;
@@ -70,11 +70,11 @@ const FORM_DEFAULT: QuickForm = {
   apiProvider: "openai_compatible",
   apiProtocol: "auto",
   apiReasoningEffort: "medium",
-  outerApiKey: "",
-  outerApiBaseUrl: "",
-  outerApiModel: "",
-  outerApiProvider: "",
-  outerReasoningEffort: "",
+  shellApiKey: "",
+  shellApiBaseUrl: "",
+  shellApiModel: "",
+  shellApiProvider: "",
+  shellReasoningEffort: "",
   coreApiKey: "",
   coreApiBaseUrl: "",
   coreApiModel: "",
@@ -118,7 +118,7 @@ const COLLAPSED_DEFAULT: Record<SectionKey, boolean> = {
 
 const SENSITIVE_PATHS: Array<{ id: string; path: string[]; labelKey: string }> = [
   { id: "api.api_key", path: ["api", "api_key"], labelKey: "apiKey" },
-  { id: "api.routing.outer.api_key", path: ["api", "routing", "outer", "api_key"], labelKey: "outerApiKey" },
+  { id: "api.routing.shell.api_key", path: ["api", "routing", "shell", "api_key"], labelKey: "shellApiKey" },
   { id: "api.routing.core.api_key", path: ["api", "routing", "core", "api_key"], labelKey: "coreApiKey" },
   { id: "embedding.api_key", path: ["embedding", "api_key"], labelKey: "embeddingApiKey" },
   { id: "grag.neo4j_password", path: ["grag", "neo4j_password"], labelKey: "neo4jPassword" },
@@ -166,11 +166,11 @@ const PAGE_COPY: Record<
         apiProvider: string;
         apiProtocol: string;
         apiReasoningEffort: string;
-        outerApiKey: string;
-        outerApiBaseUrl: string;
-        outerApiModel: string;
-        outerApiProvider: string;
-        outerReasoningEffort: string;
+        shellApiKey: string;
+        shellApiBaseUrl: string;
+        shellApiModel: string;
+        shellApiProvider: string;
+        shellReasoningEffort: string;
         coreApiKey: string;
         coreApiBaseUrl: string;
         coreApiModel: string;
@@ -238,7 +238,7 @@ const PAGE_COPY: Record<
       empty: string;
       labels: {
         apiKey: string;
-        outerApiKey: string;
+        shellApiKey: string;
         coreApiKey: string;
         embeddingApiKey: string;
         neo4jPassword: string;
@@ -285,11 +285,11 @@ const PAGE_COPY: Record<
         apiProvider: "Provider",
         apiProtocol: "Protocol",
         apiReasoningEffort: "Reasoning Effort",
-        outerApiKey: "Outer API Key (Optional)",
-        outerApiBaseUrl: "Outer API Base URL (Optional)",
-        outerApiModel: "Outer Model (Optional)",
-        outerApiProvider: "Outer Provider (Optional)",
-        outerReasoningEffort: "Outer Reasoning Effort (Optional)",
+        shellApiKey: "Shell API Key (Optional)",
+        shellApiBaseUrl: "Shell API Base URL (Optional)",
+        shellApiModel: "Shell Model (Optional)",
+        shellApiProvider: "Shell Provider (Optional)",
+        shellReasoningEffort: "Shell Reasoning Effort (Optional)",
         coreApiKey: "Core API Key (Optional)",
         coreApiBaseUrl: "Core API Base URL (Optional)",
         coreApiModel: "Core Model (Optional)",
@@ -324,7 +324,8 @@ const PAGE_COPY: Record<
       },
       hints: {
         apiTemperature: "Recommended range: 0.0 - 1.5",
-        routeOverride: "Leave route fields empty to fallback to API defaults. Outer applies to Path-A/B, Core applies to Path-C.",
+        routeOverride:
+          "Leave route fields empty to fallback to API defaults. Shell applies to shell_readonly/shell_clarify, Core applies to core_execution.",
         releaseMaxErrorRate: "Recommended range: 0.0 - 1.0",
         emblaApprovalRequiredScopes: "Use comma-separated scope names, for example: core,policy,prompt_dna,tools_registry",
         embedding: "OpenAI-compatible embedding endpoint. Keep API Base/Key empty to fallback to API settings.",
@@ -357,7 +358,7 @@ const PAGE_COPY: Record<
       empty: "Empty",
       labels: {
         apiKey: "API Key",
-        outerApiKey: "Outer API Key",
+        shellApiKey: "Shell API Key",
         coreApiKey: "Core API Key",
         embeddingApiKey: "Embedding API Key",
         neo4jPassword: "Neo4j Password",
@@ -403,16 +404,16 @@ const PAGE_COPY: Record<
         apiProvider: "Provider",
         apiProtocol: "Protocol",
         apiReasoningEffort: "推理强度",
-        outerApiKey: "外层 API 密钥（可选）",
-        outerApiBaseUrl: "外层 API Base URL（可选）",
-        outerApiModel: "外层模型（可选）",
-        outerApiProvider: "外层 Provider（可选）",
-        outerReasoningEffort: "外层推理强度（可选）",
-        coreApiKey: "内层 Core API 密钥（可选）",
-        coreApiBaseUrl: "内层 Core API Base URL（可选）",
-        coreApiModel: "内层 Core 模型（可选）",
-        coreApiProvider: "内层 Core Provider（可选）",
-        coreReasoningEffort: "内层 Core 推理强度（可选）",
+        shellApiKey: "Shell API 密钥（可选）",
+        shellApiBaseUrl: "Shell API Base URL（可选）",
+        shellApiModel: "Shell 模型（可选）",
+        shellApiProvider: "Shell Provider（可选）",
+        shellReasoningEffort: "Shell 推理强度（可选）",
+        coreApiKey: "Core 执行 API 密钥（可选）",
+        coreApiBaseUrl: "Core 执行 API Base URL（可选）",
+        coreApiModel: "Core 执行模型（可选）",
+        coreApiProvider: "Core 执行 Provider（可选）",
+        coreReasoningEffort: "Core 执行推理强度（可选）",
         visionMultimodalModel: "多模态理解模型",
         visionApiBaseUrl: "Vision API Base URL（可选）",
         visionApiKey: "Vision API 密钥（可选）",
@@ -442,7 +443,8 @@ const PAGE_COPY: Record<
       },
       hints: {
         apiTemperature: "建议区间：0.0 - 1.5",
-        routeOverride: "路由字段留空会回退到主 API 配置。外层覆盖 Path-A/B，Core 覆盖 Path-C。",
+        routeOverride:
+          "路由字段留空会回退到主 API 配置。Shell 覆盖 shell_readonly/shell_clarify，Core 覆盖 core_execution。",
         releaseMaxErrorRate: "建议区间：0.0 - 1.0",
         emblaApprovalRequiredScopes: "使用英文逗号分隔，例如：core,policy,prompt_dna,tools_registry",
         embedding: "OpenAI 兼容 Embedding 接口。若留空 API Base/API Key，将回退到主 API 配置。",
@@ -475,8 +477,8 @@ const PAGE_COPY: Record<
       empty: "为空",
       labels: {
         apiKey: "API 密钥",
-        outerApiKey: "外层 API 密钥",
-        coreApiKey: "内层 Core API 密钥",
+        shellApiKey: "Shell API 密钥",
+        coreApiKey: "Core 执行 API 密钥",
         embeddingApiKey: "Embedding API 密钥",
         neo4jPassword: "Neo4j 密码",
         computerControlApiKey: "电脑控制 API 密钥",
@@ -552,13 +554,13 @@ function buildQuickForm(config: Record<string, unknown>): QuickForm {
     apiReasoningEffort:
       getNestedString(config, ["api", "reasoning_effort"], "") ||
       getNestedString(config, ["api", "thinking_intensity"], "medium"),
-    outerApiKey: getNestedString(config, ["api", "routing", "outer", "api_key"], ""),
-    outerApiBaseUrl: getNestedString(config, ["api", "routing", "outer", "base_url"], ""),
-    outerApiModel: getNestedString(config, ["api", "routing", "outer", "model"], ""),
-    outerApiProvider: getNestedString(config, ["api", "routing", "outer", "provider"], ""),
-    outerReasoningEffort:
-      getNestedString(config, ["api", "routing", "outer", "reasoning_effort"], "") ||
-      getNestedString(config, ["api", "routing", "outer", "thinking_intensity"], ""),
+    shellApiKey: getNestedString(config, ["api", "routing", "shell", "api_key"], ""),
+    shellApiBaseUrl: getNestedString(config, ["api", "routing", "shell", "base_url"], ""),
+    shellApiModel: getNestedString(config, ["api", "routing", "shell", "model"], ""),
+    shellApiProvider: getNestedString(config, ["api", "routing", "shell", "provider"], ""),
+    shellReasoningEffort:
+      getNestedString(config, ["api", "routing", "shell", "reasoning_effort"], "") ||
+      getNestedString(config, ["api", "routing", "shell", "thinking_intensity"], ""),
     coreApiKey: getNestedString(config, ["api", "routing", "core", "api_key"], ""),
     coreApiBaseUrl: getNestedString(config, ["api", "routing", "core", "base_url"], ""),
     coreApiModel: getNestedString(config, ["api", "routing", "core", "model"], ""),
@@ -727,12 +729,12 @@ function buildQuickPayload(form: QuickForm): { ok: true; payload: Record<string,
         temperature: apiTemperature,
         request_timeout: Math.max(1, Math.round(apiTimeout)),
         routing: {
-          outer: {
-            api_key: form.outerApiKey.trim(),
-            base_url: form.outerApiBaseUrl.trim(),
-            model: form.outerApiModel.trim(),
-            provider: form.outerApiProvider.trim(),
-            reasoning_effort: form.outerReasoningEffort.trim(),
+          shell: {
+            api_key: form.shellApiKey.trim(),
+            base_url: form.shellApiBaseUrl.trim(),
+            model: form.shellApiModel.trim(),
+            provider: form.shellApiProvider.trim(),
+            reasoning_effort: form.shellReasoningEffort.trim(),
           },
           core: {
             api_key: form.coreApiKey.trim(),
@@ -1113,49 +1115,49 @@ export function SettingsConsole({ lang }: SettingsConsoleProps) {
                   <p className="mt-1 text-[10px] text-gray-500">{copy.quick.hints.routeOverride}</p>
                   <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                     <label className="block">
-                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.outerApiKey}</p>
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.shellApiKey}</p>
                       <input
                         type="password"
                         autoComplete="off"
-                        value={form.outerApiKey}
-                        onChange={(event) => setField("outerApiKey", event.target.value)}
+                        value={form.shellApiKey}
+                        onChange={(event) => setField("shellApiKey", event.target.value)}
                         className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
                       />
                     </label>
                     <label className="block">
-                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.outerApiBaseUrl}</p>
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.shellApiBaseUrl}</p>
                       <input
-                        value={form.outerApiBaseUrl}
-                        onChange={(event) => setField("outerApiBaseUrl", event.target.value)}
+                        value={form.shellApiBaseUrl}
+                        onChange={(event) => setField("shellApiBaseUrl", event.target.value)}
                         className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
                       />
                     </label>
                     <label className="block">
-                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.outerApiModel}</p>
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.shellApiModel}</p>
                       <input
-                        value={form.outerApiModel}
-                        onChange={(event) => setField("outerApiModel", event.target.value)}
+                        value={form.shellApiModel}
+                        onChange={(event) => setField("shellApiModel", event.target.value)}
                         className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
                       />
                     </label>
                     <label className="block">
-                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.outerApiProvider}</p>
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.shellApiProvider}</p>
                       <input
-                        value={form.outerApiProvider}
-                        onChange={(event) => setField("outerApiProvider", event.target.value)}
+                        value={form.shellApiProvider}
+                        onChange={(event) => setField("shellApiProvider", event.target.value)}
                         className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
                       />
                     </label>
                     <label className="block">
-                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.outerReasoningEffort}</p>
+                      <p className="mb-1 text-xs text-gray-600">{copy.quick.fields.shellReasoningEffort}</p>
                       <select
-                        value={form.outerReasoningEffort}
-                        onChange={(event) => setField("outerReasoningEffort", event.target.value)}
+                        value={form.shellReasoningEffort}
+                        onChange={(event) => setField("shellReasoningEffort", event.target.value)}
                         className="h-10 w-full rounded-xl border border-white/70 bg-white/85 px-3 text-sm outline-none"
                       >
                         <option value="">default</option>
                         {API_REASONING_EFFORT_OPTIONS.map((effort) => (
-                          <option key={`outer-${effort}`} value={effort}>
+                          <option key={`shell-${effort}`} value={effort}>
                             {effort}
                           </option>
                         ))}

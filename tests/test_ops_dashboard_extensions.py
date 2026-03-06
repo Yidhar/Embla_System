@@ -166,7 +166,7 @@ def test_ops_incidents_latest_payload_merges_events_and_report_issues(tmp_path, 
         "build_snapshot",
         lambda **_kwargs: {
             "metrics": {
-                "outer_readonly_hit_rate": {"value": 0.6, "sample_count": 10, "hit_count": 6, "status": "ok"},
+                "shell_readonly_hit_rate": {"value": 0.6, "sample_count": 10, "hit_count": 6, "status": "ok"},
                 "readonly_write_tool_exposure_rate": {
                     "value": 0.1,
                     "sample_count": 10,
@@ -174,19 +174,25 @@ def test_ops_incidents_latest_payload_merges_events_and_report_issues(tmp_path, 
                     "exposed_slice_count": 1,
                     "status": "warning",
                 },
-                "chat_route_path_distribution": {
+                "agent_route_semantic_distribution": {
                     "sample_count": 10,
-                    "path_counts": {"path-a": 4, "path-b": 2, "path-c": 4},
-                    "path_ratios": {"path-a": 0.4, "path-b": 0.2, "path-c": 0.4},
+                    "route_semantic_counts": {"shell_readonly": 4, "shell_clarify": 2, "core_execution": 4},
+                    "route_semantic_ratios": {"shell_readonly": 0.4, "shell_clarify": 0.2, "core_execution": 0.4},
                     "status": "ok",
                 },
-                "path_b_budget_escalation_rate": {
+                "shell_to_core_dispatch_rate": {
+                    "value": 0.4,
+                    "sample_count": 10,
+                    "dispatch_count": 4,
+                    "status": "ok",
+                },
+                "shell_clarify_budget_escalation_rate": {
                     "value": 0.5,
                     "sample_count": 2,
                     "escalated_count": 1,
                     "status": "warning",
                 },
-                "core_session_creation_rate": {
+                "core_execution_session_creation_rate": {
                     "value": 0.75,
                     "sample_count": 4,
                     "created_count": 3,
@@ -214,12 +220,13 @@ def test_ops_incidents_latest_payload_merges_events_and_report_issues(tmp_path, 
     assert any(path.endswith("events.jsonl") for path in payload["source_reports"])
 
     runtime_prompt_safety = payload["data"]["summary"]["runtime_prompt_safety"]
-    assert runtime_prompt_safety["outer_readonly_hit_rate"]["value"] == 0.6
+    assert runtime_prompt_safety["shell_readonly_hit_rate"]["value"] == 0.6
     assert runtime_prompt_safety["readonly_write_tool_exposure_rate"]["value"] == 0.1
     assert runtime_prompt_safety["readonly_write_tool_exposure_rate"]["status"] == "warning"
-    assert runtime_prompt_safety["chat_route_path_distribution"]["path_ratios"]["path-c"] == 0.4
-    assert runtime_prompt_safety["path_b_budget_escalation_rate"]["escalated_count"] == 1
-    assert runtime_prompt_safety["core_session_creation_rate"]["created_count"] == 3
+    assert runtime_prompt_safety["agent_route_semantic_distribution"]["route_semantic_ratios"]["core_execution"] == 0.4
+    assert runtime_prompt_safety["shell_to_core_dispatch_rate"]["value"] == 0.4
+    assert runtime_prompt_safety["shell_clarify_budget_escalation_rate"]["escalated_count"] == 1
+    assert runtime_prompt_safety["core_execution_session_creation_rate"]["created_count"] == 3
     assert runtime_prompt_safety["route_quality"]["status"] == "warning"
     assert "READONLY_WRITE_EXPOSURE_WARNING" in runtime_prompt_safety["route_quality"]["reason_codes"]
     assert runtime_prompt_safety["route_quality"]["trend"]["status"] == "unknown"
@@ -255,7 +262,7 @@ def test_ops_workflow_events_payload_includes_event_database_summary(tmp_path, m
                 "event_type": "PromptInjectionComposed",
                 "topic": "evolution.prompt.compose",
                 "partition_ym": "202602",
-                "payload": {"path": "path-c"},
+                "payload": {"route_semantic": "core_execution"},
             },
         ],
     )
@@ -731,8 +738,8 @@ def test_ops_runtime_posture_payload_includes_core_child_spawn_deferred_summary(
                 "timestamp": "2026-03-05T01:00:00+00:00",
                 "event_type": "CoreChildSpawnDeferred",
                 "payload": {
-                    "session_id": "outer-001",
-                    "execution_session_id": "outer-001__core",
+                    "session_id": "shell-001",
+                    "core_execution_session_id": "shell-001__core",
                     "agent_id": "review-child-001",
                     "role": "review",
                     "source": "spawn",
@@ -766,12 +773,12 @@ def test_ops_runtime_posture_payload_includes_core_child_spawn_deferred_summary(
     assert deferred["deferred_count"] == 1
     assert deferred["latest_role"] == "review"
     assert deferred["latest_reason"] == "spawn_deferred_role"
-    assert deferred["execution_session_count"] == 1
+    assert deferred["core_execution_session_count"] == 1
 
     metric = payload["data"]["metrics"]["core_child_spawn_deferred_count"]
     assert metric["status"] == "ok"
     assert metric["value"] == 1
-    assert metric["execution_session_count"] == 1
+    assert metric["core_execution_session_count"] == 1
     assert metric["latest_role"] == "review"
     assert metric["reason_code"] == "CORE_CHILD_SPAWN_DEFERRED_OBSERVED"
 
@@ -786,8 +793,8 @@ def test_ops_incidents_latest_payload_includes_core_child_spawn_deferred(tmp_pat
                 "timestamp": "2026-03-05T01:10:00+00:00",
                 "event_type": "CoreChildSpawnDeferred",
                 "payload": {
-                    "session_id": "outer-002",
-                    "execution_session_id": "outer-002__core",
+                    "session_id": "shell-002",
+                    "core_execution_session_id": "shell-002__core",
                     "agent_id": "expert-child-002",
                     "role": "expert",
                     "source": "spawn",
@@ -892,7 +899,7 @@ def test_ops_runtime_posture_payload_includes_control_plane_guard_summaries(tmp_
     assert payload["data"]["budget_guard"]["action"] == "freeze_noncritical_budget"
 
 
-def test_ops_runtime_posture_payload_marks_legacy_autonomous_disabled(monkeypatch, tmp_path) -> None:
+def test_ops_runtime_posture_reports_single_control_plane(monkeypatch, tmp_path) -> None:
     repo_root = tmp_path
 
     def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
@@ -907,10 +914,6 @@ def test_ops_runtime_posture_payload_marks_legacy_autonomous_disabled(monkeypatc
 
     monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
     monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
-    monkeypatch.setattr(
-        "system.config.get_config",
-        lambda: SimpleNamespace(autonomous=SimpleNamespace(legacy_system_agent_enabled=False)),
-    )
 
     payload = api_server._ops_build_runtime_posture_payload(events_limit=200)
     assert payload["status"] == "success"
@@ -918,59 +921,16 @@ def test_ops_runtime_posture_payload_marks_legacy_autonomous_disabled(monkeypatc
     summary = payload["data"]["summary"]
     assert summary["control_plane_mode"] == "single_control_plane"
     assert summary["single_control_plane"] is True
-    assert summary["legacy_autonomous_status"] == "disabled"
-    assert summary["legacy_autonomous"] == "disabled"
 
     control_plane_mode = payload["data"]["control_plane_mode"]
     assert control_plane_mode["runtime_mode"] == "single_control_plane"
-    assert control_plane_mode["reason_code"] == "LEGACY_AUTONOMOUS_DISABLED"
-    assert control_plane_mode["legacy_autonomous"] == "disabled"
+    assert control_plane_mode["reason_code"] == "SINGLE_CONTROL_PLANE_ENFORCED"
+    assert control_plane_mode["source"] == "runtime.enforced"
 
     metric = payload["data"]["metrics"]["control_plane_mode"]
     assert metric["status"] == "ok"
     assert metric["value"] == 0
-    assert metric["legacy_autonomous"] == "disabled"
-
-
-def test_ops_runtime_posture_ignores_legacy_autonomous_request(monkeypatch, tmp_path) -> None:
-    repo_root = tmp_path
-
-    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
-        return {
-            "summary": {"overall_status": "ok", "metric_status": {}},
-            "metrics": {},
-            "threshold_profile": {},
-            "sources": {"events_file": "logs/autonomous/events.jsonl"},
-        }
-
-    from scripts import export_slo_snapshot
-
-    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
-    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
-    monkeypatch.setattr(
-        "system.config.get_config",
-        lambda: SimpleNamespace(autonomous=SimpleNamespace(legacy_system_agent_enabled=True)),
-    )
-
-    payload = api_server._ops_build_runtime_posture_payload(events_limit=200)
-    assert payload["status"] == "success"
-
-    summary = payload["data"]["summary"]
-    assert summary["control_plane_mode"] == "single_control_plane"
-    assert summary["single_control_plane"] is True
-    assert summary["legacy_autonomous"] == "disabled"
-    assert summary["requested_legacy_autonomous_enabled"] is True
-
-    control_plane_mode = payload["data"]["control_plane_mode"]
-    assert control_plane_mode["runtime_mode"] == "single_control_plane"
-    assert control_plane_mode["reason_code"] == "LEGACY_AUTONOMOUS_REQUEST_IGNORED"
-    assert control_plane_mode["requested_legacy_autonomous_enabled"] is True
-
-    metric = payload["data"]["metrics"]["control_plane_mode"]
-    assert metric["status"] == "ok"
-    assert metric["value"] == 0
-    assert metric["legacy_autonomous"] == "disabled"
-    assert metric["requested_legacy_autonomous_enabled"] is True
+    assert metric["reason_code"] == "SINGLE_CONTROL_PLANE_ENFORCED"
 
 
 def test_ops_incidents_latest_payload_includes_control_plane_guard_incidents(tmp_path, monkeypatch) -> None:
@@ -1115,26 +1075,32 @@ def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_pa
                 "error_rate": {"value": 0.02, "status": "ok"},
                 "latency_p95_ms": {"value": 260.0, "status": "warning"},
                 "prompt_slice_count_by_layer": {"value": 2.1, "status": "ok"},
-                "outer_readonly_hit_rate": {"value": 0.4, "status": "ok"},
+                "shell_readonly_hit_rate": {"value": 0.4, "status": "ok"},
                 "readonly_write_tool_exposure_rate": {
                     "value": 0.03,
                     "sample_count": 20,
                     "exposure_count": 1,
                     "status": "warning",
                 },
-                "chat_route_path_distribution": {
+                "agent_route_semantic_distribution": {
                     "sample_count": 20,
-                    "path_counts": {"path-a": 8, "path-b": 4, "path-c": 8},
-                    "path_ratios": {"path-a": 0.4, "path-b": 0.2, "path-c": 0.4},
+                    "route_semantic_counts": {"shell_readonly": 8, "shell_clarify": 4, "core_execution": 8},
+                    "route_semantic_ratios": {"shell_readonly": 0.4, "shell_clarify": 0.2, "core_execution": 0.4},
                     "status": "ok",
                 },
-                "path_b_budget_escalation_rate": {
+                "shell_to_core_dispatch_rate": {
+                    "value": 0.4,
+                    "sample_count": 20,
+                    "dispatch_count": 8,
+                    "status": "ok",
+                },
+                "shell_clarify_budget_escalation_rate": {
                     "value": 0.25,
                     "sample_count": 4,
                     "escalated_count": 1,
                     "status": "ok",
                 },
-                "core_session_creation_rate": {
+                "core_execution_session_creation_rate": {
                     "value": 0.5,
                     "sample_count": 8,
                     "created_count": 4,
@@ -1161,15 +1127,16 @@ def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_pa
 
     metrics = payload["data"]["metrics"]
     assert metrics["prompt_slice_count_by_layer"]["value"] == 2.1
-    assert metrics["outer_readonly_hit_rate"]["value"] == 0.4
+    assert metrics["shell_readonly_hit_rate"]["value"] == 0.4
     assert metrics["readonly_write_tool_exposure_rate"]["value"] == 0.03
     assert metrics["readonly_write_tool_exposure_rate"]["sample_count"] == 20
     assert metrics["readonly_write_tool_exposure_rate"]["status"] == "warning"
-    assert metrics["chat_route_path_distribution"]["path_ratios"]["path-b"] == 0.2
-    assert metrics["path_b_budget_escalation_rate"]["value"] == 0.25
-    assert metrics["core_session_creation_rate"]["created_count"] == 4
+    assert metrics["agent_route_semantic_distribution"]["route_semantic_ratios"]["shell_clarify"] == 0.2
+    assert metrics["shell_to_core_dispatch_rate"]["value"] == 0.4
+    assert metrics["shell_clarify_budget_escalation_rate"]["value"] == 0.25
+    assert metrics["core_execution_session_creation_rate"]["created_count"] == 4
     assert payload["data"]["summary"]["route_quality"]["status"] == "warning"
-    assert "CORE_SESSION_CREATION_WARNING" in payload["data"]["summary"]["route_quality"]["reason_codes"]
+    assert "CORE_EXECUTION_SESSION_CREATION_WARNING" in payload["data"]["summary"]["route_quality"]["reason_codes"]
     assert payload["data"]["summary"]["route_quality"]["trend"]["status"] == "unknown"
     assert payload["data"]["summary"]["route_quality"]["trend"]["windows"] == []
     assert payload["data"]["summary"]["legacy_event_namespace_status"] == "archived_legacy"
@@ -1190,29 +1157,29 @@ def test_ops_route_quality_trend_detects_degrading_windows(tmp_path) -> None:
                 "timestamp": base.replace(minute=idx % 60, second=idx % 50).isoformat(),
                 "event_type": "PromptInjectionComposed",
                 "payload": {
-                    "path": "path-a",
-                    "outer_readonly_hit": True,
+                    "route_semantic": "shell_readonly",
+                    "shell_readonly_hit": True,
                     "readonly_write_tool_exposed": False,
                     "readonly_write_tool_selected_count": 0,
-                    "path_b_budget_escalated": False,
-                    "core_session_created": False,
+                    "shell_clarify_budget_escalated": False,
+                    "core_execution_session_created": False,
                 },
             }
         )
     for idx in range(20):
         payload = {
-            "path": "path-c",
-            "outer_readonly_hit": False,
+            "route_semantic": "core_execution",
+            "shell_readonly_hit": False,
             "readonly_write_tool_exposed": False,
             "readonly_write_tool_selected_count": 0,
-            "path_b_budget_escalated": idx < 8,
-            "core_session_created": idx < 6,
+            "shell_clarify_budget_escalated": idx < 8,
+            "core_execution_session_created": idx < 6,
         }
         if idx in {2, 4, 7}:
             payload.update(
                 {
-                    "path": "path-a",
-                    "outer_readonly_hit": True,
+                    "route_semantic": "shell_readonly",
+                    "shell_readonly_hit": True,
                     "readonly_write_tool_exposed": True,
                     "readonly_write_tool_selected_count": 1,
                 }

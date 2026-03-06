@@ -2,14 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  fetchDebugRouteBridge,
+  fetchDebugRouteSessionState,
   fetchPromptTemplate,
   fetchPromptTemplates,
   fetchDebugHealth,
   fetchDebugSystemInfo,
   savePromptTemplate,
   sendDebugChatMessage,
-  type DebugRouteBridgePayload,
+  type DebugRouteSessionStatePayload,
   type DebugRouteDecision,
   type DebugChatReply,
   type DebugHealthPayload,
@@ -68,15 +68,21 @@ const PAGE_COPY: Record<
       requestFailed: string;
       noRouteDecision: string;
       noRouteEvents: string;
-      routeBridgeLoadFailed: string;
+      routeSessionStateLoadFailed: string;
       unknown: string;
     };
     route: {
       title: string;
       subtitle: string;
       latestDecision: string;
-      bridgeSnapshot: string;
-      path: string;
+      sessionState: string;
+      routeSemantic: string;
+      entryAgent: string;
+      activeAgent: string;
+      dispatchToCore: string;
+      handoffTool: string;
+      coreExecutionRoute: string;
+      trigger: string;
       delegationIntent: string;
       promptProfile: string;
       injectionMode: string;
@@ -84,15 +90,14 @@ const PAGE_COPY: Record<
       clarifyBudget: string;
       budgetEscalated: string;
       budgetReason: string;
-      outerSession: string;
-      coreSession: string;
-      executionSession: string;
+      shellSession: string;
+      coreExecutionSession: string;
       coreSessionCreated: string;
-      coreSessionExists: string;
-      lastExecutionSession: string;
+      coreExecutionSessionExists: string;
+      lastCoreExecutionSession: string;
       lastCoreEscalationAt: string;
       recentEvents: string;
-      eventPath: string;
+      eventTrigger: string;
       eventPromptProfile: string;
       eventTimestamp: string;
       eventSource: string;
@@ -153,15 +158,21 @@ const PAGE_COPY: Record<
       requestFailed: "Request failed",
       noRouteDecision: "No route decision yet. Send one message to observe routing.",
       noRouteEvents: "No route events yet.",
-      routeBridgeLoadFailed: "Failed to load route bridge snapshot",
+      routeSessionStateLoadFailed: "Failed to load route session state snapshot",
       unknown: "unknown",
     },
     route: {
       title: "Route Observability",
-      subtitle: "Expose outer/core routing decision and session bridge for debugging.",
+      subtitle: "Expose Shell/Core dispatch semantics and route session state for debugging.",
       latestDecision: "Latest Decision",
-      bridgeSnapshot: "Session Bridge",
-      path: "Path",
+      sessionState: "Session State",
+      routeSemantic: "Route Semantic",
+      entryAgent: "Entry Agent",
+      activeAgent: "Active Agent",
+      dispatchToCore: "Dispatch To Core",
+      handoffTool: "Handoff Tool",
+      coreExecutionRoute: "Core Route",
+      trigger: "Trigger",
       delegationIntent: "Delegation Intent",
       promptProfile: "Prompt Profile",
       injectionMode: "Injection Mode",
@@ -169,15 +180,14 @@ const PAGE_COPY: Record<
       clarifyBudget: "Clarify Budget",
       budgetEscalated: "Budget Escalated",
       budgetReason: "Escalation Reason",
-      outerSession: "Outer Session",
-      coreSession: "Core Session",
-      executionSession: "Execution Session",
+      shellSession: "Shell Session",
+      coreExecutionSession: "Core Execution Session",
       coreSessionCreated: "Core Session Created",
-      coreSessionExists: "Core Session Exists",
-      lastExecutionSession: "Last Execution Session",
+      coreExecutionSessionExists: "Core Execution Session Exists",
+      lastCoreExecutionSession: "Last Core Execution Session",
       lastCoreEscalationAt: "Last Core Escalation",
       recentEvents: "Recent Route Events",
-      eventPath: "Path",
+      eventTrigger: "Trigger",
       eventPromptProfile: "Prompt Profile",
       eventTimestamp: "Timestamp",
       eventSource: "Source",
@@ -237,15 +247,21 @@ const PAGE_COPY: Record<
       requestFailed: "请求失败",
       noRouteDecision: "暂无路由决策。发送一条消息后可查看分流结果。",
       noRouteEvents: "暂无路由事件。",
-      routeBridgeLoadFailed: "加载路由桥接快照失败",
+      routeSessionStateLoadFailed: "加载路由会话状态快照失败",
       unknown: "未知",
     },
     route: {
       title: "路由可观测性",
-      subtitle: "展示 outer/core 路由决策与会话桥接状态，便于调试。",
+      subtitle: "展示 Shell/Core 分发语义与路由会话状态，便于调试。",
       latestDecision: "最新决策",
-      bridgeSnapshot: "会话桥接",
-      path: "路径",
+      sessionState: "会话状态",
+      routeSemantic: "路由语义",
+      entryAgent: "入口代理",
+      activeAgent: "当前代理",
+      dispatchToCore: "是否派发 Core",
+      handoffTool: "派发工具",
+      coreExecutionRoute: "Core 路线",
+      trigger: "触发语义",
       delegationIntent: "委派意图",
       promptProfile: "Prompt 配置",
       injectionMode: "注入模式",
@@ -253,15 +269,14 @@ const PAGE_COPY: Record<
       clarifyBudget: "澄清预算",
       budgetEscalated: "预算升级",
       budgetReason: "升级原因",
-      outerSession: "外层会话",
-      coreSession: "核心会话",
-      executionSession: "执行会话",
+      shellSession: "Shell 会话",
+      coreExecutionSession: "Core 执行会话",
       coreSessionCreated: "核心会话新建",
-      coreSessionExists: "核心会话存在",
-      lastExecutionSession: "最近执行会话",
+      coreExecutionSessionExists: "核心执行会话存在",
+      lastCoreExecutionSession: "最近核心执行会话",
       lastCoreEscalationAt: "最近升级时间",
       recentEvents: "最近路由事件",
-      eventPath: "路径",
+      eventTrigger: "触发语义",
       eventPromptProfile: "Prompt 配置",
       eventTimestamp: "时间",
       eventSource: "来源",
@@ -348,8 +363,8 @@ export function DebugChatConsole({ lang }: DebugChatConsoleProps) {
   const [promptError, setPromptError] = useState("");
   const [promptMessage, setPromptMessage] = useState("");
   const [latestRouteDecision, setLatestRouteDecision] = useState<DebugRouteDecision | null>(null);
-  const [routeBridge, setRouteBridge] = useState<DebugRouteBridgePayload | null>(null);
-  const [routeBridgeError, setRouteBridgeError] = useState("");
+  const [routeSessionState, setRouteSessionState] = useState<DebugRouteSessionStatePayload | null>(null);
+  const [routeSessionStateError, setRouteSessionStateError] = useState("");
   const didAutoProbe = useRef(false);
   const didAutoLoadPrompts = useRef(false);
 
@@ -422,24 +437,24 @@ export function DebugChatConsole({ lang }: DebugChatConsoleProps) {
     await loadPromptTemplate(nextName);
   }, [copy.prompts.listFailed, loadPromptTemplate, promptName]);
 
-  const loadRouteBridge = useCallback(
+  const loadRouteSessionState = useCallback(
     async (activeSessionId: string) => {
       const normalizedSessionId = String(activeSessionId || "").trim();
       if (!normalizedSessionId) {
-        setRouteBridge(null);
-        setRouteBridgeError("");
+        setRouteSessionState(null);
+        setRouteSessionStateError("");
         return;
       }
-      const result = await fetchDebugRouteBridge({ sessionId: normalizedSessionId, limit: 8 });
+      const result = await fetchDebugRouteSessionState({ sessionId: normalizedSessionId, limit: 8 });
       if (!result.ok || !result.data) {
-        setRouteBridge(null);
-        setRouteBridgeError(`${copy.words.routeBridgeLoadFailed}: ${result.error || "--"}`);
+        setRouteSessionState(null);
+        setRouteSessionStateError(`${copy.words.routeSessionStateLoadFailed}: ${result.error || "--"}`);
         return;
       }
-      setRouteBridge(result.data);
-      setRouteBridgeError("");
+      setRouteSessionState(result.data);
+      setRouteSessionStateError("");
     },
-    [copy.words.routeBridgeLoadFailed],
+    [copy.words.routeSessionStateLoadFailed],
   );
 
   useEffect(() => {
@@ -460,18 +475,18 @@ export function DebugChatConsole({ lang }: DebugChatConsoleProps) {
 
   useEffect(() => {
     if (!sessionId) {
-      setRouteBridge(null);
-      setRouteBridgeError("");
+      setRouteSessionState(null);
+      setRouteSessionStateError("");
       return;
     }
-    void loadRouteBridge(sessionId);
-  }, [loadRouteBridge, sessionId]);
+    void loadRouteSessionState(sessionId);
+  }, [loadRouteSessionState, sessionId]);
 
   const resetSession = () => {
     setSessionId("");
     setLatestRouteDecision(null);
-    setRouteBridge(null);
-    setRouteBridgeError("");
+    setRouteSessionState(null);
+    setRouteSessionStateError("");
     setItems((prev) => [
       ...prev,
       {
@@ -525,7 +540,7 @@ export function DebugChatConsole({ lang }: DebugChatConsoleProps) {
     if (nextSessionId) {
       setSessionId(nextSessionId);
       if (nextSessionId === sessionId) {
-        await loadRouteBridge(nextSessionId);
+        await loadRouteSessionState(nextSessionId);
       }
     }
 
@@ -563,9 +578,13 @@ export function DebugChatConsole({ lang }: DebugChatConsoleProps) {
     await loadPromptTemplateList();
   };
 
-  const routeEvents = Array.isArray(routeBridge?.recent_route_events) ? routeBridge.recent_route_events : [];
-  const clarifyTurns = Number(latestRouteDecision?.path_b_clarify_turns ?? routeBridge?.state?.path_b_clarify_turns ?? 0);
-  const clarifyLimit = Number(latestRouteDecision?.path_b_clarify_limit ?? routeBridge?.state?.path_b_clarify_limit ?? 0);
+  const routeEvents = Array.isArray(routeSessionState?.recent_route_events) ? routeSessionState.recent_route_events : [];
+  const clarifyTurns = Number(
+    latestRouteDecision?.shell_clarify_turns ?? routeSessionState?.state?.shell_clarify_turns ?? 0,
+  );
+  const clarifyLimit = Number(
+    latestRouteDecision?.shell_clarify_limit ?? routeSessionState?.state?.shell_clarify_limit ?? 0,
+  );
 
   return (
     <div className="space-y-6">
@@ -674,7 +693,31 @@ export function DebugChatConsole({ lang }: DebugChatConsoleProps) {
             ) : (
               <div className="mt-3 space-y-2 text-xs text-gray-700">
                 <p>
-                  {copy.route.path}: <span className="font-mono font-semibold">{latestRouteDecision.path || copy.words.unknown}</span>
+                  {copy.route.routeSemantic}:{" "}
+                  <span className="font-mono font-semibold">{latestRouteDecision.route_semantic || copy.words.unknown}</span>
+                </p>
+                <p>
+                  {copy.route.entryAgent}: <span className="font-mono font-semibold">{latestRouteDecision.entry_agent || "shell"}</span>
+                </p>
+                <p>
+                  {copy.route.activeAgent}:{" "}
+                  <span className="font-mono font-semibold">{latestRouteDecision.active_agent || copy.words.unknown}</span>
+                </p>
+                <p>
+                  {copy.route.dispatchToCore}:{" "}
+                  <span className="font-mono font-semibold">{String(Boolean(latestRouteDecision.dispatch_to_core))}</span>
+                </p>
+                <p>
+                  {copy.route.handoffTool}:{" "}
+                  <span className="font-mono font-semibold">{latestRouteDecision.handoff_tool || "--"}</span>
+                </p>
+                <p>
+                  {copy.route.coreExecutionRoute}:{" "}
+                  <span className="font-mono font-semibold">{latestRouteDecision.core_execution_route || "--"}</span>
+                </p>
+                <p>
+                  {copy.route.trigger}:{" "}
+                  <span className="font-mono font-semibold">{latestRouteDecision.trigger || copy.words.unknown}</span>
                 </p>
                 <p>
                   {copy.route.delegationIntent}:{" "}
@@ -700,62 +743,67 @@ export function DebugChatConsole({ lang }: DebugChatConsoleProps) {
                 </p>
                 <p>
                   {copy.route.budgetEscalated}:{" "}
-                  <span className="font-mono font-semibold">{String(Boolean(latestRouteDecision.path_b_budget_escalated))}</span>
+                  <span className="font-mono font-semibold">{String(Boolean(latestRouteDecision.shell_clarify_budget_escalated))}</span>
                 </p>
                 <p>
                   {copy.route.budgetReason}:{" "}
-                  <span className="font-mono font-semibold">{latestRouteDecision.path_b_budget_reason || "--"}</span>
+                  <span className="font-mono font-semibold">{latestRouteDecision.shell_clarify_budget_reason || "--"}</span>
                 </p>
                 <p>
-                  {copy.route.outerSession}:{" "}
-                  <span className="font-mono font-semibold">{shortSessionId(String(latestRouteDecision.outer_session_id || ""))}</span>
+                  {copy.route.shellSession}:{" "}
+                  <span className="font-mono font-semibold">
+                    {shortSessionId(String(latestRouteDecision.shell_session_id || ""))}
+                  </span>
                 </p>
                 <p>
-                  {copy.route.coreSession}:{" "}
-                  <span className="font-mono font-semibold">{shortSessionId(String(latestRouteDecision.core_session_id || ""))}</span>
-                </p>
-                <p>
-                  {copy.route.executionSession}:{" "}
-                  <span className="font-mono font-semibold">{shortSessionId(String(latestRouteDecision.execution_session_id || ""))}</span>
+                  {copy.route.coreExecutionSession}:{" "}
+                  <span className="font-mono font-semibold">{shortSessionId(String(latestRouteDecision.core_execution_session_id || ""))}</span>
                 </p>
                 <p>
                   {copy.route.coreSessionCreated}:{" "}
-                  <span className="font-mono font-semibold">{String(Boolean(latestRouteDecision.core_session_created))}</span>
+                  <span className="font-mono font-semibold">{String(Boolean(latestRouteDecision.core_execution_session_created))}</span>
                 </p>
               </div>
             )}
           </article>
 
           <article className="rounded-2xl border border-gray-200/60 bg-white/80 p-4">
-            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">{copy.route.bridgeSnapshot}</p>
-            {routeBridge ? (
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">{copy.route.sessionState}</p>
+            {routeSessionState ? (
               <div className="mt-3 space-y-2 text-xs text-gray-700">
                 <p>
-                  {copy.route.outerSession}: <span className="font-mono font-semibold">{shortSessionId(String(routeBridge.outer_session_id || ""))}</span>
+                  {copy.route.shellSession}:{" "}
+                  <span className="font-mono font-semibold">
+                    {shortSessionId(String(routeSessionState.shell_session_id || ""))}
+                  </span>
                 </p>
                 <p>
-                  {copy.route.coreSession}: <span className="font-mono font-semibold">{shortSessionId(String(routeBridge.core_session_id || ""))}</span>
+                  {copy.route.coreExecutionSession}:{" "}
+                  <span className="font-mono font-semibold">
+                    {shortSessionId(String(routeSessionState.core_execution_session_id || ""))}
+                  </span>
                 </p>
                 <p>
-                  {copy.route.executionSession}:{" "}
-                  <span className="font-mono font-semibold">{shortSessionId(String(routeBridge.execution_session_id || ""))}</span>
+                  {copy.route.coreExecutionSessionExists}:{" "}
+                  <span className="font-mono font-semibold">{String(Boolean(routeSessionState.core_execution_session_exists))}</span>
                 </p>
                 <p>
-                  {copy.route.coreSessionExists}: <span className="font-mono font-semibold">{String(Boolean(routeBridge.core_session_exists))}</span>
-                </p>
-                <p>
-                  {copy.route.lastExecutionSession}:{" "}
-                  <span className="font-mono font-semibold">{shortSessionId(String(routeBridge.state?.last_execution_session_id || ""))}</span>
+                  {copy.route.lastCoreExecutionSession}:{" "}
+                  <span className="font-mono font-semibold">
+                    {shortSessionId(String(routeSessionState.state?.last_core_execution_session_id || ""))}
+                  </span>
                 </p>
                 <p>
                   {copy.route.lastCoreEscalationAt}:{" "}
-                  <span className="font-mono font-semibold">{formatEpochMs(routeBridge.state?.last_core_escalation_at_ms, lang)}</span>
+                  <span className="font-mono font-semibold">
+                    {formatEpochMs(routeSessionState.state?.last_core_escalation_at_ms, lang)}
+                  </span>
                 </p>
               </div>
             ) : (
               <p className="mt-3 text-sm text-gray-500">{copy.words.noRouteDecision}</p>
             )}
-            {routeBridgeError ? <p className="mt-3 text-sm text-rose-600">{routeBridgeError}</p> : null}
+            {routeSessionStateError ? <p className="mt-3 text-sm text-rose-600">{routeSessionStateError}</p> : null}
           </article>
         </div>
 
@@ -771,7 +819,10 @@ export function DebugChatConsole({ lang }: DebugChatConsoleProps) {
                     {copy.route.eventTimestamp}: <span className="font-mono">{formatIsoDateTime(item.timestamp, lang)}</span>
                   </p>
                   <p className="mt-1">
-                    {copy.route.eventPath}: <span className="font-mono">{item.path || "--"}</span>
+                    {copy.route.routeSemantic}: <span className="font-mono">{item.route_semantic || "--"}</span>
+                  </p>
+                  <p className="mt-1">
+                    {copy.route.eventTrigger}: <span className="font-mono">{item.trigger || "--"}</span>
                   </p>
                   <p className="mt-1">
                     {copy.route.eventPromptProfile}: <span className="font-mono">{item.prompt_profile || "--"}</span>

@@ -130,8 +130,8 @@ def test_build_snapshot_schema_and_values() -> None:
                 "timestamp": (now_dt + timedelta(seconds=10)).isoformat(),
                 "event_type": "PromptInjectionComposed",
                 "payload": {
-                    "path": "path-a",
-                    "trigger": "path-a",
+                    "route_semantic": "shell_readonly",
+                    "trigger": "shell_readonly",
                     "selected_slice_count": 2,
                     "dropped_slice_count": 2,
                     "dropped_conflict_count": 2,
@@ -141,8 +141,7 @@ def test_build_snapshot_schema_and_values() -> None:
                     },
                     "delegation_intent": "read_only_exploration",
                     "delegation_hit": False,
-                    "outer_readonly_hit": True,
-                    "core_escalation": False,
+                    "shell_readonly_hit": True,
                     "readonly_write_tool_exposed": False,
                     "readonly_write_tool_selected_count": 0,
                     "readonly_write_tool_dropped_count": 1,
@@ -155,8 +154,8 @@ def test_build_snapshot_schema_and_values() -> None:
                 "timestamp": (now_dt + timedelta(seconds=11)).isoformat(),
                 "event_type": "PromptInjectionComposed",
                 "payload": {
-                    "path": "path-c",
-                    "trigger": "path-c",
+                    "route_semantic": "core_execution",
+                    "trigger": "core_execution",
                     "selected_slice_count": 3,
                     "dropped_slice_count": 0,
                     "dropped_conflict_count": 0,
@@ -167,8 +166,7 @@ def test_build_snapshot_schema_and_values() -> None:
                     },
                     "delegation_intent": "delegate_core_execution",
                     "delegation_hit": True,
-                    "outer_readonly_hit": False,
-                    "core_escalation": True,
+                    "shell_readonly_hit": False,
                     "readonly_write_tool_exposed": False,
                     "readonly_write_tool_selected_count": 1,
                     "readonly_write_tool_dropped_count": 0,
@@ -235,12 +233,13 @@ def test_build_snapshot_schema_and_values() -> None:
             "recovery_slice_hit_rate",
             "prompt_conflict_drop_count",
             "delegation_hit_rate",
-            "outer_readonly_hit_rate",
+            "shell_readonly_hit_rate",
             "readonly_write_tool_exposure_rate",
-            "core_escalation_rate",
-            "chat_route_path_distribution",
-            "path_b_budget_escalation_rate",
-            "core_session_creation_rate",
+            "shell_to_core_dispatch_rate",
+            "agent_route_semantic_distribution",
+            "shell_clarify_budget_escalation_rate",
+            "core_execution_session_creation_rate",
+            "core_execution_route_distribution",
             "prompt_prefix_cache_hit_rate",
             "prompt_tail_churn_rate",
             "contract_upgrade_latency_ms",
@@ -284,25 +283,28 @@ def test_build_snapshot_schema_and_values() -> None:
         assert metrics["prompt_slice_count_by_layer"]["value"] == pytest.approx(2.5)
         assert metrics["prompt_slice_count_by_layer"]["selected_layer_counts"]["L0_DNA"] == 2
         assert metrics["prompt_slice_count_by_layer"]["selected_layer_counts"]["L4_RECOVERY"] == 1
-        assert metrics["injection_trigger_distribution"]["trigger_counts"]["path-a"] == 1
-        assert metrics["injection_trigger_distribution"]["trigger_counts"]["path-c"] == 1
+        assert metrics["injection_trigger_distribution"]["trigger_counts"]["shell_readonly"] == 1
+        assert metrics["injection_trigger_distribution"]["trigger_counts"]["core_execution"] == 1
         assert metrics["recovery_slice_hit_rate"]["value"] == pytest.approx(0.5)
         assert metrics["prompt_conflict_drop_count"]["value"] == pytest.approx(2.0)
         assert metrics["delegation_hit_rate"]["value"] == pytest.approx(0.5)
-        assert metrics["outer_readonly_hit_rate"]["value"] == pytest.approx(0.5)
+        assert metrics["shell_readonly_hit_rate"]["value"] == pytest.approx(0.5)
+        assert metrics["shell_readonly_hit_rate"]["value"] == pytest.approx(0.5)
         assert metrics["readonly_write_tool_exposure_rate"]["value"] == pytest.approx(0.0)
         assert metrics["readonly_write_tool_exposure_rate"]["sample_count"] == 1
         assert metrics["readonly_write_tool_exposure_rate"]["exposure_count"] == 0
         assert metrics["readonly_write_tool_exposure_rate"]["status"] == "ok"
-        assert metrics["core_escalation_rate"]["value"] == pytest.approx(0.5)
-        assert metrics["chat_route_path_distribution"]["path_counts"]["path-a"] == 1
-        assert metrics["chat_route_path_distribution"]["path_counts"]["path-b"] == 0
-        assert metrics["chat_route_path_distribution"]["path_counts"]["path-c"] == 1
-        assert metrics["chat_route_path_distribution"]["path_ratios"]["path-c"] == pytest.approx(0.5)
-        assert metrics["path_b_budget_escalation_rate"]["sample_count"] == 0
-        assert metrics["path_b_budget_escalation_rate"]["value"] is None
-        assert metrics["core_session_creation_rate"]["sample_count"] == 1
-        assert metrics["core_session_creation_rate"]["value"] == pytest.approx(0.0)
+        assert metrics["shell_to_core_dispatch_rate"]["value"] == pytest.approx(0.5)
+        assert metrics["agent_route_semantic_distribution"]["route_semantic_counts"]["shell_readonly"] == 1
+        assert metrics["agent_route_semantic_distribution"]["route_semantic_counts"]["shell_clarify"] == 0
+        assert metrics["agent_route_semantic_distribution"]["route_semantic_counts"]["core_execution"] == 1
+        assert metrics["agent_route_semantic_distribution"]["route_semantic_ratios"]["core_execution"] == pytest.approx(0.5)
+        assert metrics["shell_clarify_budget_escalation_rate"]["sample_count"] == 0
+        assert metrics["shell_clarify_budget_escalation_rate"]["value"] is None
+        assert metrics["core_execution_session_creation_rate"]["sample_count"] == 1
+        assert metrics["core_execution_session_creation_rate"]["value"] == pytest.approx(0.0)
+        assert metrics["core_execution_route_distribution"]["sample_count"] == 1
+        assert metrics["core_execution_route_distribution"]["route_counts"]["unspecified"] == 1
         assert metrics["prompt_prefix_cache_hit_rate"]["value"] == pytest.approx(0.5)
         assert metrics["prompt_tail_churn_rate"]["value"] == pytest.approx(1.0)
         assert metrics["contract_upgrade_latency_ms"]["value"] == pytest.approx(120.0)

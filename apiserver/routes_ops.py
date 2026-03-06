@@ -116,21 +116,35 @@ def _ops_read_json_file(path: Path) -> Dict[str, Any]:
 router = APIRouter()
 
 
+def _ops_route_semantic(payload: Dict[str, Any]) -> str:
+    semantic = str(payload.get("route_semantic") or "").strip().lower()
+    if semantic in {"shell_readonly", "shell_clarify", "core_execution"}:
+        return semantic
+    return "core_execution"
+
+
 def _ops_route_event_status(payload: Dict[str, Any]) -> str:
-    outer_readonly = bool(payload.get("outer_readonly_hit"))
+    route_semantic = _ops_route_semantic(payload)
+    shell_readonly_raw = payload.get("shell_readonly_hit")
+    if isinstance(shell_readonly_raw, bool):
+        shell_readonly = shell_readonly_raw
+    else:
+        shell_readonly = bool(payload.get("shell_readonly_hit")) or route_semantic == "shell_readonly"
     readonly_exposed = bool(payload.get("readonly_write_tool_exposed"))
     readonly_selected_count = _ops_safe_int(payload.get("readonly_write_tool_selected_count"), default=0)
-    readonly_exposure_hit = outer_readonly and (readonly_exposed or readonly_selected_count > 0)
+    readonly_exposure_hit = shell_readonly and (readonly_exposed or readonly_selected_count > 0)
     guard_status = _ops_status_to_severity(str(payload.get("route_quality_guard_status") or "unknown"))
+    shell_clarify_budget_escalated = bool(payload.get("shell_clarify_budget_escalated"))
+    core_execution_session_created = bool(payload.get("core_execution_session_created"))
     if readonly_exposure_hit:
         return "critical"
     if guard_status == "critical":
         return "critical"
-    if bool(payload.get("path_b_budget_escalated")):
+    if route_semantic == "shell_clarify" and shell_clarify_budget_escalated:
         return "warning"
     if guard_status == "warning" and bool(payload.get("route_quality_guard_applied")):
         return "warning"
-    if bool(payload.get("core_session_created")):
+    if route_semantic == "core_execution" and core_execution_session_created:
         return "warning"
     return "ok"
 
@@ -249,72 +263,92 @@ def _ops_build_route_quality_summary(
     *,
     trend: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    outer_readonly = metrics.get("outer_readonly_hit_rate") if isinstance(metrics.get("outer_readonly_hit_rate"), dict) else {}
+    shell_readonly_metric = (
+        metrics.get("shell_readonly_hit_rate")
+        if isinstance(metrics.get("shell_readonly_hit_rate"), dict)
+        else {}
+    )
     readonly_exposure = (
         metrics.get("readonly_write_tool_exposure_rate")
         if isinstance(metrics.get("readonly_write_tool_exposure_rate"), dict)
         else {}
     )
-    route_distribution = (
-        metrics.get("chat_route_path_distribution")
-        if isinstance(metrics.get("chat_route_path_distribution"), dict)
+    route_semantic_distribution = (
+        metrics.get("agent_route_semantic_distribution")
+        if isinstance(metrics.get("agent_route_semantic_distribution"), dict)
         else {}
     )
-    path_b_budget_escalation = (
-        metrics.get("path_b_budget_escalation_rate")
-        if isinstance(metrics.get("path_b_budget_escalation_rate"), dict)
+    shell_to_core_dispatch = (
+        metrics.get("shell_to_core_dispatch_rate")
+        if isinstance(metrics.get("shell_to_core_dispatch_rate"), dict)
         else {}
     )
-    core_session_creation = (
-        metrics.get("core_session_creation_rate")
-        if isinstance(metrics.get("core_session_creation_rate"), dict)
+    shell_clarify_budget = (
+        metrics.get("shell_clarify_budget_escalation_rate")
+        if isinstance(metrics.get("shell_clarify_budget_escalation_rate"), dict)
+        else {}
+    )
+    core_execution_session_creation = (
+        metrics.get("core_execution_session_creation_rate")
+        if isinstance(metrics.get("core_execution_session_creation_rate"), dict)
         else {}
     )
 
     status_map = {
-        "outer_readonly_hit_rate": _ops_metric_status(outer_readonly),
+        "shell_readonly_hit_rate": _ops_metric_status(shell_readonly_metric),
         "readonly_write_tool_exposure_rate": _ops_metric_status(readonly_exposure),
-        "chat_route_path_distribution": _ops_metric_status(route_distribution),
-        "path_b_budget_escalation_rate": _ops_metric_status(path_b_budget_escalation),
-        "core_session_creation_rate": _ops_metric_status(core_session_creation),
+        "agent_route_semantic_distribution": _ops_metric_status(route_semantic_distribution),
+        "shell_to_core_dispatch_rate": _ops_metric_status(shell_to_core_dispatch),
+        "shell_clarify_budget_escalation_rate": _ops_metric_status(shell_clarify_budget),
+        "core_execution_session_creation_rate": _ops_metric_status(core_execution_session_creation),
     }
     trend_payload = trend if isinstance(trend, dict) else {}
     trend_status = _ops_status_to_severity(str(trend_payload.get("status") or "unknown"))
     overall_status = _ops_max_status([*list(status_map.values()), trend_status])
 
     reason_codes: List[str] = []
+
+    def _append_reason(code: str) -> None:
+        if code not in reason_codes:
+            reason_codes.append(code)
+
     if status_map["readonly_write_tool_exposure_rate"] == "critical":
-        reason_codes.append("READONLY_WRITE_EXPOSURE_CRITICAL")
+        _append_reason("READONLY_WRITE_EXPOSURE_CRITICAL")
     elif status_map["readonly_write_tool_exposure_rate"] == "warning":
-        reason_codes.append("READONLY_WRITE_EXPOSURE_WARNING")
+        _append_reason("READONLY_WRITE_EXPOSURE_WARNING")
 
-    if status_map["path_b_budget_escalation_rate"] == "critical":
-        reason_codes.append("PATH_B_BUDGET_ESCALATION_CRITICAL")
-    elif status_map["path_b_budget_escalation_rate"] == "warning":
-        reason_codes.append("PATH_B_BUDGET_ESCALATION_WARNING")
+    if status_map["shell_clarify_budget_escalation_rate"] == "critical":
+        _append_reason("SHELL_CLARIFY_BUDGET_ESCALATION_CRITICAL")
+    elif status_map["shell_clarify_budget_escalation_rate"] == "warning":
+        _append_reason("SHELL_CLARIFY_BUDGET_ESCALATION_WARNING")
 
-    if status_map["core_session_creation_rate"] == "critical":
-        reason_codes.append("CORE_SESSION_CREATION_CRITICAL")
-    elif status_map["core_session_creation_rate"] == "warning":
-        reason_codes.append("CORE_SESSION_CREATION_WARNING")
+    if status_map["core_execution_session_creation_rate"] == "critical":
+        _append_reason("CORE_EXECUTION_SESSION_CREATION_CRITICAL")
+    elif status_map["core_execution_session_creation_rate"] == "warning":
+        _append_reason("CORE_EXECUTION_SESSION_CREATION_WARNING")
 
-    if status_map["outer_readonly_hit_rate"] == "critical":
-        reason_codes.append("OUTER_READONLY_HIT_CRITICAL")
-    elif status_map["outer_readonly_hit_rate"] == "warning":
-        reason_codes.append("OUTER_READONLY_HIT_WARNING")
+    if status_map["shell_readonly_hit_rate"] == "critical":
+        _append_reason("SHELL_READONLY_HIT_CRITICAL")
+    elif status_map["shell_readonly_hit_rate"] == "warning":
+        _append_reason("SHELL_READONLY_HIT_WARNING")
+
+    if status_map["shell_to_core_dispatch_rate"] == "critical":
+        _append_reason("SHELL_TO_CORE_DISPATCH_CRITICAL")
+    elif status_map["shell_to_core_dispatch_rate"] == "warning":
+        _append_reason("SHELL_TO_CORE_DISPATCH_WARNING")
 
     direction = str(trend_payload.get("direction") or "unknown")
     if trend_status == "critical":
-        reason_codes.append("ROUTE_QUALITY_TREND_CRITICAL")
+        _append_reason("ROUTE_QUALITY_TREND_CRITICAL")
     elif trend_status == "warning":
-        reason_codes.append("ROUTE_QUALITY_TREND_WARNING")
+        _append_reason("ROUTE_QUALITY_TREND_WARNING")
     if direction == "degrading":
-        reason_codes.append("ROUTE_QUALITY_TREND_DEGRADING")
+        _append_reason("ROUTE_QUALITY_TREND_DEGRADING")
 
     if not reason_codes and overall_status == "ok":
-        reason_codes.append("ROUTE_QUALITY_HEALTHY")
+        _append_reason("ROUTE_QUALITY_HEALTHY")
     if not reason_codes and overall_status == "unknown":
-        reason_codes.append("ROUTE_QUALITY_SIGNAL_UNKNOWN")
+        _append_reason("ROUTE_QUALITY_SIGNAL_UNKNOWN")
 
     reason_text = ""
     if overall_status == "critical":
@@ -326,12 +360,24 @@ def _ops_build_route_quality_summary(
     else:
         reason_text = "Route-quality signals are insufficient."
 
+    route_semantic_ratios = (
+        route_semantic_distribution.get("route_semantic_ratios")
+        if isinstance(route_semantic_distribution.get("route_semantic_ratios"), dict)
+        else {}
+    )
+    dispatch_to_core_rate = (
+        shell_to_core_dispatch.get("value")
+        if isinstance(shell_to_core_dispatch.get("value"), (int, float))
+        else None
+    )
+
     return {
         "status": overall_status,
         "reason_codes": reason_codes,
         "reason_text": reason_text,
         "signal_status": status_map,
-        "path_ratios": route_distribution.get("path_ratios", {}) if isinstance(route_distribution, dict) else {},
+        "route_semantic_ratios": route_semantic_ratios if isinstance(route_semantic_ratios, dict) else {},
+        "dispatch_to_core_rate": dispatch_to_core_rate,
         "trend": trend_payload,
     }
 
@@ -474,41 +520,15 @@ def _ops_collect_archived_legacy_namespace(event_rows: List[Dict[str, Any]]) -> 
 
 
 def _ops_resolve_control_plane_mode_summary() -> Dict[str, Any]:
-    """Resolve runtime control-plane mode (legacy autonomous runtime retired)."""
-    requested_legacy_enabled = False
-    source = "config.default"
-    try:
-        from system.config import get_config
-
-        cfg = get_config()
-        auto_cfg = getattr(cfg, "autonomous", None)
-        if auto_cfg is not None:
-            requested_legacy_enabled = bool(getattr(auto_cfg, "legacy_system_agent_enabled", False))
-            source = "system.config.autonomous.legacy_system_agent_enabled"
-    except Exception:
-        requested_legacy_enabled = False
-
-    # Runtime always enforces single control-plane; legacy autonomous path is retired.
-    legacy_enabled = False
-    runtime_mode = "single_control_plane"
-    status = "ok"
-    reason_code = "LEGACY_AUTONOMOUS_DISABLED"
-    reason_text = "legacy autonomous system agent is disabled; chat pipeline is the single runtime control-plane."
-    if requested_legacy_enabled:
-        reason_code = "LEGACY_AUTONOMOUS_REQUEST_IGNORED"
-        reason_text = "legacy autonomous system agent runtime path is removed; config request is ignored."
+    """Resolve runtime control-plane mode."""
     return {
-        "status": status,
-        "runtime_mode": runtime_mode,
+        "status": "ok",
+        "runtime_mode": "single_control_plane",
         "single_control_plane": True,
-        "legacy_autonomous_enabled": legacy_enabled,
-        "legacy_autonomous_status": "enabled" if legacy_enabled else "disabled",
-        "legacy_autonomous": "enabled" if legacy_enabled else "disabled",
-        "requested_legacy_autonomous_enabled": requested_legacy_enabled,
         "chat_pipeline_status": "enabled",
-        "reason_code": reason_code,
-        "reason_text": reason_text,
-        "source": source,
+        "reason_code": "SINGLE_CONTROL_PLANE_ENFORCED",
+        "reason_text": "chat pipeline is the single runtime control-plane.",
+        "source": "runtime.enforced",
     }
 
 
@@ -1147,12 +1167,6 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "control_plane_mode_status": control_plane_mode_status,
             "control_plane_mode": str(control_plane_mode.get("runtime_mode") or ""),
             "single_control_plane": bool(control_plane_mode.get("single_control_plane")),
-            "legacy_autonomous_enabled": bool(control_plane_mode.get("legacy_autonomous_enabled")),
-            "legacy_autonomous_status": str(control_plane_mode.get("legacy_autonomous_status") or "unknown"),
-            "legacy_autonomous": str(control_plane_mode.get("legacy_autonomous") or ""),
-            "requested_legacy_autonomous_enabled": bool(
-                control_plane_mode.get("requested_legacy_autonomous_enabled")
-            ),
             "brainstem_control_plane_status": brainstem_status,
             "watchdog_daemon_status": watchdog_daemon_status,
             "process_guard_status": process_guard_status,
@@ -1176,23 +1190,19 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "error_rate": metrics.get("error_rate", {}),
             "latency_p95_ms": metrics.get("latency_p95_ms", {}),
             "prompt_slice_count_by_layer": metrics.get("prompt_slice_count_by_layer", {}),
-            "outer_readonly_hit_rate": metrics.get("outer_readonly_hit_rate", {}),
+            "shell_readonly_hit_rate": metrics.get("shell_readonly_hit_rate", {}),
             "readonly_write_tool_exposure_rate": metrics.get("readonly_write_tool_exposure_rate", {}),
-            "chat_route_path_distribution": metrics.get("chat_route_path_distribution", {}),
-            "path_b_budget_escalation_rate": metrics.get("path_b_budget_escalation_rate", {}),
-            "core_session_creation_rate": metrics.get("core_session_creation_rate", {}),
+            "agent_route_semantic_distribution": metrics.get("agent_route_semantic_distribution", {}),
+            "shell_to_core_dispatch_rate": metrics.get("shell_to_core_dispatch_rate", {}),
+            "shell_clarify_budget_escalation_rate": metrics.get("shell_clarify_budget_escalation_rate", {}),
+            "core_execution_session_creation_rate": metrics.get("core_execution_session_creation_rate", {}),
+            "core_execution_route_distribution": metrics.get("core_execution_route_distribution", {}),
             "control_plane_mode": {
                 "status": control_plane_mode_status,
                 "value": 0 if bool(control_plane_mode.get("single_control_plane")) else 1,
                 "runtime_mode": str(control_plane_mode.get("runtime_mode") or ""),
                 "single_control_plane": bool(control_plane_mode.get("single_control_plane")),
-                "legacy_autonomous_enabled": bool(control_plane_mode.get("legacy_autonomous_enabled")),
-                "legacy_autonomous_status": str(control_plane_mode.get("legacy_autonomous_status") or "unknown"),
-                "legacy_autonomous": str(control_plane_mode.get("legacy_autonomous") or ""),
-                "requested_legacy_autonomous_enabled": bool(
-                    control_plane_mode.get("requested_legacy_autonomous_enabled")
-                ),
-                "reason_code": str(control_plane_mode.get("reason_code") or ""),
+                            "reason_code": str(control_plane_mode.get("reason_code") or ""),
             },
             "brainstem_heartbeat": {
                 "status": brainstem_status,
@@ -1276,7 +1286,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "core_child_spawn_deferred_count": {
                 "status": core_child_spawn_deferred_status,
                 "value": core_child_spawn_deferred.get("deferred_count"),
-                "execution_session_count": core_child_spawn_deferred.get("execution_session_count"),
+                "core_execution_session_count": core_child_spawn_deferred.get("core_execution_session_count"),
                 "latest_role": core_child_spawn_deferred.get("latest_role"),
                 "latest_reason": core_child_spawn_deferred.get("latest_reason"),
                 "reason_code": core_child_spawn_deferred.get("reason_code"),
@@ -2060,9 +2070,9 @@ def _ops_build_core_child_spawn_deferred_summary(
         source_key = str(payload.get("source") or "").strip() or "unknown"
         source_counts[source_key] = int(source_counts.get(source_key, 0)) + 1
 
-        execution_session_id = str(payload.get("execution_session_id") or "").strip()
-        if execution_session_id:
-            unique_execution_sessions.add(execution_session_id)
+        core_execution_session_id = str(payload.get("core_execution_session_id") or "").strip()
+        if core_execution_session_id:
+            unique_execution_sessions.add(core_execution_session_id)
 
     if deferred_count <= 0:
         status = "unknown"
@@ -2078,7 +2088,7 @@ def _ops_build_core_child_spawn_deferred_summary(
         "reason_code": reason_code,
         "reason_text": reason_text,
         "deferred_count": deferred_count,
-        "execution_session_count": len(unique_execution_sessions),
+        "core_execution_session_count": len(unique_execution_sessions),
         "latest_timestamp": latest_timestamp,
         "latest_agent_id": latest_agent_id,
         "latest_role": latest_role,
@@ -2521,9 +2531,9 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
 
         snapshot = build_snapshot(repo_root=repo_root, events_limit=max(200, int(limit) * 10))
         snapshot_metrics = snapshot.get("metrics") if isinstance(snapshot.get("metrics"), dict) else {}
-        outer_readonly_hit = (
-            snapshot_metrics.get("outer_readonly_hit_rate")
-            if isinstance(snapshot_metrics.get("outer_readonly_hit_rate"), dict)
+        shell_readonly_hit = (
+            snapshot_metrics.get("shell_readonly_hit_rate")
+            if isinstance(snapshot_metrics.get("shell_readonly_hit_rate"), dict)
             else {}
         )
         readonly_write_exposure = (
@@ -2531,27 +2541,39 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             if isinstance(snapshot_metrics.get("readonly_write_tool_exposure_rate"), dict)
             else {}
         )
-        chat_route_distribution = (
-            snapshot_metrics.get("chat_route_path_distribution")
-            if isinstance(snapshot_metrics.get("chat_route_path_distribution"), dict)
+        route_semantic_distribution = (
+            snapshot_metrics.get("agent_route_semantic_distribution")
+            if isinstance(snapshot_metrics.get("agent_route_semantic_distribution"), dict)
             else {}
         )
-        path_b_budget_escalation = (
-            snapshot_metrics.get("path_b_budget_escalation_rate")
-            if isinstance(snapshot_metrics.get("path_b_budget_escalation_rate"), dict)
+        shell_to_core_dispatch = (
+            snapshot_metrics.get("shell_to_core_dispatch_rate")
+            if isinstance(snapshot_metrics.get("shell_to_core_dispatch_rate"), dict)
             else {}
         )
-        core_session_creation = (
-            snapshot_metrics.get("core_session_creation_rate")
-            if isinstance(snapshot_metrics.get("core_session_creation_rate"), dict)
+        shell_clarify_budget_escalation = (
+            snapshot_metrics.get("shell_clarify_budget_escalation_rate")
+            if isinstance(snapshot_metrics.get("shell_clarify_budget_escalation_rate"), dict)
+            else {}
+        )
+        core_execution_session_creation = (
+            snapshot_metrics.get("core_execution_session_creation_rate")
+            if isinstance(snapshot_metrics.get("core_execution_session_creation_rate"), dict)
+            else {}
+        )
+        core_execution_route_distribution = (
+            snapshot_metrics.get("core_execution_route_distribution")
+            if isinstance(snapshot_metrics.get("core_execution_route_distribution"), dict)
             else {}
         )
         prompt_safety_summary = {
-            "outer_readonly_hit_rate": outer_readonly_hit,
+            "shell_readonly_hit_rate": shell_readonly_hit,
             "readonly_write_tool_exposure_rate": readonly_write_exposure,
-            "chat_route_path_distribution": chat_route_distribution,
-            "path_b_budget_escalation_rate": path_b_budget_escalation,
-            "core_session_creation_rate": core_session_creation,
+            "agent_route_semantic_distribution": route_semantic_distribution,
+            "shell_to_core_dispatch_rate": shell_to_core_dispatch,
+            "shell_clarify_budget_escalation_rate": shell_clarify_budget_escalation,
+            "core_execution_session_creation_rate": core_execution_session_creation,
+            "core_execution_route_distribution": core_execution_route_distribution,
             "route_quality": _ops_build_route_quality_summary(snapshot_metrics, trend=route_quality_trend),
             "execution_bridge_governance": execution_bridge_governance,
             "agentic_loop_completion": agentic_loop_completion,

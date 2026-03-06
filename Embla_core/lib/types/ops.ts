@@ -21,11 +21,13 @@ export interface RuntimePostureMetrics {
   error_rate?: Record<string, unknown>;
   latency_p95_ms?: Record<string, unknown>;
   prompt_slice_count_by_layer?: Record<string, unknown>;
-  outer_readonly_hit_rate?: Record<string, unknown>;
+  shell_readonly_hit_rate?: Record<string, unknown>;
   readonly_write_tool_exposure_rate?: Record<string, unknown>;
-  chat_route_path_distribution?: Record<string, unknown>;
-  path_b_budget_escalation_rate?: Record<string, unknown>;
-  core_session_creation_rate?: Record<string, unknown>;
+  agent_route_semantic_distribution?: Record<string, unknown>;
+  shell_to_core_dispatch_rate?: Record<string, unknown>;
+  shell_clarify_budget_escalation_rate?: Record<string, unknown>;
+  core_execution_session_creation_rate?: Record<string, unknown>;
+  core_execution_route_distribution?: Record<string, unknown>;
   brainstem_heartbeat?: Record<string, unknown>;
 }
 
@@ -156,11 +158,13 @@ export interface OpsIncidentSummary {
   warning_incidents: number;
   latest_incident_at: string;
   runtime_prompt_safety?: {
-    outer_readonly_hit_rate?: Record<string, unknown>;
+    shell_readonly_hit_rate?: Record<string, unknown>;
     readonly_write_tool_exposure_rate?: Record<string, unknown>;
-    chat_route_path_distribution?: Record<string, unknown>;
-    path_b_budget_escalation_rate?: Record<string, unknown>;
-    core_session_creation_rate?: Record<string, unknown>;
+    agent_route_semantic_distribution?: Record<string, unknown>;
+    shell_to_core_dispatch_rate?: Record<string, unknown>;
+    shell_clarify_budget_escalation_rate?: Record<string, unknown>;
+    core_execution_session_creation_rate?: Record<string, unknown>;
+    core_execution_route_distribution?: Record<string, unknown>;
     route_quality?: Record<string, unknown>;
   };
 }

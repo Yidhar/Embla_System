@@ -43,54 +43,62 @@ export type DebugChatReply = {
 
 export type DebugRouteDecision = {
   type?: string;
-  path?: string;
+  trigger?: string;
+  route_semantic?: string;
+  entry_agent?: string;
+  active_agent?: string;
+  dispatch_to_core?: boolean;
+  handoff_tool?: string;
+  core_execution_route?: string;
   risk_level?: string;
   prompt_profile?: string;
   injection_mode?: string;
   delegation_intent?: string;
-  path_b_clarify_turns?: number;
-  path_b_clarify_limit?: number;
-  path_b_budget_escalated?: boolean;
-  path_b_budget_reason?: string;
-  outer_session_id?: string;
-  core_session_id?: string;
-  execution_session_id?: string;
-  core_session_created?: boolean;
+  shell_clarify_turns?: number;
+  shell_clarify_limit?: number;
+  shell_clarify_budget_escalated?: boolean;
+  shell_clarify_budget_reason?: string;
+  shell_session_id?: string;
+  core_execution_session_id?: string;
+  core_execution_session_created?: boolean;
 };
 
-export type DebugRouteBridgeEvent = {
+export type DebugRouteSessionStateEvent = {
   timestamp?: string;
   event_type?: string;
-  path?: string;
   trigger?: string;
+  route_semantic?: string;
+  entry_agent?: string;
+  active_agent?: string;
+  dispatch_to_core?: boolean;
+  handoff_tool?: string;
+  core_execution_route?: string;
   delegation_intent?: string;
   prompt_profile?: string;
   injection_mode?: string;
-  outer_session_id?: string;
-  core_session_id?: string;
-  execution_session_id?: string;
-  path_b_budget_escalated?: boolean;
-  path_b_budget_reason?: string;
-  path_b_clarify_turns?: number;
-  path_b_clarify_limit?: number;
-  core_session_created?: boolean;
+  shell_session_id?: string;
+  core_execution_session_id?: string;
+  shell_clarify_budget_escalated?: boolean;
+  shell_clarify_budget_reason?: string;
+  shell_clarify_turns?: number;
+  shell_clarify_limit?: number;
+  core_execution_session_created?: boolean;
   source?: string;
 };
 
-export type DebugRouteBridgePayload = {
+export type DebugRouteSessionStatePayload = {
   status?: string;
-  outer_session_id?: string;
-  core_session_id?: string;
-  execution_session_id?: string;
-  outer_session_exists?: boolean;
-  core_session_exists?: boolean;
+  shell_session_id?: string;
+  core_execution_session_id?: string;
+  shell_session_exists?: boolean;
+  core_execution_session_exists?: boolean;
   state?: {
-    path_b_clarify_turns?: number;
-    path_b_clarify_limit?: number;
-    last_execution_session_id?: string;
+    shell_clarify_turns?: number;
+    shell_clarify_limit?: number;
+    last_core_execution_session_id?: string;
     last_core_escalation_at_ms?: number;
   };
-  recent_route_events?: DebugRouteBridgeEvent[];
+  recent_route_events?: DebugRouteSessionStateEvent[];
 };
 
 function parseStructuredDataLine(data: string): { ok: boolean; payload: Record<string, unknown> | null } {
@@ -293,24 +301,27 @@ export async function sendDebugChatMessage(params: {
   }
 }
 
-export async function fetchDebugRouteBridge(params: {
+export async function fetchDebugRouteSessionState(params: {
   sessionId: string;
   limit?: number;
-}): Promise<{ ok: boolean; data: DebugRouteBridgePayload | null; error: string }> {
+}): Promise<{ ok: boolean; data: DebugRouteSessionStatePayload | null; error: string }> {
   const sessionId = String(params.sessionId || "").trim();
   if (!sessionId) {
     return { ok: false, data: null, error: "missing session id" };
   }
   const limit = Number.isFinite(params.limit) ? Math.max(1, Math.trunc(params.limit as number)) : 20;
-  const response = await requestWithFallback(`/v1/chat/route_bridge/${encodeURIComponent(sessionId)}?limit=${limit}`, {
-    cache: "no-store",
-    headers: { Accept: "application/json" },
-  });
+  const response = await requestWithFallback(
+    `/v1/chat/route_session_state/${encodeURIComponent(sessionId)}?limit=${limit}`,
+    {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    },
+  );
   try {
     if (!response || !response.ok) {
       return { ok: false, data: null, error: `HTTP ${response?.status ?? "network"}` };
     }
-    const payload = (await response.json()) as DebugRouteBridgePayload;
+    const payload = (await response.json()) as DebugRouteSessionStatePayload;
     if (!payload || payload.status !== "success") {
       return { ok: false, data: payload || null, error: "invalid response" };
     }

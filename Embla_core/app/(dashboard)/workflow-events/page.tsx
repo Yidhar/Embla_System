@@ -50,6 +50,7 @@ const PAGE_COPY: Record<
       readonlyWriteExposure: string;
       outerReadonlyHitRate: string;
       pathCRouteShare: string;
+      shellToCoreDispatch: string;
       pathBBudgetEscalation: string;
       coreSessionCreation: string;
       routeQuality: string;
@@ -78,11 +79,12 @@ const PAGE_COPY: Record<
       sampleCount: string;
       exposureCount: string;
       hitCount: string;
+      dispatchToCoreRate: string;
       escalatedCount: string;
       createdCount: string;
-      pathARatio: string;
-      pathBRatio: string;
-      pathCRatio: string;
+      shellReadonlyRatio: string;
+      shellClarifyRatio: string;
+      coreExecutionRatio: string;
       routeQualityReason: string;
       trend: string;
       volatility: string;
@@ -120,10 +122,11 @@ const PAGE_COPY: Record<
     },
     metricLabels: {
       readonlyWriteExposure: "Readonly Write Exposure",
-      outerReadonlyHitRate: "Outer Readonly Hit Rate",
-      pathCRouteShare: "Path-C Route Share",
-      pathBBudgetEscalation: "Path-B Budget Escalation",
-      coreSessionCreation: "Core Session Creation",
+      outerReadonlyHitRate: "Shell Readonly Hit Rate",
+      pathCRouteShare: "Core Execution Route Share",
+      shellToCoreDispatch: "Shell to Core Dispatch",
+      pathBBudgetEscalation: "Shell Clarify Budget Escalation",
+      coreSessionCreation: "Core Execution Session Creation",
       routeQuality: "Route Quality",
     },
     columns: {
@@ -150,11 +153,12 @@ const PAGE_COPY: Record<
       sampleCount: "Sample count",
       exposureCount: "Exposure count",
       hitCount: "Hit count",
+      dispatchToCoreRate: "Dispatch to core",
       escalatedCount: "Escalated count",
       createdCount: "Created count",
-      pathARatio: "Path-A",
-      pathBRatio: "Path-B",
-      pathCRatio: "Path-C",
+      shellReadonlyRatio: "Shell Readonly",
+      shellClarifyRatio: "Shell Clarify",
+      coreExecutionRatio: "Core Execution",
       routeQualityReason: "Reason",
       trend: "Trend",
       volatility: "Volatility",
@@ -191,10 +195,11 @@ const PAGE_COPY: Record<
     },
     metricLabels: {
       readonlyWriteExposure: "只读写工具暴露率",
-      outerReadonlyHitRate: "外层只读命中率",
-      pathCRouteShare: "Path-C 路由占比",
-      pathBBudgetEscalation: "Path-B 预算升级率",
-      coreSessionCreation: "Core 会话新建率",
+      outerReadonlyHitRate: "Shell 只读命中率",
+      pathCRouteShare: "Core 执行路由占比",
+      shellToCoreDispatch: "Shell 到 Core 转交率",
+      pathBBudgetEscalation: "Shell 澄清预算升级率",
+      coreSessionCreation: "Core 执行会话新建率",
       routeQuality: "路由质量",
     },
     columns: {
@@ -221,11 +226,12 @@ const PAGE_COPY: Record<
       sampleCount: "样本数",
       exposureCount: "暴露次数",
       hitCount: "命中次数",
+      dispatchToCoreRate: "转交 Core 比例",
       escalatedCount: "升级次数",
       createdCount: "新建次数",
-      pathARatio: "Path-A",
-      pathBRatio: "Path-B",
-      pathCRatio: "Path-C",
+      shellReadonlyRatio: "Shell 只读",
+      shellClarifyRatio: "Shell 澄清",
+      coreExecutionRatio: "Core 执行",
       routeQualityReason: "原因",
       trend: "趋势",
       volatility: "波动率",
@@ -359,32 +365,53 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
     typeof runtimeMetrics.readonly_write_tool_exposure_rate === "object" && runtimeMetrics.readonly_write_tool_exposure_rate
       ? runtimeMetrics.readonly_write_tool_exposure_rate
       : {};
-  const outerReadonlyMetric =
-    typeof runtimeMetrics.outer_readonly_hit_rate === "object" && runtimeMetrics.outer_readonly_hit_rate
-      ? runtimeMetrics.outer_readonly_hit_rate
+  const shellReadonlyMetric =
+    typeof runtimeMetrics.shell_readonly_hit_rate === "object" && runtimeMetrics.shell_readonly_hit_rate
+      ? runtimeMetrics.shell_readonly_hit_rate
       : {};
-  const routeDistributionMetric =
-    typeof runtimeMetrics.chat_route_path_distribution === "object" && runtimeMetrics.chat_route_path_distribution
-      ? runtimeMetrics.chat_route_path_distribution
+  const routeSemanticDistributionMetric =
+    typeof runtimeMetrics.agent_route_semantic_distribution === "object" && runtimeMetrics.agent_route_semantic_distribution
+      ? runtimeMetrics.agent_route_semantic_distribution
       : {};
-  const pathBBudgetEscalationMetric =
-    typeof runtimeMetrics.path_b_budget_escalation_rate === "object" && runtimeMetrics.path_b_budget_escalation_rate
-      ? runtimeMetrics.path_b_budget_escalation_rate
+  const shellToCoreDispatchMetric =
+    typeof runtimeMetrics.shell_to_core_dispatch_rate === "object" && runtimeMetrics.shell_to_core_dispatch_rate
+      ? runtimeMetrics.shell_to_core_dispatch_rate
       : {};
-  const coreSessionCreationMetric =
-    typeof runtimeMetrics.core_session_creation_rate === "object" && runtimeMetrics.core_session_creation_rate
-      ? runtimeMetrics.core_session_creation_rate
+  const shellClarifyBudgetEscalationMetric =
+    typeof runtimeMetrics.shell_clarify_budget_escalation_rate === "object" &&
+    runtimeMetrics.shell_clarify_budget_escalation_rate
+      ? runtimeMetrics.shell_clarify_budget_escalation_rate
+      : {};
+  const coreExecutionSessionCreationMetric =
+    typeof runtimeMetrics.core_execution_session_creation_rate === "object" &&
+    runtimeMetrics.core_execution_session_creation_rate
+      ? runtimeMetrics.core_execution_session_creation_rate
       : {};
   const runtimeRouteQuality = asRecord(runtimeSummary.route_quality);
   const runtimeRouteQualityTrend = asRecord(runtimeRouteQuality.trend);
   const incidentPromptSafety = asRecord(incidentsSummary?.runtime_prompt_safety);
   const incidentReadonlyExposure = asRecord(incidentPromptSafety.readonly_write_tool_exposure_rate);
-  const incidentOuterReadonlyHit = asRecord(incidentPromptSafety.outer_readonly_hit_rate);
-  const incidentRouteDistribution = asRecord(incidentPromptSafety.chat_route_path_distribution);
-  const incidentPathBBudgetEscalation = asRecord(incidentPromptSafety.path_b_budget_escalation_rate);
-  const incidentCoreSessionCreation = asRecord(incidentPromptSafety.core_session_creation_rate);
+  const incidentShellReadonlyHit = asRecord(incidentPromptSafety.shell_readonly_hit_rate);
+  const incidentRouteDistribution = asRecord(incidentPromptSafety.agent_route_semantic_distribution);
+  const incidentShellToCoreDispatch = asRecord(
+    incidentPromptSafety.shell_to_core_dispatch_rate,
+  );
+  const incidentShellClarifyBudgetEscalation = asRecord(incidentPromptSafety.shell_clarify_budget_escalation_rate);
+  const incidentCoreSessionCreation = asRecord(incidentPromptSafety.core_execution_session_creation_rate);
   const incidentRouteQuality = asRecord(incidentPromptSafety.route_quality);
   const incidentRouteQualityTrend = asRecord(incidentRouteQuality.trend);
+  const runtimeRouteSemanticRatios = asRecord(
+    (routeSemanticDistributionMetric as { route_semantic_ratios?: unknown }).route_semantic_ratios,
+  );
+  const runtimeShellReadonlyRatio = runtimeRouteSemanticRatios.shell_readonly;
+  const runtimeShellClarifyRatio = runtimeRouteSemanticRatios.shell_clarify;
+  const runtimeCoreExecutionRatio = runtimeRouteSemanticRatios.core_execution;
+  const incidentRouteSemanticRatios = asRecord(
+    (incidentRouteDistribution as { route_semantic_ratios?: unknown }).route_semantic_ratios,
+  );
+  const incidentShellReadonlyRatio = incidentRouteSemanticRatios.shell_readonly;
+  const incidentShellClarifyRatio = incidentRouteSemanticRatios.shell_clarify;
+  const incidentCoreExecutionRatio = incidentRouteSemanticRatios.core_execution;
 
   const outboxPending = summary?.outbox_pending;
   const oldestPendingAge = summary?.oldest_pending_age_seconds;
@@ -392,12 +419,19 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
   const state = toState(payload?.severity || "unknown");
   const incidentsState = toState(incidentsPayload?.severity || "unknown");
   const readonlyExposureState = toState(String((readonlyExposureMetric as { status?: unknown }).status || "unknown"));
-  const outerReadonlyState = toState(String((outerReadonlyMetric as { status?: unknown }).status || "unknown"));
-  const routeDistributionState = toState(String((routeDistributionMetric as { status?: unknown }).status || "unknown"));
-  const pathBBudgetEscalationState = toState(
-    String((pathBBudgetEscalationMetric as { status?: unknown }).status || "unknown"),
+  const shellReadonlyState = toState(String((shellReadonlyMetric as { status?: unknown }).status || "unknown"));
+  const routeDistributionState = toState(
+    String((routeSemanticDistributionMetric as { status?: unknown }).status || "unknown"),
   );
-  const coreSessionCreationState = toState(String((coreSessionCreationMetric as { status?: unknown }).status || "unknown"));
+  const shellToCoreDispatchState = toState(
+    String((shellToCoreDispatchMetric as { status?: unknown }).status || "unknown"),
+  );
+  const pathBBudgetEscalationState = toState(
+    String((shellClarifyBudgetEscalationMetric as { status?: unknown }).status || "unknown"),
+  );
+  const coreSessionCreationState = toState(
+    String((coreExecutionSessionCreationMetric as { status?: unknown }).status || "unknown"),
+  );
   const runtimeRouteQualityState = toState(String(runtimeRouteQuality.status || "unknown"));
   const incidentRouteQualityState = toState(String(incidentRouteQuality.status || "unknown"));
   const runtimeRouteQualityDirection = String(runtimeRouteQualityTrend.direction || copy.words.unknown);
@@ -686,50 +720,65 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
                 />
                 <MetricBar
                   label={copy.metricLabels.outerReadonlyHitRate}
-                  value={toPercent((outerReadonlyMetric as { value?: unknown }).value, lang)}
+                  value={toPercent((shellReadonlyMetric as { value?: unknown }).value, lang)}
                   ratio={
-                    typeof (outerReadonlyMetric as { value?: unknown }).value === "number"
-                      ? ((outerReadonlyMetric as { value?: number }).value ?? null)
+                    typeof (shellReadonlyMetric as { value?: unknown }).value === "number"
+                      ? ((shellReadonlyMetric as { value?: number }).value ?? null)
                       : null
                   }
-                  tone={toTone(outerReadonlyState)}
-                  hint={`${copy.words.hitCount}: ${toNumber((outerReadonlyMetric as { hit_count?: unknown }).hit_count, lang)}`}
+                  tone={toTone(shellReadonlyState)}
+                  hint={`${copy.words.hitCount}: ${toNumber((shellReadonlyMetric as { hit_count?: unknown }).hit_count, lang)}`}
                 />
                 <MetricBar
                   label={copy.metricLabels.pathCRouteShare}
-                  value={toPercent(asRecord((routeDistributionMetric as { path_ratios?: unknown }).path_ratios)["path-c"], lang)}
-                  ratio={toRatio(asRecord((routeDistributionMetric as { path_ratios?: unknown }).path_ratios)["path-c"])}
+                  value={toPercent(runtimeCoreExecutionRatio, lang)}
+                  ratio={toRatio(runtimeCoreExecutionRatio)}
                   tone={toTone(routeDistributionState)}
                   right={
                     <span>
-                      {copy.words.sampleCount} {toNumber((routeDistributionMetric as { sample_count?: unknown }).sample_count, lang)}
+                      {copy.words.sampleCount}{" "}
+                      {toNumber((routeSemanticDistributionMetric as { sample_count?: unknown }).sample_count, lang)}
                     </span>
                   }
-                  hint={`${copy.words.pathARatio}: ${toPercent(asRecord((routeDistributionMetric as { path_ratios?: unknown }).path_ratios)["path-a"], lang)} · ${copy.words.pathBRatio}: ${toPercent(asRecord((routeDistributionMetric as { path_ratios?: unknown }).path_ratios)["path-b"], lang)} · ${copy.words.pathCRatio}: ${toPercent(asRecord((routeDistributionMetric as { path_ratios?: unknown }).path_ratios)["path-c"], lang)}`}
+                  hint={`${copy.words.shellReadonlyRatio}: ${toPercent(runtimeShellReadonlyRatio, lang)} · ${copy.words.shellClarifyRatio}: ${toPercent(runtimeShellClarifyRatio, lang)} · ${copy.words.coreExecutionRatio}: ${toPercent(runtimeCoreExecutionRatio, lang)}`}
+                />
+                <MetricBar
+                  label={copy.metricLabels.shellToCoreDispatch}
+                  value={toPercent((shellToCoreDispatchMetric as { value?: unknown }).value, lang)}
+                  ratio={toRatio((shellToCoreDispatchMetric as { value?: unknown }).value)}
+                  tone={toTone(shellToCoreDispatchState)}
+                  right={
+                    <span>
+                      {copy.words.sampleCount} {toNumber((shellToCoreDispatchMetric as { sample_count?: unknown }).sample_count, lang)}
+                    </span>
+                  }
+                  hint={`${copy.words.dispatchToCoreRate}: ${toPercent((shellToCoreDispatchMetric as { value?: unknown }).value, lang)}`}
                 />
                 <MetricBar
                   label={copy.metricLabels.pathBBudgetEscalation}
-                  value={toPercent((pathBBudgetEscalationMetric as { value?: unknown }).value, lang)}
-                  ratio={toRatio((pathBBudgetEscalationMetric as { value?: unknown }).value)}
+                  value={toPercent((shellClarifyBudgetEscalationMetric as { value?: unknown }).value, lang)}
+                  ratio={toRatio((shellClarifyBudgetEscalationMetric as { value?: unknown }).value)}
                   tone={toTone(pathBBudgetEscalationState)}
                   right={
                     <span>
-                      {copy.words.sampleCount} {toNumber((pathBBudgetEscalationMetric as { sample_count?: unknown }).sample_count, lang)}
+                      {copy.words.sampleCount}{" "}
+                      {toNumber((shellClarifyBudgetEscalationMetric as { sample_count?: unknown }).sample_count, lang)}
                     </span>
                   }
-                  hint={`${copy.words.escalatedCount}: ${toNumber((pathBBudgetEscalationMetric as { escalated_count?: unknown }).escalated_count, lang)}`}
+                  hint={`${copy.words.escalatedCount}: ${toNumber((shellClarifyBudgetEscalationMetric as { escalated_count?: unknown }).escalated_count, lang)}`}
                 />
                 <MetricBar
                   label={copy.metricLabels.coreSessionCreation}
-                  value={toPercent((coreSessionCreationMetric as { value?: unknown }).value, lang)}
-                  ratio={toRatio((coreSessionCreationMetric as { value?: unknown }).value)}
+                  value={toPercent((coreExecutionSessionCreationMetric as { value?: unknown }).value, lang)}
+                  ratio={toRatio((coreExecutionSessionCreationMetric as { value?: unknown }).value)}
                   tone={toTone(coreSessionCreationState)}
                   right={
                     <span>
-                      {copy.words.sampleCount} {toNumber((coreSessionCreationMetric as { sample_count?: unknown }).sample_count, lang)}
+                      {copy.words.sampleCount}{" "}
+                      {toNumber((coreExecutionSessionCreationMetric as { sample_count?: unknown }).sample_count, lang)}
                     </span>
                   }
-                  hint={`${copy.words.createdCount}: ${toNumber((coreSessionCreationMetric as { created_count?: unknown }).created_count, lang)}`}
+                  hint={`${copy.words.createdCount}: ${toNumber((coreExecutionSessionCreationMetric as { created_count?: unknown }).created_count, lang)}`}
                 />
                 <MetricBar
                   label={copy.metricLabels.routeQuality}
@@ -771,34 +820,46 @@ export default async function WorkflowEventsPage({ searchParams }: WorkflowPageP
                 />
                 <MetricBar
                   label={copy.metricLabels.outerReadonlyHitRate}
-                  value={toPercent(incidentOuterReadonlyHit.value, lang)}
-                  ratio={toRatio(incidentOuterReadonlyHit.value)}
-                  tone={toTone(toState(String(incidentOuterReadonlyHit.status || "unknown")))}
-                  hint={`${copy.words.hitCount}: ${toNumber(incidentOuterReadonlyHit.hit_count, lang)}`}
+                  value={toPercent(incidentShellReadonlyHit.value, lang)}
+                  ratio={toRatio(incidentShellReadonlyHit.value)}
+                  tone={toTone(toState(String(incidentShellReadonlyHit.status || "unknown")))}
+                  hint={`${copy.words.hitCount}: ${toNumber(incidentShellReadonlyHit.hit_count, lang)}`}
                 />
                 <MetricBar
                   label={copy.metricLabels.pathCRouteShare}
-                  value={toPercent(asRecord(incidentRouteDistribution.path_ratios)["path-c"], lang)}
-                  ratio={toRatio(asRecord(incidentRouteDistribution.path_ratios)["path-c"])}
+                  value={toPercent(incidentCoreExecutionRatio, lang)}
+                  ratio={toRatio(incidentCoreExecutionRatio)}
                   tone={toTone(toState(String(incidentRouteDistribution.status || "unknown")))}
                   right={
                     <span>
                       {copy.words.sampleCount} {toNumber(incidentRouteDistribution.sample_count, lang)}
                     </span>
                   }
-                  hint={`${copy.words.pathARatio}: ${toPercent(asRecord(incidentRouteDistribution.path_ratios)["path-a"], lang)} · ${copy.words.pathBRatio}: ${toPercent(asRecord(incidentRouteDistribution.path_ratios)["path-b"], lang)} · ${copy.words.pathCRatio}: ${toPercent(asRecord(incidentRouteDistribution.path_ratios)["path-c"], lang)}`}
+                  hint={`${copy.words.shellReadonlyRatio}: ${toPercent(incidentShellReadonlyRatio, lang)} · ${copy.words.shellClarifyRatio}: ${toPercent(incidentShellClarifyRatio, lang)} · ${copy.words.coreExecutionRatio}: ${toPercent(incidentCoreExecutionRatio, lang)}`}
+                />
+                <MetricBar
+                  label={copy.metricLabels.shellToCoreDispatch}
+                  value={toPercent(incidentShellToCoreDispatch.value, lang)}
+                  ratio={toRatio(incidentShellToCoreDispatch.value)}
+                  tone={toTone(toState(String(incidentShellToCoreDispatch.status || "unknown")))}
+                  right={
+                    <span>
+                      {copy.words.sampleCount} {toNumber(incidentShellToCoreDispatch.sample_count, lang)}
+                    </span>
+                  }
+                  hint={`${copy.words.dispatchToCoreRate}: ${toPercent(incidentShellToCoreDispatch.value, lang)}`}
                 />
                 <MetricBar
                   label={copy.metricLabels.pathBBudgetEscalation}
-                  value={toPercent(incidentPathBBudgetEscalation.value, lang)}
-                  ratio={toRatio(incidentPathBBudgetEscalation.value)}
-                  tone={toTone(toState(String(incidentPathBBudgetEscalation.status || "unknown")))}
+                  value={toPercent(incidentShellClarifyBudgetEscalation.value, lang)}
+                  ratio={toRatio(incidentShellClarifyBudgetEscalation.value)}
+                  tone={toTone(toState(String(incidentShellClarifyBudgetEscalation.status || "unknown")))}
                   right={
                     <span>
-                      {copy.words.sampleCount} {toNumber(incidentPathBBudgetEscalation.sample_count, lang)}
+                      {copy.words.sampleCount} {toNumber(incidentShellClarifyBudgetEscalation.sample_count, lang)}
                     </span>
                   }
-                  hint={`${copy.words.escalatedCount}: ${toNumber(incidentPathBBudgetEscalation.escalated_count, lang)}`}
+                  hint={`${copy.words.escalatedCount}: ${toNumber(incidentShellClarifyBudgetEscalation.escalated_count, lang)}`}
                 />
                 <MetricBar
                   label={copy.metricLabels.coreSessionCreation}

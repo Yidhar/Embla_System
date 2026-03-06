@@ -784,6 +784,24 @@ def _collect_runtime_lease(
     }
 
 
+def _normalize_route_semantic(raw_semantic: Any) -> str:
+    semantic = str(raw_semantic or "").strip().lower()
+    if semantic in {"shell_readonly", "shell_clarify", "core_execution"}:
+        return semantic
+    return "core_execution"
+
+
+def _normalize_core_execution_route(raw_route: Any) -> str:
+    route = str(raw_route or "").strip().lower()
+    if route in {"fast_track", "fast-track"}:
+        return "fast_track"
+    if route == "standard":
+        return "standard"
+    if not route:
+        return "unspecified"
+    return route
+
+
 def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     decisions: List[Dict[str, Any]] = []
     for row in events:
@@ -800,14 +818,25 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
     recovery_hit_count = 0
     conflict_drop_count = 0
     delegation_hit_count = 0
-    outer_readonly_hit_count = 0
+    shell_readonly_hit_count = 0
     readonly_exposure_sample_count = 0
     readonly_write_tool_exposure_count = 0
     readonly_write_tool_exposed_slice_count = 0
-    core_escalation_count = 0
-    route_path_counts: Dict[str, int] = {"path-a": 0, "path-b": 0, "path-c": 0}
-    path_b_budget_escalated_count = 0
-    core_session_created_count = 0
+    dispatch_to_core_count = 0
+    route_semantic_counts: Dict[str, int] = {
+        "shell_readonly": 0,
+        "shell_clarify": 0,
+        "core_execution": 0,
+    }
+    shell_clarify_budget_escalated_count = 0
+    shell_clarify_sample_count = 0
+    core_execution_session_created_count = 0
+    core_execution_sample_count = 0
+    core_execution_route_counts: Dict[str, int] = {
+        "fast_track": 0,
+        "standard": 0,
+        "unspecified": 0,
+    }
     prefix_cache_hit_count = 0
     tail_hashes: List[str] = []
     contract_upgrade_latencies_ms: List[float] = []
@@ -830,18 +859,21 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
         selected_slice_count = _to_int(payload.get("selected_slice_count"), -1)
         if selected_slice_count < 0:
             selected_slices = payload.get("selected_slices")
-            if isinstance(selected_slices, list):
-                selected_slice_count = len(selected_slices)
-            else:
-                selected_slice_count = 0
+            selected_slice_count = len(selected_slices) if isinstance(selected_slices, list) else 0
         selected_slice_total += max(0, selected_slice_count)
 
-        trigger = str(payload.get("trigger") or payload.get("path") or "unknown")
+        trigger = _normalize_route_semantic(payload.get("route_semantic") or payload.get("trigger"))
         trigger_counts[trigger] = trigger_counts.get(trigger, 0) + 1
 
-        route_path = str(payload.get("path") or "").strip().lower()
-        if route_path in route_path_counts:
-            route_path_counts[route_path] = int(route_path_counts.get(route_path, 0)) + 1
+        route_semantic = _normalize_route_semantic(payload.get("route_semantic"))
+        if route_semantic in route_semantic_counts:
+            route_semantic_counts[route_semantic] = int(route_semantic_counts.get(route_semantic, 0)) + 1
+
+        dispatch_to_core = bool(payload.get("dispatch_to_core"))
+        if not dispatch_to_core and route_semantic == "core_execution":
+            dispatch_to_core = True
+        if dispatch_to_core:
+            dispatch_to_core_count += 1
 
         if bool(payload.get("recovery_hit")):
             recovery_hit_count += 1
@@ -851,10 +883,7 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
             dropped_conflict_count = _to_int(payload.get("dropped_slice_count"), -1)
         if dropped_conflict_count < 0:
             dropped_slices = payload.get("dropped_slices")
-            if isinstance(dropped_slices, list):
-                dropped_conflict_count = len(dropped_slices)
-            else:
-                dropped_conflict_count = 0
+            dropped_conflict_count = len(dropped_slices) if isinstance(dropped_slices, list) else 0
         conflict_drop_count += max(0, dropped_conflict_count)
 
         delegation_hit = payload.get("delegation_hit")
@@ -866,35 +895,45 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
             if delegation_intent.startswith("delegate"):
                 delegation_hit_count += 1
 
-        if bool(payload.get("outer_readonly_hit")):
-            outer_readonly_hit_count += 1
+        shell_readonly_hit_raw = payload.get("shell_readonly_hit")
+        if isinstance(shell_readonly_hit_raw, bool):
+            shell_readonly_hit = shell_readonly_hit_raw
+        else:
+            shell_readonly_hit = route_semantic == "shell_readonly"
+        if shell_readonly_hit:
+            shell_readonly_hit_count += 1
             readonly_exposure_sample_count += 1
             readonly_selected_count = _to_int(payload.get("readonly_write_tool_selected_count"), -1)
             if readonly_selected_count < 0:
                 selected_exposed = payload.get("readonly_write_tool_selected_slices")
-                if isinstance(selected_exposed, list):
-                    readonly_selected_count = len(selected_exposed)
-                else:
-                    readonly_selected_count = 0
+                readonly_selected_count = len(selected_exposed) if isinstance(selected_exposed, list) else 0
             readonly_exposed = bool(payload.get("readonly_write_tool_exposed")) or readonly_selected_count > 0
             if readonly_exposed:
                 readonly_write_tool_exposure_count += 1
                 readonly_write_tool_exposed_slice_count += max(0, readonly_selected_count)
-        if bool(payload.get("core_escalation")):
-            core_escalation_count += 1
-        if bool(payload.get("path_b_budget_escalated")):
-            path_b_budget_escalated_count += 1
-        if bool(payload.get("core_session_created")):
-            core_session_created_count += 1
+
+        shell_clarify_budget_escalated = bool(payload.get("shell_clarify_budget_escalated"))
+        if route_semantic == "shell_clarify":
+            shell_clarify_sample_count += 1
+            if shell_clarify_budget_escalated:
+                shell_clarify_budget_escalated_count += 1
+
+        core_execution_session_created = bool(payload.get("core_execution_session_created"))
+        if route_semantic == "core_execution":
+            core_execution_sample_count += 1
+            if core_execution_session_created:
+                core_execution_session_created_count += 1
+            core_execution_route = _normalize_core_execution_route(payload.get("core_execution_route"))
+            core_execution_route_counts[core_execution_route] = int(
+                core_execution_route_counts.get(core_execution_route, 0)
+            ) + 1
 
         prefix_cache_hit = payload.get("prefix_cache_hit")
         if isinstance(prefix_cache_hit, bool):
             if prefix_cache_hit:
                 prefix_cache_hit_count += 1
         else:
-            block1_hit = bool(payload.get("block1_cache_hit"))
-            block2_hit = bool(payload.get("block2_cache_hit"))
-            if block1_hit and block2_hit:
+            if bool(payload.get("block1_cache_hit")) and bool(payload.get("block2_cache_hit")):
                 prefix_cache_hit_count += 1
 
         tail_hash = str(payload.get("tail_hash") or "").strip()
@@ -911,27 +950,35 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
                 recovery_survival_count += 1
 
     average_selected_slice_count = (selected_slice_total / total) if total > 0 else None
-    trigger_distribution = {
-        trigger: (count / total) for trigger, count in trigger_counts.items()
-    } if total > 0 else {}
+    trigger_distribution = (
+        {trigger: (count / total) for trigger, count in trigger_counts.items()} if total > 0 else {}
+    )
     recovery_slice_hit_rate = (recovery_hit_count / total) if total > 0 else None
     delegation_hit_rate = (delegation_hit_count / total) if total > 0 else None
-    outer_readonly_hit_rate = (outer_readonly_hit_count / total) if total > 0 else None
+    shell_readonly_hit_rate = (shell_readonly_hit_count / total) if total > 0 else None
     readonly_write_tool_exposure_rate = (
         readonly_write_tool_exposure_count / readonly_exposure_sample_count
-    ) if readonly_exposure_sample_count > 0 else None
-    core_escalation_rate = (core_escalation_count / total) if total > 0 else None
-    path_a_route_ratio = (route_path_counts.get("path-a", 0) / total) if total > 0 else None
-    path_b_route_ratio = (route_path_counts.get("path-b", 0) / total) if total > 0 else None
-    path_c_route_ratio = (route_path_counts.get("path-c", 0) / total) if total > 0 else None
-    path_b_budget_escalation_rate = (
-        (path_b_budget_escalated_count / route_path_counts.get("path-b", 0))
-        if route_path_counts.get("path-b", 0) > 0
+        if readonly_exposure_sample_count > 0
         else None
     )
-    core_session_creation_rate = (
-        (core_session_created_count / core_escalation_count) if core_escalation_count > 0 else None
+    shell_to_core_dispatch_rate = (dispatch_to_core_count / total) if total > 0 else None
+    shell_readonly_ratio = (route_semantic_counts.get("shell_readonly", 0) / total) if total > 0 else None
+    shell_clarify_ratio = (route_semantic_counts.get("shell_clarify", 0) / total) if total > 0 else None
+    core_execution_ratio = (route_semantic_counts.get("core_execution", 0) / total) if total > 0 else None
+    shell_clarify_budget_escalation_rate = (
+        (shell_clarify_budget_escalated_count / shell_clarify_sample_count)
+        if shell_clarify_sample_count > 0
+        else None
     )
+    core_execution_session_creation_rate = (
+        (core_execution_session_created_count / core_execution_sample_count)
+        if core_execution_sample_count > 0
+        else None
+    )
+    core_execution_route_ratios = {
+        route: (count / core_execution_sample_count) if core_execution_sample_count > 0 else None
+        for route, count in core_execution_route_counts.items()
+    }
     prefix_cache_hit_rate = (prefix_cache_hit_count / total) if total > 0 else None
 
     tail_churn_rate: Optional[float] = None
@@ -968,7 +1015,7 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
     if total <= 0:
         conflict_drop_status = "unknown"
     delegation_status = "ok" if total > 0 else "unknown"
-    outer_readonly_status = "ok" if total > 0 else "unknown"
+    shell_readonly_status = "ok" if total > 0 else "unknown"
     readonly_write_tool_exposure_status = _classify_numeric(
         readonly_write_tool_exposure_rate,
         warning=0.01,
@@ -977,31 +1024,32 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
     )
     if readonly_exposure_sample_count <= 0:
         readonly_write_tool_exposure_status = "unknown"
-    core_escalation_status = _classify_numeric(
-        core_escalation_rate,
+    shell_to_core_dispatch_status = _classify_numeric(
+        shell_to_core_dispatch_rate,
         warning=0.8,
         critical=0.95,
         higher_is_bad=True,
     )
     if total <= 0:
-        core_escalation_status = "unknown"
-    route_distribution_status = "ok" if total > 0 else "unknown"
-    path_b_budget_escalation_status = _classify_numeric(
-        path_b_budget_escalation_rate,
+        shell_to_core_dispatch_status = "unknown"
+    semantic_distribution_status = "ok" if total > 0 else "unknown"
+    shell_clarify_budget_escalation_status = _classify_numeric(
+        shell_clarify_budget_escalation_rate,
         warning=0.5,
         critical=0.8,
         higher_is_bad=True,
     )
-    if route_path_counts.get("path-b", 0) <= 0:
-        path_b_budget_escalation_status = "unknown"
-    core_session_creation_status = _classify_numeric(
-        core_session_creation_rate,
+    if shell_clarify_sample_count <= 0:
+        shell_clarify_budget_escalation_status = "unknown"
+    core_execution_session_creation_status = _classify_numeric(
+        core_execution_session_creation_rate,
         warning=0.6,
         critical=0.8,
         higher_is_bad=True,
     )
-    if core_escalation_count <= 0:
-        core_session_creation_status = "unknown"
+    if core_execution_sample_count <= 0:
+        core_execution_session_creation_status = "unknown"
+    core_execution_route_distribution_status = "ok" if core_execution_sample_count > 0 else "unknown"
     prefix_cache_status = _classify_numeric(
         prefix_cache_hit_rate,
         warning=0.8,
@@ -1082,13 +1130,13 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
             "source": "prompt_injection_events",
             "status": delegation_status,
         },
-        "outer_readonly_hit_rate": {
-            "value": outer_readonly_hit_rate,
+        "shell_readonly_hit_rate": {
+            "value": shell_readonly_hit_rate,
             "unit": "ratio",
             "sample_count": total,
-            "hit_count": outer_readonly_hit_count,
+            "hit_count": shell_readonly_hit_count,
             "source": "prompt_injection_events",
-            "status": outer_readonly_status,
+            "status": shell_readonly_status,
         },
         "readonly_write_tool_exposure_rate": {
             "value": readonly_write_tool_exposure_rate,
@@ -1103,54 +1151,63 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
             },
             "status": readonly_write_tool_exposure_status,
         },
-        "core_escalation_rate": {
-            "value": core_escalation_rate,
+        "shell_to_core_dispatch_rate": {
+            "value": shell_to_core_dispatch_rate,
             "unit": "ratio",
             "sample_count": total,
-            "hit_count": core_escalation_count,
+            "dispatch_count": dispatch_to_core_count,
             "source": "prompt_injection_events",
             "thresholds": {
                 "warning": 0.8,
                 "critical": 0.95,
             },
-            "status": core_escalation_status,
+            "status": shell_to_core_dispatch_status,
         },
-        "chat_route_path_distribution": {
+        "agent_route_semantic_distribution": {
             "value": float(total) if total > 0 else None,
             "unit": "count",
             "sample_count": total,
-            "path_counts": route_path_counts,
-            "path_ratios": {
-                "path-a": path_a_route_ratio,
-                "path-b": path_b_route_ratio,
-                "path-c": path_c_route_ratio,
+            "route_semantic_counts": route_semantic_counts,
+            "route_semantic_ratios": {
+                "shell_readonly": shell_readonly_ratio,
+                "shell_clarify": shell_clarify_ratio,
+                "core_execution": core_execution_ratio,
             },
             "source": "prompt_injection_events",
-            "status": route_distribution_status,
+            "status": semantic_distribution_status,
         },
-        "path_b_budget_escalation_rate": {
-            "value": path_b_budget_escalation_rate,
+        "shell_clarify_budget_escalation_rate": {
+            "value": shell_clarify_budget_escalation_rate,
             "unit": "ratio",
-            "sample_count": route_path_counts.get("path-b", 0),
-            "escalated_count": path_b_budget_escalated_count,
+            "sample_count": shell_clarify_sample_count,
+            "escalated_count": shell_clarify_budget_escalated_count,
             "source": "prompt_injection_events",
             "thresholds": {
                 "warning": 0.5,
                 "critical": 0.8,
             },
-            "status": path_b_budget_escalation_status,
+            "status": shell_clarify_budget_escalation_status,
         },
-        "core_session_creation_rate": {
-            "value": core_session_creation_rate,
+        "core_execution_session_creation_rate": {
+            "value": core_execution_session_creation_rate,
             "unit": "ratio",
-            "sample_count": core_escalation_count,
-            "created_count": core_session_created_count,
+            "sample_count": core_execution_sample_count,
+            "created_count": core_execution_session_created_count,
             "source": "prompt_injection_events",
             "thresholds": {
                 "warning": 0.6,
                 "critical": 0.8,
             },
-            "status": core_session_creation_status,
+            "status": core_execution_session_creation_status,
+        },
+        "core_execution_route_distribution": {
+            "value": float(core_execution_sample_count) if core_execution_sample_count > 0 else None,
+            "unit": "count",
+            "sample_count": core_execution_sample_count,
+            "route_counts": core_execution_route_counts,
+            "route_ratios": core_execution_route_ratios,
+            "source": "prompt_injection_events",
+            "status": core_execution_route_distribution_status,
         },
         "prompt_prefix_cache_hit_rate": {
             "value": prefix_cache_hit_rate,
@@ -1177,7 +1234,7 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
         },
         "contract_upgrade_latency_ms": {
             "value": contract_upgrade_latency_p95_ms,
-            "unit": "p95_ms",
+            "unit": "milliseconds",
             "sample_count": len(contract_upgrade_latencies_ms),
             "source": "prompt_injection_events",
             "thresholds": {
@@ -1199,8 +1256,6 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
             "status": recovery_survival_status,
         },
     }
-
-
 def _load_threshold_config(config_file: Path) -> Dict[str, Any]:
     defaults = {
         "max_error_rate": 0.02,
