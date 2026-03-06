@@ -44,7 +44,7 @@ class GatewayRouteRequest:
     task_type: str
     severity: str = "medium"
     budget_remaining: Optional[float] = None
-    path: str = "path-c"
+    route_semantic: str = "core_execution"
     prompt_profile: str = ""
     injection_mode: str = ""
     delegation_intent: str = ""
@@ -87,7 +87,7 @@ class PromptSlice:
 
 @dataclass(frozen=True)
 class PromptComposeDecision:
-    path: str
+    route_semantic: str
     selected_slices: List[str]
     dropped_slices: List[str]
     reasons: List[str]
@@ -270,16 +270,16 @@ class LLMGateway:
         )
 
     def resolve(self, *, request: GatewayRouteRequest, prompt_input: PromptEnvelopeInput) -> Dict[str, Any]:
-        path = str(request.path or "path-c").strip().lower()
+        route_semantic = self._normalize_route_semantic(request.route_semantic)
         raw_slices = self._collect_prompt_slices(prompt_input)
         selected: List[PromptSlice] = []
         dropped: List[PromptSlice] = []
         reasons: List[str] = []
 
         for slice_item in raw_slices:
-            if self._should_drop_slice_for_path(path=path, slice_item=slice_item):
+            if self._should_drop_slice_for_route_semantic(route_semantic=route_semantic, slice_item=slice_item):
                 dropped.append(slice_item)
-                reasons.append(f"{slice_item.slice_uid}: dropped for {path} policy")
+                reasons.append(f"{slice_item.slice_uid}: dropped for {route_semantic} policy")
                 continue
             selected.append(slice_item)
 
@@ -287,7 +287,7 @@ class LLMGateway:
         selected = sorted(selected, key=lambda item: (int(item.priority), str(item.slice_uid)))
         dropped = sorted(dropped, key=lambda item: (int(item.priority), str(item.slice_uid)))
         return {
-            "path": path,
+            "route_semantic": route_semantic,
             "selected": selected,
             "dropped": dropped,
             "reasons": reasons,
@@ -329,7 +329,7 @@ class LLMGateway:
         tokens_before = sum(_estimate_tokens(str(item.text or "")) for item in self._collect_prompt_slices(prompt_input))
         tokens_after = sum(_estimate_tokens(str(item.text or "")) for item in selected)
         return PromptComposeDecision(
-            path=str(resolved["path"]),
+            route_semantic=str(resolved["route_semantic"]),
             selected_slices=[item.slice_uid for item in selected],
             dropped_slices=[item.slice_uid for item in dropped],
             reasons=list(resolved["reasons"]),
@@ -380,8 +380,8 @@ class LLMGateway:
         envelope = self.build_prompt_envelope(prompt_input)
 
         # When prompt slices are provided by caller, honor resolve/serialize result directly.
-        request_path = str(request.path or "").strip().lower()
-        if prompt_input.prompt_slices or request_path in {"path-a", "path_a", "outer_readonly"}:
+        request_route_semantic = self._normalize_route_semantic(request.route_semantic)
+        if prompt_input.prompt_slices or request_route_semantic == "shell_readonly":
             resolved = self.resolve(request=request, prompt_input=prompt_input)
             selected = list(resolved["selected"])
             serialized = self.serialize_for_cache(selected_slices=selected)
@@ -513,9 +513,9 @@ class LLMGateway:
         return slices
 
     @staticmethod
-    def _should_drop_slice_for_path(*, path: str, slice_item: PromptSlice) -> bool:
-        normalized_path = str(path or "").strip().lower()
-        if normalized_path not in {"path-a", "path_a", "outer_readonly"}:
+    def _should_drop_slice_for_route_semantic(*, route_semantic: str, slice_item: PromptSlice) -> bool:
+        normalized_route_semantic = str(route_semantic or "").strip().lower()
+        if normalized_route_semantic != "shell_readonly":
             return False
 
         layer = str(slice_item.layer or "").strip().upper()
@@ -527,13 +527,11 @@ class LLMGateway:
         return False
 
     @staticmethod
-    def _normalize_path(path: str) -> str:
-        normalized_path = str(path or "").strip().lower()
-        if normalized_path in {"path_a", "outer_readonly"}:
-            return "path-a"
-        if normalized_path in {"path_c", "core_execution"}:
-            return "path-c"
-        return normalized_path or "path-c"
+    def _normalize_route_semantic(route_semantic: str) -> str:
+        normalized_route_semantic = str(route_semantic or "").strip().lower()
+        if normalized_route_semantic in {"shell_readonly", "shell_clarify", "core_execution"}:
+            return normalized_route_semantic
+        return "core_execution"
 
     @staticmethod
     def _is_write_tool_exposure_slice(slice_item: PromptSlice) -> bool:
@@ -562,7 +560,7 @@ class LLMGateway:
             return
 
         try:
-            normalized_path = self._normalize_path(str(request.path or "path-c"))
+            normalized_route_semantic = self._normalize_route_semantic(request.route_semantic)
             selected_ids = set(compose_decision.selected_slices)
             selected_slices = [
                 item for item in self._collect_prompt_slices(prompt_input) if str(item.slice_uid) in selected_ids
@@ -594,22 +592,22 @@ class LLMGateway:
 
             delegation_intent = str(request.delegation_intent or "").strip().lower()
             delegation_hit = delegation_intent.startswith("delegate")
-            outer_readonly_hit = normalized_path == "path-a"
-            core_escalation = normalized_path == "path-c"
-            readonly_write_tool_exposed = outer_readonly_hit and bool(readonly_write_tool_selected_ids)
+            shell_readonly_hit = normalized_route_semantic == "shell_readonly"
+            core_execution_hit = normalized_route_semantic == "core_execution"
+            readonly_write_tool_exposed = shell_readonly_hit and bool(readonly_write_tool_selected_ids)
             readonly_write_tool_candidate_count = len(readonly_write_tool_selected_ids) + len(readonly_write_tool_dropped_ids)
 
             payload: Dict[str, Any] = {
                 "task_type": str(request.task_type or ""),
                 "severity": str(request.severity or ""),
-                "path": normalized_path,
-                "trigger": normalized_path,
+                "route_semantic": normalized_route_semantic,
+                "trigger": normalized_route_semantic,
                 "prompt_profile": str(request.prompt_profile or ""),
                 "injection_mode": str(request.injection_mode or ""),
                 "delegation_intent": delegation_intent,
                 "delegation_hit": delegation_hit,
-                "outer_readonly_hit": outer_readonly_hit,
-                "core_escalation": core_escalation,
+                "shell_readonly_hit": shell_readonly_hit,
+                "core_execution_hit": core_execution_hit,
                 "readonly_write_tool_exposed": readonly_write_tool_exposed,
                 "readonly_write_tool_candidate_count": readonly_write_tool_candidate_count,
                 "readonly_write_tool_selected_count": len(readonly_write_tool_selected_ids),

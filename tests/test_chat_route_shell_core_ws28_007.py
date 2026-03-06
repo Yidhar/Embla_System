@@ -13,17 +13,17 @@ def test_api_server_legacy_pre_route_helpers_not_eagerly_bound() -> None:
     # not be eagerly imported into api_server globals.
     assert "_resolve_chat_stream_route" not in api_server.__dict__
     assert "_apply_chat_route_quality_guard" not in api_server.__dict__
-    assert "_apply_path_b_clarify_budget" not in api_server.__dict__
+    assert "_apply_shell_clarify_budget" not in api_server.__dict__
     assert "_apply_chat_route_router_arbiter_guard" not in api_server.__dict__
 
 
 def test_chat_route_prompt_event_payload_prefers_gateway_compose_metrics() -> None:
     payload = api_server._build_chat_route_prompt_event_payload(
         {
-            "path": "path-a",
+            "route_semantic": "shell_readonly",
             "risk_level": "read_only",
-            "_slice_selected": ["outer_shell_base", "outer_memory_recall", "outer_route_contract"],
-            "_slice_dropped": ["outer_write_tool_contract"],
+            "_slice_selected": ["shell_base", "shell_memory_recall", "shell_route_contract"],
+            "_slice_dropped": ["shell_write_tool_contract"],
             "_slice_selected_count": 3,
             "_slice_dropped_count": 1,
             "_slice_dropped_conflict_count": 1,
@@ -41,7 +41,7 @@ def test_chat_route_prompt_event_payload_prefers_gateway_compose_metrics() -> No
             "_slice_model_id": "gpt-4.1-mini",
             "router_decision": {
                 "delegation_intent": "read_only_exploration",
-                "prompt_profile": "outer_readonly_general",
+                "prompt_profile": "shell_readonly_general",
                 "injection_mode": "minimal",
                 "selected_model_tier": "primary",
             },
@@ -62,13 +62,13 @@ def test_chat_route_prompt_event_payload_prefers_gateway_compose_metrics() -> No
     assert payload["model_id"] == "gpt-4.1-mini"
 
 
-def test_build_path_model_override_resolves_outer_and_core_targets(monkeypatch) -> None:
+def test_build_route_model_override_resolves_shell_and_core_targets(monkeypatch) -> None:
     fake_cfg = SimpleNamespace(
         api=SimpleNamespace(
             routing=SimpleNamespace(
-                outer=SimpleNamespace(
-                    api_key="outer-key",
-                    base_url="https://outer.example/v1",
+                shell=SimpleNamespace(
+                    api_key="shell-key",
+                    base_url="https://shell.example/v1",
                     model="gpt-4.1-mini",
                     provider="openai_compatible",
                     protocol="",
@@ -87,12 +87,12 @@ def test_build_path_model_override_resolves_outer_and_core_targets(monkeypatch) 
     )
     monkeypatch.setattr(api_server, "get_config", lambda: fake_cfg)
 
-    outer = api_server._build_path_model_override("path-a")
-    core = api_server._build_path_model_override("path-c")
+    shell = api_server._build_route_model_override("shell_readonly")
+    core = api_server._build_route_model_override("core_execution")
 
-    assert outer == {
-        "api_key": "outer-key",
-        "api_base": "https://outer.example/v1",
+    assert shell == {
+        "api_key": "shell-key",
+        "api_base": "https://shell.example/v1",
         "model": "gpt-4.1-mini",
         "provider": "openai_compatible",
         "reasoning_effort": "low",
@@ -108,14 +108,14 @@ def test_build_path_model_override_resolves_outer_and_core_targets(monkeypatch) 
 
 
 def test_merge_model_override_prioritizes_high_priority_values() -> None:
-    base = {"model": "gpt-4.1-mini", "api_base": "https://outer.example/v1", "provider": "openai_compatible"}
+    base = {"model": "gpt-4.1-mini", "api_base": "https://shell.example/v1", "provider": "openai_compatible"}
     high = {"model": "gpt-5.2", "api_key": "core-key"}
 
     merged = api_server._merge_model_override(base, high)
 
     assert merged == {
         "model": "gpt-5.2",
-        "api_base": "https://outer.example/v1",
+        "api_base": "https://shell.example/v1",
         "provider": "openai_compatible",
         "api_key": "core-key",
     }
@@ -124,20 +124,20 @@ def test_merge_model_override_prioritizes_high_priority_values() -> None:
 def test_route_prompt_event_payload_contains_router_arbiter_fields() -> None:
     payload = api_server._build_chat_route_prompt_event_payload(
         {
-            "path": "path-c",
+            "route_semantic": "core_execution",
             "risk_level": "write_repo",
-            "outer_readonly_hit": False,
-            "core_escalation": True,
+            "shell_readonly_hit": False,
+            "core_execution_hit": True,
             "router_arbiter_status": "critical",
             "router_arbiter_applied": True,
             "router_arbiter_action": "freeze_to_core",
             "router_arbiter_reason": "router_arbiter_ping_pong_freeze_core",
             "router_arbiter_reason_codes": ["ROUTER_ARBITER_PING_PONG_FREEZE_CORE"],
-            "router_arbiter_path_before": "path-a",
-            "router_arbiter_path_after": "path-c",
+            "router_arbiter_route_semantic_before": "shell_readonly",
+            "router_arbiter_route_semantic_after": "core_execution",
             "router_arbiter_delegate_turns": 3,
             "router_arbiter_max_delegate_turns": 3,
-            "router_arbiter_conflict_ticket": "chat_route_ping_pong::path-a|path-c",
+            "router_arbiter_conflict_ticket": "chat_route_ping_pong::shell_readonly|core_execution",
             "router_arbiter_freeze": True,
             "router_arbiter_hitl": True,
             "router_arbiter_escalated": True,
@@ -153,7 +153,7 @@ def test_route_prompt_event_payload_contains_router_arbiter_fields() -> None:
     assert payload["router_arbiter_applied"] is True
     assert payload["router_arbiter_action"] == "freeze_to_core"
     assert payload["router_arbiter_delegate_turns"] == 3
-    assert payload["router_arbiter_conflict_ticket"] == "chat_route_ping_pong::path-a|path-c"
+    assert payload["router_arbiter_conflict_ticket"] == "chat_route_ping_pong::shell_readonly|core_execution"
     assert payload["router_arbiter_escalated"] is True
 
 
@@ -170,27 +170,26 @@ def test_emit_chat_route_arbiter_event_emits_critical_row() -> None:
     api_server._CHAT_ROUTE_EVENT_STORE = capture
     try:
         route_meta = {
-            "path": "path-c",
+            "route_semantic": "core_execution",
             "risk_level": "write_repo",
             "router_arbiter_status": "critical",
             "router_arbiter_applied": True,
             "router_arbiter_action": "freeze_to_core",
             "router_arbiter_reason": "router_arbiter_ping_pong_freeze_core",
             "router_arbiter_reason_codes": ["ROUTER_ARBITER_PING_PONG_FREEZE_CORE"],
-            "router_arbiter_path_before": "path-a",
-            "router_arbiter_path_after": "path-c",
+            "router_arbiter_route_semantic_before": "shell_readonly",
+            "router_arbiter_route_semantic_after": "core_execution",
             "router_arbiter_delegate_turns": 3,
             "router_arbiter_max_delegate_turns": 3,
-            "router_arbiter_conflict_ticket": "chat_route_ping_pong::path-a|path-c",
+            "router_arbiter_conflict_ticket": "chat_route_ping_pong::shell_readonly|core_execution",
             "router_arbiter_freeze": True,
             "router_arbiter_hitl": True,
             "router_arbiter_escalated": True,
-            "outer_session_id": "outer-a",
-            "core_session_id": "outer-a__core",
-            "execution_session_id": "outer-a__core",
+            "shell_session_id": "shell-a",
+            "core_execution_session_id": "shell-a__core",
             "router_decision": {"trace_id": "trace-a", "task_id": "task-a"},
         }
-        api_server._emit_chat_route_arbiter_event(route_meta, session_id="outer-a")
+        api_server._emit_chat_route_arbiter_event(route_meta, session_id="shell-a")
         assert len(capture.rows) == 1
         row = capture.rows[0]
         assert row["event_type"] == "RouteArbiterGuardEscalatedCritical"
@@ -200,62 +199,62 @@ def test_emit_chat_route_arbiter_event_emits_critical_row() -> None:
         api_server._CHAT_ROUTE_EVENT_STORE = original_store
 
 
-def test_outer_core_session_bridge_creates_core_session_for_path_c() -> None:
-    outer_session_id = api_server.message_manager.create_session(temporary=True)
+def test_shell_core_session_state_creates_core_session_for_core_execution() -> None:
+    shell_session_id = api_server.message_manager.create_session(temporary=True)
     try:
         route_meta = {
-            "path": "path-c",
-            "outer_readonly_hit": False,
-            "core_escalation": True,
+            "route_semantic": "core_execution",
+            "shell_readonly_hit": False,
+            "core_execution_hit": True,
             "router_decision": {"delegation_intent": "core_execution"},
         }
-        updated = api_server._apply_outer_core_session_bridge(route_meta, outer_session_id=outer_session_id)
-        assert updated["outer_session_id"] == outer_session_id
-        assert updated["execution_session_id"].endswith("__core")
-        assert updated["core_session_id"] == updated["execution_session_id"]
-        assert updated["core_session_created"] is True
-        assert api_server.message_manager.get_session(updated["core_session_id"]) is not None
+        updated = api_server._apply_shell_core_session_state(route_meta, shell_session_id=shell_session_id)
+        assert updated["shell_session_id"] == shell_session_id
+        assert updated["core_execution_session_id"].endswith("__core")
+        assert updated["core_execution_session_created"] is True
+        assert api_server.message_manager.get_session(updated["core_execution_session_id"]) is not None
     finally:
-        api_server.message_manager.delete_session(outer_session_id)
-        core_id = f"{outer_session_id}__core"
+        api_server.message_manager.delete_session(shell_session_id)
+        core_id = f"{shell_session_id}__core"
         api_server.message_manager.delete_session(core_id)
 
 
-def test_outer_core_session_bridge_reuses_existing_core_session() -> None:
-    outer_session_id = api_server.message_manager.create_session(temporary=True)
+def test_shell_core_session_state_reuses_existing_core_session() -> None:
+    shell_session_id = api_server.message_manager.create_session(temporary=True)
     try:
-        first = api_server._apply_outer_core_session_bridge(
-            {"path": "path-c", "router_decision": {"delegation_intent": "core_execution"}},
-            outer_session_id=outer_session_id,
+        first = api_server._apply_shell_core_session_state(
+            {"route_semantic": "core_execution", "router_decision": {"delegation_intent": "core_execution"}},
+            shell_session_id=shell_session_id,
         )
-        second = api_server._apply_outer_core_session_bridge(
-            {"path": "path-c", "router_decision": {"delegation_intent": "core_execution"}},
-            outer_session_id=outer_session_id,
+        second = api_server._apply_shell_core_session_state(
+            {"route_semantic": "core_execution", "router_decision": {"delegation_intent": "core_execution"}},
+            shell_session_id=shell_session_id,
         )
-        assert first["core_session_id"] == second["core_session_id"]
-        assert first["core_session_created"] is True
-        assert second["core_session_created"] is False
+        assert first["core_execution_session_id"] == second["core_execution_session_id"]
+        assert first["core_execution_session_created"] is True
+        assert second["core_execution_session_created"] is False
     finally:
-        api_server.message_manager.delete_session(outer_session_id)
-        core_id = f"{outer_session_id}__core"
+        api_server.message_manager.delete_session(shell_session_id)
+        core_id = f"{shell_session_id}__core"
         api_server.message_manager.delete_session(core_id)
 
 
-def test_outer_core_session_bridge_keeps_outer_for_non_core_path() -> None:
-    outer_session_id = api_server.message_manager.create_session(temporary=True)
+def test_shell_core_session_state_keeps_shell_for_non_core_execution_route() -> None:
+    shell_session_id = api_server.message_manager.create_session(temporary=True)
     try:
-        updated = api_server._apply_outer_core_session_bridge(
-            {"path": "path-a", "router_decision": {"delegation_intent": "read_only_exploration"}},
-            outer_session_id=outer_session_id,
+        updated = api_server._apply_shell_core_session_state(
+            {"route_semantic": "shell_readonly", "router_decision": {"delegation_intent": "read_only_exploration"}},
+            shell_session_id=shell_session_id,
         )
-        assert updated["execution_session_id"] == outer_session_id
-        assert updated["core_session_created"] is False
+        assert updated["shell_session_id"] == shell_session_id
+        assert updated["core_execution_session_id"] == ""
+        assert updated["core_execution_session_created"] is False
     finally:
-        api_server.message_manager.delete_session(outer_session_id)
+        api_server.message_manager.delete_session(shell_session_id)
 
 
 def test_route_decision_sse_chunk_json_protocol() -> None:
-    payload = {"type": "route_decision", "path": "path-c", "risk_level": "write_repo"}
+    payload = {"type": "route_decision", "route_semantic": "core_execution", "risk_level": "write_repo"}
     chunk = api_server._format_stream_payload_chunk(payload, protocol="sse_json_v1")
     assert chunk.startswith("data: ")
     payload_text = chunk[len("data: ") :].strip()
@@ -325,7 +324,7 @@ def test_chat_stream_dispatch_to_core_triggers_real_core_pipeline(monkeypatch) -
 
     async def _fake_run_multi_agent_pipeline(**kwargs):
         pipeline_calls.append(dict(kwargs))
-        assert str(kwargs.get("forced_path") or "") == "path-c"
+        assert str(kwargs.get("forced_route_semantic") or "") == "core_execution"
         yield {
             "type": "child_spawn_deferred",
             "pipeline_id": "pipe-test-001",
@@ -395,22 +394,23 @@ def test_chat_stream_dispatch_to_core_triggers_real_core_pipeline(monkeypatch) -
     )
 
     assert len(pipeline_calls) == 1
-    assert str(pipeline_calls[0].get("forced_path") or "") == "path-c"
+    assert str(pipeline_calls[0].get("forced_route_semantic") or "") == "core_execution"
     assert len(deferred_emits) == 1
     assert str(deferred_emits[0]["chunk_data"].get("agent_id") or "") == "review-child-001"
     assert str(deferred_emits[0]["chunk_data"].get("reason") or "") == "spawn_deferred_role"
 
-    bridge_payload = api_server._build_chat_route_bridge_payload("dispatch-only-route-session", limit=20)
-    assert bridge_payload["outer_session_id"] == "dispatch-only-route-session"
-    assert str(bridge_payload["core_session_id"]).endswith("__core")
-    assert bridge_payload["execution_session_id"] == bridge_payload["core_session_id"]
-    assert bridge_payload["core_session_exists"] is True
-    assert isinstance(bridge_payload["recent_route_events"], list)
-    assert len(bridge_payload["recent_route_events"]) >= 1
-    assert any(str(item.get("path") or "") == "path-c" for item in bridge_payload["recent_route_events"])
+    state_payload = api_server._build_chat_route_session_state_payload("dispatch-only-route-session", limit=20)
+    assert state_payload["shell_session_id"] == "dispatch-only-route-session"
+    assert str(state_payload["core_execution_session_id"]).endswith("__core")
+    assert state_payload["core_execution_session_exists"] is True
+    assert isinstance(state_payload["recent_route_events"], list)
+    assert len(state_payload["recent_route_events"]) >= 1
     assert any(
-        str(item.get("core_session_id") or "") == str(bridge_payload["core_session_id"])
-        for item in bridge_payload["recent_route_events"]
+        str(item.get("route_semantic") or "") == "core_execution" for item in state_payload["recent_route_events"]
+    )
+    assert any(
+        str(item.get("core_execution_session_id") or "") == str(state_payload["core_execution_session_id"])
+        for item in state_payload["recent_route_events"]
     )
 
     fallback_content_rows = [
@@ -459,11 +459,11 @@ def test_extract_agentic_execution_receipt_text_ignores_non_receipt_payload() ->
 
 def test_build_shell_system_prompt_with_gateway_updates_slice_metadata() -> None:
     route_meta = {
-        "path": "path-a",
+        "route_semantic": "shell_readonly",
         "risk_level": "read_only",
         "router_decision": {
             "task_type": "research",
-            "prompt_profile": "outer_readonly_research",
+            "prompt_profile": "shell_readonly_research",
             "injection_mode": "minimal",
             "delegation_intent": "read_only_exploration",
             "trace_id": "trace-shell-gw",
@@ -477,20 +477,20 @@ def test_build_shell_system_prompt_with_gateway_updates_slice_metadata() -> None
 
     assert "SHELL_BASE_PROMPT" in prompt
     assert "PromptRouteDecision" in prompt
-    assert "Route policy: Outer Direct Read-Only" in prompt
+    assert "Route policy: Shell Read-Only" in prompt
     assert "## 相关记忆" in prompt
     assert route_meta.get("_slice_selected_count", 0) >= 2
-    assert "outer_shell_base" in route_meta.get("_slice_selected", [])
+    assert "shell_base" in route_meta.get("_slice_selected", [])
     assert str(route_meta.get("_slice_prefix_hash") or "").strip()
 
 
 def test_build_shell_system_prompt_with_gateway_falls_back_when_gateway_missing(monkeypatch) -> None:
     route_meta = {
-        "path": "path-b",
+        "route_semantic": "shell_clarify",
         "risk_level": "unknown",
         "router_decision": {
             "task_type": "general",
-            "prompt_profile": "outer_general",
+            "prompt_profile": "shell_general",
             "injection_mode": "standard",
             "delegation_intent": "general_assistance",
         },
@@ -508,5 +508,5 @@ def test_build_shell_system_prompt_with_gateway_falls_back_when_gateway_missing(
 
     assert "FALLBACK_BASE" in prompt
     assert "PromptRouteDecision" in prompt
-    assert "Route policy: Outer Clarify" in prompt
+    assert "Route policy: Shell Clarify" in prompt
     assert "## 相关记忆" in prompt

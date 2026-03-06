@@ -24,9 +24,13 @@ from agents.memory.memory_agents import (
 )
 from agents.memory.semantic_graph import (
     SemanticGraphStore,
+    ToolResultTopologyStore,
     get_semantic_graph,
+    get_tool_result_topology,
     query_tool_artifact_topology,
+    query_tool_result_topology,
     update_semantic_graph_from_records,
+    update_tool_result_topology_from_records,
 )
 from agents.memory.working_memory import (
     MemoryWindowRebalanceResult,
@@ -61,7 +65,11 @@ __all__ = [
     "build_reinjection_context",
     "get_episodic_memory",
     "SemanticGraphStore",
+    "ToolResultTopologyStore",
     "get_semantic_graph",
+    "get_tool_result_topology",
     "query_tool_artifact_topology",
+    "query_tool_result_topology",
     "update_semantic_graph_from_records",
+    "update_tool_result_topology_from_records",
 ]

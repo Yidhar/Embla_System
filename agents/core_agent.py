@@ -37,10 +37,10 @@ PROMPT_PROFILE_MAP = {
     "core_exec_ops": "agents/core_exec/core_exec_ops.md",
     "core_exec_dev": "agents/core_exec/core_exec_dev.md",
     "core_exec_general": "agents/core_exec/core_exec_base.md",
-    "outer_readonly_research": "agents/outer/outer_readonly_research.md",
-    "outer_readonly_general": "agents/outer/outer_readonly_general.md",
-    "explicit_role_delegate": "agents/outer/explicit_role_delegate.md",
-    "outer_general": "agents/core_exec/core_exec_base.md",
+    "shell_readonly_research": "agents/shell/shell_readonly_research.md",
+    "shell_readonly_general": "agents/shell/shell_readonly_general.md",
+    "explicit_role_delegate": "agents/shell/explicit_role_delegate.md",
+    "shell_general": "agents/core_exec/core_exec_base.md",
 }
 FAST_TRACK_BLOCKED_TOOLS = {
     "run_command",
@@ -224,14 +224,14 @@ class CoreAgent:
             session_id=session_id,
             goal=dispatch.get("goal", ""),
             scope_hint=dispatch.get("context_summary", ""),
-            outer_context_summary=dispatch.get("context_summary", ""),
+            shell_context_summary=dispatch.get("context_summary", ""),
         )
 
     def spawn_experts(
         self,
         decomposition: Dict[str, Any],
         *,
-        core_session_id: str = "core",
+        core_execution_session_id: str = "core",
         pipeline_id: str = "",
     ) -> List[Dict[str, Any]]:
         """Spawn Expert agents based on decomposition result."""
@@ -250,7 +250,7 @@ class CoreAgent:
                     "tool_subset": assignment.get("tool_subset", []),
                     "metadata": metadata,
                 },
-                parent_session_id=core_session_id,
+                parent_session_id=core_execution_session_id,
                 store=self._store,
                 mailbox=self._mailbox,
             )
@@ -260,9 +260,9 @@ class CoreAgent:
             results.append(result)
         return results
 
-    def collect_reports(self, core_session_id: str = "core", *, pipeline_id: str = "") -> List[Dict[str, Any]]:
+    def collect_reports(self, core_execution_session_id: str = "core", *, pipeline_id: str = "") -> List[Dict[str, Any]]:
         """Collect completion reports from all Expert children."""
-        children = self._store.list_children(core_session_id)
+        children = self._store.list_children(core_execution_session_id)
         normalized_pipeline_id = str(pipeline_id or "").strip()
         if normalized_pipeline_id:
             children = [
@@ -273,7 +273,7 @@ class CoreAgent:
         reports = []
         for child in children:
             status = child.to_status_summary()
-            msgs = self._mailbox.read(core_session_id)
+            msgs = self._mailbox.read(core_execution_session_id)
             child_msgs = [m for m in msgs if m.from_id == child.session_id]
             status["reports"] = [m.content for m in child_msgs]
             reports.append(status)

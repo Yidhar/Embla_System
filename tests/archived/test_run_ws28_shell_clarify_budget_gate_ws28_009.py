@@ -4,7 +4,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from scripts.run_ws28_outer_core_session_bridge_ws28_010 import main
+from scripts.archived.run_ws28_shell_clarify_budget_gate_ws28_009 import main
 
 
 def _make_case_root(prefix: str) -> Path:
@@ -17,14 +17,14 @@ def _cleanup_case_root(root: Path) -> None:
     shutil.rmtree(root, ignore_errors=True)
 
 
-def test_run_ws28_outer_core_session_bridge_cli_main_smoke(monkeypatch) -> None:
-    case_root = _make_case_root("test_run_ws28_outer_core_session_bridge_ws28_010")
+def test_run_ws28_shell_clarify_budget_gate_cli_main_smoke(monkeypatch) -> None:
+    case_root = _make_case_root("test_run_ws28_shell_clarify_budget_gate_ws28_009")
     try:
-        output = case_root / "ws28_010_outer_core_session_bridge.json"
+        output = case_root / "ws28_009_shell_clarify_budget_gate.json"
         monkeypatch.setattr(
             "sys.argv",
             [
-                "run_ws28_outer_core_session_bridge_ws28_010.py",
+                "archived/run_ws28_shell_clarify_budget_gate_ws28_009.py",
                 "--repo-root",
                 ".",
                 "--output",

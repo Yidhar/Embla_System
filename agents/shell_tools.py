@@ -4,7 +4,7 @@ Canonical Shell tools:
   1. memory_read      — read project files (path + optional line range)
   2. memory_list      — list L1 memory files by scope
   3. memory_grep      — grep L1 memory files by keyword/regex
-  4. memory_search    — unified L1 index + episodic archive + graph search
+  4. memory_search    — unified L1 index + episodic archive + Shell L2 quintuple search
   5. get_system_status — brainstem posture + agent stats + git status
   6. list_tasks       — active tasks from TaskBoardEngine
   7. search_web       — extensible stub (requires external API config)
@@ -151,7 +151,7 @@ TOOL_DEF_SEARCH_MEMORY: Dict[str, Any] = {
     "name": "memory_search",
     "description": (
         "Search across the memory system: L1 episodic index (tag-based), "
-        "episodic archive (narrative similarity), and semantic graph. "
+        "episodic archive (narrative similarity), and the Shell L2 quintuple graph. "
         "Returns matching memory entries with relevance."
     ),
     "parameters": {
@@ -471,7 +471,7 @@ def _handle_search_memory(
     *,
     project_root: Path,
 ) -> str:
-    """Search across L1 index, episodic archive, and semantic graph."""
+    """Search across L1 index, episodic archive, and the Shell L2 quintuple graph."""
     query = str(args.get("query", "")).strip()
     if not query:
         raise ValueError("memory_search: 缺少 query 参数")
@@ -518,32 +518,25 @@ def _handle_search_memory(
     except Exception as exc:
         results.append(f"\n### 经验档案: 搜索失败 ({exc})")
 
-    # C. Semantic graph
+    # C. Shell L2 quintuple graph
     try:
-        from agents.memory.semantic_graph import get_semantic_graph, query_tool_artifact_topology
+        from summer_memory.quintuple_graph import get_all_quintuples, query_graph_by_keywords
 
-        graph = get_semantic_graph()
-        co_occurs = graph.query_topic_co_occurrence(query, top_k=top_k)
-        if co_occurs:
-            results.append(f"\n### 语义图谱主题关联 ({len(co_occurs)} 条)")
-            for item in co_occurs[:top_k]:
-                topic = str(item.get("topic") or "").strip()
-                weight = int(item.get("weight") or 0)
-                if topic:
-                    results.append(f"- {topic} (weight={weight})")
+        quintuple_hits = list(query_graph_by_keywords([query]))
+        if not quintuple_hits:
+            lowered_query = query.lower()
+            for row in get_all_quintuples():
+                row_text = " ".join(str(part or "") for part in row).lower()
+                if lowered_query and lowered_query in row_text:
+                    quintuple_hits.append(tuple(row))
 
-        topology = query_tool_artifact_topology(query, top_k_topics=top_k, graph=graph)
-        if topology:
-            results.append(f"\n### 工具-证据拓扑 ({len(topology)} 条)")
-            for row in topology[:top_k]:
-                artifact = str(row.get("artifact") or "").strip()
-                topics = row.get("topics") if isinstance(row.get("topics"), list) else []
-                topic_preview = ", ".join(
-                    str(topic.get("topic") or "").strip() for topic in topics[:3] if isinstance(topic, dict)
-                )
-                results.append(f"- artifact={artifact or '(none)'} topics={topic_preview or '(none)'}")
+        if quintuple_hits:
+            results.append(f"\n### Shell L2 五元组图谱 ({len(quintuple_hits[:top_k])} 条)")
+            for row in quintuple_hits[:top_k]:
+                if isinstance(row, (list, tuple)) and len(row) >= 5:
+                    results.append(f"- {row[0]}({row[1]}) —[{row[2]}]→ {row[3]}({row[4]})")
     except Exception as exc:
-        results.append(f"\n### 语义图谱: 搜索失败 ({exc})")
+        results.append(f"\n### Shell L2 五元组图谱: 搜索失败 ({exc})")
 
     if len(results) == 1:
         results.append("\n未找到相关记忆。")

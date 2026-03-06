@@ -1,7 +1,7 @@
 """
 Local-only memory client shim.
 
-Remote NagaMemory microservice has been removed from runtime architecture.
+Remote memory microservice has been removed from runtime architecture.
 `get_remote_memory_client()` always returns None so callers use local GRAG flow.
 """
 
@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-logger = logging.getLogger("NagaMemoryClient")
+logger = logging.getLogger("EmblaMemoryClient")
 
 QuintupleType = Tuple[str, str, str, str, str]
 

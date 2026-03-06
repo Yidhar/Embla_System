@@ -17,7 +17,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set, Tuple
 
 from core.security.budget_guard import BudgetGuardController
 from agents.memory.episodic_memory import archive_tool_results_for_session, build_reinjection_context
-from agents.memory.semantic_graph import update_semantic_graph_from_records
+from agents.memory.semantic_graph import update_tool_result_topology_from_records
 from system.config import get_config
 from system.coding_intent import contains_direct_coding_signal, extract_latest_user_message
 from system.gc_budget_guard import GCBudgetGuard, GCBudgetGuardConfig
@@ -3748,14 +3748,14 @@ async def run_agentic_loop(
                     round_num,
                 )
                 try:
-                    updated_edges = update_semantic_graph_from_records(session_id, archived_records)
+                    updated_edges = update_tool_result_topology_from_records(session_id, archived_records)
                     logger.debug(
-                        "[AgenticLoop] semantic graph updated with %s edge mutation(s) in round %s",
+                        "[AgenticLoop] tool-result topology updated with %s edge mutation(s) in round %s",
                         updated_edges,
                         round_num,
                     )
                 except Exception as exc:
-                    logger.warning("[AgenticLoop] semantic graph update skipped in round %s: %s", round_num, exc)
+                    logger.warning("[AgenticLoop] tool-result topology update skipped in round %s: %s", round_num, exc)
         except Exception as exc:
             logger.warning("[AgenticLoop] episodic archive skipped in round %s: %s", round_num, exc)
 

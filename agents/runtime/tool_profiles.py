@@ -137,7 +137,7 @@ def resolve_child_tool_capabilities(
     Rules:
     - preset profile string → mapped subset
     - `tool_profile=[...]` or `tool_profile="custom"` + subset → explicit tools
-    - legacy `tool_subset=[...]` remains supported
+    - historical alias `tool_subset=[...]` remains supported
     - if nothing explicit is provided, infer a memory profile only for obvious
       memory/doc tasks; otherwise return the original subset (possibly empty)
     """

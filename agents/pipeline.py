@@ -3,7 +3,7 @@
 Orchestrates: ShellAgent → (direct reply | CoreAgent → Expert(s) → Dev(s) → Review)
 Yields events compatible with the existing event stream.
 
-ShellAgent IS the outer LLM — it handles simple queries directly and only
+ShellAgent IS the shell-side LLM — it handles simple queries directly and only
 calls dispatch_to_core for execution tasks.
 """
 
@@ -251,7 +251,7 @@ def _apply_child_session_cleanup(
     *,
     store: AgentSessionStore,
     mailbox: AgentMailbox,
-    core_session_id: str,
+    core_execution_session_id: str,
     pipeline_id: str,
     mode: str,
     ttl_seconds: int,
@@ -262,7 +262,7 @@ def _apply_child_session_cleanup(
         "mode": normalized_mode,
         "requested_mode": str(mode or ""),
         "ttl_seconds": normalized_ttl,
-        "core_session_id": str(core_session_id or ""),
+        "core_execution_session_id": str(core_execution_session_id or ""),
         "pipeline_id": str(pipeline_id or ""),
         "root_candidates": 0,
         "destroyed_count": 0,
@@ -272,7 +272,7 @@ def _apply_child_session_cleanup(
     if normalized_mode == "retain":
         return summary
 
-    roots = store.list_children(core_session_id)
+    roots = store.list_children(core_execution_session_id)
     now_ts = time.time()
     root_ids: List[str] = []
     for child in roots:
@@ -358,15 +358,15 @@ def _build_runtime_tool_definitions(tool_names: List[str]) -> List[Dict[str, Any
 def _ensure_core_runtime_session(
     *,
     store: AgentSessionStore,
-    core_session_id: str,
+    core_execution_session_id: str,
     goal: str,
     pipeline_id: str,
 ) -> None:
-    existing = store.get(core_session_id)
+    existing = store.get(core_execution_session_id)
     if existing is None:
         metadata = {"pipeline_id": str(pipeline_id or "").strip()}
         store.create(
-            session_id=core_session_id,
+            session_id=core_execution_session_id,
             role="core",
             parent_id="",
             task_description=str(goal or "").strip(),
@@ -375,13 +375,13 @@ def _ensure_core_runtime_session(
         return
     if existing.status != AgentStatus.RUNNING:
         try:
-            store.update_status(core_session_id, AgentStatus.RUNNING)
+            store.update_status(core_execution_session_id, AgentStatus.RUNNING)
         except Exception:
-            logger.debug("Failed to set core runtime session running: %s", core_session_id, exc_info=True)
+            logger.debug("Failed to set core runtime session running: %s", core_execution_session_id, exc_info=True)
     try:
-        store.update_metadata(core_session_id, {"pipeline_id": str(pipeline_id or "").strip()})
+        store.update_metadata(core_execution_session_id, {"pipeline_id": str(pipeline_id or "").strip()})
     except Exception:
-        logger.debug("Failed to update core runtime session metadata: %s", core_session_id, exc_info=True)
+        logger.debug("Failed to update core runtime session metadata: %s", core_execution_session_id, exc_info=True)
 
 
 def _build_core_parent_tool_definitions() -> List[Dict[str, Any]]:
@@ -399,9 +399,9 @@ def _build_core_parent_tool_definitions() -> List[Dict[str, Any]]:
 def _collect_core_descendant_status_snapshot(
     *,
     store: AgentSessionStore,
-    core_session_id: str,
+    core_execution_session_id: str,
 ) -> List[Dict[str, Any]]:
-    root_children = store.list_children(core_session_id)
+    root_children = store.list_children(core_execution_session_id)
     root_ids = [str(getattr(item, "session_id", "") or "").strip() for item in root_children]
     descendant_ids = _collect_descendant_session_ids(
         store=store,
@@ -421,7 +421,7 @@ def _collect_core_descendant_status_snapshot(
 def _build_core_loop_initial_task(
     *,
     message: str,
-    core_session_id: str,
+    core_execution_session_id: str,
     pipeline_id: str,
     children_snapshot: List[Dict[str, Any]],
 ) -> str:
@@ -449,7 +449,7 @@ def _build_core_loop_initial_task(
             "For expert/review spawns, runtime may defer execution to later requests.",
             "Do not use any other tools.",
             f"Pipeline ID: {pipeline_id}",
-            f"Core Session ID: {core_session_id}",
+            f"Core Session ID: {core_execution_session_id}",
             f"Goal: {str(message or '').strip()}",
             "Current descendant roster:",
             *roster_lines,
@@ -540,8 +540,8 @@ async def run_multi_agent_pipeline(
     session_id: str = "",
     risk_level: str = "",
     route_decision: Optional[Dict[str, Any]] = None,
-    forced_path: str = "",
-    core_session_id: str = "",
+    forced_route_semantic: str = "",
+    core_execution_session_id: str = "",
     child_llm_call: Optional[ChildLLMCallFn] = None,
     child_tool_executor: Optional[ChildToolExecutorFn] = None,
     enable_child_execution: bool = False,
@@ -608,10 +608,10 @@ async def run_multi_agent_pipeline(
         decision = shell.route(message, session_id=session_id, risk_level=risk_level)
         decision_source = "pipeline_router"
 
-    normalized_forced_path = str(forced_path or "").strip().lower()
-    if normalized_forced_path == "path-c":
+    normalized_forced_route_semantic = str(forced_route_semantic or "").strip().lower()
+    if normalized_forced_route_semantic == "core_execution":
         needs_core = True
-    elif normalized_forced_path in {"path-a", "path-b"}:
+    elif normalized_forced_route_semantic in {"shell_readonly", "shell_clarify"}:
         needs_core = False
     else:
         needs_core = shell.should_dispatch(decision)
@@ -634,7 +634,7 @@ async def run_multi_agent_pipeline(
     # ── Shell direct reply (no Core dispatch needed) ───────────
     if not needs_core:
         # Shell handles directly: yield content event with the user message
-        # for the outer LLM to process with Shell's system prompt.
+        # for the shell-side LLM to process with Shell's system prompt.
         # In production, Shell would run its own mini_loop with read-only tools.
         yield {
             "type": "shell_direct",
@@ -710,12 +710,12 @@ async def run_multi_agent_pipeline(
 
     # ── Phase 2A: Fast-Track direct execution ─────────────────
 
-    resolved_core_session_id = str(core_session_id or "").strip() or str(session_id or "").strip()
-    if not resolved_core_session_id:
-        resolved_core_session_id = f"core_{pipeline_id}"
+    resolved_core_execution_session_id = str(core_execution_session_id or "").strip() or str(session_id or "").strip()
+    if not resolved_core_execution_session_id:
+        resolved_core_execution_session_id = f"core_{pipeline_id}"
     _ensure_core_runtime_session(
         store=_store,
-        core_session_id=resolved_core_session_id,
+        core_execution_session_id=resolved_core_execution_session_id,
         goal=message,
         pipeline_id=pipeline_id,
     )
@@ -748,7 +748,7 @@ async def run_multi_agent_pipeline(
                         "execution_mode": "fast_track",
                     },
                 },
-                parent_session_id=resolved_core_session_id,
+                parent_session_id=resolved_core_execution_session_id,
                 store=_store,
                 mailbox=_mailbox,
             )
@@ -852,7 +852,7 @@ async def run_multi_agent_pipeline(
                 yield {
                     "type": "fast_track_start",
                     "pipeline_id": pipeline_id,
-                    "core_session_id": resolved_core_session_id,
+                    "core_execution_session_id": resolved_core_execution_session_id,
                     "agent_id": fast_track_agent_id,
                     "tool_subset": list(fast_track_tools),
                     "max_files": max_files,
@@ -873,7 +873,7 @@ async def run_multi_agent_pipeline(
                     yield {
                         "type": "fast_track_event",
                         "pipeline_id": pipeline_id,
-                        "core_session_id": resolved_core_session_id,
+                        "core_execution_session_id": resolved_core_execution_session_id,
                         "agent_id": fast_track_agent_id,
                         "event": mini_event,
                     }
@@ -887,7 +887,7 @@ async def run_multi_agent_pipeline(
                 if guard_blocked_details and not fast_track_completed:
                     stop_reason = "fast_track_guard_blocked"
 
-                reports = core.collect_reports(resolved_core_session_id, pipeline_id=pipeline_id)
+                reports = core.collect_reports(resolved_core_execution_session_id, pipeline_id=pipeline_id)
                 receipt_event = _build_fast_track_execution_receipt(
                     pipeline_id=pipeline_id,
                     goal=str(dispatch.get("goal") or message),
@@ -926,7 +926,7 @@ async def run_multi_agent_pipeline(
                 yield {
                     "type": "fast_track_summary",
                     "pipeline_id": pipeline_id,
-                    "core_session_id": resolved_core_session_id,
+                    "core_execution_session_id": resolved_core_execution_session_id,
                     "agent_id": fast_track_agent_id,
                     "status": fast_track_status,
                     "guard_blocked_count": len(guard_blocked_details),
@@ -937,7 +937,7 @@ async def run_multi_agent_pipeline(
                 cleanup_summary = _apply_child_session_cleanup(
                     store=_store,
                     mailbox=_mailbox,
-                    core_session_id=resolved_core_session_id,
+                    core_execution_session_id=resolved_core_execution_session_id,
                     pipeline_id=pipeline_id,
                     mode=child_session_cleanup_mode,
                     ttl_seconds=int(child_session_cleanup_ttl_seconds),
@@ -953,7 +953,7 @@ async def run_multi_agent_pipeline(
                     "reason": "completed" if fast_track_completed else "delegated_waiting_child_completion",
                     "duration_ms": int((time.time() - started_at) * 1000),
                     "expert_count": 0,
-                    "core_session_id": resolved_core_session_id,
+                    "core_execution_session_id": resolved_core_execution_session_id,
                     "child_session_cleanup": cleanup_summary,
                     "execution_mode": "fast_track",
                 }
@@ -977,7 +977,7 @@ async def run_multi_agent_pipeline(
 
     expert_results = core.spawn_experts(
         decomposition,
-        core_session_id=resolved_core_session_id,
+        core_execution_session_id=resolved_core_execution_session_id,
         pipeline_id=pipeline_id,
     )
 
@@ -1232,7 +1232,7 @@ async def run_multi_agent_pipeline(
                     report_text = f"{report_text}\n\n### Review Summary\n{review_summary}"
             _mailbox.send(
                 str(agent_id),
-                resolved_core_session_id,
+                resolved_core_execution_session_id,
                 report_text,
                 message_type="report",
             )
@@ -1269,11 +1269,11 @@ async def run_multi_agent_pipeline(
     if core_loop_enabled and child_llm_call is not None:
         children_snapshot = _collect_core_descendant_status_snapshot(
             store=_store,
-            core_session_id=resolved_core_session_id,
+            core_execution_session_id=resolved_core_execution_session_id,
         )
         core_loop_initial_task = _build_core_loop_initial_task(
             message=message,
-            core_session_id=resolved_core_session_id,
+            core_execution_session_id=resolved_core_execution_session_id,
             pipeline_id=pipeline_id,
             children_snapshot=children_snapshot,
         )
@@ -1336,7 +1336,7 @@ async def run_multi_agent_pipeline(
             return handle_parent_tool_call(
                 normalized_name,
                 safe_arguments,
-                parent_session_id=resolved_core_session_id,
+                parent_session_id=resolved_core_execution_session_id,
                 store=_store,
                 mailbox=_mailbox,
             )
@@ -1344,13 +1344,13 @@ async def run_multi_agent_pipeline(
         yield {
             "type": "core_loop_start",
             "pipeline_id": pipeline_id,
-            "core_session_id": resolved_core_session_id,
+            "core_execution_session_id": resolved_core_execution_session_id,
             "tool_subset": sorted(core_allowed_tools),
             "child_count": len(children_snapshot),
         }
 
         async for core_event in run_mini_loop(
-            session_id=resolved_core_session_id,
+            session_id=resolved_core_execution_session_id,
             store=_store,
             mailbox=_mailbox,
             llm_call=_core_llm_call,
@@ -1388,15 +1388,15 @@ async def run_multi_agent_pipeline(
             yield {
                 "type": "core_loop_event",
                 "pipeline_id": pipeline_id,
-                "core_session_id": resolved_core_session_id,
+                "core_execution_session_id": resolved_core_execution_session_id,
                 "event": core_event,
             }
 
-        if _store.get(resolved_core_session_id) is not None:
+        if _store.get(resolved_core_execution_session_id) is not None:
             try:
-                _store.update_status(resolved_core_session_id, AgentStatus.WAITING)
+                _store.update_status(resolved_core_execution_session_id, AgentStatus.WAITING)
             except Exception:
-                logger.debug("Failed to set core runtime session waiting: %s", resolved_core_session_id, exc_info=True)
+                logger.debug("Failed to set core runtime session waiting: %s", resolved_core_execution_session_id, exc_info=True)
 
         if "stop_reason" not in core_loop_summary:
             core_loop_summary["stop_reason"] = "unknown"
@@ -1409,7 +1409,7 @@ async def run_multi_agent_pipeline(
         yield {
             "type": "core_loop_end",
             "pipeline_id": pipeline_id,
-            "core_session_id": resolved_core_session_id,
+            "core_execution_session_id": resolved_core_execution_session_id,
             "summary": dict(core_loop_summary),
         }
 
@@ -1625,7 +1625,7 @@ async def run_multi_agent_pipeline(
             refreshed_report = expert.aggregate_results()
             _mailbox.send(
                 expert_id,
-                resolved_core_session_id,
+                resolved_core_execution_session_id,
                 refreshed_report,
                 message_type="report",
             )
@@ -1633,7 +1633,7 @@ async def run_multi_agent_pipeline(
                 "type": "expert_report_refresh",
                 "pipeline_id": pipeline_id,
                 "expert_id": expert_id,
-                "core_session_id": resolved_core_session_id,
+                "core_execution_session_id": resolved_core_execution_session_id,
             }
 
         if core_loop_summary:
@@ -1644,7 +1644,7 @@ async def run_multi_agent_pipeline(
 
     # ── Phase 6: Collect results ───────────────────────────────
 
-    reports = core.collect_reports(resolved_core_session_id, pipeline_id=pipeline_id)
+    reports = core.collect_reports(resolved_core_execution_session_id, pipeline_id=pipeline_id)
     for report in reports:
         yield {
             "type": "expert_report",
@@ -1722,7 +1722,7 @@ async def run_multi_agent_pipeline(
     cleanup_summary = _apply_child_session_cleanup(
         store=_store,
         mailbox=_mailbox,
-        core_session_id=resolved_core_session_id,
+        core_execution_session_id=resolved_core_execution_session_id,
         pipeline_id=pipeline_id,
         mode=child_session_cleanup_mode,
         ttl_seconds=int(child_session_cleanup_ttl_seconds),
@@ -1741,7 +1741,7 @@ async def run_multi_agent_pipeline(
         "reason": "completed" if task_completed else "delegated_waiting_child_completion",
         "duration_ms": int((time.time() - started_at) * 1000),
         "expert_count": len(expert_results),
-        "core_session_id": resolved_core_session_id,
+        "core_execution_session_id": resolved_core_execution_session_id,
         "child_session_cleanup": cleanup_summary,
     }
 

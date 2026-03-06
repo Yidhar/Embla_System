@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-NagaAgent API服务器
-提供RESTful API接口访问NagaAgent功能
+Embla System API 服务器
+提供 RESTful API 接口访问 Embla System 功能
 """
 
 import asyncio
@@ -49,16 +49,15 @@ from .message_manager import message_manager  # noqa: E402 - keep script-mode co
 
 from .llm_service import get_llm_service, llm_app  # noqa: E402 - mounted below
 from .native_tools import get_native_tool_executor  # noqa: E402
-from . import naga_auth  # noqa: E402 - keep script-mode compatibility path setup
 
-# ── Backward-compat module delegation for extracted routes ─────
+# ── Module delegation for extracted routes ─────
 import apiserver.routes_ops as _routes_ops  # noqa: E402
 import apiserver.routes_chat as _routes_chat  # noqa: E402
 import apiserver.routes_brainstem as _routes_brainstem  # noqa: E402
 _CHAT_LLM_GATEWAY = getattr(_routes_chat, "_CHAT_LLM_GATEWAY", None)
 
 def __getattr__(name: str):  # noqa: N807
-    """Delegate attribute lookup to extracted modules for backward compatibility."""
+    """Delegate attribute lookup to extracted route modules."""
     for _mod in (_routes_ops, _routes_chat, _routes_brainstem):
         try:
             return getattr(_mod, name)
@@ -149,9 +148,37 @@ def _trigger_background_analysis(session_id: str):
 
 
 # 统一保存对话与日志函数 - 已整合到message_manager
-def _save_conversation_and_logs(session_id: str, user_message: str, assistant_response: str):
+def _build_shell_l2_round_messages(
+    base_messages: List[Dict[str, Any]],
+    assistant_response: str,
+) -> List[Dict[str, Any]]:
+    prepared: List[Dict[str, Any]] = []
+    for item in base_messages or []:
+        if isinstance(item, dict):
+            prepared.append(dict(item))
+    normalized_response = str(assistant_response or "")
+    if normalized_response:
+        if not prepared or str(prepared[-1].get("role") or "") != "assistant" or str(prepared[-1].get("content") or "") != normalized_response:
+            prepared.append({"role": "assistant", "content": normalized_response})
+    return prepared
+
+
+def _save_conversation_and_logs(
+    session_id: str,
+    user_message: str,
+    assistant_response: str,
+    *,
+    enable_shell_l2_extraction: bool = True,
+    shell_round_messages: Optional[List[Dict[str, Any]]] = None,
+):
     """统一保存对话历史与日志 - 委托给message_manager"""
-    message_manager.save_conversation_and_logs(session_id, user_message, assistant_response)
+    message_manager.save_conversation_and_logs(
+        session_id,
+        user_message,
+        assistant_response,
+        enable_shell_l2_extraction=enable_shell_l2_extraction,
+        shell_round_messages=shell_round_messages,
+    )
 
 
 def _format_memory_quintuple_line(item: Any) -> str:
@@ -227,15 +254,15 @@ _bind_route_exports(
 _bind_route_exports(
     _routes_chat,
     [
-        # NOTE: legacy pre-route helpers (_resolve/_apply_* path-a|b|c chain)
+        # NOTE: prior pre-route helpers (_resolve/_apply_* route chain)
         # are intentionally not eagerly bound into api_server globals.
         # Runtime chat_stream is dispatch_to_core_only and should not couple to
         # pre-route decision helpers.
-        "_apply_outer_core_session_bridge",
+        "_apply_shell_core_session_state",
         "_get_chat_route_quality_guard_summary",
         "_read_chat_route_event_rows",
-        "_collect_chat_route_bridge_events",
-        "_build_chat_route_bridge_payload",
+        "_collect_chat_route_session_state_events",
+        "_build_chat_route_session_state_payload",
         "_CHAT_ROUTE_STATE_KEY",
         "_emit_chat_route_prompt_event",
         "_emit_chat_route_guard_event",
@@ -243,7 +270,7 @@ _bind_route_exports(
         "_sanitize_route_quality_reason_codes",
         "_sanitize_router_arbiter_reason_codes",
         "_build_chat_route_prompt_hints",
-        "_build_path_model_override",
+        "_build_route_model_override",
         "_merge_model_override",
         "_emit_agentic_loop_completion_event",
         "_emit_core_child_spawn_deferred_event",
@@ -329,7 +356,7 @@ def _build_gateway_route_request_from_route_meta(route_meta: Dict[str, Any]) -> 
     return GatewayRouteRequest(
         task_type=str(decision.get("task_type") or ""),
         severity=str(route_meta.get("risk_level") or ""),
-        path=str(route_meta.get("path") or "path-c"),
+        route_semantic=str(route_meta.get("route_semantic") or "core_execution"),
         prompt_profile=str(decision.get("prompt_profile") or ""),
         injection_mode=str(decision.get("injection_mode") or ""),
         delegation_intent=str(decision.get("delegation_intent") or ""),
@@ -424,7 +451,7 @@ def _build_shell_system_prompt_with_gateway(
 
     prompt_slices: List[PromptSlice] = [
         PromptSlice(
-            slice_uid="outer_shell_base",
+            slice_uid="shell_base",
             layer="L0_DNA",
             text=str(base_system_prompt or ""),
             owner="system",
@@ -432,7 +459,7 @@ def _build_shell_system_prompt_with_gateway(
             priority=10,
         ),
         PromptSlice(
-            slice_uid="outer_route_contract",
+            slice_uid="shell_route_contract",
             layer="L2_ROLE",
             text=str(route_hints or ""),
             owner="router",
@@ -444,7 +471,7 @@ def _build_shell_system_prompt_with_gateway(
     if memory_lines:
         prompt_slices.append(
             PromptSlice(
-                slice_uid="outer_memory_recall",
+                slice_uid="shell_memory_recall",
                 layer="L1_5_EPISODIC_MEMORY",
                 text="## 相关记忆\n" + "\n".join(
                     str(line or "") for line in memory_lines if str(line or "").strip()
@@ -536,7 +563,7 @@ async def lifespan(app: FastAPI):
 
 
 # 创建FastAPI应用
-app = FastAPI(title="NagaAgent API", description="智能对话助手API服务", version="5.0.0", lifespan=lifespan)
+app = FastAPI(title="Embla System API", description="Embla System 智能运行与对话 API 服务", version="5.0.0", lifespan=lifespan)
 if hasattr(_routes_ops, "_bind_ops_app_context"):
     _routes_ops._bind_ops_app_context(app)
 if hasattr(_routes_brainstem, "_bind_brainstem_runtime_context"):
@@ -596,23 +623,11 @@ def _build_api_contract_snapshot() -> Dict[str, Any]:
 
 
 @app.middleware("http")
-async def sync_auth_token(request: Request, call_next):
-    """每次请求自动同步前端 token 到后端认证状态，避免 token 刷新后后端仍持有旧 token"""
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        if token and token != naga_auth.get_access_token():
-            naga_auth.restore_token(token)
-    response = await call_next(request)
-    return response
-
-
-@app.middleware("http")
 async def inject_api_contract_headers(request: Request, call_next):
     response = await call_next(request)
     snapshot = _build_api_contract_snapshot()
-    response.headers.setdefault("X-NagaAgent-Api-Version", str(snapshot["api_version"]))
-    response.headers.setdefault("X-NagaAgent-Contract-Version", str(snapshot["contract_version"]))
+    response.headers.setdefault("X-Embla-System-Api-Version", str(snapshot["api_version"]))
+    response.headers.setdefault("X-Embla-System-Contract-Version", str(snapshot["contract_version"]))
 
     deprecation = _resolve_api_deprecation_policy(request.url.path)
     if isinstance(deprecation, dict):
@@ -761,55 +776,13 @@ class DocumentProcessRequest(BaseModel):
     action: str = "read"  # read, analyze, summarize
     session_id: Optional[str] = None
 
-
-# ============ Local-only auth compatibility endpoints ============
-
-AUTH_DISABLED_DETAIL = "Remote authentication is disabled in local-only mode"
-
-
-@app.post("/auth/login")
-async def auth_login(body: dict):
-    raise HTTPException(status_code=410, detail=AUTH_DISABLED_DETAIL)
-
-
-@app.get("/auth/me")
-async def auth_me(request: Request):
-    return {"user": None, "memory_url": None, "local_mode": True}
-
-
-@app.post("/auth/logout")
-async def auth_logout():
-    naga_auth.logout()
-    return {"success": True, "local_mode": True}
-
-
-@app.post("/auth/register")
-async def auth_register(body: dict):
-    raise HTTPException(status_code=410, detail=AUTH_DISABLED_DETAIL)
-
-
-@app.get("/auth/captcha")
-async def auth_captcha():
-    raise HTTPException(status_code=410, detail=AUTH_DISABLED_DETAIL)
-
-
-@app.post("/auth/send-verification")
-async def auth_send_verification(body: dict):
-    raise HTTPException(status_code=410, detail=AUTH_DISABLED_DETAIL)
-
-
-@app.post("/auth/refresh")
-async def auth_refresh(request: Request):
-    raise HTTPException(status_code=410, detail=AUTH_DISABLED_DETAIL)
-
-
 # API路由
 @app.get("/", response_model=Dict[str, str])
 async def root():
     """API根路径"""
     system_version = str(getattr(get_config().system, "version", "5.0.0"))
     return {
-        "name": "NagaAgent API",
+        "name": "Embla System API",
         "version": system_version,
         "api_version": API_DEFAULT_VERSION,
         "status": "running",
@@ -1196,23 +1169,28 @@ async def chat(request: ChatRequest):
 
         # 使用整合后的LLM服务（支持 reasoning_content）
         llm_service = get_llm_service()
-        outer_model_override = _build_path_model_override("path-a")
-        if outer_model_override:
+        shell_model_override = _build_route_model_override("shell_readonly")
+        if shell_model_override:
             llm_response = await llm_service.chat_with_context_and_reasoning_with_overrides(
                 messages,
                 get_config().api.temperature,
-                model_override=str(outer_model_override.get("model") or "").strip() or None,
-                api_key_override=str(outer_model_override.get("api_key") or "").strip() or None,
-                api_base_override=str(outer_model_override.get("api_base") or "").strip() or None,
-                provider_hint=str(outer_model_override.get("provider") or "").strip() or None,
-                reasoning_effort_override=str(outer_model_override.get("reasoning_effort") or "").strip() or None,
+                model_override=str(shell_model_override.get("model") or "").strip() or None,
+                api_key_override=str(shell_model_override.get("api_key") or "").strip() or None,
+                api_base_override=str(shell_model_override.get("api_base") or "").strip() or None,
+                provider_hint=str(shell_model_override.get("provider") or "").strip() or None,
+                reasoning_effort_override=str(shell_model_override.get("reasoning_effort") or "").strip() or None,
             )
         else:
             llm_response = await llm_service.chat_with_context_and_reasoning(messages, get_config().api.temperature)
 
         # 处理完成
         # 统一保存对话历史与日志
-        _save_conversation_and_logs(session_id, user_message, llm_response.content)
+        _save_conversation_and_logs(
+            session_id,
+            user_message,
+            llm_response.content,
+            shell_round_messages=_build_shell_l2_round_messages(messages, llm_response.content),
+        )
 
         # 在用户消息保存到历史后触发后台意图分析（除非明确跳过）
         if not request.skip_intent_analysis:
@@ -1272,20 +1250,19 @@ async def chat_stream(request: ChatRequest):
             # - Shell LLM always starts first and decides whether to call dispatch_to_core.
             # - API server only runs Core pipeline when dispatch_to_core tool is actually called.
             route_meta: Dict[str, Any] = {
-                "path": "path-a",
+                "route_semantic": "shell_readonly",
                 "risk_level": "read_only",
-                "outer_readonly_hit": True,
-                "core_escalation": False,
+                "shell_readonly_hit": True,
                 "router_decision": {},
-                "outer_session_id": session_id,
-                "core_session_id": "",
-                "execution_session_id": session_id,
+                "shell_session_id": session_id,
+                "core_execution_session_id": "",
                 "routing_mode": "dispatch_to_core_only",
+                "core_execution_route": "",
             }
-            route_meta = _apply_outer_core_session_bridge(route_meta, outer_session_id=session_id)
+            route_meta = _apply_shell_core_session_state(route_meta, shell_session_id=session_id)
             route_decision: Dict[str, Any] = {}
-            path = str(route_meta.get("path") or "path-a")
-            execution_session_id = str(route_meta.get("execution_session_id") or session_id)
+            route_semantic = str(route_meta.get("route_semantic") or "shell_readonly")
+            core_execution_session_id = str(route_meta.get("core_execution_session_id") or "")
 
             precomposed_memory_lines: List[str] = []
             try:
@@ -1312,17 +1289,21 @@ async def chat_stream(request: ChatRequest):
             yield _format_stream_payload_chunk(
                 {
                     "type": "route_decision",
-                    "path": path,
+                    "trigger": route_semantic,
+                    "route_semantic": str(route_meta.get("route_semantic") or "shell_readonly"),
+                    "entry_agent": str(route_meta.get("entry_agent") or "shell"),
+                    "active_agent": str(route_meta.get("active_agent") or "shell"),
+                    "dispatch_to_core": bool(route_meta.get("dispatch_to_core")),
+                    "handoff_tool": str(route_meta.get("handoff_tool") or ""),
+                    "core_execution_route": str(route_meta.get("core_execution_route") or ""),
                     "risk_level": route_meta.get("risk_level"),
-                    "outer_readonly_hit": bool(route_meta.get("outer_readonly_hit")),
-                    "core_escalation": bool(route_meta.get("core_escalation")),
+                    "shell_readonly_hit": bool(route_meta.get("shell_readonly_hit")),
                     "prompt_profile": "",
                     "injection_mode": "",
                     "delegation_intent": "shell_dispatch_only",
-                    "outer_session_id": str(route_meta.get("outer_session_id") or ""),
-                    "core_session_id": str(route_meta.get("core_session_id") or ""),
-                    "execution_session_id": execution_session_id,
-                    "core_session_created": False,
+                    "shell_session_id": str(route_meta.get("shell_session_id") or ""),
+                    "core_execution_session_id": str(route_meta.get("core_execution_session_id") or ""),
+                    "core_execution_session_created": False,
                     "routing_mode": "dispatch_to_core_only",
                     "selected_slice_count": int(route_meta.get("_slice_selected_count") or 0),
                     "dropped_slice_count": int(route_meta.get("_slice_dropped_count") or 0),
@@ -1332,10 +1313,10 @@ async def chat_stream(request: ChatRequest):
                 protocol=stream_protocol,
             )
             logger.info(
-                "[API Server] chat route decided outer_session=%s execution_session=%s path=%s mode=%s",
+                "[API Server] chat route decided shell_session=%s core_execution_session=%s route_semantic=%s mode=%s",
                 session_id,
-                execution_session_id,
-                path,
+                core_execution_session_id,
+                route_semantic,
                 "dispatch_to_core_only",
             )
 
@@ -1349,7 +1330,7 @@ async def chat_stream(request: ChatRequest):
             session_store, agent_mailbox, task_board_engine = _get_pipeline_runtime_handles()
             child_session_cleanup_policy = _resolve_pipeline_child_session_cleanup_policy()
             child_loop_llm_service = get_llm_service()
-            child_loop_model_override = _build_path_model_override("path-c")
+            child_loop_model_override = _build_route_model_override("core_execution")
             native_tool_executor = get_native_tool_executor()
 
             async def _pipeline_child_llm_call(
@@ -1420,10 +1401,10 @@ async def chat_stream(request: ChatRequest):
                 shell_messages[-1] = {"role": "user", "content": content_parts}
                 _vlm_sessions.add(session_id)
 
-            shell_model_override = _build_path_model_override("path-a")
+            shell_model_override = _build_route_model_override("shell_readonly")
             use_vlm = session_id in _vlm_sessions
             cc = get_config().computer_control
-            if use_vlm and cc.enabled and (cc.api_key or naga_auth.is_authenticated()):
+            if use_vlm and cc.enabled and cc.api_key:
                 shell_model_override = _merge_model_override(
                     shell_model_override,
                     {"model": cc.model, "api_base": cc.model_url, "api_key": cc.api_key},
@@ -1548,37 +1529,42 @@ async def chat_stream(request: ChatRequest):
             # ── Core handoff only happens when Shell explicitly dispatches. ──
             if dispatch_payload:
                 route_decision = dict(dispatch_payload.get("router_decision") or {})
-                path = "path-c"
-                route_meta["path"] = path
+                route_semantic = "core_execution"
+                route_meta["route_semantic"] = route_semantic
                 route_meta["risk_level"] = str(route_decision.get("risk_level") or "write_repo")
-                route_meta["outer_readonly_hit"] = False
-                route_meta["core_escalation"] = True
+                route_meta["shell_readonly_hit"] = False
                 route_meta["router_decision"] = dict(route_decision)
                 route_meta["routing_mode"] = "dispatch_to_core_tool"
                 route_meta["handoff_source"] = "dispatch_to_core"
-                route_meta = _apply_outer_core_session_bridge(route_meta, outer_session_id=session_id)
-                core_session_id = str(route_meta.get("core_session_id") or "")
-                execution_session_id = str(route_meta.get("execution_session_id") or core_session_id)
-                core_session_created = bool(route_meta.get("core_session_created"))
+                route_meta["core_execution_route"] = str(route_decision.get("core_route") or "")
+                route_meta = _apply_shell_core_session_state(route_meta, shell_session_id=session_id)
+                core_execution_session_id = str(route_meta.get("core_execution_session_id") or "")
+                core_execution_session_created = bool(route_meta.get("core_execution_session_created"))
 
                 # Emit a second prompt-route composition snapshot after handoff so
-                # route_bridge can observe the finalized outer->core bridge state.
+                # route_session_state can observe the finalized shell->core session state.
                 _emit_chat_route_prompt_event(route_meta, session_id=session_id)
 
                 yield _format_stream_payload_chunk(
                     {
                         "type": "route_decision",
-                        "path": path,
+                        "trigger": route_semantic,
+                        "route_semantic": str(route_meta.get("route_semantic") or "core_execution"),
+                        "entry_agent": str(route_meta.get("entry_agent") or "shell"),
+                        "active_agent": str(route_meta.get("active_agent") or "core"),
+                        "dispatch_to_core": bool(route_meta.get("dispatch_to_core")),
+                        "handoff_tool": str(route_meta.get("handoff_tool") or "dispatch_to_core"),
+                        "core_execution_route": str(route_meta.get("core_execution_route") or route_decision.get("core_route") or ""),
                         "risk_level": route_meta.get("risk_level"),
-                        "outer_readonly_hit": False,
-                        "core_escalation": True,
+                        "shell_readonly_hit": False,
                         "prompt_profile": route_decision.get("prompt_profile", ""),
                         "injection_mode": route_decision.get("injection_mode", ""),
                         "delegation_intent": route_decision.get("delegation_intent", ""),
-                        "outer_session_id": session_id,
-                        "core_session_id": core_session_id,
-                        "execution_session_id": execution_session_id,
-                        "core_session_created": core_session_created,
+                        "shell_session_id": str(route_meta.get("shell_session_id") or session_id),
+                        "core_execution_session_id": str(
+                            route_meta.get("core_execution_session_id") or core_execution_session_id
+                        ),
+                        "core_execution_session_created": core_execution_session_created,
                         "routing_mode": "dispatch_to_core_tool",
                         "handoff_source": "dispatch_to_core",
                     },
@@ -1587,11 +1573,11 @@ async def chat_stream(request: ChatRequest):
 
                 async for event in run_multi_agent_pipeline(
                     message=effective_message,
-                    session_id=execution_session_id,
+                    session_id=core_execution_session_id,
                     risk_level=str(route_meta.get("risk_level") or "write_repo"),
                     route_decision=route_decision,
-                    forced_path=path,
-                    core_session_id=core_session_id,
+                    forced_route_semantic=route_semantic,
+                    core_execution_session_id=core_execution_session_id,
                     child_llm_call=_pipeline_child_llm_call,
                     child_tool_executor=_pipeline_child_tool_executor,
                     enable_child_execution=True,
@@ -1614,14 +1600,14 @@ async def chat_stream(request: ChatRequest):
                     elif chunk_type == "tool_stage":
                         _emit_agentic_loop_completion_event(
                             session_id=session_id,
-                            execution_session_id=execution_session_id,
+                            core_execution_session_id=core_execution_session_id,
                             route_meta=route_meta,
                             chunk_data=event,
                         )
                     elif chunk_type == "child_spawn_deferred":
                         _emit_core_child_spawn_deferred_event(
                             session_id=session_id,
-                            execution_session_id=execution_session_id,
+                            core_execution_session_id=core_execution_session_id,
                             route_meta=route_meta,
                             chunk_data=event,
                         )
@@ -1643,8 +1629,8 @@ async def chat_stream(request: ChatRequest):
             if not complete_response and current_round_text:
                 complete_response = current_round_text
 
-            # Path-C fallback: some models finish via SubmitResult_Tool without emitting plain content tokens.
-            if path == "path-c" and not complete_response and receipt_fallback_text:
+            # core_execution fallback: some models finish via SubmitResult_Tool without emitting plain content tokens.
+            if route_semantic == "core_execution" and not complete_response and receipt_fallback_text:
                 complete_response = receipt_fallback_text
                 yield _format_stream_payload_chunk(
                     {
@@ -1656,7 +1642,18 @@ async def chat_stream(request: ChatRequest):
                 )
 
             # 统一保存对话历史与日志
-            _save_conversation_and_logs(session_id, user_message, complete_response)
+            shell_l2_eligible = not bool(route_meta.get("dispatch_to_core")) and not bool(dispatch_payload)
+            _save_conversation_and_logs(
+                session_id,
+                user_message,
+                complete_response,
+                enable_shell_l2_extraction=shell_l2_eligible,
+                shell_round_messages=(
+                    _build_shell_l2_round_messages(shell_messages, complete_response)
+                    if shell_l2_eligible
+                    else None
+                ),
+            )
 
             # Agentic loop 模式下跳过后台意图分析（工具调用已在loop中处理）
             # 仅在非 agentic 模式或明确需要时触发后台分析
@@ -1697,7 +1694,7 @@ async def get_memory_stats():
     """获取记忆统计信息"""
 
     try:
-        # 优先使用远程 NagaMemory 服务
+        # 优先使用远程记忆服务
         from summer_memory.memory_client import get_remote_memory_client
 
         remote = get_remote_memory_client()
@@ -1825,7 +1822,7 @@ def _build_mcp_task_snapshot(
 from apiserver.routes_ops import router as _ops_router
 app.include_router(_ops_router)
 
-# Re-export shared utilities for backward compatibility with in-file callers
+# Re-export shared utilities for module-level callers
 from apiserver._shared import (
     env_flag as _env_flag,
     env_float as _env_float,
@@ -1888,14 +1885,14 @@ enabled: true
 async def get_quintuples():
     """获取所有五元组 (用于知识图谱可视化)"""
     try:
-        # 优先使用远程 NagaMemory 服务
+        # 优先使用远程记忆服务
         from summer_memory.memory_client import get_remote_memory_client
 
         remote = get_remote_memory_client()
         if remote is not None:
             result = await remote.get_quintuples(limit=500)
             quintuples_raw = result.get("quintuples") or result.get("results") or result.get("data") or []
-            # 兼容 NagaMemory 返回格式：可能是 dict 列表或 tuple 列表
+            # 远程记忆服务可能返回 dict 列表或 tuple 列表
             quintuples = []
             for q in quintuples_raw:
                 if isinstance(q, dict):
@@ -1941,7 +1938,7 @@ async def search_quintuples(keywords: str = ""):
         if not keyword_list:
             raise HTTPException(status_code=400, detail="请提供搜索关键词")
 
-        # 优先使用远程 NagaMemory 服务
+        # 优先使用远程记忆服务
         from summer_memory.memory_client import get_remote_memory_client
 
         remote = get_remote_memory_client()
@@ -2011,22 +2008,22 @@ async def get_session_detail(session_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/chat/route_bridge/{session_id}")
-async def get_chat_route_bridge(session_id: str, limit: int = 20):
-    """获取 outer/core 会话桥接状态与最近路由事件。"""
+@app.get("/chat/route_session_state/{session_id}")
+async def get_chat_route_session_state(session_id: str, limit: int = 20):
+    """获取 Shell/Core 路由会话状态与最近路由事件。"""
     try:
-        return _build_chat_route_bridge_payload(session_id, limit=limit)
+        return _build_chat_route_session_state_payload(session_id, limit=limit)
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"获取会话桥接状态失败: {e}")
+        logger.error(f"获取路由会话状态失败: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/v1/chat/route_bridge/{session_id}")
-async def get_chat_route_bridge_v1(session_id: str, limit: int = 20):
-    return await get_chat_route_bridge(session_id=session_id, limit=limit)
+@app.get("/v1/chat/route_session_state/{session_id}")
+async def get_chat_route_session_state_v1(session_id: str, limit: int = 20):
+    return await get_chat_route_session_state(session_id=session_id, limit=limit)
 
 
 @app.delete("/sessions/{session_id}")
@@ -2342,7 +2339,7 @@ async def tool_result(payload: Dict[str, Any]):
 
         # AgentServer 轮询队列已退役：仅记录结果，不再排队推送旧前端通道。
         if notification_type == "tool_completed_with_ai_response" and ai_response:
-            logger.info(f"[UI] 收到 tool_completed_with_ai_response（legacy queue retired），长度: {len(ai_response)}")
+            logger.info(f"[UI] 收到 tool_completed_with_ai_response（retired queue path），长度: {len(ai_response)}")
 
         return {"success": True, "message": "工具结果已接收", "result": result, "session_id": session_id}
 

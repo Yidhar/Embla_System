@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Archived legacy gate: WS28-007 pre-route path gate."""
+"""Archived legacy gate: WS28-009 shell clarify budget."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 
-DEFAULT_OUTPUT = Path("scratch/reports/ws28_007_outer_core_path_gate.json")
+DEFAULT_OUTPUT = Path("scratch/reports/ws28_009_shell_clarify_budget_gate.json")
 
 
 def _utc_now() -> str:
@@ -25,7 +25,7 @@ def _resolve_path(repo_root: Path, candidate: Path) -> Path:
     return candidate if candidate.is_absolute() else repo_root / candidate
 
 
-def run_ws28_outer_core_path_gate_ws28_007(
+def run_ws28_shell_clarify_budget_gate_ws28_009(
     *,
     repo_root: Path,
     output_file: Path = DEFAULT_OUTPUT,
@@ -33,18 +33,18 @@ def run_ws28_outer_core_path_gate_ws28_007(
     root = repo_root.resolve()
     checks = {
         "archived_legacy_gate": True,
-        "pre_route_implementation_retired": True,
+        "pre_route_budget_guard_retired": True,
     }
     report: Dict[str, Any] = {
-        "task_id": "NGA-WS28-007",
-        "scenario": "outer_core_path_gate_ws28_007",
+        "task_id": "NGA-WS28-009",
+        "scenario": "shell_clarify_budget_gate_ws28_009",
         "generated_at": _utc_now(),
         "repo_root": _to_unix(root),
         "lifecycle": "archived_legacy",
         "passed": True,
         "checks": checks,
         "notes": [
-            "Pre-route path-a/path-b/path-c ingress gate retired from active runtime.",
+            "Shell clarify budget pre-route guard retired from active runtime path.",
             "Legacy script preserved as archived artifact for audit traceability.",
         ],
     }
@@ -56,7 +56,7 @@ def run_ws28_outer_core_path_gate_ws28_007(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run archived WS28-007 pre-route gate")
+    parser = argparse.ArgumentParser(description="Run archived WS28-009 pre-route gate")
     parser.add_argument("--repo-root", type=Path, default=Path("."), help="Repository root")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output JSON report path")
     parser.add_argument("--strict", action="store_true", help="Return non-zero when checks fail")
@@ -65,7 +65,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    report = run_ws28_outer_core_path_gate_ws28_007(
+    report = run_ws28_shell_clarify_budget_gate_ws28_009(
         repo_root=args.repo_root,
         output_file=args.output,
     )

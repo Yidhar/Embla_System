@@ -22,7 +22,7 @@ def test_background_analyzer_prompt_route_metadata_parity_with_router_engine() -
     assert route_meta["selected_role"] == decision.selected_role
 
 
-def test_background_analyzer_prompt_route_metadata_for_read_only_path() -> None:
+def test_background_analyzer_prompt_route_metadata_for_read_only_route() -> None:
     messages = [
         {"role": "user", "content": "帮我分析这份运维文档的关键结论，不要修改任何代码"},
     ]
@@ -30,7 +30,7 @@ def test_background_analyzer_prompt_route_metadata_for_read_only_path() -> None:
 
     assert route_meta["delegation_intent"] == "read_only_exploration"
     assert route_meta["injection_mode"] == "minimal"
-    assert route_meta["prompt_profile"] in {"outer_readonly_research", "outer_readonly_general"}
+    assert route_meta["prompt_profile"] in {"shell_readonly_research", "shell_readonly_general"}
 
 
 def test_background_analyzer_build_prompt_includes_router_hint(monkeypatch) -> None:

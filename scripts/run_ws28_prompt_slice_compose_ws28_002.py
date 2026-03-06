@@ -40,8 +40,13 @@ def run_ws28_prompt_slice_compose_ws28_002(
     root = repo_root.resolve()
     gateway = LLMGateway()
 
-    path_c_plan = gateway.build_plan(
-        request=GatewayRouteRequest(task_type="qa", severity="low", budget_remaining=5.0, path="path-c"),
+    core_execution_plan = gateway.build_plan(
+        request=GatewayRouteRequest(
+            task_type="qa",
+            severity="low",
+            budget_remaining=5.0,
+            route_semantic="core_execution",
+        ),
         prompt_input=PromptEnvelopeInput(
             static_header="legacy-static",
             long_term_summary="legacy-summary",
@@ -74,8 +79,13 @@ def run_ws28_prompt_slice_compose_ws28_002(
             ],
         ),
     )
-    path_a_plan = gateway.build_plan(
-        request=GatewayRouteRequest(task_type="qa", severity="low", budget_remaining=5.0, path="path-a"),
+    shell_readonly_plan = gateway.build_plan(
+        request=GatewayRouteRequest(
+            task_type="qa",
+            severity="low",
+            budget_remaining=5.0,
+            route_semantic="shell_readonly",
+        ),
         prompt_input=PromptEnvelopeInput(
             static_header="legacy-static",
             long_term_summary="legacy-summary",
@@ -109,20 +119,20 @@ def run_ws28_prompt_slice_compose_ws28_002(
         ),
     )
 
-    compose_c = path_c_plan.compose_decision
-    compose_a = path_a_plan.compose_decision
+    compose_c = core_execution_plan.compose_decision
+    compose_a = shell_readonly_plan.compose_decision
     checks = {
-        "path_c_compose_has_hashes": bool(compose_c and compose_c.prefix_hash and compose_c.tail_hash),
-        "path_c_compose_retains_execution_slices": bool(
+        "core_execution_compose_has_hashes": bool(compose_c and compose_c.prefix_hash and compose_c.tail_hash),
+        "core_execution_compose_retains_execution_slices": bool(
             compose_c and "slice_l3" in compose_c.selected_slices and "slice_l3" not in compose_c.dropped_slices
         ),
-        "path_a_drops_execution_dynamic_slices": bool(
+        "shell_readonly_drops_execution_dynamic_slices": bool(
             compose_a
             and "slice_exec_policy" in compose_a.dropped_slices
             and "legacy_dynamic_message_0" in compose_a.dropped_slices
         ),
-        "path_a_envelope_excludes_write_policy_text": "WRITE ENABLED" not in (
-            path_a_plan.prompt_envelope.block1_text + path_a_plan.prompt_envelope.block2_text
+        "shell_readonly_envelope_excludes_write_policy_text": "WRITE ENABLED" not in (
+            shell_readonly_plan.prompt_envelope.block1_text + shell_readonly_plan.prompt_envelope.block2_text
         ),
     }
     passed = all(checks.values())
@@ -135,8 +145,8 @@ def run_ws28_prompt_slice_compose_ws28_002(
         "passed": passed,
         "checks": checks,
         "samples": {
-            "path_c_compose_decision": (compose_c.to_dict() if compose_c else {}),
-            "path_a_compose_decision": (compose_a.to_dict() if compose_a else {}),
+            "core_execution_compose_decision": (compose_c.to_dict() if compose_c else {}),
+            "shell_readonly_compose_decision": (compose_a.to_dict() if compose_a else {}),
         },
     }
 

@@ -1,4 +1,4 @@
-# Outer Readonly Profile: Research
+# Shell Readonly Profile: Research
 
 ## Profile Intent
 - This profile handles read-only exploration and information synthesis.

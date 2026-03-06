@@ -86,8 +86,8 @@ def test_llm_gateway_emits_prompt_injection_composed_event() -> None:
                 task_type="qa",
                 severity="low",
                 budget_remaining=10.0,
-                path="path-a",
-                prompt_profile="outer_readonly",
+                route_semantic="shell_readonly",
+                prompt_profile="shell_readonly",
                 injection_mode="minimal",
                 delegation_intent="read_only_exploration",
                 workflow_id="wf-a",
@@ -100,7 +100,7 @@ def test_llm_gateway_emits_prompt_injection_composed_event() -> None:
                 task_type="code_generation",
                 severity="high",
                 budget_remaining=10.0,
-                path="path-c",
+                route_semantic="core_execution",
                 prompt_profile="core_execution",
                 injection_mode="hardened",
                 delegation_intent="delegate_core_execution",
@@ -121,9 +121,9 @@ def test_llm_gateway_emits_prompt_injection_composed_event() -> None:
         assert isinstance(payload_a, dict)
         assert isinstance(payload_b, dict)
 
-        assert payload_a["path"] == "path-a"
-        assert payload_a["outer_readonly_hit"] is True
-        assert payload_a["core_escalation"] is False
+        assert payload_a["route_semantic"] == "shell_readonly"
+        assert payload_a["shell_readonly_hit"] is True
+        assert payload_a["core_execution_hit"] is False
         assert payload_a["recovery_hit"] is False
         assert payload_a["readonly_write_tool_exposed"] is False
         assert payload_a["readonly_write_tool_selected_count"] == 0
@@ -132,9 +132,9 @@ def test_llm_gateway_emits_prompt_injection_composed_event() -> None:
         assert payload_a["workflow_id"] == "wf-a"
         assert payload_a["trace_id"] == "trace-a"
 
-        assert payload_b["path"] == "path-c"
-        assert payload_b["outer_readonly_hit"] is False
-        assert payload_b["core_escalation"] is True
+        assert payload_b["route_semantic"] == "core_execution"
+        assert payload_b["shell_readonly_hit"] is False
+        assert payload_b["core_execution_hit"] is True
         assert payload_b["recovery_hit"] is True
         assert payload_b["readonly_write_tool_exposed"] is False
         assert payload_b["readonly_write_tool_selected_count"] == 1

@@ -1,7 +1,7 @@
 """Chat-route domain — extracted from api_server.py (Phase 2).
 
 Contains:
-- Outer/core session bridge state helpers
+- Shell/Core route session state helpers
 - Route-event emission and observability payload helpers
 - Model override and prompt hints
 """
@@ -131,16 +131,16 @@ __all__ = [
     "_CHAT_ROUTE_EVENT_STORE",
     "_CHAT_ROUTE_GUARD_CACHE",
     "_CHAT_ROUTE_GUARD_CACHE_TTL_MS",
-    "_CHAT_ROUTE_PATH_B_CLARIFY_LIMIT",
+    "_CHAT_ROUTE_SHELL_CLARIFY_LIMIT",
     "_CHAT_ROUTE_STATE_KEY",
-    "_apply_outer_core_session_bridge",
-    "_build_chat_route_bridge_payload",
+    "_apply_shell_core_session_state",
+    "_build_chat_route_session_state_payload",
     "_build_chat_route_prompt_event_payload",
     "_build_chat_route_prompt_hints",
     "_build_chat_route_quality_guard_summary",
     "_bind_chat_runtime_context",
-    "_build_path_model_override",
-    "_collect_chat_route_bridge_events",
+    "_build_route_model_override",
+    "_collect_chat_route_session_state_events",
     "_emit_agentic_loop_completion_event",
     "_emit_core_child_spawn_deferred_event",
     "_emit_chat_route_arbiter_event",
@@ -167,7 +167,7 @@ except Exception:
     _CHAT_LLM_GATEWAY = None
 _CHAT_ROUTE_EVENT_STORE: Optional[EventStore] = None
 _CHAT_ROUTE_STATE_KEY = "_chat_route_state"
-_CHAT_ROUTE_PATH_B_CLARIFY_LIMIT = 1
+_CHAT_ROUTE_SHELL_CLARIFY_LIMIT = 1
 _CHAT_ROUTE_GUARD_CACHE_TTL_MS = 5_000
 _CHAT_ROUTE_GUARD_CACHE: Dict[str, Any] = {"expires_at_ms": 0, "summary": {}}
 _CHAT_ROUTE_ARBITER_GUARD = RouterArbiterGuard(max_delegate_turns=3)
@@ -177,18 +177,94 @@ def _normalize_chat_text(text: str) -> str:
     return " ".join(str(text or "").strip().lower().split())
 
 
+def _normalize_route_semantic(route_semantic: Any) -> str:
+    normalized = str(route_semantic or "").strip().lower()
+    if normalized in {"shell_readonly", "shell_clarify", "core_execution"}:
+        return normalized
+    return "core_execution"
+
+
+def _derive_route_semantic(route_meta: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_route_semantic = _normalize_route_semantic(route_meta.get("route_semantic"))
+    if normalized_route_semantic == "core_execution":
+        route_semantic = "core_execution"
+        active_agent = "core"
+        dispatch_to_core = True
+    elif normalized_route_semantic == "shell_clarify":
+        route_semantic = "shell_clarify"
+        active_agent = "shell"
+        dispatch_to_core = False
+    else:
+        route_semantic = "shell_readonly"
+        active_agent = "shell"
+        dispatch_to_core = False
+
+    decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
+    core_execution_route = str(
+        route_meta.get("core_execution_route")
+        or route_meta.get("core_route")
+        or decision.get("core_route")
+        or ""
+    ).strip()
+    if route_semantic != "core_execution":
+        core_execution_route = ""
+
+    return {
+        "route_semantic": route_semantic,
+        "active_agent": active_agent,
+        "dispatch_to_core": dispatch_to_core,
+        "handoff_tool": "dispatch_to_core" if dispatch_to_core else "",
+        "core_execution_route": core_execution_route,
+    }
+
+
+def _apply_route_semantic_fields(route_meta: Dict[str, Any]) -> Dict[str, Any]:
+    semantic = _derive_route_semantic(route_meta)
+    route_meta["entry_agent"] = "shell"
+    route_meta["active_agent"] = str(
+        route_meta.get("active_agent")
+        or semantic.get("active_agent")
+        or "shell"
+    )
+    route_meta["route_semantic"] = str(
+        route_meta.get("route_semantic")
+        or semantic.get("route_semantic")
+        or "shell_readonly"
+    )
+    route_meta["dispatch_to_core"] = bool(
+        route_meta.get("dispatch_to_core")
+        if route_meta.get("dispatch_to_core") is not None
+        else semantic.get("dispatch_to_core")
+    )
+    route_meta["handoff_tool"] = str(
+        route_meta.get("handoff_tool")
+        or semantic.get("handoff_tool")
+        or ""
+    )
+    core_execution_route = str(
+        route_meta.get("core_execution_route")
+        or semantic.get("core_execution_route")
+        or ""
+    ).strip()
+    if core_execution_route:
+        route_meta["core_execution_route"] = core_execution_route
+    route_meta["shell_session_id"] = str(route_meta.get("shell_session_id") or "")
+    route_meta["core_execution_session_id"] = str(route_meta.get("core_execution_session_id") or "")
+    return route_meta
+
+
 def _ensure_chat_route_state(session_id: str) -> Dict[str, Any]:
     session = _get_message_manager().get_session(session_id)
     if not isinstance(session, dict):
-        return {"path_b_clarify_turns": 0}
+        return {"shell_clarify_turns": 0}
     state = session.get(_CHAT_ROUTE_STATE_KEY)
     if not isinstance(state, dict):
-        state = {"path_b_clarify_turns": 0}
+        state = {"shell_clarify_turns": 0}
         session[_CHAT_ROUTE_STATE_KEY] = state
     try:
-        state["path_b_clarify_turns"] = max(0, int(state.get("path_b_clarify_turns", 0)))
+        state["shell_clarify_turns"] = max(0, int(state.get("shell_clarify_turns", 0)))
     except Exception:
-        state["path_b_clarify_turns"] = 0
+        state["shell_clarify_turns"] = 0
     return state
 
 
@@ -281,42 +357,41 @@ def _get_chat_route_quality_guard_summary(*, force_refresh: bool = False) -> Dic
     return summary
 
 
-def _apply_outer_core_session_bridge(route_meta: Dict[str, Any], *, outer_session_id: str) -> Dict[str, Any]:
-    state = _ensure_chat_route_state(outer_session_id)
-    path = str(route_meta.get("path") or "path-c")
-    route_meta["outer_session_id"] = str(outer_session_id or "")
-    route_meta["core_session_id"] = str(state.get("core_session_id") or "")
-    route_meta["execution_session_id"] = str(outer_session_id or "")
-    route_meta["core_session_created"] = False
+def _apply_shell_core_session_state(route_meta: Dict[str, Any], *, shell_session_id: str) -> Dict[str, Any]:
+    state = _ensure_chat_route_state(shell_session_id)
+    route_semantic = _normalize_route_semantic(route_meta.get("route_semantic"))
+    route_meta["route_semantic"] = route_semantic
+    route_meta["shell_session_id"] = str(shell_session_id or "")
+    route_meta["core_execution_session_id"] = str(state.get("core_execution_session_id") or "")
+    route_meta["core_execution_session_created"] = False
 
-    if path != "path-c":
-        state["last_execution_session_id"] = str(outer_session_id or "")
-        return route_meta
+    if route_semantic != "core_execution":
+        state["last_core_execution_session_id"] = str(shell_session_id or "")
+        return _apply_route_semantic_fields(route_meta)
 
-    core_session_id = str(state.get("core_session_id") or "").strip()
-    core_session_created = False
-    if not core_session_id:
-        core_session_id = f"{str(outer_session_id or '')}__core"
-    if not _get_message_manager().get_session(core_session_id):
-        outer_session = _get_message_manager().get_session(outer_session_id) or {}
-        temporary = bool(outer_session.get("temporary", False))
-        _get_message_manager().create_session(session_id=core_session_id, temporary=temporary)
-        core_session_created = True
+    core_execution_session_id = str(state.get("core_execution_session_id") or "").strip()
+    core_execution_session_created = False
+    if not core_execution_session_id:
+        core_execution_session_id = f"{str(shell_session_id or '')}__core"
+    if not _get_message_manager().get_session(core_execution_session_id):
+        shell_session = _get_message_manager().get_session(shell_session_id) or {}
+        temporary = bool(shell_session.get("temporary", False))
+        _get_message_manager().create_session(session_id=core_execution_session_id, temporary=temporary)
+        core_execution_session_created = True
 
-    state["core_session_id"] = core_session_id
+    state["core_execution_session_id"] = core_execution_session_id
     state["last_core_escalation_at_ms"] = int(time.time() * 1000)
-    state["last_execution_session_id"] = core_session_id
+    state["last_core_execution_session_id"] = core_execution_session_id
 
-    route_meta["core_session_id"] = core_session_id
-    route_meta["execution_session_id"] = core_session_id
-    route_meta["core_session_created"] = core_session_created
-    return route_meta
+    route_meta["core_execution_session_id"] = core_execution_session_id
+    route_meta["core_execution_session_created"] = core_execution_session_created
+    return _apply_route_semantic_fields(route_meta)
 
 
-def _build_path_model_override(path: str) -> Optional[Dict[str, str]]:
-    """Build route-scoped LLM override for outer/core execution paths."""
-    normalized_path = str(path or "").strip().lower()
-    target_key = "core" if normalized_path == "path-c" else "outer"
+def _build_route_model_override(route_semantic: str) -> Optional[Dict[str, str]]:
+    """Build route-scoped LLM override for shell/core execution routes."""
+    normalized_route_semantic = _normalize_route_semantic(route_semantic)
+    target_key = "core" if normalized_route_semantic == "core_execution" else "shell"
     cfg = _get_config()
     api_cfg = getattr(cfg, "api", None)
     routing_cfg = getattr(api_cfg, "routing", None) if api_cfg is not None else None
@@ -365,11 +440,15 @@ def _merge_model_override(
 
 
 def _build_chat_route_prompt_hints(route_meta: Dict[str, Any]) -> str:
-    path = str(route_meta.get("path") or "path-c")
+    route_semantic = _normalize_route_semantic(route_meta.get("route_semantic"))
+    semantic = _derive_route_semantic(route_meta)
     decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
     lines = [
         "[PromptRouteDecision]",
-        f"path={path}",
+        f"route_semantic={route_semantic}",
+        f"entry_agent={str(route_meta.get('entry_agent') or 'shell')}",
+        f"active_agent={str(route_meta.get('active_agent') or semantic.get('active_agent') or '')}",
+        f"dispatch_to_core={bool(route_meta.get('dispatch_to_core') if route_meta.get('dispatch_to_core') is not None else semantic.get('dispatch_to_core'))}",
         f"prompt_profile={str(decision.get('prompt_profile') or '')}",
         f"injection_mode={str(decision.get('injection_mode') or '')}",
         f"delegation_intent={str(decision.get('delegation_intent') or '')}",
@@ -387,10 +466,10 @@ def _build_chat_route_prompt_hints(route_meta: Dict[str, Any]) -> str:
             f"{router_arbiter_status}:{str(route_meta.get('router_arbiter_action') or 'none')}"
         )
 
-    if path == "path-a":
-        lines.append("Route policy: Outer Direct Read-Only. Do not call tools. Reply directly with analysis.")
-    elif path == "path-b":
-        lines.append("Route policy: Outer Clarify. Ask at most one clarifying question before any execution escalation.")
+    if route_semantic == "shell_readonly":
+        lines.append("Route policy: Shell Read-Only. Do not call tools. Reply directly with analysis.")
+    elif route_semantic == "shell_clarify":
+        lines.append("Route policy: Shell Clarify. Ask at most one clarifying question before any execution escalation.")
     else:
         lines.append("Route policy: Core Execution. You may plan and execute through the tool loop.")
     return "\n".join(lines)
@@ -440,7 +519,13 @@ def _get_chat_route_event_store() -> Optional[EventStore]:
 
 def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[str, Any]:
     decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
-    path = str(route_meta.get("path") or "path-c")
+    route_semantic = _normalize_route_semantic(route_meta.get("route_semantic"))
+    semantic = _derive_route_semantic(route_meta)
+    dispatch_to_core = bool(
+        route_meta.get("dispatch_to_core")
+        if route_meta.get("dispatch_to_core") is not None
+        else semantic.get("dispatch_to_core")
+    )
     delegation_intent = str(decision.get("delegation_intent") or "").strip()
     selected_layers = route_meta.get("_slice_selected_layers") or []
     selected_layer_counts = route_meta.get("_slice_selected_layer_counts") or {}
@@ -449,14 +534,18 @@ def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[s
     return {
         "task_type": str(decision.get("task_type") or ""),
         "severity": str(route_meta.get("risk_level") or ""),
-        "path": path,
-        "trigger": path,
+        "trigger": route_semantic,
+        "route_semantic": str(route_meta.get("route_semantic") or semantic.get("route_semantic") or route_semantic),
+        "entry_agent": str(route_meta.get("entry_agent") or "shell"),
+        "active_agent": str(route_meta.get("active_agent") or semantic.get("active_agent") or ""),
+        "dispatch_to_core": dispatch_to_core,
+        "handoff_tool": str(route_meta.get("handoff_tool") or semantic.get("handoff_tool") or ""),
+        "core_execution_route": str(route_meta.get("core_execution_route") or decision.get("core_route") or ""),
         "prompt_profile": str(decision.get("prompt_profile") or ""),
         "injection_mode": str(decision.get("injection_mode") or ""),
         "delegation_intent": delegation_intent,
         "delegation_hit": delegation_intent.lower().startswith("delegate"),
-        "outer_readonly_hit": bool(route_meta.get("outer_readonly_hit")),
-        "core_escalation": bool(route_meta.get("core_escalation")),
+        "shell_readonly_hit": bool(route_meta.get("shell_readonly_hit")),
         "readonly_write_tool_exposed": False,
         "readonly_write_tool_candidate_count": 0,
         "readonly_write_tool_selected_count": 0,
@@ -480,11 +569,11 @@ def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[s
         "token_budget_after": int(route_meta.get("_slice_token_budget_after") or 0),
         "model_tier": str(route_meta.get("_slice_model_tier") or decision.get("selected_model_tier") or ""),
         "model_id": str(route_meta.get("_slice_model_id") or ""),
-        "path_b_clarify_turns": int(route_meta.get("path_b_clarify_turns") or 0),
-        "path_b_clarify_limit": int(route_meta.get("path_b_clarify_limit") or _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT),
-        "path_b_clarify_limit_override": route_meta.get("path_b_clarify_limit_override"),
-        "path_b_budget_escalated": bool(route_meta.get("path_b_budget_escalated")),
-        "path_b_budget_reason": str(route_meta.get("path_b_budget_reason") or ""),
+        "shell_clarify_turns": int(route_meta.get("shell_clarify_turns") or 0),
+        "shell_clarify_limit": int(route_meta.get("shell_clarify_limit") or _CHAT_ROUTE_SHELL_CLARIFY_LIMIT),
+        "shell_clarify_limit_override": route_meta.get("shell_clarify_limit_override"),
+        "shell_clarify_budget_escalated": bool(route_meta.get("shell_clarify_budget_escalated")),
+        "shell_clarify_budget_reason": str(route_meta.get("shell_clarify_budget_reason") or ""),
         "route_quality_guard_status": _ops_status_to_severity(str(route_meta.get("route_quality_guard_status") or "unknown")),
         "route_quality_guard_applied": bool(route_meta.get("route_quality_guard_applied")),
         "route_quality_guard_action": str(route_meta.get("route_quality_guard_action") or ""),
@@ -492,8 +581,8 @@ def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[s
         "route_quality_guard_reason_codes": _sanitize_route_quality_reason_codes(
             route_meta.get("route_quality_guard_reason_codes")
         ),
-        "route_quality_guard_path_before": str(route_meta.get("route_quality_guard_path_before") or ""),
-        "route_quality_guard_path_after": str(route_meta.get("route_quality_guard_path_after") or ""),
+        "route_quality_guard_route_semantic_before": str(route_meta.get("route_quality_guard_route_semantic_before") or ""),
+        "route_quality_guard_route_semantic_after": str(route_meta.get("route_quality_guard_route_semantic_after") or ""),
         "route_quality_guard_evaluated_at": str(route_meta.get("route_quality_guard_evaluated_at") or ""),
         "route_quality_guard_trend_status": _ops_status_to_severity(
             str(route_meta.get("route_quality_guard_trend_status") or "unknown")
@@ -507,8 +596,8 @@ def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[s
         "router_arbiter_reason_codes": _sanitize_router_arbiter_reason_codes(
             route_meta.get("router_arbiter_reason_codes")
         ),
-        "router_arbiter_path_before": str(route_meta.get("router_arbiter_path_before") or ""),
-        "router_arbiter_path_after": str(route_meta.get("router_arbiter_path_after") or ""),
+        "router_arbiter_route_semantic_before": str(route_meta.get("router_arbiter_route_semantic_before") or ""),
+        "router_arbiter_route_semantic_after": str(route_meta.get("router_arbiter_route_semantic_after") or ""),
         "router_arbiter_delegate_turns": int(route_meta.get("router_arbiter_delegate_turns") or 0),
         "router_arbiter_max_delegate_turns": int(
             route_meta.get("router_arbiter_max_delegate_turns") or _router_arbiter_max_delegate_turns()
@@ -517,10 +606,9 @@ def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[s
         "router_arbiter_freeze": bool(route_meta.get("router_arbiter_freeze")),
         "router_arbiter_hitl": bool(route_meta.get("router_arbiter_hitl")),
         "router_arbiter_escalated": bool(route_meta.get("router_arbiter_escalated")),
-        "outer_session_id": str(route_meta.get("outer_session_id") or ""),
-        "core_session_id": str(route_meta.get("core_session_id") or ""),
-        "execution_session_id": str(route_meta.get("execution_session_id") or ""),
-        "core_session_created": bool(route_meta.get("core_session_created")),
+        "shell_session_id": str(route_meta.get("shell_session_id") or ""),
+        "core_execution_session_id": str(route_meta.get("core_execution_session_id") or ""),
+        "core_execution_session_created": bool(route_meta.get("core_execution_session_created")),
     }
 
 
@@ -558,9 +646,13 @@ def _emit_chat_route_guard_event(route_meta: Dict[str, Any], *, session_id: str)
         "session_id": str(session_id or ""),
         "trace_id": str(decision.get("trace_id") or ""),
         "workflow_id": str(decision.get("task_id") or ""),
-        "path_before": str(route_meta.get("route_quality_guard_path_before") or ""),
-        "path_after": str(route_meta.get("route_quality_guard_path_after") or route_meta.get("path") or ""),
-        "final_path": str(route_meta.get("path") or ""),
+        "route_semantic_before": str(route_meta.get("route_quality_guard_route_semantic_before") or ""),
+        "route_semantic_after": str(
+            route_meta.get("route_quality_guard_route_semantic_after")
+            or route_meta.get("route_semantic")
+            or ""
+        ),
+        "final_route_semantic": str(route_meta.get("route_semantic") or ""),
         "risk_level": str(route_meta.get("risk_level") or ""),
         "route_quality_guard_status": guard_status,
         "route_quality_guard_action": str(route_meta.get("route_quality_guard_action") or ""),
@@ -569,9 +661,8 @@ def _emit_chat_route_guard_event(route_meta: Dict[str, Any], *, session_id: str)
             route_meta.get("route_quality_guard_reason_codes")
         ),
         "route_quality_guard_evaluated_at": str(route_meta.get("route_quality_guard_evaluated_at") or ""),
-        "outer_session_id": str(route_meta.get("outer_session_id") or ""),
-        "core_session_id": str(route_meta.get("core_session_id") or ""),
-        "execution_session_id": str(route_meta.get("execution_session_id") or ""),
+        "shell_session_id": str(route_meta.get("shell_session_id") or ""),
+        "core_execution_session_id": str(route_meta.get("core_execution_session_id") or ""),
     }
     store.emit(event_type, payload, source="apiserver.chat_stream")
 
@@ -597,9 +688,13 @@ def _emit_chat_route_arbiter_event(route_meta: Dict[str, Any], *, session_id: st
         "session_id": str(session_id or ""),
         "trace_id": str(decision.get("trace_id") or ""),
         "workflow_id": str(decision.get("task_id") or ""),
-        "path_before": str(route_meta.get("router_arbiter_path_before") or ""),
-        "path_after": str(route_meta.get("router_arbiter_path_after") or route_meta.get("path") or ""),
-        "final_path": str(route_meta.get("path") or ""),
+        "route_semantic_before": str(route_meta.get("router_arbiter_route_semantic_before") or ""),
+        "route_semantic_after": str(
+            route_meta.get("router_arbiter_route_semantic_after")
+            or route_meta.get("route_semantic")
+            or ""
+        ),
+        "final_route_semantic": str(route_meta.get("route_semantic") or ""),
         "risk_level": str(route_meta.get("risk_level") or ""),
         "router_arbiter_status": arbiter_status,
         "router_arbiter_action": str(route_meta.get("router_arbiter_action") or ""),
@@ -615,9 +710,8 @@ def _emit_chat_route_arbiter_event(route_meta: Dict[str, Any], *, session_id: st
         "router_arbiter_freeze": bool(route_meta.get("router_arbiter_freeze")),
         "router_arbiter_hitl": bool(route_meta.get("router_arbiter_hitl")),
         "router_arbiter_escalated": bool(route_meta.get("router_arbiter_escalated")),
-        "outer_session_id": str(route_meta.get("outer_session_id") or ""),
-        "core_session_id": str(route_meta.get("core_session_id") or ""),
-        "execution_session_id": str(route_meta.get("execution_session_id") or ""),
+        "shell_session_id": str(route_meta.get("shell_session_id") or ""),
+        "core_execution_session_id": str(route_meta.get("core_execution_session_id") or ""),
     }
     store.emit(event_type, payload, source="apiserver.chat_stream")
 
@@ -625,7 +719,7 @@ def _emit_chat_route_arbiter_event(route_meta: Dict[str, Any], *, session_id: st
 def _emit_agentic_loop_completion_event(
     *,
     session_id: str,
-    execution_session_id: str,
+    core_execution_session_id: str,
     route_meta: Dict[str, Any],
     chunk_data: Dict[str, Any],
 ) -> None:
@@ -652,12 +746,11 @@ def _emit_agentic_loop_completion_event(
     details = chunk_data.get("details") if isinstance(chunk_data.get("details"), dict) else {}
     payload = {
         "session_id": str(session_id or ""),
-        "execution_session_id": str(execution_session_id or ""),
-        "outer_session_id": str(route_meta.get("outer_session_id") or ""),
-        "core_session_id": str(route_meta.get("core_session_id") or ""),
+        "shell_session_id": str(route_meta.get("shell_session_id") or ""),
+        "core_execution_session_id": str(core_execution_session_id or ""),
         "trace_id": str(decision.get("trace_id") or ""),
         "workflow_id": str(decision.get("task_id") or ""),
-        "path": str(route_meta.get("path") or ""),
+        "route_semantic": str(route_meta.get("route_semantic") or ""),
         "status": str(chunk_data.get("status") or ""),
         "reason": str(chunk_data.get("reason") or ""),
         "decision": str(chunk_data.get("decision") or ""),
@@ -672,7 +765,7 @@ def _emit_agentic_loop_completion_event(
 def _emit_core_child_spawn_deferred_event(
     *,
     session_id: str,
-    execution_session_id: str,
+    core_execution_session_id: str,
     route_meta: Dict[str, Any],
     chunk_data: Dict[str, Any],
 ) -> None:
@@ -688,12 +781,11 @@ def _emit_core_child_spawn_deferred_event(
     decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
     payload = {
         "session_id": str(session_id or ""),
-        "execution_session_id": str(execution_session_id or ""),
-        "outer_session_id": str(route_meta.get("outer_session_id") or ""),
-        "core_session_id": str(route_meta.get("core_session_id") or ""),
+        "shell_session_id": str(route_meta.get("shell_session_id") or ""),
+        "core_execution_session_id": str(core_execution_session_id or ""),
         "trace_id": str(decision.get("trace_id") or ""),
         "workflow_id": str(decision.get("task_id") or ""),
-        "path": str(route_meta.get("path") or ""),
+        "route_semantic": str(route_meta.get("route_semantic") or ""),
         "pipeline_id": str(chunk_data.get("pipeline_id") or ""),
         "agent_id": str(chunk_data.get("agent_id") or ""),
         "role": str(chunk_data.get("role") or ""),
@@ -762,7 +854,7 @@ def _read_chat_route_event_rows(*, limit: int = 2000) -> List[Dict[str, Any]]:
     return rows
 
 
-def _collect_chat_route_bridge_events(*, session_ids: List[str], limit: int = 20) -> List[Dict[str, Any]]:
+def _collect_chat_route_session_state_events(*, session_ids: List[str], limit: int = 20) -> List[Dict[str, Any]]:
     ids = {str(item or "").strip() for item in session_ids if str(item or "").strip()}
     if not ids:
         return []
@@ -776,30 +868,45 @@ def _collect_chat_route_bridge_events(*, session_ids: List[str], limit: int = 20
         if not isinstance(payload, dict):
             continue
 
-        outer_session_id = str(payload.get("outer_session_id") or payload.get("session_id") or "").strip()
-        core_session_id = str(payload.get("core_session_id") or "").strip()
-        execution_session_id = str(payload.get("execution_session_id") or "").strip()
-        event_session_ids = {sid for sid in (outer_session_id, core_session_id, execution_session_id) if sid}
+        shell_session_id = str(payload.get("shell_session_id") or payload.get("session_id") or "").strip()
+        core_execution_session_id = str(payload.get("core_execution_session_id") or "").strip()
+        event_session_ids = {sid for sid in (shell_session_id, core_execution_session_id) if sid}
         if not (event_session_ids & ids):
             continue
+
+        normalized_event_route_semantic = _normalize_route_semantic(payload.get("route_semantic"))
+        normalized_event_trigger = _normalize_route_semantic(payload.get("trigger") or normalized_event_route_semantic)
+        route_semantic = normalized_event_route_semantic
+        active_agent = str(payload.get("active_agent") or "").strip()
+        if not active_agent:
+            active_agent = "core" if route_semantic == "core_execution" else "shell"
+        dispatch_to_core = bool(payload.get("dispatch_to_core"))
+        if not dispatch_to_core and route_semantic == "core_execution":
+            dispatch_to_core = True
 
         matched.append(
             {
                 "timestamp": str(row.get("timestamp") or ""),
                 "event_type": "PromptInjectionComposed",
-                "path": str(payload.get("path") or ""),
-                "trigger": str(payload.get("trigger") or ""),
+                "trigger": normalized_event_trigger,
+                "route_semantic": route_semantic,
+                "entry_agent": str(payload.get("entry_agent") or "shell"),
+                "active_agent": active_agent,
+                "dispatch_to_core": dispatch_to_core,
+                "handoff_tool": str(
+                    payload.get("handoff_tool") or ("dispatch_to_core" if dispatch_to_core else "")
+                ),
+                "core_execution_route": str(payload.get("core_execution_route") or ""),
                 "delegation_intent": str(payload.get("delegation_intent") or ""),
                 "prompt_profile": str(payload.get("prompt_profile") or ""),
                 "injection_mode": str(payload.get("injection_mode") or ""),
-                "outer_session_id": outer_session_id,
-                "core_session_id": core_session_id,
-                "execution_session_id": execution_session_id,
-                "path_b_budget_escalated": bool(payload.get("path_b_budget_escalated")),
-                "path_b_budget_reason": str(payload.get("path_b_budget_reason") or ""),
-                "path_b_clarify_turns": int(payload.get("path_b_clarify_turns") or 0),
-                "path_b_clarify_limit": int(payload.get("path_b_clarify_limit") or _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT),
-                "path_b_clarify_limit_override": payload.get("path_b_clarify_limit_override"),
+                "shell_session_id": shell_session_id,
+                "core_execution_session_id": core_execution_session_id,
+                "shell_clarify_budget_escalated": bool(payload.get("shell_clarify_budget_escalated")),
+                "shell_clarify_budget_reason": str(payload.get("shell_clarify_budget_reason") or ""),
+                "shell_clarify_turns": int(payload.get("shell_clarify_turns") or 0),
+                "shell_clarify_limit": int(payload.get("shell_clarify_limit") or _CHAT_ROUTE_SHELL_CLARIFY_LIMIT),
+                "shell_clarify_limit_override": payload.get("shell_clarify_limit_override"),
                 "route_quality_guard_status": _ops_status_to_severity(
                     str(payload.get("route_quality_guard_status") or "unknown")
                 ),
@@ -809,8 +916,8 @@ def _collect_chat_route_bridge_events(*, session_ids: List[str], limit: int = 20
                 "route_quality_guard_reason_codes": _sanitize_route_quality_reason_codes(
                     payload.get("route_quality_guard_reason_codes")
                 ),
-                "route_quality_guard_path_before": str(payload.get("route_quality_guard_path_before") or ""),
-                "route_quality_guard_path_after": str(payload.get("route_quality_guard_path_after") or ""),
+                "route_quality_guard_route_semantic_before": str(payload.get("route_quality_guard_route_semantic_before") or ""),
+                "route_quality_guard_route_semantic_after": str(payload.get("route_quality_guard_route_semantic_after") or ""),
                 "router_arbiter_status": _ops_status_to_severity(
                     str(payload.get("router_arbiter_status") or "unknown")
                 ),
@@ -820,8 +927,8 @@ def _collect_chat_route_bridge_events(*, session_ids: List[str], limit: int = 20
                 "router_arbiter_reason_codes": _sanitize_router_arbiter_reason_codes(
                     payload.get("router_arbiter_reason_codes")
                 ),
-                "router_arbiter_path_before": str(payload.get("router_arbiter_path_before") or ""),
-                "router_arbiter_path_after": str(payload.get("router_arbiter_path_after") or ""),
+                "router_arbiter_route_semantic_before": str(payload.get("router_arbiter_route_semantic_before") or ""),
+                "router_arbiter_route_semantic_after": str(payload.get("router_arbiter_route_semantic_after") or ""),
                 "router_arbiter_delegate_turns": int(payload.get("router_arbiter_delegate_turns") or 0),
                 "router_arbiter_max_delegate_turns": int(
                     payload.get("router_arbiter_max_delegate_turns") or _router_arbiter_max_delegate_turns()
@@ -830,7 +937,7 @@ def _collect_chat_route_bridge_events(*, session_ids: List[str], limit: int = 20
                 "router_arbiter_freeze": bool(payload.get("router_arbiter_freeze")),
                 "router_arbiter_hitl": bool(payload.get("router_arbiter_hitl")),
                 "router_arbiter_escalated": bool(payload.get("router_arbiter_escalated")),
-                "core_session_created": bool(payload.get("core_session_created")),
+                "core_execution_session_created": bool(payload.get("core_execution_session_created")),
                 "source": str(row.get("source") or ""),
             }
         )
@@ -840,77 +947,84 @@ def _collect_chat_route_bridge_events(*, session_ids: List[str], limit: int = 20
     return matched
 
 
-def _build_chat_route_bridge_payload(session_id: str, *, limit: int = 20) -> Dict[str, Any]:
+def _build_chat_route_session_state_payload(session_id: str, *, limit: int = 20) -> Dict[str, Any]:
     session = _get_message_manager().get_session(session_id)
     if not isinstance(session, dict):
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
 
+    shell_session_id = str(session_id or "")
     state = _ensure_chat_route_state(session_id)
-    core_session_id = str(state.get("core_session_id") or "").strip()
-    execution_session_id = str(state.get("last_execution_session_id") or session_id)
-    session_ids = [session_id]
-    if core_session_id:
-        session_ids.append(core_session_id)
-    route_events = _collect_chat_route_bridge_events(session_ids=session_ids, limit=max(1, int(limit)))
+    core_execution_session_id = str(state.get("core_execution_session_id") or "").strip()
+    last_core_execution_session_id = str(state.get("last_core_execution_session_id") or shell_session_id)
+    session_ids = [shell_session_id]
+    if core_execution_session_id:
+        session_ids.append(core_execution_session_id)
+    route_events = _collect_chat_route_session_state_events(session_ids=session_ids, limit=max(1, int(limit)))
     if not route_events:
-        fallback_path = "path-c" if core_session_id else "path-a"
+        fallback_route_semantic = "core_execution" if core_execution_session_id else "shell_readonly"
         route_events = [
             {
                 "timestamp": _ops_utc_iso_now(),
-                "event_type": "RouteBridgeStateFallback",
-                "session_id": str(session_id),
-                "execution_session_id": execution_session_id,
-                "outer_session_id": str(session_id),
-                "core_session_id": core_session_id,
-                "path": fallback_path,
-                "trigger": fallback_path,
-                "risk_level": "write_repo" if fallback_path == "path-c" else "read_only",
-                "outer_readonly_hit": fallback_path == "path-a",
-                "core_escalation": fallback_path == "path-c",
-                "delegation_intent": "core_execution" if fallback_path == "path-c" else "read_only_exploration",
+                "event_type": "RouteSessionStateStateFallback",
+                "session_id": shell_session_id,
+                "shell_session_id": shell_session_id,
+                "core_execution_session_id": core_execution_session_id,
+                "trigger": fallback_route_semantic,
+                "route_semantic": fallback_route_semantic,
+                "entry_agent": "shell",
+                "active_agent": "core" if fallback_route_semantic == "core_execution" else "shell",
+                "dispatch_to_core": fallback_route_semantic == "core_execution",
+                "handoff_tool": "dispatch_to_core" if fallback_route_semantic == "core_execution" else "",
+                "core_execution_route": "",
+                "risk_level": "write_repo" if fallback_route_semantic == "core_execution" else "read_only",
+                "shell_readonly_hit": fallback_route_semantic == "shell_readonly",
+                "delegation_intent": (
+                    "core_execution" if fallback_route_semantic == "core_execution" else "read_only_exploration"
+                ),
                 "prompt_profile": "",
                 "injection_mode": "",
-                "path_b_budget_escalated": False,
-                "path_b_budget_reason": "",
-                "path_b_clarify_turns": int(state.get("path_b_clarify_turns") or 0),
-                "path_b_clarify_limit": _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT,
-                "path_b_clarify_limit_override": None,
+                "shell_clarify_budget_escalated": False,
+                "shell_clarify_budget_reason": "",
+                "shell_clarify_turns": int(state.get("shell_clarify_turns") or 0),
+                "shell_clarify_limit": _CHAT_ROUTE_SHELL_CLARIFY_LIMIT,
+                "shell_clarify_limit_override": None,
                 "route_quality_guard_status": "unknown",
                 "route_quality_guard_applied": False,
                 "route_quality_guard_action": "",
                 "route_quality_guard_reason": "",
                 "route_quality_guard_reason_codes": [],
-                "route_quality_guard_path_before": "",
-                "route_quality_guard_path_after": "",
+                "route_quality_guard_route_semantic_before": "",
+                "route_quality_guard_route_semantic_after": "",
                 "router_arbiter_status": "unknown",
                 "router_arbiter_applied": False,
                 "router_arbiter_action": "",
                 "router_arbiter_reason": "",
                 "router_arbiter_reason_codes": [],
-                "router_arbiter_path_before": "",
-                "router_arbiter_path_after": "",
+                "router_arbiter_route_semantic_before": "",
+                "router_arbiter_route_semantic_after": "",
                 "router_arbiter_delegate_turns": 0,
                 "router_arbiter_max_delegate_turns": int(_router_arbiter_max_delegate_turns() or 0),
                 "router_arbiter_conflict_ticket": "",
                 "router_arbiter_freeze": False,
                 "router_arbiter_hitl": False,
                 "router_arbiter_escalated": False,
-                "core_session_created": False,
+                "core_execution_session_created": False,
                 "source": "state_fallback",
             }
         ]
 
     return {
         "status": "success",
-        "outer_session_id": str(session_id),
-        "core_session_id": core_session_id,
-        "execution_session_id": execution_session_id,
-        "outer_session_exists": True,
-        "core_session_exists": bool(core_session_id and _get_message_manager().get_session(core_session_id)),
+        "shell_session_id": shell_session_id,
+        "core_execution_session_id": core_execution_session_id,
+        "shell_session_exists": True,
+        "core_execution_session_exists": bool(
+            core_execution_session_id and _get_message_manager().get_session(core_execution_session_id)
+        ),
         "state": {
-            "path_b_clarify_turns": int(state.get("path_b_clarify_turns") or 0),
-            "path_b_clarify_limit": _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT,
-            "last_execution_session_id": execution_session_id,
+            "shell_clarify_turns": int(state.get("shell_clarify_turns") or 0),
+            "shell_clarify_limit": _CHAT_ROUTE_SHELL_CLARIFY_LIMIT,
+            "last_core_execution_session_id": last_core_execution_session_id,
             "last_core_escalation_at_ms": int(state.get("last_core_escalation_at_ms") or 0),
         },
         "recent_route_events": route_events,

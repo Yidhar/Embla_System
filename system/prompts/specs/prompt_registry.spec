@@ -4,7 +4,7 @@
     {
       "prompt_name": "conversation_style_prompt",
       "path": "core/dna/conversation_style_prompt.md",
-      "aliases": ["outer_chat_style"]
+      "aliases": ["shell_chat_style"]
     },
     {
       "prompt_name": "conversation_analyzer_prompt",
@@ -47,18 +47,18 @@
       "aliases": []
     },
     {
-      "prompt_name": "outer_readonly_research",
-      "path": "agents/outer/outer_readonly_research.md",
+      "prompt_name": "shell_readonly_research",
+      "path": "agents/shell/shell_readonly_research.md",
       "aliases": []
     },
     {
-      "prompt_name": "outer_readonly_general",
-      "path": "agents/outer/outer_readonly_general.md",
+      "prompt_name": "shell_readonly_general",
+      "path": "agents/shell/shell_readonly_general.md",
       "aliases": []
     },
     {
       "prompt_name": "explicit_role_delegate",
-      "path": "agents/outer/explicit_role_delegate.md",
+      "path": "agents/shell/explicit_role_delegate.md",
       "aliases": []
     }
   ]

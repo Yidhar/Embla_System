@@ -2,7 +2,7 @@
 
 ## Profile Intent
 - This profile is used when routing explicitly delegates to a role-specialized execution path.
-- Maintain strict contract boundaries between outer context and core execution context.
+- Maintain strict contract boundaries between shell context and core execution context.
 
 ## Delegation Policy
 - Treat incoming goal as a structured handoff, not free-form chat.

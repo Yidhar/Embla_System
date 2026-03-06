@@ -18,17 +18,17 @@ def test_router_engine_adds_prompt_profile_fields_for_read_only_research() -> No
     assert decision.selected_role == "researcher"
     assert decision.selected_model_tier == "secondary"
     assert decision.delegation_intent == "read_only_exploration"
-    assert decision.prompt_profile == "outer_readonly_research"
+    assert decision.prompt_profile == "shell_readonly_research"
     assert decision.injection_mode == "minimal"
     payload = decision.to_dict()
-    assert payload["prompt_profile"] == "outer_readonly_research"
+    assert payload["prompt_profile"] == "shell_readonly_research"
     assert payload["injection_mode"] == "minimal"
     assert payload["delegation_intent"] == "read_only_exploration"
     assert payload["workflow_entry_state"] == "planned"
     assert payload["controlled_execution_plan"]["schema_version"] == "ws28_router_workflow_engine.v1"
 
 
-def test_router_engine_keeps_legacy_role_tier_behavior_for_high_risk_path() -> None:
+def test_router_engine_keeps_legacy_role_tier_behavior_for_high_risk_route() -> None:
     router = TaskRouterEngine()
     decision = router.route(
         RouterRequest(

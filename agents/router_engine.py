@@ -317,7 +317,7 @@ class TaskRouterEngine:
     ) -> tuple[str, str]:
         intent = str(delegation_intent or "").strip().lower()
         if intent not in {"core_execution", "explicit_role_delegate"}:
-            return "outer", f"delegation_intent={intent or 'unknown'} => outer route"
+            return "shell_direct", f"delegation_intent={intent or 'unknown'} => shell_direct route"
 
         risk = str(request.risk_level or "").strip().lower()
         if risk in FAST_TRACK_RISK_BLOCKLIST:
@@ -405,11 +405,11 @@ class TaskRouterEngine:
             return "core_exec_general", "core_execution + non-standard role => core_exec_general"
         if intent == "read_only_exploration":
             if role == "researcher" or task_type == "research":
-                return "outer_readonly_research", "read_only_exploration + research => outer_readonly_research"
-            return "outer_readonly_general", "read_only_exploration => outer_readonly_general"
+                return "shell_readonly_research", "read_only_exploration + research => shell_readonly_research"
+            return "shell_readonly_general", "read_only_exploration => shell_readonly_general"
         if intent == "explicit_role_delegate":
             return "explicit_role_delegate", "explicit_role_delegate => explicit_role_delegate"
-        return "outer_general", "default => outer_general"
+        return "shell_general", "default => shell_general"
 
     @staticmethod
     def _select_injection_mode(*, request: RouterRequest, task_type: str) -> tuple[str, str]:

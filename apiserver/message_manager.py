@@ -9,7 +9,7 @@ import logging
 import re
 import sys
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -64,7 +64,7 @@ class MessageManager:
             self.persistent_context = True
             self.context_load_days = 3
             self.log_dir = Path("logs")
-            self.ai_name = "娜迦"
+            self.ai_name = "Embla"
             logger.warning("无法导入配置，使用默认历史轮数设置")
 
         # 会话持久化存储目录
@@ -625,45 +625,56 @@ class MessageManager:
         except Exception as e:
             logger.error(f"保存对话日志失败: {e}")
     
-    def save_conversation_and_logs(self, session_id: str, user_message: str, assistant_response: str):
-        """统一保存对话历史与日志 - 整合重复逻辑"""
+    def save_conversation_and_logs(
+        self,
+        session_id: str,
+        user_message: str,
+        assistant_response: str,
+        *,
+        enable_shell_l2_extraction: bool = True,
+        shell_round_messages: Optional[List[Dict[str, Any]]] = None,
+    ):
+        """统一保存对话历史与日志，并按门禁触发 Shell L2 抽取。"""
         try:
-            # 保存对话历史到消息管理器（临时会话的 add_message 内部已跳过磁盘持久化）
             self.add_message(session_id, "user", user_message)
-            # 空响应不保存到会话历史，避免 LLM 在后续对话中模仿空回复模式
             if assistant_response and assistant_response.strip():
                 self.add_message(session_id, "assistant", assistant_response)
             else:
                 logger.warning(f"会话 {session_id}: assistant 响应为空，跳过保存到会话历史")
 
-            # 临时会话不保存日志文件，也不触发记忆提取
             session = self.sessions.get(session_id)
             if session and session.get("temporary"):
                 return
 
-            # 保存对话日志到文件
             self.save_conversation_log(
                 user_message,
                 assistant_response,
-                dev_mode=False  # 开发者模式已禁用
+                dev_mode=False,
             )
 
-            # 触发五元组自动提取（如果记忆系统已启用）
+            if not enable_shell_l2_extraction:
+                logger.debug("会话 %s: 本轮跳过 Shell L2 抽取", session_id)
+                return
+
+            if not shell_round_messages:
+                logger.warning("会话 %s: 缺少本轮完整消息，跳过 Shell L2 抽取", session_id)
+                return
+
             try:
-                # 优先使用远程 NagaMemory 服务
-                from summer_memory.memory_client import get_remote_memory_client
-                remote = get_remote_memory_client()
-                if remote is not None:
+                from summer_memory.memory_manager import memory_manager
+
+                if memory_manager and memory_manager.enabled and memory_manager.auto_extract:
                     import asyncio
-                    asyncio.create_task(remote.add_memory(user_message, assistant_response))
-                    logger.info(f"已提交远程记忆提取任务: {user_message[:50]}...")
-                else:
-                    # 回退到本地 summer_memory
-                    from summer_memory.memory_manager import memory_manager
-                    if memory_manager and memory_manager.enabled and memory_manager.auto_extract:
-                        import asyncio
-                        asyncio.create_task(memory_manager.add_conversation_memory(user_message, assistant_response))
-                        logger.info(f"已提交五元组提取任务: {user_message[:50]}...")
+
+                    asyncio.create_task(
+                        memory_manager.add_shell_round_memory(
+                            session_id,
+                            shell_round_messages,
+                            latest_user_input=user_message,
+                            latest_ai_response=assistant_response,
+                        )
+                    )
+                    logger.info("已提交Shell L2会话级抽取任务: %s...", user_message[:50])
             except ImportError as e:
                 logger.warning(f"记忆系统未启用或导入失败: {e}")
         except Exception as e:

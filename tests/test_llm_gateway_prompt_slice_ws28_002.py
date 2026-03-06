@@ -10,7 +10,12 @@ from agents.llm_gateway import (
 
 def test_llm_gateway_compose_exposes_prefix_tail_hashes() -> None:
     gateway = LLMGateway()
-    request = GatewayRouteRequest(task_type="qa", severity="low", budget_remaining=5.0, path="path-c")
+    request = GatewayRouteRequest(
+        task_type="qa",
+        severity="low",
+        budget_remaining=5.0,
+        route_semantic="core_execution",
+    )
     prompt_input = PromptEnvelopeInput(
         static_header="LEGACY_STATIC",
         long_term_summary="LEGACY_SUMMARY",
@@ -52,12 +57,17 @@ def test_llm_gateway_compose_exposes_prefix_tail_hashes() -> None:
     assert decision.dropped_slices == []
 
 
-def test_llm_gateway_path_a_drops_execution_dynamic_slices() -> None:
+def test_llm_gateway_shell_readonly_drops_execution_dynamic_slices() -> None:
     gateway = LLMGateway()
-    request = GatewayRouteRequest(task_type="qa", severity="low", budget_remaining=5.0, path="path-a")
+    request = GatewayRouteRequest(
+        task_type="qa",
+        severity="low",
+        budget_remaining=5.0,
+        route_semantic="shell_readonly",
+    )
     prompt_input = PromptEnvelopeInput(
-        static_header="OUTER STATIC",
-        long_term_summary="OUTER SUMMARY",
+        static_header="SHELL STATIC",
+        long_term_summary="SHELL SUMMARY",
         dynamic_messages=[{"role": "user", "content": "please run write command"}],
         prompt_slices=[
             PromptSlice(

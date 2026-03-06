@@ -21,7 +21,7 @@ def _install_temp_prompt_manager_with_registry(tmp_path: Path, monkeypatch):
             {
                 "prompt_name": "conversation_style_prompt",
                 "path": "layers/core/conversation_style_prompt.md",
-                "aliases": ["outer_chat_style"],
+                "aliases": ["shell_chat_style"],
             },
             {
                 "prompt_name": "tool_dispatch_prompt",
@@ -38,9 +38,9 @@ def _install_temp_prompt_manager_with_registry(tmp_path: Path, monkeypatch):
 
 def test_prompt_registry_alias_can_read_and_write_canonical_file(monkeypatch, tmp_path: Path) -> None:
     prompts_dir, manager = _install_temp_prompt_manager_with_registry(tmp_path, monkeypatch)
-    assert manager.get_prompt("outer_chat_style") == "STYLE_V1"
+    assert manager.get_prompt("shell_chat_style") == "STYLE_V1"
 
-    manager.save_prompt("outer_chat_style", "STYLE_V2")
+    manager.save_prompt("shell_chat_style", "STYLE_V2")
     canonical_file = prompts_dir / "layers" / "core" / "conversation_style_prompt.md"
     assert canonical_file.read_text(encoding="utf-8") == "STYLE_V2"
 
@@ -77,11 +77,11 @@ def test_prompt_acl_evaluation_uses_registry_canonical_mapping(monkeypatch, tmp_
     )
 
     decision = config_module.evaluate_prompt_acl(
-        prompt_name="outer_chat_style",
+        prompt_name="shell_chat_style",
         prompts_dir=prompts_dir,
     )
     assert decision["prompt_name"] == "conversation_style_prompt"
-    assert decision["requested_prompt_name"] == "outer_chat_style"
+    assert decision["requested_prompt_name"] == "shell_chat_style"
     assert decision["blocked"] is True
     assert decision["reason_code"] == "PROMPT_ACL_APPROVAL_TICKET_REQUIRED"
     assert decision["matched_rule"]["path_pattern"] == "conversation_style_prompt.md"

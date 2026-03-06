@@ -81,7 +81,7 @@ def run_ws28_runtime_signal_seed_ws28_031(
     sample_id = uuid.uuid4().hex[:10]
     task_id = f"ws28-signal-seed-{sample_id}"
     workflow_id = f"wf-{task_id}"
-    execution_session_id = f"ws28-seed-session-{sample_id}"
+    core_execution_session_id = f"ws28-seed-session-{sample_id}"
     trace_id = f"ws28-seed-trace-{sample_id}"
     sample_patch_path = f"scratch/reports/ws28_runtime_signal_seed_{sample_id}.md"
     sample_patch_content = (
@@ -124,13 +124,12 @@ def run_ws28_runtime_signal_seed_ws28_031(
 
     # Seed one completion-submitted signal through the same EventStore channel.
     completion_payload = {
-        "session_id": execution_session_id,
-        "execution_session_id": execution_session_id,
-        "outer_session_id": execution_session_id,
-        "core_session_id": f"{execution_session_id}__core",
+        "session_id": core_execution_session_id,
+        "shell_session_id": core_execution_session_id,
+        "core_execution_session_id": core_execution_session_id,
         "trace_id": trace_id,
         "workflow_id": workflow_id,
-        "path": "path-c",
+        "route_semantic": "core_execution",
         "status": "success",
         "reason": "submitted_completion",
         "decision": "stop",
@@ -154,7 +153,7 @@ def run_ws28_runtime_signal_seed_ws28_031(
         for row in rows
         if str(row.get("event_type") or "") == "AgenticLoopCompletionSubmitted"
         and isinstance(row.get("payload"), dict)
-        and str(row["payload"].get("execution_session_id") or "") == execution_session_id
+        and str(row["payload"].get("core_execution_session_id") or "") == core_execution_session_id
     ]
 
     original_repo_root = routes_ops._ops_repo_root  # noqa: SLF001
@@ -189,7 +188,7 @@ def run_ws28_runtime_signal_seed_ws28_031(
             "sample_id": sample_id,
             "task_id": task_id,
             "workflow_id": workflow_id,
-            "execution_session_id": execution_session_id,
+            "core_execution_session_id": core_execution_session_id,
             "patch_path": sample_patch_path,
             "event_file": _to_unix(event_file),
         },

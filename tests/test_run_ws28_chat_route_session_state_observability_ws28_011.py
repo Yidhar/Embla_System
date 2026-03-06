@@ -4,7 +4,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from scripts.run_ws28_chat_route_bridge_observability_ws28_011 import main
+from scripts.run_ws28_chat_route_session_state_observability_ws28_011 import main
 
 
 def _make_case_root(prefix: str) -> Path:
@@ -17,14 +17,14 @@ def _cleanup_case_root(root: Path) -> None:
     shutil.rmtree(root, ignore_errors=True)
 
 
-def test_run_ws28_chat_route_bridge_observability_cli_main_smoke(monkeypatch) -> None:
-    case_root = _make_case_root("test_run_ws28_chat_route_bridge_observability_ws28_011")
+def test_run_ws28_chat_route_session_state_observability_cli_main_smoke(monkeypatch) -> None:
+    case_root = _make_case_root("test_run_ws28_chat_route_session_state_observability_ws28_011")
     try:
-        output = case_root / "ws28_011_chat_route_bridge_observability.json"
+        output = case_root / "ws28_011_chat_route_session_state_observability.json"
         monkeypatch.setattr(
             "sys.argv",
             [
-                "run_ws28_chat_route_bridge_observability_ws28_011.py",
+                "run_ws28_chat_route_session_state_observability_ws28_011.py",
                 "--repo-root",
                 ".",
                 "--output",

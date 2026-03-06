@@ -99,10 +99,10 @@ class TestShellAgent:
     def test_shell_loads_persona(self, tmp_path):
         from agents.shell_agent import ShellAgent, ShellAgentConfig
         persona_path = tmp_path / "persona.md"
-        persona_path.write_text("I am Naga, a helpful AI assistant.", encoding="utf-8")
+        persona_path.write_text("I am Embla, a helpful AI assistant.", encoding="utf-8")
         config = ShellAgentConfig(persona_dna_path=str(persona_path))
         shell = ShellAgent(config=config)
-        assert "Naga" in shell.persona_prompt
+        assert "Embla" in shell.persona_prompt
 
 
 # ── Core Agent Tests (RouterDecision Integration) ──────────────
@@ -137,7 +137,7 @@ class TestCoreAgent:
         )
         core = CoreAgent(store=store, mailbox=mailbox)
         decomp = core.decompose_goal(dispatch)
-        results = core.spawn_experts(decomp, core_session_id="core")
+        results = core.spawn_experts(decomp, core_execution_session_id="core")
         assert len(results) > 0
         assert all("agent_id" in r for r in results)
         assert all("model_tier" in r for r in results)
@@ -458,7 +458,7 @@ class TestPipeline:
         end_event = next(e for e in events if e["type"] == "pipeline_end")
         assert end_event["reason"] == "shell_direct_reply"
 
-    def test_pipeline_fast_track_route_skips_expert_path_when_runtime_available(self, store, mailbox):
+    def test_pipeline_fast_track_route_skips_expert_fanout_when_runtime_available(self, store, mailbox):
         from agents.pipeline import run_multi_agent_pipeline
 
         async def _mock_child_llm(messages, tools, model):
@@ -573,8 +573,8 @@ class TestPipeline:
                 session_id="forced-sess__core",
                 risk_level="read_only",
                 route_decision=forced_decision.to_dict(),
-                forced_path="path-c",
-                core_session_id="forced-sess__core",
+                forced_route_semantic="core_execution",
+                core_execution_session_id="forced-sess__core",
                 store=store,
                 mailbox=mailbox,
                 task_board_engine=task_board_engine,
@@ -678,13 +678,13 @@ class TestPipeline:
                 "status": "ok",
             }
 
-        core_session_id = "outer-session__core"
+        core_execution_session_id = "shell-session__core"
 
         first_events = self._run(self._collect_events(
             run_multi_agent_pipeline(
                 message="Implement auth endpoint and tests",
-                session_id=core_session_id,
-                core_session_id=core_session_id,
+                session_id=core_execution_session_id,
+                core_execution_session_id=core_execution_session_id,
                 risk_level="write_repo",
                 enable_child_execution=True,
                 child_llm_call=_mock_child_llm,
@@ -702,8 +702,8 @@ class TestPipeline:
         second_events = self._run(self._collect_events(
             run_multi_agent_pipeline(
                 message="Implement auth endpoint and tests",
-                session_id=core_session_id,
-                core_session_id=core_session_id,
+                session_id=core_execution_session_id,
+                core_execution_session_id=core_execution_session_id,
                 risk_level="write_repo",
                 enable_child_execution=True,
                 child_llm_call=_mock_child_llm,
@@ -720,7 +720,7 @@ class TestPipeline:
 
         # Runtime store keeps historical children, but report collection should
         # be scoped to the current pipeline run instead of all non-destroyed children.
-        all_children = store.list_children(core_session_id)
+        all_children = store.list_children(core_execution_session_id)
         assert len(all_children) >= first_expert_count + second_expert_count
 
     def test_pipeline_cleanup_destroy_mode_reaps_current_run_children(self, store, mailbox, task_board_engine):
@@ -750,12 +750,12 @@ class TestPipeline:
                 "status": "ok",
             }
 
-        core_session_id = "cleanup-destroy__core"
+        core_execution_session_id = "cleanup-destroy__core"
         events = self._run(self._collect_events(
             run_multi_agent_pipeline(
                 message="Implement auth endpoint and tests",
-                session_id=core_session_id,
-                core_session_id=core_session_id,
+                session_id=core_execution_session_id,
+                core_execution_session_id=core_execution_session_id,
                 risk_level="write_repo",
                 enable_child_execution=True,
                 child_llm_call=_mock_child_llm,
@@ -771,7 +771,7 @@ class TestPipeline:
         cleanup = end_event["child_session_cleanup"]
         assert cleanup["mode"] == "destroy"
         assert cleanup["destroyed_count"] >= 1
-        assert len(store.list_children(core_session_id)) == 0
+        assert len(store.list_children(core_execution_session_id)) == 0
 
     def test_pipeline_cleanup_ttl_mode_reaps_expired_history_children(self, store, mailbox, task_board_engine):
         from agents.pipeline import run_multi_agent_pipeline
@@ -800,22 +800,22 @@ class TestPipeline:
                 "status": "ok",
             }
 
-        core_session_id = "cleanup-ttl__core"
+        core_execution_session_id = "cleanup-ttl__core"
         old_child = store.create(
             role="expert",
-            parent_id=core_session_id,
+            parent_id=core_execution_session_id,
             task_description="historical child",
             metadata={"pipeline_id": "pipe_historical_old"},
         )
         store.update_status(old_child.session_id, AgentStatus.WAITING)
-        mailbox.send(old_child.session_id, core_session_id, "historical report", message_type="report")
-        assert len(store.list_children(core_session_id)) == 1
+        mailbox.send(old_child.session_id, core_execution_session_id, "historical report", message_type="report")
+        assert len(store.list_children(core_execution_session_id)) == 1
 
         events = self._run(self._collect_events(
             run_multi_agent_pipeline(
                 message="Implement auth endpoint and tests",
-                session_id=core_session_id,
-                core_session_id=core_session_id,
+                session_id=core_execution_session_id,
+                core_execution_session_id=core_execution_session_id,
                 risk_level="write_repo",
                 enable_child_execution=True,
                 child_llm_call=_mock_child_llm,
@@ -833,7 +833,7 @@ class TestPipeline:
         assert cleanup["mode"] == "ttl"
         assert cleanup["ttl_seconds"] == 0
         assert cleanup["destroyed_count"] >= 2
-        assert len(store.list_children(core_session_id)) == 0
+        assert len(store.list_children(core_execution_session_id)) == 0
 
     def test_pipeline_core_loop_exposes_parent_lifecycle_tools(self, store, mailbox, task_board_engine):
         from agents.pipeline import run_multi_agent_pipeline
@@ -917,7 +917,7 @@ class TestPipeline:
                 run_multi_agent_pipeline(
                     message="Implement auth endpoint and tests",
                     session_id="core-loop-parent-tools",
-                    core_session_id="core-loop-parent-tools__core",
+                    core_execution_session_id="core-loop-parent-tools__core",
                     risk_level="write_repo",
                     enable_child_execution=True,
                     child_llm_call=_mock_child_llm,
@@ -1017,7 +1017,7 @@ class TestPipeline:
                 run_multi_agent_pipeline(
                     message="Implement auth endpoint and tests",
                     session_id="core-loop-resume__core",
-                    core_session_id="core-loop-resume__core",
+                    core_execution_session_id="core-loop-resume__core",
                     risk_level="write_repo",
                     enable_child_execution=True,
                     child_llm_call=_mock_child_llm,
@@ -1095,7 +1095,7 @@ class TestPipeline:
                 run_multi_agent_pipeline(
                     message="Implement auth endpoint and tests",
                     session_id="core-loop-spawn-review",
-                    core_session_id="core-loop-spawn-review__core",
+                    core_execution_session_id="core-loop-spawn-review__core",
                     risk_level="write_repo",
                     enable_child_execution=True,
                     child_llm_call=_mock_child_llm,

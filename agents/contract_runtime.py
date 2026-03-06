@@ -28,7 +28,7 @@ def trim_contract_text(value: Any, *, limit: int = 240) -> str:
 
 
 class CoreExecutionContractInput(BaseModel):
-    """Structured seed contract passed into Path-C execution loop."""
+    """Structured seed contract passed into core_execution loop."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -37,7 +37,7 @@ class CoreExecutionContractInput(BaseModel):
     goal: str = Field(min_length=1)
     scope_hint: str = ""
     acceptance_hint: str = "输出可验证的执行证据（含结果与报告路径），必要时附失败根因与下一步。"
-    outer_context_summary: str = ""
+    shell_context_summary: str = ""
     recent_user_history: List[str] = Field(default_factory=list)
     recent_assistant_history: List[str] = Field(default_factory=list)
     assumptions: List[str] = Field(default_factory=list)
@@ -49,7 +49,7 @@ class CoreExecutionContractInput(BaseModel):
         "goal",
         "scope_hint",
         "acceptance_hint",
-        "outer_context_summary",
+        "shell_context_summary",
         "evidence_path_hint",
         mode="before",
     )
@@ -94,22 +94,22 @@ def build_core_execution_contract_payload(
     if len(goal) <= 24 and any(marker and marker in lowered_goal for marker in markers):
         assumptions.append("用户输入可能是续写指令，需结合 recent_user_history 推断目标。")
 
-    outer_context_summary = ""
+    shell_context_summary = ""
     if latest_user_history:
-        outer_context_summary = " → ".join(latest_user_history[-2:])
+        shell_context_summary = " → ".join(latest_user_history[-2:])
     if latest_assistant_history:
         last_assistant = latest_assistant_history[-1]
-        if outer_context_summary:
-            outer_context_summary += f" [assistant: {last_assistant[:120]}]"
+        if shell_context_summary:
+            shell_context_summary += f" [assistant: {last_assistant[:120]}]"
         else:
-            outer_context_summary = f"[assistant: {last_assistant[:120]}]"
+            shell_context_summary = f"[assistant: {last_assistant[:120]}]"
 
     payload = CoreExecutionContractInput(
         contract_stage="seed",
         session_id=str(session_id or ""),
         goal=goal,
         scope_hint=scope_hint,
-        outer_context_summary=outer_context_summary,
+        shell_context_summary=shell_context_summary,
         recent_user_history=latest_user_history,
         recent_assistant_history=latest_assistant_history,
         assumptions=assumptions,
@@ -127,7 +127,7 @@ def build_core_execution_messages(
     recent_messages: Sequence[Dict[str, Any]] | None = None,
     followup_markers: Sequence[str] | None = None,
 ) -> List[Dict[str, Any]]:
-    """Build 3-message core execution packet for Path-C.
+    """Build 3-message core execution packet for core_execution.
 
     Message shape:
     1) system: core system prompt
@@ -159,4 +159,3 @@ __all__ = [
     "build_core_execution_messages",
     "trim_contract_text",
 ]
-

@@ -1,10 +1,11 @@
-"""L1 → L2 sync pipeline: extract entities from L1 episodic MD → SemanticGraphStore.
+"""L1 → tool-result topology sync pipeline.
 
-Architecture ref: doc/14-multi-agent-architecture.md §5.2
-  "L1→L2 管道：定期从经验 MD 中用次模型抽取五元组 → 写入 Neo4j + 向量化"
+This module projects L1 episodic markdown into the execution topology store
+(`agents.memory.semantic_graph`), which is separate from Shell L2 Graph RAG in
+`summer_memory/quintuple_graph.py`.
 
 Lightweight local implementation: regex-based extraction (no LLM required),
-syncing to the existing `SemanticGraphStore` (local JSON graph).
+syncing to the existing local JSON topology store.
 """
 
 from __future__ import annotations
@@ -151,6 +152,15 @@ def sync_all_experiences(
 
 __all__ = [
     "extract_entities_from_experience_md",
+    "extract_entities_from_experience_md_for_topology",
     "sync_all_experiences",
+    "sync_all_experiences_to_tool_result_topology",
     "sync_experience_to_graph",
+    "sync_experience_to_tool_result_topology",
 ]
+
+
+# Canonical aliases for the execution-topology naming.
+extract_entities_from_experience_md_for_topology = extract_entities_from_experience_md
+sync_experience_to_tool_result_topology = sync_experience_to_graph
+sync_all_experiences_to_tool_result_topology = sync_all_experiences

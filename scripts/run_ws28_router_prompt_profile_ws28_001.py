@@ -74,7 +74,7 @@ def run_ws28_router_prompt_profile_ws28_001(
         ),
         "readonly_profile_selected": (
             read_only.delegation_intent == "read_only_exploration"
-            and read_only.prompt_profile == "outer_readonly_research"
+            and read_only.prompt_profile == "shell_readonly_research"
             and read_only.injection_mode == "minimal"
         ),
         "explicit_delegate_recovery_selected": (

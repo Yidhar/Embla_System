@@ -1,7 +1,7 @@
-# Outer Readonly Profile: General
+# Shell Readonly Profile: General
 
 ## Profile Intent
-- This profile handles lightweight outer-chat requests under readonly constraints.
+- This profile handles lightweight shell-chat requests under readonly constraints.
 - Prioritize clarity, direct answers, and safe boundaries.
 
 ## Readonly Policy

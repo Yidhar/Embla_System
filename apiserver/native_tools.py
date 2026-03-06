@@ -4,7 +4,7 @@
 Native local tools for agentic loop.
 
 Goal:
-- Handle basic local tasks inside NagaAgent directly.
+- Handle basic local tasks inside Embla System directly.
 - Execute native local tools only.
 """
 
@@ -31,8 +31,8 @@ from system.workspace_transaction import ConflictBackoffConfig, WorkspaceChange,
 _DEFAULT_PREVIEW_CHARS = 6000
 _PY_REPL_BOOTSTRAP = (
     "import os,base64;"
-    "src=base64.b64decode(os.environ.get('NAGA_SAFE_REPL_PAYLOAD','')).decode('utf-8');"
-    "exec(compile(src,'<naga_safe_repl_payload>','exec'),{'__name__':'__main__'})"
+    "src=base64.b64decode(os.environ.get('EMBLA_SAFE_REPL_PAYLOAD','')).decode('utf-8');"
+    "exec(compile(src,'<embla_safe_repl_payload>','exec'),{'__name__':'__main__'})"
 )
 _SAFE_PY_BUILTINS = [
     "abs",
@@ -1631,7 +1631,7 @@ class NativeToolExecutor:
 
         payload_script = _build_safe_python_payload(code)
         payload_b64 = base64.b64encode(payload_script.encode("utf-8")).decode("ascii")
-        env = {"NAGA_SAFE_REPL_PAYLOAD": payload_b64}
+        env = {"EMBLA_SAFE_REPL_PAYLOAD": payload_b64}
 
         if sandbox == "docker":
             docker_image = str(call.get("docker_image") or "python:3.11-alpine").strip()

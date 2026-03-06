@@ -1,8 +1,12 @@
 """
-Lightweight semantic graph persistence and topology query helpers.
+Tool-result topology persistence and query helpers.
+
+This store models `session/tool/artifact/topic` execution topology from episodic
+records. It is intentionally separate from Shell L2 Graph RAG in
+`summer_memory/quintuple_graph.py`.
 
 NGA-WS19-006:
-- build/update graph from WS19-005 episodic records
+- build/update topology from WS19-005 episodic records
 - local JSON storage (no external dependency)
 - provide tool -> artifact -> topic/session topology queries
 """
@@ -100,7 +104,7 @@ def _build_node_id(node_type: str, key: str) -> str:
 
 
 class SemanticGraphStore:
-    """Mutable lightweight graph store backed by local JSON."""
+    """Mutable lightweight tool-result topology store backed by local JSON."""
 
     def __init__(self, graph_path: Optional[Path] = None, *, max_topics_per_record: int = 8) -> None:
         self.graph_path = Path(graph_path) if graph_path is not None else _default_graph_path()
@@ -450,9 +454,41 @@ def query_tool_artifact_topology(
     return store.query_tool_artifact_topology(tool, session_id=session_id, top_k_topics=top_k_topics)
 
 
+ToolResultTopologyStore = SemanticGraphStore
+
+
+def get_tool_result_topology() -> SemanticGraphStore:
+    return get_semantic_graph()
+
+
+def update_tool_result_topology_from_records(
+    session_id: str,
+    records: Sequence["EpisodicRecord"],
+    *,
+    graph: Optional[SemanticGraphStore] = None,
+) -> int:
+    store = graph or get_tool_result_topology()
+    return store.update_from_records(session_id, records)
+
+
+def query_tool_result_topology(
+    tool: str,
+    *,
+    session_id: Optional[str] = None,
+    top_k_topics: int = 8,
+    graph: Optional[SemanticGraphStore] = None,
+) -> List[Dict[str, Any]]:
+    store = graph or get_tool_result_topology()
+    return store.query_tool_artifact_topology(tool, session_id=session_id, top_k_topics=top_k_topics)
+
+
 __all__ = [
     "SemanticGraphStore",
+    "ToolResultTopologyStore",
     "get_semantic_graph",
+    "get_tool_result_topology",
     "query_tool_artifact_topology",
+    "query_tool_result_topology",
     "update_semantic_graph_from_records",
+    "update_tool_result_topology_from_records",
 ]
