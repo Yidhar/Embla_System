@@ -6,7 +6,7 @@
 # NGA-WS19-007 实施记录（Daily Checkpoint 日结归档）
 
 
-> Migration Note (archived/legacy)
+> 口径说明（archived）
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
 ## 任务信息
@@ -35,7 +35,7 @@
   - 标准命令、核验项、异常处理与回滚策略
 
 4. 对外导出
-- 更新 `autonomous/__init__.py`（archived/legacy）：
+- 更新 `autonomous/__init__.py`（archived）：
   - `DailyCheckpointConfig`
   - `DailyCheckpointReport`
   - `DailyCheckpointEngine`
@@ -47,7 +47,7 @@
   - archive 缺失时稳定输出空报告
 
 ## 验证命令
-- `.\.venv\Scripts\python.exe -m ruff check agents/runtime/daily_checkpoint.py tests/test_memory_agents.py scripts/daily_checkpoint_ws19_007.py autonomous/__init__.py`（archived/legacy path in command）
+- `.\.venv\Scripts\python.exe -m ruff check agents/runtime/daily_checkpoint.py tests/test_memory_agents.py scripts/daily_checkpoint_ws19_007.py autonomous/__init__.py`（归档路径，仅用于历史追溯）
   - 结果: `All checks passed!`
 - `.\.venv\Scripts\python.exe -m pytest -q tests/test_memory_agents.py tests/test_episodic_memory.py`
   - 结果: `passed`
@@ -61,7 +61,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `agents/runtime/daily_checkpoint.py; tests/test_memory_agents.py; scripts/daily_checkpoint_ws19_007.py; autonomous/__init__.py [archived/legacy]; doc/task/runbooks/daily_checkpoint_ws19_007.md; doc/task/implementation/NGA-WS19-007-implementation.md`
+  - `agents/runtime/daily_checkpoint.py; tests/test_memory_agents.py; scripts/daily_checkpoint_ws19_007.py; autonomous/__init__.py [archived]; doc/task/runbooks/daily_checkpoint_ws19_007.md; doc/task/implementation/NGA-WS19-007-implementation.md`
 - `notes`:
   - `daily checkpoint pipeline now builds 24h summary and next-day recovery card from episodic archives, writes auditable json reports, and supports scheduled execution via dedicated script`
 

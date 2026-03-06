@@ -1,8 +1,8 @@
 # WS24x 设计讨论稿：Prompt 路由注入与多职能 Agent 注入时机
 
-
-> Migration Note (archived/legacy)
-> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+> 口径说明（current runtime）
+> 运行时契约统一使用 `route_semantic`（`shell_readonly`/`shell_clarify`/`core_execution`）与 `entry_agent`/`active_agent`。
+> 文中 `autonomous/*` 仅表示归档实现路径，不进入当前运行时主链。
 
 文档状态：设计稿（Executable Draft）  
 最后更新：2026-02-26  
@@ -23,8 +23,8 @@
 3. 分层与优先级调整（新增 `L1.5`，强调 `L3` 硬覆盖 `L2`）：采纳。
 - 原因：与当前项目“工具物理权限优先于角色自我描述”原则一致。
 
-4. 双层常驻模型（Outer Chat + Core Execution）：采纳为目标态，明确“分阶段迁移”。
-- 原因：适配方向正确，但当前代码尚未完成物理双进程隔离，需按阶段落地。
+4. 双层常驻模型（Shell Chat + Core Execution）：采纳并按当前主链口径落地。
+- 原因：运行时已完成语义分层与会话分层，物理部署形态不影响契约字段口径。
 
 5. `PromptComposeDecision` 增加路由评估字段：采纳。
 - 原因：满足后续离线评估与路由回放需求。
@@ -45,7 +45,7 @@
 - 原因：纯轮次 TTL 对 ReAct 长链修复不稳定，易在根因未收敛前失忆。
 
 11. 契约屏障分级（Seed Contract -> Execution Contract）：采纳。
-- 原因：避免 Outer 在 Path-B 进入“表单式盘问”，保持交互流畅性。
+- 原因：避免 Shell 在 `shell_clarify` 阶段进入“表单式盘问”，保持交互流畅性。
 
 12. 冲突消解从 `conflicts_with[str]` 升级为语义域规则：采纳。
 - 原因：降低 slice 重命名导致静默失效的风险。
@@ -108,24 +108,24 @@
 2. 注入策略缺“阶段触发器”和“失败触发器”。
 3. 子代理 spawn 时缺“最小必要上下文”强约束。
 4. 缺注入冲突消解机制（例如技能指令覆盖安全策略）。
-5. Outer/Core 尚未物理隔离，执行代理仍会间接受到闲聊历史影响。
+5. Shell/Core 尚未物理隔离，执行代理仍会间接受到闲聊历史影响。
 
 ### 2.3 现状可支持度评估（2026-02-26）
 
 | 能力项 | 当前状态 | 结论 |
 |---|---|---|
-| 三路径准入（Path-A/B/C） | 部分具备（逻辑上可区分，未形成统一路由判定层） | 可先落地 P0 逻辑隔离 |
-| 多 Agent Prompt 路由 | 部分具备（role/tool profile 有基础） | 需补 `prompt_profile/injection_mode` |
-| Prompt Slice 组合引擎 | 未落地 | 需在 `agents/llm_gateway.py` 实现 |
-| Prompt ACL（按文件/层级权限） | 未落地 | 必须优先补齐 |
-| Outer/Core 物理隔离 | 未落地 | 先逻辑隔离，后进程隔离 |
+| `route_semantic` 三态准入（`shell_readonly`/`shell_clarify`/`core_execution`） | 已落地（统一路由判定层已上线） | 运行时 canonical：`route_semantic` + `dispatch_to_core` |
+| 多 Agent Prompt 路由 | 已落地（`prompt_profile` / `injection_mode` / `delegation_intent`） | 与 Router 决策同源 |
+| Prompt Slice 组合引擎 | 已落地 | `agents/llm_gateway.py` 进入常规回归链 |
+| Prompt ACL（按文件/层级权限） | 已落地（`prompt_acl.spec`，`enforcement_mode=block`） | 作为发布门禁必选项 |
+| Shell/Core 语义隔离 | 已落地（会话状态与契约字段分层） | 契约口径不依赖物理进程形态 |
 | DNA 门禁一致性 | 已具备（`.spec`） | 作为核心不可降级约束 |
 
 当前可执行判断：
 
-1. 当前项目支持“多 Agent Prompt 的第一阶段（逻辑隔离 + 路由字段扩展）”。
-2. 当前项目不支持“完全放任 AI 修改 Prompt”。
-3. 在未引入 ACL 之前，核心 Prompt 改动必须走“审批票据 + manifest 重算 + gate 复验”。
+1. 当前项目已支持多 Agent Prompt 主链（路由字段扩展 + Slice 组合 + Analyzer 同源）。
+2. 当前项目保持 `S1_CONTROLLED` 变更边界，不放开核心 Prompt 自由改写。
+3. 核心 Prompt 改动必须走“审批票据 + manifest 重算 + gate 复验”。
 
 ---
 
@@ -213,16 +213,16 @@
 
 为同时满足“高自动化 + 低延迟 + 低误触发”，采用三路径准入：
 
-1. `Path-A: Outer Direct Read-Only`（默认优先）
+1. `route_semantic=shell_readonly`（默认优先）
 - 适用：问候、闲聊、上传文件总结、文档检索、只读问答。
-- 执行：Outer Chat 直接处理，仅加载只读能力，不进入 Core。
+- 执行：Shell 直接处理，仅加载只读能力，不进入 Core。
 - 目标：`hi` 类请求 P95 `<300ms`。
 
-2. `Path-B: Outer Clarify`
+2. `route_semantic=shell_clarify`
 - 适用：意图不明确或输入信息不足。
-- 执行：Outer 先澄清并生成 `Seed Contract`（最小必填 + 假设项），再决定是否升级 Core。
+- 执行：Shell 先澄清并生成 `Seed Contract`（最小必填 + 假设项），再决定是否升级 Core。
 
-3. `Path-C: Core Execution`
+3. `route_semantic=core_execution`
 - 适用：写操作、跨模块编排、多代理协同、需要回滚/重试治理。
 - 执行：进入 Core 做路由、门禁、契约校验、权限裁剪与调度。
 
@@ -236,7 +236,7 @@
 
 ## 6. Prompt 分层、优先级、物理拼接与缓存规则
 
-建议引入六层（兼容当前 `PromptEnvelope`，并补上 `L1.5`）：
+建议引入六层（对齐当前 `PromptEnvelope`，并补上 `L1.5`）：
 
 1. `L0_DNA`（不可变）
 - 来源：`ImmutableDNALoader.inject()`
@@ -331,11 +331,11 @@
 1. `system/prompts/core/`
 - DNA 受控核心 prompt（S1/S0 配套治理）
 
-2. `system/prompts/agents/outer/`
-- 外层交互代理 prompt（Path-A/B）
+2. `system/prompts/agents/shell/`
+- Shell 交互代理 prompt（`shell_readonly`/`shell_clarify`）
 
 3. `system/prompts/agents/core_exec/`
-- 核心执行代理 prompt（Path-C）
+- 核心执行代理 prompt（`core_execution`）
 
 4. `system/prompts/agents/experts/`
 - 专家子代理 prompt（Explore/Plan/Review/Ops 等）
@@ -349,8 +349,8 @@
 
 迁移约束：
 
-1. P0 先保持现有平铺文件可读，新增 registry 映射层兼容旧路径。
-2. 目录迁移期需支持 alias 与回放对齐，避免旧切片引用失效。
+1. P0 直接切到 registry 单源路径，不新增运行时映射层。
+2. 历史 alias 仅保留在归档文档与离线回放脚本中，不进入主链。
 
 ---
 
@@ -358,11 +358,11 @@
 
 ### 7.1 双层常驻隔离模型（Two-Layer Persistent Model）
 
-1. 外层交互代理（Outer Chat Agent）
+1. 外层交互代理（Shell Chat Agent）
 - 职能：负责闲聊、需求澄清、生成执行契约（Contract）。
 - 注入包：`L0_DNA + L1_TASK_BASE + L2_ROLE(Chat/Router)`。
 - 工具权限：`ask_user`, `search_kb`, `read_uploaded_file`, `summarize_doc`, `delegate_to_core`（目标态）。
-- 说明：上传文件总结/文档检索默认走 Outer 只读路径，不必直接拉起 Core。
+- 说明：上传文件总结/文档检索默认走 Shell 只读路径，不必直接拉起 Core。
 
 2. 核心执行代理（Core Execution Agent）
 - 职能：后台无头执行，不直接消费闲聊历史，仅消费 Contract。
@@ -383,11 +383,11 @@
 
 ### 7.3 并行多职能契约屏障（Frontend/Backend/Ops）
 
-为避免 Path-B 退化为“盘问式 UX”，采用分级契约屏障：
+为避免 `shell_clarify` 退化为“盘问式 UX”，采用分级契约屏障：
 
 1. `Seed Contract`（低阻塞）
 - 最小必填：`goal`、`scope_hint`、`risk_class`、`acceptance_hint`。
-- 允许 `unknown_fields`，由 Outer 写入 `assumptions[]` 并标注 `confidence`。
+- 允许 `unknown_fields`，由 Shell 写入 `assumptions[]` 并标注 `confidence`。
 - 生成 `seed_contract_checksum`，可用于 Core 的只读侦察/计划。
 
 2. `Execution Contract`（写入前强校验）
@@ -395,7 +395,7 @@
 - 生成 `contract_checksum` 并广播到所有子任务元数据。
 
 3. 执行门禁
-- `seed_contract_checksum`：允许 Path-C 只读分析、依赖探测、方案草拟。
+- `seed_contract_checksum`：允许 `core_execution` 只读分析、依赖探测、方案草拟。
 - `contract_checksum`：才允许并行写入和落地执行。
 - 未达 Execution Contract 时，系统自动降级为只读探索，不阻塞整个会话。
 
@@ -451,7 +451,7 @@ class PromptSlice:
     conflict_domain: str         # e.g. "tool_policy.exec_mode"
     conflict_tags: list[str]     # e.g. ["read_only", "write_enabled"]
     supersedes: list[str]        # 以 slice_uid 声明替代关系
-    aliases: list[str]           # 历史名称，用于兼容与迁移校验
+    aliases: list[str]           # 历史名称，仅用于归档校验，不进入运行时契约
 ```
 
 ```python
@@ -501,7 +501,7 @@ class PromptACLRule:
 3. 语义冲突消解。
 - 先按 `conflict_domain` 分组，再按层级优先级/priority/版本进行选择。
 - `supersedes` 仅接受稳定 `slice_uid`，禁止以可变 `slice_name` 做硬依赖。
-- 兼容模式下可读取旧 `conflicts_with`，但必须在启动期做 dangling 引用校验并告警。
+- 不读取旧 `conflicts_with` 兼容字段；仅接受当前规范字段并在启动期做 dangling 引用校验。
 
 4. 生命周期处理。
 - 按 `ttl_policy` 执行软过期/硬过期。
@@ -545,8 +545,8 @@ class PromptACLRule:
 - `block`：触发即拒绝执行。
 
 5. 准入策略要求：
-- Path-A（Outer 只读）默认开启，用于聊天/上传总结/文档检索。
-- 仅当满足 Core 升级条件时才进入 Path-C。
+- `shell_readonly` 默认开启，用于聊天/上传总结/文档检索。
+- 仅当满足 Core 升级条件时才进入 `core_execution`。
 
 ### 10.2 P1（可观测）
 
@@ -557,12 +557,16 @@ class PromptACLRule:
 - `recovery_slice_hit_rate`
 - `prompt_conflict_drop_count`
 - `delegation_hit_rate`
-- `outer_readonly_hit_rate`
-- `core_escalation_rate`
+- `shell_readonly_hit_rate`
+- `shell_to_core_dispatch_rate`
 - `prompt_prefix_cache_hit_rate`
 - `prompt_tail_churn_rate`
 - `contract_upgrade_latency_ms`
 - `recovery_context_survival_rate`
+
+3. 语义口径迁移（v2.1 对齐，一步到位）：
+- 语义优先指标：`shell_readonly_hit_rate`、`agent_route_semantic_distribution`、`shell_to_core_dispatch_rate`、`shell_clarify_budget_escalation_rate`、`core_execution_session_creation_rate`、`core_execution_route_distribution`
+- 不保留旧别名；历史口径仅作为归档文档描述，不进入运行时契约字段。
 
 ### 10.3 P2（多代理并行保障）
 
@@ -607,7 +611,7 @@ class PromptACLRule:
 
 3. `system/config.py`
 - `build_system_prompt()` 从固定拼接迁移为基于 profile 的切片组合入口。
-- 保留旧接口兼容层，避免 `/chat` 与 `/chat/stream` 行为突变。
+- 不保留旧接口兼容层，`/chat` 与 `/chat/stream` 统一使用当前语义契约。
 
 4. `system/background_analyzer.py`
 - `conversation_analyzer_prompt + tool_dispatch_prompt` 从固定模板升级为 profile 可选模板集。
@@ -628,12 +632,12 @@ class PromptACLRule:
 > 说明：以下任务卡按 `doc/task/00-task-unit-spec.md` 最小字段组织，定位为本设计稿对应的首批可落地改造包。  
 > 任务号采用 `NGA-WS28-*` 暂编排，后续并入主任务清单时可按排期重映射。
 
-### NGA-WS28-001 扩展 Router 决策字段并保持兼容
+### NGA-WS28-001 扩展 Router 决策字段并同步契约
 - type: `feature`
 - priority: `P0`
 - phase: `M13`
 - owner_role: `backend`
-- scope: `RouterDecision` 输出契约扩展；不改变现有调用方默认行为
+- scope: `RouterDecision` 输出契约扩展；调用方按新契约一次切换
 - inputs: `doc/task/24-ws-prompt-routing-injection-policy.md` §5/§10.6；`agents/router_engine.py`
 - depends_on: `-`
 - deliverables:
@@ -666,7 +670,7 @@ class PromptACLRule:
 - acceptance:
   - 实现 `resolve()`（逻辑优先级裁剪）与 `serialize_for_cache()`（物理拼接）双阶段。
   - 生成并暴露 `prefix_hash`、`tail_hash` 与 `PromptComposeDecision`。
-  - Path-A 请求不得拼接执行态高动态切片（保持快路径轻量）。
+  - `shell_readonly` 请求不得拼接执行态高动态切片（保持快路径轻量）。
   - 执行：`.venv/bin/pytest -q tests/test_llm_gateway_prompt_slice_ws28_002.py`
   - 产物文件存在且 `passed=true`。
 - rollback:
@@ -717,7 +721,7 @@ class PromptACLRule:
   - 执行：`.venv/bin/pytest -q tests/test_background_analyzer_prompt_parity_ws28_004.py`
   - 产物文件存在且 `passed=true`。
 - rollback:
-  - 保留新字段透传，模板选择临时退回 legacy 分支。
+  - 保留新字段透传，模板选择临时退回保守模板分支。
   - 记录不一致样本并落盘，作为下一轮修复输入。
 - status: `done`（2026-02-26，已通过 `tests/test_background_analyzer_prompt_parity_ws28_004.py`）
 
@@ -771,19 +775,19 @@ class PromptACLRule:
 
 以下增量任务在 P0 基线之后已完成，并已纳入回归链：
 
-1. `NGA-WS28-007` Outer/Core 三路径准入门（Path-A/B/C）  
-status: `done`；锚点：`c43b60c`；回归：`tests/test_chat_route_outer_core_ws28_007.py`
-2. `NGA-WS28-008` Path-C Contract-only 输入（ExecutionContractInput）  
+1. `NGA-WS28-007` Shell/Core 路由语义准入门（`shell_readonly`/`shell_clarify`/`core_execution`）  
+status: `done`；锚点：`c43b60c`；回归：`tests/test_chat_route_shell_core_ws28_007.py`
+2. `NGA-WS28-008` `core_execution` Contract-only 输入（ExecutionContractInput）  
 status: `done`；锚点：`c1ac6af`；回归：`tests/test_chat_core_contract_input_ws28_008.py`
-3. `NGA-WS28-009` Path-B 澄清预算与自动升级 Core  
-status: `done`；锚点：`b68349a`；回归：`tests/test_run_ws28_path_b_clarify_budget_ws28_009.py`
-4. `NGA-WS28-010` Outer/Core 会话桥接（`execution_session_id` 指向 Core 会话）  
-status: `done`；锚点：`ff30de5`；回归：`tests/test_run_ws28_outer_core_session_bridge_ws28_010.py`
-5. `NGA-WS28-011` 路由桥接可观测性（`/v1/chat/route_bridge/{session_id}` + Debug UI）  
-status: `done`；锚点：`c2c5539`、`26b94ff`；回归：`tests/test_chat_route_bridge_snapshot_ws28_011.py`
+3. `NGA-WS28-009` `shell_clarify` 澄清预算与自动升级 Core  
+status: `done`；锚点：`b68349a`；回归：`tests/test_run_ws28_shell_clarify_budget_gate_ws28_009.py`
+4. `NGA-WS28-010` Shell/Core 会话状态绑定（`core_execution_session_id` 指向 Core 会话）  
+status: `done`；锚点：`ff30de5`；回归：`tests/test_run_ws28_shell_core_session_state_ws28_010.py`
+5. `NGA-WS28-011` 路由会话状态可观测性（`/v1/chat/route_session_state/{session_id}` + Debug UI）  
+status: `done`；锚点：`c2c5539`、`26b94ff`；回归：`tests/test_chat_route_session_state_snapshot_ws28_011.py`
 6. `NGA-WS28-012` Route-Quality 运行态治理闭环（warning/critical 强制策略 + guard 事件入总线）  
 status: `done`；锚点：`efda0bc`、`bbaed69`；回归：`tests/test_chat_route_quality_guard_ws28_012.py`
-7. `NGA-WS28-015` Prompt Registry 兼容迁移层（`prompt_registry.spec` + alias ACL 防绕过）  
+7. `NGA-WS28-015` Prompt Registry 单源治理层（`prompt_registry.spec` + alias ACL 防绕过）  
 status: `done`；锚点：`system/prompts/specs/prompt_registry.spec`、`system/config.py`；回归：`tests/test_prompt_registry_spec_ws28_015.py`
 8. `NGA-WS28-016` Runtime Posture 脑干心跳接入与聚合 smoke  
 status: `done`；锚点：`apiserver/api_server.py`（`brainstem_control_plane` 聚合）、`scripts/run_ws28_runtime_posture_brainstem_smoke_ws28_016.py`；回归：`tests/test_ops_dashboard_extensions.py`、`tests/test_run_ws28_runtime_posture_brainstem_smoke_ws28_016.py`
@@ -811,7 +815,7 @@ status: `done`；锚点：`apiserver/api_server.py`（`brainstem_control_plane` 
 7. 聊天快路径性能：`hi` 类请求 P95 `<300ms`（不触发 Core/工具链）。
 8. 并发稳定性：动态并发场景下无持续排队放大和无界 agent 膨胀。
 9. 缓存稳定性：`P0_STATIC_PREFIX` 命中率在同任务多轮对话中不低于 80%。
-10. 交互效率：Path-B 到 Path-C 的升级中位追问次数 <= 1（高风险写操作除外）。
+10. 交互效率：`shell_clarify` 到 `core_execution` 的升级中位追问次数 <= 1（高风险写操作除外）。
 11. 恢复连续性：同根因修复链路中，`L4` 上下文不可在未收敛前被硬过期截断。
 
 ---
@@ -827,8 +831,8 @@ status: `done`；锚点：`apiserver/api_server.py`（`brainstem_control_plane` 
 - 规则：绑定任务生命周期，不属于临时补救层 `L4`。
 
 3. Prompt 存储与 DNA 语义
-- 结论：DNA 单源统一为 `.spec`，并保留当前 `.txt` 核心 prompt 兼容。
-- 规则：在未完成 registry 迁移前，不强制切换到 Frontmatter；后续专家 prompt 可逐步引入 `Markdown + YAML Frontmatter`。
+- 结论：DNA 单源统一为 `.spec`，当前 `.txt` 核心 prompt 作为 canonical 存储格式。
+- 规则：Registry 按单源治理维护；若引入 Frontmatter，必须通过同源 gate 与回归链。
 
 4. 远程环境灰度策略
 - 结论：已完成 `shadow -> block` 切换（当前为 `block`）；若误拦截升高，允许临时回退 `shadow` 并要求附变更审计票据。

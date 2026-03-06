@@ -31,10 +31,10 @@
 1. `apiserver/llm_service.py`
 - 在 LLM 调用前统一执行 immutable DNA 运行时注入（非流式 + 流式）。
 - 新增环境开关与路径配置：
-  - `NAGA_IMMUTABLE_DNA_RUNTIME_INJECTION`
-  - `NAGA_IMMUTABLE_DNA_PROMPTS_ROOT`
-  - `NAGA_IMMUTABLE_DNA_MANIFEST_PATH`
-  - `NAGA_IMMUTABLE_DNA_AUDIT_PATH`
+  - `EMBLA_IMMUTABLE_DNA_RUNTIME_INJECTION`
+  - `EMBLA_IMMUTABLE_DNA_PROMPTS_ROOT`
+  - `EMBLA_IMMUTABLE_DNA_MANIFEST_PATH`
+  - `EMBLA_IMMUTABLE_DNA_AUDIT_PATH`
 - 注入失败时 fail-closed（阻断 chat 调用并返回错误说明）。
 
 ### 2.2 测试点

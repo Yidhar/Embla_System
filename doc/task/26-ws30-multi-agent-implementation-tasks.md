@@ -1,7 +1,8 @@
 # WS30 — Multi-Agent 协作系统实现任务拆解
 
-> 对标文档：[14-multi-agent-architecture.md](../14-multi-agent-architecture.md)  
+> 对标文档：[Multi Agent Target Architecturev2.1.md](../Multi%20Agent%20Target%20Architecturev2.1.md)  
 > 创建日期：2026-03-03
+> 统一口径说明：实现与验收统一使用 `Shell/Core/Expert/Dev/Review` 与 `route_semantic(shell_readonly|shell_clarify|core_execution)`、`dispatch_to_core`、`core_execution_route(fast_track|standard)` 语义。
 
 ---
 
@@ -76,7 +77,7 @@
 
 > 优先级：🟡 P1 | 预估：2 WS | 前置：Phase 1
 
-- [ ] 从 `apiserver/api_server.py` Path-A 提取 Shell 逻辑
+- [ ] 从 `apiserver/api_server.py` Shell 首轮路由环提取 Shell 逻辑
 - [ ] 加载 `prompts/dna/shell_persona.md` 不可变人格
 - [ ] 注入只读工具集 (`memory_read`, `memory_list`, `memory_grep`, `memory_search`, `get_system_status`, `list_tasks`, `search_web`)
 - [ ] 实现 `dispatch_to_core` 工具
@@ -162,16 +163,16 @@
 
 ---
 
-### 3.3 L2 — Graph RAG (Neo4j) 整合
+### 3.3 L2 — Shell Graph RAG / Tool-Result Topology 对齐
 
 > 优先级：🟠 P2 | 预估：2 WS | 前置：3.2
 
-- [ ] 将 `summer_memory/quintuple_graph.py` 核心逻辑整合到 `agents/memory/`
-- [ ] L1→L2 管道：定期从经验 MD 抽取五元组（次模型）
-- [ ] 向量化 + Neo4j 向量索引
-- [ ] `query_knowledge_graph` 工具
-- [ ] `agents/memory/semantic_graph.py` 迁移到 Neo4j 后端
-- 目标文件：`agents/memory/graph_rag.py`
+- [ ] 保持 `summer_memory/quintuple_graph.py` 作为 Shell L2 五元组图谱 canonical 存储
+- [ ] Shell 每轮对话后按当轮完整消息列表抽取五元组（非独立后台次模型管道）
+- [ ] 向量化 + Neo4j 向量索引（用于 L2 召回）
+- [ ] `memory_search` / `query_knowledge_graph` 对接 Shell L2 图谱
+- [ ] `agents/memory/semantic_graph.py` 明确为 Tool-Result Topology，继续服务 agentic loop / forensic 查询
+- 目标文件：`summer_memory/quintuple_graph.py`、`agents/memory/semantic_graph.py`
 
 ---
 
@@ -209,7 +210,7 @@
 
 - [ ] Shell → Core → Expert → Dev/Review 全链路打通
 - [ ] `main.py` ServiceManager 集成 Agent 运行时
-- [ ] apiserver 路由适配（Path-C 接入 Core Agent）
+- [ ] apiserver 路由适配（`core_execution` 接入 Core Agent）
 - [ ] 前端 TaskBoard 展示
 - [ ] 全链路冒烟测试
 ---
@@ -230,7 +231,7 @@ graph LR
 
     P2_1 & P2_2 & P2_3 & P2_4 & P2_5 --> P3_1["3.1 Prompt 引擎"]
     P3_2["3.2 L1 MD 记忆"]
-    P3_2 --> P3_3["3.3 L2 Graph RAG"]
+    P3_2 --> P3_3["3.3 Shell Graph RAG / Tool-Result Topology"]
     P3_4["3.4 L3 Hierarchical"]
 
     P2_3 & P2_4 & P3_1 --> P4_1["4.1 Workspace"]

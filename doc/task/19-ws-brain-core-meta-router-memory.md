@@ -71,12 +71,12 @@
 - rollback: 降级仅保留短期记忆
 - status: done
 
-### NGA-WS19-006 Semantic Graph 拓扑扫描与更新
+### NGA-WS19-006 工具结果拓扑扫描与更新
 - type: feature
 - priority: P2
 - phase: M3
 - owner_role: backend
-- scope: semantic graph
+- scope: tool-result topology
 - inputs: `doc/11#4.4,#4.5`
 - depends_on: NGA-WS19-005
 - deliverables: 拓扑节点/关系更新服务

@@ -1,4 +1,4 @@
-# NagaAgent API Server
+# Embla System API Server
 
 文档状态：As-Is（运行主链）
 最后更新：2026-02-28
@@ -16,7 +16,7 @@
 ## 2. 关键模块
 
 - `api_server.py`：FastAPI 主应用与路由聚合
-- `agentic_tool_loop.py`：结构化工具循环（多轮执行、事件回推）
+- `agents/tool_loop.py`：结构化工具循环（多轮执行、事件回推）
 - `native_tools.py`：本地工具适配层
 - `llm_service.py`：LLM 请求与流式输出封装
 - `start_server.py`：API/LLM 调试服务启动脚本
@@ -57,7 +57,7 @@ uvicorn apiserver.llm_service:llm_app --host 127.0.0.1 --port 8001 --reload
 
 - `POST /chat`、`POST /v1/chat`
 - `POST /chat/stream`、`POST /v1/chat/stream`
-- `GET /chat/route_bridge/{session_id}`、`GET /v1/chat/route_bridge/{session_id}`
+- `GET /chat/route_session_state/{session_id}`、`GET /v1/chat/route_session_state/{session_id}`
 
 ### 4.3 会话
 

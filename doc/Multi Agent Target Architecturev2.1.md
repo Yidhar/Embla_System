@@ -138,7 +138,7 @@ L2 图谱**仅服务于 Shell 层的聊天助手场景**（用户偏好、关系
 
 ```mermaid
 graph LR
-    SHELL["Shell 每轮对话"] -->|"在上下文中自动抽取"| GATE["质量门禁"]
+    SHELL["Shell 当轮完整消息"] -->|"基于当轮完整消息抽取"| GATE["质量门禁"]
     GATE -->|"confidence ≥ 0.7"| NEO4J["Neo4j"]
     GATE -->|"与现有矛盾 / 低置信"| QUARANTINE["隔离区"]
     NEO4J -->|"查询"| SHELL
@@ -147,9 +147,11 @@ graph LR
 
 #### 抽取方式：会话级（非后台管道）
 
-Shell 每轮对话后，用**自身 LLM 在完整上下文中**抽取五元组。不依赖独立的次模型管道。
+Shell 每轮对话后，基于**当轮完整消息列表**用自身 LLM 抽取五元组。不依赖独立的次模型管道。
 
 > 与 ChatGPT persistent memory、Character.ai Chat Memories、MemGPT/Letta Core Memory 的抽取方式一致。
+>
+> 运行时 canonical 口径：`summer_memory/quintuple_graph.py` = **Shell L2 Graph RAG**；`agents/memory/semantic_graph.py` = **Tool-Result Topology**（执行拓扑，非 Shell L2）。
 
 #### 置信度打分：四信号加权
 
@@ -355,12 +357,13 @@ graph TB
 
 | 目标态 | 现有基础 | 改造 |
 |--------|---------|------|
-| Shell Agent | `apiserver/` Path-A | +persona DNA +只读工具 |
+| Shell Agent | `apiserver/`（`route_semantic=shell_readonly` 首层入口） | +persona DNA +只读工具 |
 | Core Agent | `agents/meta_agent.py` | +values DNA +Fast-Track（安全硬约束）|
 | Expert Agent | `autonomous/subagent_runtime.py` | +TaskBoard +contract 管理 +tool profile |
 | Dev / Review | 新建 | 迷你 tool-loop +精准编辑工具 |
 | L1 MD 记忆 | `agents/memory/episodic_memory.py` | +精准编辑工具 +乐观锁 |
 | L2 Graph RAG | `summer_memory/quintuple_graph.py` | +Shell 会话级抽取 +门禁 +衰减 |
+| Tool-Result Topology | `agents/memory/semantic_graph.py` | +执行拓扑索引（session/tool/artifact/topic），非 Shell L2 |
 | L3 Hierarchical | 新建 | AST 切分 +摘要 +chunk |
 | 记忆工具集 | `agents/shell_tools.py` | 13 工具 + 6 个 profile 预设 |
 | MemoryDeprecator | `agents/memory/memory_agents.py` | +事件触发 +L2 联动标记 |

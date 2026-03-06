@@ -6,7 +6,7 @@
 # NGA-WS19-008 实施记录（Router 仲裁熔断联动）
 
 
-> Migration Note (archived/legacy)
+> 口径说明（archived）
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
 ## 任务信息
@@ -39,7 +39,7 @@
 - 冲突 ticket 变更时，委派计数重置，避免跨问题误熔断。
 
 3. 对外导出
-- 更新 `autonomous/__init__.py`（archived/legacy）：
+- 更新 `autonomous/__init__.py`（archived）：
   - `RouterArbiterGuard`
   - `RouterArbiterDecision`
 
@@ -51,7 +51,7 @@
   - 冲突摘要构建与 reset 解冻
 
 ## 验证命令
-- `.\.venv\Scripts\python.exe -m ruff check agents/router_arbiter_guard.py tests/test_chat_route_quality_guard_ws28_012.py autonomous/__init__.py`（archived/legacy path in command）
+- `.\.venv\Scripts\python.exe -m ruff check agents/router_arbiter_guard.py tests/test_chat_route_quality_guard_ws28_012.py autonomous/__init__.py`（归档路径，仅用于历史追溯）
   - 结果: `All checks passed!`
 - `.\.venv\Scripts\python.exe -m pytest -q tests/test_chat_route_quality_guard_ws28_012.py tests/test_router_engine_prompt_profile_ws28_001.py tests/test_agentic_loop_contract_and_mutex.py`
   - 结果: `passed`
@@ -65,7 +65,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `agents/router_arbiter_guard.py; tests/test_chat_route_quality_guard_ws28_012.py; autonomous/__init__.py [archived/legacy]; doc/task/implementation/NGA-WS19-008-implementation.md`
+  - `agents/router_arbiter_guard.py; tests/test_chat_route_quality_guard_ws28_012.py; autonomous/__init__.py [archived]; doc/task/implementation/NGA-WS19-008-implementation.md`
 - `notes`:
   - `router arbiter guard now enforces max delegate turns, freezes escalated conflict loops, integrates workspace conflict signals, and exposes conflict summary plus hitl reset hooks`
 

@@ -66,7 +66,7 @@ NGA-WS19-002,WS19,M3,P1,feature,Router 规则引擎与角色路由,NGA-WS19-001,
 NGA-WS19-003,WS19,M3,P1,refactor,LLM Gateway 分层路由与缓存,NGA-WS10-003,11|09,llm_gateway,成本与时延指标达标,done
 NGA-WS19-004,WS19,M3,P1,feature,Working Memory 窗口管理器,NGA-WS19-003,11,memory_manager,token 峰值受控,done
 NGA-WS19-005,WS19,M3,P1,feature,Episodic Memory 写入与检索链路,NGA-WS15-002,11,long_term_memory,历史经验稳定召回,done
-NGA-WS19-006,WS19,M3,P2,feature,Semantic Graph 拓扑扫描与更新,NGA-WS19-005,11,semantic_graph,依赖链查询准确,done
+NGA-WS19-006,WS19,M3,P2,feature,工具结果拓扑扫描与更新,NGA-WS19-005,11,semantic_graph,依赖链查询准确,done
 NGA-WS19-007,WS19,M4,P2,ops,Daily Checkpoint 日结归档,NGA-WS19-004;NGA-WS19-005,11,checkpoint_cron,日结稳定可审计,done
 NGA-WS19-008,WS19,M3,P1,hardening,Router 仲裁熔断联动,NGA-WS19-002;NGA-WS12-005,11|09,router_arbiter,超限冲突不无限循环,done
 NGA-WS20-001,WS20,M1,P1,migration,API 契约冻结与版本策略,NGA-WS10-001,04|08,apiserver_contract,兼容窗口明确,archived

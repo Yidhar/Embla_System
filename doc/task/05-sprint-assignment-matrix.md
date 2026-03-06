@@ -163,7 +163,7 @@ Sprint Gate（DoD）:
 | POOL-04 SubAgent-Scaffold | NGA-WS13-005 clean_state 保证与恢复票据 |
 | POOL-06 Memory-GC | NGA-WS15-004 GC 预算守门与回路防抖<br/>NGA-WS15-005 证据回读自动化链路 |
 | POOL-08 QA-Release | NGA-WS17-006 混沌演练 double-fork 与磁盘压力<br/>NGA-WS17-008 SLO 告警看板上线 |
-| POOL-10 Brain-Core | NGA-WS19-006 Semantic Graph 拓扑扫描与更新<br/>NGA-WS19-007 Daily Checkpoint 日结归档 |
+| POOL-10 Brain-Core | NGA-WS19-006 工具结果拓扑扫描与更新<br/>NGA-WS19-007 Daily Checkpoint 日结归档 |
 | POOL-11 Frontend-BFF | NGA-WS20-006 桌面端发布兼容性验证 |
 
 Sprint Gate（DoD）:

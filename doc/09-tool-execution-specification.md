@@ -7,18 +7,18 @@
 **目标态参考**：`doc/00-omni-operator-architecture.md` + `doc/task/25-subagent-development-fabric-status-matrix.md`
 ---
 
-# 09 工具调用与任务执行规范（Embla_system 对齐版）
+# 09 工具调用与任务执行规范（Embla System 对齐版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-27
 
 ## 1. 目标
 
-统一 NagaAgent 工具调用治理，确保"模型输出 -> 工具执行 -> 结果回流"全过程可校验、可审计、可收敛。
+统一 Embla System 工具调用治理，确保"模型输出 -> 工具执行 -> 结果回流"全过程可校验、可审计、可收敛。
 
 适用范围：
 
-- `apiserver/agentic_tool_loop.py`
+- `agents/tool_loop.py`
 - `apiserver/native_tools.py`
 - `system/native_executor.py`
 - `mcpserver/mcp_manager.py`
@@ -35,7 +35,7 @@
 ## 3. 当前执行链路（As-Is）
 
 1. LLM 产出结构化 `tool_calls` 或子任务契约（`task contract`）。
-2. 交互链路由 `agentic_tool_loop` 校验并分类：`native_call` / `mcp_call`。
+2. 交互链路由 `agents/tool_loop.py` 校验并分类：`native_call` / `mcp_call`。
 3. 自治链路由 `SystemAgent` 决策 `runtime_mode=subagent` 后进入：
    - `subagent_runtime`（依赖调度、契约校验、事件编排）
    - `execution_bridge`（补丁意图执行、角色门禁、审计回执）
@@ -75,7 +75,7 @@
 
 ## 4. Tool Contract（统一契约）
 
-目标态字段（来源：Embla_system 蓝图）：
+目标态字段（来源：Embla System 蓝图）：
 
 - `tool_name`
 - `input_schema_version`

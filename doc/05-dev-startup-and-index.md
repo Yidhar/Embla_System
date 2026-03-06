@@ -1,4 +1,4 @@
-﻿# 05 开发启动与目录索引（Embla_system 开发预备版）
+﻿# 05 开发启动与目录索引（Embla System 开发预备版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-28
@@ -12,7 +12,7 @@
 提供一份可直接执行的开发启动 runbook，覆盖：
 
 - 标准启动路径
-- Embla_system 对齐所需的最小环境
+- Embla System 对齐所需的最小环境
 - 常见健康检查与排障入口
 
 ## 2. 快速启动
@@ -102,7 +102,7 @@ uvicorn mcpserver.mcp_server:app --host 0.0.0.0 --port 8003
 
 - `autonomous.release.gate_policy_path` 路径存在
 
-## 6. Embla_system 开发环境建议
+## 6. Embla System 开发环境建议
 
 最小建议：
 

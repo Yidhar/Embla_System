@@ -1,21 +1,21 @@
-# Embla_system Prompt Layout
+# Embla System Prompt Layout
 
 This directory stores runtime prompt assets and governance specs.
 
 ## Canonical layout
 
 - `core/dna/conversation_style_prompt.md`
-  Outer chat style DNA (locked).
+  Shell chat style DNA (locked).
 - `core/dna/agentic_tool_prompt.md`
   Core execution DNA (locked).
 - `core/routing/conversation_analyzer_prompt.md`
   Route analysis prompt (editable).
 - `core/routing/tool_dispatch_prompt.md`
   Tool dispatch prompt (editable).
-- `agents/outer/*.md`
-  Outer read-only / delegate profile prompt blocks (Path-A/B).
+- `agents/shell/*.md`
+  Shell read-only / delegate profile prompt blocks.
 - `agents/core_exec/*.md`
-  Path-A/B/C execution profile prompt blocks.
+  Core execution profile prompt blocks.
 - `agents/experts/` and `agents/recovery/`
   Reserved namespaces for expert/recovery prompt blocks.
 - `specs/prompt_registry.spec`

@@ -12,7 +12,7 @@
 > Migration Note (archived/legacy)
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
-> **定位**：手脚层是 Embla_system 的执行末端，所有能力以 MCP (Model Context Protocol) 形式挂载，支持热插拔和动态注册。
+> **定位**：手脚层是 Embla System 的执行末端，所有能力以 MCP (Model Context Protocol) 形式挂载，支持热插拔和动态注册。
 >
 > **实施状态**：
 > - 🟢 **Phase 0 已实现**：MCP Manager、Native Executor、基础工具集

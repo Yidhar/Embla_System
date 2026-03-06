@@ -2,7 +2,7 @@
 > Migration Note (archived/legacy)
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
-﻿# NagaAgent 多Agent自治架构设计文档（修订版）
+﻿# Embla System 多Agent自治架构设计文档（修订版）
 
 > `DOC_LAYER: L3_ARCHIVE_PHASE0`  
 > `作用：Phase 0 历史方案回溯`  
@@ -51,7 +51,7 @@
 
 ```mermaid
 flowchart TB
-    subgraph Core["NagaAgent Core"]
+    subgraph Core["Embla System Core"]
         SM["ServiceManager<br/>(main.py)"]
         Config["config.json<br/>autonomous 配置"]
     end
@@ -646,7 +646,7 @@ stateDiagram-v2
 ## 6. 目录结构
 
 ```text
-NagaAgent/
+Embla_System/
 ├── autonomous/（archived/legacy）    # [HIST] 历史自治Agent框架
 │   ├── __init__.py
 │   ├── system_agent.py               # System Agent 主类

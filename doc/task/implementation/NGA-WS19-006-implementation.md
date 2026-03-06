@@ -3,20 +3,20 @@
 > `约束：不作为当前主链设计、接口契约或运行基线`  
 > `当前口径：doc/01-module-overview.md + doc/05-dev-startup-and-index.md + doc/task/25-subagent-development-fabric-status-matrix.md`
 
-# NGA-WS19-006 实施记录（Semantic Graph 拓扑扫描与更新）
+# NGA-WS19-006 实施记录（工具结果拓扑扫描与更新）
 
 ## 任务信息
 - 任务ID: `NGA-WS19-006`
-- 标题: Semantic Graph 拓扑扫描与更新
+- 标题: 工具结果拓扑扫描与更新（历史任务名：Semantic Graph 拓扑扫描与更新）
 - 状态: 已完成（最小可交付）
 
 ## 变更范围
-- `system/semantic_graph.py`（新增）
-- `apiserver/agentic_tool_loop.py`
+- `agents/memory/semantic_graph.py`（当前 canonical）
+- `agents/tool_loop.py`（当前 canonical）
 - `tests/test_semantic_graph.py`（新增）
 
 ## 实施内容
-1. 新增本地语义图存储
+1. 新增本地工具结果拓扑存储
 - 文件型 JSON 持久化（默认 `logs/episodic_memory/semantic_graph.json`）。
 - 节点类型：`session/tool/artifact/topic`。
 - 关系类型：`contains/references/emits/co_occurs`。
@@ -36,10 +36,13 @@
 - 支持会话过滤与 topic 权重排序。
 
 4. 主循环接入
-- 在 episodic archive 成功后执行语义图增量更新（失败仅警告，不影响主流程）。
+- 在 episodic archive 成功后执行工具结果拓扑增量更新（失败仅警告，不影响主流程）。
 
 ## 验证
 - `uv --cache-dir .uv_cache run python -m pytest -q tests/test_semantic_graph.py tests/test_episodic_memory.py`
-- `uv --cache-dir .uv_cache run python -m ruff check system/semantic_graph.py apiserver/agentic_tool_loop.py tests/test_semantic_graph.py`
+- `uv --cache-dir .uv_cache run python -m ruff check agents/memory/semantic_graph.py agents/tool_loop.py tests/test_semantic_graph.py`
 
 结果：通过。
+
+
+> 说明：当前 canonical 概念名为 **Tool-Result Topology**；`agents/memory/semantic_graph.py` 仅保留历史文件名。

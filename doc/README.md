@@ -1,4 +1,4 @@
-# NagaAgent 文档索引
+# Embla System 文档索引
 
 本目录用于统一归档项目架构、开发 runbook、工具治理与目标态设计文档。
 
@@ -20,7 +20,7 @@
 1. `doc/00-mvp-architecture-design.md`
    - `L3-ARCHIVE`：Phase 0 历史归档（CLI 时代设计回溯，不作为当前实现依据）。
 2. `doc/00-omni-operator-architecture.md`
-   - `L1-TARGET`：Embla_system 目标态总蓝图（Phase 3 参考，不等价当前实现）。
+   - `L1-TARGET`：Embla System 目标态总蓝图（Phase 3 参考，不等价当前实现）。
 3. `doc/01-module-overview.md`
    - `L0-RUNTIME`：当前模块总览、运行链路与关键边界。
 4. `doc/02-module-archive.md`

@@ -12,7 +12,7 @@
 > Migration Note (archived/legacy)
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
-> **定位**：脑干层是 Embla_system 的不可变守护进程区。Agent 无法修改该层的任何代码。所有模块编译后打包为二进制运行，由人类工程师维护。
+> **定位**：脑干层是 Embla System 的不可变守护进程区。Agent 无法修改该层的任何代码。所有模块编译后打包为二进制运行，由人类工程师维护。
 >
 > **实施状态**：
 > - 🟢 **Phase 0 已实现**：Event Store (SQLite)、Native Executor、基础安全沙箱

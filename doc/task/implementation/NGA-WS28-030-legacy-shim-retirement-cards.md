@@ -6,7 +6,7 @@
 # NGA-WS28-030 Legacy Shim 最终退役可执行卡
 
 
-> Migration Note (archived/legacy)
+> 口径说明（archived）
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
 ## 目标
@@ -29,7 +29,7 @@
 ## 当前引用基线（扫描结果）
 运行路径/脚本路径仍有 legacy 引用：
 - `agents/pipeline.py`（`autonomous.event_log`）
-- `autonomous/event_log/cron_alert_producer.py`（archived/legacy）（`autonomous.event_log.event_store`）
+- `autonomous/event_log/cron_alert_producer.py`（archived）（`autonomous.event_log.event_store`）
 - `core/event_bus/replay_tool.py`（`autonomous.event_log.event_store`）
 - `scripts/event_replay_ws18_003.py`（`autonomous.event_log`）
 - `scripts/chaos_lock_failover.py`（`system.global_mutex`）
@@ -61,14 +61,14 @@
 
 `代码点`
 - `agents/pipeline.py`
-- `autonomous/event_log/cron_alert_producer.py`（archived/legacy）
+- `autonomous/event_log/cron_alert_producer.py`（archived）
 - `core/event_bus/replay_tool.py`
-- `autonomous/event_log/__init__.py`（archived/legacy）
+- `autonomous/event_log/__init__.py`（archived）
 - `scripts/event_replay_ws18_003.py`
 
 `实施动作`
 - 将 EventStore/EventSchema/TopicBus 的 import 全部改为 `core.event_bus`。
-- `autonomous/event_log/__init__.py`（archived/legacy） 保留对外 API 名称，但改为从 `core.event_bus` re-export。
+- `autonomous/event_log/__init__.py`（archived） 保留对外 API 名称，但改为从 `core.event_bus` re-export。
 - 保证 `SystemAgent` 不再经由 `autonomous.event_log.event_store` shim 获取 EventStore。
 
 `测试点`
@@ -114,7 +114,7 @@
 - 新增 `scripts/check_legacy_shim_imports_ws28_030.py`
 
 `实施动作`
-- 脚本扫描 `apiserver/ autonomous/（archived/legacy） system/ scripts/ core/`（排除 `tests`）。
+- 脚本扫描 `apiserver/ autonomous/（archived） system/ scripts/ core/`（排除 `tests`）。
 - 命中 legacy import 则输出文件+行号并返回非 0。
 
 `测试点`
@@ -165,19 +165,19 @@
 - 删除：`core/event_bus/event_schema.py`
 - 删除：`core/event_bus/event_store.py`
 - 删除：`core/event_bus/topic_bus.py`
-- 修改：`autonomous/event_log/__init__.py`（archived/legacy）
+- 修改：`autonomous/event_log/__init__.py`（archived）
 
 `实施动作`
 - 删 3 个 shim 文件。
-- `autonomous/event_log/__init__.py`（archived/legacy） 直接从 `core.event_bus` re-export。
-- 若 replay/producer 仍在 `autonomous/event_log`（archived/legacy），仅保留业务辅助组件，不保留总线主实现。
+- `autonomous/event_log/__init__.py`（archived） 直接从 `core.event_bus` re-export。
+- 若 replay/producer 仍在 `autonomous/event_log`（archived），仅保留业务辅助组件，不保留总线主实现。
 
 `测试点`
 - `autonomous.event_log` 对外导入仍可用（向后兼容 API 名称）。
 - Topic replay/idempotency 行为保持。
 
 `验收命令`
-- `rg -n "autonomous/event_log/(event_schema|event_store|topic_event_bus)\\.py" -S`（archived/legacy path check）
+- `rg -n "autonomous/event_log/(event_schema|event_store|topic_event_bus)\\.py" -S`（归档路径检查，仅用于历史追溯）
 - `.venv/bin/pytest -q tests/test_core_event_bus_consumers_ws28_029.py tests/test_core_event_bus_consumers_ws28_029.py tests/test_event_store_db_partition_ws29_005.py tests/test_core_event_bus_consumers_ws28_029.py`
 
 `完成标准`
@@ -286,6 +286,6 @@
 - 风险1：测试 monkeypatch 钩子迁移后行为差异。  
   回滚：先回退 Card B1/B2，仅保留 Step 1 调用点替换。
 - 风险2：`autonomous.event_log` 对外 API 变化导致脚本失败。  
-  回滚：在 `autonomous/event_log/__init__.py`（archived/legacy） 暂时保留 re-export 桥接。
+  回滚：在 `autonomous/event_log/__init__.py`（archived） 暂时保留 re-export 桥接。
 - 风险3：release chain 新增 gate 触发历史分支失败。  
   回滚：将 Card B3 的 strict 模式改为 warn-only 一版过渡。

@@ -12,7 +12,7 @@
 > Migration Note (archived/legacy)
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
-> **定位**：大脑层是 Embla_system 的认知中枢，负责推理、记忆、路由和状态管理。属于工作空间层中的高级逻辑区域。
+> **定位**：大脑层是 Embla System 的认知中枢，负责推理、记忆、路由和状态管理。属于工作空间层中的高级逻辑区域。
 >
 > **实施状态**：
 > - 🟢 **Phase 0 已实现**：System Agent 主循环、Workflow Store
@@ -23,8 +23,9 @@
 > - Meta-Agent → `agents/meta_agent.py` + `agents/pipeline.py`（桥接）
 > - Router → `agents/router_engine.py`（主）+ `autonomous/tools/cli_selector.py`（archived/legacy）（历史兼容）
 > - Working Memory → `agents/memory/working_memory.py` + 对话上下文（`apiserver/llm_service.py`）
-> - Episodic Memory → `system/episodic_memory.py`（增量）
-> - Semantic Graph → `system/semantic_graph.py`（增量）
+> - Episodic Memory → `agents/memory/episodic_memory.py`（增量）
+> - Shell L2 Graph RAG → `summer_memory/quintuple_graph.py` + `summer_memory/memory_manager.py`（增量）
+> - Tool-Result Topology → `agents/memory/semantic_graph.py`（执行拓扑，非 L2）
 >
 > **一致性口径（2026-02-27）**：
 > - 阶段与目标态判定以 `doc/00-omni-operator-architecture.md` 为主。
@@ -479,60 +480,47 @@ sequenceDiagram
     META->>META: "根据历史经验，类似问题通常由..."
 ```
 
-### 4.4 Semantic Graph 系统拓扑图
+### 4.4 Shell L2 Graph RAG（五元组图谱）
 
-Agent 扫描服务器后自己绘制的"地图"，记录目录结构、端口占用、服务依赖关系。
+Shell 在每轮对话完成后，基于**当轮完整消息列表**抽取用户偏好、关系、风格等五元组；通过质量门禁后写入 Neo4j / 本地文件存储。
 
 ```mermaid
-flowchart TB
-    subgraph SG["🗺️ Semantic Graph"]
-        direction TB
-        SCANNER["拓扑扫描器<br/>自动发现服务·端口·依赖"]
-        GRAPH_DB["图存储<br/>JSON-Graph / Neo4j"]
-        QUERY_ENG["图查询引擎<br/>路径查找·依赖分析"]
-        VISUALIZER["拓扑可视化<br/>D3.js / Mermaid 输出"]
-    end
+flowchart LR
+    SHELL["Shell 当轮完整消息"] --> EXTRACT["五元组抽取"]
+    EXTRACT --> GATE["质量门禁"]
+    GATE -->|"置信通过"| GRAPH["L2 图谱
+Neo4j / quintuples.json"]
+    GATE -->|"低置信 / 矛盾"| QUAR["隔离区 / 跳过"]
+    GRAPH -->|"召回"| SHELL_READ["Shell"]
+    GRAPH -.->|"低权重查询"| CORE["Core"]
 
-    AGENT["Agent os_bash"] -->|"ss -tuln<br/>systemctl list-units<br/>docker ps"| SCANNER
-    SCANNER -->|"构建图谱"| GRAPH_DB
-    META["Meta-Agent"] -->|"查询依赖"| QUERY_ENG
-    QUERY_ENG -->|"检索"| GRAPH_DB
-
-    style SG fill:#1a2a2a,stroke:#44aaaa
+    style GRAPH fill:#1a2a2a,stroke:#44aaaa
 ```
 
-### 4.5 拓扑扫描与更新时序
+> `agents/memory/semantic_graph.py` 是 **Tool-Result Topology**：记录 `session/tool/artifact/topic` 执行拓扑，供 agentic loop / forensic 查询使用，不属于 Shell L2 记忆层。
+
+### 4.5 Shell L2 抽取与写入时序
 
 ```mermaid
 sequenceDiagram
-    participant CRON as Cron (每6h)
-    participant SCAN as Topology Scanner
-    participant BASH as os_bash
-    participant GRAPH as Graph DB
-    participant META as Meta-Agent
+    participant SHELL as Shell Round
+    participant MM as MessageManager
+    participant MEM as GRAGMemoryManager
+    participant EXT as Quintuple Extractor
+    participant GRAPH as L2 Graph Store
 
-    CRON->>SCAN: trigger_scan()
-
-    par 并行采集
-        SCAN->>BASH: ss -tuln
-        BASH-->>SCAN: 端口列表: [22, 80, 443, 3306, 8000, 8001]
-    and
-        SCAN->>BASH: systemctl list-units --type=service --state=running
-        BASH-->>SCAN: 服务列表: [nginx, mysql, naga-backend]
-    and
-        SCAN->>BASH: docker ps --format json
-        BASH-->>SCAN: 容器列表: [redis:6379, chromadb:8000]
-    end
-
-    SCAN->>SCAN: 构建依赖图:<br/>nginx:80 → naga-backend:8000<br/>naga-backend → mysql:3306<br/>naga-backend → redis:6379<br/>naga-backend → chromadb:8000
-
-    SCAN->>GRAPH: upsert_graph(nodes, edges)
-    GRAPH-->>SCAN: updated
-
-    Note over META: 后续任务查询时...
-    META->>GRAPH: query("nginx 的上游依赖链?")
-    GRAPH-->>META: nginx → naga-backend → [mysql, redis, chromadb]
+    SHELL->>MM: save_conversation_and_logs(..., shell_round_messages)
+    MM->>MEM: add_shell_round_memory(session_id, round_messages)
+    MEM->>MEM: 格式化当轮完整消息列表
+    MEM->>EXT: extract_quintuples(round_text)
+    EXT-->>MEM: quintuples
+    MEM->>GRAPH: store_quintuples(quintuples)
+    GRAPH-->>SHELL: query_graph_by_keywords(...)
 ```
+
+- **抽取输入**：当轮完整消息列表（system/user/assistant/tool），而不是整 session 快照。
+- **触发边界**：仅 Shell 自主完成的轮次写入 L2；发生 Core handoff 的执行轮次不写入。
+- **运行时口径**：L2 = `summer_memory/quintuple_graph.py`；Tool-Result Topology = `agents/memory/semantic_graph.py`。
 
 ---
 
@@ -752,7 +740,7 @@ flowchart TB
         subgraph Memory["三维记忆"]
             WM["📋 Working Memory"]
             EM["📚 Episodic Memory"]
-            SG["🗺️ Semantic Graph"]
+            SG["🕸️ Shell L2 Graph RAG"]
         end
 
         GC["♻️ GC Engine"]
@@ -771,7 +759,7 @@ flowchart TB
     %% 记忆流
     LLM <-->|"上下文"| WM
     META -->|"经验检索"| EM
-    META -->|"拓扑查询"| SG
+    META -->|"低权重查询"| SG
     WM -->|"Token超限"| GC
     GC -->|"归档"| EM
 

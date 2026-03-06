@@ -8,13 +8,14 @@
 
 ## 1. 设计目标
 
-在 Embla_system 的三层架构（Brainstem / Brain / Limbs）之上，构建面向未来基座模型的多 Agent 协作系统。
+在 Embla System 的三层架构（Brainstem / Brain / Limbs）之上，构建面向未来基座模型的多 Agent 协作系统。
 
 **核心原则**：
 - **框架只做管道，不做裁判**——不设 token/时间/调用硬限制，信任模型自主能力
 - **双层隔离**——Shell（对外人格）与 Core（内核执行）完全分离
 - **原子化 Prompt**——可自由组装、可自我进化的 Prompt 块
-- **三层记忆**——MD 文件系统 + Graph RAG + Hierarchical RAG
+- **三层记忆**——MD 文件系统 + Shell L2 Graph RAG + Hierarchical RAG
+- **统一路由契约**——运行时仅使用 `route_semantic(shell_readonly|shell_clarify|core_execution)`、`dispatch_to_core`、`core_execution_route(fast_track|standard)`，所有契约与观测字段同口径
 
 ---
 
@@ -39,7 +40,7 @@
 | `memory_list` | 列出 L1 记忆文件 |
 | `memory_grep` | 在 L1 记忆中做关键词/正则检索 |
 | `get_system_status` | 脑干层 posture 快照 |
-| `memory_search` | 图谱/经验检索 |
+| `memory_search` | L1/L2 统一记忆检索 |
 | `list_tasks` | 当前活跃任务进度 |
 | `search_web` | 在线信息查询 |
 
@@ -170,17 +171,18 @@ memory/
 - **注入**：Expert spawn Dev 时扫描 `_index.md`，按标签匹配，以路径列表注入
 - **写回**：Dev/Review 完成后写入经验 MD + 更新 `_index.md`
 
-### 5.2 Layer 2: Graph RAG（Neo4j）
+### 5.2 Layer 2: Graph RAG（Shell 专属五元组图谱）
 
-跨对话的实体关系、拓扑认知与经验关联。
+L2 仅服务于 Shell 聊天助手场景，承载用户偏好、关系、风格等会话级五元组记忆。
 
-| 图谱类型 | 内容 | 数据源 |
-|---------|------|--------|
-| 代码依赖树 | 模块→导入→调用链 | AST + L1 |
-| 运维拓扑 | 服务→端口→部署 | 配置 + 运行时 |
-| 经验关联 | 问题→根因→方案→文件 | L1 自动抽取 |
+| 图谱类型 | 内容 | Canonical 入口 |
+|---------|------|----------------|
+| Shell 会话五元组 | 用户偏好 / 关系 / 风格 | `summer_memory/quintuple_graph.py` + `summer_memory/memory_manager.py` |
 
-**L1→L2 管道**：定期用次模型从经验 MD 抽取五元组 → Neo4j + 向量化。
+- **抽取方式**：Shell 每轮对话结束后，基于**当轮完整消息列表**抽取五元组。
+- **门禁方式**：仅在 Shell 自行完成回答时写入；发生 Core handoff 的执行轮次不写入 L2。
+- **召回方式**：Shell 通过 `memory_search` / `query_graph_by_keywords` 读取；Core 仅允许低权重查询。
+- **边界说明**：`agents/memory/semantic_graph.py` 表示 **Tool-Result Topology**（`session/tool/artifact/topic`），不属于 L2 Graph RAG。
 
 ### 5.3 Layer 3: Hierarchical RAG
 
@@ -199,11 +201,11 @@ memory/
 
 | Agent | L1 读 | L1 写 | L2 Graph | L3 Hierarchical |
 |-------|-------|-------|----------|-----------------|
-| Shell | ✅ | ❌ | ✅ | ❌ |
-| Core | ✅ | ❌ | ✅ | ❌ |
-| Expert | ✅ | ❌ | ✅ | ❌ |
-| Dev | ✅ | ✅ | ✅ | ✅ |
-| Review | ✅ | ✅ | ✅ | ✅ |
+| Shell | ✅ | ❌ | ✅ 读写（每轮自动抽取 + 查询） | ❌ |
+| Core | ✅ | ❌ | ⚠️ 低权重查询 | ❌ |
+| Expert | ✅ | ❌ | ❌ | ❌ |
+| Dev | ✅ | ✅ | ❌ | ✅ |
+| Review | ✅ | ✅ | ❌ | ✅ |
 
 ---
 

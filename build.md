@@ -29,7 +29,7 @@ python scripts/build-win.py
 
 后端构建完成后，检查以下关键文件：
 
-- `dist/backend-dist/naga-backend/naga-backend.exe`
+- `dist/backend-dist/embla-backend/embla-backend.exe`
 
 ## 运行时验证
 

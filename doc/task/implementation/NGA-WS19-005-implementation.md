@@ -11,7 +11,7 @@
 - 状态: 已完成（最小可交付）
 
 ## 变更范围
-- `system/episodic_memory.py`（新增）
+- `agents/memory/episodic_memory.py`（当前 canonical）
 - `apiserver/agentic_tool_loop.py`
 - `tests/test_episodic_memory.py`（新增）
 
@@ -38,6 +38,6 @@
 
 ## 验证
 - `uv --cache-dir .uv_cache run python -m pytest -q tests/test_episodic_memory.py`
-- `uv --cache-dir .uv_cache run python -m ruff check system/episodic_memory.py apiserver/agentic_tool_loop.py tests/test_episodic_memory.py`
+- `uv --cache-dir .uv_cache run python -m ruff check agents/memory/episodic_memory.py agents/tool_loop.py tests/test_episodic_memory.py`
 
 结果：通过。

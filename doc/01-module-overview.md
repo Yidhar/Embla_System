@@ -1,17 +1,15 @@
-﻿# 01 模块总览（Embla_system 开发预备版）
+﻿# 01 模块总览（Embla System 开发预备版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-28
 
 ## 1. 目标
 
+注：文中出现 `autonomous/*` 仅表示归档实现，不进入当前运行时主链。
 
-> Migration Note (archived/legacy)
-> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+本文用于统一 Embla System 当前可运行架构与目标架构的语义映射。
 
-本文用于统一 NagaAgent 当前可运行架构与 Embla_system 目标架构之间的语义。
-
-本文件只描述 **当前代码已实现** 与 **已确认的过渡态**，并将目标态映射到三层模型：
+本文件只描述 **当前代码已实现** 的运行链路，并将目标态映射到三层模型：
 
 - Brainstem（控制与接入层）
 - Brain（策略与推理层）
@@ -31,8 +29,7 @@
 状态标签约定：
 
 - `已实现`：代码路径可直接运行。
-- `过渡态`：功能存在但与目标态有语义漂移。
-- `兼容保留`：为历史接口保留，不建议新增依赖。
+- `归档态`：历史实现仅用于追溯，不进入运行时主链。
 
 ## 3. 服务启动链路（As-Is）
 
@@ -53,22 +50,23 @@
 ### 4.1 聊天主链路
 
 1. 前端请求 `POST /chat/stream`（`apiserver`）。
-2. `apiserver/api_server.py` 先执行聊天路由治理（route quality / arbiter / bridge），随后进入 `agents/pipeline.py::run_multi_agent_pipeline`。
-3. Pipeline 先由 `ShellAgent` 做外层分流：
-   - `shell_direct`：外层直接回答（只读链路）。
-   - `core_execution`：进入 Core/Expert 执行编排并生成 `execution_receipt`。
-4. 执行态工具循环的规范实现位于 `agents/tool_loop.py`（canonical）；`apiserver/agentic_tool_loop.py` 为兼容 shim。
+2. `apiserver/api_server.py` 先执行聊天路由治理（route quality / arbiter / session state），随后进入 `agents/pipeline.py::run_multi_agent_pipeline`。
+3. Pipeline 先由 `ShellAgent` 进行语义路由（`route_semantic`）：
+   - `shell_readonly`：Shell 直接回答（只读链路）。
+   - `shell_clarify`：Shell 发起澄清并保持只读链路。
+   - `core_execution`：通过 `dispatch_to_core` 进入 Core/Expert 执行编排并生成 `execution_receipt`。
+4. 执行态工具循环的规范实现位于 `agents/tool_loop.py`（canonical）。
 5. SSE 回推统一结构化事件到前端（`route_decision` / `tool_stage` / `execution_receipt` / `content` / `pipeline_end` 等）。
 
-### 4.2 MCP 过渡态说明
+### 4.2 MCP 运行态说明
 
 当前链路状态：
 
 - `main.py` 会启动独立 `mcpserver`。
-- `apiserver` 的 `/mcp/status`、`/mcp/tasks` 输出运行态快照（兼容 UI 的 status/tasks 语义）。
+- `apiserver` 的 `/mcp/status`、`/mcp/tasks` 输出运行态快照（对齐前端 status/tasks 展示口径）。
 - `apiserver` 的 `/mcp/services`、`/mcp/import` 提供服务发现与导入管理能力。
 
-## 5. Embla_system 三层映射（开发预备语义）
+## 5. Embla System 三层映射（开发预备语义）
 
 ### 5.1 Brainstem（控制与接入层）
 
@@ -78,7 +76,7 @@
 - `system/config.py`（统一配置）
 - `apiserver/`（BFF 入口）
 - `agents/pipeline.py`（单活自治控制）
-  - 已支持可配置子代理桥接（`subagent_runtime.enabled`）用于 Phase 3 渐进接管。
+  - 已支持可配置子代理运行控制（`subagent_runtime.enabled`）。
 
 说明：Legacy `agentserver` 旧执行链已移出仓库，不再作为控制面路径。
 
@@ -88,7 +86,7 @@
 
 - `apiserver/llm_service.py`（LLM client 与路由）
 - `agents/pipeline.py`（Shell/Core 多代理编排主入口）
-- `agents/tool_loop.py`（canonical 工具循环；兼容导入由 `apiserver/agentic_tool_loop.py` 提供）
+- `agents/tool_loop.py`（canonical 工具循环）
 - `summer_memory/`（记忆检索）
 
 ### 5.3 Limbs（工具与执行层）
@@ -129,7 +127,7 @@
 
 ## 8. 系统落地最高原则（新增）
 
-在 Embla_system 开发生命周期中，统一采用以下反直觉原则：
+在 Embla System 开发生命周期中，统一采用以下反直觉原则：
 
 - `逻辑并发，执行串行（Logical Concurrency, Serial Execution）`
 

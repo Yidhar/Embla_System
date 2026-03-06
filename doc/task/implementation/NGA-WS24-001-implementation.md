@@ -27,7 +27,7 @@
    - `mcpserver/mcp_registry.py` 新增：
      - `ISOLATED_WORKER_REGISTRY`；
      - `agentType` 与 `isolation.mode` 判定（`inprocess` / `isolated_worker`）；
-     - 插件目录扫描（`NAGA_PLUGIN_MANIFEST_DIRS`，默认 `workspace/tools/plugins`）；
+     - 插件目录扫描（`EMBLA_PLUGIN_MANIFEST_DIRS`，默认 `workspace/tools/plugins`）；
      - manifest 记录写入 `_runtime_mode/_manifest_path` 元数据。
 
 4. mcp_manager 暴露隔离来源标记

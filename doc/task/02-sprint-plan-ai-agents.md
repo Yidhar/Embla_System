@@ -139,7 +139,7 @@
 | NGA-WS15-005 | P1 | M3 | WS15 | 证据回读自动化链路 | NGA-WS11-002;NGA-WS15-003 |
 | NGA-WS17-006 | P1 | M5 | WS17 | 混沌演练 double-fork 与磁盘压力 | NGA-WS14-006;NGA-WS11-004 |
 | NGA-WS17-008 | P2 | M5 | WS17 | SLO 告警看板上线 | NGA-WS11-006;NGA-WS14-010 |
-| NGA-WS19-006 | P2 | M3 | WS19 | Semantic Graph 拓扑扫描与更新 | NGA-WS19-005 |
+| NGA-WS19-006 | P2 | M3 | WS19 | 工具结果拓扑扫描与更新 | NGA-WS19-005 |
 | NGA-WS19-007 | P2 | M4 | WS19 | Daily Checkpoint 日结归档 | NGA-WS19-004;NGA-WS19-005 |
 | NGA-WS20-006 | P2 | M5 | WS20 | 桌面端发布兼容性验证 | NGA-WS20-005 |
 

@@ -23,8 +23,8 @@
 2. 响应头级版本与弃用信号
 - `apiserver/api_server.py`
   - 新增 `inject_api_contract_headers` 中间件：
-    - 注入 `X-NagaAgent-Api-Version`
-    - 注入 `X-NagaAgent-Contract-Version`
+    - 注入 `X-Embla-System-Api-Version`
+    - 注入 `X-Embla-System-Contract-Version`
     - 对未版本化且标记弃用的路由注入：
       - `Deprecation: true`
       - `Sunset`

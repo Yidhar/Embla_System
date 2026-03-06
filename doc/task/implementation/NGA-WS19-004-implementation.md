@@ -6,7 +6,7 @@
 # NGA-WS19-004 实施记录（Working Memory 窗口管理器）
 
 
-> Migration Note (archived/legacy)
+> 口径说明（archived）
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
 ## 任务信息
@@ -37,7 +37,7 @@
 - 在回收窗口时，关键消息不会被优先删除，降低“排障盲化”风险。
 
 3. 对外导出
-- 更新 `autonomous/__init__.py`（archived/legacy），导出：
+- 更新 `autonomous/__init__.py`（archived），导出：
   - `MemoryWindowThresholds`
   - `MemoryWindowRebalanceResult`
   - `WorkingMemoryWindowManager`
@@ -49,7 +49,7 @@
   - 硬阈值触发后截断/丢弃路径验证
 
 ## 验证命令
-- `.\.venv\Scripts\python.exe -m ruff check agents/memory/working_memory.py tests/test_memory_agents.py autonomous/__init__.py`（archived/legacy path in command）
+- `.\.venv\Scripts\python.exe -m ruff check agents/memory/working_memory.py tests/test_memory_agents.py autonomous/__init__.py`（归档路径，仅用于历史追溯）
   - 结果: `All checks passed!`
 - `.\.venv\Scripts\python.exe -m pytest -q tests/test_memory_agents.py tests/test_llm_gateway_prompt_slice_ws28_002.py tests/test_router_engine_prompt_profile_ws28_001.py`
   - 结果: `passed`
@@ -63,7 +63,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `agents/memory/working_memory.py; tests/test_memory_agents.py; autonomous/__init__.py [archived/legacy]; doc/task/implementation/NGA-WS19-004-implementation.md`
+  - `agents/memory/working_memory.py; tests/test_memory_agents.py; autonomous/__init__.py [archived]; doc/task/implementation/NGA-WS19-004-implementation.md`
 - `notes`:
   - `working memory manager now enforces soft-hard token thresholds with callback hooks, preserves critical troubleshooting context markers, and trims/truncates noncritical history to control token peaks`
 

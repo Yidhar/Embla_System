@@ -6,7 +6,7 @@
 # NGA-WS19-002 实施记录（Router 规则引擎与角色路由）
 
 
-> Migration Note (archived/legacy)
+> 口径说明（archived）
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
 ## 任务信息
@@ -33,7 +33,7 @@
   - 审计：支持 `decision_log` jsonl 落盘（请求+决策）
 
 2. 包级导出
-- 更新 `autonomous/__init__.py`（archived/legacy）
+- 更新 `autonomous/__init__.py`（archived）
   - 导出 `TaskRouterEngine`、`RouterRequest`、`RouterDecision`
 
 3. 测试覆盖
@@ -44,7 +44,7 @@
   - 决策审计日志落盘
 
 ## 验证命令
-- `python -m ruff check agents/router_engine.py autonomous/__init__.py tests/test_router_engine_prompt_profile_ws28_001.py`（archived/legacy path in command）
+- `python -m ruff check agents/router_engine.py autonomous/__init__.py tests/test_router_engine_prompt_profile_ws28_001.py`（归档路径，仅用于历史追溯）
   - 结果: `All checks passed`
 - `python -m pytest -q tests/test_router_engine_prompt_profile_ws28_001.py tests/test_agent_roles_ws30_005.py tests/test_core_event_bus_consumers_ws28_029.py`
   - 结果: `passed`
@@ -58,7 +58,7 @@
 
 ## Suggested Execution-Board Evidence
 - `evidence_link`:
-  - `agents/router_engine.py; autonomous/__init__.py [archived/legacy]; tests/test_router_engine_prompt_profile_ws28_001.py; doc/task/implementation/NGA-WS19-002-implementation.md`
+  - `agents/router_engine.py; autonomous/__init__.py [archived]; tests/test_router_engine_prompt_profile_ws28_001.py; doc/task/implementation/NGA-WS19-002-implementation.md`
 - `notes`:
   - `router engine now performs deterministic role/model routing by task type risk and budget, emits explainable reasoning, and supports replay fingerprint verification with decision audit logging`
 

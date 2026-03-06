@@ -1,19 +1,15 @@
 <div align="center">
 
-# NagaAgent
+# Embla System
 
 **Dual-Service Runtime Platform — Streaming Tool Calls · Knowledge Graph Memory · Ops Dashboard**
 
 [简体中文](README.md) | [English](README_en.md)
 
-![NagaAgent](https://img.shields.io/badge/NagaAgent-5.0.0-blue?style=for-the-badge&logo=python&logoColor=white)
+![Embla System](https://img.shields.io/badge/Embla_System-5.0.0-blue?style=for-the-badge&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-green?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)
-
-[![Stars](https://img.shields.io/github/stars/Xxiii8322766509/NagaAgent?style=social)](https://github.com/Xxiii8322766509/NagaAgent)
-[![Forks](https://img.shields.io/github/forks/Xxiii8322766509/NagaAgent?style=social)](https://github.com/Xxiii8322766509/NagaAgent)
-[![Issues](https://img.shields.io/github/issues/Xxiii8322766509/NagaAgent)](https://github.com/Xxiii8322766509/NagaAgent/issues)
 
 **[QQ Bot Integration: Undefined QQbot](https://github.com/69gg/Undefined/)**
 
@@ -41,12 +37,12 @@ The active runtime pipeline consists of two backend services (plus one optional 
 |------|---------|
 | **2026-02-27** | Retired Live2D runtime path: removed `live2d_action` dispatch, `/live2d/actions` API, and related config fields; tool execution now converges on `native/mcp` only |
 | **2026-02-19** | Core Architecture Refactoring: Introduced Autonomous SDLC framework (with Lease/Fencing); Native structured tool_calls fully take over the execution layer |
-| **2026-02-14** | 5.0.0 Release: Remote memory microservice (NagaMemory Cloud + Local GRAG fallback), MindView 3D rewrite, startup title animation |
+| **2026-02-14** | 5.0.0 Release: Remote memory microservice (Embla Memory Cloud + local GRAG fallback), MindView 3D rewrite, startup title animation |
 | **2026-02-14** | Captcha integration, registration flow (username + email + captcha), CAS session expiration dialog, voice input button, file parsing button |
 | **2026-02-14** | Removed local ChromaDB dependency (-1119 lines), complete cloud migration of game guide, added login gating to guide function |
 | **2026-02-13** | Floating ball mode (4 state animations: classic / ball / compact / full), automatic switching of multimodal visual model for screenshots |
-| **2026-02-13** | Skill workshop refactor + Live2D emotion channel independent + naga-config skill |
-| **2026-02-12** | NagaCAS authentication + NagaModel gateway routing + login dialog + user menu |
+| **2026-02-13** | Skill workshop refactor + Live2D emotion channel independent + embla-config skill |
+| **2026-02-12** | Embla CAS authentication + Embla Model gateway routing + login dialog + user menu |
 | **2026-02-12** | Live2D 4-channel orthogonal animation (body state / actions / emotions / tracking), window-level gaze tracking with calibration |
 | **2026-02-12** | Agentic Tool Loop: streaming tool extraction + multi-round auto-execution + parallel MCP/Native/Live2D dispatch |
 | **2026-02-12** | Arknights-style splash screen + progress tracking + view preloading + mouse parallax effect |
@@ -61,7 +57,7 @@ The active runtime pipeline consists of two backend services (plus one optional 
 
 ### Streaming Tool Call Loop (Structured tool_calls & Local-first Native)
 
-The primary pipeline of NagaAgent is now completely driven by **structured `tool_calls` channels**:
+The primary pipeline of Embla System is now completely driven by **structured `tool_calls` channels**:
 The LLM no longer triggers tools by emitting ` ```tool ` code blocks. Instead, it natively outputs a list of structured tool intent objects. AgenticLoop consumes these independently of standard conversation text, severely reducing formatting drift and parser failures.
 
 **Core Mechanism:**
@@ -82,7 +78,7 @@ AgenticLoop converts calls into actionable execution arrays (with concurrency li
  Tool results inject into the message list, triggering the next inference round
 ```
 
-Source: [`apiserver/llm_service.py`](apiserver/llm_service.py), [`agents/tool_loop.py`](agents/tool_loop.py) (canonical; `apiserver/agentic_tool_loop.py` is a compatibility shim), [`apiserver/native_tools.py`](apiserver/native_tools.py)
+Source: [`apiserver/llm_service.py`](apiserver/llm_service.py), [`agents/tool_loop.py`](agents/tool_loop.py), [`apiserver/native_tools.py`](apiserver/native_tools.py)
 
 ---
 
@@ -205,7 +201,7 @@ The system uses a robust, highly-automated SDLC (Software Development Life Cycle
 - **Evaluator & Reworker**: Verification failures are handled by native governance loops (contract/scaffold/risk/incident) instead of black-box external fallback agents.
 - **Release Controller (Gray Release)**: Updates aren't directly applied to prod. They enter a Canary execution pool. AI dictates if a release is Promoted or trigger Auto-Rollback based strictly on P95 latency and runtime Error Rate.
 
-This transforms Naga from an assistant into a smart development server capable of unsupervised marathon execution.
+This transforms Embla System from an assistant stack into a smart development server capable of unsupervised marathon execution.
 
 Source: [`autonomous/`](autonomous/)
 
@@ -243,10 +239,9 @@ Source: [`autonomous/`](autonomous/)
 ### Directory Structure
 
 ```
-NagaAgent/
+Embla_System/
 ├── apiserver/            # API Server — Dialogue, Native tools, Auth, Config
 │   ├── api_server.py     #   FastAPI Main App (route entry + SSE adapter)
-│   ├── agentic_tool_loop.py  #   Compatibility shim → agents/tool_loop.py
 │   ├── native_tools.py   #   Local-First interception tools
 │   └── llm_service.py    #   LiteLLM Unified Caller & tool_calls stream
 ├── agents/               # Brain layer — production multi-agent runtime
@@ -277,7 +272,7 @@ NagaAgent/
 │   ├── quintuple_rag_query.py  #   Cypher keyword RAG retrieval
 │   ├── task_manager.py         #   3-worker async task manager
 │   ├── memory_manager.py       #   GRAG orchestrator
-│   └── memory_client.py        #   NagaMemory remote client
+│   └── memory_client.py        #   Embla Memory remote client
 ├── Embla_core/           # Next.js runtime posture dashboard (active)
 ├── system/               # Config loader, env checker, system prompts, background analyzer
 ├── main.py               # Unified entry point, orchestrates all services
@@ -298,8 +293,8 @@ NagaAgent/
 ### Installation
 
 ```bash
-git clone https://github.com/Xxiii8322766509/NagaAgent.git
-cd NagaAgent
+git clone <embla-system-repo-url> Embla_System
+cd Embla_System
 
 # Option 1: Using uv (recommended)
 uv sync
@@ -379,7 +374,7 @@ Install Neo4j ([Docker](https://hub.docker.com/_/neo4j) or [Neo4j Desktop](https
     "enabled": true,
     "broker": "mqtt-broker-address",
     "port": 1883,
-    "topic": "naga/agent/topic"
+    "topic": "embla/agent/topic"
   }
 }
 ```
@@ -441,8 +436,3 @@ Issues and Pull Requests are welcome.
 
 [MIT License](LICENSE)
 
----
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Xxiii8322766509/NagaAgent&type=date&legend=top-left)](https://www.star-history.com/#Xxiii8322766509/NagaAgent&type=date&legend=top-left)

@@ -1,7 +1,7 @@
 # M12 一页式执行清单（WS27-003：OOB 抢修 Runbook 演练）
 
 适用任务：`NGA-WS27-003`  
-默认分支：`modifier/naga`
+默认分支：`当前 Embla 开发分支`
 
 ## 1. 目标
 

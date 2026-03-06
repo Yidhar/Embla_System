@@ -6,7 +6,7 @@
 # NGA-WS25-002 实施记录（Cron/Alert 事件生产者接入 Event Bus）
 
 
-> Migration Note (archived/legacy)
+> 口径说明（archived）
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
 ## 1. 背景
@@ -17,7 +17,7 @@
 ## 2. 实施内容
 
 1. 新增生产者模块
-   - 文件：`autonomous/event_log/cron_alert_producer.py`（archived/legacy）
+   - 文件：`autonomous/event_log/cron_alert_producer.py`（archived）
    - `CronEventProducer`：
      - 支持 schedule 注册、到期触发、周期续约；
      - 事件发布到 `cron.*` 主题。
@@ -39,8 +39,8 @@
 
 ## 3. 变更文件
 
-- `autonomous/event_log/cron_alert_producer.py`（archived/legacy）
-- `autonomous/event_log/__init__.py`（archived/legacy）
+- `autonomous/event_log/cron_alert_producer.py`（archived）
+- `autonomous/event_log/__init__.py`（archived）
 - `agents/pipeline.py`
 - `tests/test_core_event_bus_consumers_ws28_029.py`
 - `tests/test_ops_dashboard_extensions.py`

@@ -1,4 +1,4 @@
-﻿# 04 模型协议与代理指南（Embla_system 对齐版）
+﻿# 04 模型协议与代理指南（Embla System 对齐版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-28
@@ -92,7 +92,7 @@
 
 代理初始化在 `main.py` 完成，核心机制：
 
-1. 读取 `config.api.applied_proxy` 与 `NAGA_USE_SYSTEM_PROXY`。
+1. 读取 `config.api.applied_proxy` 与 `EMBLA_USE_SYSTEM_PROXY`。
 2. Windows 下可从注册表读取系统代理并同步为进程环境变量。
 3. 强制维护 `NO_PROXY`（至少包含 `localhost/127.0.0.1/0.0.0.0`）。
 4. 当代理关闭时，清理 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY` 相关变量。
@@ -111,7 +111,7 @@
    - 4xx/5xx：多为鉴权或参数问题。
    - connect timeout / connection attempts failed：多为网络或代理连通问题。
 
-## 7. 与 Embla_system 对齐说明
+## 7. 与 Embla System 对齐说明
 
 当前状态：
 

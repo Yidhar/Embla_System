@@ -20,13 +20,13 @@
 - 新增主启动链托管入口：`ServiceManager._bootstrap_brainstem_control_plane_main_startup(...)`。
 - 启动流程在 `start_all_servers()` 中先执行 brainstem 托管，再启动 API/MCP/TTS 线程。
 - 托管成功后设置 ownership 与去重环境变量：
-  - `NAGA_BRAINSTEM_BOOTSTRAP_OWNER=main`
-  - `NAGA_BRAINSTEM_AUTOSTART=0`
+  - `EMBLA_BRAINSTEM_BOOTSTRAP_OWNER=main`
+  - `EMBLA_BRAINSTEM_AUTOSTART=0`
 - 通过上述约定让 API 生命周期不再重复托管 brainstem。
 
 2. `apiserver/api_server.py`
 - 新增 ownership 感知：
-  - `NAGA_BRAINSTEM_BOOTSTRAP_OWNER`
+  - `EMBLA_BRAINSTEM_BOOTSTRAP_OWNER`
   - 当 owner 非 `api/apiserver` 时，`_should_bootstrap_brainstem_control_plane()` 返回 skip。
 - shutdown 入口同样尊重 ownership，避免 API 在非 owner 模式下 stop 外部托管实例。
 

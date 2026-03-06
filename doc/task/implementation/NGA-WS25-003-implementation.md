@@ -6,7 +6,7 @@
 # NGA-WS25-003 实施记录（Replay 幂等锚点与去重策略强化）
 
 
-> Migration Note (archived/legacy)
+> 口径说明（archived）
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
 ## 1. 背景
@@ -48,14 +48,14 @@
    - 保持原 `emit/read_recent/replay/replay_by_topic` 行为兼容。
 
 4. 对外导出扩展
-   - 文件：`autonomous/event_log/__init__.py`（archived/legacy）
+   - 文件：`autonomous/event_log/__init__.py`（archived）
    - 导出 `ReplayDispatchResult`，供运行时与测试直接引用。
 
 ## 3. 变更文件
 
 - `core/event_bus/topic_bus.py`
 - `core/event_bus/event_store.py`
-- `autonomous/event_log/__init__.py`（archived/legacy）
+- `autonomous/event_log/__init__.py`（archived）
 - `tests/test_event_store_db_partition_ws29_005.py`
 - `doc/task/23-phase3-full-target-task-list.md`
 - `doc/00-omni-operator-architecture.md`

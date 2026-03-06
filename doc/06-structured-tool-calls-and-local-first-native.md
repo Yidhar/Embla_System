@@ -1,4 +1,4 @@
-﻿# 06 结构化工具调用与本地优先执行（Embla_system 对齐版）
+﻿# 06 结构化工具调用与本地优先执行（Embla System 对齐版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-22
@@ -20,7 +20,7 @@
 ## 2. 当前执行管线（As-Is）
 
 1. `apiserver/llm_service.py` 输出结构化工具调用数据。
-2. `apiserver/agentic_tool_loop.py` 聚合并校验 `tool_calls`。
+2. `agents/tool_loop.py` 聚合并校验 `tool_calls`。
 3. 按调用类型分发：
    - Native：`apiserver/native_tools.py`
    - MCP：`mcpserver/mcp_manager.py`
@@ -36,7 +36,7 @@ SSE 关键事件：
 
 ## 3. MCP Host + Tool Registry 映射
 
-与 Embla_system 对齐关系：
+与 Embla System 对齐关系：
 
 - MCP Host：`mcpserver/mcp_server.py`（`/schedule`、`/call`、`/services`、`/status`）
 - Tool Registry：`mcpserver/mcp_registry.py`（manifest 扫描、实例化注册）
@@ -48,7 +48,7 @@ SSE 关键事件：
 2. 本地失败后可按策略回退到 mcporter 外部服务。
 3. 外部 MCP 调用走统一服务名规范化与结构化错误回执，不再有供应商特化分支。
 
-## 4. Embla_system 安全层管线（当前落地）
+## 4. Embla System 安全层管线（当前落地）
 
 ### 4.1 调用前校验
 

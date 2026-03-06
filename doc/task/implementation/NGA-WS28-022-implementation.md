@@ -18,10 +18,10 @@
 
 1. `apiserver/llm_service.py`
 - 新增运行时注入常量与环境开关：
-  - `NAGA_IMMUTABLE_DNA_RUNTIME_INJECTION`
-  - `NAGA_IMMUTABLE_DNA_PROMPTS_ROOT`
-  - `NAGA_IMMUTABLE_DNA_MANIFEST_PATH`
-  - `NAGA_IMMUTABLE_DNA_AUDIT_PATH`
+  - `EMBLA_IMMUTABLE_DNA_RUNTIME_INJECTION`
+  - `EMBLA_IMMUTABLE_DNA_PROMPTS_ROOT`
+  - `EMBLA_IMMUTABLE_DNA_MANIFEST_PATH`
+  - `EMBLA_IMMUTABLE_DNA_AUDIT_PATH`
 - 在非流式与流式调用前统一执行 `ImmutableDNALoader.inject()`。
 - 注入失败时 fail-closed：
   - 非流式返回 `Chat call blocked: ...`

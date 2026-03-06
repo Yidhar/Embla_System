@@ -1,8 +1,6 @@
-# 23 M7 之后到 Embla_system 全目标态（Phase3 Full）任务清单
+# 23 M7 之后到 Embla System 全目标态（Phase3 Full）任务清单
 
-
-> Migration Note (archived/legacy)
-> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
+注：文中出现 `autonomous/*` 仅表示归档证据路径，不进入当前运行时主链。
 
 ## 1. 目标与边界
 
@@ -61,12 +59,12 @@
 | `NGA-WS25-006` | M10 | Lane-REL | P1 | NGA-WS25-002;NGA-WS25-005 | M10 综合门禁脚本链 | M10 脚本链通过且报告完整 |
 | `NGA-WS26-001` | M11 | Lane-RT | P0 | NGA-WS25-006 | SystemAgent 写路径强制收敛到 Scaffold/Txn | 禁止绕过原子提交的默认路径 |
 | `NGA-WS26-002` | M11 | Lane-OBS | P0 | NGA-WS25-006 | rollout/fail-open/lease 统一指标与导出 | 可看见灰度命中率与失败预算 |
-| `NGA-WS26-003` | M11 | Lane-BS | P0 | NGA-WS26-002 | fail-open 预算超限自动降级策略 | 超阈值自动切回 legacy 并告警 |
+| `NGA-WS26-003` | M11 | Lane-BS | P0 | NGA-WS26-002 | fail-open 预算超限自动降级策略 | 超阈值自动进入受控降级模式并告警 |
 | `NGA-WS26-004` | M11 | Lane-BS | P1 | NGA-WS26-001 | 锁泄漏清道夫与 fencing 联动 | orphan 锁可自动回收且无误杀 |
 | `NGA-WS26-005` | M11 | Lane-BS | P1 | NGA-WS24-004;NGA-WS26-004 | double-fork/脱离进程树回收链 | 幽灵进程可识别并回收 |
 | `NGA-WS26-006` | M11 | Lane-REL | P1 | NGA-WS26-003;NGA-WS26-004;NGA-WS26-005 | M11 混沌门禁（锁泄漏/logrotate/double-fork） | 三类场景回归稳定通过 |
 | `NGA-WS27-001` | M12 | Lane-OBS | P0 | NGA-WS26-006 | 72h 长稳耐久脚本与磁盘配额压测 | 无 ENOSPC/无未捕获异常/无事件丢失 |
-| `NGA-WS27-002` | M12 | Lane-REL | P0 | NGA-WS26-006 | Legacy -> SubAgent Full cutover 方案与回滚窗 | 可灰度放量并可一键回退 |
+| `NGA-WS27-002` | M12 | Lane-REL | P0 | NGA-WS26-006 | SubAgent Full cutover 方案与回滚窗 | 可灰度放量并可一键回退 |
 | `NGA-WS27-003` | M12 | Lane-REL | P1 | NGA-WS27-002 | OOB 抢修 Runbook + 演练记录 | 云主机场景下可恢复可验证 |
 | `NGA-WS27-004` | M12 | Lane-REL | P0 | NGA-WS27-001;NGA-WS27-002;NGA-WS27-003 | `release_closure_chain_full_m0_m12.py` | M0-M12 统一收口脚本一键执行成功 |
 | `NGA-WS27-005` | M12 | Lane-REL | P1 | NGA-WS27-004 | 文档一致性收口（00/10/11/12/13 + task） | 文档状态与实现证据一致无冲突 |
@@ -154,16 +152,16 @@
 - `NGA-WS24-006` 已落地 M9 发布门禁接入：
   - 新增 M9 门禁评估器与入口：`agents/release_gates/ws24_release_gate.py`、`scripts/validate_m9_closure_gate_ws24_006.py`
   - 新增 M9 收口链：`scripts/release_closure_chain_m9_ws24_006.py`
-  - 全量收口链扩展接入 M9 组：`scripts/release_closure_chain_full_m0_m7.py`（兼容命名，目标域已到 M0-M9）
+  - 全量收口链扩展接入 M9 组：`scripts/release_closure_chain_full_m0_m7.py`（历史脚本名沿用，目标域已到 M0-M9）
   - 新增 runbook：`doc/task/runbooks/release_m9_plugin_isolation_closure_onepager_ws24_006.md`
   - 回归：`tests/test_release_closure_chain_m9_ws24_006.py`、`tests/test_release_closure_chain_m9_ws24_006.py`、`tests/test_release_closure_chain_full_m0_m7.py`
 - `NGA-WS25-001` 已落地 Topic Event Bus 第一版：
   - 新增 Topic 总线抽象：`core/event_bus/topic_bus.py`（publish/subscribe/replay/dead-letter）
-  - `EventStore` 接入 TopicBus 发布路径，保留 JSONL 兼容回读并新增 topic 回放接口
+  - `EventStore` 接入 TopicBus 发布路径，保留 JSONL 回读并新增 topic 回放接口
   - 新增回归：`tests/test_core_event_bus_consumers_ws28_029.py`、`tests/test_core_event_bus_consumers_ws28_029.py`
-  - 兼容回归通过：`tests/test_core_event_bus_consumers_ws28_029.py`、`tests/test_core_event_bus_consumers_ws28_029.py`
+  - 回归通过：`tests/test_core_event_bus_consumers_ws28_029.py`、`tests/test_core_event_bus_consumers_ws28_029.py`
 - `NGA-WS25-002` 已落地 Cron/Alert 生产者接入：
-  - 新增生产者模块：`autonomous/event_log/cron_alert_producer.py`（archived/legacy）（`CronEventProducer` / `AlertEventProducer`）
+  - 新增生产者模块：`autonomous/event_log/cron_alert_producer.py`（archived）（`CronEventProducer` / `AlertEventProducer`）
   - `SystemAgent` 挂载 cron/alert producer：
     - cycle 触发 `cron.system_agent.cycle`
     - watchdog 门禁触发 `alert.watchdog`
@@ -188,13 +186,13 @@
 - `NGA-WS25-006` 已落地 M10 综合门禁脚本链：
   - 新增 M10 门禁评估器与入口：`agents/release_gates/ws25_release_gate.py`、`scripts/validate_m10_closure_gate_ws25_006.py`
   - 新增 M10 收口链：`scripts/release_closure_chain_m10_ws25_006.py`
-  - 全量收口链扩展接入 M10 组：`scripts/release_closure_chain_full_m0_m7.py`（兼容命名，目标域已到 M0-M10）
+  - 全量收口链扩展接入 M10 组：`scripts/release_closure_chain_full_m0_m7.py`（历史脚本名沿用，目标域已到 M0-M10）
   - 新增 runbook：`doc/task/runbooks/release_m10_event_gc_closure_onepager_ws25_006.md`
   - 新增回归：`tests/test_release_closure_chain_m10_ws25_006.py`、`tests/test_release_closure_chain_m10_ws25_006.py`
 - `NGA-WS26-001` 已落地写路径强制收敛：
-  - `SubAgentRuntimeConfig` 增加写路径门禁开关（默认强制、默认不允许 write fail-open 回退 legacy）
+  - `SubAgentRuntimeConfig` 增加写路径门禁开关（默认强制、默认不允许 write fail-open 回退到归档执行链）
   - `SystemAgent` 新增写意图识别与 `gate=write_path` 拒绝链路，阻断绕过 Scaffold/Txn 的默认路径
-  - write 任务 fail-open 默认触发 `SubAgentRuntimeFailOpenBlocked`（archived_legacy 历史事件命名空间 可通过显式开关兼容）
+  - write 任务 fail-open 默认触发 `SubAgentRuntimeFailOpenBlocked`（archived_legacy 历史事件命名空间仅用于归档回放）
   - 新增回归：`tests/test_native_tools_runtime_hardening.py`
 - `NGA-WS26-002` 已落地 rollout/fail-open/lease 统一指标导出：
   - `scripts/export_slo_snapshot.py` 新增 `runtime_rollout/runtime_fail_open/runtime_lease` 三组指标
@@ -205,7 +203,7 @@
   - `SystemAgent` 新增 fail-open 预算状态机（attempt/fail_open/ratio/budget/degraded）
   - 预算超限触发 `SubAgentRuntimeAutoDegraded`（archived_legacy） + `ReleaseGateRejected(gate=fail_open_budget)` + `alert.runtime` 告警
   - 运行模式决策支持 `decision_reason=fail_open_budget_exhausted_auto_degrade`
-  - 与 WS26-001 兼容：写路径任务仍保持 `write_path_enforced -> subagent`
+  - 与 WS26-001 约束一致：写路径任务仍保持 `write_path_enforced -> subagent`
   - 新增回归：`tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py`
 - `NGA-WS26-004` 已落地锁泄漏清道夫与 fencing 联动：
   - `agentic_tool_loop` 全局锁分支新增调用前清道夫扫描：`scan_and_reap_expired(reason=tool_call_pre_acquire:...)`
@@ -222,7 +220,7 @@
   - 新增 M11 门禁评估器与入口：`agents/release_gates/ws26_release_gate.py`、`scripts/validate_m11_closure_gate_ws26_006.py`
   - 新增 M11 混沌回归报告脚本：`scripts/run_ws26_m11_runtime_chaos_suite_ws26_006.py`
   - 新增 M11 收口链：`scripts/release_closure_chain_m11_ws26_006.py`
-  - 全量收口链扩展接入 M11 组：`scripts/release_closure_chain_full_m0_m7.py`（兼容命名，目标域已到 M0-M11）
+  - 全量收口链扩展接入 M11 组：`scripts/release_closure_chain_full_m0_m7.py`（历史脚本名沿用，目标域已到 M0-M11）
   - 新增 runbook：`doc/task/runbooks/release_m11_lock_fencing_closure_onepager_ws26_006.md`
   - 新增回归：`tests/test_release_closure_chain_m11_ws26_006.py`、`tests/test_run_ws26_m11_runtime_chaos_suite_ws26_006.py`、`tests/test_release_closure_chain_m11_ws26_006.py`、`tests/test_release_closure_chain_full_m0_m7.py`
 - `NGA-WS27-001` 已落地 72h 长稳 + 磁盘配额压测首版：
@@ -241,7 +239,7 @@
   - 新增回归：`tests/test_manage_ws27_subagent_cutover_ws27_002.py`
 - `NGA-WS27-003` 已落地 OOB 抢修演练首版：
   - 新增 OOB 演练脚本：`scripts/run_ws27_oob_repair_drill_ws27_003.py`
-  - 演练覆盖：快照恢复回滚、无快照强制 legacy 降级、OOB bundle 导出校验
+  - 演练覆盖：快照恢复回滚、无快照强制受控降级、OOB bundle 导出校验
   - 新增 runbook：`doc/task/runbooks/release_m12_oob_repair_drill_onepager_ws27_003.md`
   - 默认报告：`scratch/reports/ws27_oob_repair_drill_ws27_003.json`
   - 新增回归：`tests/test_run_ws27_oob_repair_drill_ws27_003.py`

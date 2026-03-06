@@ -1,4 +1,4 @@
-﻿# 03 C++/Qt UI 改造评估（对齐 Embla_system）
+﻿# 03 C++/Qt UI 改造评估（对齐 Embla System）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-22
@@ -13,11 +13,11 @@
 
 不建议在同一阶段推进“前端 Qt + 后端全量 C++重写”。
 
-## 2. 与 Embla_system 的对齐视角
+## 2. 与 Embla System 的对齐视角
 
 ### 2.1 当前可复用的无头后端
 
-现有后端已经具备 Embla_system 入口能力：
+现有后端已经具备 Embla System 入口能力：
 
 - 单入口 BFF：`apiserver`
 - 结构化事件流：`/chat/stream` 返回 `tool_calls/tool_results/tool_stage/round_*` 事件
@@ -46,9 +46,9 @@
 4. 自动更新与异常恢复。
 5. 截图与媒体相关交互。
 
-这部分不在 Embla_system 后端内，需要 Qt 壳层自行实现或阶段性降级。
+这部分不在 Embla System 后端内，需要 Qt 壳层自行实现或阶段性降级。
 
-## 4. 分阶段实施建议（与 Embla_system 对齐）
+## 4. 分阶段实施建议（与 Embla System 对齐）
 
 ### Phase 0：契约冻结
 

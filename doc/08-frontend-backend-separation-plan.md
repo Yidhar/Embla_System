@@ -1,4 +1,4 @@
-﻿# 08 前后端分离方案（Embla_system 入口对齐版）
+﻿# 08 前后端分离方案（Embla System 入口对齐版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-28
@@ -20,9 +20,9 @@
 2. `apiserver` 的 MCP 状态接口为“运行态快照语义”，仍与底层 `mcpserver` 状态并行存在。
 3. 历史 `frontend/voice/agentserver` 目录已移除，但旧文档仍有残留引用。
 
-## 2. Embla_system 对齐目标
+## 2. Embla System 对齐目标
 
-目标是把 `apiserver` 明确为 Embla_system 入口层（BFF），并把前端与内部服务解耦：
+目标是把 `apiserver` 明确为 Embla System 入口层（BFF），并把前端与内部服务解耦：
 
 - 前端只依赖 BFF 契约与事件流
 - BFF 内部可自由替换 `mcpserver`、`autonomous`、`memory` 细节

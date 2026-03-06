@@ -1,17 +1,17 @@
 ---
 **文档类型**：🎯 目标态架构设计（Target Architecture）
-**架构版本**：Embla_system v2.0 (Pythonic Secure Edition)
+**架构版本**：Embla System v2.0 (Pythonic Secure Edition)
 **实施状态**：目标态蓝图（用于 WS28+ 持续落地）
 **最后更新**：2026-02-28
 **技术基线**：Python 3.11+ / FastAPI / Pydantic / asyncio / multiprocessing
 **核心原则**：三层架构不变（脑干/大脑/手脚），执行与进化强隔离，审计先行
 ---
 
-# Embla_system v2.0 架构设计蓝图（纯 Python 化 + 安全门禁升级）
+# Embla System v2.0 架构设计蓝图（纯 Python 化 + 安全门禁升级）
 
 ## 0. 文档定位与改造目标
 
-本文档是 Embla_system v2.0 的目标态架构蓝图，重点解决两类历史问题：
+本文档是 Embla System v2.0 的目标态架构蓝图，重点解决两类历史问题：
 
 1. 技术栈统一：全量采用 Python 工程体系，不再引入 JS/TS 运行时依赖。
 2. 安全边界重建：将“用户任务执行域”与“框架维护/自进化域”做物理隔离，并引入审批账本与可追溯门禁链。
@@ -90,7 +90,7 @@ graph TB
 
 ## 2. 工程目录与节点树（Python 包结构）
 
-> 说明：目录树已统一为 Python-first，不再保留历史 `src/` 与 `NagaAgent/` 双栈分裂模型。
+> 说明：目录树已统一为 Python-first，不再保留历史 `src/` 与 `Embla_System/` 双栈分裂模型。
 
 ```text
 Embla_System/

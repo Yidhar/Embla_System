@@ -322,7 +322,7 @@
 
 | task_id | priority | phase | title | depends_on |
 |---|---|---|---|---|
-| NGA-WS19-006 | P2 | M3 | Semantic Graph 拓扑扫描与更新 | NGA-WS19-005 |
+| NGA-WS19-006 | P2 | M3 | 工具结果拓扑扫描与更新 | NGA-WS19-005 |
 | NGA-WS19-007 | P2 | M4 | Daily Checkpoint 日结归档 | NGA-WS19-004;NGA-WS19-005 |
 
 ### Lane WS20

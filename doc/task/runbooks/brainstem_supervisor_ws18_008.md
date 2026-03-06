@@ -12,9 +12,9 @@
 ## 3. 快速导出部署模板
 ```bash
 python scripts/export_brainstem_service_template_ws18_008.py \
-  --service-name naga-brainstem \
+  --service-name embla-brainstem \
   --command python main.py --headless \
-  --working-dir E:/Programs/NagaAgent \
+  --working-dir E:/Programs/Embla_System \
   --restart-policy on-failure \
   --max-restarts 5 \
   --restart-backoff 3 \
@@ -23,9 +23,9 @@ python scripts/export_brainstem_service_template_ws18_008.py \
 ```
 
 导出结果：
-1. `scratch/brainstem_templates/naga-brainstem.service`（systemd 模板）
-2. `scratch/brainstem_templates/naga-brainstem.windows-recovery.json`（Windows 恢复计划）
-3. `scratch/brainstem_templates/naga-brainstem.manifest.json`（监督器清单）
+1. `scratch/brainstem_templates/embla-brainstem.service`（systemd 模板）
+2. `scratch/brainstem_templates/embla-brainstem.windows-recovery.json`（Windows 恢复计划）
+3. `scratch/brainstem_templates/embla-brainstem.manifest.json`（监督器清单）
 
 ## 4. 托管策略
 1. `restart_policy=on-failure`：仅异常退出自动拉起。
