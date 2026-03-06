@@ -26,7 +26,7 @@ from agents.shell_agent import ShellAgent
 from agents.core_agent import CoreAgent
 from agents.expert_agent import ExpertAgent, ExpertAgentConfig
 from agents.dev_agent import DevAgent, DevAgentConfig
-from agents.review_agent import ReviewAgent
+from agents.review_agent import ReviewAgent, ReviewAgentConfig
 from agents.runtime.mini_loop import MiniLoopConfig, run_mini_loop
 from agents.runtime.parent_tools import get_parent_tool_definitions, handle_parent_tool_call
 
@@ -63,6 +63,8 @@ _FAST_TRACK_PROTECTED_EXACT = {
     ".env",
     "config.json",
 }
+_MAX_REVIEW_REMEDIATION_CYCLES = 3
+_MAX_REVIEW_REJECT_RESPAWNS = 1
 
 
 def _trim_text(value: Any, *, limit: int = 220) -> str:
@@ -84,6 +86,148 @@ def _extract_report_text(report: Dict[str, Any]) -> str:
                 except Exception:
                     continue
     return ""
+
+
+def _normalize_changed_files(raw_files: Any) -> List[str]:
+    if not isinstance(raw_files, list):
+        return []
+    return sorted({str(item).strip() for item in raw_files if str(item).strip()})
+
+
+def _collect_expert_dev_artifacts(store: AgentSessionStore, expert_id: str) -> List[Dict[str, Any]]:
+    artifacts: List[Dict[str, Any]] = []
+    for child in store.list_children(expert_id):
+        if str(child.role or "").strip().lower() != "dev":
+            continue
+        verification_report = child.metadata.get("verification_report")
+        if not isinstance(verification_report, dict):
+            verification_report = {}
+        changed_files = _normalize_changed_files(
+            verification_report.get("changed_files") if verification_report else child.metadata.get("changed_files")
+        )
+        artifacts.append(
+            {
+                "agent_id": child.session_id,
+                "status": str(child.status.value),
+                "completion_report": str(child.metadata.get("completion_report") or "").strip(),
+                "verification_report": dict(verification_report),
+                "changed_files": changed_files,
+                "task_updates": dict(child.metadata.get("task_updates") or {}),
+            }
+        )
+    return artifacts
+
+
+def _build_aggregate_test_results(dev_artifacts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "passed": sum(
+            int((((artifact.get("verification_report") or {}).get("tests") or {}).get("passed", 0)) or 0)
+            for artifact in dev_artifacts
+        ),
+        "failed": sum(
+            int((((artifact.get("verification_report") or {}).get("tests") or {}).get("failed", 0)) or 0)
+            for artifact in dev_artifacts
+        ),
+        "errors": sum(
+            int((((artifact.get("verification_report") or {}).get("tests") or {}).get("errors", 0)) or 0)
+            for artifact in dev_artifacts
+        ),
+        "details": "aggregated_from_dev_verification_reports",
+    }
+
+
+def _build_review_rework_instruction(
+    *,
+    original_task: str,
+    review_payload: Dict[str, Any],
+    review_cycle: int,
+) -> str:
+    issues = [str(item).strip() for item in list(review_payload.get("issues") or []) if str(item).strip()]
+    suggestions = [str(item).strip() for item in list(review_payload.get("suggestions") or []) if str(item).strip()]
+    summary = str(review_payload.get("summary") or "").strip()
+    parts = [
+        f"Review cycle {max(1, int(review_cycle))} requested changes.",
+        "Please address the reviewer feedback, rerun your self-verification, and report completed again with an updated verification_report.",
+    ]
+    if original_task:
+        parts.append(f"Original task:\n{original_task}")
+    if summary:
+        parts.append(f"Review summary:\n{summary}")
+    if issues:
+        parts.append("Issues to fix:\n" + "\n".join(f"- {item}" for item in issues))
+    if suggestions:
+        parts.append("Reviewer suggestions:\n" + "\n".join(f"- {item}" for item in suggestions))
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def _inject_system_instruction(store: AgentSessionStore, session_id: str, content: str) -> None:
+    text = str(content or "").strip()
+    if not text:
+        return
+    session = store.get(session_id)
+    if session is None:
+        return
+    messages = list(session.messages or [])
+    messages.append({"role": "system", "content": f"[Parent resume instruction] {text}"})
+    store.save_messages(session_id, messages)
+
+
+def _is_review_reject_recoverable(review_payload: Dict[str, Any]) -> bool:
+    verdict = str(review_payload.get("verdict") or "").strip().lower()
+    if verdict != "reject":
+        return False
+    corpus_parts = [
+        str(review_payload.get("summary") or ""),
+        *(str(item) for item in list(review_payload.get("issues") or [])),
+        *(str(item) for item in list(review_payload.get("suggestions") or [])),
+    ]
+    corpus = " ".join(part.strip().lower() for part in corpus_parts if str(part).strip())
+    unrecoverable_markers = (
+        "review agent did not emit a valid review_result",
+        "no valid review_result",
+        "malformed review_result",
+        "missing review_result",
+        "insufficient context to review",
+        "no dev agents were available",
+    )
+    return not any(marker in corpus for marker in unrecoverable_markers)
+
+
+def _select_reject_respawn_task_ids(tasks: List[Any], changed_files: List[str]) -> List[str]:
+    normalized_changed_files = {str(path).strip() for path in changed_files if str(path).strip()}
+    if not normalized_changed_files:
+        return [str(getattr(task, "task_id", "") or "").strip() for task in tasks if str(getattr(task, "task_id", "") or "").strip()]
+    selected: List[str] = []
+    for task in tasks:
+        task_id = str(getattr(task, "task_id", "") or "").strip()
+        task_files = {str(path).strip() for path in list(getattr(task, "files", []) or []) if str(path).strip()}
+        if task_id and (not task_files or task_files & normalized_changed_files):
+            selected.append(task_id)
+    return selected or [str(getattr(task, "task_id", "") or "").strip() for task in tasks if str(getattr(task, "task_id", "") or "").strip()]
+
+
+def _build_review_reject_respawn_instruction(
+    *,
+    original_task: str,
+    review_payload: Dict[str, Any],
+    review_cycle: int,
+) -> str:
+    issues = [str(item).strip() for item in list(review_payload.get("issues") or []) if str(item).strip()]
+    suggestions = [str(item).strip() for item in list(review_payload.get("suggestions") or []) if str(item).strip()]
+    summary = str(review_payload.get("summary") or "").strip()
+    parts = [
+        f"Review cycle {max(1, int(review_cycle))} rejected the current implementation.",
+        "Start a fresh remediation pass. Re-evaluate the approach, do not blindly preserve the previous solution, and complete full self-verification before reporting completed.",
+    ]
+    if original_task:
+        parts.append(f"Original task:\n{original_task}")
+    if summary:
+        parts.append(f"Review rejection summary:\n{summary}")
+    if issues:
+        parts.append("Blocking issues:\n" + "\n".join(f"- {item}" for item in issues))
+    if suggestions:
+        parts.append("Reviewer suggestions:\n" + "\n".join(f"- {item}" for item in suggestions))
+    return "\n\n".join(part for part in parts if part).strip()
 
 
 def _normalize_fast_track_tool_name(raw: str) -> str:
@@ -570,8 +714,17 @@ async def run_multi_agent_pipeline(
         - dev_loop_start
         - dev_loop_event
         - dev_loop_end
+        - dev_review_resume_start
+        - dev_review_resume_event
+        - dev_review_resume_end
         - expert_report
+        - expert_blocked
         - review_spawned
+        - review_loop_start
+        - review_loop_event
+        - review_loop_end
+        - review_rework_requested
+        - review_reject_respawn
         - review_result
         - pipeline_end
     """
@@ -1020,8 +1173,14 @@ async def run_multi_agent_pipeline(
         scope = er.get("scope", assignment.get("scope", ""))
         tasks = expert.plan_tasks(scope)
         devs: List[Dict[str, Any]] = []
+        dev_task_map: Dict[str, str] = {}
         if tasks:
             devs = expert.spawn_devs(tasks)
+            dev_task_map = {
+                str(item.get("agent_id") or "").strip(): str(item.get("task_id") or "").strip()
+                for item in devs
+                if str(item.get("agent_id") or "").strip()
+            }
             yield {
                 "type": "expert_progress",
                 "pipeline_id": pipeline_id,
@@ -1113,8 +1272,16 @@ async def run_multi_agent_pipeline(
                 final_session = _store.get(dev_agent_id)
                 final_status = str(final_session.status.value) if final_session is not None else "missing"
                 completion_report = ""
+                verification_report: Dict[str, Any] = {}
+                changed_files: List[str] = []
                 if final_session is not None:
                     completion_report = str(final_session.metadata.get("completion_report") or "").strip()
+                    raw_verification_report = final_session.metadata.get("verification_report")
+                    if isinstance(raw_verification_report, dict):
+                        verification_report = dict(raw_verification_report)
+                    changed_files = _normalize_changed_files(
+                        verification_report.get("changed_files") if verification_report else final_session.metadata.get("changed_files")
+                    )
 
                 if task_board_engine is not None and expert.board_id and task_id:
                     try:
@@ -1124,6 +1291,7 @@ async def run_multi_agent_pipeline(
                                 task_id,
                                 status=TaskStatus.DONE,
                                 summary=completion_report or "child loop completed",
+                                files_changed=changed_files if changed_files else None,
                             )
                         elif final_status == AgentStatus.RUNNING.value:
                             task_board_engine.update_task(
@@ -1148,6 +1316,8 @@ async def run_multi_agent_pipeline(
                     "task_id": task_id,
                     "status": final_status,
                     "completion_report": completion_report,
+                    "verification_report": verification_report,
+                    "changed_files": changed_files,
                 }
 
         expert_progress = expert.check_progress()
@@ -1157,79 +1327,670 @@ async def run_multi_agent_pipeline(
 
         if expert_completed:
             review_payload: Optional[Dict[str, Any]] = None
+            final_review_payload: Optional[Dict[str, Any]] = None
             review_agent_id = ""
             if task_board_engine is not None and expert.board_id:
                 review_expected_count += 1
-                review_runtime = ReviewAgent(task_board_engine=task_board_engine)
-                spawned_review = expert.spawn_review()
-                review_agent_id = str(spawned_review.get("agent_id") or "").strip()
-                yield {
-                    "type": "review_spawned",
-                    "pipeline_id": pipeline_id,
-                    "expert_id": str(agent_id),
-                    "expert_type": expert_type,
-                    "board_id": expert.board_id,
-                    "review_agent_id": review_agent_id,
-                }
-
-                board = task_board_engine.get_board(expert.board_id)
-                declared_files: List[str] = []
-                if board is not None:
-                    declared_files = sorted(
+                original_task_text = str(decomposition.get("original_goal") or message)
+                review_cycle_limit = _MAX_REVIEW_REMEDIATION_CYCLES if child_execution_enabled else 1
+                reject_respawn_budget = _MAX_REVIEW_REJECT_RESPAWNS if child_execution_enabled else 0
+                reject_respawn_count = 0
+                expert_blocked_reason = ""
+                for review_cycle in range(1, review_cycle_limit + 1):
+                    review_payload = None
+                    review_agent_id = ""
+                    dev_artifacts = _collect_expert_dev_artifacts(_store, str(agent_id))
+                    changed_files = sorted(
                         {
-                            str(path).strip()
-                            for task in board.tasks
-                            for path in list(task.files or [])
+                            path
+                            for artifact in dev_artifacts
+                            for path in list(artifact.get("changed_files") or [])
                             if str(path).strip()
                         }
                     )
-
-                review_result = review_runtime.run_full_review(
-                    board_id=expert.board_id,
-                    actual_changed_files=declared_files,
-                    test_results={"passed": 1, "failed": 0, "errors": 0, "details": "pipeline_default_baseline"},
-                )
-                review_payload = review_result.to_dict()
-                review_payload.update(
-                    {
+                    aggregate_test_results = _build_aggregate_test_results(dev_artifacts)
+                    spawned_review = expert.spawn_review(
+                        original_task=original_task_text,
+                        changed_files=changed_files,
+                        verification_reports=dev_artifacts,
+                        cycle=review_cycle,
+                    )
+                    review_agent_id = str(spawned_review.get("agent_id") or "").strip()
+                    yield {
+                        "type": "review_spawned",
+                        "pipeline_id": pipeline_id,
                         "expert_id": str(agent_id),
                         "expert_type": expert_type,
                         "board_id": expert.board_id,
                         "review_agent_id": review_agent_id,
+                        "review_cycle": review_cycle,
                     }
-                )
-                review_results.append(review_payload)
 
-                if review_agent_id:
-                    summary_text = str(review_payload.get("summary") or "").strip()
-                    if not summary_text:
-                        summary_text = _trim_text(json.dumps(review_payload, ensure_ascii=False), limit=600)
-                    _mailbox.send(
-                        review_agent_id,
-                        str(agent_id),
-                        summary_text,
-                        message_type="report",
+                    if child_execution_enabled and child_llm_call is not None and child_tool_executor is not None and review_agent_id:
+                        review_session = _store.get(review_agent_id)
+                        review_tool_subset = list(review_session.tool_subset or []) if review_session is not None else []
+                        review_prompt_blocks = list(review_session.prompt_blocks or []) if review_session is not None else []
+                        review_memory_hints = []
+                        if review_session is not None:
+                            raw_hints = review_session.metadata.get("memory_hints")
+                            if isinstance(raw_hints, list):
+                                review_memory_hints = [str(item).strip() for item in raw_hints if str(item).strip()]
+                        review_runtime = ReviewAgent(
+                            config=ReviewAgentConfig(
+                                prompt_blocks=review_prompt_blocks,
+                                memory_hints=review_memory_hints,
+                                prompts_root="system/prompts",
+                            ),
+                            task_board_engine=task_board_engine,
+                        )
+                        review_runtime_tool_defs = _build_runtime_tool_definitions(review_tool_subset)
+                        review_allowed_tools = {str(item).strip() for item in review_tool_subset if str(item).strip()}
+                        review_initial_task = "Review the completed work and produce a structured review_result."
+                        if review_session is not None and str(review_session.task_description or "").strip():
+                            review_initial_task = str(review_session.task_description or "").strip()
+                        review_loop_config = MiniLoopConfig(
+                            max_rounds=max(1, min(int(child_max_rounds), 6)),
+                            poll_parent_every_n=3,
+                        )
+
+                        async def _execute_review_tool(tool_name, arguments, _review_session_id=review_agent_id):
+                            normalized_tool = str(tool_name or "").strip()
+                            if normalized_tool not in review_allowed_tools:
+                                return {
+                                    "error": f"tool_not_allowed:{normalized_tool}",
+                                    "status": "blocked",
+                                    "tool_name": normalized_tool,
+                                }
+                            safe_arguments = arguments if isinstance(arguments, dict) else {}
+                            if is_memory_tool(normalized_tool):
+                                return handle_memory_tool(normalized_tool, safe_arguments)
+                            return await child_tool_executor(normalized_tool, safe_arguments, _review_session_id)
+
+                        yield {
+                            "type": "review_loop_start",
+                            "pipeline_id": pipeline_id,
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "board_id": expert.board_id,
+                            "review_agent_id": review_agent_id,
+                            "tool_subset": review_tool_subset,
+                            "review_cycle": review_cycle,
+                        }
+                        async for mini_event in run_mini_loop(
+                            session_id=review_agent_id,
+                            store=_store,
+                            mailbox=_mailbox,
+                            llm_call=child_llm_call,
+                            tool_executor=_execute_review_tool,
+                            tool_definitions=review_runtime_tool_defs,
+                            system_prompt=review_runtime.build_system_prompt(),
+                            initial_task=review_initial_task,
+                            config=review_loop_config,
+                        ):
+                            yield {
+                                "type": "review_loop_event",
+                                "pipeline_id": pipeline_id,
+                                "expert_id": str(agent_id),
+                                "expert_type": expert_type,
+                                "board_id": expert.board_id,
+                                "review_agent_id": review_agent_id,
+                                "review_cycle": review_cycle,
+                                "event": mini_event,
+                            }
+
+                        final_review_session = _store.get(review_agent_id)
+                        final_review_status = str(final_review_session.status.value) if final_review_session is not None else "missing"
+                        review_completion_report = ""
+                        if final_review_session is not None:
+                            review_completion_report = str(final_review_session.metadata.get("completion_report") or "").strip()
+                            raw_review_payload = final_review_session.metadata.get("review_result")
+                            if isinstance(raw_review_payload, dict):
+                                review_payload = dict(raw_review_payload)
+                        if not isinstance(review_payload, dict):
+                            review_payload = {
+                                "verdict": "reject",
+                                "requirement_alignment": [],
+                                "code_quality": {"status": "failed", "summary": "Review agent did not emit a valid review_result."},
+                                "regression_risk": {"level": "high", "summary": "No valid review_result was produced."},
+                                "test_coverage": {"status": "unknown", "summary": "No valid review_result was produced.", "missing_cases": []},
+                                "issues": ["Review agent completed without a valid review_result payload."],
+                                "suggestions": ["Rerun the independent review with a valid structured completion payload."],
+                                "summary": review_completion_report or "Review agent failed to produce a valid structured review result.",
+                            }
+                        yield {
+                            "type": "review_loop_end",
+                            "pipeline_id": pipeline_id,
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "board_id": expert.board_id,
+                            "review_agent_id": review_agent_id,
+                            "review_cycle": review_cycle,
+                            "status": final_review_status,
+                            "completion_report": review_completion_report,
+                            "result": review_payload,
+                        }
+                    else:
+                        review_runtime = ReviewAgent(task_board_engine=task_board_engine)
+                        review_result = review_runtime.run_full_review(
+                            board_id=expert.board_id,
+                            actual_changed_files=changed_files,
+                            test_results=aggregate_test_results,
+                        )
+                        review_payload = review_result.to_dict()
+                        if review_agent_id:
+                            summary_text = str(review_payload.get("summary") or "").strip()
+                            if not summary_text:
+                                summary_text = _trim_text(json.dumps(review_payload, ensure_ascii=False), limit=600)
+                            _mailbox.send(
+                                review_agent_id,
+                                str(agent_id),
+                                summary_text,
+                                message_type="report",
+                            )
+                            try:
+                                _store.update_status(review_agent_id, AgentStatus.WAITING)
+                            except Exception:
+                                logger.debug("Failed to set review status waiting: %s", review_agent_id, exc_info=True)
+
+                    if isinstance(review_payload, dict):
+                        review_payload.update(
+                            {
+                                "expert_id": str(agent_id),
+                                "expert_type": expert_type,
+                                "board_id": expert.board_id,
+                                "review_agent_id": review_agent_id,
+                                "review_cycle": review_cycle,
+                            }
+                        )
+                        yield {
+                            "type": "review_result",
+                            "pipeline_id": pipeline_id,
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "board_id": expert.board_id,
+                            "review_agent_id": review_agent_id,
+                            "review_cycle": review_cycle,
+                            "result": review_payload,
+                        }
+
+                    verdict = str((review_payload or {}).get("verdict") or "").strip().lower()
+                    if verdict == "approve":
+                        final_review_payload = dict(review_payload or {})
+                        break
+
+                    if verdict == "reject":
+                        recoverable_reject = _is_review_reject_recoverable(review_payload or {})
+                        can_respawn = bool(recoverable_reject and reject_respawn_count < reject_respawn_budget and child_execution_enabled)
+                        if not can_respawn:
+                            expert_blocked_reason = "review_rejected_unrecoverable" if not recoverable_reject else "review_rejected_respawn_exhausted"
+                            final_review_payload = dict(review_payload or {})
+                            yield {
+                                "type": "expert_blocked",
+                                "pipeline_id": pipeline_id,
+                                "expert_id": str(agent_id),
+                                "expert_type": expert_type,
+                                "board_id": expert.board_id,
+                                "reason": expert_blocked_reason,
+                                "review_cycle": review_cycle,
+                                "review_agent_id": review_agent_id,
+                                "result": final_review_payload,
+                            }
+                            break
+
+                        respawn_task_ids = _select_reject_respawn_task_ids(tasks, changed_files)
+                        if not respawn_task_ids:
+                            expert_blocked_reason = "review_rejected_no_respawn_tasks"
+                            final_review_payload = dict(review_payload or {})
+                            yield {
+                                "type": "expert_blocked",
+                                "pipeline_id": pipeline_id,
+                                "expert_id": str(agent_id),
+                                "expert_type": expert_type,
+                                "board_id": expert.board_id,
+                                "reason": expert_blocked_reason,
+                                "review_cycle": review_cycle,
+                                "review_agent_id": review_agent_id,
+                                "result": final_review_payload,
+                            }
+                            break
+
+                        reject_respawn_count += 1
+                        respawn_instruction = _build_review_reject_respawn_instruction(
+                            original_task=original_task_text,
+                            review_payload=review_payload or {},
+                            review_cycle=review_cycle,
+                        )
+                        respawned_devs = expert.spawn_retry_devs(
+                            tasks,
+                            task_ids=respawn_task_ids,
+                            review_feedback=respawn_instruction,
+                            prompt_blocks=assignment.get("prompt_blocks", []),
+                        )
+                        if not respawned_devs:
+                            expert_blocked_reason = "review_rejected_respawn_failed"
+                            final_review_payload = dict(review_payload or {})
+                            yield {
+                                "type": "expert_blocked",
+                                "pipeline_id": pipeline_id,
+                                "expert_id": str(agent_id),
+                                "expert_type": expert_type,
+                                "board_id": expert.board_id,
+                                "reason": expert_blocked_reason,
+                                "review_cycle": review_cycle,
+                                "review_agent_id": review_agent_id,
+                                "result": final_review_payload,
+                            }
+                            break
+
+                        for spawned_dev in respawned_devs:
+                            spawned_dev_id = str(spawned_dev.get("agent_id") or "").strip()
+                            spawned_task_id = str(spawned_dev.get("task_id") or "").strip()
+                            if spawned_dev_id:
+                                dev_task_map[spawned_dev_id] = spawned_task_id
+                        yield {
+                            "type": "review_reject_respawn",
+                            "pipeline_id": pipeline_id,
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "board_id": expert.board_id,
+                            "review_cycle": review_cycle,
+                            "review_agent_id": review_agent_id,
+                            "task_ids": list(respawn_task_ids),
+                            "respawn_dev_count": len(respawned_devs),
+                            "reject_respawn_count": reject_respawn_count,
+                        }
+
+                        reject_respawn_failed = False
+                        for spawned_dev in respawned_devs:
+                            spawned_dev_id = str(spawned_dev.get("agent_id") or "").strip()
+                            spawned_task_id = str(spawned_dev.get("task_id") or "").strip()
+                            if not spawned_dev_id:
+                                reject_respawn_failed = True
+                                continue
+                            spawned_dev_session = _store.get(spawned_dev_id)
+                            if spawned_dev_session is None:
+                                reject_respawn_failed = True
+                                continue
+
+                            dev_tool_subset = list(spawned_dev_session.tool_subset or assignment.get("tool_subset", []))
+                            dev_prompt_blocks = list(spawned_dev_session.prompt_blocks or assignment.get("prompt_blocks", []))
+                            respawned_dev_agent = DevAgent(
+                                config=DevAgentConfig(
+                                    prompt_blocks=dev_prompt_blocks,
+                                    tool_subset=dev_tool_subset,
+                                    prompts_root="system/prompts",
+                                ),
+                                session_id=spawned_dev_id,
+                                store=_store,
+                                mailbox=_mailbox,
+                            )
+                            runtime_tool_defs = _build_runtime_tool_definitions(dev_tool_subset)
+                            dev_initial_task = str(spawned_dev_session.task_description or scope or "").strip()
+                            max_rounds = max(1, int(child_max_rounds))
+                            loop_config = MiniLoopConfig(max_rounds=max_rounds, poll_parent_every_n=3)
+
+                            async def _execute_reject_respawn_dev_tool(
+                                tool_name: str,
+                                arguments: Dict[str, Any],
+                                *,
+                                _allowed_tools: List[str] = dev_tool_subset,
+                                _dev_session_id: str = spawned_dev_id,
+                            ) -> Dict[str, Any]:
+                                normalized_tool = str(tool_name or "").strip()
+                                if _allowed_tools and normalized_tool not in _allowed_tools:
+                                    return {
+                                        "error": f"tool_not_allowed:{normalized_tool}",
+                                        "status": "blocked",
+                                        "tool_name": normalized_tool,
+                                    }
+                                safe_arguments = arguments if isinstance(arguments, dict) else {}
+                                if is_memory_tool(normalized_tool):
+                                    return handle_memory_tool(normalized_tool, safe_arguments)
+                                return await child_tool_executor(normalized_tool, safe_arguments, _dev_session_id)
+
+                            yield {
+                                "type": "dev_loop_start",
+                                "pipeline_id": pipeline_id,
+                                "expert_id": str(agent_id),
+                                "expert_type": expert_type,
+                                "agent_id": spawned_dev_id,
+                                "task_id": spawned_task_id,
+                                "tool_subset": dev_tool_subset,
+                                "review_cycle": review_cycle,
+                                "recovery_mode": "reject_respawn",
+                            }
+                            async for mini_event in run_mini_loop(
+                                session_id=spawned_dev_id,
+                                store=_store,
+                                mailbox=_mailbox,
+                                llm_call=child_llm_call,
+                                tool_executor=_execute_reject_respawn_dev_tool,
+                                tool_definitions=runtime_tool_defs,
+                                system_prompt=respawned_dev_agent.build_system_prompt(),
+                                initial_task=dev_initial_task,
+                                config=loop_config,
+                            ):
+                                yield {
+                                    "type": "dev_loop_event",
+                                    "pipeline_id": pipeline_id,
+                                    "expert_id": str(agent_id),
+                                    "expert_type": expert_type,
+                                    "agent_id": spawned_dev_id,
+                                    "task_id": spawned_task_id,
+                                    "review_cycle": review_cycle,
+                                    "recovery_mode": "reject_respawn",
+                                    "event": mini_event,
+                                }
+
+                            final_session = _store.get(spawned_dev_id)
+                            final_status = str(final_session.status.value) if final_session is not None else "missing"
+                            completion_report = ""
+                            verification_report: Dict[str, Any] = {}
+                            respawn_changed_files: List[str] = []
+                            if final_session is not None:
+                                completion_report = str(final_session.metadata.get("completion_report") or "").strip()
+                                raw_verification_report = final_session.metadata.get("verification_report")
+                                if isinstance(raw_verification_report, dict):
+                                    verification_report = dict(raw_verification_report)
+                                respawn_changed_files = _normalize_changed_files(
+                                    verification_report.get("changed_files") if verification_report else final_session.metadata.get("changed_files")
+                                )
+                            if task_board_engine is not None and expert.board_id and spawned_task_id:
+                                try:
+                                    if final_status == AgentStatus.WAITING.value:
+                                        task_board_engine.update_task(
+                                            expert.board_id,
+                                            spawned_task_id,
+                                            status=TaskStatus.DONE,
+                                            summary=completion_report or "child loop completed",
+                                            files_changed=respawn_changed_files if respawn_changed_files else None,
+                                        )
+                                    elif final_status == AgentStatus.RUNNING.value:
+                                        task_board_engine.update_task(
+                                            expert.board_id,
+                                            spawned_task_id,
+                                            status=TaskStatus.IN_PROGRESS,
+                                        )
+                                except Exception:
+                                    logger.debug(
+                                        "Failed to update task board after reject respawn dev loop (board=%s task=%s)",
+                                        expert.board_id,
+                                        spawned_task_id,
+                                        exc_info=True,
+                                    )
+                            if final_status != AgentStatus.WAITING.value:
+                                reject_respawn_failed = True
+                            yield {
+                                "type": "dev_loop_end",
+                                "pipeline_id": pipeline_id,
+                                "expert_id": str(agent_id),
+                                "expert_type": expert_type,
+                                "agent_id": spawned_dev_id,
+                                "task_id": spawned_task_id,
+                                "status": final_status,
+                                "completion_report": completion_report,
+                                "verification_report": verification_report,
+                                "changed_files": respawn_changed_files,
+                                "review_cycle": review_cycle,
+                                "recovery_mode": "reject_respawn",
+                            }
+
+                        refreshed_progress = expert.check_progress()
+                        if reject_respawn_failed or not bool(refreshed_progress.get("all_devs_done")):
+                            expert_blocked_reason = "review_rejected_respawn_incomplete"
+                            final_review_payload = dict(review_payload or {})
+                            yield {
+                                "type": "expert_blocked",
+                                "pipeline_id": pipeline_id,
+                                "expert_id": str(agent_id),
+                                "expert_type": expert_type,
+                                "board_id": expert.board_id,
+                                "reason": expert_blocked_reason,
+                                "review_cycle": review_cycle,
+                                "review_agent_id": review_agent_id,
+                                "result": final_review_payload,
+                            }
+                            break
+                        continue
+
+                    if verdict != "request_changes":
+                        final_review_payload = dict(review_payload or {})
+                        break
+
+                    if review_cycle >= review_cycle_limit:
+                        if isinstance(review_payload, dict):
+                            issues = list(review_payload.get("issues") or [])
+                            issues.append("Review requested changes but the remediation cycle limit was reached.")
+                            review_payload["issues"] = issues
+                            summary_text = str(review_payload.get("summary") or "").strip()
+                            review_payload["summary"] = (
+                                f"{summary_text} | remediation limit reached" if summary_text else "Review requested changes but the remediation cycle limit was reached."
+                            )
+                        final_review_payload = dict(review_payload or {})
+                        break
+
+                    resumable_devs = [
+                        child
+                        for child in _store.list_children(str(agent_id))
+                        if str(child.role or "").strip().lower() == "dev" and child.status == AgentStatus.WAITING
+                    ]
+                    if not resumable_devs:
+                        if isinstance(review_payload, dict):
+                            issues = list(review_payload.get("issues") or [])
+                            issues.append("Review requested changes but no waiting dev agents were available for remediation.")
+                            review_payload["issues"] = issues
+                        final_review_payload = dict(review_payload or {})
+                        break
+
+                    review_instruction = _build_review_rework_instruction(
+                        original_task=original_task_text,
+                        review_payload=review_payload or {},
+                        review_cycle=review_cycle,
                     )
-                    try:
-                        _store.update_status(review_agent_id, AgentStatus.WAITING)
-                    except Exception:
-                        logger.debug("Failed to set review status waiting: %s", review_agent_id, exc_info=True)
+                    yield {
+                        "type": "review_rework_requested",
+                        "pipeline_id": pipeline_id,
+                        "expert_id": str(agent_id),
+                        "expert_type": expert_type,
+                        "board_id": expert.board_id,
+                        "review_agent_id": review_agent_id,
+                        "review_cycle": review_cycle,
+                        "dev_count": len(resumable_devs),
+                        "issues": list((review_payload or {}).get("issues") or []),
+                    }
 
-                yield {
-                    "type": "review_result",
-                    "pipeline_id": pipeline_id,
-                    "expert_id": str(agent_id),
-                    "expert_type": expert_type,
-                    "board_id": expert.board_id,
-                    "review_agent_id": review_agent_id,
-                    "result": review_payload,
-                }
+                    remediation_failed = False
+                    for resumed_dev in resumable_devs:
+                        resumed_dev_id = str(resumed_dev.session_id or "").strip()
+                        resumed_task_id = str(dev_task_map.get(resumed_dev_id) or "").strip()
+                        if not resumed_dev_id:
+                            remediation_failed = True
+                            continue
+                        resume_result = handle_parent_tool_call(
+                            "resume_child_agent",
+                            {"agent_id": resumed_dev_id, "instruction": review_instruction},
+                            parent_session_id=str(agent_id),
+                            store=_store,
+                            mailbox=_mailbox,
+                        )
+                        if resume_result.get("error"):
+                            remediation_failed = True
+                            yield {
+                                "type": "dev_review_resume_end",
+                                "pipeline_id": pipeline_id,
+                                "expert_id": str(agent_id),
+                                "expert_type": expert_type,
+                                "agent_id": resumed_dev_id,
+                                "task_id": resumed_task_id,
+                                "review_cycle": review_cycle,
+                                "status": "resume_failed",
+                                "error": str(resume_result.get("error") or ""),
+                            }
+                            continue
+
+                        _inject_system_instruction(_store, resumed_dev_id, review_instruction)
+                        resumed_dev_session = _store.get(resumed_dev_id)
+                        if resumed_dev_session is None or resumed_dev_session.status != AgentStatus.RUNNING:
+                            remediation_failed = True
+                            yield {
+                                "type": "dev_review_resume_end",
+                                "pipeline_id": pipeline_id,
+                                "expert_id": str(agent_id),
+                                "expert_type": expert_type,
+                                "agent_id": resumed_dev_id,
+                                "task_id": resumed_task_id,
+                                "review_cycle": review_cycle,
+                                "status": "not_running",
+                            }
+                            continue
+
+                        dev_tool_subset = list(resumed_dev_session.tool_subset or assignment.get("tool_subset", []))
+                        dev_prompt_blocks = list(resumed_dev_session.prompt_blocks or assignment.get("prompt_blocks", []))
+                        resumed_dev_agent = DevAgent(
+                            config=DevAgentConfig(
+                                prompt_blocks=dev_prompt_blocks,
+                                tool_subset=dev_tool_subset,
+                                prompts_root="system/prompts",
+                            ),
+                            session_id=resumed_dev_id,
+                            store=_store,
+                            mailbox=_mailbox,
+                        )
+                        runtime_tool_defs = _build_runtime_tool_definitions(dev_tool_subset)
+                        dev_initial_task = str(resumed_dev_session.task_description or scope or "").strip()
+                        max_rounds = max(1, int(child_max_rounds))
+                        loop_config = MiniLoopConfig(max_rounds=max_rounds, poll_parent_every_n=3)
+
+                        async def _execute_resumed_review_dev_tool(
+                            tool_name: str,
+                            arguments: Dict[str, Any],
+                            *,
+                            _allowed_tools: List[str] = dev_tool_subset,
+                            _dev_session_id: str = resumed_dev_id,
+                        ) -> Dict[str, Any]:
+                            normalized_tool = str(tool_name or "").strip()
+                            if _allowed_tools and normalized_tool not in _allowed_tools:
+                                return {
+                                    "error": f"tool_not_allowed:{normalized_tool}",
+                                    "status": "blocked",
+                                    "tool_name": normalized_tool,
+                                }
+                            safe_arguments = arguments if isinstance(arguments, dict) else {}
+                            if is_memory_tool(normalized_tool):
+                                return handle_memory_tool(normalized_tool, safe_arguments)
+                            return await child_tool_executor(normalized_tool, safe_arguments, _dev_session_id)
+
+                        yield {
+                            "type": "dev_review_resume_start",
+                            "pipeline_id": pipeline_id,
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "agent_id": resumed_dev_id,
+                            "task_id": resumed_task_id,
+                            "review_cycle": review_cycle,
+                            "tool_subset": dev_tool_subset,
+                        }
+                        async for mini_event in run_mini_loop(
+                            session_id=resumed_dev_id,
+                            store=_store,
+                            mailbox=_mailbox,
+                            llm_call=child_llm_call,
+                            tool_executor=_execute_resumed_review_dev_tool,
+                            tool_definitions=runtime_tool_defs,
+                            system_prompt=resumed_dev_agent.build_system_prompt(),
+                            initial_task=dev_initial_task,
+                            config=loop_config,
+                        ):
+                            yield {
+                                "type": "dev_review_resume_event",
+                                "pipeline_id": pipeline_id,
+                                "expert_id": str(agent_id),
+                                "expert_type": expert_type,
+                                "agent_id": resumed_dev_id,
+                                "task_id": resumed_task_id,
+                                "review_cycle": review_cycle,
+                                "event": mini_event,
+                            }
+
+                        final_session = _store.get(resumed_dev_id)
+                        final_status = str(final_session.status.value) if final_session is not None else "missing"
+                        completion_report = ""
+                        verification_report: Dict[str, Any] = {}
+                        resumed_changed_files: List[str] = []
+                        if final_session is not None:
+                            completion_report = str(final_session.metadata.get("completion_report") or "").strip()
+                            raw_verification_report = final_session.metadata.get("verification_report")
+                            if isinstance(raw_verification_report, dict):
+                                verification_report = dict(raw_verification_report)
+                            resumed_changed_files = _normalize_changed_files(
+                                verification_report.get("changed_files") if verification_report else final_session.metadata.get("changed_files")
+                            )
+                        if task_board_engine is not None and expert.board_id and resumed_task_id:
+                            try:
+                                if final_status == AgentStatus.WAITING.value:
+                                    task_board_engine.update_task(
+                                        expert.board_id,
+                                        resumed_task_id,
+                                        status=TaskStatus.DONE,
+                                        summary=completion_report or "child loop completed",
+                                        files_changed=resumed_changed_files if resumed_changed_files else None,
+                                    )
+                                elif final_status == AgentStatus.RUNNING.value:
+                                    task_board_engine.update_task(
+                                        expert.board_id,
+                                        resumed_task_id,
+                                        status=TaskStatus.IN_PROGRESS,
+                                    )
+                            except Exception:
+                                logger.debug(
+                                    "Failed to update task board after dev review resume loop (board=%s task=%s)",
+                                    expert.board_id,
+                                    resumed_task_id,
+                                    exc_info=True,
+                                )
+                        if final_status != AgentStatus.WAITING.value:
+                            remediation_failed = True
+                        yield {
+                            "type": "dev_review_resume_end",
+                            "pipeline_id": pipeline_id,
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "agent_id": resumed_dev_id,
+                            "task_id": resumed_task_id,
+                            "review_cycle": review_cycle,
+                            "status": final_status,
+                            "completion_report": completion_report,
+                            "verification_report": verification_report,
+                            "changed_files": resumed_changed_files,
+                        }
+
+                    refreshed_progress = expert.check_progress()
+                    if remediation_failed or not bool(refreshed_progress.get("all_devs_done")):
+                        if isinstance(review_payload, dict):
+                            issues = list(review_payload.get("issues") or [])
+                            issues.append("One or more dev agents did not complete the requested review remediation.")
+                            review_payload["issues"] = issues
+                        final_review_payload = dict(review_payload or {})
+                        break
+
+                if final_review_payload is None and isinstance(review_payload, dict):
+                    final_review_payload = dict(review_payload)
+                if isinstance(final_review_payload, dict):
+                    review_results.append(final_review_payload)
 
             report_text = expert.aggregate_results()
-            if review_payload is not None:
-                review_summary = str(review_payload.get("summary") or "").strip()
+            if final_review_payload is not None:
+                review_summary = str(final_review_payload.get("summary") or "").strip()
                 if review_summary:
                     report_text = f"{report_text}\n\n### Review Summary\n{review_summary}"
+            final_verdict = str((final_review_payload or {}).get("verdict") or "").strip().lower()
+            if final_verdict == "reject":
+                blocked_reason_text = expert_blocked_reason or "review_rejected"
+                report_text = f"[BLOCKED] {blocked_reason_text}\n\n{report_text}"
+                try:
+                    _store.update_metadata(str(agent_id), {"blocked_reason": blocked_reason_text, "final_review_verdict": final_verdict})
+                except Exception:
+                    logger.debug("Failed to persist blocked metadata for expert: %s", agent_id, exc_info=True)
             _mailbox.send(
                 str(agent_id),
                 resolved_core_execution_session_id,
@@ -1662,9 +2423,16 @@ async def run_multi_agent_pipeline(
         if len(review_results) < review_expected_count:
             review_gate_passed = False
             review_stop_reason = "review_missing"
-        elif not all(str(item.get("verdict") or "").strip().lower() == "pass" for item in review_results):
-            review_gate_passed = False
-            review_stop_reason = "review_failed"
+        else:
+            normalized_review_verdicts = [str(item.get("verdict") or "").strip().lower() for item in review_results]
+            if not all(verdict == "approve" for verdict in normalized_review_verdicts):
+                review_gate_passed = False
+                if any(verdict == "reject" for verdict in normalized_review_verdicts):
+                    review_stop_reason = "review_rejected"
+                elif any(verdict == "request_changes" for verdict in normalized_review_verdicts):
+                    review_stop_reason = "review_requested_changes"
+                else:
+                    review_stop_reason = "review_failed"
 
     task_completed = reports_submitted and review_gate_passed
     if task_completed:

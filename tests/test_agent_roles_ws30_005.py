@@ -38,6 +38,64 @@ def task_board_engine(tmp_path):
     e.close()
 
 
+def _mock_verification_report(*, summary: str = "self verification complete", changed_files=None):
+    return {
+        "tests": {"passed": 1, "failed": 0, "errors": 0, "attempts": 1, "summary": summary},
+        "lint": {"status": "passed", "errors": 0, "summary": "lint clean"},
+        "diff_review": {"complete": True, "summary": summary, "missing_items": []},
+        "changed_files": list(changed_files or ["auth.py"]),
+        "risks": [],
+    }
+
+
+def _mock_review_result(*, verdict: str = "approve", summary: str = "review approved"):
+    return {
+        "verdict": verdict,
+        "requirement_alignment": [
+            {"requirement": "task requirements implemented", "status": "passed", "details": summary},
+        ],
+        "code_quality": {"status": "passed", "issues": [], "summary": summary},
+        "regression_risk": {"level": "low", "summary": "no obvious regression risk"},
+        "test_coverage": {"status": "passed", "summary": summary, "missing_cases": []},
+        "issues": [],
+        "suggestions": [],
+        "summary": summary,
+    }
+
+
+def _mock_child_completion_response(tools, *, dev_content: str = "child work complete", review_summary: str = "review approved"):
+    tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+    if {"memory_read", "memory_grep", "memory_tag", "memory_deprecate"} & tool_names:
+        return {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "review_done_1",
+                    "name": "report_to_parent",
+                    "arguments": {
+                        "type": "completed",
+                        "content": review_summary,
+                        "review_result": _mock_review_result(summary=review_summary),
+                    },
+                }
+            ],
+        }
+    return {
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "dev_done_1",
+                "name": "report_to_parent",
+                "arguments": {
+                    "type": "completed",
+                    "content": dev_content,
+                    "verification_report": _mock_verification_report(summary=dev_content),
+                },
+            }
+        ],
+    }
+
+
 # ── Shell Agent Tests (Router Integration) ─────────────────────
 
 class TestShellAgent:
@@ -263,6 +321,7 @@ class TestExpertAgent:
         assert result.get("agent_id")
         review_child = store.get(result["agent_id"])
         assert review_child.role == "review"
+        assert review_child.tool_profile == "review"
 
 
 # ── Dev Agent Tests ────────────────────────────────────────────
@@ -288,6 +347,7 @@ class TestDevAgent:
         assert "backend developer" in prompt
         assert "exp_20260303_001.md" in prompt
         assert "report_to_parent" in prompt
+        assert "verification_report" in prompt
 
     def test_dev_experience_md(self):
         from agents.dev_agent import DevAgent
@@ -376,7 +436,7 @@ class TestReviewAgent:
             actual_changed_files=["a.py"],
             test_results={"passed": 5, "failed": 0, "errors": 0},
         )
-        assert result.verdict == "pass"
+        assert result.verdict == "approve"
         assert "✅" in result.summary
 
 
@@ -462,20 +522,8 @@ class TestPipeline:
         from agents.pipeline import run_multi_agent_pipeline
 
         async def _mock_child_llm(messages, tools, model):
-            del messages, tools, model
-            return {
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "ft_call_1",
-                        "name": "report_to_parent",
-                        "arguments": {
-                            "type": "completed",
-                            "content": "已完成单文件小修复",
-                        },
-                    }
-                ],
-            }
+            del messages, model
+            return _mock_child_completion_response(tools, dev_content="已完成单文件小修复")
 
         async def _mock_tool_executor(tool_name, arguments, child_session_id):
             return {
@@ -591,20 +639,8 @@ class TestPipeline:
         from agents.pipeline import run_multi_agent_pipeline
 
         async def _mock_child_llm(messages, tools, model):
-            del messages, tools, model
-            return {
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "mock_call_1",
-                        "name": "report_to_parent",
-                        "arguments": {
-                            "type": "completed",
-                            "content": "child work complete",
-                        },
-                    }
-                ],
-            }
+            del messages, model
+            return _mock_child_completion_response(tools)
 
         async def _mock_tool_executor(tool_name, arguments, child_session_id):
             return {
@@ -633,6 +669,9 @@ class TestPipeline:
         assert "dev_loop_event" in event_types
         assert "dev_loop_end" in event_types
         assert "review_spawned" in event_types
+        assert "review_loop_start" in event_types
+        assert "review_loop_event" in event_types
+        assert "review_loop_end" in event_types
         assert "review_result" in event_types
 
         receipt_event = next(e for e in events if e["type"] == "execution_receipt")
@@ -641,10 +680,290 @@ class TestPipeline:
         assert receipt_event.get("agent_state", {}).get("review_count", 0) >= 1
 
         review_event = next(e for e in events if e["type"] == "review_result")
-        assert review_event.get("result", {}).get("verdict") == "pass"
+        assert review_event.get("result", {}).get("verdict") == "approve"
 
         end_event = next(e for e in events if e["type"] == "pipeline_end")
         assert end_event["reason"] == "completed"
+
+    def test_pipeline_review_request_changes_resumes_dev_and_re_reviews(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        review_round = {"value": 0}
+        dev_round = {"value": 0}
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, model
+            tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+            is_review = bool({"memory_read", "memory_grep", "memory_tag", "memory_deprecate"} & tool_names)
+            if is_review:
+                review_round["value"] += 1
+                if review_round["value"] == 1:
+                    return {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "review_cycle_1",
+                                "name": "report_to_parent",
+                                "arguments": {
+                                    "type": "completed",
+                                    "content": "need changes before approval",
+                                    "review_result": _mock_review_result(
+                                        verdict="request_changes",
+                                        summary="need changes before approval",
+                                    ) | {
+                                        "issues": ["Add the missing edge-case handling."],
+                                        "suggestions": ["Cover the new edge case in self-verification."],
+                                    },
+                                },
+                            }
+                        ],
+                    }
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "review_cycle_2",
+                            "name": "report_to_parent",
+                            "arguments": {
+                                "type": "completed",
+                                "content": "review approved after remediation",
+                                "review_result": _mock_review_result(summary="review approved after remediation"),
+                            },
+                        }
+                    ],
+                }
+
+            dev_round["value"] += 1
+            dev_content = "child work complete" if dev_round["value"] == 1 else "child work complete after review remediation"
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"dev_done_{dev_round['value']}",
+                        "name": "report_to_parent",
+                        "arguments": {
+                            "type": "completed",
+                            "content": dev_content,
+                            "verification_report": _mock_verification_report(summary=dev_content),
+                        },
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(self._collect_events(
+            run_multi_agent_pipeline(
+                message="Implement auth endpoint and tests",
+                session_id="test-session-review-remediation",
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+            )
+        ))
+
+        event_types = [e.get("type") for e in events]
+        assert "review_rework_requested" in event_types
+        assert "dev_review_resume_start" in event_types
+        assert "dev_review_resume_end" in event_types
+
+        review_events = [e for e in events if e.get("type") == "review_result"]
+        assert len(review_events) >= 2
+        assert review_events[0].get("result", {}).get("verdict") == "request_changes"
+        assert review_events[-1].get("result", {}).get("verdict") == "approve"
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        assert receipt_event.get("stop_reason") == "submitted_completion"
+        assert receipt_event.get("agent_state", {}).get("task_completed") is True
+
+    def test_pipeline_review_reject_respawns_new_dev_and_re_reviews(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        review_round = {"value": 0}
+        dev_round = {"value": 0}
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, model
+            tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+            is_review = bool({"memory_read", "memory_grep", "memory_tag", "memory_deprecate"} & tool_names)
+            if is_review:
+                review_round["value"] += 1
+                if review_round["value"] == 1:
+                    return {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "review_reject_1",
+                                "name": "report_to_parent",
+                                "arguments": {
+                                    "type": "completed",
+                                    "content": "reject current implementation",
+                                    "review_result": _mock_review_result(
+                                        verdict="reject",
+                                        summary="reject current implementation",
+                                    ) | {
+                                        "issues": ["Architecture mismatch requires a fresh retry."],
+                                        "suggestions": ["Restart the implementation with a simplified approach."],
+                                    },
+                                },
+                            }
+                        ],
+                    }
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "review_approve_after_respawn",
+                            "name": "report_to_parent",
+                            "arguments": {
+                                "type": "completed",
+                                "content": "review approved after respawn",
+                                "review_result": _mock_review_result(summary="review approved after respawn"),
+                            },
+                        }
+                    ],
+                }
+
+            dev_round["value"] += 1
+            dev_content = "child work complete" if dev_round["value"] == 1 else "child work complete after reject respawn"
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"dev_reject_respawn_{dev_round['value']}",
+                        "name": "report_to_parent",
+                        "arguments": {
+                            "type": "completed",
+                            "content": dev_content,
+                            "verification_report": _mock_verification_report(summary=dev_content),
+                        },
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(self._collect_events(
+            run_multi_agent_pipeline(
+                message="Implement auth endpoint and tests",
+                session_id="test-session-review-reject-respawn",
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+            )
+        ))
+
+        event_types = [e.get("type") for e in events]
+        assert "review_reject_respawn" in event_types
+        review_events = [e for e in events if e.get("type") == "review_result"]
+        assert len(review_events) >= 2
+        assert review_events[0].get("result", {}).get("verdict") == "reject"
+        assert review_events[-1].get("result", {}).get("verdict") == "approve"
+
+        respawned_dev_starts = [
+            e for e in events
+            if e.get("type") == "dev_loop_start" and e.get("recovery_mode") == "reject_respawn"
+        ]
+        assert respawned_dev_starts
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        assert receipt_event.get("stop_reason") == "submitted_completion"
+        assert receipt_event.get("agent_state", {}).get("task_completed") is True
+
+    def test_pipeline_review_reject_unrecoverable_escalates_blocked(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, model
+            tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+            is_review = bool({"memory_read", "memory_grep", "memory_tag", "memory_deprecate"} & tool_names)
+            if is_review:
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "review_reject_blocked_1",
+                            "name": "report_to_parent",
+                            "arguments": {
+                                "type": "completed",
+                                "content": "reject due to invalid review contract",
+                                "review_result": _mock_review_result(
+                                    verdict="reject",
+                                    summary="reject due to invalid review contract",
+                                ) | {
+                                    "issues": ["Review agent did not emit a valid review_result contract."],
+                                },
+                            },
+                        }
+                    ],
+                }
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "dev_done_blocked_1",
+                        "name": "report_to_parent",
+                        "arguments": {
+                            "type": "completed",
+                            "content": "child work complete",
+                            "verification_report": _mock_verification_report(summary="child work complete"),
+                        },
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(self._collect_events(
+            run_multi_agent_pipeline(
+                message="Implement auth endpoint and tests",
+                session_id="test-session-review-reject-blocked",
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+            )
+        ))
+
+        event_types = [e.get("type") for e in events]
+        assert "expert_blocked" in event_types
+        assert "review_reject_respawn" not in event_types
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        assert receipt_event.get("stop_reason") == "review_rejected"
+        assert receipt_event.get("agent_state", {}).get("task_completed") is False
+
+        expert_reports = [e for e in events if e.get("type") == "expert_report"]
+        assert any("[BLOCKED]" in "\n".join(map(str, e.get("reports", []))) for e in expert_reports)
 
     def test_pipeline_report_collection_is_scoped_to_current_pipeline_run(
         self,
@@ -655,20 +974,8 @@ class TestPipeline:
         from agents.pipeline import run_multi_agent_pipeline
 
         async def _mock_child_llm(messages, tools, model):
-            del messages, tools, model
-            return {
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "mock_call_1",
-                        "name": "report_to_parent",
-                        "arguments": {
-                            "type": "completed",
-                            "content": "child work complete",
-                        },
-                    }
-                ],
-            }
+            del messages, model
+            return _mock_child_completion_response(tools)
 
         async def _mock_tool_executor(tool_name, arguments, child_session_id):
             return {
@@ -727,20 +1034,8 @@ class TestPipeline:
         from agents.pipeline import run_multi_agent_pipeline
 
         async def _mock_child_llm(messages, tools, model):
-            del messages, tools, model
-            return {
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "mock_call_1",
-                        "name": "report_to_parent",
-                        "arguments": {
-                            "type": "completed",
-                            "content": "child work complete",
-                        },
-                    }
-                ],
-            }
+            del messages, model
+            return _mock_child_completion_response(tools)
 
         async def _mock_tool_executor(tool_name, arguments, child_session_id):
             return {
@@ -777,20 +1072,8 @@ class TestPipeline:
         from agents.pipeline import run_multi_agent_pipeline
 
         async def _mock_child_llm(messages, tools, model):
-            del messages, tools, model
-            return {
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "mock_call_1",
-                        "name": "report_to_parent",
-                        "arguments": {
-                            "type": "completed",
-                            "content": "child work complete",
-                        },
-                    }
-                ],
-            }
+            del messages, model
+            return _mock_child_completion_response(tools)
 
         async def _mock_tool_executor(tool_name, arguments, child_session_id):
             return {
@@ -892,17 +1175,8 @@ class TestPipeline:
                     }
                 return {"content": "", "tool_calls": []}
 
-            # Dev loops complete in one round.
-            return {
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "dev_done_1",
-                        "name": "report_to_parent",
-                        "arguments": {"type": "completed", "content": "child work complete"},
-                    }
-                ],
-            }
+            # Dev/review loops complete in one round.
+            return _mock_child_completion_response(tools)
 
         async def _mock_tool_executor(tool_name, arguments, child_session_id):
             return {
@@ -992,17 +1266,8 @@ class TestPipeline:
                     }
                 return {"content": "", "tool_calls": []}
 
-            # Dev loop: finish quickly via child completion report.
-            return {
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "dev_report_done_1",
-                        "name": "report_to_parent",
-                        "arguments": {"type": "completed", "content": "dev resumed and finished"},
-                    }
-                ],
-            }
+            # Dev/review loop: finish quickly via structured completion report.
+            return _mock_child_completion_response(tools, dev_content="dev resumed and finished")
 
         async def _mock_tool_executor(tool_name, arguments, child_session_id):
             return {
@@ -1070,17 +1335,8 @@ class TestPipeline:
                     }
                 return {"content": "", "tool_calls": []}
 
-            # Dev loops complete in one round.
-            return {
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "dev_done_1",
-                        "name": "report_to_parent",
-                        "arguments": {"type": "completed", "content": "child work complete"},
-                    }
-                ],
-            }
+            # Dev/review loops complete in one round.
+            return _mock_child_completion_response(tools)
 
         async def _mock_tool_executor(tool_name, arguments, child_session_id):
             return {

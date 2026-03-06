@@ -6,6 +6,7 @@ Creates detailed TaskBoards, spawns Dev agents, and coordinates Review.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -171,24 +172,126 @@ class ExpertAgent:
 
         return results
 
-    def spawn_review(self) -> Dict[str, Any]:
-        """Spawn a Review agent to verify all completed tasks."""
-        task_desc = f"Review TaskBoard {self._board_id}: verify completeness, consistency, and correctness."
+    def spawn_review(
+        self,
+        *,
+        original_task: str = "",
+        changed_files: Optional[List[str]] = None,
+        verification_reports: Optional[List[Dict[str, Any]]] = None,
+        memory_hints: Optional[List[str]] = None,
+        prompt_blocks: Optional[List[str]] = None,
+        cycle: int = 1,
+    ) -> Dict[str, Any]:
+        """Spawn a Review agent with contextualized review inputs."""
+        sections: List[str] = [
+            f"Review cycle {max(1, int(cycle))} for TaskBoard {self._board_id}: independently verify the completed work.",
+        ]
+        if original_task:
+            sections.append(f"Original task:\n{original_task}")
         if self._task_board and self._board_id:
             md = self._task_board.read_board_md(self._board_id)
-            task_desc += f"\n\nTaskBoard:\n{md}"
+            if md:
+                sections.append(f"TaskBoard:\n{md}")
 
+        normalized_files = [str(path).strip() for path in (changed_files or []) if str(path).strip()]
+        if normalized_files:
+            sections.append("Changed files:\n" + "\n".join(f"- `{path}`" for path in normalized_files))
+
+        if verification_reports:
+            rendered_reports: List[str] = []
+            for idx, report in enumerate(verification_reports, start=1):
+                try:
+                    rendered = json.dumps(report, ensure_ascii=False)
+                except Exception:
+                    rendered = str(report)
+                rendered_reports.append(f"Dev verification {idx}: {rendered}")
+            sections.append("\n".join(rendered_reports))
+
+        task_desc = "\n\n".join(section for section in sections if section).strip()
+        review_prompt_blocks = list(prompt_blocks or ["agents/review/code_reviewer.md"])
+        review_metadata: Dict[str, Any] = {
+            "memory_hints": list(memory_hints or []),
+            "review_cycle": max(1, int(cycle)),
+            "changed_files": normalized_files,
+        }
         return handle_parent_tool_call(
             "spawn_child_agent",
             {
                 "role": "review",
                 "task_description": task_desc,
-                "prompt_blocks": ["roles/code_reviewer.md"],
+                "prompt_blocks": review_prompt_blocks,
+                "tool_profile": "review",
+                "metadata": review_metadata,
             },
             parent_session_id=self._session_id,
             store=self._store,
             mailbox=self._mailbox,
         )
+
+    def spawn_retry_devs(
+        self,
+        tasks: List[TaskItem],
+        *,
+        task_ids: Optional[List[str]] = None,
+        review_feedback: str = "",
+        prompt_blocks: Optional[List[str]] = None,
+        memory_hints: Optional[List[str]] = None,
+        tool_profile: Optional[Any] = None,
+    ) -> List[Dict[str, Any]]:
+        """Spawn fresh Dev agents for a retry pass after review rejection."""
+        selected_ids = {str(task_id).strip() for task_id in (task_ids or []) if str(task_id).strip()}
+        results: List[Dict[str, Any]] = []
+        for task in tasks:
+            if selected_ids and task.task_id not in selected_ids:
+                continue
+            blocks = list(prompt_blocks or self._config.prompt_blocks)
+            task_desc = f"Task {task.task_id}: {task.title}"
+            if task.acceptance:
+                task_desc += f"\nAcceptance: {task.acceptance}"
+            if task.files:
+                task_desc += f"\nFiles: {', '.join(task.files)}"
+            if review_feedback:
+                task_desc += f"\n\nReview feedback:\n{review_feedback}"
+            if memory_hints:
+                task_desc += f"\nRelevant experience: {', '.join(memory_hints)}"
+
+            selected_profile = tool_profile
+            if selected_profile is None:
+                selected_profile = infer_memory_tool_profile(
+                    task_desc,
+                    files=task.files,
+                    role="dev",
+                )
+
+            spawn_args: Dict[str, Any] = {
+                "role": "dev",
+                "task_description": task_desc,
+                "prompt_blocks": blocks,
+                "metadata": {"retry_reason": "review_reject_respawn"},
+            }
+            if selected_profile:
+                spawn_args["tool_profile"] = selected_profile
+            else:
+                spawn_args["tool_subset"] = list(self._config.tool_subset)
+
+            result = handle_parent_tool_call(
+                "spawn_child_agent",
+                spawn_args,
+                parent_session_id=self._session_id,
+                store=self._store,
+                mailbox=self._mailbox,
+            )
+            result["task_id"] = task.task_id
+            if self._task_board and self._board_id:
+                self._task_board.update_task(
+                    self._board_id,
+                    task.task_id,
+                    assigned_to=result.get("agent_id", ""),
+                    status=TaskStatus.IN_PROGRESS,
+                    summary="respawned_after_review_reject",
+                )
+            results.append(result)
+        return results
 
     def check_progress(self) -> Dict[str, Any]:
         """Check the status of all spawned Dev agents."""
