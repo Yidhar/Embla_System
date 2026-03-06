@@ -28,7 +28,7 @@
   - 目标文件：`agents/runtime/parent_tools.py`
 
 - [ ] **实现子节点工具集**
-  - [ ] `report_to_parent`：写入 parent inbox + 自身状态 → Waiting
+  - [ ] `report_to_parent`：写入 parent inbox；`completed` 需按角色附带 `verification_report` / `review_result`，校验通过后自身状态 → Waiting
   - [ ] `read_parent_messages`：从 inbox 读取
   - [ ] `update_my_task_status`：同步 TaskBoard MD + SQLite
   - 目标文件：`agents/runtime/child_tools.py`
@@ -66,7 +66,7 @@
 - [ ] 从 `agents/tool_loop.py` 提取核心 ReAct 循环为独立模块
 - [ ] 迷你 loop 支持：独立 LLM 会话、可裁剪工具集、中断标志检查
 - [ ] 集成 child_tools（report/read_messages/update_status）
-- [ ] 集成 agent_messages (peer communication)
+- [ ] 集成 agent_messages（peer communication，经 Expert 路由与监督）
 - 目标文件：`agents/runtime/mini_loop.py`
 
 ---
@@ -119,7 +119,7 @@
 - [ ] Dev Shell：接收 task + prompt_blocks → 启动 mini_loop
 - [ ] 原子化 prompt 加载与组装
 - [ ] L1 经验自动注入（Expert spawn 时检索 _index.md）
-- [ ] 完成后自动写回经验 MD + update_my_task_status + report_to_parent(completed)
+- [ ] 完成后自动写回经验 MD + update_my_task_status + report_to_parent(completed + verification_report)
 - 目标文件：`agents/dev_agent.py`
 
 ---
@@ -128,11 +128,13 @@
 
 > 优先级：🟡 P1 | 预估：1 WS | 前置：1.3, 1.4
 
-- [ ] 三重检查实现：
-  - [ ] 完整性：读 TaskBoard → 检查全部 task 状态
-  - [ ] 一致性：git diff → 对比 TaskBoard file_targets
-  - [ ] 正确性：运行测试
-- [ ] 输出审查报告（通过/打回/部分通过 + 问题列表）
+- [ ] 五项独立审查实现：
+  - [ ] 需求对齐：对照原始任务检查是否实现
+  - [ ] 代码质量：检查硬编码、TODO、异常吞没、资源泄漏
+  - [ ] 回归风险：读取改动上下文并评估调用方影响
+  - [ ] 测试覆盖：审阅 Dev `verification_report`，识别漏测边界
+  - [ ] 最终结论：输出 `review_result.verdict=approve/request_changes/reject`
+- [ ] 输出审查报告（结构化 `review_result`，而非自由文本“通过/打回/部分通过”）
 - 目标文件：`agents/review_agent.py`
 
 ---

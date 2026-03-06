@@ -20,7 +20,7 @@
 现有后端已经具备 Embla System 入口能力：
 
 - 单入口 BFF：`apiserver`
-- 结构化事件流：`/chat/stream` 返回 `tool_calls/tool_results/tool_stage/round_*` 事件
+- 结构化事件流：`/chat/stream` 返回 `route_decision` / `content` / `tool_calls` / `tool_results` / `tool_stage` / `execution_receipt` / `pipeline_end` 等事件；多 Agent 路径还会补充 `review_result` / `review_rework_requested` / `review_reject_respawn` / `expert_blocked`。
 - 工具执行治理：`agentic_tool_loop + native/mcp`
 - 可选自治循环：`agents/pipeline.py`
 
@@ -31,7 +31,7 @@
 当前前端在 `MessageView.vue` 已按事件类型消费流式数据。Qt 迁移时可按同样契约实现本地 Event Bus：
 
 - 输入：SSE chunk（JSON）
-- 总线事件：`content`、`reasoning`、`tool_calls`、`tool_results`、`tool_stage`、`round_start`、`round_end`
+- 总线事件：基础聊天事件为 `content`、`reasoning`、`tool_calls`、`tool_results`、`tool_stage`、`round_start`、`round_end`；执行编排补充 `route_decision`、`execution_receipt`、`pipeline_end`，多 Agent 审查阶段补充 `review_result`、`review_rework_requested`、`review_reject_respawn`、`expert_blocked`。
 - UI 映射：消息正文、推理区、工具状态区、轮次分隔
 
 建议在 Qt 客户端定义统一事件结构体，避免页面直接解析原始 SSE 文本。

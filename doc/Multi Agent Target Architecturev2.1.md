@@ -361,8 +361,9 @@ graph TB
 2. Expert spawn Dev A: "按此 contract 实现前端"  (contract 作为任务上下文)
 3. Expert spawn Dev B: "按此 contract 实现后端"  (同一 contract)
 4. Dev A/B 各自独立执行
-5. 如果 Dev A 发现 contract 问题:
-   → report_to_parent(type="contract_issue", detail="birthDate 应改为 birth_date")
+5. 如果 Dev A 发现 contract 问题或依赖阻塞:
+   → report_to_parent(type="question", content="建议将 birthDate 改为 birth_date")
+   → 如需补充上下文，可发送 Expert 中转的 peer message
 6. Expert 评估 → update_contract → resume Dev B 通知变更
 7. 两个 Dev 完成 → Expert 汇总验证
 ```
@@ -371,7 +372,7 @@ graph TB
 
 | 考量 | P2P | Expert 协调 |
 |------|-----|------------|
-| 复杂度 | 高（双通道 + Summarizer + finalize） | 低（已有 report/resume 机制）|
+| 复杂度 | 高（额外会话同步 + 共识收敛） | 低（已有 report/resume + Expert 中转）|
 | 可控性 | Expert 失去控制力 | Expert 全程掌控 |
 | 行业验证 | 无竞品实现 | Claude Code / Manus 均采用 |
 | Token 成本 | Dev↔Dev 对话额外开销 | 仅 report + resume |

@@ -299,9 +299,10 @@ graph TB
 
 ### 7.2 同级通信（Dev↔Dev）
 
-运行时 canonical 口径：Dev **不建立 P2P 会话**，跨 Dev 协调一律走 Expert 中转。
+运行时 canonical 口径：Dev **不建立绕过 Expert 的直接 P2P 会话**。如需同级交流，可使用 `send_message_to_agent` / `read_agent_messages`，但消息仍经 Expert 路由与监督，因此治理语义仍属于 Expert 协调。
 
-- Dev 发现契约问题或依赖阻塞：通过 `report_to_parent(type="question" | "blocked")` 上报 Expert。
+- Dev 发现契约问题或依赖阻塞：优先通过 `report_to_parent(type="question" | "blocked")` 上报 Expert。
+- 如需同级补充上下文：可发送 Expert 中转的 peer message，但不应自行形成脱离 Expert 的协商闭环。
 - Expert 评估后，通过 `send_message_to_child` / `resume_child_agent` 下发更新后的 contract、返修意见或依赖变更。
 - Review 不参与同级协商，只对 Dev 产出做独立审查。
 
