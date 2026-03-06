@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from system.git_worktree_sandbox import cleanup_git_worktree_sandbox
+
 logger = logging.getLogger(__name__)
 
 
@@ -244,6 +246,7 @@ class AgentSessionStore:
 
     def destroy(self, session_id: str, reason: str = "") -> None:
         """Mark session as destroyed and clean up."""
+        cleanup_context: Dict[str, Any] = {}
         with self._lock:
             session = self._sessions.get(session_id)
             if not session:
@@ -252,9 +255,39 @@ class AgentSessionStore:
             session.updated_at = _utc_now_iso()
             if reason:
                 session.metadata["destroy_reason"] = reason
+            cleanup_context = {
+                "workspace_root": str(session.metadata.get("workspace_root") or "").strip(),
+                "workspace_origin_root": str(session.metadata.get("workspace_origin_root") or "").strip(),
+                "workspace_owner_session_id": str(session.metadata.get("workspace_owner_session_id") or "").strip(),
+                "workspace_cleanup_on_destroy": bool(session.metadata.get("workspace_cleanup_on_destroy", False)),
+            }
             self._persist(session)
             # Keep in memory for audit trail, but get() will return None
         logger.info("Destroyed session %s (reason=%s)", session_id, reason or "n/a")
+
+        should_cleanup_workspace = bool(
+            cleanup_context.get("workspace_cleanup_on_destroy")
+            and cleanup_context.get("workspace_owner_session_id") == session_id
+            and cleanup_context.get("workspace_root")
+        )
+        if not should_cleanup_workspace:
+            return
+
+        success, error = cleanup_git_worktree_sandbox(
+            worktree_root=str(cleanup_context.get("workspace_root") or ""),
+            repo_root=str(cleanup_context.get("workspace_origin_root") or "") or None,
+        )
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if not session:
+                return
+            session.metadata["workspace_cleanup_success"] = bool(success)
+            if error:
+                session.metadata["workspace_cleanup_error"] = error
+            session.updated_at = _utc_now_iso()
+            self._persist(session)
+        if not success:
+            logger.warning("Failed to clean git worktree sandbox for %s: %s", session_id, error)
 
     def close(self) -> None:
         """Close the SQLite connection."""

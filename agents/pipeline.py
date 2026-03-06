@@ -29,6 +29,7 @@ from agents.dev_agent import DevAgent, DevAgentConfig
 from agents.review_agent import ReviewAgent, ReviewAgentConfig
 from agents.runtime.mini_loop import MiniLoopConfig, run_mini_loop
 from agents.runtime.parent_tools import get_parent_tool_definitions, handle_parent_tool_call
+from system.git_worktree_sandbox import apply_workspace_path_overrides
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,22 @@ def _normalize_changed_files(raw_files: Any) -> List[str]:
     if not isinstance(raw_files, list):
         return []
     return sorted({str(item).strip() for item in raw_files if str(item).strip()})
+
+
+def _prepare_child_tool_arguments(
+    *,
+    store: AgentSessionStore,
+    child_session_id: str,
+    tool_name: str,
+    arguments: Dict[str, Any],
+) -> Dict[str, Any]:
+    session = store.get(child_session_id)
+    if session is None:
+        return dict(arguments) if isinstance(arguments, dict) else {}
+    workspace_root = str(session.metadata.get("workspace_root") or "").strip()
+    if not workspace_root:
+        return dict(arguments) if isinstance(arguments, dict) else {}
+    return apply_workspace_path_overrides(tool_name, arguments, workspace_root)
 
 
 def _collect_expert_dev_artifacts(store: AgentSessionStore, expert_id: str) -> List[Dict[str, Any]]:
@@ -889,18 +906,21 @@ async def run_multi_agent_pipeline(
             max_files = max(1, int(core_route_plan.get("max_files") or 1))
             max_changed_lines = max(1, int(core_route_plan.get("max_changed_lines") or 10))
 
+            fast_track_spawn_args = {
+                "role": "dev",
+                "task_description": str(dispatch.get("goal") or message),
+                "prompt_blocks": [],
+                "tool_subset": fast_track_tools,
+                "metadata": {
+                    "pipeline_id": str(pipeline_id),
+                    "execution_mode": "fast_track",
+                },
+            }
+            if str(dispatch.get("target_repo") or "").strip().lower() == "self":
+                fast_track_spawn_args["workspace_mode"] = "worktree"
             spawn_result = handle_parent_tool_call(
                 "spawn_child_agent",
-                {
-                    "role": "dev",
-                    "task_description": str(dispatch.get("goal") or message),
-                    "prompt_blocks": [],
-                    "tool_subset": fast_track_tools,
-                    "metadata": {
-                        "pipeline_id": str(pipeline_id),
-                        "execution_mode": "fast_track",
-                    },
-                },
+                fast_track_spawn_args,
                 parent_session_id=resolved_core_execution_session_id,
                 store=_store,
                 mailbox=_mailbox,
@@ -985,7 +1005,8 @@ async def run_multi_agent_pipeline(
                                 "max_changed_lines": max_changed_lines,
                             }
 
-                    return await child_tool_executor(normalized_tool, safe_arguments, fast_track_agent_id)
+                    prepared_arguments = _prepare_child_tool_arguments(store=_store, child_session_id=fast_track_agent_id, tool_name=normalized_tool, arguments=safe_arguments)
+                    return await child_tool_executor(normalized_tool, prepared_arguments, fast_track_agent_id)
 
                 dev_agent = DevAgent(
                     config=DevAgentConfig(
@@ -1236,7 +1257,8 @@ async def run_multi_agent_pipeline(
                     safe_arguments = arguments if isinstance(arguments, dict) else {}
                     if is_memory_tool(normalized_tool):
                         return handle_memory_tool(normalized_tool, safe_arguments)
-                    return await child_tool_executor(normalized_tool, safe_arguments, _dev_session_id)
+                    prepared_arguments = _prepare_child_tool_arguments(store=_store, child_session_id=_dev_session_id, tool_name=normalized_tool, arguments=safe_arguments)
+                    return await child_tool_executor(normalized_tool, prepared_arguments, _dev_session_id)
 
                 yield {
                     "type": "dev_loop_start",
@@ -1404,7 +1426,8 @@ async def run_multi_agent_pipeline(
                             safe_arguments = arguments if isinstance(arguments, dict) else {}
                             if is_memory_tool(normalized_tool):
                                 return handle_memory_tool(normalized_tool, safe_arguments)
-                            return await child_tool_executor(normalized_tool, safe_arguments, _review_session_id)
+                            prepared_arguments = _prepare_child_tool_arguments(store=_store, child_session_id=_review_session_id, tool_name=normalized_tool, arguments=safe_arguments)
+                            return await child_tool_executor(normalized_tool, prepared_arguments, _review_session_id)
 
                         yield {
                             "type": "review_loop_start",
@@ -1646,7 +1669,8 @@ async def run_multi_agent_pipeline(
                                 safe_arguments = arguments if isinstance(arguments, dict) else {}
                                 if is_memory_tool(normalized_tool):
                                     return handle_memory_tool(normalized_tool, safe_arguments)
-                                return await child_tool_executor(normalized_tool, safe_arguments, _dev_session_id)
+                                prepared_arguments = _prepare_child_tool_arguments(store=_store, child_session_id=_dev_session_id, tool_name=normalized_tool, arguments=safe_arguments)
+                                return await child_tool_executor(normalized_tool, prepared_arguments, _dev_session_id)
 
                             yield {
                                 "type": "dev_loop_start",
@@ -1878,7 +1902,8 @@ async def run_multi_agent_pipeline(
                             safe_arguments = arguments if isinstance(arguments, dict) else {}
                             if is_memory_tool(normalized_tool):
                                 return handle_memory_tool(normalized_tool, safe_arguments)
-                            return await child_tool_executor(normalized_tool, safe_arguments, _dev_session_id)
+                            prepared_arguments = _prepare_child_tool_arguments(store=_store, child_session_id=_dev_session_id, tool_name=normalized_tool, arguments=safe_arguments)
+                            return await child_tool_executor(normalized_tool, prepared_arguments, _dev_session_id)
 
                         yield {
                             "type": "dev_review_resume_start",
@@ -2094,6 +2119,8 @@ async def run_multi_agent_pipeline(
                 metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
                 metadata["pipeline_id"] = str(pipeline_id or "").strip()
                 safe_arguments["metadata"] = metadata
+                if str(dispatch.get("target_repo") or "").strip().lower() == "self" and not safe_arguments.get("workspace_mode"):
+                    safe_arguments["workspace_mode"] = "worktree"
             return handle_parent_tool_call(
                 normalized_name,
                 safe_arguments,
@@ -2315,7 +2342,8 @@ async def run_multi_agent_pipeline(
                 safe_arguments = arguments if isinstance(arguments, dict) else {}
                 if is_memory_tool(normalized_tool):
                     return handle_memory_tool(normalized_tool, safe_arguments)
-                return await child_tool_executor(normalized_tool, safe_arguments, _dev_session_id)
+                prepared_arguments = _prepare_child_tool_arguments(store=_store, child_session_id=_dev_session_id, tool_name=normalized_tool, arguments=safe_arguments)
+                return await child_tool_executor(normalized_tool, prepared_arguments, _dev_session_id)
 
             yield {
                 "type": start_event_type,

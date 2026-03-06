@@ -679,7 +679,10 @@ class NativeToolExecutor:
         return f"已写入文件: {path} (mode={mode}, chars={len(content)})"
 
     async def _get_cwd(self, call: Dict[str, Any]) -> str:
-        """Return native sandbox working directory (project root)."""
+        """Return the effective working directory for this tool call."""
+        cwd = str(call.get("cwd") or "").strip()
+        if cwd:
+            return cwd.replace('\\', '/')
         return str(self.project_root).replace('\\', '/')
 
 

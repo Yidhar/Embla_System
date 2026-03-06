@@ -10,11 +10,13 @@ all management decisions are made by the parent agent model.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any, Dict, List
 
 from agents.runtime.agent_session import AgentSessionStore, AgentStatus
 from agents.runtime.mailbox import AgentMailbox
 from agents.runtime.tool_profiles import resolve_child_tool_capabilities
+from system.git_worktree_sandbox import create_git_worktree_sandbox, inherit_workspace_metadata, normalize_workspace_mode
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,20 @@ def get_parent_tool_definitions() -> List[Dict[str, Any]]:
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Legacy explicit list of tool names the child agent is allowed to use.",
+                    },
+                    "workspace_mode": {
+                        "type": "string",
+                        "enum": ["inherit", "project", "worktree"],
+                        "description": "Workspace mode for the child: inherit parent sandbox, stay on project root, or create a new git worktree sandbox.",
+                    },
+                    "workspace_ref": {
+                        "type": "string",
+                        "description": "Git ref used when workspace_mode=worktree. Defaults to HEAD.",
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Additional runtime metadata persisted on the child session.",
+                        "additionalProperties": True,
                     },
                 },
                 "required": ["role", "task_description"],
@@ -205,8 +221,9 @@ def _handle_spawn(
     store: AgentSessionStore,
     mailbox: AgentMailbox,
 ) -> Dict[str, Any]:
+    del mailbox
     raw_metadata = args.get("metadata")
-    metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+    metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
     role = str(args.get("role", "dev") or "dev").strip() or "dev"
     task_description = str(args.get("task_description", "") or "")
     resolution = resolve_child_tool_capabilities(
@@ -215,7 +232,44 @@ def _handle_spawn(
         tool_subset=args.get("tool_subset") if isinstance(args.get("tool_subset"), list) else None,
         task_description=task_description,
     )
+    requested_workspace_mode = normalize_workspace_mode(args.get("workspace_mode"))
+    workspace_ref = str(args.get("workspace_ref") or "HEAD").strip() or "HEAD"
+    session_id = str(args.get("session_id") or f"agent-{uuid.uuid4().hex[:12]}").strip()
+    parent_session = store.get(parent_session_id)
+    parent_metadata = dict(parent_session.metadata) if parent_session is not None else {}
+
+    if requested_workspace_mode == "inherit":
+        inherited = inherit_workspace_metadata(parent_metadata)
+        if inherited:
+            metadata.update(inherited)
+            metadata["workspace_mode"] = "inherit"
+        else:
+            metadata.setdefault("workspace_mode", "project")
+    elif requested_workspace_mode == "project":
+        metadata["workspace_mode"] = "project"
+        for key in (
+            "workspace_sandbox_type",
+            "workspace_origin_root",
+            "workspace_root",
+            "workspace_ref",
+            "workspace_head_sha",
+            "workspace_owner_session_id",
+            "workspace_cleanup_on_destroy",
+            "workspace_created_at",
+        ):
+            metadata.pop(key, None)
+    elif requested_workspace_mode == "worktree":
+        sandbox = create_git_worktree_sandbox(
+            owner_session_id=session_id,
+            ref=workspace_ref,
+            repo_root=parent_metadata.get("workspace_origin_root") or None,
+        )
+        metadata.update(sandbox.to_metadata())
+    else:
+        return {"error": f"unsupported workspace_mode: {requested_workspace_mode}", "status": "blocked"}
+
     session = store.create(
+        session_id=session_id,
         role=role,
         parent_id=parent_session_id,
         task_description=task_description,
@@ -230,6 +284,8 @@ def _handle_spawn(
         "status": session.status.value,
         "tool_profile": session.tool_profile,
         "tool_subset": list(session.tool_subset),
+        "workspace_mode": str(session.metadata.get("workspace_mode") or "project"),
+        "workspace_root": str(session.metadata.get("workspace_root") or ""),
         "message": f"Child agent {session.session_id} created and running.",
     }
 

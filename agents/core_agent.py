@@ -160,6 +160,7 @@ class CoreAgent:
             "router_tool_profile": tool_profile,
             "complexity_hint": complexity_hint,
             "core_route": core_route,
+            "target_repo": str(dispatch.get("target_repo") or "external").strip().lower() or "external",
             "router_decision": router_decision,
             "expert_assignments": expert_assignments,
             "subtask_count": len(subtasks),
@@ -236,20 +237,24 @@ class CoreAgent:
     ) -> List[Dict[str, Any]]:
         """Spawn Expert agents based on decomposition result."""
         results = []
+        target_repo = str(decomposition.get("target_repo") or "external").strip().lower()
         for assignment in decomposition.get("expert_assignments", []):
             metadata: Dict[str, Any] = {}
             normalized_pipeline_id = str(pipeline_id or "").strip()
             if normalized_pipeline_id:
                 metadata["pipeline_id"] = normalized_pipeline_id
+            spawn_args: Dict[str, Any] = {
+                "role": "expert",
+                "task_description": assignment.get("scope", ""),
+                "prompt_blocks": assignment.get("prompt_blocks", []),
+                "tool_subset": assignment.get("tool_subset", []),
+                "metadata": metadata,
+            }
+            if target_repo == "self":
+                spawn_args["workspace_mode"] = "worktree"
             result = handle_parent_tool_call(
                 "spawn_child_agent",
-                {
-                    "role": "expert",
-                    "task_description": assignment.get("scope", ""),
-                    "prompt_blocks": assignment.get("prompt_blocks", []),
-                    "tool_subset": assignment.get("tool_subset", []),
-                    "metadata": metadata,
-                },
+                spawn_args,
                 parent_session_id=core_execution_session_id,
                 store=self._store,
                 mailbox=self._mailbox,
