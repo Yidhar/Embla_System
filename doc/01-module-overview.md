@@ -150,7 +150,6 @@
 ## 9. 交叉引用
 
 - 模块归档：`./02-module-archive.md`
-- 模型协议与代理：`./04-api-protocol-proxy-guide.md`
 - 启动与开发环境：`./05-dev-startup-and-index.md`
 - 工具调用管线：`./06-structured-tool-calls-and-local-first-native.md`
 - 自治 SDLC（历史归档）：`./07-archived-autonomous-agent-sdlc-architecture.md`

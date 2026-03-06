@@ -138,12 +138,11 @@ curl http://127.0.0.1:8003/status
 
 1. 端口被占用：检查启动日志中的端口提示。
 2. 工具不执行：查看 `agentic_tool_loop` 校验错误与 `tool_stage` 事件。
-3. 模型请求失败：按 `04` 文档检查 base_url/proxy/provider/protocol。
+3. 模型请求失败：检查 `config.json` / `config.json.example`、`apiserver/llm_service.py` 与当前环境变量中的 `base_url` / `proxy` / `provider` / `protocol`。
 4. 自动化未启动：确认 `config.autonomous.enabled=true`。
 
 ## 10. 交叉引用
 
 - 总览：`./01-module-overview.md`
-- 协议与代理：`./04-api-protocol-proxy-guide.md`
 - 工具调用：`./06-structured-tool-calls-and-local-first-native.md`
 - 自治 SDLC（历史归档）：`./07-archived-autonomous-agent-sdlc-architecture.md`
