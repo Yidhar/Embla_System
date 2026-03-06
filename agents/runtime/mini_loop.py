@@ -246,8 +246,15 @@ async def run_mini_loop(
                 "content": json.dumps(result, ensure_ascii=False, default=str),
             })
 
-            # Check if report_to_parent(completed) was called
-            if tool_name == "report_to_parent" and tool_args.get("type") == "completed":
+            # Stop only when a completed report was accepted by the child-tool handler.
+            if (
+                tool_name == "report_to_parent"
+                and tool_args.get("type") == "completed"
+                and isinstance(result, dict)
+                and not result.get("error")
+                and bool(result.get("reported"))
+                and str(result.get("status") or "").strip().lower() == "waiting"
+            ):
                 stop_after_tools = True
 
         if stop_after_tools:

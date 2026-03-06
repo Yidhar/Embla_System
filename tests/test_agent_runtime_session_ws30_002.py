@@ -32,6 +32,29 @@ def mailbox():
     m.close()
 
 
+def _verification_report(summary: str = "done"):
+    return {
+        "tests": {"passed": 1, "failed": 0, "errors": 0, "attempts": 1, "summary": summary},
+        "lint": {"status": "passed", "errors": 0, "summary": "lint clean"},
+        "diff_review": {"complete": True, "summary": summary, "missing_items": []},
+        "changed_files": ["sample.py"],
+        "risks": [],
+    }
+
+
+def _review_result(summary: str = "approved"):
+    return {
+        "verdict": "approve",
+        "requirement_alignment": [{"requirement": "done", "status": "passed", "details": summary}],
+        "code_quality": {"status": "passed", "summary": summary},
+        "regression_risk": {"level": "low", "summary": summary},
+        "test_coverage": {"status": "passed", "summary": summary, "missing_cases": []},
+        "issues": [],
+        "suggestions": [],
+        "summary": summary,
+    }
+
+
 # ── AgentSession Tests ─────────────────────────────────────────
 
 class TestAgentSession:
@@ -393,7 +416,7 @@ class TestChildTools:
 
         result = handle_child_tool_call(
             "report_to_parent",
-            {"type": "completed", "content": "All tasks done", "task_status": "5/5"},
+            {"type": "completed", "content": "All tasks done", "task_status": "5/5", "verification_report": _verification_report("All tasks done")},
             child_session_id="child-1",
             store=store,
             mailbox=mailbox,
@@ -420,6 +443,35 @@ class TestChildTools:
             mailbox=mailbox,
         )
         assert result["status"] == "running"
+
+    def test_report_completed_requires_structured_payload(self, store, mailbox):
+        store.create(role="expert", session_id="parent-1")
+        store.create(role="dev", parent_id="parent-1", session_id="child-1")
+
+        result = handle_child_tool_call(
+            "report_to_parent",
+            {"type": "completed", "content": "missing verification"},
+            child_session_id="child-1",
+            store=store,
+            mailbox=mailbox,
+        )
+        assert result["error"].startswith("verification_report")
+        assert store.get("child-1").status == AgentStatus.RUNNING
+
+    def test_review_completed_stores_review_result(self, store, mailbox):
+        store.create(role="expert", session_id="parent-1")
+        store.create(role="review", parent_id="parent-1", session_id="review-1")
+
+        result = handle_child_tool_call(
+            "report_to_parent",
+            {"type": "completed", "content": "review done", "review_result": _review_result("review done")},
+            child_session_id="review-1",
+            store=store,
+            mailbox=mailbox,
+        )
+        assert result["status"] == "waiting"
+        review_session = store.get("review-1")
+        assert review_session.metadata["review_result"]["verdict"] == "approve"
 
     def test_read_parent_messages(self, store, mailbox):
         store.create(role="expert", session_id="parent-1")

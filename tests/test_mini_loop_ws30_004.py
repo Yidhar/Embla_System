@@ -48,6 +48,16 @@ class MockToolExecutor:
         return self._results.get(tool_name, {"ok": True})
 
 
+def _verification_report(summary: str = "all good") -> Dict[str, Any]:
+    return {
+        "tests": {"passed": 1, "failed": 0, "errors": 0, "attempts": 1, "summary": summary},
+        "lint": {"status": "passed", "errors": 0, "summary": "lint clean"},
+        "diff_review": {"complete": True, "summary": summary, "missing_items": []},
+        "changed_files": ["test.py"],
+        "risks": [],
+    }
+
+
 # ── Fixtures ───────────────────────────────────────────────────
 
 @pytest.fixture
@@ -148,7 +158,7 @@ class TestMiniLoop:
                 "tool_calls": [{
                     "id": "c1",
                     "name": "report_to_parent",
-                    "arguments": {"type": "completed", "content": "All done"},
+                    "arguments": {"type": "completed", "content": "All done", "verification_report": _verification_report("All done")},
                 }],
             },
         ])
@@ -171,6 +181,42 @@ class TestMiniLoop:
         # Session should be Waiting
         s = store.get("child-1")
         assert s.status == AgentStatus.WAITING
+
+    def test_invalid_completed_report_does_not_stop_loop(self, store, mailbox):
+        """Completed report without required payload is rejected and the loop continues."""
+        store.create(role="expert", session_id="parent-1")
+        store.create(role="dev", parent_id="parent-1", session_id="child-1")
+
+        llm = MockLLM([
+            {
+                "content": "",
+                "tool_calls": [{
+                    "id": "c1",
+                    "name": "report_to_parent",
+                    "arguments": {"type": "completed", "content": "missing verification"},
+                }],
+            },
+            {"content": "Need one more pass.", "tool_calls": []},
+        ])
+        executor = MockToolExecutor()
+
+        events = _collect_events(run_mini_loop(
+            session_id="child-1",
+            store=store,
+            mailbox=mailbox,
+            llm_call=llm,
+            tool_executor=executor,
+            tool_definitions=[],
+            initial_task="Do work",
+        ))
+
+        end_events = [e for e in events if e["type"] == "loop_end"]
+        assert len(end_events) == 1
+        assert end_events[0]["reason"] == "no_tool_calls"
+        tool_results = [e for e in events if e["type"] == "tool_result"]
+        assert tool_results[0]["result"]["error"].startswith("verification_report")
+        s = store.get("child-1")
+        assert s.status == AgentStatus.RUNNING
 
     def test_parent_interrupt_stops_loop(self, store, mailbox):
         """Parent sets interrupt flag → child stops at next round."""
