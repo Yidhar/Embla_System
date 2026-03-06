@@ -159,6 +159,73 @@ MCP 路径（`mcp_manager`）已具备：
 - 下一步：...
 ```
 
+### 8.1 子 Agent `completed` payload 契约
+
+多 Agent 运行时对 `report_to_parent(type="completed")` 采用角色化强校验：
+
+- `Dev` 必须附带 `verification_report`
+- `Review` 必须附带 `review_result`
+
+```json
+{
+  "type": "completed",
+  "content": "summary",
+  "verification_report": {
+    "tests": {"passed": 3, "failed": 0, "errors": 0, "attempts": 1, "summary": "targeted tests passed"},
+    "lint": {"status": "passed", "errors": 0, "summary": "lint clean"},
+    "diff_review": {"complete": true, "summary": "task fully covered", "missing_items": []},
+    "changed_files": ["path/to/file.py"],
+    "risks": []
+  }
+}
+```
+
+```json
+{
+  "type": "completed",
+  "content": "review summary",
+  "review_result": {
+    "verdict": "approve",
+    "requirement_alignment": [{"requirement": "original task", "status": "passed", "details": "implemented"}],
+    "code_quality": {"status": "passed", "summary": "no blocking issues"},
+    "regression_risk": {"level": "low", "summary": "callers unaffected"},
+    "test_coverage": {"status": "passed", "summary": "core path covered", "missing_cases": []},
+    "issues": [],
+    "suggestions": [],
+    "summary": "approved"
+  }
+}
+```
+
+### 8.2 Review 生命周期事件协议
+
+`agents/pipeline.py` 当前对 Review gate 的 canonical 事件语义如下：
+
+| 阶段 | 事件 | 关键字段 | 说明 |
+|------|------|----------|------|
+| Review 启动 | `review_spawned` | `expert_id`, `review_agent_id`, `review_cycle` | Expert 为本轮已完成的 Dev 产出创建独立 Review |
+| Review 完成 | `review_result` | `result.verdict` | 每次 Review 完成都会发出，包括中间态 `request_changes` / `reject` |
+| 要求返修 | `review_rework_requested` | `review_cycle`, `issues`, `review_agent_id` | `request_changes` 后，Expert 恢复原 Dev |
+| Dev 返修 | `dev_review_resume_start` / `dev_review_resume_event` / `dev_review_resume_end` | `review_cycle`, `agent_id` | 原 Dev 返修并重新自检 |
+| 驳回重做 | `review_reject_respawn` | `task_ids`, `respawn_dev_count`, `reject_respawn_count` | `reject` 且可恢复时，Expert 重新 spawn fresh Dev |
+| 阻断上报 | `expert_blocked` | `reason`, `review_cycle`, `result` | `reject` 不可恢复、预算耗尽、无任务可重跑或 respawn 失败/未完成 |
+| Expert 汇总 | `expert_report` | `reports[]`, `status` | Expert 给 Core 的聚合报告 |
+| 最终回执 | `execution_receipt` | `stop_reason`, `agent_state.review_count`, `agent_state.review_verdicts` | 多 Agent gate 的最终结构化结果 |
+
+### 8.3 Verdict 到 stop_reason 的归一口径
+
+| 最终情况 | `execution_receipt.stop_reason` | 语义 |
+|----------|--------------------------------|------|
+| 全部完成且 Review 通过 | `submitted_completion` | Dev 已完成，自检通过，最终 Review 全部 `approve` |
+| Dev 未提交完成态 | `completion_not_submitted` | 至少一个 Dev 没有合法 `completed` 报告 |
+| Review 最终 `reject` | `review_rejected` | 最终审查未通过，或被升级为 blocked |
+| Review 未完成 | `review_missing` | 预期应有 Review，但没有收到最终生效结论 |
+| Review 仍停留在返修要求 | `review_requested_changes` | 返修轮次耗尽或任务在返修态结束 |
+
+- `review_result` 事件会保留**每一轮** Review 的输出，便于前端/审计复盘。
+- `execution_receipt.agent_state.review_verdicts` 与最终 `review_results` 聚合只记录**每个 Expert 最终生效的 verdict**，不把中间态 `request_changes` 或可恢复 `reject` 当作最终通过结果。
+- 当最终 verdict 为 `reject` 时，Expert 对 Core 的报告应以前缀 `[BLOCKED] ...` 标记阻断原因。
+
 ## 9. 开发预备落地清单
 
 1. 在 `agentic_tool_loop` 增加 Tool Contract 统一封装。

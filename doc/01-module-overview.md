@@ -58,6 +58,16 @@
 4. 执行态工具循环的规范实现位于 `agents/tool_loop.py`（canonical）。
 5. SSE 回推统一结构化事件到前端（`route_decision` / `tool_stage` / `execution_receipt` / `content` / `pipeline_end` 等）。
 
+其中 `execution_receipt` 是 `core_execution` 路径的最终结构化回执，当前 canonical 口径为：
+
+- `submitted_completion`：所有 Dev 已合法提交 `completed`，且每个 Expert 的最终 Review 结论均为 `approve`。
+- `completion_not_submitted`：至少一个 Dev 没有提交合法完成态。
+- `review_missing`：预期应有 Review，但未收到最终生效结论。
+- `review_requested_changes`：流程停留在返修态，最终未收敛到通过。
+- `review_rejected`：最终审查未通过，或已被 Expert 升级为 `blocked`。
+
+中间态审查结果会通过 `review_result` / `review_rework_requested` / `review_reject_respawn` / `expert_blocked` 等事件暴露；`execution_receipt` 只汇总每个 Expert **最终生效**的审查结论，不把中间 `request_changes` 或可恢复 `reject` 视为最终通过结果。
+
 ### 4.2 MCP 运行态说明
 
 当前链路状态：
