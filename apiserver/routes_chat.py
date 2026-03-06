@@ -1,9 +1,8 @@
 """Chat-route domain — extracted from api_server.py (Phase 2).
 
 Contains:
-- Chat route resolution, quality guard, budget/bridge logic
-- Event store management and emission
-- Router arbiter guard integration
+- Outer/core session bridge state helpers
+- Route-event emission and observability payload helpers
 - Model override and prompt hints
 """
 from __future__ import annotations
@@ -17,16 +16,10 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
-from agents.shell_agent import ShellAgent
 from agents.router_arbiter_guard import RouterArbiterGuard
 from agents.llm_gateway import LLMGateway
 from core.event_bus import EventStore
 from apiserver.message_manager import message_manager as _default_message_manager
-from system.coding_intent import (
-    contains_direct_coding_signal,
-    has_recent_coding_context,
-    is_coding_followup,
-)
 from agents.contract_runtime import trim_contract_text as trim_brain_contract_text
 from apiserver.routes_ops import (
     _ops_build_route_quality_summary,
@@ -136,19 +129,11 @@ def _router_arbiter_max_delegate_turns() -> int:
 __all__ = [
     "_CHAT_ROUTE_ARBITER_GUARD",
     "_CHAT_ROUTE_EVENT_STORE",
-    "_CHAT_ROUTE_FOLLOWUP_MARKERS",
-    "_CHAT_ROUTE_GREETING_MARKERS",
     "_CHAT_ROUTE_GUARD_CACHE",
     "_CHAT_ROUTE_GUARD_CACHE_TTL_MS",
-    "_CHAT_ROUTE_HIGH_RISK_MARKERS",
     "_CHAT_ROUTE_PATH_B_CLARIFY_LIMIT",
-    "_CHAT_ROUTE_READONLY_MARKERS",
     "_CHAT_ROUTE_STATE_KEY",
-    "_SHELL_AGENT",
-    "_apply_chat_route_quality_guard",
-    "_apply_chat_route_router_arbiter_guard",
     "_apply_outer_core_session_bridge",
-    "_apply_path_b_clarify_budget",
     "_build_chat_route_bridge_payload",
     "_build_chat_route_prompt_event_payload",
     "_build_chat_route_prompt_hints",
@@ -163,24 +148,19 @@ __all__ = [
     "_emit_chat_route_prompt_event",
     "_ensure_chat_route_state",
     "_extract_agentic_execution_receipt_text",
-    "_force_route_to_pipeline",
     "_format_sse_payload_chunk_json",
     "_get_chat_route_event_store",
     "_get_chat_route_quality_guard_summary",
-    "_infer_chat_route_complexity",
-    "_infer_chat_route_risk_level",
     "_merge_model_override",
     "_merge_route_quality_reason_codes",
     "_normalize_chat_text",
     "_read_chat_route_event_rows",
-    "_resolve_chat_stream_route",
     "_sanitize_route_quality_reason_codes",
     "_sanitize_router_arbiter_reason_codes",
     "_trim_contract_text",
 ]
 
 # ── Chat-route constants ──────────────────────────────────────
-# _CHAT_PATH_ROUTER removed: routing now handled by _SHELL_AGENT (ShellAgent wrapping TaskRouterEngine)
 try:
     _CHAT_LLM_GATEWAY: Optional[LLMGateway] = LLMGateway()
 except Exception:
@@ -191,132 +171,10 @@ _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT = 1
 _CHAT_ROUTE_GUARD_CACHE_TTL_MS = 5_000
 _CHAT_ROUTE_GUARD_CACHE: Dict[str, Any] = {"expires_at_ms": 0, "summary": {}}
 _CHAT_ROUTE_ARBITER_GUARD = RouterArbiterGuard(max_delegate_turns=3)
-_CHAT_ROUTE_HIGH_RISK_MARKERS = (
-    "deploy",
-    "rollback",
-    "release",
-    "上线",
-    "回滚",
-    "发布",
-    "生产",
-    "权限",
-    "删除",
-    "批量改写",
-)
-_CHAT_ROUTE_READONLY_MARKERS = (
-    "explain",
-    "summary",
-    "summarize",
-    "analysis",
-    "analyse",
-    "read",
-    "check",
-    "状态",
-    "现状",
-    "总结",
-    "解释",
-    "分析",
-    "查看",
-)
-_CHAT_ROUTE_GREETING_MARKERS = (
-    "hello",
-    "hi",
-    "hey",
-    "你好",
-    "嗨",
-)
-_CHAT_ROUTE_FOLLOWUP_MARKERS = (
-    "continue",
-    "go on",
-    "继续",
-    "接着",
-    "然后",
-)
 
 # ── Chat-route functions ─────────────────────────────────────
 def _normalize_chat_text(text: str) -> str:
     return " ".join(str(text or "").strip().lower().split())
-
-
-def _infer_chat_route_risk_level(message: str, *, recent_messages: Optional[List[Dict[str, Any]]] = None) -> str:
-    normalized = _normalize_chat_text(message)
-    if not normalized:
-        return "read_only"
-
-    if recent_messages and is_coding_followup(message) and has_recent_coding_context(recent_messages):
-        return "write_repo"
-
-    if len(normalized) <= 24 and any(marker in normalized for marker in _CHAT_ROUTE_FOLLOWUP_MARKERS):
-        return "unknown"
-
-    if any(marker in normalized for marker in _CHAT_ROUTE_HIGH_RISK_MARKERS):
-        return "deploy"
-
-    if any(marker in normalized for marker in _CHAT_ROUTE_GREETING_MARKERS):
-        return "read_only"
-
-    if any(marker in normalized for marker in _CHAT_ROUTE_READONLY_MARKERS):
-        return "read_only"
-
-    if contains_direct_coding_signal(message):
-        return "write_repo"
-
-    if "?" in normalized or "？" in str(message):
-        return "read_only"
-
-    return "unknown"
-
-
-def _infer_chat_route_complexity(message: str) -> str:
-    raw = str(message or "")
-    length = len(raw)
-    if contains_direct_coding_signal(raw) or length >= 220:
-        return "high"
-    if length >= 80:
-        return "medium"
-    return "low"
-
-
-# ── ShellAgent singleton for routing ──────────────────────────
-_SHELL_AGENT = ShellAgent()
-
-
-def _resolve_chat_stream_route(message: str, *, session_id: str) -> Dict[str, Any]:
-    """Route user message via ShellAgent.
-
-    Returns route_meta with delegation_intent (no path-a/b/c classification).
-    """
-    normalized_message = str(message or "")
-    recent_messages = _get_message_manager().get_recent_messages(session_id, count=10)
-    risk_level = _infer_chat_route_risk_level(normalized_message, recent_messages=recent_messages)
-    complexity = _infer_chat_route_complexity(normalized_message)
-    decision = _SHELL_AGENT.route(
-        normalized_message,
-        session_id=session_id,
-        risk_level=risk_level,
-        complexity=complexity,
-    )
-    needs_core = _SHELL_AGENT.should_dispatch(decision)
-    intent = str(decision.delegation_intent or "")
-
-    # backward-compat keys for guard functions and observability
-    if needs_core:
-        compat_path = "path-c"
-    elif intent == "read_only_exploration":
-        compat_path = "path-a"
-    else:
-        compat_path = "path-b"
-
-    return {
-        "delegation_intent": decision.delegation_intent,
-        "needs_core": needs_core,
-        "risk_level": risk_level,
-        "router_decision": decision.to_dict(),
-        # backward-compat (consumed by guard functions / observability)
-        "path": compat_path,
-        "outer_readonly_hit": compat_path == "path-a",
-        "core_escalation": needs_core,
-    }
 
 
 def _ensure_chat_route_state(session_id: str) -> Dict[str, Any]:
@@ -421,226 +279,6 @@ def _get_chat_route_quality_guard_summary(*, force_refresh: bool = False) -> Dic
     _CHAT_ROUTE_GUARD_CACHE["expires_at_ms"] = now_ms + int(_CHAT_ROUTE_GUARD_CACHE_TTL_MS)
     _CHAT_ROUTE_GUARD_CACHE["summary"] = dict(summary)
     return summary
-
-
-def _force_route_to_pipeline(route_meta: Dict[str, Any], *, reason: str) -> Dict[str, Any]:
-    """Force-escalate to Core execution pipeline."""
-    decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
-    effective_decision = dict(decision)
-    effective_decision["delegation_intent"] = "core_execution"
-    prompt_profile = str(effective_decision.get("prompt_profile") or "").strip()
-    if not prompt_profile.startswith("core_exec"):
-        effective_decision["prompt_profile"] = "core_exec_general"
-    injection_mode = str(effective_decision.get("injection_mode") or "").strip().lower()
-    if injection_mode in {"", "minimal"}:
-        effective_decision["injection_mode"] = "normal"
-
-    route_meta["delegation_intent"] = "core_execution"
-    route_meta["needs_core"] = True
-    route_meta["router_decision"] = effective_decision
-    route_meta["route_forced_to_core_reason"] = str(reason or "")
-    # backward-compat keys for guard functions
-    route_meta["path"] = "path-c"
-    route_meta["outer_readonly_hit"] = False
-    route_meta["core_escalation"] = True
-    return route_meta
-
-
-def _apply_chat_route_quality_guard(route_meta: Dict[str, Any]) -> Dict[str, Any]:
-    summary = _get_chat_route_quality_guard_summary()
-    guard_status = _ops_status_to_severity(str(summary.get("status") or "unknown"))
-    reason_codes = _sanitize_route_quality_reason_codes(summary.get("reason_codes"))
-    reason_text = str(summary.get("reason_text") or "")
-    trend = summary.get("trend") if isinstance(summary.get("trend"), dict) else {}
-    guard_path_before = str(route_meta.get("path") or "path-c")
-
-    route_meta["route_quality_guard_status"] = guard_status
-    route_meta["route_quality_guard_reason_codes"] = reason_codes
-    route_meta["route_quality_guard_reason"] = reason_text
-    route_meta["route_quality_guard_applied"] = False
-    route_meta["route_quality_guard_action"] = "none"
-    route_meta["route_quality_guard_path_before"] = guard_path_before
-    route_meta["route_quality_guard_path_after"] = guard_path_before
-    route_meta["route_quality_guard_evaluated_at"] = str(summary.get("evaluated_at") or "")
-    route_meta["route_quality_guard_trend_status"] = _ops_status_to_severity(str(trend.get("status") or "unknown"))
-    route_meta["route_quality_guard_trend_direction"] = str(trend.get("direction") or "unknown")
-    route_meta["route_quality_guard_trend_sample_count"] = int(trend.get("sample_count") or 0)
-
-    if guard_status == "warning" and guard_path_before == "path-b":
-        route_meta["path_b_clarify_limit_override"] = 0
-        route_meta["route_quality_guard_applied"] = True
-        route_meta["route_quality_guard_action"] = "tighten_path_b_clarify_limit_zero"
-        route_meta["route_quality_guard_reason"] = "route_quality_warning_tighten_path_b_budget"
-        route_meta["route_quality_guard_reason_codes"] = _merge_route_quality_reason_codes(
-            reason_codes,
-            ["ROUTE_QUALITY_WARNING_PATH_B_LIMIT_ZERO"],
-        )
-    elif guard_status == "critical":
-        risk_level = str(route_meta.get("risk_level") or "").strip().lower()
-        path = str(route_meta.get("path") or "path-c")
-        reason_code_set = set(reason_codes)
-        suspicious_path_a = path == "path-a" and (
-            risk_level in {"write_repo", "deploy"}
-            or "READONLY_WRITE_EXPOSURE_CRITICAL" in reason_code_set
-        )
-        high_risk_non_core = path in {"path-a", "path-b"} and risk_level in {"write_repo", "deploy"}
-        if suspicious_path_a or high_risk_non_core:
-            route_meta = _force_route_to_pipeline(
-                route_meta,
-                reason="route_quality_guard_critical_auto_escalate_core",
-            )
-            route_meta["route_quality_guard_applied"] = True
-            route_meta["route_quality_guard_action"] = "force_core_path"
-            route_meta["route_quality_guard_reason"] = "route_quality_critical_force_core"
-            route_meta["route_quality_guard_reason_codes"] = _merge_route_quality_reason_codes(
-                reason_codes,
-                [
-                    "ROUTE_QUALITY_CRITICAL_FORCE_CORE",
-                    "ROUTE_QUALITY_CRITICAL_HIGH_RISK_NON_CORE" if high_risk_non_core else "",
-                    "ROUTE_QUALITY_CRITICAL_SUSPICIOUS_PATH_A" if suspicious_path_a else "",
-                ],
-            )
-        elif path == "path-b":
-            route_meta["path_b_clarify_limit_override"] = 0
-            route_meta["route_quality_guard_applied"] = True
-            route_meta["route_quality_guard_action"] = "force_path_b_zero_budget"
-            route_meta["route_quality_guard_reason"] = "route_quality_critical_force_path_b_zero_budget"
-            route_meta["route_quality_guard_reason_codes"] = _merge_route_quality_reason_codes(
-                reason_codes,
-                ["ROUTE_QUALITY_CRITICAL_PATH_B_LIMIT_ZERO"],
-            )
-
-    route_meta["route_quality_guard_path_after"] = str(route_meta.get("path") or guard_path_before)
-    return route_meta
-
-
-def _apply_path_b_clarify_budget(route_meta: Dict[str, Any], *, session_id: str) -> Dict[str, Any]:
-    state = _ensure_chat_route_state(session_id)
-    path = str(route_meta.get("path") or "path-c")
-    clarify_turns = max(0, int(state.get("path_b_clarify_turns", 0)))
-    limit_override: Optional[int] = None
-    if route_meta.get("path_b_clarify_limit_override") is not None:
-        try:
-            limit_override = max(0, int(route_meta.get("path_b_clarify_limit_override")))
-        except Exception:
-            limit_override = 0
-    clarify_limit = limit_override if limit_override is not None else _CHAT_ROUTE_PATH_B_CLARIFY_LIMIT
-
-    route_meta["path_b_clarify_limit"] = clarify_limit
-    route_meta["path_b_clarify_limit_override"] = limit_override
-    route_meta["path_b_budget_escalated"] = False
-    route_meta["path_b_budget_reason"] = ""
-    route_meta["path_b_clarify_turns"] = clarify_turns
-
-    if path != "path-b":
-        state["path_b_clarify_turns"] = 0
-        route_meta["path_b_clarify_turns"] = 0
-        return route_meta
-
-    if clarify_turns >= clarify_limit:
-        budget_reason = "clarify_budget_exceeded_auto_escalate_core"
-        if limit_override is not None:
-            budget_reason = "clarify_budget_guard_override_auto_escalate_core"
-        route_meta = _force_route_to_pipeline(route_meta, reason=budget_reason)
-        route_meta["path_b_budget_escalated"] = True
-        route_meta["path_b_budget_reason"] = budget_reason
-        route_meta["path_b_clarify_turns"] = clarify_turns
-        state["path_b_clarify_turns"] = 0
-        return route_meta
-
-    state["path_b_clarify_turns"] = clarify_turns + 1
-    route_meta["path_b_clarify_turns"] = int(state["path_b_clarify_turns"])
-    return route_meta
-
-
-def _apply_chat_route_router_arbiter_guard(route_meta: Dict[str, Any], *, session_id: str) -> Dict[str, Any]:
-    state = _ensure_chat_route_state(session_id)
-    current_path = str(route_meta.get("path") or "path-c")
-    previous_path = str(state.get("last_router_path") or "").strip()
-
-    route_meta["router_arbiter_status"] = "ok"
-    route_meta["router_arbiter_applied"] = False
-    route_meta["router_arbiter_action"] = "none"
-    route_meta["router_arbiter_reason"] = ""
-    route_meta["router_arbiter_reason_codes"] = []
-    route_meta["router_arbiter_path_before"] = previous_path
-    route_meta["router_arbiter_path_after"] = current_path
-    route_meta["router_arbiter_delegate_turns"] = 0
-    guard_for_limit = _get_chat_route_arbiter_guard()
-    route_meta["router_arbiter_max_delegate_turns"] = int(
-        guard_for_limit.max_delegate_turns if guard_for_limit is not None else 0
-    )
-    route_meta["router_arbiter_conflict_ticket"] = ""
-    route_meta["router_arbiter_freeze"] = False
-    route_meta["router_arbiter_hitl"] = False
-    route_meta["router_arbiter_escalated"] = False
-
-    guard = _get_chat_route_arbiter_guard()
-    if guard is None:
-        state["last_router_path"] = str(route_meta.get("path") or current_path)
-        return route_meta
-
-    summary_before = guard.build_conflict_summary(session_id)
-    frozen_before = bool(summary_before.get("freeze"))
-    if frozen_before and current_path != "path-c":
-        route_meta = _force_route_to_pipeline(route_meta, reason="router_arbiter_frozen_to_core")
-        route_meta["router_arbiter_status"] = "critical"
-        route_meta["router_arbiter_applied"] = True
-        route_meta["router_arbiter_action"] = "freeze_to_core_latched"
-        route_meta["router_arbiter_reason"] = "router_arbiter_frozen_to_core"
-        route_meta["router_arbiter_reason_codes"] = ["ROUTER_ARBITER_FREEZE_LATCHED"]
-        route_meta["router_arbiter_path_after"] = str(route_meta.get("path") or "path-c")
-        route_meta["router_arbiter_delegate_turns"] = int(summary_before.get("delegate_turns") or 0)
-        route_meta["router_arbiter_max_delegate_turns"] = int(guard.max_delegate_turns)
-        route_meta["router_arbiter_conflict_ticket"] = str(summary_before.get("conflict_ticket") or "")
-        route_meta["router_arbiter_freeze"] = True
-        route_meta["router_arbiter_hitl"] = bool(summary_before.get("hitl"))
-        route_meta["router_arbiter_escalated"] = True
-        state["last_router_path"] = str(route_meta.get("path") or "path-c")
-        return route_meta
-
-    if previous_path and previous_path != current_path:
-        transition_pair = "|".join(sorted([previous_path, current_path]))
-        decision = guard.register_delegate_turn(
-            task_id=session_id,
-            from_agent=previous_path,
-            to_agent=current_path,
-            reason="chat_route_path_switch",
-            conflict_ticket=f"chat_route_ping_pong::{transition_pair}",
-            candidate_decisions=[previous_path, current_path],
-        )
-        decision_payload = decision.to_dict()
-        route_meta["router_arbiter"] = decision_payload
-        route_meta["router_arbiter_delegate_turns"] = int(decision.delegate_turns)
-        route_meta["router_arbiter_max_delegate_turns"] = int(decision.max_delegate_turns)
-        route_meta["router_arbiter_conflict_ticket"] = str(decision.conflict_ticket or "")
-        route_meta["router_arbiter_freeze"] = bool(decision.freeze)
-        route_meta["router_arbiter_hitl"] = bool(decision.hitl)
-        route_meta["router_arbiter_escalated"] = bool(decision.escalated)
-
-        if decision.escalated or decision.freeze:
-            route_meta = _force_route_to_pipeline(route_meta, reason="router_arbiter_ping_pong_freeze_core")
-            route_meta["router_arbiter_status"] = "critical"
-            route_meta["router_arbiter_applied"] = True
-            route_meta["router_arbiter_action"] = "freeze_to_core"
-            route_meta["router_arbiter_reason"] = "router_arbiter_ping_pong_freeze_core"
-            route_meta["router_arbiter_reason_codes"] = [
-                "ROUTER_ARBITER_PING_PONG_FREEZE_CORE",
-                "ROUTER_ARBITER_HITL_REQUIRED" if bool(decision.hitl) else "",
-            ]
-            route_meta["router_arbiter_path_after"] = str(route_meta.get("path") or "path-c")
-        else:
-            route_meta["router_arbiter_status"] = "warning"
-            route_meta["router_arbiter_action"] = "observe_ping_pong"
-            route_meta["router_arbiter_reason"] = "router_arbiter_path_switch_observed"
-            route_meta["router_arbiter_reason_codes"] = ["ROUTER_ARBITER_PATH_SWITCH_OBSERVED"]
-
-    route_meta["router_arbiter_reason_codes"] = _sanitize_router_arbiter_reason_codes(
-        route_meta.get("router_arbiter_reason_codes")
-    )
-    route_meta["router_arbiter_path_after"] = str(route_meta.get("path") or current_path)
-    state["last_router_path"] = str(route_meta.get("path") or current_path)
-    return route_meta
 
 
 def _apply_outer_core_session_bridge(route_meta: Dict[str, Any], *, outer_session_id: str) -> Dict[str, Any]:

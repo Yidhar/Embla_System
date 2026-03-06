@@ -1,11 +1,17 @@
 """Shell Agent read-only tool definitions and handlers.
 
-Provides the 5 read-only tools that the Shell Agent can use:
-  1. read_file        — read project files (path + optional line range)
-  2. get_system_status — brainstem posture + agent stats + git status
-  3. search_memory    — unified L1 index + episodic archive + graph search
-  4. list_tasks       — active tasks from TaskBoardEngine
-  5. search_web       — extensible stub (requires external API config)
+Canonical Shell tools:
+  1. memory_read      — read project files (path + optional line range)
+  2. memory_list      — list L1 memory files by scope
+  3. memory_grep      — grep L1 memory files by keyword/regex
+  4. memory_search    — unified L1 index + episodic archive + graph search
+  5. get_system_status — brainstem posture + agent stats + git status
+  6. list_tasks       — active tasks from TaskBoardEngine
+  7. search_web       — extensible stub (requires external API config)
+
+Legacy aliases remain supported:
+  - read_file -> memory_read
+  - search_memory -> memory_search
 """
 
 from __future__ import annotations
@@ -19,6 +25,29 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_SHELL_TOOL_ALIASES = {
+    "read_file": "memory_read",
+    "search_memory": "memory_search",
+}
+
+
+def normalize_shell_tool_name(tool_name: str) -> str:
+    text = str(tool_name or "").strip()
+    if not text:
+        return ""
+    return _SHELL_TOOL_ALIASES.get(text, text)
+
+
+def is_shell_tool_supported(tool_name: str) -> bool:
+    return normalize_shell_tool_name(tool_name) in {
+        "memory_read",
+        "memory_list",
+        "memory_grep",
+        "memory_search",
+        "get_system_status",
+        "list_tasks",
+        "search_web",
+    }
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -26,7 +55,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 TOOL_DEF_READ_FILE: Dict[str, Any] = {
-    "name": "read_file",
+    "name": "memory_read",
     "description": (
         "Read a file from the project. Returns file content with optional "
         "line range selection. Shell can read any file but cannot modify."
@@ -51,6 +80,61 @@ TOOL_DEF_READ_FILE: Dict[str, Any] = {
     },
 }
 
+TOOL_DEF_MEMORY_LIST: Dict[str, Any] = {
+    "name": "memory_list",
+    "description": "List Layer-1 memory files by scope.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "scope": {
+                "type": "string",
+                "enum": ["all", "working", "episodic", "domain", "deprecated"],
+                "description": "Memory scope to list (default: all).",
+            },
+            "pattern": {
+                "type": "string",
+                "description": "Glob pattern, default `*.md`.",
+            },
+            "recursive": {
+                "type": "boolean",
+                "description": "Whether to recurse subdirectories.",
+            },
+        },
+    },
+}
+
+TOOL_DEF_MEMORY_GREP: Dict[str, Any] = {
+    "name": "memory_grep",
+    "description": "Search matching lines across Layer-1 memory markdown files.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "pattern": {
+                "type": "string",
+                "description": "Keyword or regex to search for.",
+            },
+            "scope": {
+                "type": "string",
+                "enum": ["all", "working", "episodic", "domain", "deprecated"],
+                "description": "Memory scope to search (default: all).",
+            },
+            "top_k": {
+                "type": "integer",
+                "description": "Max matches to return (default 20).",
+            },
+            "use_regex": {
+                "type": "boolean",
+                "description": "Treat `pattern` as regex.",
+            },
+            "case_sensitive": {
+                "type": "boolean",
+                "description": "Whether matching is case-sensitive.",
+            },
+        },
+        "required": ["pattern"],
+    },
+}
+
 TOOL_DEF_SYSTEM_STATUS: Dict[str, Any] = {
     "name": "get_system_status",
     "description": (
@@ -64,7 +148,7 @@ TOOL_DEF_SYSTEM_STATUS: Dict[str, Any] = {
 }
 
 TOOL_DEF_SEARCH_MEMORY: Dict[str, Any] = {
-    "name": "search_memory",
+    "name": "memory_search",
     "description": (
         "Search across the memory system: L1 episodic index (tag-based), "
         "episodic archive (narrative similarity), and semantic graph. "
@@ -132,6 +216,8 @@ def get_shell_tool_definitions() -> List[Dict[str, Any]]:
     """Return all Shell read-only tool definitions for the LLM."""
     return [
         TOOL_DEF_READ_FILE,
+        TOOL_DEF_MEMORY_LIST,
+        TOOL_DEF_MEMORY_GREP,
         TOOL_DEF_SYSTEM_STATUS,
         TOOL_DEF_SEARCH_MEMORY,
         TOOL_DEF_LIST_TASKS,
@@ -155,27 +241,36 @@ def handle_shell_tool(
     Returns a dict with 'result' key containing the tool output.
     """
     root = project_root or _PROJECT_ROOT
+    normalized_tool_name = normalize_shell_tool_name(tool_name)
     try:
-        if tool_name == "read_file":
+        if normalized_tool_name == "memory_read":
             result = _handle_read_file(arguments, project_root=root)
-        elif tool_name == "get_system_status":
+        elif normalized_tool_name == "memory_list":
+            result = _handle_memory_list(arguments, project_root=root)
+        elif normalized_tool_name == "memory_grep":
+            result = _handle_memory_grep(arguments, project_root=root)
+        elif normalized_tool_name == "get_system_status":
             result = _handle_get_system_status(project_root=root)
-        elif tool_name == "search_memory":
+        elif normalized_tool_name == "memory_search":
             result = _handle_search_memory(arguments, project_root=root)
-        elif tool_name == "list_tasks":
+        elif normalized_tool_name == "list_tasks":
             result = _handle_list_tasks(arguments, project_root=root)
-        elif tool_name == "search_web":
+        elif normalized_tool_name == "search_web":
             result = _handle_search_web(arguments)
         else:
             return {"error": f"Unknown shell tool: {tool_name}", "status": "error"}
 
-        return {"result": result, "status": "success", "tool_name": tool_name}
+        return {"result": result, "status": "success", "tool_name": normalized_tool_name}
     except Exception as exc:
         logger.warning("Shell tool %s failed: %s", tool_name, exc)
-        return {"error": str(exc), "status": "error", "tool_name": tool_name}
+        return {
+            "error": str(exc),
+            "status": "error",
+            "tool_name": normalized_tool_name or tool_name,
+        }
 
 
-# ── 1. read_file ───────────────────────────────────────────────
+# ── 1. memory_read ─────────────────────────────────────────────
 
 
 def _handle_read_file(
@@ -186,7 +281,7 @@ def _handle_read_file(
     """Read a file from the project."""
     path_str = str(args.get("path", "")).strip()
     if not path_str:
-        raise ValueError("read_file: 缺少 path 参数")
+        raise ValueError("memory_read: 缺少 path 参数")
 
     filepath = Path(path_str)
     if not filepath.is_absolute():
@@ -199,7 +294,7 @@ def _handle_read_file(
     try:
         filepath.resolve().relative_to(project_root.resolve())
     except ValueError:
-        raise PermissionError(f"read_file: 不允许访问项目外文件: {path_str}")
+        raise PermissionError(f"memory_read: 不允许访问项目外文件: {path_str}")
 
     content = filepath.read_text(encoding="utf-8", errors="replace")
     lines = content.splitlines()
@@ -225,7 +320,67 @@ def _handle_read_file(
     return f"[{filepath.name}] ({len(lines)} lines):\n{content}"
 
 
-# ── 2. get_system_status ──────────────────────────────────────
+# ── 2. memory_list ─────────────────────────────────────────────
+
+
+def _handle_memory_list(
+    args: Dict[str, Any],
+    *,
+    project_root: Path,
+) -> str:
+    """List memory files under the project's `memory/` root."""
+    from agents.memory.l1_memory import L1MemoryManager
+
+    mgr = L1MemoryManager(memory_root=str(project_root / "memory"))
+    scope = str(args.get("scope") or "all").strip().lower() or "all"
+    pattern = str(args.get("pattern") or "*.md").strip() or "*.md"
+    recursive = bool(args.get("recursive", True))
+    items = mgr.list_memory(scope=scope, pattern=pattern, recursive=recursive)
+    lines = [f"## 记忆列表 (scope={scope}, count={len(items)})"]
+    if not items:
+        lines.append("\n未找到匹配的记忆文件。")
+        return "\n".join(lines)
+    for item in items[:50]:
+        lines.append(f"- {item}")
+    if len(items) > 50:
+        lines.append(f"- ... 还有 {len(items) - 50} 项")
+    return "\n".join(lines)
+
+
+# ── 3. memory_grep ─────────────────────────────────────────────
+
+
+def _handle_memory_grep(
+    args: Dict[str, Any],
+    *,
+    project_root: Path,
+) -> str:
+    """Search matching lines across the L1 memory store."""
+    from agents.memory.l1_memory import L1MemoryManager
+
+    pattern = str(args.get("pattern") or "").strip()
+    if not pattern:
+        raise ValueError("memory_grep: 缺少 pattern 参数")
+
+    mgr = L1MemoryManager(memory_root=str(project_root / "memory"))
+    scope = str(args.get("scope") or "all").strip().lower() or "all"
+    matches = mgr.grep_memory(
+        pattern,
+        scope=scope,
+        top_k=int(args.get("top_k") or 20),
+        use_regex=bool(args.get("use_regex", False)),
+        case_sensitive=bool(args.get("case_sensitive", False)),
+    )
+    lines = [f"## 记忆 grep: {pattern} (scope={scope})"]
+    if not matches:
+        lines.append("\n未找到匹配项。")
+        return "\n".join(lines)
+    for row in matches:
+        lines.append(f"- {row.get('path')}:{row.get('line')} {row.get('content')}")
+    return "\n".join(lines)
+
+
+# ── 4. get_system_status ──────────────────────────────────────
 
 
 def _handle_get_system_status(*, project_root: Path) -> str:
@@ -308,7 +463,7 @@ def _handle_get_system_status(*, project_root: Path) -> str:
     return "\n".join(sections)
 
 
-# ── 3. search_memory ──────────────────────────────────────────
+# ── 5. memory_search ──────────────────────────────────────────
 
 
 def _handle_search_memory(
@@ -319,7 +474,7 @@ def _handle_search_memory(
     """Search across L1 index, episodic archive, and semantic graph."""
     query = str(args.get("query", "")).strip()
     if not query:
-        raise ValueError("search_memory: 缺少 query 参数")
+        raise ValueError("memory_search: 缺少 query 参数")
 
     tags = args.get("tags") or []
     top_k = int(args.get("top_k", 5))
@@ -342,7 +497,7 @@ def _handle_search_memory(
             if query.lower() in str(entry).lower()
         ]
         if keyword_matches:
-            results.append(f"\n### L1 关键词匹配")
+            results.append("\n### L1 关键词匹配")
             for m in keyword_matches[:top_k]:
                 results.append(f"- {m}")
     except Exception as exc:
@@ -396,7 +551,7 @@ def _handle_search_memory(
     return "\n".join(results)
 
 
-# ── 4. list_tasks ─────────────────────────────────────────────
+# ── 6. list_tasks ─────────────────────────────────────────────
 
 
 def _handle_list_tasks(
@@ -460,7 +615,7 @@ def _handle_list_tasks(
     return "\n".join(results)
 
 
-# ── 5. search_web ─────────────────────────────────────────────
+# ── 7. search_web ─────────────────────────────────────────────
 
 
 def _handle_search_web(args: Dict[str, Any]) -> str:
@@ -540,10 +695,14 @@ def _handle_search_web(args: Dict[str, Any]) -> str:
 
 __all__ = [
     "TOOL_DEF_LIST_TASKS",
+    "TOOL_DEF_MEMORY_GREP",
+    "TOOL_DEF_MEMORY_LIST",
     "TOOL_DEF_READ_FILE",
     "TOOL_DEF_SEARCH_MEMORY",
     "TOOL_DEF_SEARCH_WEB",
     "TOOL_DEF_SYSTEM_STATUS",
     "get_shell_tool_definitions",
     "handle_shell_tool",
+    "is_shell_tool_supported",
+    "normalize_shell_tool_name",
 ]

@@ -68,3 +68,41 @@ def test_router_engine_marks_explicit_role_delegate_and_recovery_mode() -> None:
     assert decision.delegation_intent == "explicit_role_delegate"
     assert decision.prompt_profile == "explicit_role_delegate"
     assert decision.injection_mode == "recovery"
+
+
+def test_router_engine_marks_trivial_core_execution_as_fast_track() -> None:
+    router = TaskRouterEngine()
+    decision = router.route(
+        RouterRequest(
+            task_id="ws30-fast-track-trivial",
+            description="修复一个拼写错误并更新单行注释",
+            estimated_complexity="low",
+            complexity_hint="trivial",
+            risk_level="write_repo",
+        )
+    )
+
+    assert decision.delegation_intent == "core_execution"
+    assert decision.complexity_hint == "trivial"
+    assert decision.core_route == "fast_track"
+    assert decision.fast_track_candidate is True
+    route_contract = decision.controlled_execution_plan.get("route_contract") or {}
+    assert route_contract.get("core_route") == "fast_track"
+
+
+def test_router_engine_blocks_fast_track_for_deploy_risk_even_if_trivial_hint() -> None:
+    router = TaskRouterEngine()
+    decision = router.route(
+        RouterRequest(
+            task_id="ws30-fast-track-high-risk",
+            description="快速发布生产环境补丁",
+            estimated_complexity="low",
+            complexity_hint="trivial",
+            risk_level="deploy",
+        )
+    )
+
+    assert decision.delegation_intent == "core_execution"
+    assert decision.complexity_hint == "trivial"
+    assert decision.core_route == "standard"
+    assert decision.fast_track_candidate is False

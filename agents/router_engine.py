@@ -28,6 +28,7 @@ def _stable_hash(payload: Dict[str, Any]) -> str:
 
 
 HIGH_RISK_LEVELS = {"write_repo", "deploy", "secrets", "self_modify"}
+FAST_TRACK_RISK_BLOCKLIST = {"deploy", "secrets", "self_modify"}
 TASK_TYPE_RULES = [
     ("ops", ("nginx", "k8s", "kubernetes", "docker", "cpu", "memory", "磁盘", "告警", "故障", "恢复")),
     ("development", ("api", "code", "refactor", "bug", "test", "代码", "修复", "patch", "模块")),
@@ -37,6 +38,21 @@ ROLE_TO_TOOLS = {
     "sys_admin": ["os_bash", "sleep_and_watch", "read_file", "artifact_reader"],
     "developer": ["file_ast", "workspace_txn_apply", "read_file", "artifact_reader"],
     "researcher": ["read_file", "artifact_reader", "search"],
+}
+COMPLEXITY_HINT_ALIASES = {
+    "": "",
+    "trivial": "trivial",
+    "low": "trivial",
+    "simple": "trivial",
+    "small": "trivial",
+    "tiny": "trivial",
+    "standard": "standard",
+    "normal": "standard",
+    "medium": "standard",
+    "default": "standard",
+    "complex": "complex",
+    "high": "complex",
+    "epic": "complex",
 }
 
 
@@ -48,6 +64,7 @@ class RouterRequest(BaseModel):
     estimated_complexity: str = "medium"
     requested_role: str = ""
     risk_level: str = "read_only"
+    complexity_hint: str = ""
     budget_remaining: Optional[int] = Field(default=None, ge=0)
     trace_id: str = ""
     session_id: str = ""
@@ -58,6 +75,7 @@ class RouterRequest(BaseModel):
         "estimated_complexity",
         "requested_role",
         "risk_level",
+        "complexity_hint",
         "trace_id",
         "session_id",
         mode="before",
@@ -82,6 +100,9 @@ class RouterDecision(BaseModel):
     prompt_profile: str
     injection_mode: str
     delegation_intent: str
+    complexity_hint: str = "standard"
+    core_route: str = "standard"
+    fast_track_candidate: bool = False
     risk_level: str
     budget_remaining: Optional[int] = None
     reasoning: List[str]
@@ -110,9 +131,15 @@ class TaskRouterEngine:
 
     def route(self, request: RouterRequest) -> RouterDecision:
         task_type = self._infer_task_type(request.description)
+        complexity_hint, complexity_reason = self._resolve_complexity_hint(request=request)
         role, role_reason = self._select_role(request=request, task_type=task_type)
         model_tier, model_reason = self._select_model_tier(request=request, task_type=task_type)
         delegation_intent, delegation_reason = self._select_delegation_intent(request=request, task_type=task_type)
+        core_route, core_route_reason = self._select_core_route(
+            request=request,
+            delegation_intent=delegation_intent,
+            complexity_hint=complexity_hint,
+        )
         prompt_profile, prompt_profile_reason = self._select_prompt_profile(
             task_type=task_type,
             selected_role=role,
@@ -120,7 +147,16 @@ class TaskRouterEngine:
         )
         injection_mode, injection_mode_reason = self._select_injection_mode(request=request, task_type=task_type)
         tool_profile = list(ROLE_TO_TOOLS.get(role, ROLE_TO_TOOLS[self.fixed_role_fallback]))
-        reasons = [role_reason, model_reason, delegation_reason, prompt_profile_reason, injection_mode_reason]
+        fast_track_candidate = core_route == "fast_track"
+        reasons = [
+            complexity_reason,
+            role_reason,
+            model_reason,
+            delegation_reason,
+            core_route_reason,
+            prompt_profile_reason,
+            injection_mode_reason,
+        ]
 
         fingerprint_payload = {
             "task_type": task_type,
@@ -130,6 +166,9 @@ class TaskRouterEngine:
             "prompt_profile": prompt_profile,
             "injection_mode": injection_mode,
             "delegation_intent": delegation_intent,
+            "complexity_hint": complexity_hint,
+            "core_route": core_route,
+            "fast_track_candidate": fast_track_candidate,
             "risk_level": request.risk_level,
             "budget_remaining": request.budget_remaining,
             "description": request.description,
@@ -145,6 +184,9 @@ class TaskRouterEngine:
             prompt_profile=prompt_profile,
             injection_mode=injection_mode,
             delegation_intent=delegation_intent,
+            complexity_hint=complexity_hint,
+            core_route=core_route,
+            fast_track_candidate=fast_track_candidate,
         )
         decision = RouterDecision(
             decision_id=f"route_{uuid.uuid4().hex[:12]}",
@@ -159,6 +201,9 @@ class TaskRouterEngine:
             prompt_profile=prompt_profile,
             injection_mode=injection_mode,
             delegation_intent=delegation_intent,
+            complexity_hint=complexity_hint,
+            core_route=core_route,
+            fast_track_candidate=fast_track_candidate,
             risk_level=request.risk_level,
             budget_remaining=request.budget_remaining,
             reasoning=reasons,
@@ -197,6 +242,9 @@ class TaskRouterEngine:
         prompt_profile: str,
         injection_mode: str,
         delegation_intent: str,
+        complexity_hint: str,
+        core_route: str,
+        fast_track_candidate: bool,
     ) -> Dict[str, Any]:
         risk = str(request.risk_level or "").strip().lower()
         requires_human_approval = risk in HIGH_RISK_LEVELS or str(selected_role).strip().lower() == "sys_admin"
@@ -234,6 +282,9 @@ class TaskRouterEngine:
                 "prompt_profile": prompt_profile,
                 "injection_mode": injection_mode,
                 "delegation_intent": delegation_intent,
+                "complexity_hint": complexity_hint,
+                "core_route": core_route,
+                "fast_track_candidate": bool(fast_track_candidate),
             },
             "guardrails": {
                 "requires_human_approval": requires_human_approval,
@@ -242,6 +293,40 @@ class TaskRouterEngine:
                 "max_delegate_turns": 3,
             },
         }
+
+    @staticmethod
+    def _resolve_complexity_hint(*, request: RouterRequest) -> tuple[str, str]:
+        explicit = str(request.complexity_hint or "").strip().lower()
+        normalized_explicit = COMPLEXITY_HINT_ALIASES.get(explicit, "")
+        if normalized_explicit:
+            return normalized_explicit, f"complexity_hint from request: {normalized_explicit}"
+
+        estimated = str(request.estimated_complexity or "").strip().lower()
+        normalized_estimated = COMPLEXITY_HINT_ALIASES.get(estimated, "")
+        if normalized_estimated:
+            return normalized_estimated, f"complexity_hint inferred from estimated_complexity={estimated}"
+
+        return "standard", "complexity_hint default => standard"
+
+    @staticmethod
+    def _select_core_route(
+        *,
+        request: RouterRequest,
+        delegation_intent: str,
+        complexity_hint: str,
+    ) -> tuple[str, str]:
+        intent = str(delegation_intent or "").strip().lower()
+        if intent not in {"core_execution", "explicit_role_delegate"}:
+            return "outer", f"delegation_intent={intent or 'unknown'} => outer route"
+
+        risk = str(request.risk_level or "").strip().lower()
+        if risk in FAST_TRACK_RISK_BLOCKLIST:
+            return "standard", f"risk={risk} => standard route"
+
+        if complexity_hint == "trivial":
+            return "fast_track", "complexity_hint=trivial => fast_track route"
+
+        return "standard", f"complexity_hint={complexity_hint or 'standard'} => standard route"
 
     @staticmethod
     def _infer_task_type(description: str) -> str:

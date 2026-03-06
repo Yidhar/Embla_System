@@ -14,6 +14,7 @@ from agents.runtime.agent_session import AgentSessionStore, AgentStatus
 from agents.runtime.mailbox import AgentMailbox
 from agents.runtime.parent_tools import handle_parent_tool_call
 from agents.runtime.task_board import TaskBoardEngine, TaskItem, TaskStatus
+from agents.runtime.tool_profiles import infer_memory_tool_profile
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,11 @@ class ExpertAgent:
         """
         # Split scope lines into individual task items
         tasks: List[TaskItem] = []
-        lines = [l.strip().lstrip("- ") for l in scope.split("\n") if l.strip() and not l.strip().startswith("[")]
+        lines = [
+            raw_line.strip().lstrip("- ")
+            for raw_line in scope.split("\n")
+            if raw_line.strip() and not raw_line.strip().startswith("[")
+        ]
         prev_id = ""
         for i, line in enumerate(lines):
             if not line or line.startswith(">"):
@@ -101,6 +106,7 @@ class ExpertAgent:
         *,
         prompt_blocks: Optional[List[str]] = None,
         memory_hints: Optional[List[str]] = None,
+        tool_profile: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         """Spawn Dev agents for independent tasks.
 
@@ -127,14 +133,27 @@ class ExpertAgent:
             if memory_hints:
                 task_desc += f"\nRelevant experience: {', '.join(memory_hints)}"
 
+            selected_profile = tool_profile
+            if selected_profile is None:
+                selected_profile = infer_memory_tool_profile(
+                    task_desc,
+                    files=task.files,
+                    role="dev",
+                )
+
+            spawn_args: Dict[str, Any] = {
+                "role": "dev",
+                "task_description": task_desc,
+                "prompt_blocks": blocks,
+            }
+            if selected_profile:
+                spawn_args["tool_profile"] = selected_profile
+            else:
+                spawn_args["tool_subset"] = list(self._config.tool_subset)
+
             result = handle_parent_tool_call(
                 "spawn_child_agent",
-                {
-                    "role": "dev",
-                    "task_description": task_desc,
-                    "prompt_blocks": blocks,
-                    "tool_subset": list(self._config.tool_subset),
-                },
+                spawn_args,
                 parent_session_id=self._session_id,
                 store=self._store,
                 mailbox=self._mailbox,

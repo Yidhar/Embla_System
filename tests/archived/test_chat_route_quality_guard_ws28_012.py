@@ -3,6 +3,9 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 import apiserver.api_server as api_server
+import pytest
+
+pytestmark = pytest.mark.skip(reason="archived legacy pre-route guard tests")
 
 
 class _CaptureStore:

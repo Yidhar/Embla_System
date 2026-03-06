@@ -41,6 +41,7 @@ class AgentSession:
     - role: agent role (e.g. "expert", "dev", "review")
     - status: current lifecycle status
     - prompt_blocks: ordered list of prompt block paths
+    - tool_profile: preset profile name used to derive tool_subset
     - tool_subset: list of tool names this agent is allowed to use
     - task_description: the task assigned to this agent
     - messages: serialized LLM conversation history (list of dicts)
@@ -53,6 +54,7 @@ class AgentSession:
     role: str = ""
     status: AgentStatus = AgentStatus.RUNNING
     prompt_blocks: List[str] = field(default_factory=list)
+    tool_profile: str = ""
     tool_subset: List[str] = field(default_factory=list)
     task_description: str = ""
     messages: List[Dict[str, Any]] = field(default_factory=list)
@@ -83,6 +85,8 @@ class AgentSession:
             "status": self.status.value,
             "interrupt_requested": self.interrupt_requested,
             "task_description": self.task_description,
+            "tool_profile": self.tool_profile,
+            "tool_subset": list(self.tool_subset),
             "prompt_block_count": len(self.prompt_blocks),
             "message_count": len(self.messages),
             "metadata": dict(self.metadata),
@@ -98,6 +102,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
     role TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'running',
     prompt_blocks TEXT NOT NULL DEFAULT '[]',
+    tool_profile TEXT NOT NULL DEFAULT '',
     tool_subset TEXT NOT NULL DEFAULT '[]',
     task_description TEXT NOT NULL DEFAULT '',
     messages TEXT NOT NULL DEFAULT '[]',
@@ -133,6 +138,7 @@ class AgentSessionStore:
         self._db = sqlite3.connect(resolved, check_same_thread=False)
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.executescript(_SCHEMA_SQL)
+        self._ensure_schema_compat()
         self._db.commit()
 
         # Load existing sessions from disk
@@ -147,6 +153,7 @@ class AgentSessionStore:
         parent_id: str = "",
         task_description: str = "",
         prompt_blocks: Optional[List[str]] = None,
+        tool_profile: str = "",
         tool_subset: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         session_id: str = "",
@@ -158,6 +165,7 @@ class AgentSessionStore:
             role=role,
             status=AgentStatus.RUNNING,
             prompt_blocks=list(prompt_blocks or []),
+            tool_profile=str(tool_profile or "").strip(),
             tool_subset=list(tool_subset or []),
             task_description=task_description,
             metadata=dict(metadata or {}),
@@ -258,16 +266,17 @@ class AgentSessionStore:
         """Upsert session into SQLite."""
         self._db.execute(
             """INSERT OR REPLACE INTO agent_sessions
-               (session_id, parent_id, role, status, prompt_blocks, tool_subset,
+               (session_id, parent_id, role, status, prompt_blocks, tool_profile, tool_subset,
                 task_description, messages, metadata, interrupt_requested,
                 created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 session.session_id,
                 session.parent_id,
                 session.role,
                 session.status.value,
                 json.dumps(session.prompt_blocks, ensure_ascii=False),
+                str(session.tool_profile or ""),
                 json.dumps(session.tool_subset, ensure_ascii=False),
                 session.task_description,
                 json.dumps(session.messages, ensure_ascii=False),
@@ -279,10 +288,21 @@ class AgentSessionStore:
         )
         self._db.commit()
 
+    def _ensure_schema_compat(self) -> None:
+        """Apply lightweight additive migrations for persisted runtime DBs."""
+        columns = {
+            str(row[1])
+            for row in self._db.execute("PRAGMA table_info(agent_sessions)").fetchall()
+            if isinstance(row, tuple) and len(row) > 1
+        }
+        if "tool_profile" not in columns:
+            self._db.execute("ALTER TABLE agent_sessions ADD COLUMN tool_profile TEXT NOT NULL DEFAULT ''")
+            self._db.commit()
+
     def _load_from_db(self) -> None:
         """Load all non-destroyed sessions from SQLite on startup."""
         cursor = self._db.execute(
-            "SELECT session_id, parent_id, role, status, prompt_blocks, tool_subset, "
+            "SELECT session_id, parent_id, role, status, prompt_blocks, tool_profile, tool_subset, "
             "task_description, messages, metadata, interrupt_requested, created_at, updated_at "
             "FROM agent_sessions WHERE status != ?",
             (AgentStatus.DESTROYED.value,),
@@ -294,13 +314,14 @@ class AgentSessionStore:
                 role=row[2],
                 status=AgentStatus(row[3]),
                 prompt_blocks=json.loads(row[4]),
-                tool_subset=json.loads(row[5]),
-                task_description=row[6],
-                messages=json.loads(row[7]),
-                metadata=json.loads(row[8]),
-                interrupt_requested=bool(row[9]),
-                created_at=row[10],
-                updated_at=row[11],
+                tool_profile=str(row[5] or ""),
+                tool_subset=json.loads(row[6]),
+                task_description=row[7],
+                messages=json.loads(row[8]),
+                metadata=json.loads(row[9]),
+                interrupt_requested=bool(row[10]),
+                created_at=row[11],
+                updated_at=row[12],
             )
             self._sessions[session.session_id] = session
         logger.debug("Loaded %d agent sessions from DB", len(self._sessions))

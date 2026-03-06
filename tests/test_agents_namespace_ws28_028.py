@@ -146,6 +146,9 @@ def test_agents_memory_namespace_exports_core_modules() -> None:
         MemoryWindowThresholds,
         SemanticGraphStore,
         WorkingMemoryWindowManager,
+        get_memory_tool_definitions,
+        handle_memory_tool,
+        is_memory_tool,
     )
 
     thresholds = MemoryWindowThresholds()
@@ -153,3 +156,6 @@ def test_agents_memory_namespace_exports_core_modules() -> None:
     assert manager.estimate_tokens([{"role": "user", "content": "hello"}]) > 0
     assert WorkingMemoryWindowManager.__module__.startswith("agents.memory.")
     assert SemanticGraphStore.__module__.startswith("agents.memory.")
+    assert callable(get_memory_tool_definitions)
+    assert callable(handle_memory_tool)
+    assert is_memory_tool("memory_read") is True

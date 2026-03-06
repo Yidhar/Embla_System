@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
-
-import pytest
 
 from agents.shell_tools import (
     get_shell_tool_definitions,
@@ -19,9 +16,9 @@ from agents.shell_tools import (
 
 class TestToolDefinitions:
 
-    def test_returns_5_tools(self) -> None:
+    def test_returns_7_tools(self) -> None:
         defs = get_shell_tool_definitions()
-        assert len(defs) == 5
+        assert len(defs) == 7
 
     def test_all_have_name_and_description(self) -> None:
         for td in get_shell_tool_definitions():
@@ -32,22 +29,24 @@ class TestToolDefinitions:
     def test_tool_names_match(self) -> None:
         names = {td["name"] for td in get_shell_tool_definitions()}
         assert names == {
-            "read_file",
+            "memory_read",
+            "memory_list",
+            "memory_grep",
+            "memory_search",
             "get_system_status",
-            "search_memory",
             "list_tasks",
             "search_web",
         }
 
-    def test_search_memory_has_query_param(self) -> None:
+    def test_memory_search_has_query_param(self) -> None:
         for td in get_shell_tool_definitions():
-            if td["name"] == "search_memory":
+            if td["name"] == "memory_search":
                 assert "query" in td["parameters"]["properties"]
                 assert "query" in td["parameters"]["required"]
                 break
 
 
-# ── read_file ──────────────────────────────────────────────────
+# ── memory_read ────────────────────────────────────────────────
 
 
 class TestReadFile:
@@ -57,7 +56,7 @@ class TestReadFile:
         test_file.write_text("line1\nline2\nline3\n", encoding="utf-8")
 
         result = handle_shell_tool(
-            "read_file",
+            "memory_read",
             {"path": str(test_file)},
             project_root=tmp_path,
         )
@@ -71,7 +70,7 @@ class TestReadFile:
         test_file.write_text("\n".join(lines), encoding="utf-8")
 
         result = handle_shell_tool(
-            "read_file",
+            "memory_read",
             {"path": str(test_file), "start_line": 3, "end_line": 5},
             project_root=tmp_path,
         )
@@ -81,7 +80,7 @@ class TestReadFile:
 
     def test_file_not_found(self, tmp_path: Path) -> None:
         result = handle_shell_tool(
-            "read_file",
+            "memory_read",
             {"path": "nonexistent.txt"},
             project_root=tmp_path,
         )
@@ -89,7 +88,7 @@ class TestReadFile:
 
     def test_missing_path(self, tmp_path: Path) -> None:
         result = handle_shell_tool(
-            "read_file",
+            "memory_read",
             {},
             project_root=tmp_path,
         )
@@ -100,7 +99,7 @@ class TestReadFile:
         big_file.write_text("x" * 10000, encoding="utf-8")
 
         result = handle_shell_tool(
-            "read_file",
+            "memory_read",
             {"path": str(big_file)},
             project_root=tmp_path,
         )
@@ -118,13 +117,25 @@ class TestReadFile:
             project = tmp_path / "project"
             project.mkdir()
             result = handle_shell_tool(
-                "read_file",
+                "memory_read",
                 {"path": outer_path},
                 project_root=project,
             )
             assert result["status"] == "error"
         finally:
             Path(outer_path).unlink(missing_ok=True)
+
+    def test_legacy_read_file_alias_still_works(self, tmp_path: Path) -> None:
+        test_file = tmp_path / "hello.txt"
+        test_file.write_text("hello", encoding="utf-8")
+
+        result = handle_shell_tool(
+            "read_file",
+            {"path": str(test_file)},
+            project_root=tmp_path,
+        )
+        assert result["status"] == "success"
+        assert result["tool_name"] == "memory_read"
 
 
 # ── get_system_status ──────────────────────────────────────────
@@ -183,14 +194,39 @@ class TestSystemStatus:
         assert "3 经验" in result["result"]
 
 
-# ── search_memory ──────────────────────────────────────────────
+# ── memory_list / memory_grep / memory_search ────────────────
+
+
+class TestMemoryListAndGrep:
+
+    def test_memory_list_lists_l1_files(self, tmp_path: Path) -> None:
+        domain = tmp_path / "memory" / "domain"
+        domain.mkdir(parents=True)
+        (domain / "python_ast.md").write_text("# Python AST\n", encoding="utf-8")
+
+        result = handle_shell_tool("memory_list", {"scope": "domain"}, project_root=tmp_path)
+        assert result["status"] == "success"
+        assert "domain/python_ast.md" in result["result"]
+
+    def test_memory_grep_searches_l1_files(self, tmp_path: Path) -> None:
+        domain = tmp_path / "memory" / "domain"
+        domain.mkdir(parents=True)
+        (domain / "python_ast.md").write_text("# Python AST\nmatch-token\n", encoding="utf-8")
+
+        result = handle_shell_tool(
+            "memory_grep",
+            {"scope": "domain", "pattern": "match-token"},
+            project_root=tmp_path,
+        )
+        assert result["status"] == "success"
+        assert "match-token" in result["result"]
 
 
 class TestSearchMemory:
 
     def test_missing_query(self, tmp_path: Path) -> None:
         result = handle_shell_tool(
-            "search_memory",
+            "memory_search",
             {},
             project_root=tmp_path,
         )
@@ -198,12 +234,21 @@ class TestSearchMemory:
 
     def test_searches_gracefully_with_no_memory(self, tmp_path: Path) -> None:
         result = handle_shell_tool(
-            "search_memory",
+            "memory_search",
             {"query": "pipeline refactoring"},
             project_root=tmp_path,
         )
         assert result["status"] == "success"
         assert "搜索" in result["result"]
+
+    def test_legacy_search_memory_alias_still_works(self, tmp_path: Path) -> None:
+        result = handle_shell_tool(
+            "search_memory",
+            {"query": "pipeline refactoring"},
+            project_root=tmp_path,
+        )
+        assert result["status"] == "success"
+        assert result["tool_name"] == "memory_search"
 
 
 # ── list_tasks ─────────────────────────────────────────────────
@@ -258,19 +303,29 @@ class TestShellAgentIntegration:
         agent = ShellAgent()
         defs = agent.get_tool_definitions()
         names = {d["name"] for d in defs}
-        assert "read_file" in names
+        assert "memory_read" in names
+        assert "memory_list" in names
+        assert "memory_grep" in names
         assert "get_system_status" in names
-        assert "search_memory" in names
+        assert "memory_search" in names
         assert "list_tasks" in names
         assert "search_web" in names
         assert "dispatch_to_core" in names
-        assert len(defs) == 6  # 5 read-only + dispatch_to_core
+        assert len(defs) == 8  # 7 read-only + dispatch_to_core
 
-    def test_execute_tool_read_file(self) -> None:
+    def test_execute_tool_memory_read(self) -> None:
         from agents.shell_agent import ShellAgent
         agent = ShellAgent()
 
         # Use a file that exists within the project root
+        result = agent.execute_tool("memory_read", {"path": "pyproject.toml"})
+        assert result.get("status") == "success"
+        assert "result" in result
+
+    def test_execute_tool_legacy_read_file_alias(self) -> None:
+        from agents.shell_agent import ShellAgent
+        agent = ShellAgent()
+
         result = agent.execute_tool("read_file", {"path": "pyproject.toml"})
         assert result.get("status") == "success"
         assert "result" in result

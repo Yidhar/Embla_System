@@ -10,10 +10,11 @@ all management decisions are made by the parent agent model.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-from agents.runtime.agent_session import AgentSession, AgentSessionStore, AgentStatus
+from agents.runtime.agent_session import AgentSessionStore, AgentStatus
 from agents.runtime.mailbox import AgentMailbox
+from agents.runtime.tool_profiles import resolve_child_tool_capabilities
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +46,13 @@ def get_parent_tool_definitions() -> List[Dict[str, Any]]:
                         "items": {"type": "string"},
                         "description": "Ordered list of prompt block paths to compose the child's system prompt.",
                     },
+                    "tool_profile": {
+                        "description": "Preset tool profile name (refactor/new_doc/bugfix/review/cleanup/custom) or explicit tool-name list.",
+                    },
                     "tool_subset": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of tool names the child agent is allowed to use.",
+                        "description": "Legacy explicit list of tool names the child agent is allowed to use.",
                     },
                 },
                 "required": ["role", "task_description"],
@@ -203,18 +207,29 @@ def _handle_spawn(
 ) -> Dict[str, Any]:
     raw_metadata = args.get("metadata")
     metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+    role = str(args.get("role", "dev") or "dev").strip() or "dev"
+    task_description = str(args.get("task_description", "") or "")
+    resolution = resolve_child_tool_capabilities(
+        role=role,
+        tool_profile=args.get("tool_profile"),
+        tool_subset=args.get("tool_subset") if isinstance(args.get("tool_subset"), list) else None,
+        task_description=task_description,
+    )
     session = store.create(
-        role=args.get("role", "dev"),
+        role=role,
         parent_id=parent_session_id,
-        task_description=args.get("task_description", ""),
+        task_description=task_description,
         prompt_blocks=args.get("prompt_blocks"),
-        tool_subset=args.get("tool_subset"),
+        tool_profile=resolution.profile_name,
+        tool_subset=resolution.tool_subset,
         metadata=metadata,
     )
     return {
         "agent_id": session.session_id,
         "role": session.role,
         "status": session.status.value,
+        "tool_profile": session.tool_profile,
+        "tool_subset": list(session.tool_subset),
         "message": f"Child agent {session.session_id} created and running.",
     }
 

@@ -35,9 +35,11 @@
 
 | 工具 | 说明 |
 |------|------|
-| `read_file` | 阅读文档/代码/配置 |
+| `memory_read` | 阅读文档/代码/配置 |
+| `memory_list` | 列出 L1 记忆文件 |
+| `memory_grep` | 在 L1 记忆中做关键词/正则检索 |
 | `get_system_status` | 脑干层 posture 快照 |
-| `search_memory` | 图谱/经验检索 |
+| `memory_search` | 图谱/经验检索 |
 | `list_tasks` | 当前活跃任务进度 |
 | `search_web` | 在线信息查询 |
 

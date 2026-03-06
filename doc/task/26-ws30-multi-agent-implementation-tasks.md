@@ -78,7 +78,7 @@
 
 - [ ] 从 `apiserver/api_server.py` Path-A 提取 Shell 逻辑
 - [ ] 加载 `prompts/dna/shell_persona.md` 不可变人格
-- [ ] 注入只读工具集 (read_file, get_system_status, search_memory, list_tasks, search_web)
+- [ ] 注入只读工具集 (`memory_read`, `memory_list`, `memory_grep`, `memory_search`, `get_system_status`, `list_tasks`, `search_web`)
 - [ ] 实现 `dispatch_to_core` 工具
 - [ ] 集成 Neo4j 图谱查询（复用 summer_memory）
 - 目标文件：`agents/shell_agent.py`

@@ -10,6 +10,7 @@ from agents.memory.episodic_memory import (
 )
 from agents.memory.gc_pipeline import GCPipelineConfig, GCPipelineReport, run_gc_pipeline
 from agents.memory.l1_memory import L1MemoryManager
+from agents.memory.memory_tools import get_memory_tool_definitions, handle_memory_tool, is_memory_tool
 from agents.memory.memory_agents import (
     CompressionReport,
     ConvertedExperience,
@@ -38,6 +39,18 @@ __all__ = [
     "GCPipelineReport",
     "run_gc_pipeline",
     "L1MemoryManager",
+    "get_memory_tool_definitions",
+    "handle_memory_tool",
+    "is_memory_tool",
+    "CompressionReport",
+    "ConvertedExperience",
+    "DistillationResult",
+    "ExperienceDistiller",
+    "FormatConverter",
+    "LogScrubber",
+    "MemoryCompressor",
+    "ScrubResult",
+    "run_post_task_pipeline",
     "MemoryWindowThresholds",
     "MemoryWindowRebalanceResult",
     "WorkingMemoryWindowManager",

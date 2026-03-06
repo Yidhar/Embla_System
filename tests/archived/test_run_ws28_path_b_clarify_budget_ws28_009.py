@@ -4,7 +4,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from scripts.run_ws28_path_b_clarify_budget_ws28_009 import main
+from scripts.archived.run_ws28_path_b_clarify_budget_ws28_009 import main
 
 
 def _make_case_root(prefix: str) -> Path:
@@ -24,7 +24,7 @@ def test_run_ws28_path_b_clarify_budget_cli_main_smoke(monkeypatch) -> None:
         monkeypatch.setattr(
             "sys.argv",
             [
-                "run_ws28_path_b_clarify_budget_ws28_009.py",
+                "archived/run_ws28_path_b_clarify_budget_ws28_009.py",
                 "--repo-root",
                 ".",
                 "--output",

@@ -12,7 +12,8 @@ Three memory subdirectories:
 from __future__ import annotations
 
 import logging
-import time
+import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -20,6 +21,10 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MEMORY_ROOT = Path(__file__).resolve().parent.parent.parent / "memory"
+
+
+class L1MemoryConflictError(RuntimeError):
+    """Raised when an optimistic-lock memory edit no longer matches the file."""
 
 
 class L1MemoryManager:
@@ -47,6 +52,7 @@ class L1MemoryManager:
         self._working_dir = self._root / "working"
         self._episodic_dir = self._root / "episodic"
         self._domain_dir = self._root / "domain"
+        self._deprecated_dir = self._root / ".deprecated"
         self._post_write_hooks: List[Callable[[Path, List[str]], None]] = []
 
     @property
@@ -60,6 +66,10 @@ class L1MemoryManager:
     @property
     def domain_dir(self) -> Path:
         return self._domain_dir
+
+    @property
+    def deprecated_dir(self) -> Path:
+        return self._deprecated_dir
 
     def register_post_write_hook(
         self, hook: Callable[[Path, List[str]], None]
@@ -77,6 +87,433 @@ class L1MemoryManager:
         if not self._episodic_dir.exists():
             return 0
         return sum(1 for _ in self._episodic_dir.glob("exp_*.md"))
+
+    # ── Generic Memory File Ops ───────────────────────────────
+
+    def resolve_memory_path(self, path: str | Path, *, must_exist: bool = False) -> Path:
+        """Resolve a path under the memory root and reject path traversal."""
+        raw = str(path or "").strip().replace("\\", "/")
+        if not raw:
+            raise ValueError("memory path is required")
+        if raw.startswith("memory/"):
+            raw = raw[len("memory/") :]
+
+        candidate = Path(raw)
+        if candidate.is_absolute():
+            resolved = candidate.resolve()
+        else:
+            resolved = (self._root / candidate).resolve()
+
+        root_resolved = self._root.resolve()
+        try:
+            resolved.relative_to(root_resolved)
+        except ValueError as exc:
+            raise ValueError(f"memory path escapes root: {path}") from exc
+
+        if must_exist and not resolved.exists():
+            raise FileNotFoundError(f"memory file not found: {self._to_relative_path(resolved)}")
+        return resolved
+
+    def list_memory(
+        self,
+        *,
+        scope: str = "all",
+        recursive: bool = True,
+        pattern: str = "*.md",
+        include_deprecated: bool = False,
+    ) -> List[str]:
+        """List files under the memory root."""
+        results: List[str] = []
+        for base_dir in self._iter_scope_dirs(scope, include_deprecated=include_deprecated):
+            if not base_dir.exists():
+                continue
+            iterator = base_dir.rglob(pattern) if recursive else base_dir.glob(pattern)
+            for path in iterator:
+                if path.is_file():
+                    results.append(self._to_relative_path(path))
+        return sorted(dict.fromkeys(results))
+
+    def read_memory_file(self, path: str | Path) -> str:
+        """Read a single file from the memory root."""
+        resolved = self.resolve_memory_path(path, must_exist=True)
+        return resolved.read_text(encoding="utf-8")
+
+    def write_memory_file(
+        self,
+        path: str | Path,
+        content: str,
+        *,
+        overwrite: bool = True,
+    ) -> Path:
+        """Write a file under the memory root."""
+        resolved = self.resolve_memory_path(path)
+        if resolved.exists() and not overwrite:
+            raise FileExistsError(f"memory file already exists: {self._to_relative_path(resolved)}")
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_text(str(content), encoding="utf-8")
+        self._refresh_indexes_for_path(resolved)
+        return resolved
+
+    def delete_memory_file(self, path: str | Path) -> Dict[str, str]:
+        """Soft-delete a memory file by moving it into `.deprecated/`."""
+        resolved = self.resolve_memory_path(path, must_exist=True)
+        rel_path = resolved.relative_to(self._root)
+        if rel_path.parts and rel_path.parts[0] == ".deprecated":
+            resolved.unlink(missing_ok=False)
+            return {"path": rel_path.as_posix(), "archived_path": rel_path.as_posix()}
+
+        archived_path = self._deprecated_dir / rel_path
+        archived_path.parent.mkdir(parents=True, exist_ok=True)
+        archived_path = self._ensure_unique_destination(archived_path)
+        shutil.move(str(resolved), str(archived_path))
+        self._refresh_indexes_for_path(resolved)
+        return {
+            "path": rel_path.as_posix(),
+            "archived_path": self._to_relative_path(archived_path),
+        }
+
+    def grep_memory(
+        self,
+        pattern: str,
+        *,
+        scope: str = "all",
+        top_k: int = 20,
+        use_regex: bool = False,
+        case_sensitive: bool = False,
+        include_deprecated: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Search matching lines across memory files."""
+        query = str(pattern or "")
+        if not query:
+            raise ValueError("pattern is required")
+
+        flags = 0 if case_sensitive else re.IGNORECASE
+        compiled = re.compile(query, flags) if use_regex else None
+        matches: List[Dict[str, Any]] = []
+        for rel_path in self.list_memory(
+            scope=scope,
+            recursive=True,
+            pattern="*.md",
+            include_deprecated=include_deprecated,
+        ):
+            text = self.read_memory_file(rel_path)
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                matched = bool(compiled.search(line)) if compiled else (query in line if case_sensitive else query.lower() in line.lower())
+                if not matched:
+                    continue
+                matches.append(
+                    {
+                        "path": rel_path,
+                        "line": line_no,
+                        "content": line.strip(),
+                    }
+                )
+                if len(matches) >= max(1, int(top_k)):
+                    return matches
+        return matches
+
+    def search_memory(
+        self,
+        query: str,
+        *,
+        scope: str = "all",
+        top_k: int = 5,
+        tags: Optional[Sequence[str]] = None,
+        include_deprecated: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Best-effort keyword search across L1 memory files."""
+        query_text = str(query or "").strip()
+        if not query_text:
+            raise ValueError("query is required")
+
+        lowered_query = query_text.lower()
+        query_tokens = [token for token in re.findall(r"[\w\u4e00-\u9fff]+", lowered_query) if token]
+        tag_set = {str(tag).strip().lstrip("#").lower() for tag in (tags or []) if str(tag).strip()}
+        results: List[Dict[str, Any]] = []
+
+        for rel_path in self.list_memory(
+            scope=scope,
+            recursive=True,
+            pattern="*.md",
+            include_deprecated=include_deprecated,
+        ):
+            text = self.read_memory_file(rel_path)
+            lower_path = rel_path.lower()
+            lower_text = text.lower()
+            file_tags = {tag.lower() for tag in self._extract_md_tags(text)}
+            if tag_set and not (tag_set & file_tags):
+                continue
+
+            score = 0
+            if lowered_query in lower_path:
+                score += 8
+            if lowered_query in lower_text:
+                score += 6
+            for token in query_tokens:
+                if token in lower_path:
+                    score += 3
+                if token in lower_text:
+                    score += 1
+            if tag_set:
+                score += 4 * len(tag_set & file_tags)
+            if score <= 0:
+                continue
+
+            snippet = self._build_snippet(text, query_text)
+            results.append(
+                {
+                    "path": rel_path,
+                    "title": self._extract_md_title(text),
+                    "tags": sorted(file_tags),
+                    "score": score,
+                    "snippet": snippet,
+                }
+            )
+
+        results.sort(key=lambda item: (-int(item.get("score") or 0), str(item.get("path") or "")))
+        return results[: max(1, int(top_k))]
+
+    def rebuild_domain_index(self) -> int:
+        """Rebuild `domain/_index.md` from current knowledge files."""
+        self._domain_dir.mkdir(parents=True, exist_ok=True)
+        index_path = self._domain_dir / "_index.md"
+
+        entries: List[Dict[str, Any]] = []
+        for md_file in sorted(self._domain_dir.glob("*.md")):
+            if md_file.name == "_index.md":
+                continue
+            content = md_file.read_text(encoding="utf-8")
+            entries.append(
+                {
+                    "filename": md_file.name,
+                    "title": self._extract_md_title(content),
+                    "tags": self._extract_md_tags(content),
+                }
+            )
+
+        lines = ["# 领域知识索引\n\n> 自动生成，勿手动编辑\n"]
+        for entry in entries:
+            tag_str = " ".join(f"#{tag}" for tag in entry["tags"])
+            lines.append(f"- [{entry['title']}](domain/{entry['filename']}) {tag_str}")
+        index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return len(entries)
+
+    def rebuild_all_indices(self) -> Dict[str, int]:
+        """Rebuild all L1 index files."""
+        return {
+            "episodic": self.rebuild_index(),
+            "domain": self.rebuild_domain_index(),
+        }
+
+    def patch_memory_file(self, path: str | Path, edits: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+        """Apply optimistic-lock line edits to a memory file."""
+        if not edits:
+            raise ValueError("edits is required")
+
+        resolved = self.resolve_memory_path(path, must_exist=True)
+        original_text = resolved.read_text(encoding="utf-8")
+        had_trailing_newline = original_text.endswith("\n")
+        lines = original_text.splitlines()
+        normalized_edits: List[Dict[str, Any]] = []
+        for item in edits:
+            if not isinstance(item, dict):
+                raise ValueError("each edit must be an object")
+            start_line = int(item.get("start_line") or 0)
+            end_line = int(item.get("end_line") or 0)
+            if start_line <= 0 or end_line <= 0 or start_line > end_line:
+                raise ValueError("invalid edit line range")
+            normalized_edits.append(
+                {
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "old_content": str(item.get("old_content") or ""),
+                    "new_content": str(item.get("new_content") or ""),
+                }
+            )
+
+        normalized_edits.sort(key=lambda item: int(item["start_line"]), reverse=True)
+        last_start = len(lines) + 1
+        for item in normalized_edits:
+            start_line = int(item["start_line"])
+            end_line = int(item["end_line"])
+            if end_line > len(lines):
+                raise ValueError("edit line range exceeds file length")
+            if end_line >= last_start:
+                raise ValueError("overlapping edits are not allowed")
+            last_start = start_line
+
+            current_segment = "\n".join(lines[start_line - 1 : end_line])
+            expected_segment = self._normalize_multiline_text(str(item["old_content"]))
+            if self._normalize_multiline_text(current_segment) != expected_segment:
+                raise L1MemoryConflictError(
+                    f"optimistic lock mismatch at lines {start_line}-{end_line}: "
+                    f"expected {expected_segment!r} got {self._normalize_multiline_text(current_segment)!r}"
+                )
+
+            replacement_lines = self._split_preserve_empty_lines(str(item["new_content"]))
+            lines[start_line - 1 : end_line] = replacement_lines
+
+        updated_text = "\n".join(lines)
+        if lines and had_trailing_newline:
+            updated_text += "\n"
+        resolved.write_text(updated_text, encoding="utf-8")
+        self._refresh_indexes_for_path(resolved)
+        return {
+            "path": self._to_relative_path(resolved),
+            "applied_edits": len(normalized_edits),
+            "line_count": len(lines),
+        }
+
+    def insert_memory_content(
+        self,
+        path: str | Path,
+        *,
+        line: int,
+        content: str,
+        position: str = "after",
+    ) -> Dict[str, Any]:
+        """Insert content before or after a 1-indexed line number."""
+        resolved = self.resolve_memory_path(path, must_exist=True)
+        original_text = resolved.read_text(encoding="utf-8")
+        lines = original_text.splitlines()
+        if line <= 0:
+            raise ValueError("line must be >= 1")
+        if line > len(lines):
+            raise ValueError("line exceeds file length")
+        normalized_position = str(position or "after").strip().lower()
+        if normalized_position not in {"before", "after"}:
+            raise ValueError("position must be 'before' or 'after'")
+        insert_at = line - 1 if normalized_position == "before" else line
+        lines[insert_at:insert_at] = self._split_preserve_empty_lines(content)
+        resolved.write_text("\n".join(lines) + ("\n" if original_text.endswith("\n") else ""), encoding="utf-8")
+        self._refresh_indexes_for_path(resolved)
+        return {"path": self._to_relative_path(resolved), "inserted_line": line, "position": normalized_position}
+
+    def append_memory_content(self, path: str | Path, content: str) -> Dict[str, Any]:
+        """Append content to a memory file."""
+        resolved = self.resolve_memory_path(path, must_exist=True)
+        existing = resolved.read_text(encoding="utf-8")
+        separator = "" if not existing or existing.endswith("\n") else "\n"
+        resolved.write_text(f"{existing}{separator}{content}", encoding="utf-8")
+        self._refresh_indexes_for_path(resolved)
+        return {"path": self._to_relative_path(resolved), "appended_chars": len(content)}
+
+    def replace_memory_content(
+        self,
+        path: str | Path,
+        *,
+        new_text: str,
+        old_text: str = "",
+        pattern: str = "",
+        use_regex: bool = False,
+        count: Optional[int] = None,
+        expected_count: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Replace content by literal or regex match."""
+        resolved = self.resolve_memory_path(path, must_exist=True)
+        text = resolved.read_text(encoding="utf-8")
+        replace_count = 0
+        if use_regex:
+            if not pattern:
+                raise ValueError("pattern is required when use_regex=true")
+            compiled = re.compile(pattern)
+            max_count = 0 if count in (None, 0) else max(0, int(count))
+            updated_text, replace_count = compiled.subn(new_text, text, count=max_count)
+        else:
+            if not old_text:
+                raise ValueError("old_text is required for literal replace")
+            occurrences = text.count(old_text)
+            if occurrences <= 0:
+                raise L1MemoryConflictError(f"literal replace target not found: {old_text!r}")
+            max_count = occurrences if count in (None, 0) else max(0, int(count))
+            updated_text = text.replace(old_text, new_text, max_count)
+            replace_count = min(occurrences, max_count)
+
+        if expected_count is not None and replace_count != int(expected_count):
+            raise L1MemoryConflictError(
+                f"replace count mismatch: expected {int(expected_count)} got {replace_count}"
+            )
+
+        resolved.write_text(updated_text, encoding="utf-8")
+        self._refresh_indexes_for_path(resolved)
+        return {"path": self._to_relative_path(resolved), "replaced_count": replace_count}
+
+    def tag_memory_file(
+        self,
+        path: str | Path,
+        *,
+        tags: Sequence[str],
+        mode: str = "append",
+    ) -> Dict[str, Any]:
+        """Upsert a `tags:` metadata line in a memory markdown file."""
+        normalized_tags = self._normalize_tags(tags)
+        if not normalized_tags:
+            raise ValueError("tags is required")
+        resolved = self.resolve_memory_path(path, must_exist=True)
+        lines = resolved.read_text(encoding="utf-8").splitlines()
+        lines = self._upsert_tags_line(lines, normalized_tags, mode=mode)
+        resolved.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._refresh_indexes_for_path(resolved)
+        return {"path": self._to_relative_path(resolved), "tags": normalized_tags}
+
+    def link_memory_file(
+        self,
+        path: str | Path,
+        *,
+        target: str,
+        label: str = "",
+        section_title: str = "## 相关链接",
+    ) -> Dict[str, Any]:
+        """Append a markdown link to the given memory file."""
+        if not str(target or "").strip():
+            raise ValueError("target is required")
+        resolved = self.resolve_memory_path(path, must_exist=True)
+        text = resolved.read_text(encoding="utf-8")
+        link_label = str(label or "").strip() or Path(str(target)).stem or str(target)
+        link_line = f"- [{link_label}]({str(target).strip()})"
+        if link_line in text:
+            return {"path": self._to_relative_path(resolved), "link": link_line, "created": False}
+
+        lines = text.splitlines()
+        if section_title not in text:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append(section_title)
+            lines.append("")
+            lines.append(link_line)
+        else:
+            section_index = next((idx for idx, line in enumerate(lines) if line.strip() == section_title), len(lines) - 1)
+            insert_at = section_index + 1
+            while insert_at < len(lines) and lines[insert_at].strip().startswith("-"):
+                insert_at += 1
+            lines.insert(insert_at, link_line)
+        resolved.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._refresh_indexes_for_path(resolved)
+        return {"path": self._to_relative_path(resolved), "link": link_line, "created": True}
+
+    def deprecate_memory_file(
+        self,
+        path: str | Path,
+        *,
+        reason: str = "",
+        replacement_path: str = "",
+    ) -> Dict[str, Any]:
+        """Mark a memory file as deprecated without deleting it."""
+        resolved = self.resolve_memory_path(path, must_exist=True)
+        lines = resolved.read_text(encoding="utf-8").splitlines()
+        lines = self._upsert_tags_line(lines, ["deprecated"], mode="append")
+        lines = self._upsert_prefixed_line(lines, "deprecated:", "deprecated: true")
+        if str(reason or "").strip():
+            lines = self._upsert_prefixed_line(lines, "deprecated_reason:", f"deprecated_reason: {str(reason).strip()}")
+        if str(replacement_path or "").strip():
+            lines = self._upsert_prefixed_line(lines, "replacement:", f"replacement: {str(replacement_path).strip()}")
+        resolved.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._refresh_indexes_for_path(resolved)
+        return {
+            "path": self._to_relative_path(resolved),
+            "deprecated": True,
+            "replacement_path": str(replacement_path or "").strip(),
+        }
 
     # ── Working Memory (per-session) ───────────────────────────
 
@@ -346,6 +783,130 @@ class L1MemoryManager:
         filepath.write_text(new_content, encoding="utf-8")
         return filepath
 
+    def _iter_scope_dirs(self, scope: str, *, include_deprecated: bool) -> List[Path]:
+        normalized_scope = str(scope or "all").strip().lower()
+        if normalized_scope == "all":
+            dirs = [self._working_dir, self._episodic_dir, self._domain_dir]
+        elif normalized_scope == "working":
+            dirs = [self._working_dir]
+        elif normalized_scope == "episodic":
+            dirs = [self._episodic_dir]
+        elif normalized_scope == "domain":
+            dirs = [self._domain_dir]
+        elif normalized_scope in {"deprecated", "archive"}:
+            dirs = [self._deprecated_dir]
+        else:
+            raise ValueError(f"unsupported memory scope: {scope}")
+        if include_deprecated and self._deprecated_dir not in dirs:
+            dirs.append(self._deprecated_dir)
+        return dirs
+
+    def _refresh_indexes_for_path(self, path: Path) -> None:
+        rel = self._to_relative_path(path)
+        if rel.startswith("episodic/"):
+            self.rebuild_index()
+        elif rel.startswith("domain/"):
+            self.rebuild_domain_index()
+
+    def _to_relative_path(self, path: Path) -> str:
+        return path.resolve().relative_to(self._root.resolve()).as_posix()
+
+    @staticmethod
+    def _normalize_multiline_text(text: str) -> str:
+        return str(text or "").replace("\r\n", "\n")
+
+    @staticmethod
+    def _split_preserve_empty_lines(text: str) -> List[str]:
+        normalized = str(text or "").replace("\r\n", "\n")
+        if normalized == "":
+            return []
+        return normalized.split("\n")
+
+    @staticmethod
+    def _normalize_tags(tags: Sequence[str]) -> List[str]:
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for tag in tags:
+            value = str(tag or "").strip().lstrip("#").lower()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            normalized.append(value)
+        return normalized
+
+    @classmethod
+    def _upsert_tags_line(cls, lines: List[str], tags: Sequence[str], *, mode: str = "append") -> List[str]:
+        normalized_tags = cls._normalize_tags(tags)
+        current_idx = next((idx for idx, line in enumerate(lines) if line.startswith("tags:")), -1)
+        existing_tags = cls._extract_md_tags("\n".join(lines)) if current_idx >= 0 else []
+        if str(mode or "append").strip().lower() == "replace":
+            merged = normalized_tags
+        else:
+            merged = cls._normalize_tags([*existing_tags, *normalized_tags])
+        tag_line = "tags: " + " ".join(f"#{tag}" for tag in merged)
+        if current_idx >= 0:
+            lines[current_idx] = tag_line
+            return lines
+        insert_at = cls._metadata_insert_index(lines)
+        lines.insert(insert_at, tag_line)
+        return lines
+
+    @classmethod
+    def _upsert_prefixed_line(cls, lines: List[str], prefix: str, value: str) -> List[str]:
+        current_idx = next((idx for idx, line in enumerate(lines) if line.startswith(prefix)), -1)
+        if current_idx >= 0:
+            lines[current_idx] = value
+            return lines
+        insert_at = cls._metadata_insert_index(lines)
+        lines.insert(insert_at, value)
+        return lines
+
+    @staticmethod
+    def _metadata_insert_index(lines: Sequence[str]) -> int:
+        idx = 1 if lines and str(lines[0]).startswith("# ") else 0
+        metadata_prefixes = (
+            "tags:",
+            "task:",
+            "outcome:",
+            "date:",
+            "deprecated:",
+            "deprecated_reason:",
+            "replacement:",
+        )
+        while idx < len(lines) and str(lines[idx]).startswith(metadata_prefixes):
+            idx += 1
+        return idx
+
+    @staticmethod
+    def _ensure_unique_destination(path: Path) -> Path:
+        if not path.exists():
+            return path
+        counter = 2
+        candidate = path
+        while candidate.exists():
+            suffix = "".join(candidate.suffixes)
+            stem = candidate.name[: -len(suffix)] if suffix else candidate.name
+            candidate = candidate.with_name(f"{stem}_{counter}{suffix}")
+            counter += 1
+        return candidate
+
+    @staticmethod
+    def _build_snippet(text: str, query: str, *, radius: int = 80) -> str:
+        normalized_text = str(text or "")
+        lowered = normalized_text.lower()
+        lowered_query = str(query or "").lower()
+        idx = lowered.find(lowered_query)
+        if idx < 0:
+            return normalized_text[:160].strip()
+        start = max(0, idx - radius)
+        end = min(len(normalized_text), idx + len(query) + radius)
+        snippet = normalized_text[start:end].strip()
+        if start > 0:
+            snippet = "..." + snippet
+        if end < len(normalized_text):
+            snippet = snippet + "..."
+        return snippet
+
     def _update_episodic_index(
         self, filename: str, tags: Sequence[str], title: str
     ) -> None:
@@ -421,4 +982,4 @@ class L1MemoryManager:
         return []
 
 
-__all__ = ["L1MemoryManager"]
+__all__ = ["L1MemoryConflictError", "L1MemoryManager"]

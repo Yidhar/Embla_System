@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
 
 from agents.router_engine import RouterDecision
+from agents.memory.memory_tools import get_memory_tool_definitions, handle_memory_tool, is_memory_tool
 from agents.runtime.agent_session import AgentSessionStore, AgentStatus
 from agents.runtime.mailbox import AgentMailbox
 from agents.runtime.task_board import TaskBoardEngine, TaskStatus
@@ -43,6 +44,25 @@ _CORE_PARENT_TOOL_ALLOWLIST = {
 }
 
 _CORE_SPAWN_ROLE_ALLOWLIST = {"dev", "expert", "review"}
+_FAST_TRACK_BLOCKED_TOOLS = {
+    "run_command",
+    "exec_shell",
+    "run_cmd",
+    "os_bash",
+    "python_repl",
+    "write_config",
+    "delete_file",
+    "workspace_txn_apply",
+    "git_checkout_file",
+}
+_FAST_TRACK_PROTECTED_PREFIXES = (
+    "core/security/",
+    "system/dna/",
+)
+_FAST_TRACK_PROTECTED_EXACT = {
+    ".env",
+    "config.json",
+}
 
 
 def _trim_text(value: Any, *, limit: int = 220) -> str:
@@ -64,6 +84,106 @@ def _extract_report_text(report: Dict[str, Any]) -> str:
                 except Exception:
                     continue
     return ""
+
+
+def _normalize_fast_track_tool_name(raw: str) -> str:
+    text = str(raw or "").strip().lower()
+    aliases = {
+        "os_bash": "run_cmd",
+        "command": "run_cmd",
+        "cmd": "run_cmd",
+        "search": "search_keyword",
+        "grep": "search_keyword",
+        "file_ast": "file_ast_skeleton",
+    }
+    return aliases.get(text, text)
+
+
+def _normalize_fast_track_path(raw_path: str) -> str:
+    return str(raw_path or "").strip().replace("\\", "/").lstrip("./").lower()
+
+
+def _is_fast_track_protected_path(raw_path: str) -> bool:
+    normalized = _normalize_fast_track_path(raw_path)
+    if not normalized:
+        return False
+    if normalized in _FAST_TRACK_PROTECTED_EXACT:
+        return True
+    return any(normalized.startswith(prefix) for prefix in _FAST_TRACK_PROTECTED_PREFIXES)
+
+
+def _extract_tool_path(arguments: Dict[str, Any]) -> str:
+    if not isinstance(arguments, dict):
+        return ""
+    for key in ("path", "file_path", "target_path"):
+        value = arguments.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _build_fast_track_execution_receipt(
+    *,
+    pipeline_id: str,
+    goal: str,
+    reports: List[Dict[str, Any]],
+    task_completed: bool,
+    stop_reason: str,
+    fast_track_agent_id: str,
+    complexity_hint: str,
+    guard_blocked_count: int,
+    touched_files: List[str],
+) -> Dict[str, Any]:
+    summary_lines: List[str] = []
+    deliverables: List[str] = []
+    for report in reports:
+        status = str(report.get("status") or "unknown").strip()
+        agent_id = str(report.get("session_id") or report.get("agent_id") or "").strip() or "fast_track_dev"
+        report_text = _extract_report_text(report)
+        if report_text:
+            summary_lines.append(f"- [{status}] {agent_id}: {report_text}")
+            deliverables.append(report_text)
+        else:
+            summary_lines.append(f"- [{status}] {agent_id}: report_received")
+
+    if not summary_lines:
+        summary_lines.append("- [info] no fast-track report payload was produced")
+
+    if task_completed:
+        header = "Core fast-track execution completed."
+    else:
+        header = "Core fast-track execution did not reach completed state."
+
+    final_answer = "\n".join(
+        [
+            header,
+            f"Goal: {str(goal or '').strip()}",
+            f"Fast-track agent: {fast_track_agent_id or 'unknown'}",
+            f"Complexity hint: {complexity_hint}",
+            f"Guard blocked calls: {int(guard_blocked_count)}",
+            f"Touched files: {', '.join(touched_files) if touched_files else '(none)'}",
+            *summary_lines[:8],
+        ]
+    ).strip()
+
+    return {
+        "type": "execution_receipt",
+        "pipeline_id": pipeline_id,
+        "stop_reason": str(stop_reason or ""),
+        "agent_state": {
+            "task_completed": bool(task_completed),
+            "final_answer": final_answer,
+            "completion_summary": final_answer,
+            "deliverables": deliverables[:12],
+            "execution_mode": "fast_track",
+            "fast_track_agent_id": str(fast_track_agent_id or ""),
+            "goal_id": "",
+            "review_count": 0,
+            "review_verdicts": [],
+            "guard_blocked_count": int(guard_blocked_count),
+            "touched_files": list(touched_files),
+        },
+    }
 
 
 def _normalize_child_session_cleanup_mode(mode: str) -> str:
@@ -218,6 +338,9 @@ def _build_runtime_tool_definitions(tool_names: List[str]) -> List[Dict[str, Any
         if not tool_name or tool_name in seen:
             continue
         seen.add(tool_name)
+        if is_memory_tool(tool_name):
+            definitions.extend(get_memory_tool_definitions([tool_name]))
+            continue
         definitions.append(
             {
                 "name": tool_name,
@@ -503,6 +626,9 @@ async def run_multi_agent_pipeline(
         "model_tier": decision.selected_model_tier,
         "prompt_profile": decision.prompt_profile,
         "tool_profile": list(decision.tool_profile),
+        "complexity_hint": str(getattr(decision, "complexity_hint", "") or ""),
+        "core_route": str(getattr(decision, "core_route", "") or ""),
+        "fast_track_candidate": bool(getattr(decision, "fast_track_candidate", False)),
     }
 
     # ── Shell direct reply (no Core dispatch needed) ───────────
@@ -552,6 +678,8 @@ async def run_multi_agent_pipeline(
             "model_tier": decision.selected_model_tier,
             "selected_role": decision.selected_role,
             "injection_mode": decision.injection_mode,
+            "complexity_hint": str(getattr(decision, "complexity_hint", "") or ""),
+            "core_route": str(getattr(decision, "core_route", "") or ""),
         }
     else:
         dispatch = shell.dispatch_to_core(
@@ -565,18 +693,22 @@ async def run_multi_agent_pipeline(
         )
 
     core = CoreAgent(store=_store, mailbox=_mailbox, task_board_engine=task_board_engine)
-    decomposition = core.decompose_goal(dispatch)
+    core_route_plan = core.plan_execution_route(dispatch)
+    dispatch["complexity_hint"] = str(core_route_plan.get("complexity_hint") or "standard")
+    dispatch["core_route"] = str(core_route_plan.get("route") or "standard")
 
     yield {
-        "type": "core_decomposition",
+        "type": "core_route_selected",
         "pipeline_id": pipeline_id,
-        "goal_id": decomposition.get("goal_id"),
-        "expert_count": len(decomposition.get("expert_assignments", [])),
-        "subtask_count": decomposition.get("subtask_count", 0),
-        "model_tier": decomposition.get("model_tier"),
+        "core_route": str(core_route_plan.get("route") or "standard"),
+        "complexity_hint": str(core_route_plan.get("complexity_hint") or "standard"),
+        "fast_track_eligible": bool(core_route_plan.get("fast_track_eligible")),
+        "reason_codes": list(core_route_plan.get("reason_codes") or []),
+        "max_files": int(core_route_plan.get("max_files") or 1),
+        "max_changed_lines": int(core_route_plan.get("max_changed_lines") or 10),
     }
 
-    # ── Phase 3: Spawn Experts ─────────────────────────────────
+    # ── Phase 2A: Fast-Track direct execution ─────────────────
 
     resolved_core_session_id = str(core_session_id or "").strip() or str(session_id or "").strip()
     if not resolved_core_session_id:
@@ -587,6 +719,261 @@ async def run_multi_agent_pipeline(
         goal=message,
         pipeline_id=pipeline_id,
     )
+    runtime_child_execution_enabled = bool(
+        enable_child_execution and child_llm_call is not None and child_tool_executor is not None
+    )
+
+    if str(core_route_plan.get("route") or "") == "fast_track":
+        if not runtime_child_execution_enabled:
+            yield {
+                "type": "fast_track_fallback",
+                "pipeline_id": pipeline_id,
+                "reason": "fast_track_runtime_unavailable",
+                "target_route": "standard",
+            }
+        else:
+            fast_track_tools = list(core_route_plan.get("tool_subset") or [])
+            max_files = max(1, int(core_route_plan.get("max_files") or 1))
+            max_changed_lines = max(1, int(core_route_plan.get("max_changed_lines") or 10))
+
+            spawn_result = handle_parent_tool_call(
+                "spawn_child_agent",
+                {
+                    "role": "dev",
+                    "task_description": str(dispatch.get("goal") or message),
+                    "prompt_blocks": [],
+                    "tool_subset": fast_track_tools,
+                    "metadata": {
+                        "pipeline_id": str(pipeline_id),
+                        "execution_mode": "fast_track",
+                    },
+                },
+                parent_session_id=resolved_core_session_id,
+                store=_store,
+                mailbox=_mailbox,
+            )
+            fast_track_agent_id = str(spawn_result.get("agent_id") or "").strip()
+            if not fast_track_agent_id:
+                yield {
+                    "type": "fast_track_fallback",
+                    "pipeline_id": pipeline_id,
+                    "reason": "fast_track_spawn_failed",
+                    "target_route": "standard",
+                    "spawn_result": spawn_result,
+                }
+            else:
+                touched_files: set[str] = set()
+                guard_blocked_details: List[Dict[str, Any]] = []
+
+                async def _execute_fast_track_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+                    normalized_tool = _normalize_fast_track_tool_name(tool_name)
+                    safe_arguments = dict(arguments) if isinstance(arguments, dict) else {}
+                    if normalized_tool in _FAST_TRACK_BLOCKED_TOOLS:
+                        reason = "blocked_tool"
+                        guard_blocked_details.append({"tool_name": normalized_tool, "reason": reason})
+                        return {
+                            "error": "fast_track_guard_blocked",
+                            "reason": reason,
+                            "tool_name": normalized_tool,
+                        }
+                    if fast_track_tools and normalized_tool not in set(fast_track_tools):
+                        reason = "tool_not_in_fast_track_profile"
+                        guard_blocked_details.append({"tool_name": normalized_tool, "reason": reason})
+                        return {
+                            "error": "fast_track_guard_blocked",
+                            "reason": reason,
+                            "tool_name": normalized_tool,
+                        }
+
+                    candidate_path = _extract_tool_path(safe_arguments)
+                    normalized_path = _normalize_fast_track_path(candidate_path)
+                    mutating_tools = {"write_file", "workspace_txn_apply", "git_checkout_file"}
+                    if normalized_tool in mutating_tools and normalized_path:
+                        if _is_fast_track_protected_path(normalized_path):
+                            reason = "protected_path"
+                            guard_blocked_details.append(
+                                {"tool_name": normalized_tool, "reason": reason, "path": normalized_path}
+                            )
+                            return {
+                                "error": "fast_track_guard_blocked",
+                                "reason": reason,
+                                "tool_name": normalized_tool,
+                                "path": normalized_path,
+                            }
+                        touched_files.add(normalized_path)
+                        if len(touched_files) > max_files:
+                            reason = "multi_file_limit_exceeded"
+                            guard_blocked_details.append({"tool_name": normalized_tool, "reason": reason})
+                            return {
+                                "error": "fast_track_guard_blocked",
+                                "reason": reason,
+                                "tool_name": normalized_tool,
+                                "max_files": max_files,
+                            }
+
+                    if normalized_tool == "write_file":
+                        content = str(safe_arguments.get("content") or "")
+                        changed_lines = len(content.splitlines())
+                        if changed_lines > max_changed_lines:
+                            reason = "line_limit_exceeded"
+                            guard_blocked_details.append(
+                                {
+                                    "tool_name": normalized_tool,
+                                    "reason": reason,
+                                    "changed_lines": changed_lines,
+                                    "max_changed_lines": max_changed_lines,
+                                }
+                            )
+                            return {
+                                "error": "fast_track_guard_blocked",
+                                "reason": reason,
+                                "tool_name": normalized_tool,
+                                "changed_lines": changed_lines,
+                                "max_changed_lines": max_changed_lines,
+                            }
+
+                    return await child_tool_executor(normalized_tool, safe_arguments, fast_track_agent_id)
+
+                dev_agent = DevAgent(
+                    config=DevAgentConfig(
+                        prompt_blocks=[],
+                        tool_subset=fast_track_tools,
+                        prompts_root="system/prompts",
+                    ),
+                    session_id=fast_track_agent_id,
+                    store=_store,
+                    mailbox=_mailbox,
+                )
+                fast_track_loop_config = MiniLoopConfig(
+                    max_rounds=max(1, min(int(child_max_rounds), 6)),
+                    poll_parent_every_n=3,
+                )
+
+                yield {
+                    "type": "fast_track_start",
+                    "pipeline_id": pipeline_id,
+                    "core_session_id": resolved_core_session_id,
+                    "agent_id": fast_track_agent_id,
+                    "tool_subset": list(fast_track_tools),
+                    "max_files": max_files,
+                    "max_changed_lines": max_changed_lines,
+                }
+
+                async for mini_event in run_mini_loop(
+                    session_id=fast_track_agent_id,
+                    store=_store,
+                    mailbox=_mailbox,
+                    llm_call=child_llm_call,
+                    tool_executor=_execute_fast_track_tool,
+                    tool_definitions=_build_runtime_tool_definitions(fast_track_tools),
+                    system_prompt=dev_agent.build_system_prompt(),
+                    initial_task=str(dispatch.get("goal") or message),
+                    config=fast_track_loop_config,
+                ):
+                    yield {
+                        "type": "fast_track_event",
+                        "pipeline_id": pipeline_id,
+                        "core_session_id": resolved_core_session_id,
+                        "agent_id": fast_track_agent_id,
+                        "event": mini_event,
+                    }
+
+                fast_track_session = _store.get(fast_track_agent_id)
+                fast_track_status = (
+                    str(fast_track_session.status.value) if fast_track_session is not None else "missing"
+                )
+                fast_track_completed = fast_track_status == AgentStatus.WAITING.value
+                stop_reason = "submitted_completion" if fast_track_completed else "completion_not_submitted"
+                if guard_blocked_details and not fast_track_completed:
+                    stop_reason = "fast_track_guard_blocked"
+
+                reports = core.collect_reports(resolved_core_session_id, pipeline_id=pipeline_id)
+                receipt_event = _build_fast_track_execution_receipt(
+                    pipeline_id=pipeline_id,
+                    goal=str(dispatch.get("goal") or message),
+                    reports=reports,
+                    task_completed=fast_track_completed,
+                    stop_reason=stop_reason,
+                    fast_track_agent_id=fast_track_agent_id,
+                    complexity_hint=str(core_route_plan.get("complexity_hint") or "standard"),
+                    guard_blocked_count=len(guard_blocked_details),
+                    touched_files=sorted(touched_files),
+                )
+
+                yield {
+                    "type": "tool_stage",
+                    "pipeline_id": pipeline_id,
+                    "phase": "verify",
+                    "status": "success" if fast_track_completed else "warning",
+                    "reason": stop_reason,
+                    "decision": "stop" if fast_track_completed else "continue",
+                    "round": 1,
+                    "details": {
+                        "task_completed": bool(fast_track_completed),
+                        "submit_result_called": bool(fast_track_completed),
+                        "submit_result_round": 1 if fast_track_completed else 0,
+                        "execution_mode": "fast_track",
+                        "guard_blocked_count": len(guard_blocked_details),
+                    },
+                }
+                yield receipt_event
+                yield {
+                    "type": "content",
+                    "pipeline_id": pipeline_id,
+                    "source": "execution_receipt",
+                    "text": str(receipt_event.get("agent_state", {}).get("final_answer") or ""),
+                }
+                yield {
+                    "type": "fast_track_summary",
+                    "pipeline_id": pipeline_id,
+                    "core_session_id": resolved_core_session_id,
+                    "agent_id": fast_track_agent_id,
+                    "status": fast_track_status,
+                    "guard_blocked_count": len(guard_blocked_details),
+                    "guard_blocked_details": guard_blocked_details[:10],
+                    "touched_files": sorted(touched_files),
+                }
+
+                cleanup_summary = _apply_child_session_cleanup(
+                    store=_store,
+                    mailbox=_mailbox,
+                    core_session_id=resolved_core_session_id,
+                    pipeline_id=pipeline_id,
+                    mode=child_session_cleanup_mode,
+                    ttl_seconds=int(child_session_cleanup_ttl_seconds),
+                )
+                yield {
+                    "type": "pipeline_cleanup",
+                    "pipeline_id": pipeline_id,
+                    "cleanup": cleanup_summary,
+                }
+                yield {
+                    "type": "pipeline_end",
+                    "pipeline_id": pipeline_id,
+                    "reason": "completed" if fast_track_completed else "delegated_waiting_child_completion",
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                    "expert_count": 0,
+                    "core_session_id": resolved_core_session_id,
+                    "child_session_cleanup": cleanup_summary,
+                    "execution_mode": "fast_track",
+                }
+                return
+
+    # ── Phase 2B: Standard route (decompose + experts) ────────
+
+    decomposition = core.decompose_goal(dispatch)
+
+    yield {
+        "type": "core_decomposition",
+        "pipeline_id": pipeline_id,
+        "goal_id": decomposition.get("goal_id"),
+        "expert_count": len(decomposition.get("expert_assignments", [])),
+        "subtask_count": decomposition.get("subtask_count", 0),
+        "model_tier": decomposition.get("model_tier"),
+        "core_route": "standard",
+    }
+
+    # ── Phase 3: Spawn Experts ─────────────────────────────────
 
     expert_results = core.spawn_experts(
         decomposition,
@@ -688,6 +1075,8 @@ async def run_multi_agent_pipeline(
                             "tool_name": normalized_tool,
                         }
                     safe_arguments = arguments if isinstance(arguments, dict) else {}
+                    if is_memory_tool(normalized_tool):
+                        return handle_memory_tool(normalized_tool, safe_arguments)
                     return await child_tool_executor(normalized_tool, safe_arguments, _dev_session_id)
 
                 yield {
@@ -1163,6 +1552,8 @@ async def run_multi_agent_pipeline(
                         "tool_name": normalized_tool,
                     }
                 safe_arguments = arguments if isinstance(arguments, dict) else {}
+                if is_memory_tool(normalized_tool):
+                    return handle_memory_tool(normalized_tool, safe_arguments)
                 return await child_tool_executor(normalized_tool, safe_arguments, _dev_session_id)
 
             yield {

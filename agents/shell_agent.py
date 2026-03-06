@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from agents.prompt_engine import PromptAssembler
 from agents.router_engine import RouterDecision, RouterRequest, TaskRouterEngine
-from agents.shell_tools import get_shell_tool_definitions, handle_shell_tool
+from agents.shell_tools import get_shell_tool_definitions, handle_shell_tool, is_shell_tool_supported
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +24,26 @@ logger = logging.getLogger(__name__)
 # ── Shell Tool Definitions ─────────────────────────────────────
 
 SHELL_READONLY_TOOLS = [
-    "read_file",
+    "memory_read",
+    "memory_list",
+    "memory_grep",
+    "memory_search",
     "get_system_status",
-    "search_memory",
     "list_tasks",
     "search_web",
 ]
+HIGH_RISK_LEVELS = {"deploy", "secrets", "self_modify"}
+COMPLEXITY_HINT_VALUES = {"trivial", "standard", "complex"}
+COMPLEXITY_HINT_FROM_COMPLEXITY = {
+    "low": "trivial",
+    "trivial": "trivial",
+    "small": "trivial",
+    "medium": "standard",
+    "high": "standard",
+    "normal": "standard",
+    "epic": "complex",
+    "complex": "complex",
+}
 
 
 def get_dispatch_to_core_definition() -> Dict[str, Any]:
@@ -71,6 +85,30 @@ def get_dispatch_to_core_definition() -> Dict[str, Any]:
                     "type": "string",
                     "enum": ["low", "normal", "high"],
                     "description": "Task priority.",
+                },
+                "complexity_hint": {
+                    "type": "string",
+                    "enum": ["trivial", "standard", "complex"],
+                    "description": (
+                        "Core execution route hint. "
+                        "Use trivial for small single-file edits, standard for normal tasks, "
+                        "complex for cross-domain or multi-agent tasks."
+                    ),
+                },
+                "target_files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of expected target files for this task.",
+                },
+                "estimated_changed_lines": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Optional estimate of changed lines.",
+                },
+                "requested_tools": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional tools expected to be used during execution.",
                 },
             },
             "required": ["goal"],
@@ -116,7 +154,7 @@ class ShellAgent:
     def get_tool_definitions(self) -> List[Dict[str, Any]]:
         """Get all tool definitions for the Shell agent.
 
-        Returns 5 read-only tool schemas + dispatch_to_core routing tool.
+        Returns canonical read-only tool schemas + dispatch_to_core routing tool.
         """
         return get_shell_tool_definitions() + [get_dispatch_to_core_definition()]
 
@@ -135,7 +173,7 @@ class ShellAgent:
         if tool_name == "dispatch_to_core":
             return self.dispatch_to_core(arguments, session_id=session_id)
 
-        if tool_name in self._config.readonly_tools:
+        if tool_name in self._config.readonly_tools or is_shell_tool_supported(tool_name):
             return handle_shell_tool(tool_name, arguments)
 
         return {"error": f"Unknown tool: {tool_name}", "status": "error"}
@@ -147,6 +185,7 @@ class ShellAgent:
         session_id: str = "",
         risk_level: str = "",
         complexity: str = "medium",
+        complexity_hint: str = "",
         requested_role: str = "",
     ) -> RouterDecision:
         """Route a user message through TaskRouterEngine.
@@ -158,6 +197,10 @@ class ShellAgent:
             task_id=f"chat_{int(time.time() * 1000)}",
             description=message,
             estimated_complexity=complexity,
+            complexity_hint=self._normalize_complexity_hint(
+                complexity_hint,
+                fallback_complexity=complexity,
+            ),
             requested_role=requested_role,
             risk_level=risk_level or "read_only",
             trace_id=f"shell_{uuid.uuid4().hex[:12]}",
@@ -184,12 +227,33 @@ class ShellAgent:
         target_repo = str(arguments.get("target_repo", "") or "").strip().lower()
         if target_repo not in {"self", "external"}:
             target_repo = "external"
+        complexity_hint = self._infer_dispatch_complexity_hint(arguments, goal=goal, risk_level=risk_level)
         decision = self.route(
             goal,
             session_id=session_id,
             risk_level=risk_level,
-            complexity="high",
+            complexity=self._complexity_level_from_hint(complexity_hint),
+            complexity_hint=complexity_hint,
         )
+        target_files_raw = arguments.get("target_files")
+        target_files: List[str] = []
+        if isinstance(target_files_raw, list):
+            for item in target_files_raw:
+                text = str(item or "").strip()
+                if text:
+                    target_files.append(text)
+        estimated_changed_lines = arguments.get("estimated_changed_lines")
+        try:
+            estimated_changed_lines_int = max(0, int(estimated_changed_lines))
+        except Exception:
+            estimated_changed_lines_int = 0
+        requested_tools_raw = arguments.get("requested_tools")
+        requested_tools: List[str] = []
+        if isinstance(requested_tools_raw, list):
+            for item in requested_tools_raw:
+                text = str(item or "").strip()
+                if text:
+                    requested_tools.append(text)
 
         return {
             "dispatched": True,
@@ -199,6 +263,11 @@ class ShellAgent:
             "context_summary": arguments.get("context_summary", ""),
             "relevant_memories": arguments.get("relevant_memories", []),
             "priority": arguments.get("priority", "normal"),
+            "complexity_hint": complexity_hint,
+            "target_files": target_files,
+            "estimated_changed_lines": estimated_changed_lines_int,
+            "requested_tools": requested_tools,
+            "fast_track_candidate": bool(getattr(decision, "core_route", "") == "fast_track"),
             # RouterDecision fields for downstream agents
             "router_decision": decision.to_dict(),
             "delegation_intent": decision.delegation_intent,
@@ -223,7 +292,7 @@ class ShellAgent:
         """Build the complete system prompt for the Shell agent using PromptAssembler."""
         behavior_rules = (
             "\n## 行为准则\n"
-            "- 你可以使用只读工具获取信息：read_file, get_system_status, search_memory, list_tasks, search_web\n"
+            "- 你可以使用只读工具获取信息：memory_read, memory_list, memory_grep, memory_search, get_system_status, list_tasks, search_web\n"
             "- 有任何需要执行的任务，使用 dispatch_to_core 工具转交给 Core Agent\n"
             "- 你**绝对不能**修改任何文件或系统状态\n"
         )
@@ -249,6 +318,84 @@ class ShellAgent:
         else:
             self._persona_prompt = ""
             logger.warning("Shell persona DNA not found at %s — using empty persona", path)
+
+    @staticmethod
+    def _normalize_complexity_hint(raw_hint: str, *, fallback_complexity: str = "") -> str:
+        normalized = str(raw_hint or "").strip().lower()
+        if normalized in COMPLEXITY_HINT_VALUES:
+            return normalized
+
+        fallback = str(fallback_complexity or "").strip().lower()
+        mapped = COMPLEXITY_HINT_FROM_COMPLEXITY.get(fallback, "standard")
+        if mapped in COMPLEXITY_HINT_VALUES:
+            return mapped
+        return "standard"
+
+    @staticmethod
+    def _complexity_level_from_hint(hint: str) -> str:
+        normalized = str(hint or "").strip().lower()
+        if normalized == "trivial":
+            return "low"
+        if normalized == "complex":
+            return "epic"
+        return "high"
+
+    def _infer_dispatch_complexity_hint(self, arguments: Dict[str, Any], *, goal: str, risk_level: str) -> str:
+        explicit_hint = arguments.get("complexity_hint")
+        if isinstance(explicit_hint, str):
+            normalized = self._normalize_complexity_hint(explicit_hint)
+            if normalized in COMPLEXITY_HINT_VALUES:
+                return normalized
+
+        normalized_risk = str(risk_level or "").strip().lower()
+        if normalized_risk in HIGH_RISK_LEVELS:
+            return "complex"
+
+        target_files_raw = arguments.get("target_files")
+        target_files: List[str] = []
+        if isinstance(target_files_raw, list):
+            for item in target_files_raw:
+                text = str(item or "").strip()
+                if text:
+                    target_files.append(text)
+        estimated_changed_lines = arguments.get("estimated_changed_lines")
+        try:
+            changed_lines = max(0, int(estimated_changed_lines))
+        except Exception:
+            changed_lines = 0
+        if target_files and len(set(target_files)) == 1 and 0 < changed_lines <= 10:
+            return "trivial"
+        if target_files and len(set(target_files)) > 1:
+            return "complex"
+        if changed_lines > 10:
+            return "complex"
+
+        goal_text = str(goal or "").strip().lower()
+        trivial_markers = (
+            "typo",
+            "拼写",
+            "单行",
+            "single line",
+            "小修",
+            "small fix",
+            "formatting",
+            "格式",
+        )
+        complex_markers = (
+            "跨模块",
+            "cross module",
+            "multi file",
+            "多文件",
+            "重构",
+            "architecture",
+            "migrate",
+            "并行",
+        )
+        if any(marker in goal_text for marker in complex_markers):
+            return "complex"
+        if len(goal_text) <= 120 and any(marker in goal_text for marker in trivial_markers):
+            return "trivial"
+        return "standard"
 
 
 __all__ = ["ShellAgent", "ShellAgentConfig"]

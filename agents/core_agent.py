@@ -14,8 +14,7 @@ from typing import Any, Dict, List, Optional
 from agents.contract_runtime import CoreExecutionContractInput
 from agents.meta_agent import Goal, MetaAgentRuntime, SubTask
 from agents.prompt_engine import PromptAssembler
-from agents.router_engine import RouterDecision
-from agents.runtime.agent_session import AgentSessionStore, AgentStatus
+from agents.runtime.agent_session import AgentSessionStore
 from agents.runtime.mailbox import AgentMailbox
 from agents.runtime.parent_tools import handle_parent_tool_call
 from agents.runtime.task_board import TaskBoardEngine
@@ -43,6 +42,37 @@ PROMPT_PROFILE_MAP = {
     "explicit_role_delegate": "agents/outer/explicit_role_delegate.md",
     "outer_general": "agents/core_exec/core_exec_base.md",
 }
+FAST_TRACK_BLOCKED_TOOLS = {
+    "run_command",
+    "exec_shell",
+    "run_cmd",
+    "os_bash",
+    "python_repl",
+    "write_config",
+    "delete_file",
+}
+FAST_TRACK_ALLOWED_TOOLS = {
+    "read_file",
+    "write_file",
+    "search_keyword",
+    "list_files",
+    "file_ast_skeleton",
+    "file_ast_chunk_read",
+    "git_status",
+    "git_diff",
+    "artifact_reader",
+}
+FAST_TRACK_PROTECTED_PREFIXES = (
+    "core/security/",
+    "system/dna/",
+)
+FAST_TRACK_PROTECTED_EXACT = {
+    ".env",
+    "config.json",
+}
+FAST_TRACK_MAX_FILES = 1
+FAST_TRACK_MAX_CHANGED_LINES = 10
+FAST_TRACK_HIGH_RISK_LEVELS = {"deploy", "secrets", "self_modify"}
 
 
 @dataclass
@@ -98,6 +128,12 @@ class CoreAgent:
         prompt_profile = dispatch.get("prompt_profile", "")
         model_tier = dispatch.get("model_tier", "primary")
         delegation_intent = dispatch.get("delegation_intent", "core_execution")
+        complexity_hint = self._normalize_complexity_hint(
+            dispatch.get("complexity_hint", router_decision.get("complexity_hint", "standard"))
+        )
+        core_route = str(
+            dispatch.get("core_route", router_decision.get("core_route", "standard"))
+        ).strip() or "standard"
 
         goal = Goal(
             goal_id=f"g-{id(goal_desc) % 100000:05d}",
@@ -122,9 +158,60 @@ class CoreAgent:
             "model_tier": model_tier,
             "prompt_profile": prompt_profile,
             "router_tool_profile": tool_profile,
+            "complexity_hint": complexity_hint,
+            "core_route": core_route,
             "router_decision": router_decision,
             "expert_assignments": expert_assignments,
             "subtask_count": len(subtasks),
+        }
+
+    def plan_execution_route(self, dispatch: Dict[str, Any]) -> Dict[str, Any]:
+        """Select Core execution route: fast_track or standard.
+
+        Fast-Track is enabled only when all hard constraints pass.
+        """
+        router_decision = dispatch.get("router_decision") if isinstance(dispatch.get("router_decision"), dict) else {}
+        goal_text = str(dispatch.get("goal") or "").strip()
+        risk_level = str(dispatch.get("risk_level") or router_decision.get("risk_level") or "").strip().lower()
+        complexity_hint = self._normalize_complexity_hint(
+            dispatch.get("complexity_hint", router_decision.get("complexity_hint", "standard"))
+        )
+
+        target_files = self._normalize_string_list(dispatch.get("target_files"))
+        estimated_changed_lines = self._safe_non_negative_int(dispatch.get("estimated_changed_lines"))
+        requested_tools = self._normalize_string_list(dispatch.get("requested_tools"))
+        router_tools = self._normalize_string_list(dispatch.get("tool_profile"))
+
+        reason_codes: List[str] = []
+        if complexity_hint != "trivial":
+            reason_codes.append("FAST_TRACK_HINT_NOT_TRIVIAL")
+        if risk_level in FAST_TRACK_HIGH_RISK_LEVELS:
+            reason_codes.append("FAST_TRACK_HIGH_RISK")
+        if target_files and len(set(target_files)) > FAST_TRACK_MAX_FILES:
+            reason_codes.append("FAST_TRACK_MULTI_FILE_SCOPE")
+        if estimated_changed_lines > FAST_TRACK_MAX_CHANGED_LINES:
+            reason_codes.append("FAST_TRACK_LINE_LIMIT_EXCEEDED")
+        if any(self._is_protected_path(path) for path in target_files):
+            reason_codes.append("FAST_TRACK_PROTECTED_PATH")
+        if self._looks_like_config_change(goal_text):
+            reason_codes.append("FAST_TRACK_CONFIG_CHANGE")
+        if any(self._normalize_tool_name(tool) in FAST_TRACK_BLOCKED_TOOLS for tool in requested_tools):
+            reason_codes.append("FAST_TRACK_BLOCKED_TOOL_REQUEST")
+
+        fast_track_eligible = len(reason_codes) == 0
+        selected_route = "fast_track" if fast_track_eligible else "standard"
+        fast_track_tools = self._build_fast_track_tool_subset(router_tools)
+        return {
+            "route": selected_route,
+            "complexity_hint": complexity_hint,
+            "fast_track_eligible": bool(fast_track_eligible),
+            "reason_codes": reason_codes,
+            "max_files": int(FAST_TRACK_MAX_FILES),
+            "max_changed_lines": int(FAST_TRACK_MAX_CHANGED_LINES),
+            "protected_paths": list(FAST_TRACK_PROTECTED_PREFIXES) + sorted(FAST_TRACK_PROTECTED_EXACT),
+            "blocked_tools": sorted(FAST_TRACK_BLOCKED_TOOLS),
+            "tool_subset": fast_track_tools,
+            "risk_level": risk_level,
         }
 
     def build_contract_input(self, dispatch: Dict[str, Any], *, session_id: str = "") -> CoreExecutionContractInput:
@@ -304,6 +391,89 @@ class CoreAgent:
         else:
             self._values_prompt = ""
             logger.warning("Core Values DNA not found at %s", path)
+
+    @staticmethod
+    def _normalize_string_list(value: Any) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        rows: List[str] = []
+        for item in value:
+            text = str(item or "").strip()
+            if text:
+                rows.append(text)
+        return rows
+
+    @staticmethod
+    def _safe_non_negative_int(value: Any) -> int:
+        try:
+            return max(0, int(value))
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _normalize_tool_name(raw: str) -> str:
+        text = str(raw or "").strip().lower()
+        aliases = {
+            "os_bash": "run_cmd",
+            "command": "run_cmd",
+            "cmd": "run_cmd",
+            "search": "search_keyword",
+            "grep": "search_keyword",
+            "file_ast": "file_ast_skeleton",
+        }
+        return aliases.get(text, text)
+
+    @staticmethod
+    def _normalize_complexity_hint(raw: Any) -> str:
+        text = str(raw or "").strip().lower()
+        mapping = {
+            "trivial": "trivial",
+            "low": "trivial",
+            "simple": "trivial",
+            "small": "trivial",
+            "standard": "standard",
+            "normal": "standard",
+            "medium": "standard",
+            "high": "complex",
+            "complex": "complex",
+            "epic": "complex",
+        }
+        return mapping.get(text, "standard")
+
+    def _build_fast_track_tool_subset(self, router_tools: List[str]) -> List[str]:
+        normalized_router = [self._normalize_tool_name(tool) for tool in router_tools]
+        subset: List[str] = []
+        for tool in normalized_router:
+            if tool in FAST_TRACK_ALLOWED_TOOLS and tool not in subset:
+                subset.append(tool)
+        for tool in sorted(FAST_TRACK_ALLOWED_TOOLS):
+            if tool not in subset:
+                subset.append(tool)
+        return subset
+
+    @staticmethod
+    def _looks_like_config_change(goal: str) -> bool:
+        text = str(goal or "").strip().lower()
+        markers = (
+            ".env",
+            "config.json",
+            "write_config",
+            "delete_file",
+            "配置",
+            "config",
+            "setting",
+            "settings",
+        )
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _is_protected_path(path: str) -> bool:
+        normalized = str(path or "").strip().replace("\\", "/").lstrip("./").lower()
+        if not normalized:
+            return False
+        if normalized in FAST_TRACK_PROTECTED_EXACT:
+            return True
+        return any(normalized.startswith(prefix) for prefix in FAST_TRACK_PROTECTED_PREFIXES)
 
 
 __all__ = ["CoreAgent", "CoreAgentConfig"]

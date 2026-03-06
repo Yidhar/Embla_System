@@ -15,16 +15,20 @@ from scripts.run_ws28_background_analyzer_parity_ws28_004 import (
 )
 from scripts.run_ws28_dna_spec_gate_ws28_005 import run_ws28_dna_spec_gate_ws28_005
 from scripts.run_ws28_prompt_acl_guard_ws28_003 import run_ws28_prompt_acl_guard_ws28_003
-from scripts.run_ws28_outer_core_path_gate_ws28_007 import run_ws28_outer_core_path_gate_ws28_007
+from scripts.archived.run_ws28_outer_core_path_gate_ws28_007 import (
+    run_ws28_outer_core_path_gate_ws28_007,
+)
 from scripts.run_ws28_prompt_slice_compose_ws28_002 import run_ws28_prompt_slice_compose_ws28_002
 from scripts.run_ws28_router_prompt_profile_ws28_001 import run_ws28_router_prompt_profile_ws28_001
 from scripts.run_ws28_core_contract_input_ws28_008 import run_ws28_core_contract_input_ws28_008
-from scripts.run_ws28_path_b_clarify_budget_ws28_009 import run_ws28_path_b_clarify_budget_ws28_009
+from scripts.archived.run_ws28_path_b_clarify_budget_ws28_009 import (
+    run_ws28_path_b_clarify_budget_ws28_009,
+)
 from scripts.run_ws28_outer_core_session_bridge_ws28_010 import run_ws28_outer_core_session_bridge_ws28_010
 from scripts.run_ws28_chat_route_bridge_observability_ws28_011 import (
     run_ws28_chat_route_bridge_observability_ws28_011,
 )
-from scripts.run_ws28_route_quality_guard_enforcement_ws28_012 import (
+from scripts.archived.run_ws28_route_quality_guard_enforcement_ws28_012 import (
     run_ws28_route_quality_guard_enforcement_ws28_012,
 )
 

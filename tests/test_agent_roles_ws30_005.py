@@ -46,7 +46,8 @@ class TestShellAgent:
         from agents.shell_agent import ShellAgent
         shell = ShellAgent()
         assert "dispatch_to_core" in shell.tool_names
-        assert "read_file" in shell.tool_names
+        assert "memory_read" in shell.tool_names
+        assert "memory_search" in shell.tool_names
 
     def test_shell_tool_definitions(self):
         from agents.shell_agent import ShellAgent
@@ -165,6 +166,45 @@ class TestCoreAgent:
         config = CoreAgentConfig(values_dna_path=str(values_path))
         core = CoreAgent(config=config, store=store, mailbox=mailbox)
         assert "self-improvement" in core.values_prompt
+
+    def test_core_plan_execution_route_accepts_fast_track_for_trivial_single_file(self, store, mailbox):
+        from agents.core_agent import CoreAgent
+
+        core = CoreAgent(store=store, mailbox=mailbox)
+        plan = core.plan_execution_route(
+            {
+                "goal": "修复 parser.py 的一个拼写错误",
+                "complexity_hint": "trivial",
+                "risk_level": "write_repo",
+                "target_files": ["parser.py"],
+                "estimated_changed_lines": 3,
+                "tool_profile": ["read_file", "write_file"],
+            }
+        )
+
+        assert plan["route"] == "fast_track"
+        assert plan["fast_track_eligible"] is True
+        assert plan["reason_codes"] == []
+        assert "write_file" in plan["tool_subset"]
+
+    def test_core_plan_execution_route_rejects_fast_track_for_protected_config(self, store, mailbox):
+        from agents.core_agent import CoreAgent
+
+        core = CoreAgent(store=store, mailbox=mailbox)
+        plan = core.plan_execution_route(
+            {
+                "goal": "快速修改 config.json 并重写配置",
+                "complexity_hint": "trivial",
+                "risk_level": "write_repo",
+                "target_files": ["config.json"],
+                "estimated_changed_lines": 2,
+                "tool_profile": ["read_file", "write_file"],
+            }
+        )
+
+        assert plan["route"] == "standard"
+        assert plan["fast_track_eligible"] is False
+        assert "FAST_TRACK_PROTECTED_PATH" in plan["reason_codes"]
 
 
 # ── Expert Agent Tests ─────────────────────────────────────────
@@ -417,6 +457,69 @@ class TestPipeline:
 
         end_event = next(e for e in events if e["type"] == "pipeline_end")
         assert end_event["reason"] == "shell_direct_reply"
+
+    def test_pipeline_fast_track_route_skips_expert_path_when_runtime_available(self, store, mailbox):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, tools, model
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "ft_call_1",
+                        "name": "report_to_parent",
+                        "arguments": {
+                            "type": "completed",
+                            "content": "已完成单文件小修复",
+                        },
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(self._collect_events(
+            run_multi_agent_pipeline(
+                message="请修复 parser.py 的一个 typo，只改一行",
+                session_id="test-session-fast-track",
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                store=store,
+                mailbox=mailbox,
+            )
+        ))
+
+        event_types = [e.get("type") for e in events]
+        assert "core_route_selected" in event_types
+        core_route_event = next(e for e in events if e["type"] == "core_route_selected")
+        assert core_route_event["core_route"] == "fast_track"
+
+        assert "fast_track_start" in event_types
+        assert "fast_track_event" in event_types
+        assert "fast_track_summary" in event_types
+        assert "core_decomposition" not in event_types
+        assert "expert_spawned" not in event_types
+
+        stage_event = next(e for e in events if e["type"] == "tool_stage")
+        assert stage_event["reason"] == "submitted_completion"
+        assert stage_event["details"]["execution_mode"] == "fast_track"
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        assert receipt_event.get("agent_state", {}).get("execution_mode") == "fast_track"
+        assert receipt_event.get("agent_state", {}).get("task_completed") is True
+
+        end_event = next(e for e in events if e["type"] == "pipeline_end")
+        assert end_event["reason"] == "completed"
+        assert end_event.get("execution_mode") == "fast_track"
 
     def test_pipeline_experts_spawned(self, store, mailbox, task_board_engine):
         from agents.pipeline import run_multi_agent_pipeline

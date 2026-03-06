@@ -4,7 +4,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from scripts.run_ws28_route_quality_guard_enforcement_ws28_012 import main
+from scripts.archived.run_ws28_route_quality_guard_enforcement_ws28_012 import main
 
 
 def _make_case_root(prefix: str) -> Path:
@@ -24,7 +24,7 @@ def test_run_ws28_route_quality_guard_enforcement_cli_main_smoke(monkeypatch) ->
         monkeypatch.setattr(
             "sys.argv",
             [
-                "run_ws28_route_quality_guard_enforcement_ws28_012.py",
+                "archived/run_ws28_route_quality_guard_enforcement_ws28_012.py",
                 "--repo-root",
                 ".",
                 "--output",
