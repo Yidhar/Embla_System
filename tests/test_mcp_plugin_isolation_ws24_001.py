@@ -53,9 +53,9 @@ def _sign_manifest(payload: dict, *, key_id: str, secret: str) -> dict:
 
 
 def _set_plugin_trust_env(monkeypatch, *, allowlist: list[str], key_id: str, secret: str, scopes: list[str]) -> None:
-    monkeypatch.setenv("NAGA_PLUGIN_ALLOWLIST", ",".join(allowlist))
-    monkeypatch.setenv("NAGA_PLUGIN_SIGNING_KEYS", json.dumps({key_id: secret}, ensure_ascii=False))
-    monkeypatch.setenv("NAGA_PLUGIN_ALLOWED_SCOPES", ",".join(scopes))
+    monkeypatch.setenv("EMBLA_PLUGIN_ALLOWLIST", ",".join(allowlist))
+    monkeypatch.setenv("EMBLA_PLUGIN_SIGNING_KEYS", json.dumps({key_id: secret}, ensure_ascii=False))
+    monkeypatch.setenv("EMBLA_PLUGIN_ALLOWED_SCOPES", ",".join(scopes))
 
 
 def test_scan_registers_plugin_manifest_as_isolated_worker(monkeypatch) -> None:
@@ -110,7 +110,7 @@ class EchoPluginAgent:
             secret="ut-secret",
             scopes=["read_workspace", "tool_invoke"],
         )
-        monkeypatch.setenv("NAGA_PLUGIN_MANIFEST_DIRS", str(plugin_root))
+        monkeypatch.setenv("EMBLA_PLUGIN_MANIFEST_DIRS", str(plugin_root))
         registered = scan_and_register_mcp_agents(mcp_dir=str(case_root / "empty_mcp_root"))
 
         assert "isolated_echo_plugin" in registered
@@ -160,7 +160,7 @@ class BuiltinAgent:
             },
         )
 
-        monkeypatch.setenv("NAGA_PLUGIN_MANIFEST_DIRS", str(case_root / "missing_plugins"))
+        monkeypatch.setenv("EMBLA_PLUGIN_MANIFEST_DIRS", str(case_root / "missing_plugins"))
         sys.path.insert(0, str(builtin_root))
         try:
             registered = scan_and_register_mcp_agents(mcp_dir=str(builtin_root))
@@ -221,7 +221,7 @@ class SimplePluginAgent:
             secret="ut-secret",
             scopes=["read_workspace"],
         )
-        monkeypatch.setenv("NAGA_PLUGIN_MANIFEST_DIRS", str(plugin_root))
+        monkeypatch.setenv("EMBLA_PLUGIN_MANIFEST_DIRS", str(plugin_root))
         scan_and_register_mcp_agents(mcp_dir=str(case_root / "empty_mcp_root"))
         manager = MCPManager()
         filtered = manager.get_available_services_filtered()
@@ -267,7 +267,7 @@ class UnsignedPlugin:
             secret="ut-secret",
             scopes=["read_workspace"],
         )
-        monkeypatch.setenv("NAGA_PLUGIN_MANIFEST_DIRS", str(plugin_root))
+        monkeypatch.setenv("EMBLA_PLUGIN_MANIFEST_DIRS", str(plugin_root))
 
         registered = scan_and_register_mcp_agents(mcp_dir=str(case_root / "empty_mcp_root"))
         assert "unsigned_plugin" not in registered
@@ -313,7 +313,7 @@ class BadScopePlugin:
             secret="ut-secret",
             scopes=["read_workspace", "tool_invoke"],
         )
-        monkeypatch.setenv("NAGA_PLUGIN_MANIFEST_DIRS", str(plugin_root))
+        monkeypatch.setenv("EMBLA_PLUGIN_MANIFEST_DIRS", str(plugin_root))
 
         registered = scan_and_register_mcp_agents(mcp_dir=str(case_root / "empty_mcp_root"))
         assert "bad_scope_plugin" not in registered
@@ -368,7 +368,7 @@ class SlowPluginAgent:
             secret="ut-secret",
             scopes=["read_workspace", "tool_invoke"],
         )
-        monkeypatch.setenv("NAGA_PLUGIN_MANIFEST_DIRS", str(plugin_root))
+        monkeypatch.setenv("EMBLA_PLUGIN_MANIFEST_DIRS", str(plugin_root))
         scan_and_register_mcp_agents(mcp_dir=str(case_root / "empty_mcp_root"))
 
         proxy = MCP_REGISTRY["slow_isolated_plugin"]
@@ -431,7 +431,7 @@ class OutputPluginAgent:
             secret="ut-secret",
             scopes=["read_workspace"],
         )
-        monkeypatch.setenv("NAGA_PLUGIN_MANIFEST_DIRS", str(plugin_root))
+        monkeypatch.setenv("EMBLA_PLUGIN_MANIFEST_DIRS", str(plugin_root))
         scan_and_register_mcp_agents(mcp_dir=str(case_root / "empty_mcp_root"))
 
         proxy = MCP_REGISTRY["output_budget_plugin"]

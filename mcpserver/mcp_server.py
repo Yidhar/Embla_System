@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
     logger.info("[MCP Server] 已关闭")
 
 
-app = FastAPI(title="NagaAgent MCP Server", lifespan=lifespan)
+app = FastAPI(title="Embla System MCP Server", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

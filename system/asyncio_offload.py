@@ -93,7 +93,7 @@ def _fallback_executor() -> concurrent.futures.ThreadPoolExecutor:
             max_workers = min(32, (os.cpu_count() or 1) + 4)
             _FALLBACK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
                 max_workers=max_workers,
-                thread_name_prefix="naga-offload",
+                thread_name_prefix="embla-offload",
             )
         return _FALLBACK_EXECUTOR
 

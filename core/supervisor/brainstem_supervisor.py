@@ -23,6 +23,9 @@ Launcher = Callable[["BrainstemServiceSpec"], int]
 PidAliveChecker = Callable[[int], bool]
 
 
+_BRAINSTEM_STATE_FILE_ENV = "EMBLA_BRAINSTEM_STATE_FILE"
+
+
 @dataclass(frozen=True)
 class BrainstemServiceSpec:
     service_name: str
@@ -359,7 +362,7 @@ class BrainstemSupervisor:
         return "\n".join(
             [
                 "[Unit]",
-                f"Description=Naga Brainstem Service ({spec.service_name})",
+                f"Description=Embla Brainstem Service ({spec.service_name})",
                 "After=network.target",
                 "",
                 "[Service]",
@@ -368,7 +371,7 @@ class BrainstemSupervisor:
                 f"ExecStart={command_text}",
                 f"Restart={restart_policy}",
                 f"RestartSec={int(spec.restart_backoff_seconds)}",
-                f"Environment=NAGA_BRAINSTEM_STATE_FILE={self.state_file}",
+                f"Environment={_BRAINSTEM_STATE_FILE_ENV}={self.state_file}",
                 "",
                 "[Install]",
                 "WantedBy=multi-user.target",

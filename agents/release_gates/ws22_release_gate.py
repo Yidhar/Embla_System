@@ -86,7 +86,7 @@ def evaluate_ws22_longrun_report(
         "subtask_dispatching_matches_rounds": rounds > 0 and subtask_dispatching_count == rounds,
         "runtime_completed_matches_rounds": rounds > 0 and runtime_completed_count == rounds,
         # Accept both semantics:
-        # 1) legacy fail_open path increments fail_open_count;
+        # 1) historical fail_open path increments fail_open_count;
         # 2) subagent-only path blocks fallback and records planned rejects instead.
         "fail_open_matches_planned": (fail_open_count == planned_fail_open_rounds)
         or (fail_open_count == 0 and task_rejected_count == planned_fail_open_rounds),

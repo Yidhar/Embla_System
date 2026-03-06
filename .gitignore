@@ -22,7 +22,6 @@ wheels/
 venv/
 ENV/
 env/
-nagaagent-core/
 
 # IDE
 .vscode/

@@ -2,7 +2,7 @@
 name: code-review
 description: 代码审查和质量分析技能。用于审查代码、发现潜在问题、提供改进建议。当用户请求代码审查、代码质量分析或最佳实践建议时使用。
 version: 1.0.0
-author: Naga Team
+author: Embla Team
 tags:
   - code
   - review

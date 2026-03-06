@@ -798,7 +798,7 @@ def resolve_topic_db_path_from_mirror(file_path: Path) -> Path:
 
 
 def should_enable_jsonl_mirror() -> bool:
-    raw = str(os.environ.get("NAGA_EVENT_BUS_JSONL_MIRROR", "")).strip().lower()
+    raw = str(os.environ.get("EMBLA_EVENT_BUS_JSONL_MIRROR", "")).strip().lower()
     return raw in {"1", "true", "yes", "on", "y"}
 
 

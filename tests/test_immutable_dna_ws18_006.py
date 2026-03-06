@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from system.immutable_dna import DNAFileSpec, ImmutableDNALoader
+from core.security.immutable_dna import DNAFileSpec, ImmutableDNALoader
 
 
 def _make_case_root(prefix: str) -> Path:

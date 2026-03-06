@@ -7,7 +7,7 @@ from core.event_bus.topic_bus import resolve_topic_db_path_from_mirror
 
 
 def test_event_store_uses_db_primary_without_jsonl_mirror(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.delenv("NAGA_EVENT_BUS_JSONL_MIRROR", raising=False)
+    monkeypatch.delenv("EMBLA_EVENT_BUS_JSONL_MIRROR", raising=False)
     event_file = tmp_path / "logs" / "autonomous" / "events.jsonl"
     store = EventStore(event_file)
 
@@ -23,7 +23,7 @@ def test_event_store_uses_db_primary_without_jsonl_mirror(monkeypatch, tmp_path:
 
 
 def test_event_store_exposes_time_partitions(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.delenv("NAGA_EVENT_BUS_JSONL_MIRROR", raising=False)
+    monkeypatch.delenv("EMBLA_EVENT_BUS_JSONL_MIRROR", raising=False)
     event_file = tmp_path / "logs" / "autonomous" / "events.jsonl"
     store = EventStore(event_file)
 

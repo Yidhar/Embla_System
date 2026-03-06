@@ -639,7 +639,7 @@ class SystemChecker:
         if not self.results.get("Neo4j连接", True):
             print("7. 配置Neo4j数据库:")
             print("   # 使用Docker启动Neo4j:")
-            print("   docker run -d --name naga-neo4j -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j:latest")
+            print("   docker run -d --name embla-neo4j -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j:latest")
             print("   # 或安装Neo4j Desktop")
             print()
 
@@ -777,7 +777,7 @@ def run_quick_check() -> bool:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="NagaAgent 系统环境检测工具")
+    parser = argparse.ArgumentParser(description="Embla System 系统环境检测工具")
     parser.add_argument("--quick", action="store_true", help="快速检测（仅检测核心项）")
     parser.add_argument("--force", action="store_true", help="强制检测（忽略缓存）")
     parser.add_argument("--auto-setup", action="store_true", help="首次运行自动配置环境")

@@ -23,7 +23,7 @@ PHASE3_TEST_TARGETS: Sequence[str] = (
     "tests/test_agentic_loop_submit_result_state_ws28_026.py",
     "tests/test_agentic_loop_watchdog_guard_ws28_022.py",
     "tests/test_agentic_loop_structured_events_ws28_034.py",
-    "tests/test_tool_loop_shim_ws28_033.py",
+    "tests/test_canonical_module_retirement_ws28_033.py",
     "tests/test_run_ws28_execution_governance_gate_ws28_021.py",
     "tests/test_core_approval_gate_ws28_027.py",
     "tests/test_core_lease_fencing_ws28_029.py",

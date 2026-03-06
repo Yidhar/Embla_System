@@ -390,7 +390,7 @@ class PluginWorkerProxy:
 
     def _build_env(self) -> Dict[str, str]:
         env = dict(os.environ)
-        env["NAGA_PLUGIN_WORKER_ISOLATED"] = "1"
+        env["EMBLA_PLUGIN_WORKER_ISOLATED"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         existing = str(env.get("PYTHONPATH", "")).strip()
         entries = [str(Path(item)).replace("\\", "/") for item in self.spec.pythonpath_entries if str(item).strip()]

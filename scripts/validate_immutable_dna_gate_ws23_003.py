@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from system.config import get_immutable_dna_locked_prompts, resolve_prompt_registry_entry
-from system.immutable_dna import DNAFileSpec, ImmutableDNALoader
+from core.security.immutable_dna import DNAFileSpec, ImmutableDNALoader
 
 
 REQUIRED_PROMPT_FILES_DEFAULT: tuple[str, ...] = (

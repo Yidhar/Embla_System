@@ -2,7 +2,7 @@
   "system": {
     "version": "5.0.0",  // 系统版本号
     "config_schema_version": 1, // 配置结构版本号
-    "ai_name": "恩布拉", // AI助手名称
+    "ai_name": "Embla", // AI助手名称
     "stream_mode": true, // 是否启用流式响应
     "debug": false, // 是否启用调试模式
     "log_level": "INFO", // 日志级别: DEBUG, INFO, WARNING, ERROR
@@ -16,21 +16,21 @@
     "protocol": "auto", // API protocol (recommended: auto/openai_chat_completions)
     "reasoning_effort": "medium", // OpenAI兼容推理强度（low/medium/high/xhigh，主要用于 GPT-5 推理强度）
     "routing": {
-      "outer": {
-        "api_key": "", // 外层对话（Path-A/Path-B）专用API Key，留空回退到 api.api_key
-        "base_url": "", // 外层对话专用API地址，留空回退到 api.base_url
-        "model": "", // 外层对话专用模型，留空回退到 api.model
-        "provider": "", // 外层对话专用 provider，留空回退到 api.provider
-        "protocol": "", // 外层对话专用协议，留空回退到 api.protocol
-        "reasoning_effort": "" // 外层对话专用推理强度，留空回退到 api.reasoning_effort
+      "shell": {
+        "api_key": "", // Shell 对话（shell_readonly/shell_clarify）专用 API Key，留空回退到 api.api_key
+        "base_url": "", // Shell 对话专用 API 地址，留空回退到 api.base_url
+        "model": "", // Shell 对话专用模型，留空回退到 api.model
+        "provider": "", // Shell 对话专用 provider，留空回退到 api.provider
+        "protocol": "", // Shell 对话专用协议，留空回退到 api.protocol
+        "reasoning_effort": "" // Shell 对话专用推理强度，留空回退到 api.reasoning_effort
       },
       "core": {
-        "api_key": "", // 内层执行（Path-C）专用API Key，留空回退到 api.api_key
-        "base_url": "", // 内层执行专用API地址，留空回退到 api.base_url
-        "model": "", // 内层执行专用模型，留空回退到 api.model
-        "provider": "", // 内层执行专用 provider，留空回退到 api.provider
-        "protocol": "", // 内层执行专用协议，留空回退到 api.protocol
-        "reasoning_effort": "" // 内层执行专用推理强度，留空回退到 api.reasoning_effort
+        "api_key": "", // Core 执行（core_execution）专用 API Key，留空回退到 api.api_key
+        "base_url": "", // Core 执行专用 API 地址，留空回退到 api.base_url
+        "model": "", // Core 执行专用模型，留空回退到 api.model
+        "provider": "", // Core 执行专用 provider，留空回退到 api.provider
+        "protocol": "", // Core 执行专用协议，留空回退到 api.protocol
+        "reasoning_effort": "" // Core 执行专用推理强度，留空回退到 api.reasoning_effort
       }
     },
     "google_live_api": false, // Deprecated legacy flag; ignored in OpenAI-compatible routing
@@ -105,7 +105,6 @@
   },
   "autonomous": {
     "enabled": false, // 是否启用 System Agent 自治循环
-    "legacy_system_agent_enabled": false, // 废弃字段：legacy autonomous.system_agent 运行时已移除，配置值将被忽略
     "cycle_interval_seconds": 3600, // 自治循环周期（秒）
     "cli_tools": {
       "preferred": "claude", // 首选 CLI
@@ -145,8 +144,8 @@
     "enabled": false, // 是否启用MQTT
     "broker": "mqtt-broker-address", // MQTT代理地址
     "port": 1883, // MQTT端口
-    "topic": "naga/agent/topic", // MQTT主题
-    "client_id": "naga-agent-client", // MQTT客户端ID
+    "topic": "embla/agent/topic", // MQTT主题
+    "client_id": "embla-agent-client", // MQTT客户端ID
     "username": "mqtt-username", // MQTT用户名
     "password": "mqtt-password", // MQTT密码
     "keepalive": 60, // 保持连接时间(秒)
@@ -161,10 +160,10 @@
     "mac_btn_gap": 12, // Mac按钮间距
     "animation_duration": 600 // 动画持续时间(毫秒)
   },
-  "naga_portal": {
-    "portal_url": "https://naga.furina.chat/", // Naga门户URL
-    "username": "your-portal-username", // 门户用户名
-    "password": "your-portal-password" // 门户密码
+  "embla_portal": {
+    "portal_url": "https://portal.example.com/", // Embla门户URL
+    "username": "your-portal-username", // Embla门户用户名
+    "password": "your-portal-password" // Embla门户密码
   },
   "online_search": {
     "searxng_url": "https://searxng.pylindex.top", // SearXNG搜索URL
@@ -188,7 +187,7 @@
     "safe_mode": true // 是否启用安全模式
   },
   "memory_server": {
-    "url": "http://localhost:8004", // NagaMemory 服务地址
+    "url": "http://localhost:8004", // 远程记忆服务地址
     "token": null // 认证Token（Bearer），登录后自动设置
   },
   "embedding": {

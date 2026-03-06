@@ -40,7 +40,9 @@ if os.path.exists("_internal"):
 IS_PACKAGED = getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
 
 # 标准库导入
+import argparse
 import asyncio
+from dataclasses import dataclass
 import json as _json
 import logging
 from pathlib import Path
@@ -95,11 +97,12 @@ logger.setLevel(logging.INFO)
 logging.getLogger("OpenGL").setLevel(logging.WARNING)
 logging.getLogger("OpenGL.acceleratesupport").setLevel(logging.WARNING)
 
-_BRAINSTEM_MAIN_BOOTSTRAP_ENV = "NAGA_BRAINSTEM_MAIN_BOOTSTRAP"
-_BRAINSTEM_BOOTSTRAP_OWNER_ENV = "NAGA_BRAINSTEM_BOOTSTRAP_OWNER"
+_BRAINSTEM_MAIN_BOOTSTRAP_ENV = "EMBLA_BRAINSTEM_MAIN_BOOTSTRAP"
+_BRAINSTEM_BOOTSTRAP_OWNER_ENV = "EMBLA_BRAINSTEM_BOOTSTRAP_OWNER"
 _BRAINSTEM_BOOTSTRAP_OWNER_MAIN = "main"
-_BRAINSTEM_API_AUTOSTART_ENV = "NAGA_BRAINSTEM_AUTOSTART"
-_BRAINSTEM_API_AUTOSTART_TIMEOUT_ENV = "NAGA_BRAINSTEM_AUTOSTART_TIMEOUT_SECONDS"
+_BRAINSTEM_API_AUTOSTART_ENV = "EMBLA_BRAINSTEM_AUTOSTART"
+_BRAINSTEM_API_AUTOSTART_TIMEOUT_ENV = "EMBLA_BRAINSTEM_AUTOSTART_TIMEOUT_SECONDS"
+_USE_SYSTEM_PROXY_ENV = "EMBLA_USE_SYSTEM_PROXY"
 _BRAINSTEM_MAIN_STARTUP_OUTPUT = Path("scratch/reports/brainstem_control_plane_main_startup_ws28_024.json")
 
 
@@ -115,6 +118,35 @@ def _emit_progress(percent: int, phase: str):
         pass
 
     print(f"##PROGRESS##{_json.dumps(payload)}", flush=True)
+
+
+def _read_optional_bool_env(name: str) -> bool | None:
+    raw = os.environ.get(str(name))
+    if raw is None:
+        return None
+    normalized = str(raw).strip().lower()
+    if normalized in {"1", "true", "yes", "on", "y"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "n"}:
+        return False
+    return None
+
+
+def _read_bool_env_flag(name: str, default: bool) -> bool:
+    value = _read_optional_bool_env(name)
+    if value is None:
+        return bool(default)
+    return value
+
+
+def _read_float_env(name: str, default: float) -> float:
+    raw = os.environ.get(str(name))
+    if raw is None:
+        return float(default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 # 服务管理器类
@@ -165,22 +197,13 @@ class ServiceManager:
             logger.error(f"后台服务异常: {e}")
 
     async def _try_start_autonomous_agent(self):
-        """Legacy autonomous runtime is retired; keep single control-plane only."""
+        """Autonomous runtime stays on the single control-plane."""
         try:
             auto_cfg = getattr(config, "autonomous", None)
             auto_enabled = bool(getattr(auto_cfg, "enabled", False)) if auto_cfg is not None else False
-            requested_legacy = bool(getattr(auto_cfg, "legacy_system_agent_enabled", False)) if auto_cfg is not None else False
-            if requested_legacy:
-                logger.warning(
-                    "[RuntimeControlPlane] runtime_mode=single_control_plane legacy_autonomous=disabled "
-                    "chat_pipeline=enabled autonomous_enabled=%s requested_legacy_autonomous=true "
-                    "reason=legacy_runtime_removed",
-                    str(auto_enabled).lower(),
-                )
-                return
             logger.info(
-                "[RuntimeControlPlane] runtime_mode=single_control_plane legacy_autonomous=disabled "
-                "chat_pipeline=enabled autonomous_enabled=%s requested_legacy_autonomous=false",
+                "[RuntimeControlPlane] runtime_mode=single_control_plane chat_pipeline=enabled autonomous_enabled=%s "
+                "reason=single_control_plane_enforced",
                 str(auto_enabled).lower(),
             )
         except Exception as exc:
@@ -195,26 +218,8 @@ class ServiceManager:
     ):
         """主启动链托管 Brainstem 控制面，并声明 ownership，避免 API lifespan 重复托管。"""
 
-        def _env_flag(name: str, default: bool) -> bool:
-            raw = os.environ.get(str(name))
-            if raw is None:
-                return bool(default)
-            normalized = str(raw).strip().lower()
-            if not normalized:
-                return bool(default)
-            return normalized in {"1", "true", "yes", "on", "y"}
-
-        def _env_float(name: str, default: float) -> float:
-            raw = os.environ.get(str(name))
-            if raw is None:
-                return float(default)
-            try:
-                return float(raw)
-            except (TypeError, ValueError):
-                return float(default)
-
         root = (repo_root or Path(os.getcwd())).resolve()
-        enabled = _env_flag(_BRAINSTEM_MAIN_BOOTSTRAP_ENV, True)
+        enabled = _read_bool_env_flag(_BRAINSTEM_MAIN_BOOTSTRAP_ENV, default=True)
         api_enabled = (
             bool(config.api_server.enabled and config.api_server.auto_start)
             if api_autostart_enabled is None
@@ -248,7 +253,7 @@ class ServiceManager:
             run_manager = run_manage_brainstem_control_plane_ws28_017
 
         report["enabled"] = True
-        timeout_seconds = max(2.0, _env_float(_BRAINSTEM_API_AUTOSTART_TIMEOUT_ENV, 8.0))
+        timeout_seconds = max(2.0, _read_float_env(_BRAINSTEM_API_AUTOSTART_TIMEOUT_ENV, default=8.0))
         try:
             startup_report = run_manager(
                 repo_root=root,
@@ -384,17 +389,6 @@ class ServiceManager:
     def _init_proxy_settings(self):
         """初始化代理设置：本地地址始终 NO_PROXY，系统代理按配置/环境变量开关控制。"""
 
-        def _parse_bool_env(name: str):
-            raw = os.environ.get(name)
-            if raw is None:
-                return None
-            value = str(raw).strip().lower()
-            if value in {"1", "true", "yes", "on"}:
-                return True
-            if value in {"0", "false", "no", "off"}:
-                return False
-            return None
-
         def _split_no_proxy(raw: str):
             values = []
             if not raw:
@@ -422,11 +416,11 @@ class ServiceManager:
             return f"{parsed.scheme}://{auth}{host}{port}"
 
         config_proxy_enabled = bool(getattr(config.api, "applied_proxy", False))
-        env_proxy_override = _parse_bool_env("NAGA_USE_SYSTEM_PROXY")
+        env_proxy_override = _read_optional_bool_env(_USE_SYSTEM_PROXY_ENV)
         use_system_proxy = config_proxy_enabled if env_proxy_override is None else env_proxy_override
         print(
             f"系统代理开关: {use_system_proxy} "
-            f"(config.api.applied_proxy={config_proxy_enabled}, env.NAGA_USE_SYSTEM_PROXY={env_proxy_override})"
+            f"(config.api.applied_proxy={config_proxy_enabled}, env.{_USE_SYSTEM_PROXY_ENV}={env_proxy_override})"
         )
 
         proxy_vars = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]
@@ -802,116 +796,160 @@ def check_and_update_if_needed() -> bool:
         print(f"⚠️ 检查上次检测时间失败: {e}")
         return False
 
-# 延迟初始化 - 避免启动时阻塞
-def _lazy_init_services():
-    """延迟初始化服务 - 在需要时才初始化"""
-    global service_manager, n
-    if not hasattr(_lazy_init_services, '_initialized'):
-        # 初始化服务管理器
-        service_manager = ServiceManager()
-        service_manager.start_background_services()
-        _emit_progress(15, "初始化服务...")
+@dataclass(frozen=True)
+class MainStartupOptions:
+    check_env: bool = False
+    quick_check: bool = False
+    force_check: bool = False
+    headless: bool = False
+    lightweight: bool = False
 
-        # conversation_core已删除，相关功能已迁移到apiserver
-        n = None
+    @property
+    def effective_headless(self) -> bool:
+        return bool(self.headless or self.lightweight or not sys.stdin.isatty())
 
-        # 初始化各个系统
-        service_manager._init_mcp_services()
-        _emit_progress(20, "注册MCP服务...")
-        service_manager._init_memory_system()
-        _emit_progress(25, "初始化子系统...")
-        
-        # 显示系统状态
-        print("=" * 30)
-        print(f"GRAG状态: {'启用' if memory_manager.enabled else '禁用'}")
-        if memory_manager.enabled:
-            memory_manager.get_memory_stats()
-            from summer_memory.quintuple_graph import get_graph, GRAG_ENABLED
-            graph = get_graph()
-            print(f"Neo4j连接: {'成功' if graph and GRAG_ENABLED else '失败'}")
-        print("=" * 30)
-        print(f'{AI_NAME}系统已启动')
-        print("=" * 30)
-        
-        # 启动服务（并行异步）
-        _emit_progress(30, "启动服务器...")
-        service_manager.start_all_servers()
-        _emit_progress(50, "后端就绪")
-        
+
+_service_manager_singleton: ServiceManager | None = None
+_service_manager_started = False
+_interactive_chat_runtime = None
+
+
+def _print_runtime_status() -> None:
+    print("=" * 30)
+    print(f"GRAG状态: {'启用' if memory_manager.enabled else '禁用'}")
+    if memory_manager.enabled:
+        memory_manager.get_memory_stats()
+        from summer_memory.quintuple_graph import GRAG_ENABLED, get_graph
+
+        graph = get_graph()
+        print(f"Neo4j连接: {'成功' if graph and GRAG_ENABLED else '失败'}")
+    print("=" * 30)
+    print(f"{AI_NAME}系统已启动")
+    print("=" * 30)
+
+
+def ensure_services_started(*, show_help_text: bool = True) -> ServiceManager:
+    global _interactive_chat_runtime, _service_manager_singleton, _service_manager_started
+    if _service_manager_started and _service_manager_singleton is not None:
+        return _service_manager_singleton
+
+    if _service_manager_singleton is None:
+        _service_manager_singleton = ServiceManager()
+
+    manager = _service_manager_singleton
+    manager.start_background_services()
+    _emit_progress(15, "初始化服务...")
+
+    _interactive_chat_runtime = None
+
+    manager._init_mcp_services()
+    _emit_progress(20, "注册MCP服务...")
+    manager._init_memory_system()
+    _emit_progress(25, "初始化子系统...")
+    _print_runtime_status()
+
+    _emit_progress(30, "启动服务器...")
+    manager.start_all_servers()
+    _emit_progress(50, "后端就绪")
+
+    if show_help_text:
         show_help()
-        
-        _lazy_init_services._initialized = True
 
-# NagaAgent适配器 - 优化重复初始化
-class NagaAgentAdapter:
-    def __init__(s):
-        # 使用全局实例，避免重复初始化
-        _lazy_init_services()  # 确保服务已初始化
-        s.naga = n  # 使用全局实例
-    
-    async def respond_stream(s, txt):
-        async for resp in s.naga.process(txt):
+    _service_manager_started = True
+    return manager
+
+
+def _lazy_init_services():
+    """保留轻量包装入口；内部统一走显式启动函数。"""
+    return ensure_services_started()
+
+
+# Embla System 适配器 - 优化重复初始化
+class EmblaSystemAdapter:
+    def __init__(self):
+        ensure_services_started(show_help_text=False)
+        self.runtime = _interactive_chat_runtime
+
+    async def respond_stream(self, txt):
+        if self.runtime is None or not hasattr(self.runtime, "process"):
+            raise RuntimeError("EmblaSystemAdapter 当前未接入交互式运行时")
+        async for resp in self.runtime.process(txt):
             yield AI_NAME, resp, None, True, False
 
-# 主程序入口
-if __name__ == "__main__":
-    import argparse
 
-    # 解析命令行参数
-    parser = argparse.ArgumentParser(description="NagaAgent - 智能对话助手")
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Embla System - 智能运行与对话入口")
     parser.add_argument("--check-env", action="store_true", help="运行系统环境检测")
     parser.add_argument("--quick-check", action="store_true", help="运行快速环境检测")
-    parser.add_argument("--force-check", action="store_true", help="强制运行环境检测（忽略缓存）")
+    parser.add_argument("--force-check", action="store_true", help="强制运行系统环境检测（忽略缓存）")
     parser.add_argument("--headless", action="store_true", help="无头模式（Electron/Web，跳过交互提示）")
+    parser.add_argument("--lightweight", action="store_true", help="轻量模式（跳过更新与阻塞式门检，适配守护回退）")
+    return parser
 
-    args = parser.parse_args()
 
-    # 处理检测命令
-    if args.check_env or args.quick_check:
-        if args.quick_check:
-            success = run_quick_check()
-        else:
-            success = run_system_check(force_check=args.force_check)
-        sys.exit(0 if success else 1)
+def parse_main_args(argv: list[str] | None = None) -> MainStartupOptions:
+    parsed = build_arg_parser().parse_args(argv)
+    return MainStartupOptions(
+        check_env=bool(parsed.check_env),
+        quick_check=bool(parsed.quick_check),
+        force_check=bool(parsed.force_check),
+        headless=bool(parsed.headless),
+        lightweight=bool(parsed.lightweight),
+    )
 
-    # 检查上次系统检测时间，如果超过7天则执行更新
-    check_and_update_if_needed()
 
-    # 启动前清理占用端口的进程
-    print("🔍 检查端口占用...")
-    kill_port_occupiers()
+def _handle_diagnostic_flags(options: MainStartupOptions) -> int | None:
+    if not options.check_env and not options.quick_check:
+        return None
+    success = run_quick_check() if options.quick_check else run_system_check(force_check=options.force_check)
+    return 0 if success else 1
 
-    # 系统环境检测
-    print("🚀 正在启动NagaAgent...")
+
+def _confirm_continue_after_failed_system_check(*, headless: bool) -> bool:
+    if headless:
+        print("⚠️ 无头/轻量模式：自动继续启动...")
+        return True
+    reply = input("是否无视检测结果继续启动？是则按y，否则按其他任意键退出...")
+    return reply in {"y", "Y"}
+
+
+def _run_startup_gates(options: MainStartupOptions) -> bool:
+    print("🚀 正在启动 Embla System...")
     print("=" * 50)
 
-    headless = args.headless or not sys.stdin.isatty()
+    if options.lightweight:
+        print("⚙️ Lightweight 模式：跳过更新检查，并将环境检测降级为 best-effort quick-check。")
+        if IS_PACKAGED:
+            print("📦 检测到打包环境，跳过系统环境检测...")
+            return True
+        if not run_quick_check():
+            print("⚠️ Lightweight 模式：快速检查失败，继续启动。")
+        return True
 
-    # 如果是打包环境，跳过所有环境检测
     if IS_PACKAGED:
         print("📦 检测到打包环境，跳过系统环境检测...")
-    else:
-        # 执行系统检测（只在第一次启动时检测）
-        if not run_system_check():
-            print("\n❌ 系统环境检测失败，程序无法启动")
-            print("请根据上述建议修复问题后重新启动")
-            if headless:
-                print("⚠️ 无头模式：自动继续启动...")
-            else:
-                i=input("是否无视检测结果继续启动？是则按y，否则按其他任意键退出...")
-                if i != "y" and i != "Y":
-                    sys.exit(1)
+        return True
 
-    print("\n🎉 系统环境检测通过，正在启动应用...")
-    print("=" * 50)
+    if run_system_check(force_check=options.force_check):
+        return True
 
-    if not asyncio.get_event_loop().is_running():
+    print("\n❌ 系统环境检测失败，程序无法启动")
+    print("请根据上述建议修复问题后重新启动")
+    return _confirm_continue_after_failed_system_check(headless=options.effective_headless)
+
+
+def _ensure_main_event_loop() -> None:
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        return
+
+    if loop.is_closed():
         asyncio.set_event_loop(asyncio.new_event_loop())
 
-    # 启动后端服务
-    _lazy_init_services()
-    print("\n✅ 所有后端服务已启动，等待前端连接...")
 
+def _install_shutdown_handler() -> None:
     import signal
 
     def _shutdown(signum=None, frame=None):
@@ -920,8 +958,47 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGTERM, _shutdown)
 
+
+def _wait_forever() -> None:
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        _shutdown()
+        print("\n👋 正在关闭后端服务...")
+        os._exit(0)
+
+
+def main(argv: list[str] | None = None) -> int:
+    options = parse_main_args(argv)
+
+    diagnostic_exit = _handle_diagnostic_flags(options)
+    if diagnostic_exit is not None:
+        return diagnostic_exit
+
+    if options.lightweight:
+        print("⚙️ 以 lightweight 模式启动：跳过更新检查，保留 API + MCP + 后台控制面。")
+    else:
+        check_and_update_if_needed()
+
+    print("🔍 检查端口占用...")
+    kill_port_occupiers()
+
+    if not _run_startup_gates(options):
+        return 1
+
+    startup_summary = "Lightweight 启动准备完成" if options.lightweight else "启动前检查完成"
+    print(f"\n🎉 {startup_summary}，正在启动应用...")
+    print("=" * 50)
+
+    _ensure_main_event_loop()
+    ensure_services_started(show_help_text=not options.lightweight)
+    print("\n✅ 所有后端服务已启动，等待前端连接...")
+
+    _install_shutdown_handler()
+    _wait_forever()
+    return 0
+
+
+# 主程序入口
+if __name__ == "__main__":
+    raise SystemExit(main())

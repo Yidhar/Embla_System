@@ -86,12 +86,12 @@ def _split_env_tokens(raw: str) -> list[str]:
 
 
 def load_plugin_allowlist() -> set[str]:
-    allowlist = {item for item in _split_env_tokens(os.getenv("NAGA_PLUGIN_ALLOWLIST", "")) if item}
+    allowlist = {item for item in _split_env_tokens(os.getenv("EMBLA_PLUGIN_ALLOWLIST", "")) if item}
     return allowlist
 
 
 def load_plugin_signing_keys() -> Dict[str, str]:
-    raw = str(os.getenv("NAGA_PLUGIN_SIGNING_KEYS", "")).strip()
+    raw = str(os.getenv("EMBLA_PLUGIN_SIGNING_KEYS", "")).strip()
     if not raw:
         return {}
 
@@ -121,7 +121,7 @@ def load_plugin_signing_keys() -> Dict[str, str]:
 
 
 def load_allowed_scopes() -> set[str]:
-    raw_scopes = {item for item in _split_env_tokens(os.getenv("NAGA_PLUGIN_ALLOWED_SCOPES", "")) if item}
+    raw_scopes = {item for item in _split_env_tokens(os.getenv("EMBLA_PLUGIN_ALLOWED_SCOPES", "")) if item}
     return raw_scopes or set(_DEFAULT_ALLOWED_SCOPES)
 
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NagaAgent 服务启动脚本
+Embla System 服务启动脚本
 支持启动API服务器和LLM服务
 """
 
@@ -29,7 +29,7 @@ async def start_api_server():
     port = int(os.getenv("API_SERVER_PORT", str(default_port)))
     reload = os.getenv("API_SERVER_RELOAD", "False").lower() == "true"
     
-    print("启动NagaAgent API服务器...")
+    print("启动 Embla System API 服务器...")
     print(f"地址: http://{host}:{port}")
     print(f"文档: http://{host}:{port}/docs")
     print(f"自动重载: {'开启' if reload else '关闭'}")
@@ -76,7 +76,7 @@ async def start_llm_service():
 
 async def main():
     """主函数"""
-    parser = argparse.ArgumentParser(description="NagaAgent 服务启动器")
+    parser = argparse.ArgumentParser(description="Embla System 服务启动器")
     parser.add_argument("service", choices=["api", "llm", "both"], 
                        help="要启动的服务: api(API服务器), llm(LLM服务), both(两个都启动)")
     

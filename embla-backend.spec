@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-NagaAgent Headless Backend - PyInstaller Spec
+Embla System Headless Backend - PyInstaller Spec
 编译后端为独立二进制，供统一启动链部署使用。
 排除 PyQt5 及 UI 相关模块。
 """
@@ -178,7 +178,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='naga-backend',
+    name='embla-backend',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -194,5 +194,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='naga-backend',
+    name='embla-backend',
 )

@@ -50,3 +50,9 @@ def test_main_bootstrap_brainstem_keeps_api_fallback_when_startup_failed(monkeyp
     assert report["api_lifespan_autostart_disabled"] is False
     assert os.environ.get(main_module._BRAINSTEM_BOOTSTRAP_OWNER_ENV) is None  # noqa: SLF001
     assert os.environ.get(main_module._BRAINSTEM_API_AUTOSTART_ENV) == "1"  # noqa: SLF001
+
+
+def test_parse_main_args_supports_lightweight_mode() -> None:
+    options = main_module.parse_main_args(["--lightweight"])
+    assert options.lightweight is True
+    assert options.effective_headless is True

@@ -13,7 +13,7 @@ def test_extract_gc_evidence_from_text_log() -> None:
             "    at com.example.OrderService.handle(OrderService.java:88)",
             "panic: invalid pointer addr=7FFDF0A12010",
             "hex crash @ 0x7ffdf0a12000",
-            r"windows log: C:\ProgramData\Naga\logs\agent.log",
+            r"windows log: C:\ProgramData\Embla\logs\agent.log",
         ]
     )
 
@@ -24,7 +24,7 @@ def test_extract_gc_evidence_from_text_log() -> None:
     assert "com.example.OrderService.handle" in evidence.stack_tokens
     assert "process_job" in evidence.stack_tokens
     assert "/srv/app/worker.py" in evidence.paths
-    assert r"C:\ProgramData\Naga\logs\agent.log" in evidence.paths
+    assert r"C:\ProgramData\Embla\logs\agent.log" in evidence.paths
     assert "0x7ffdf0a12000" in evidence.hex_addresses
     assert "0x7ffdf0a12010" in evidence.hex_addresses
 

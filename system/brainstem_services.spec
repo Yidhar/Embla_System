@@ -2,7 +2,7 @@
   "schema_version": "ws23-001-v1",
   "services": [
     {
-      "service_name": "naga-main-headless",
+      "service_name": "embla-main-headless",
       "command": [
         "python",
         "main.py",

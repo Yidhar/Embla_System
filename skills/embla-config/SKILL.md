@@ -1,8 +1,8 @@
 ---
-name: naga-config
-description: Naga 自身配置管理技能。用于查看和修改 Naga 系统设置、添加 MCP 工具服务、导入自定义技能、搜索可用 MCP 工具。当用户要求修改设置、添加工具或技能时使用此技能。
+name: embla-config
+description: Embla System 自身配置管理技能。用于查看和修改 Embla System 系统设置、添加 MCP 工具服务、导入自定义技能、搜索可用 MCP 工具。当用户要求修改设置、添加工具或技能时使用此技能。
 version: 1.0.0
-author: Naga Team
+author: Embla Team
 tags:
   - config
   - settings
@@ -12,9 +12,9 @@ tags:
 enabled: true
 ---
 
-# Naga 自身配置管理技能
+# Embla System 自身配置管理技能
 
-本技能让你能够管理和配置 Naga 系统本身，包括修改系统设置、添加 MCP 工具服务、导入自定义技能。
+本技能让你能够管理和配置 Embla System 本身，包括修改系统设置、添加 MCP 工具服务、导入自定义技能。
 
 ## 1. 查看和修改系统配置
 
@@ -159,7 +159,7 @@ Content-Type: application/json
 
 ## 注意事项
 
-- 网络搜索、网址访问和文件访问功能使用 Naga 内置 native 工具链，不需要额外的 MCP 服务
+- 网络搜索、网址访问和文件访问功能使用 Embla System 内置 native 工具链，不需要额外的 MCP 服务
 - 修改配置后会立即生效，无需重启
 - 添加 MCP 服务后，需要在服务列表中确认其状态为可用
 - 敏感信息（如 API 密钥）在回复用户时应适当掩码处理

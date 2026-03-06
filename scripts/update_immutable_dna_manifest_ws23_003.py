@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from system.immutable_dna import DNAFileSpec, ImmutableDNALoader
+from core.security.immutable_dna import DNAFileSpec, ImmutableDNALoader
 
 try:
     from scripts.validate_immutable_dna_gate_ws23_003 import (

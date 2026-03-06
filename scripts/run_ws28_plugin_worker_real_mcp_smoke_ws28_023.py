@@ -129,7 +129,7 @@ def _build_signed_plugin_manifest(
         "displayName": f"WS28-023 Real MCP Smoke ({source_manifest.get('displayName') or plugin_name})",
         "version": "0.1.0",
         "description": "WS28-023 real MCP isolated worker smoke manifest",
-        "author": "NagaAgent",
+        "author": "Embla System",
         "agentType": "mcp_plugin",
         "entryPoint": {
             "module": module_name,
@@ -267,10 +267,10 @@ def run_ws28_plugin_worker_real_mcp_smoke_ws28_023(
 
     if checks["plugin_manifest_written"]:
         env_overrides = {
-            "NAGA_PLUGIN_ALLOWLIST": worker_service_name,
-            "NAGA_PLUGIN_SIGNING_KEYS": json.dumps({DEFAULT_SIGNING_KEY_ID: DEFAULT_SIGNING_SECRET}, ensure_ascii=False),
-            "NAGA_PLUGIN_ALLOWED_SCOPES": "read_workspace,tool_invoke",
-            "NAGA_PLUGIN_MANIFEST_DIRS": str(plugin_root.resolve()),
+            "EMBLA_PLUGIN_ALLOWLIST": worker_service_name,
+            "EMBLA_PLUGIN_SIGNING_KEYS": json.dumps({DEFAULT_SIGNING_KEY_ID: DEFAULT_SIGNING_SECRET}, ensure_ascii=False),
+            "EMBLA_PLUGIN_ALLOWED_SCOPES": "read_workspace,tool_invoke",
+            "EMBLA_PLUGIN_MANIFEST_DIRS": str(plugin_root.resolve()),
         }
         try:
             clear_registry()

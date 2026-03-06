@@ -29,7 +29,7 @@ def setup_logging() -> None:
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
     backend_handler = RotatingFileHandler(
-        details_dir / "naga-backend.log",
+        details_dir / "embla-backend.log",
         maxBytes=10 * 1024 * 1024,
         backupCount=5,
         encoding="utf-8",

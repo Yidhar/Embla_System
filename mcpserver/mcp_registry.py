@@ -51,7 +51,7 @@ def create_agent_instance(manifest: Dict[str, Any]) -> Optional[Any]:
 
 
 def _resolve_plugin_manifest_dirs() -> List[Path]:
-    raw = str(os.getenv("NAGA_PLUGIN_MANIFEST_DIRS", "")).strip()
+    raw = str(os.getenv("EMBLA_PLUGIN_MANIFEST_DIRS", "")).strip()
     if not raw:
         raw = "workspace/tools/plugins"
     dirs: List[Path] = []

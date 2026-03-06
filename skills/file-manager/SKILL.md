@@ -2,7 +2,7 @@
 name: file-manager
 description: 文件管理技能。用于创建、移动、复制、删除文件和文件夹，整理目录结构。当用户需要管理文件、整理文件夹或批量处理文件时使用。
 version: 1.0.0
-author: Naga Team
+author: Embla Team
 tags:
   - file
   - folder

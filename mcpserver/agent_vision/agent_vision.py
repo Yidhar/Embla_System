@@ -319,7 +319,7 @@ class VisionAgent:
         image_data_url = f"data:{image_mime};base64,{image_base64}"
 
         prompt = (
-            "你是 Embla_system 的视觉分析子代理。"
+            "你是 Embla System 的视觉分析子代理。"
             "请结合图像内容和附带元数据回答用户问题，输出简洁中文答案。"
             "\n\n[用户问题]\n"
             f"{question}"

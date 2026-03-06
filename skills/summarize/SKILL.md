@@ -2,7 +2,7 @@
 name: summarize
 description: "总结技能。对用户提供的文本、对话内容或文档进行精炼总结，提取核心要点。"
 version: 1.0.0
-author: Naga Team
+author: Embla Team
 tags:
   - summarize
   - digest

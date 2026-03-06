@@ -62,10 +62,10 @@ def _restore_env(previous: Mapping[str, str | None]) -> None:
 
 def _default_env_for_case(*, plugin_root: Path, allowlist: List[str], scopes: List[str]) -> Dict[str, str]:
     return {
-        "NAGA_PLUGIN_MANIFEST_DIRS": str(plugin_root),
-        "NAGA_PLUGIN_ALLOWLIST": ",".join(allowlist),
-        "NAGA_PLUGIN_SIGNING_KEYS": json.dumps({"chaos-key": "chaos-secret"}, ensure_ascii=False),
-        "NAGA_PLUGIN_ALLOWED_SCOPES": ",".join(scopes),
+        "EMBLA_PLUGIN_MANIFEST_DIRS": str(plugin_root),
+        "EMBLA_PLUGIN_ALLOWLIST": ",".join(allowlist),
+        "EMBLA_PLUGIN_SIGNING_KEYS": json.dumps({"chaos-key": "chaos-secret"}, ensure_ascii=False),
+        "EMBLA_PLUGIN_ALLOWED_SCOPES": ",".join(scopes),
     }
 
 

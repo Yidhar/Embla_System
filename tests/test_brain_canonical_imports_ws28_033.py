@@ -15,11 +15,12 @@ FORBIDDEN_PATTERNS = (
     "from system.episodic_memory import",
     "from system.semantic_graph import",
     "from apiserver.agentic_tool_loop import",
+    "import apiserver.agentic_tool_loop",
+    "from system.immutable_dna import",
+    "import system.immutable_dna",
 )
 
-ALLOWLIST_SUFFIXES = {
-    "apiserver/agentic_tool_loop.py",  # compatibility shim itself
-}
+ALLOWLIST_SUFFIXES: set[str] = set()
 
 
 def _iter_runtime_py_files():

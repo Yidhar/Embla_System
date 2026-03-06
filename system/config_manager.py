@@ -17,7 +17,7 @@ from pathlib import Path
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from .config import hot_reload_config, add_config_listener
+from .config import hot_reload_config, add_config_listener, normalize_runtime_config_payload
 import json5  # 支持带注释的JSON解析
 
 class ConfigManager:
@@ -212,11 +212,11 @@ class ConfigManager:
                 content = f.read()
             # 优先 json5（支持注释）
             try:
-                return json5.loads(content)
+                return normalize_runtime_config_payload(json5.loads(content))
             except Exception:
                 pass
             # 兜底标准 json（不做任何注释剥离，避免破坏字符串值）
-            return json.loads(content)
+            return normalize_runtime_config_payload(json.loads(content))
         except Exception as e:
             print(f"加载配置文件失败: {e}")
             return None
@@ -228,7 +228,7 @@ class ConfigManager:
             fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix='.tmp', prefix='.config_')
             try:
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                    json.dump(config_data, f, ensure_ascii=False, indent=2)
+                    json.dump(normalize_runtime_config_payload(config_data), f, ensure_ascii=False, indent=2)
                 os.replace(tmp_path, config_path)
             except BaseException:
                 # 写入或 rename 失败，清理临时文件
@@ -269,7 +269,7 @@ class ConfigManager:
             "weather": {"api_key": ""},
             "mqtt": {"enabled": False},
             "ui": {"user_name": "用户"},
-            "naga_portal": {"portal_url": "https://naga.furina.chat/"},
+            "embla_portal": {"portal_url": ""},
             "online_search": {"Bocha_API_KEY": "-"}
         }
     

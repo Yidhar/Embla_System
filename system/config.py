@@ -1,6 +1,6 @@
 # config.py - 简化配置系统
 """
-NagaAgent 配置系统 - 基于Pydantic实现类型安全和验证
+Embla System 配置系统 - 基于 Pydantic 实现类型安全和验证
 支持配置热更新和变更通知
 """
 
@@ -10,7 +10,8 @@ import copy
 import logging
 import fnmatch
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Callable
+from types import UnionType
+from typing import Optional, List, Dict, Any, Callable, get_args, get_origin, Union
 from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
@@ -179,7 +180,7 @@ def _normalize_embla_system_payload(payload: Dict[str, Any], *, source: str, loa
 
 
 def load_embla_system_config(config_path: str | Path | None = None) -> Dict[str, Any]:
-    """加载 Embla_system 统一配置（embla_system.yaml），失败时回退到安全默认值。"""
+    """加载 Embla System 统一配置（embla_system.yaml），失败时回退到安全默认值。"""
     path = _resolve_embla_system_config_path(config_path)
     if not path.exists():
         return _normalize_embla_system_payload({}, source=str(path), loaded=False)
@@ -227,7 +228,7 @@ def get_immutable_dna_locked_prompts() -> List[str]:
 
 
 def save_embla_system_config(payload: Dict[str, Any], config_path: str | Path | None = None) -> Dict[str, Any]:
-    """保存 Embla_system 统一配置并刷新进程内缓存。"""
+    """保存 Embla System 统一配置并刷新进程内缓存。"""
     if not isinstance(payload, dict):
         raise ValueError("embla_system payload must be a dict")
     path = _resolve_embla_system_config_path(config_path)
@@ -367,12 +368,67 @@ def bootstrap_config_from_example(config_path: str) -> None:
         print(f"警告：自动生成 config.json 失败: {e}")
 
 
+def _normalize_annotation_payload(annotation: Any, value: Any) -> Any:
+    if value is None:
+        return None
+
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+
+    if origin is None:
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel) and isinstance(value, dict):
+            return _normalize_model_payload(annotation, value)
+        return copy.deepcopy(value)
+
+    if origin in (list, List):
+        item_annotation = args[0] if args else Any
+        if isinstance(value, list):
+            return [_normalize_annotation_payload(item_annotation, item) for item in value]
+        return copy.deepcopy(value)
+
+    if origin in (dict, Dict):
+        value_annotation = args[1] if len(args) > 1 else Any
+        if isinstance(value, dict):
+            return {copy.deepcopy(key): _normalize_annotation_payload(value_annotation, item) for key, item in value.items()}
+        return copy.deepcopy(value)
+
+    if origin in (Union, UnionType):
+        for candidate in args:
+            if candidate is type(None):
+                continue
+            if isinstance(candidate, type) and issubclass(candidate, BaseModel) and isinstance(value, dict):
+                return _normalize_model_payload(candidate, value)
+        return copy.deepcopy(value)
+
+    return copy.deepcopy(value)
+
+
+def _normalize_model_payload(model_cls: type[BaseModel], payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    normalized: Dict[str, Any] = {}
+    for field_name, field_info in model_cls.model_fields.items():
+        if field_name not in payload:
+            continue
+        normalized[field_name] = _normalize_annotation_payload(field_info.annotation, payload[field_name])
+    return normalized
+
+
+def normalize_runtime_config_payload(config_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize config payload to canonical Embla System keys."""
+    if not isinstance(config_data, dict):
+        return {}
+
+    return _normalize_model_payload(EmblaSystemConfig, copy.deepcopy(config_data))
+
+
 class SystemConfig(BaseModel):
     """系统基础配置"""
 
     version: str = Field(default="5.0.0", description="系统版本号")
     config_schema_version: int = Field(default=1, ge=1, description="配置结构版本号")
-    ai_name: str = Field(default="娜迦", description="AI助手名称")
+    ai_name: str = Field(default="Embla", description="AI助手名称")
     base_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent, description="项目根目录")
     log_dir: Path = Field(default_factory=lambda: Path(__file__).parent.parent / "logs", description="日志目录")
     stream_mode: bool = Field(default=True, description="是否启用流式响应")
@@ -413,15 +469,15 @@ class APIRouteTargetConfig(BaseModel):
 
 
 class APIRoutingConfig(BaseModel):
-    """外层/内层路由 LLM 覆盖配置。"""
+    """Shell/Core 路由 LLM 覆盖配置。"""
 
-    outer: APIRouteTargetConfig = Field(
+    shell: APIRouteTargetConfig = Field(
         default_factory=APIRouteTargetConfig,
-        description="外层对话路径（Path-A/Path-B）LLM 覆盖配置",
+        description="Shell 对话路径（shell_readonly/shell_clarify）LLM 覆盖配置",
     )
     core: APIRouteTargetConfig = Field(
         default_factory=APIRouteTargetConfig,
-        description="内层执行路径（Path-C）LLM 覆盖配置",
+        description="Core 执行路径（core_execution）LLM 覆盖配置",
     )
 
 
@@ -448,7 +504,7 @@ class APIConfig(BaseModel):
     extra_body: Dict[str, Any] = Field(default_factory=dict, description="附加请求体参数")
     routing: APIRoutingConfig = Field(
         default_factory=APIRoutingConfig,
-        description="按路由（outer/core）覆盖 LLM API 地址与模型",
+        description="按路由（shell/core）覆盖 LLM API 地址与模型",
     )
 
     @field_validator("reasoning_effort", "thinking_intensity")
@@ -635,10 +691,6 @@ class AutonomousConfig(BaseModel):
     """System Agent autonomous configuration."""
 
     enabled: bool = Field(default=False, description="是否启用自治循环")
-    legacy_system_agent_enabled: bool = Field(
-        default=False,
-        description="废弃字段：legacy autonomous.system_agent 运行时已移除，配置值将被忽略",
-    )
     cycle_interval_seconds: int = Field(default=3600, ge=60, le=86400, description="自治循环间隔（秒）")
     cli_tools: AutonomousCliToolsConfig = Field(default_factory=AutonomousCliToolsConfig)
     run_quality_checks: bool = Field(default=False, description="是否在评估阶段运行lint/test")
@@ -729,9 +781,9 @@ class ComputerControlConfig(BaseModel):
 
 
 class MemoryServerConfig(BaseModel):
-    """记忆微服务配置（NagaMemory）"""
+    """记忆微服务配置。"""
 
-    url: str = Field(default="http://localhost:8004", description="NagaMemory 服务地址")
+    url: str = Field(default="http://localhost:8004", description="远程记忆服务地址")
     token: Optional[str] = Field(default=None, description="认证 Token（Bearer），留空则不携带认证头")
 
 
@@ -757,7 +809,7 @@ class MQTTConfig(BaseModel):
     broker: str = Field(default="localhost", description="MQTT代理服务器地址")
     port: int = Field(default=1883, ge=1, le=65535, description="MQTT代理服务器端口")
     topic: str = Field(default="/test/topic", description="MQTT主题")
-    client_id: str = Field(default="naga_mqtt_client", description="MQTT客户端ID")
+    client_id: str = Field(default="embla_mqtt_client", description="MQTT客户端ID")
     username: str = Field(default="", description="MQTT用户名")
     password: str = Field(default="", description="MQTT密码")
     keepalive: int = Field(default=60, ge=1, le=3600, description="保持连接时间（秒）")
@@ -780,12 +832,12 @@ class FloatingConfig(BaseModel):
     """悬浮球模式配置"""
     enabled: bool = Field(default=False, description="是否启用悬浮球模式")
 
-class NagaPortalConfig(BaseModel):
-    """娜迦官网账户配置"""
+class EmblaPortalConfig(BaseModel):
+    """Embla 门户账户配置。"""
 
-    portal_url: str = Field(default="https://naga.furina.chat/", description="娜迦官网地址")
-    username: str = Field(default="", description="娜迦官网用户名")
-    password: str = Field(default="", description="娜迦官网密码")
+    portal_url: str = Field(default="", description="Embla 门户地址")
+    username: str = Field(default="", description="Embla 门户用户名")
+    password: str = Field(default="", description="Embla 门户密码")
     request_timeout: int = Field(default=30, ge=5, le=120, description="请求超时时间（秒）")
     login_path: str = Field(default="/api/user/login", description="登录API路径")
     turnstile_param: str = Field(default="", description="Turnstile验证参数")
@@ -977,7 +1029,7 @@ def _resolve_prompts_dir(prompts_dir: Optional[Path] = None) -> Path:
 _DEFAULT_PROMPT_REGISTRY_SPEC: Dict[str, Any] = {
     "schema_version": "ws28-prompt-registry-v1",
     "entries": [
-        {"prompt_name": "conversation_style_prompt", "path": "core/dna/conversation_style_prompt.md", "aliases": ["outer_chat_style"]},
+        {"prompt_name": "conversation_style_prompt", "path": "core/dna/conversation_style_prompt.md", "aliases": ["shell_chat_style"]},
         {"prompt_name": "conversation_analyzer_prompt", "path": "core/routing/conversation_analyzer_prompt.md", "aliases": []},
         {"prompt_name": "tool_dispatch_prompt", "path": "core/routing/tool_dispatch_prompt.md", "aliases": []},
         {"prompt_name": "agentic_tool_prompt", "path": "core/dna/agentic_tool_prompt.md", "aliases": []},
@@ -986,9 +1038,9 @@ _DEFAULT_PROMPT_REGISTRY_SPEC: Dict[str, Any] = {
         {"prompt_name": "core_exec_base", "path": "agents/core_exec/core_exec_base.md", "aliases": ["core_exec_general"]},
         {"prompt_name": "core_exec_ops", "path": "agents/core_exec/core_exec_ops.md", "aliases": []},
         {"prompt_name": "core_exec_dev", "path": "agents/core_exec/core_exec_dev.md", "aliases": []},
-        {"prompt_name": "outer_readonly_research", "path": "agents/outer/outer_readonly_research.md", "aliases": []},
-        {"prompt_name": "outer_readonly_general", "path": "agents/outer/outer_readonly_general.md", "aliases": []},
-        {"prompt_name": "explicit_role_delegate", "path": "agents/outer/explicit_role_delegate.md", "aliases": []},
+        {"prompt_name": "shell_readonly_research", "path": "agents/shell/shell_readonly_research.md", "aliases": []},
+        {"prompt_name": "shell_readonly_general", "path": "agents/shell/shell_readonly_general.md", "aliases": []},
+        {"prompt_name": "explicit_role_delegate", "path": "agents/shell/explicit_role_delegate.md", "aliases": []},
     ],
 }
 
@@ -1198,7 +1250,7 @@ def load_prompt_acl_spec(*, prompts_dir: Optional[Path] = None) -> Dict[str, Any
     resolved_prompts_dir = _resolve_prompts_dir(prompts_dir)
     candidate_paths = [
         resolved_prompts_dir / "specs" / "prompt_acl.spec",
-        resolved_prompts_dir / "prompt_acl.spec",  # legacy fallback
+        resolved_prompts_dir / "prompt_acl.spec",  # secondary lookup
     ]
     payload: Dict[str, Any] = {}
     for spec_path in candidate_paths:
@@ -1402,32 +1454,32 @@ def build_system_prompt(
     return "".join(parts)
 
 
-def build_system_prompt_for_path(
-    path: str,
+def build_system_prompt_for_route_semantic(
+    route_semantic: str,
     *,
     include_skills: bool = True,
     skill_name: Optional[str] = None,
 ) -> str:
     """
-    按路由路径构建裁剪后的系统提示词。
+    按路由语义构建裁剪后的系统提示词。
 
-    - path-a: 外层只读 — 完整对话风格 + 技能元数据，不注入工具指令
-    - path-b: 外层澄清 — 完整对话风格 + 技能元数据，不注入工具指令
-    - path-c: Core 执行 — 使用精简 core_exec_base + 工具指令，不注入闲聊风格
+    - shell_readonly: Shell 只读 — 完整对话风格 + 技能元数据，不注入工具指令
+    - shell_clarify: Shell 澄清 — 完整对话风格 + 技能元数据，不注入工具指令
+    - core_execution: Core 执行 — 使用精简 core_exec_base + 工具指令，不注入闲聊风格
 
     异常时降级到原始 build_system_prompt()。
     """
-    normalized_path = str(path or "path-c").strip().lower()
+    normalized_route_semantic = str(route_semantic or "core_execution").strip().lower()
     try:
-        if normalized_path in {"path-a", "path-b"}:
-            # Outer 路径：完整对话风格，不注入工具指令
+        if normalized_route_semantic in {"shell_readonly", "shell_clarify"}:
+            # Shell 路由语义：完整对话风格，不注入工具指令
             return build_system_prompt(
                 include_skills=include_skills,
                 include_tool_instructions=False,
                 skill_name=skill_name,
             )
 
-        # path-c: Core 执行路径
+        # core_execution: Core 执行路径
         # 使用精简的 Core 身份 prompt 替代闲聊风格 prompt
         core_prompt_file = Path(__file__).parent / "prompts" / "agents" / "core_exec" / "core_exec_base.md"
         if core_prompt_file.exists():
@@ -1474,17 +1526,17 @@ def build_system_prompt_for_path(
 
     except Exception as exc:
         logging.getLogger(__name__).warning(
-            "build_system_prompt_for_path(%s) 降级到 build_system_prompt: %s", path, exc
+            "build_system_prompt_for_route_semantic(%s) 降级到 build_system_prompt: %s", route_semantic, exc
         )
         return build_system_prompt(
             include_skills=include_skills,
-            include_tool_instructions=(normalized_path == "path-c"),
+            include_tool_instructions=(normalized_route_semantic == "core_execution"),
             skill_name=skill_name,
         )
 
 
-class NagaConfig(BaseModel):
-    """NagaAgent主配置类"""
+class EmblaSystemConfig(BaseModel):
+    """Embla System 主配置类。"""
 
     system: SystemConfig = Field(default_factory=SystemConfig)
     api: APIConfig = Field(default_factory=APIConfig)
@@ -1503,7 +1555,7 @@ class NagaConfig(BaseModel):
     mqtt: MQTTConfig = Field(default_factory=MQTTConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     floating: FloatingConfig = Field(default_factory=FloatingConfig)
-    naga_portal: NagaPortalConfig = Field(default_factory=NagaPortalConfig)
+    embla_portal: EmblaPortalConfig = Field(default_factory=EmblaPortalConfig)
     online_search: OnlineSearchConfig = Field(default_factory=OnlineSearchConfig)
     crawl4ai: Crawl4AIConfig = Field(default_factory=Crawl4AIConfig)
     system_check: SystemCheckConfig = Field(default_factory=SystemCheckConfig)
@@ -1549,7 +1601,7 @@ def load_config():
                     with open(config_path, "r", encoding=detected_encoding) as f:
                         # 使用json5解析支持注释的JSON
                         try:
-                            config_data = json5.load(f)
+                            config_data = normalize_runtime_config_payload(json5.load(f))
                         except Exception as json5_error:
                             print(f"json5解析失败: {json5_error}")
                             print("尝试使用标准JSON库解析（将忽略注释）...")
@@ -1566,9 +1618,10 @@ def load_config():
                                 if line.strip():  # 只保留非空行
                                     cleaned_lines.append(line)
                             cleaned_content = "\n".join(cleaned_lines)
-                            config_data = json.loads(cleaned_content)
+                            config_data = normalize_runtime_config_payload(json.loads(cleaned_content))
+                    config_data = normalize_runtime_config_payload(config_data)
                     _sync_server_ports_from_config_data(config_data)
-                    return NagaConfig(**config_data)
+                    return EmblaSystemConfig(**config_data)
                 else:
                     print(f"警告：无法检测 {config_path} 的编码")
             else:
@@ -1578,24 +1631,24 @@ def load_config():
             print("使用回退方法加载配置")
             with open(config_path, "r", encoding="utf-8") as f:
                 # 使用json5解析支持注释的JSON
-                config_data = json5.load(f)
+                config_data = normalize_runtime_config_payload(json5.load(f))
             _sync_server_ports_from_config_data(config_data)
-            return NagaConfig(**config_data)
+            return EmblaSystemConfig(**config_data)
 
         except Exception as e:
             print(f"警告：加载 {config_path} 失败: {e}")
             print("使用默认配置")
-            return NagaConfig()
+            return EmblaSystemConfig()
     else:
         print(f"警告：配置文件 {config_path} 不存在，使用默认配置")
 
-    return NagaConfig()
+    return EmblaSystemConfig()
 
 
 config = load_config()
 
 
-def reload_config() -> NagaConfig:
+def reload_config() -> EmblaSystemConfig:
     """重新加载配置"""
     global config
     config = load_config()
@@ -1603,7 +1656,7 @@ def reload_config() -> NagaConfig:
     return config
 
 
-def hot_reload_config() -> NagaConfig:
+def hot_reload_config() -> EmblaSystemConfig:
     """热更新配置 - 重新加载配置并通知所有模块"""
     global config
     old_config = config
@@ -1613,14 +1666,14 @@ def hot_reload_config() -> NagaConfig:
     return config
 
 
-def get_config() -> NagaConfig:
+def get_config() -> EmblaSystemConfig:
     """获取当前配置"""
     return config
 
 
 # 初始化时打印配置信息
 if config.system.debug:
-    print(f"NagaAgent {config.system.version} 配置已加载")
+    print(f"Embla System {config.system.version} 配置已加载")
     print(
         f"API服务器: {'启用' if config.api_server.enabled else '禁用'} ({config.api_server.host}:{config.api_server.port})"
     )

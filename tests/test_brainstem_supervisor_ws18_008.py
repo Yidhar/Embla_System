@@ -115,7 +115,7 @@ def test_brainstem_supervisor_renders_deployment_templates() -> None:
             BrainstemServiceSpec(
                 service_name="brainstem-watchdog",
                 command=["python", "main.py", "--headless"],
-                working_dir="E:/Programs/NagaAgent",
+                working_dir="E:/Programs/Embla_System",
                 restart_policy="on-failure",
                 max_restarts=5,
                 restart_backoff_seconds=3,
@@ -124,9 +124,9 @@ def test_brainstem_supervisor_renders_deployment_templates() -> None:
         )
 
         systemd_unit = supervisor.render_systemd_unit("brainstem-watchdog")
-        assert "Description=Naga Brainstem Service (brainstem-watchdog)" in systemd_unit
+        assert "Description=Embla Brainstem Service (brainstem-watchdog)" in systemd_unit
         assert "Restart=on-failure" in systemd_unit
-        assert "Environment=NAGA_BRAINSTEM_STATE_FILE=" in systemd_unit
+        assert "Environment=EMBLA_BRAINSTEM_STATE_FILE=" in systemd_unit
 
         windows_plan = supervisor.render_windows_recovery_template("brainstem-watchdog")
         assert windows_plan["service_name"] == "brainstem-watchdog"

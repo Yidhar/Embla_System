@@ -1,10 +1,10 @@
 [project]
 
-name = "nagaagent"
+name = "embla-system"
 
 version = "5.0.0"
 
-description = "NagaAgent 5.0 - 智能对话助手，支持多MCP服务、GRAG知识图谱记忆系统、RESTful API接口"
+description = "Embla System 5.0 - 智能运行与对话平台，支持多MCP服务、Shell L2 图谱记忆与 RESTful API 接口"
 
 authors = [
 

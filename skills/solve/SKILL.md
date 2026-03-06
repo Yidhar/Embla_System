@@ -2,7 +2,7 @@
 name: solve
 description: "问题解决技能。针对用户描述的具体问题，提供分步骤的解决方案。适用于技术问题、日常疑难、学习困惑等场景。"
 version: 1.0.0
-author: Naga Team
+author: Embla Team
 tags:
   - solve
   - help

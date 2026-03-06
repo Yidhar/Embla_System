@@ -11,7 +11,7 @@ from core.supervisor import BrainstemServiceSpec, BrainstemSupervisor
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export brainstem service supervision templates.")
-    parser.add_argument("--service-name", default="naga-brainstem", help="Service name")
+    parser.add_argument("--service-name", default="embla-brainstem", help="Service name")
     parser.add_argument("--command", nargs="+", default=["python", "main.py", "--headless"], help="Service command")
     parser.add_argument("--working-dir", default=".", help="Working directory")
     parser.add_argument(

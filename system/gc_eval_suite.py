@@ -119,7 +119,7 @@ def default_gc_eval_cases() -> list[GCEvalCase]:
             {
                 "trace": "trace-array-006",
                 "errorCode": "ERR_NET_RESET",
-                "source_path": "/var/log/naga/net.log",
+                "source_path": "/var/log/embla/net.log",
                 "ptr": "0xFFEEAA11",
             }
         ],
@@ -150,11 +150,11 @@ def default_gc_eval_cases() -> list[GCEvalCase]:
         GCEvalCase(
             case_id="text_windows_002",
             content_type="text/plain",
-            payload=r"panic trace-triage-002 HTTP 503 C:\ProgramData\Naga\logs\agent.log ptr=0xABCDEF12",
+            payload=r"panic trace-triage-002 HTTP 503 C:\ProgramData\Embla\logs\agent.log ptr=0xABCDEF12",
             expected={
                 "trace_ids": ["trace-triage-002"],
                 "error_codes": ["503"],
-                "paths": [r"C:\ProgramData\Naga\logs\agent.log"],
+                "paths": [r"C:\ProgramData\Embla\logs\agent.log"],
                 "hex_addresses": ["0xabcdef12"],
             },
         ),
@@ -208,7 +208,7 @@ def default_gc_eval_cases() -> list[GCEvalCase]:
             expected={
                 "trace_ids": ["trace-array-006"],
                 "error_codes": ["ERR_NET_RESET"],
-                "paths": ["/var/log/naga/net.log"],
+                "paths": ["/var/log/embla/net.log"],
                 "hex_addresses": ["0xffeeaa11"],
             },
         ),

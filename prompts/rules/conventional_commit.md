@@ -28,5 +28,5 @@
 ```
 feat(agents): add PromptAssembler for atomic prompt composition
 fix(memory): correct _index.md tag dedup logic
-refactor(pipeline): remove path-c gate from run_multi_agent_pipeline
+refactor(pipeline): remove core_execution gate from run_multi_agent_pipeline
 ```

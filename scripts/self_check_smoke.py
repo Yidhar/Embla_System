@@ -1,4 +1,4 @@
-"""Minimal self-check smoke tests for NagaAgent autonomous core.
+"""Minimal self-check smoke tests for Embla System autonomous core.
 
 Run: python scripts/self_check_smoke.py
 """

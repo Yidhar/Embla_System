@@ -22,8 +22,8 @@ from scripts.clean_checkout_dual_track import (
 
 
 def test_normalize_output_rewrites_paths_and_newlines() -> None:
-    workspace_root = r"C:\repo\naga"
-    clean_root = r"C:\repo\naga\scratch\clean_ws17"
+    workspace_root = r"C:\repo\Embla_System"
+    clean_root = r"C:\repo\Embla_System\scratch\clean_ws17"
     raw = (
         "line-one   \r\n"
         f"workspace={workspace_root}\\tests\\case.py\r\n"
@@ -117,7 +117,7 @@ def test_worktree_command_builders() -> None:
 
 
 def test_create_clean_worktree_uses_git_runner_mock() -> None:
-    repo_root = Path("E:/Programs/NagaAgent")
+    repo_root = Path("E:/Programs/Embla_System")
     worktree_path = repo_root / "scratch" / "clean_checkout_dual_track" / "ws17"
     git_runner = Mock(return_value=CompletedProcess(args=["git"], returncode=0, stdout="", stderr=""))
 
@@ -130,7 +130,7 @@ def test_create_clean_worktree_uses_git_runner_mock() -> None:
 
 
 def test_create_clean_worktree_raises_when_git_fails() -> None:
-    repo_root = Path("E:/Programs/NagaAgent")
+    repo_root = Path("E:/Programs/Embla_System")
     worktree_path = repo_root / "scratch" / "clean_checkout_dual_track" / "ws17_fail"
     git_runner = Mock(return_value=CompletedProcess(args=["git"], returncode=1, stdout="", stderr="boom"))
 
@@ -139,7 +139,7 @@ def test_create_clean_worktree_raises_when_git_fails() -> None:
 
 
 def test_cleanup_worktree_returns_failure_details() -> None:
-    repo_root = Path("E:/Programs/NagaAgent")
+    repo_root = Path("E:/Programs/Embla_System")
     worktree_path = repo_root / "scratch" / "clean_checkout_dual_track" / "ws17_cleanup"
     git_runner = Mock(return_value=CompletedProcess(args=["git"], returncode=1, stdout="", stderr="dirty tree"))
 

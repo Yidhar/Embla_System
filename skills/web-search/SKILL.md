@@ -2,7 +2,7 @@
 name: web-search
 description: 网络搜索和信息检索技能。用于搜索网页、查询实时信息、获取新闻资讯。当用户询问需要联网查询的问题、最新信息或实时数据时使用。
 version: 1.0.0
-author: Naga Team
+author: Embla Team
 tags:
   - search
   - web

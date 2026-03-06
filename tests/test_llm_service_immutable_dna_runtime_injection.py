@@ -5,8 +5,10 @@ import shutil
 import uuid
 from pathlib import Path
 
+import pytest
+
 import apiserver.llm_service as llm_service_module
-from system.immutable_dna import DNAFileSpec, ImmutableDNALoader
+from core.security.immutable_dna import DNAFileSpec, ImmutableDNALoader
 
 
 def _make_case_root(prefix: str) -> Path:
@@ -17,6 +19,20 @@ def _make_case_root(prefix: str) -> Path:
 
 def _cleanup_case_root(root: Path) -> None:
     shutil.rmtree(root, ignore_errors=True)
+
+
+_DNA_ENV_KEYS = (
+    "EMBLA_IMMUTABLE_DNA_RUNTIME_INJECTION",
+    "EMBLA_IMMUTABLE_DNA_PROMPTS_ROOT",
+    "EMBLA_IMMUTABLE_DNA_MANIFEST_PATH",
+    "EMBLA_IMMUTABLE_DNA_AUDIT_PATH",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_immutable_dna_env(monkeypatch) -> None:
+    for env_name in _DNA_ENV_KEYS:
+        monkeypatch.delenv(env_name, raising=False)
 
 
 def _write_required_prompts(root: Path) -> None:
@@ -197,3 +213,4 @@ def test_llm_service_immutable_dna_preflight_reports_failure_on_mismatch(monkeyp
         assert "agentic_tool_prompt.md" in list(verify.get("mismatch_files") or [])
     finally:
         _cleanup_case_root(case_root)
+

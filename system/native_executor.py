@@ -112,7 +112,7 @@ class NativeExecutor:
         Robust Windows-safe containment check.
 
         Avoids prefix bugs like:
-        - E:\\Programs\\NagaAgent2 incorrectly matching E:\\Programs\\NagaAgent
+        - E:\\Programs\\Embla_System2 incorrectly matching E:\\Programs\\Embla_System
         """
         try:
             root_s = os.path.normcase(os.path.abspath(str(root)))

@@ -2,7 +2,7 @@
 name: translate
 description: "翻译技能。将用户提供的文本翻译为目标语言。默认在中文和英文之间互译：中文内容翻译为英文，英文内容翻译为中文。"
 version: 1.0.0
-author: Naga Team
+author: Embla Team
 tags:
   - translate
   - language

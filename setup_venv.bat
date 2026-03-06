@@ -4,7 +4,7 @@ setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 echo ========================================
-echo   NagaAgent 虚拟环境重配
+echo   Embla System 虚拟环境重配
 echo ========================================
 echo.
 

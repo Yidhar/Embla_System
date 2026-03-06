@@ -1,6 +1,6 @@
 ﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Build NagaAgent Windows package."""
+"""Build Embla System Windows package."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from typing import Optional
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 EMBLA_CORE_DIR = PROJECT_ROOT / "Embla_core"
 DEFAULT_BACKEND_DIST_DIR = PROJECT_ROOT / "dist" / "backend-dist"
-SPEC_FILE = PROJECT_ROOT / "naga-backend.spec"
+SPEC_FILE = PROJECT_ROOT / "embla-backend.spec"
 PHASE3_CLOSURE_SCRIPT = PROJECT_ROOT / "scripts" / "release_phase3_closure_chain_ws22_004.py"
 
 MIN_PYTHON = (3, 11)
@@ -122,7 +122,7 @@ def build_backend(*, backend_dist_dir: Path) -> None:
         cwd=PROJECT_ROOT,
     )
 
-    backend_exe = backend_dist_dir / "naga-backend" / "naga-backend.exe"
+    backend_exe = backend_dist_dir / "embla-backend" / "embla-backend.exe"
     if not backend_exe.exists():
         raise FileNotFoundError(f"backend artifact missing: {backend_exe}")
     log(f"Backend build complete: {backend_exe}")
@@ -155,13 +155,13 @@ def print_summary(*, backend_dist_dir: Path) -> None:
     print("  Build complete")
     print("=" * 50)
 
-    backend_dir = backend_dist_dir / "naga-backend"
+    backend_dir = backend_dist_dir / "embla-backend"
     if backend_dir.exists():
         size = sum(f.stat().st_size for f in backend_dir.rglob("*") if f.is_file())
         log(f"Backend artifact: {backend_dir} ({size / 1024 / 1024:.0f} MB)")
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="NagaAgent Windows build script")
+    parser = argparse.ArgumentParser(description="Embla System Windows build script")
     parser.add_argument("--backend-only", action="store_true", help="Build backend only")
     parser.add_argument(
         "--phase3-closure",

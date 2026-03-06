@@ -2,7 +2,7 @@
 name: verify-authenticity
 description: "真实性验证技能。分析用户提供的信息、消息、图片或内容，判断其真实性和可信度，识别虚假信息、AI生成内容或伪造内容。"
 version: 1.0.0
-author: Naga Team
+author: Embla Team
 tags:
   - security
   - verify

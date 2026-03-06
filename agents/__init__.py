@@ -45,5 +45,5 @@ __all__ = [
     "run_multi_agent_pipeline",
     "get_agentic_tool_definitions",
     "convert_structured_tool_calls",
-    "run_agentic_loop",  # legacy — kept for backward compat
+    "run_agentic_loop",  # public re-export
 ]

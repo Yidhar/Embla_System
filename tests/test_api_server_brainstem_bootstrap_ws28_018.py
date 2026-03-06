@@ -2,7 +2,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import apiserver.api_server as api_server
+
+
+_BRAINSTEM_ENV_KEYS = (
+    "EMBLA_BRAINSTEM_AUTOSTART",
+    "EMBLA_BRAINSTEM_AUTOSTOP_ON_API_SHUTDOWN",
+    "EMBLA_BRAINSTEM_AUTOSTART_TIMEOUT_SECONDS",
+    "EMBLA_BRAINSTEM_BOOTSTRAP_OWNER",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_brainstem_bootstrap_env(monkeypatch) -> None:
+    for env_name in _BRAINSTEM_ENV_KEYS:
+        monkeypatch.delenv(env_name, raising=False)
 
 
 def test_brainstem_bootstrap_startup_skips_by_default_under_pytest(monkeypatch, tmp_path: Path) -> None:

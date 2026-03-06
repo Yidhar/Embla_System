@@ -29,7 +29,7 @@ class WorkspaceChange:
     encoding: str = "utf-8"
     # optimistic-lock hash from caller's baseline. accept alias expected_file_hash upstream.
     original_file_hash: str = ""
-    # optional explicit alias to ease legacy/heterogeneous callers.
+    # optional explicit alias to ease mixed/heterogeneous callers.
     expected_file_hash: str = ""
     # baseline content used for conservative 3-way semantic rebase when hash mismatch.
     original_content: Optional[str] = None

@@ -25,7 +25,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from system.config import get_config, get_immutable_dna_locked_prompts, resolve_prompt_registry_entry
 from core.security import DNAFileSpec, ImmutableDNALoader
-from . import naga_auth
 
 logger = logging.getLogger("LLMService")
 
@@ -49,10 +48,10 @@ class LLMService:
 
     PROTOCOL_OPENAI_CHAT = "openai_chat_completions"
     DNA_RUNTIME_HEADER = "[Immutable DNA Runtime Injection]"
-    DNA_RUNTIME_ENABLED_ENV = "NAGA_IMMUTABLE_DNA_RUNTIME_INJECTION"
-    DNA_PROMPTS_ROOT_ENV = "NAGA_IMMUTABLE_DNA_PROMPTS_ROOT"
-    DNA_MANIFEST_PATH_ENV = "NAGA_IMMUTABLE_DNA_MANIFEST_PATH"
-    DNA_AUDIT_PATH_ENV = "NAGA_IMMUTABLE_DNA_AUDIT_PATH"
+    DNA_RUNTIME_ENABLED_ENV = "EMBLA_IMMUTABLE_DNA_RUNTIME_INJECTION"
+    DNA_PROMPTS_ROOT_ENV = "EMBLA_IMMUTABLE_DNA_PROMPTS_ROOT"
+    DNA_MANIFEST_PATH_ENV = "EMBLA_IMMUTABLE_DNA_MANIFEST_PATH"
+    DNA_AUDIT_PATH_ENV = "EMBLA_IMMUTABLE_DNA_AUDIT_PATH"
     DNA_REQUIRED_FILES_DEFAULT = (
         "conversation_style_prompt.md",
         "agentic_tool_prompt.md",
@@ -370,10 +369,6 @@ class LLMService:
         model = model or cfg.api.model
         base_url = (base_url or cfg.api.base_url or "").lower()
 
-        # Keep existing gateway behavior
-        if naga_auth.is_authenticated():
-            return "openai/default"
-
         if "/" in model:
             return model
 
@@ -469,19 +464,12 @@ class LLMService:
         extra_body = self._filter_extra_body_for_protocol(self.PROTOCOL_OPENAI_CHAT, self._get_config_extra_body())
 
         params: Dict[str, Any] = {}
-
-        if naga_auth.is_authenticated():
-            token = naga_auth.get_access_token()
-            params["api_key"] = token
-            params["api_base"] = naga_auth.NAGA_MODEL_URL + "/"
-            extra_body["user_token"] = token
-        else:
-            params["api_key"] = api_key or cfg.api.api_key
-            base = api_base or cfg.api.base_url
-            normalized_google_base = self._normalize_google_openai_compat_base(base)
-            if normalized_google_base:
-                base = normalized_google_base
-            params["api_base"] = base.rstrip("/") + "/" if base else None
+        params["api_key"] = api_key or cfg.api.api_key
+        base = api_base or cfg.api.base_url
+        normalized_google_base = self._normalize_google_openai_compat_base(base)
+        if normalized_google_base:
+            base = normalized_google_base
+        params["api_base"] = base.rstrip("/") + "/" if base else None
 
         if extra_body:
             params["extra_body"] = extra_body
@@ -779,7 +767,6 @@ class LLMService:
 
         cfg = get_config()
         max_attempts = 3
-        auth_retried = False
 
         if model_override:
             final_model = model_override.get("model") or cfg.api.model
@@ -843,9 +830,8 @@ class LLMService:
                     provider_params["custom_llm_provider"] = provider_override
 
                 logger.debug(
-                    "[LLM] attempt=%s is_auth=%s api_base=%s model=%s",
+                    "[LLM] attempt=%s api_base=%s model=%s",
                     attempt,
-                    naga_auth.is_authenticated(),
                     llm_params.get("api_base"),
                     model_name,
                 )
@@ -897,25 +883,9 @@ class LLMService:
                 return
 
             except litellm.AuthenticationError as e:
-                logger.error(
-                    "LLM 401 diagnostic: attempt=%s is_auth=%s has_refresh=%s",
-                    attempt,
-                    naga_auth.is_authenticated(),
-                    naga_auth.has_refresh_token(),
-                )
-                if naga_auth.is_authenticated():
-                    if not auth_retried:
-                        auth_retried = True
-                        try:
-                            await naga_auth.refresh()
-                            logger.info("Token refresh success, retrying LLM call")
-                            continue
-                        except Exception as refresh_err:
-                            logger.error("Token refresh failed: %s", refresh_err)
-                    yield self._format_sse_chunk("auth_expired", "Login expired, please sign in again")
-                else:
-                    safe_error = self._sanitize_litellm_error_text(e)
-                    yield self._format_sse_chunk("error", f"LLM authentication failed: {safe_error}")
+                logger.error("LLM authentication failed: attempt=%s", attempt)
+                safe_error = self._sanitize_litellm_error_text(e)
+                yield self._format_sse_chunk("error", f"LLM authentication failed: {safe_error}")
                 return
 
             except Exception as e:

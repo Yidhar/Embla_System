@@ -13,6 +13,8 @@ from typing import Any, Dict, Iterable, List
 
 
 LEGACY_SHIM_MODULES = (
+    "apiserver.agentic_tool_loop",
+    "system.immutable_dna",
     "system.global_mutex",
     "system.policy_firewall",
     "system.watchdog_daemon",
