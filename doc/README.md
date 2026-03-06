@@ -25,33 +25,31 @@
    - `L0-RUNTIME`：当前模块总览、运行链路与关键边界。
 4. `doc/02-module-archive.md`
    - `L0-RUNTIME`：模块职责归档、关键文件与风险点。
-5. `doc/03-qt-migration-assessment.md`
-   - `L1-TARGET`：Qt 前端迁移可行性评估与分阶段路线。
-6. `doc/04-api-protocol-proxy-guide.md`
+5. `doc/04-api-protocol-proxy-guide.md`
    - `L0-RUNTIME`：模型协议、路由归一与代理行为说明。
-7. `doc/05-dev-startup-and-index.md`
+6. `doc/05-dev-startup-and-index.md`
    - `L0-RUNTIME`：开发启动 runbook、端口基线与排障清单。
-8. `doc/06-structured-tool-calls-and-local-first-native.md`
+7. `doc/06-structured-tool-calls-and-local-first-native.md`
    - `L0-RUNTIME`：结构化工具调用链路与本地优先执行策略。
-9. `doc/07-archived-autonomous-agent-sdlc-architecture.md`
+8. `doc/07-archived-autonomous-agent-sdlc-architecture.md`
    - `L3-ARCHIVE`：历史自治 SDLC 架构与迁移演进记录（非当前主链）。
-10. `doc/08-frontend-backend-separation-plan.md`
+9. `doc/08-frontend-backend-separation-plan.md`
     - `L0/L1`：前后端边界收敛与分阶段解耦方案（含现状与目标）。
-11. `doc/09-tool-execution-specification.md`
+10. `doc/09-tool-execution-specification.md`
     - `L2-RUNBOOK`：工具调用规范、风控门禁与审计模板。
-12. `doc/10-brainstem-layer-modules.md`
+11. `doc/10-brainstem-layer-modules.md`
     - `L1-TARGET`：目标态脑干层模块设计（Phase 2-3 规划）。
-13. `doc/11-brain-layer-modules.md`
+12. `doc/11-brain-layer-modules.md`
     - `L1-TARGET`：目标态大脑层模块设计（Phase 3 规划）。
-14. `doc/12-limbs-layer-modules.md`
+13. `doc/12-limbs-layer-modules.md`
     - `L1-TARGET`：目标态手脚层模块设计（Phase 3 规划）。
-15. `doc/13-security-blindspots-and-hardening.md`
+14. `doc/13-security-blindspots-and-hardening.md`
     - `L2-RUNBOOK`：安全盲区审计与强制加固基线（覆盖命令混淆、插件隔离、锁泄漏、评测毒化等）。
-16. `doc/task-autonomous-skeleton.md`
+15. `doc/task-autonomous-skeleton.md`
     - `L3-ARCHIVE`：自治骨架早期实施追踪（历史归档，不作为当前执行链依据）。
-17. `doc/task/README.md`
+16. `doc/task/README.md`
     - `L2/L3`：迁移与增量开发任务拆解总览（结构化工作流 + CSV backlog + 历史归档入口）。
-18. `doc/task/implementation/README.md`
+17. `doc/task/implementation/README.md`
     - `L3-ARCHIVE`：任务实施记录归档层说明（Implementation 目录统一口径）。
 
 ## 当前口径优先级（执行主链）

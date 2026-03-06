@@ -113,6 +113,5 @@ BFF 内部编排：
 
 - 总览：`./01-module-overview.md`
 - 模块归档：`./02-module-archive.md`
-- Qt 改造：`./03-qt-migration-assessment.md`
 - 工具管线：`./06-structured-tool-calls-and-local-first-native.md`
 - 工具治理：`./09-tool-execution-specification.md`
