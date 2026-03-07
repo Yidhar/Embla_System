@@ -1,7 +1,7 @@
 # WS22 Phase 3 - Scheduler Bridge & Gradual Takeover
 
 
-> Migration Note (archived/legacy)
+> 口径说明（archived）
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
 ## 目标
@@ -47,7 +47,7 @@
 - priority: P1
 - phase: M7
 - owner_role: backend
-- scope: `agents/pipeline.py`, `autonomous/scaffold_engine.py`（archived/legacy）
+- scope: `agents/pipeline.py`, `autonomous/scaffold_engine.py`（archived）
 - inputs: `doc/12#8.4`, `doc/09#11`
 - deliverables:
   - 当 `scaffold_result/negotiation_result` 失败时，统一映射到发布门禁拒绝路径

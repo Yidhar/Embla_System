@@ -1,30 +1,30 @@
 ---
-**文档类型**：Historical Archive（archived/legacy）
+**文档类型**：Historical Archive（archived）
 **实施状态**：归档（不作为当前主链设计与运行基线）
 **最后更新**：2026-03-04
-**历史实现基线**：autonomous/（archived/legacy，已退役；能力已迁移至 agents/core）
+**历史实现基线**：autonomous/（archived，已退役；能力已迁移至 agents/core）
 **目标态参考**：00-omni-operator-architecture.md (Phase 3)
 ---
 
 # 07 Archived Autonomous Agent SDLC 架构（历史归档）
 
 
-> Migration Note (archived/legacy)
+> 口径说明（archived）
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
-文档状态：Historical Archive（archived/legacy）
+文档状态：Historical Archive（archived）
 最后更新：2026-03-04
 
 ## 1. 文档定位
 
 本文不再把目标态与现状混写。
 
-- `As-Is`：历史 `autonomous/`（archived/legacy）已落地能力（用于追溯，不作为当前运行基线）。
+- `As-Is`：历史 `autonomous/`（archived）已落地能力（用于追溯，不作为当前运行基线）。
 - `Target`：Embla System 目标架构（`00-omni-operator-architecture.md` + 10/11/12）。
 - `Gap`：从当前到目标态的实施差距。
 - `状态判定`：是否属于 `BRIDGE_DONE` / `TARGET_DONE` 以 `doc/task/25-subagent-development-fabric-status-matrix.md` 为准。
 
-## 1.1 autonomous/（archived/legacy）模块统一定位
+## 1.1 autonomous/（archived）模块统一定位
 
 **核心职责**：
 - System Agent 自治闭环（感知 → 规划 → 执行 → 评估）
@@ -205,7 +205,7 @@
 
 ## 7. 本版本结论
 
-`autonomous/`（archived/legacy）是历史可运行 SDLC 子系统实现，当前主链已迁移到 `agents/*` 与 `core/*`。
+`autonomous/`（archived）是历史可运行 SDLC 子系统实现，当前主链已迁移到 `agents/*` 与 `core/*`。
 
 当前文档语义应视为：
 

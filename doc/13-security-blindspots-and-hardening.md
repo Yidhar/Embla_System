@@ -1,12 +1,12 @@
 # 13 安全盲区与加固基线（面向当前实现）
 
 
-> Migration Note (archived/legacy)
+> 口径说明（archived）
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
 文档状态：安全审计基线（As-Is 风险识别 + 强制加固）  
 最后更新：2026-02-23  
-适用范围：`apiserver/`、`system/`、`mcpserver/`、`agents/`、`core/`（`autonomous/` 为 archived/legacy 追溯路径）
+适用范围：`apiserver/`、`system/`、`mcpserver/`、`agents/`、`core/`（`autonomous/` 为 archived 追溯路径）
 
 ## 1. 目标
 

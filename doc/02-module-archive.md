@@ -4,11 +4,6 @@
 最后更新：2026-02-28
 
 ## 1. 归档规则
-
-
-> Migration Note (archived/legacy)
-> 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
-
 本归档按“模块职责 + 当前状态 + Embla System 对齐”统一表达。
 
 状态标签：
@@ -24,7 +19,7 @@ Embla System 在当前项目的集成层由三块组成：
 
 1. BFF 入口：`apiserver/`
 2. MCP Host + Tool Registry：`mcpserver/`
-3. 自治控制代理（历史实现归档）：`autonomous/`（archived/legacy）
+3. 自治控制代理（历史实现归档）：`autonomous/`（archived）
 
 该集成层负责把前端请求、模型调用、工具执行与自治闭环收敛到统一控制面。
 
@@ -57,7 +52,7 @@ Embla System 在当前项目的集成层由三块组成：
 
 ### 3.4 自治系统代理（历史实现归档）
 
-模块：`autonomous/`（archived/legacy，目录已退役）
+模块：`autonomous/`（archived，目录已退役）
 
 - 职责（历史）：System Agent 循环、任务编排、事件日志、命令幂等、发布治理。
 - 当前承接：
@@ -65,7 +60,7 @@ Embla System 在当前项目的集成层由三块组成：
   - `agents/runtime/workflow_store.py`
   - `core/event_bus/event_store.py`
   - `agents/release/controller.py`
-- Embla System 对齐：上述承接模块构成当前 Brainstem 控制与治理主链；`autonomous/`（archived/legacy）仅保留历史语义。
+- Embla System 对齐：上述承接模块构成当前 Brainstem 控制与治理主链；`autonomous/`（archived）仅保留历史语义。
 
 ### 3.5 MCP 主机与注册中心
 

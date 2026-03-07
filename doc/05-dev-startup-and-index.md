@@ -6,7 +6,7 @@
 ## 1. 目标
 
 
-> Migration Note (archived/legacy)
+> 口径说明（archived）
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
 提供一份可直接执行的开发启动 runbook，覆盖：
@@ -127,7 +127,7 @@ curl http://127.0.0.1:8003/status
 
 - `main.py`：服务编排、代理环境、启动入口。
 - `apiserver/`：BFF 与工具循环。
-- `autonomous/`（archived/legacy）：历史自治闭环实现（已退役，仅保留归档说明）。
+- `autonomous/`（archived）：历史自治闭环实现（已退役，仅保留归档说明）。
 - `mcpserver/`：MCP Host 与 Tool Registry。
 - `summer_memory/`：记忆与图谱。
 - `guide_engine/`：领域问答与计算。

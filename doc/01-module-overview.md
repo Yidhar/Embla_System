@@ -20,7 +20,7 @@
 - `main.py`：后端总入口，负责服务编排与生命周期管理。
 - `system/`：配置、日志、系统检查、提示词、基础策略工具。
 - `apiserver/`：统一 BFF（前后端唯一入口），提供 REST/SSE。
-- `autonomous/`（archived/legacy）：历史 System Agent 自治闭环实现（已退役，保留文档追溯）。
+- `autonomous/`（archived）：历史 System Agent 自治闭环实现（已退役，保留文档追溯）。
 - `mcpserver/`：MCP Host + Tool Registry + 外部 mcporter 接入。
 - `summer_memory/`：GRAG 记忆、五元组抽取、Neo4j 检索。
 - `Embla_core/`：Next.js 运维与调试前端（当前主链前端）。
@@ -106,7 +106,7 @@
 - `apiserver/native_tools.py` + `system/native_executor.py`
 - `mcpserver/mcp_registry.py` + `mcpserver/mcp_manager.py`
 - `agents/runtime/mini_loop.py`（子代理依赖调度、契约协商前置与统一提交）
-- `autonomous/scaffold_engine.py`（archived/legacy）（契约门禁 + verify pipeline + 多文件事务回滚）
+- `autonomous/scaffold_engine.py`（archived）（契约门禁 + verify pipeline + 多文件事务回滚）
 
 ## 6. Legacy AgentServer 状态（已移除）
 

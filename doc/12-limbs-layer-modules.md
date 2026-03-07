@@ -9,7 +9,7 @@
 # 12 - 手脚层模块详细架构 (Limbs Layer Modules)
 
 
-> Migration Note (archived/legacy)
+> 口径说明（archived）
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
 > **定位**：手脚层是 Embla System 的执行末端，所有能力以 MCP (Model Context Protocol) 形式挂载，支持热插拔和动态注册。
@@ -25,7 +25,7 @@
 > - os_bash → Native Executor (system/native_executor.py)
 > - file_ast → 无（目标态）
 > - Sub-Agent Runtime → `agents/runtime/mini_loop.py`（Phase 3 增量 v1：依赖调度 + 契约协商前置 + 事件锚点）
-> - Scaffold Engine → `autonomous/scaffold_engine.py`（archived/legacy）（契约门禁 + 可插拔 verify pipeline + 事务回滚）
+> - Scaffold Engine → `autonomous/scaffold_engine.py`（archived）（契约门禁 + 可插拔 verify pipeline + 事务回滚）
 > - Execution Bridge → `agents/tool_loop.py`（内生可审计执行桥已落地；语义级能力持续补齐）
 > - CLI Adapter → 历史兼容入口（非默认主路径）
 >

@@ -1,7 +1,7 @@
 # WS21 Phase 3 - Sub-Agent Runtime + Scaffold Engine
 
 
-> Migration Note (archived/legacy)
+> 口径说明（archived）
 > 文中 `autonomous/*` 路径属于历史实现标识；当前实现请优先使用 `agents/*`、`core/*` 与 `config/autonomous_runtime.yaml`。
 
 ## 目标
@@ -15,7 +15,7 @@
 - priority: P0
 - phase: M6
 - owner_role: backend
-- scope: `autonomous/scaffold_engine.py`（archived/legacy）
+- scope: `autonomous/scaffold_engine.py`（archived）
 - inputs: `doc/12#8`, `doc/13#盲区5`
 - deliverables:
   - contract gate + checksum 校验
