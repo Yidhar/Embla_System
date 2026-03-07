@@ -79,6 +79,7 @@ _PIPELINE_TASK_BOARD: Optional[TaskBoardEngine] = None
 def _get_pipeline_runtime_handles() -> tuple[AgentSessionStore, AgentMailbox, TaskBoardEngine]:
     global _PIPELINE_SESSION_STORE, _PIPELINE_MAILBOX, _PIPELINE_TASK_BOARD
     if _PIPELINE_SESSION_STORE is not None and _PIPELINE_MAILBOX is not None and _PIPELINE_TASK_BOARD is not None:
+        get_native_tool_executor().set_agent_session_store(_PIPELINE_SESSION_STORE)
         return _PIPELINE_SESSION_STORE, _PIPELINE_MAILBOX, _PIPELINE_TASK_BOARD
 
     with _PIPELINE_RUNTIME_LOCK:
@@ -91,6 +92,7 @@ def _get_pipeline_runtime_handles() -> tuple[AgentSessionStore, AgentMailbox, Ta
                 boards_dir=Path("memory/working/boards"),
                 db_path=runtime_dir / "task_boards.db",
             )
+    get_native_tool_executor().set_agent_session_store(_PIPELINE_SESSION_STORE)
     return _PIPELINE_SESSION_STORE, _PIPELINE_MAILBOX, _PIPELINE_TASK_BOARD
 
 

@@ -15,10 +15,11 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from core.security.killswitch import KillSwitchController
 from system.artifact_store import get_artifact_store
+from system.git_worktree_sandbox import apply_workspace_path_overrides
 from system.native_executor import CommandResult, NativeExecutor, NativeSecurityError
 from core.security import get_policy_firewall
 from system.sleep_watch import wait_for_log_pattern
@@ -26,6 +27,9 @@ from system.subagent_contract import validate_parallel_contract
 from system.test_baseline_guard import TestBaselineGuard, TestPoisoningDetector
 from system.tool_contract import ToolResultEnvelope, build_tool_result_with_artifact
 from system.workspace_transaction import ConflictBackoffConfig, WorkspaceChange, WorkspaceTransactionManager
+
+if TYPE_CHECKING:
+    from agents.runtime.agent_session import AgentSessionStore
 
 
 _DEFAULT_PREVIEW_CHARS = 6000
@@ -501,6 +505,47 @@ class NativeToolExecutor:
             "README.md",
             "README_en.md",
         ]
+        self._agent_session_store: Optional[AgentSessionStore] = None
+
+    def set_agent_session_store(self, store: Optional[AgentSessionStore]) -> None:
+        self._agent_session_store = store
+
+    def _resolve_session_workspace_root(self, call: Dict[str, Any], session_id: str) -> Optional[Path]:
+        store = self._agent_session_store
+        if store is None:
+            return None
+
+        candidate_ids: List[str] = []
+        for raw in (call.get("_session_id"), session_id, call.get("session_id")):
+            normalized = str(raw or "").strip()
+            if normalized and normalized not in candidate_ids:
+                candidate_ids.append(normalized)
+
+        for candidate_id in candidate_ids:
+            session = store.get(candidate_id)
+            if session is None:
+                continue
+            raw_root = str(session.metadata.get("workspace_root") or "").strip()
+            if not raw_root:
+                continue
+            resolved_root = Path(raw_root).resolve(strict=False)
+            if not self.executor._is_within_root(resolved_root, self.executor.PROJECT_ROOT):
+                continue
+            return resolved_root
+        return None
+
+    def _build_effective_call(self, tool_name: str, call: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+        effective_call = dict(call) if isinstance(call, dict) else {}
+        normalized_session_id = str(session_id or effective_call.get("_session_id") or effective_call.get("session_id") or "").strip()
+        if normalized_session_id:
+            effective_call["_session_id"] = normalized_session_id
+        effective_call.pop("session_id", None)
+
+        workspace_root = self._resolve_session_workspace_root(effective_call, normalized_session_id)
+        if workspace_root is not None:
+            effective_call = apply_workspace_path_overrides(tool_name, effective_call, workspace_root)
+            effective_call["_session_workspace_root"] = str(workspace_root)
+        return effective_call
 
     async def execute(self, call: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         tool_name = (call.get("tool_name") or call.get("tool") or "").strip().lower()
@@ -546,60 +591,61 @@ class NativeToolExecutor:
             "repl": "python_repl",
         }
         tool_name = aliases.get(tool_name, tool_name)
+        effective_call = self._build_effective_call(tool_name, call, session_id)
 
-        decision = self.policy_firewall.validate_native_call(tool_name, call)
+        decision = self.policy_firewall.validate_native_call(tool_name, effective_call)
         if not decision.allowed:
             audit_suffix = f" (audit_id={decision.audit_id})" if decision.audit_id else ""
             return self._error(call, f"瀹夊叏闄愬埗: {decision.reason}{audit_suffix}", tool_name=tool_name)
 
         try:
             if tool_name == "read_file":
-                result = await self._read_file(call)
+                result = await self._read_file(effective_call)
             elif tool_name == "write_file":
-                result = await self._write_file(call)
+                result = await self._write_file(effective_call)
             elif tool_name == "get_cwd":
-                result = await self._get_cwd(call)
+                result = await self._get_cwd(effective_call)
             elif tool_name == "run_cmd":
-                result = await self._run_cmd(call)
+                result = await self._run_cmd(effective_call)
             elif tool_name == "search_keyword":
-                result = await self._search_keyword(call)
+                result = await self._search_keyword(effective_call)
             elif tool_name == "query_docs":
-                result = await self._query_docs(call)
+                result = await self._query_docs(effective_call)
             # NOTE:
             # - Web retrieval belongs to Shell's read-only toolchain (`agents/shell_tools.py:search_web`).
             # - Native executor stays local/sandbox-focused to keep capability boundaries explicit.
             elif tool_name == "list_files":
-                result = await self._list_files(call)
+                result = await self._list_files(effective_call)
             elif tool_name == "git_status":
-                result = await self._git_status(call)
+                result = await self._git_status(effective_call)
             elif tool_name == "git_diff":
-                result = await self._git_diff(call)
+                result = await self._git_diff(effective_call)
             elif tool_name == "git_log":
-                result = await self._git_log(call)
+                result = await self._git_log(effective_call)
             elif tool_name == "git_show":
-                result = await self._git_show(call)
+                result = await self._git_show(effective_call)
             elif tool_name == "git_blame":
-                result = await self._git_blame(call)
+                result = await self._git_blame(effective_call)
             elif tool_name == "git_grep":
-                result = await self._git_grep(call)
+                result = await self._git_grep(effective_call)
             elif tool_name == "git_changed_files":
-                result = await self._git_changed_files(call)
+                result = await self._git_changed_files(effective_call)
             elif tool_name == "git_checkout_file":
-                result = await self._git_checkout_file(call)
+                result = await self._git_checkout_file(effective_call)
             elif tool_name == "python_repl":
-                result = await self._python_repl(call)
+                result = await self._python_repl(effective_call)
             elif tool_name == "artifact_reader":
-                result = await self._artifact_reader(call)
+                result = await self._artifact_reader(effective_call)
             elif tool_name == "file_ast_skeleton":
-                result = await self._file_ast_skeleton(call)
+                result = await self._file_ast_skeleton(effective_call)
             elif tool_name == "file_ast_chunk_read":
-                result = await self._file_ast_chunk_read(call)
+                result = await self._file_ast_chunk_read(effective_call)
             elif tool_name == "workspace_txn_apply":
-                result = await self._workspace_txn_apply(call)
+                result = await self._workspace_txn_apply(effective_call)
             elif tool_name == "sleep_and_watch":
-                result = await self._sleep_and_watch(call)
+                result = await self._sleep_and_watch(effective_call)
             elif tool_name == "killswitch_plan":
-                result = await self._killswitch_plan(call)
+                result = await self._killswitch_plan(effective_call)
             else:
                 return self._error(call, f"不支持的native工具: {tool_name}", tool_name=tool_name)
 
