@@ -283,6 +283,32 @@ def _extract_tool_path(arguments: Dict[str, Any]) -> str:
     return ""
 
 
+def _collect_workspace_submission_summaries(reports: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    submissions: List[Dict[str, Any]] = []
+    for report in reports:
+        metadata = report.get("metadata") if isinstance(report.get("metadata"), dict) else {}
+        workspace_root = str(metadata.get("workspace_root") or "").strip()
+        workspace_mode = str(metadata.get("workspace_mode") or "").strip().lower()
+        sandbox_type = str(metadata.get("workspace_sandbox_type") or "").strip().lower()
+        submission_state = str(metadata.get("workspace_submission_state") or "sandboxed").strip().lower() or "sandboxed"
+        if not workspace_root or (workspace_mode != "worktree" and sandbox_type != "git_worktree"):
+            continue
+        submissions.append(
+            {
+                "agent_id": str(report.get("session_id") or report.get("agent_id") or "").strip(),
+                "workspace_root": workspace_root,
+                "workspace_origin_root": str(metadata.get("workspace_origin_root") or "").strip(),
+                "change_id": str(metadata.get("workspace_change_id") or "").strip(),
+                "state": submission_state,
+                "changed_files": list(metadata.get("workspace_submission_changed_files") or []),
+                "audit_report_path": str(metadata.get("workspace_audit_report_path") or "").strip(),
+                "audit_diff_path": str(metadata.get("workspace_audit_diff_path") or "").strip(),
+                "promote_pending": submission_state not in {"promoted", "teardown_complete"},
+            }
+        )
+    return submissions
+
+
 def _build_fast_track_execution_receipt(
     *,
     pipeline_id: str,
@@ -297,6 +323,8 @@ def _build_fast_track_execution_receipt(
 ) -> Dict[str, Any]:
     summary_lines: List[str] = []
     deliverables: List[str] = []
+    workspace_submissions = _collect_workspace_submission_summaries(reports)
+    workspace_submission_required = any(bool(item.get("promote_pending")) for item in workspace_submissions)
     for report in reports:
         status = str(report.get("status") or "unknown").strip()
         agent_id = str(report.get("session_id") or report.get("agent_id") or "").strip() or "fast_track_dev"
@@ -310,7 +338,9 @@ def _build_fast_track_execution_receipt(
     if not summary_lines:
         summary_lines.append("- [info] no fast-track report payload was produced")
 
-    if task_completed:
+    if task_completed and workspace_submission_required:
+        header = "Core fast-track execution completed in sandbox and is awaiting workspace promotion approval."
+    elif task_completed:
         header = "Core fast-track execution completed."
     else:
         header = "Core fast-track execution did not reach completed state."
@@ -343,6 +373,8 @@ def _build_fast_track_execution_receipt(
             "review_verdicts": [],
             "guard_blocked_count": int(guard_blocked_count),
             "touched_files": list(touched_files),
+            "workspace_submission_required": bool(workspace_submission_required),
+            "workspace_submissions": workspace_submissions[:8],
         },
     }
 
@@ -631,6 +663,8 @@ def _build_core_execution_receipt(
 ) -> Dict[str, Any]:
     deliverables: List[str] = []
     summary_lines: List[str] = []
+    workspace_submissions = _collect_workspace_submission_summaries(reports)
+    workspace_submission_required = any(bool(item.get("promote_pending")) for item in workspace_submissions)
     for report in reports:
         agent_id = str(report.get("session_id") or report.get("agent_id") or "").strip()
         status = str(report.get("status") or "unknown").strip()
@@ -660,7 +694,9 @@ def _build_core_execution_receipt(
     if not review_lines:
         review_lines.append("- [info] review stage was not executed")
 
-    if task_completed:
+    if task_completed and workspace_submission_required:
+        header = "Core execution pipeline completed in sandbox and is awaiting workspace promotion approval."
+    elif task_completed:
         header = "Core execution pipeline completed."
     else:
         header = "Core execution pipeline delegated tasks and is waiting for child completion."
@@ -691,6 +727,8 @@ def _build_core_execution_receipt(
             "review_count": len(review_results),
             "review_verdicts": review_verdicts,
             "goal_id": str(decomposition.get("goal_id") or ""),
+            "workspace_submission_required": bool(workspace_submission_required),
+            "workspace_submissions": workspace_submissions[:8],
         },
     }
 
@@ -1062,6 +1100,12 @@ async def run_multi_agent_pipeline(
                     stop_reason = "fast_track_guard_blocked"
 
                 reports = core.collect_reports(resolved_core_execution_session_id, pipeline_id=pipeline_id)
+                if fast_track_completed:
+                    pending_workspace_submission = any(
+                        bool(item.get("promote_pending")) for item in _collect_workspace_submission_summaries(reports)
+                    )
+                    if pending_workspace_submission:
+                        stop_reason = "awaiting_workspace_promotion"
                 receipt_event = _build_fast_track_execution_receipt(
                     pipeline_id=pipeline_id,
                     goal=str(dispatch.get("goal") or message),
@@ -2463,7 +2507,12 @@ async def run_multi_agent_pipeline(
                     review_stop_reason = "review_failed"
 
     task_completed = reports_submitted and review_gate_passed
-    if task_completed:
+    pending_workspace_submission = any(
+        bool(item.get("promote_pending")) for item in _collect_workspace_submission_summaries(reports)
+    )
+    if task_completed and pending_workspace_submission:
+        stop_reason = "awaiting_workspace_promotion"
+    elif task_completed:
         stop_reason = "submitted_completion"
     elif not reports_submitted:
         stop_reason = "completion_not_submitted"

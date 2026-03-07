@@ -269,6 +269,9 @@ class TestParentTools:
         assert names == {
             "spawn_child_agent",
             "poll_child_status",
+            "audit_child_workspace",
+            "promote_child_workspace",
+            "teardown_child_workspace",
             "send_message_to_child",
             "resume_child_agent",
             "terminate_child_agent",

@@ -11,12 +11,19 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from agents.runtime.agent_session import AgentSessionStore, AgentStatus
 from agents.runtime.mailbox import AgentMailbox
 from agents.runtime.tool_profiles import resolve_child_tool_capabilities
-from system.git_worktree_sandbox import create_git_worktree_sandbox, inherit_workspace_metadata, normalize_workspace_mode
+from system.git_worktree_sandbox import (
+    audit_git_worktree_sandbox,
+    create_git_worktree_sandbox,
+    inherit_workspace_metadata,
+    normalize_workspace_mode,
+    promote_git_worktree_sandbox,
+    teardown_git_worktree_sandbox,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +99,84 @@ def get_parent_tool_definitions() -> List[Dict[str, Any]]:
             },
         },
         {
+            "name": "audit_child_workspace",
+            "description": (
+                "Inspect a child's git worktree sandbox, persist an audit report, and return approval-ready diff facts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "The child session whose worktree should be audited. Inherited children resolve to the owner sandbox.",
+                    },
+                    "change_id": {
+                        "type": "string",
+                        "description": "Optional stable submission/change ID. Reuses the previous audit chain when provided.",
+                    },
+                },
+                "required": ["agent_id"],
+            },
+        },
+        {
+            "name": "promote_child_workspace",
+            "description": (
+                "Promote an audited child git worktree into the main repo root after explicit approval. "
+                "Use only when the child is no longer running."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "The child session whose owner worktree should be promoted.",
+                    },
+                    "approval_ticket": {
+                        "type": "string",
+                        "description": "Required approval/cab ticket for the promote action.",
+                    },
+                    "approved_by": {
+                        "type": "string",
+                        "description": "Human or system approver identity recorded in the audit ledger.",
+                    },
+                    "change_id": {
+                        "type": "string",
+                        "description": "Optional audited change ID. Defaults to the last recorded workspace_change_id.",
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Optional approval or release notes for the promote ledger entry.",
+                    },
+                },
+                "required": ["agent_id", "approval_ticket"],
+            },
+        },
+        {
+            "name": "teardown_child_workspace",
+            "description": (
+                "Discard and remove a child's owner git worktree sandbox after review or promote is complete. "
+                "Use only when the owner child is no longer running."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agent_id": {
+                        "type": "string",
+                        "description": "The child session whose owner worktree should be torn down.",
+                    },
+                    "change_id": {
+                        "type": "string",
+                        "description": "Optional stable change ID to reuse in the teardown audit event.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Reason for discarding/tearing down the sandbox.",
+                    },
+                },
+                "required": ["agent_id"],
+            },
+        },
+        {
             "name": "send_message_to_child",
             "description": "Send a message to a child agent's inbox.",
             "parameters": {
@@ -147,17 +232,17 @@ def get_parent_tool_definitions() -> List[Dict[str, Any]]:
                     },
                     "reason": {
                         "type": "string",
-                        "description": "Reason for termination.",
+                        "description": "Optional human-readable reason for termination.",
                     },
                 },
-                "required": ["agent_id", "reason"],
+                "required": ["agent_id"],
             },
         },
         {
             "name": "destroy_child_agent",
             "description": (
-                "Permanently destroy a child agent, releasing all resources. "
-                "The session history is discarded. Only use after reviewing the child's output."
+                "Permanently destroy a child agent session and release its resources. "
+                "This is irreversible. Use after completion or when abandoning the task."
             ),
             "parameters": {
                 "type": "object",
@@ -168,7 +253,7 @@ def get_parent_tool_definitions() -> List[Dict[str, Any]]:
                     },
                     "reason": {
                         "type": "string",
-                        "description": "Reason for destruction.",
+                        "description": "Optional human-readable reason for destruction.",
                     },
                 },
                 "required": ["agent_id"],
@@ -194,6 +279,9 @@ def handle_parent_tool_call(
     handlers = {
         "spawn_child_agent": _handle_spawn,
         "poll_child_status": _handle_poll,
+        "audit_child_workspace": _handle_audit_workspace,
+        "promote_child_workspace": _handle_promote_workspace,
+        "teardown_child_workspace": _handle_teardown_workspace,
         "send_message_to_child": _handle_send_message,
         "resume_child_agent": _handle_resume,
         "terminate_child_agent": _handle_terminate,
@@ -256,6 +344,11 @@ def _handle_spawn(
             "workspace_owner_session_id",
             "workspace_cleanup_on_destroy",
             "workspace_created_at",
+            "workspace_submission_state",
+            "workspace_change_id",
+            "workspace_audit_report_path",
+            "workspace_audit_diff_path",
+            "workspace_submission_changed_files",
         ):
             metadata.pop(key, None)
     elif requested_workspace_mode == "worktree":
@@ -307,6 +400,194 @@ def _handle_poll(
     return summary
 
 
+def _resolve_workspace_owner_session(
+    *,
+    store: AgentSessionStore,
+    agent_id: str,
+) -> Tuple[Any, Any, Dict[str, Any]]:
+    session = store.get(agent_id)
+    if not session:
+        raise ValueError(f"Agent {agent_id} not found.")
+
+    session_metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    owner_id = str(session_metadata.get("workspace_owner_session_id") or session.session_id or "").strip() or session.session_id
+    owner_session = store.get(owner_id) if owner_id != session.session_id else session
+    if owner_session is None:
+        raise ValueError(f"Workspace owner session {owner_id} not found.")
+
+    owner_metadata = owner_session.metadata if isinstance(owner_session.metadata, dict) else {}
+    workspace_root = str(owner_metadata.get("workspace_root") or "").strip()
+    workspace_mode = str(owner_metadata.get("workspace_mode") or "").strip().lower()
+    sandbox_type = str(owner_metadata.get("workspace_sandbox_type") or "").strip().lower()
+    if not workspace_root or (sandbox_type != "git_worktree" and workspace_mode != "worktree"):
+        raise ValueError(f"Agent {owner_session.session_id} does not own a git worktree sandbox.")
+
+    return session, owner_session, dict(owner_metadata)
+
+
+def _require_workspace_not_running(owner_session: Any) -> None:
+    if owner_session.status == AgentStatus.RUNNING:
+        raise ValueError(f"Agent {owner_session.session_id} is running; wait for completion before workspace lifecycle actions.")
+
+
+def _handle_audit_workspace(
+    args: Dict[str, Any],
+    *,
+    parent_session_id: str,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+) -> Dict[str, Any]:
+    del mailbox
+    requested_agent_id = str(args.get("agent_id") or "").strip()
+    if not requested_agent_id:
+        return {"error": "agent_id is required"}
+
+    requested_session, owner_session, owner_metadata = _resolve_workspace_owner_session(
+        store=store,
+        agent_id=requested_agent_id,
+    )
+    change_id = str(args.get("change_id") or owner_metadata.get("workspace_change_id") or "").strip()
+    result = audit_git_worktree_sandbox(
+        owner_session_id=owner_session.session_id,
+        worktree_root=str(owner_metadata.get("workspace_root") or ""),
+        repo_root=str(owner_metadata.get("workspace_origin_root") or "") or None,
+        base_sha=str(owner_metadata.get("workspace_head_sha") or ""),
+        change_id=change_id,
+        requested_by=parent_session_id,
+    )
+    store.update_metadata(
+        owner_session.session_id,
+        {
+            "workspace_submission_state": "audited" if not bool(result.get("clean")) else "sandboxed",
+            "workspace_change_id": str(result.get("change_id") or ""),
+            "workspace_audit_report_path": str(result.get("report_path") or ""),
+            "workspace_audit_diff_path": str(result.get("diff_path") or ""),
+            "workspace_submission_changed_files": list(result.get("changed_files") or []),
+            "workspace_audited_at": str(result.get("audit_generated_at") or ""),
+            "workspace_audit_ledger_hash": str(result.get("audit_ledger_hash") or ""),
+        },
+    )
+    return {
+        **result,
+        "agent_id": owner_session.session_id,
+        "requested_agent_id": requested_session.session_id,
+    }
+
+
+def _handle_promote_workspace(
+    args: Dict[str, Any],
+    *,
+    parent_session_id: str,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+) -> Dict[str, Any]:
+    del mailbox
+    requested_agent_id = str(args.get("agent_id") or "").strip()
+    if not requested_agent_id:
+        return {"error": "agent_id is required"}
+
+    requested_session, owner_session, owner_metadata = _resolve_workspace_owner_session(
+        store=store,
+        agent_id=requested_agent_id,
+    )
+    _require_workspace_not_running(owner_session)
+
+    change_id = str(args.get("change_id") or owner_metadata.get("workspace_change_id") or "").strip()
+    approval_ticket = str(args.get("approval_ticket") or "").strip()
+    approved_by = str(args.get("approved_by") or parent_session_id).strip() or parent_session_id
+    notes = str(args.get("notes") or "").strip()
+    result = promote_git_worktree_sandbox(
+        owner_session_id=owner_session.session_id,
+        worktree_root=str(owner_metadata.get("workspace_root") or ""),
+        repo_root=str(owner_metadata.get("workspace_origin_root") or "") or None,
+        base_sha=str(owner_metadata.get("workspace_head_sha") or ""),
+        change_id=change_id,
+        requested_by=parent_session_id,
+        approved_by=approved_by,
+        approval_ticket=approval_ticket,
+        notes=notes,
+    )
+
+    next_state = str(owner_metadata.get("workspace_submission_state") or "sandboxed")
+    if str(result.get("status") or "") == "success":
+        next_state = "promoted"
+    elif str(result.get("status") or "") == "blocked":
+        next_state = "promotion_blocked"
+
+    store.update_metadata(
+        owner_session.session_id,
+        {
+            "workspace_submission_state": next_state,
+            "workspace_change_id": str(result.get("change_id") or change_id or ""),
+            "workspace_audit_report_path": str(result.get("report_path") or owner_metadata.get("workspace_audit_report_path") or ""),
+            "workspace_audit_diff_path": str(result.get("diff_path") or owner_metadata.get("workspace_audit_diff_path") or ""),
+            "workspace_submission_changed_files": list(result.get("changed_files") or owner_metadata.get("workspace_submission_changed_files") or []),
+            "workspace_promoted_at": str(result.get("audit_generated_at") or "") if str(result.get("status") or "") == "success" else str(owner_metadata.get("workspace_promoted_at") or ""),
+            "workspace_promote_approval_ticket": approval_ticket,
+            "workspace_promote_approved_by": approved_by,
+            "workspace_audit_ledger_hash": str(result.get("audit_ledger_hash") or owner_metadata.get("workspace_audit_ledger_hash") or ""),
+        },
+    )
+    return {
+        **result,
+        "agent_id": owner_session.session_id,
+        "requested_agent_id": requested_session.session_id,
+    }
+
+
+def _handle_teardown_workspace(
+    args: Dict[str, Any],
+    *,
+    parent_session_id: str,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+) -> Dict[str, Any]:
+    del mailbox
+    requested_agent_id = str(args.get("agent_id") or "").strip()
+    if not requested_agent_id:
+        return {"error": "agent_id is required"}
+
+    requested_session, owner_session, owner_metadata = _resolve_workspace_owner_session(
+        store=store,
+        agent_id=requested_agent_id,
+    )
+    _require_workspace_not_running(owner_session)
+
+    change_id = str(args.get("change_id") or owner_metadata.get("workspace_change_id") or "").strip()
+    reason = str(args.get("reason") or "").strip()
+    old_workspace_root = str(owner_metadata.get("workspace_root") or "")
+    result = teardown_git_worktree_sandbox(
+        owner_session_id=owner_session.session_id,
+        worktree_root=old_workspace_root,
+        repo_root=str(owner_metadata.get("workspace_origin_root") or "") or None,
+        change_id=change_id,
+        requested_by=parent_session_id,
+        reason=reason,
+    )
+
+    updates: Dict[str, Any] = {
+        "workspace_change_id": str(result.get("change_id") or change_id or ""),
+        "workspace_submission_state": "teardown_complete" if str(result.get("status") or "") == "success" else "teardown_failed",
+        "workspace_teardown_at": str(result.get("audit_generated_at") or ""),
+        "workspace_teardown_reason": reason,
+        "workspace_teardown_error": str(result.get("error") or ""),
+        "workspace_cleanup_on_destroy": False if str(result.get("status") or "") == "success" else bool(owner_metadata.get("workspace_cleanup_on_destroy", False)),
+        "workspace_cleanup_success": bool(str(result.get("status") or "") == "success"),
+        "workspace_cleanup_error": str(result.get("error") or ""),
+        "workspace_last_root": old_workspace_root,
+        "workspace_audit_ledger_hash": str(result.get("audit_ledger_hash") or owner_metadata.get("workspace_audit_ledger_hash") or ""),
+    }
+    if str(result.get("status") or "") == "success":
+        updates["workspace_root"] = ""
+    store.update_metadata(owner_session.session_id, updates)
+
+    return {
+        **result,
+        "agent_id": owner_session.session_id,
+        "requested_agent_id": requested_session.session_id,
+    }
+
+
 def _handle_send_message(
     args: Dict[str, Any],
     *,
@@ -355,6 +636,7 @@ def _handle_terminate(
     store: AgentSessionStore,
     mailbox: AgentMailbox,
 ) -> Dict[str, Any]:
+    del parent_session_id, mailbox
     agent_id = args.get("agent_id", "")
     reason = args.get("reason", "")
     session = store.get(agent_id)
@@ -381,6 +663,7 @@ def _handle_destroy(
     store: AgentSessionStore,
     mailbox: AgentMailbox,
 ) -> Dict[str, Any]:
+    del parent_session_id, mailbox
     agent_id = args.get("agent_id", "")
     reason = args.get("reason", "")
     store.destroy(agent_id, reason=reason)
