@@ -18,8 +18,15 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
 
+from agents.runtime.tool_discovery import (
+    META_TOOL_NAMES,
+    ToolActivationState,
+    build_default_registry,
+    handle_meta_tool,
+)
 from agents.runtime.agent_session import AgentSessionStore, AgentStatus
 from agents.runtime.child_tools import handle_child_tool_call
+from agents.runtime.custom_tools import handle_custom_tool_call
 from agents.runtime.mailbox import AgentMailbox
 
 logger = logging.getLogger(__name__)
@@ -127,6 +134,11 @@ async def run_mini_loop(
 
     # Merge child built-in tools with configured tool subset.
     all_tool_defs = list(tool_definitions)
+    _dynamically_added_tools: set[str] = set()
+    # Create per-session activation state for progressive tool discovery
+    _agent_role = str(session.role or "") if session else ""
+    _registry = build_default_registry()
+    _activation_state = ToolActivationState(role=_agent_role, registry=_registry)
     if bool(cfg.include_child_tools):
         from agents.runtime.child_tools import get_child_tool_definitions
 
@@ -222,7 +234,17 @@ async def run_mini_loop(
 
             # Route to correct handler
             try:
-                if bool(cfg.include_child_tools) and tool_name in _CHILD_TOOL_NAMES:
+                if tool_name in META_TOOL_NAMES:
+                    result = handle_meta_tool(
+                        tool_name, tool_args, state=_activation_state,
+                    )
+                    # Dynamically inject returned schemas for subsequent rounds
+                    for schema in result.get("schemas") or []:
+                        sname = schema.get("name", "")
+                        if sname and sname not in _dynamically_added_tools:
+                            all_tool_defs.append(schema)
+                            _dynamically_added_tools.add(sname)
+                elif bool(cfg.include_child_tools) and tool_name in _CHILD_TOOL_NAMES:
                     result = handle_child_tool_call(
                         tool_name,
                         tool_args,
@@ -231,7 +253,24 @@ async def run_mini_loop(
                         mailbox=mailbox,
                     )
                 else:
-                    result = await tool_executor(tool_name, tool_args)
+                    # Check if it's an activated custom tool
+                    tool_domain = _registry._tool_to_domain.get(tool_name, "")
+                    if tool_name in _activation_state.active_tools and tool_domain == "custom":
+                        result = handle_custom_tool_call(tool_name, tool_args)
+                    elif tool_name in _activation_state.active_tools and tool_domain.startswith("mcp_"):
+                        # Route to MCP server via standard protocol
+                        from agents.runtime.mcp_client import get_mcp_pool
+                        pool = get_mcp_pool()
+                        if pool:
+                            server_name = pool.find_server_for_tool(tool_name)
+                            if server_name:
+                                result = await pool.call_tool(server_name, tool_name, tool_args)
+                            else:
+                                result = {"error": f"MCP tool '{tool_name}' not found in any server"}
+                        else:
+                            result = {"error": "MCP client pool not initialized"}
+                    else:
+                        result = await tool_executor(tool_name, tool_args)
             except Exception as exc:
                 logger.exception("Tool %s failed", tool_name)
                 state.tool_errors += 1

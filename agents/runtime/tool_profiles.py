@@ -182,7 +182,15 @@ def resolve_child_tool_capabilities(
             source="inferred",
         )
 
-    return ToolProfileResolution(profile_name="", tool_subset=[], source="none")
+    return ToolProfileResolution(
+        profile_name="discovery",
+        tool_subset=[
+            "search_tools", "activate_domain",
+            "list_domains", "list_active_tools",
+            "create_tool",
+        ],
+        source="discovery_fallback",
+    )
 
 
 __all__ = [
