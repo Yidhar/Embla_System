@@ -646,31 +646,28 @@ def _handle_search_web(args: Dict[str, Any]) -> str:
         return _runner()
 
     try:
-        from mcpserver.mcp_manager import get_mcp_manager
+        from agents.runtime.mcp_client import get_mcp_pool
 
-        manager = get_mcp_manager()
-        tool_call = {
-            "tool_name": "search_web",
-            "query": query,
-        }
-        result = _run_async_blocking(manager.unified_call, "online_search", tool_call, timeout=30.0)
+        pool = get_mcp_pool()
+        if not pool:
+            return (
+                f"## 搜索: {query}\n\n"
+                "⚠️ MCP 客户端池未初始化。\n"
+                "请确保 MCP Server 已配置在 mcp_servers.json 中。"
+            )
+        result = _run_async_blocking(pool.call_tool, "online_search", "search_web", {"query": query}, timeout=30.0)
 
         if result:
             import json as _json
             try:
-                parsed = _json.loads(result) if isinstance(result, str) else result
-                if isinstance(parsed, dict) and parsed.get("status") == "ok":
-                    data = parsed.get("data", {})
-                    results_list = data.get("results", [])
-                    lines = [f"## 搜索: {query}", f"共 {len(results_list)} 条结果\n"]
-                    for i, r in enumerate(results_list, 1):
-                        title = r.get("title", "")
-                        url = r.get("url", "")
-                        content = r.get("content", "")[:200]
-                        lines.append(f"{i}. **{title}**\n   {url}\n   {content}\n")
+                parsed = result if isinstance(result, dict) else _json.loads(result)
+                status = parsed.get("status", "")
+                if status == "ok":
+                    data = parsed.get("result", "")
+                    lines = [f"## 搜索: {query}", f"\n{data}"]
                     return "\n".join(lines)
-                elif isinstance(parsed, dict) and parsed.get("status") == "error":
-                    return f"## 搜索: {query}\n\n⚠️ 搜索失败: {parsed.get('message', '未知错误')}"
+                elif status == "error":
+                    return f"## 搜索: {query}\n\n⚠️ 搜索失败: {parsed.get('error', '未知错误')}"
             except Exception:
                 pass
             # Return raw result if parsing fails
@@ -679,8 +676,8 @@ def _handle_search_web(args: Dict[str, Any]) -> str:
     except ImportError:
         return (
             f"## 搜索: {query}\n\n"
-            "⚠️ MCP 服务未加载（mcpserver 未初始化）。\n"
-            "请确保 MCP Server 已启动。"
+            "⚠️ MCP 客户端未加载。\n"
+            "请确保 agents.runtime.mcp_client 可用。"
         )
     except Exception as exc:
         return f"## 搜索: {query}\n\n⚠️ 搜索失败: {exc}"

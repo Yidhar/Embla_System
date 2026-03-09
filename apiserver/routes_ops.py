@@ -1408,10 +1408,31 @@ def _ops_build_mcp_fabric_payload() -> Dict[str, Any]:
     reason_text: Optional[str] = None
 
     try:
-        from mcpserver.mcp_registry import auto_register_mcp, get_registry_status
+        from agents.runtime.mcp_client import get_mcp_pool
 
-        auto_register_mcp()
-        registry_status = get_registry_status()
+        pool = get_mcp_pool()
+        if pool:
+            tools = pool.get_all_tools()
+            service_names = list({t.get("domain", "") for t in tools if t.get("domain", "").startswith("mcp_")})
+            registry_status = {
+                "registered_services": len(service_names),
+                "isolated_worker_services": 0,
+                "rejected_plugin_manifests": 0,
+                "cached_manifests": 0,
+                "service_names": service_names,
+                "isolated_worker_names": [],
+                "rejected_plugin_names": [],
+            }
+        else:
+            registry_status = {
+                "registered_services": 0,
+                "isolated_worker_services": 0,
+                "rejected_plugin_manifests": 0,
+                "cached_manifests": 0,
+                "service_names": [],
+                "isolated_worker_names": [],
+                "rejected_plugin_names": [],
+            }
     except Exception as exc:
         logger.warning(f"获取 MCP registry 状态失败: {exc}")
         registry_status = {

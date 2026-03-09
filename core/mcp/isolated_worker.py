@@ -1,16 +1,33 @@
-"""Core MCP isolated worker primitives + runtime snapshot helper."""
+"""Core MCP isolated worker primitives + runtime snapshot helper.
+
+The old mcpserver.plugin_worker dependency has been removed.
+Stub classes are provided for backward compatibility.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from mcpserver.plugin_worker import (
-    PluginWorkerProxy,
-    PluginWorkerSpec,
-    get_plugin_worker_runtime_metrics,
-)
 
+# ── Backward-compatible stubs for removed mcpserver.plugin_worker ──
+
+class PluginWorkerSpec:
+    """Stub — previously from mcpserver.plugin_worker."""
+    pass
+
+
+class PluginWorkerProxy:
+    """Stub — previously from mcpserver.plugin_worker."""
+    pass
+
+
+def get_plugin_worker_runtime_metrics() -> Dict[str, Any]:
+    """Stub — returns empty metrics since mcpserver has been removed."""
+    return {"services": {}}
+
+
+# ── Dataclasses ──
 
 @dataclass(frozen=True)
 class IsolatedWorkerRuntimeSnapshot:

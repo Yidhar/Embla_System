@@ -1745,10 +1745,15 @@ def _build_mcp_runtime_snapshot(
 
     if registry_status is None:
         try:
-            from mcpserver.mcp_registry import auto_register_mcp, get_registry_status
+            from agents.runtime.mcp_client import get_mcp_pool
 
-            auto_register_mcp()
-            registry_status = get_registry_status()
+            pool = get_mcp_pool()
+            if pool:
+                tools = pool.get_all_tools()
+                service_names = list({t.get("domain", "") for t in tools if t.get("domain", "").startswith("mcp_")})
+                registry_status = {"registered_services": len(service_names), "service_names": service_names}
+            else:
+                registry_status = {"registered_services": 0, "service_names": []}
         except Exception as exc:  # pragma: no cover - defensive guard
             logger.warning(f"构建 MCP registry 状态失败: {exc}")
             registry_status = {"registered_services": 0, "service_names": []}

@@ -1,13 +1,16 @@
-"""Core MCP host facade with a stable call/list API."""
+"""Core MCP host facade with a stable call/list API.
+
+Rewritten to use the standard MCP protocol client (agents.runtime.mcp_client)
+instead of the deprecated custom mcpserver implementation.
+"""
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from core.mcp.contract import MCPCallInput, MCPCallOutput
-from mcpserver.mcp_manager import MCPManager, get_mcp_manager
 
 
 @dataclass(frozen=True)
@@ -23,13 +26,22 @@ class MCPHostSnapshot:
 
 
 class NativeMCPHost:
-    """Core namespace host for MCP dispatch."""
+    """Core namespace host for MCP dispatch via standard protocol."""
 
-    def __init__(self, *, manager: MCPManager | None = None) -> None:
-        self.manager = manager or get_mcp_manager()
+    def __init__(self, *, pool: Optional[Any] = None) -> None:
+        if pool is not None:
+            self._pool = pool
+        else:
+            from agents.runtime.mcp_client import get_mcp_pool
+            self._pool = get_mcp_pool()
 
     async def call(self, *, service_name: str, tool_call: Dict[str, Any]) -> str:
-        return await self.manager.unified_call(service_name=service_name, tool_call=dict(tool_call or {}))
+        if not self._pool:
+            return json.dumps({"status": "error", "error": "MCP pool not initialized"})
+        tool_name = str(tool_call.get("tool_name", "")).strip()
+        args = {k: v for k, v in tool_call.items() if k not in ("tool_name", "service_name", "_tool_call_id")}
+        result = await self._pool.call_tool(service_name, tool_name, args)
+        return json.dumps(result, ensure_ascii=False, default=str)
 
     async def call_contract(self, request: MCPCallInput) -> MCPCallOutput:
         payload = request.to_tool_call_payload()
@@ -67,11 +79,15 @@ class NativeMCPHost:
         )
 
     def list_services(self) -> List[str]:
-        return list(self.manager.get_available_services())
+        if not self._pool:
+            return []
+        return list(self._pool.connections.keys())
 
     def list_services_filtered(self) -> Dict[str, Any]:
-        payload = self.manager.get_available_services_filtered()
-        return dict(payload if isinstance(payload, dict) else {})
+        if not self._pool:
+            return {}
+        status = self._pool.get_status()
+        return dict(status) if isinstance(status, dict) else {}
 
     def snapshot(self) -> MCPHostSnapshot:
         services = self.list_services()
@@ -91,6 +107,15 @@ class NativeMCPHost:
             return parsed
         except json.JSONDecodeError:
             return {"status": "success", "result": text}
+
+
+# Backward-compatible exports (type stubs only)
+MCPManager = type("MCPManager", (), {})
+
+
+def get_mcp_manager() -> Any:
+    """Deprecated: returns None. Use agents.runtime.mcp_client.get_mcp_pool() instead."""
+    return None
 
 
 __all__ = ["MCPHostSnapshot", "MCPManager", "NativeMCPHost", "get_mcp_manager"]

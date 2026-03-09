@@ -1,20 +1,13 @@
-"""Core MCP registry facade."""
+"""Core MCP registry facade.
+
+Rewritten to use the standard MCP protocol client (agents.runtime.mcp_client)
+instead of the deprecated custom mcpserver.mcp_registry.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List
-
-from mcpserver.mcp_registry import (
-    MCP_REGISTRY,
-    MANIFEST_CACHE,
-    auto_register_mcp,
-    get_all_services_info,
-    get_available_tools,
-    get_registered_services,
-    get_service_info,
-    scan_and_register_mcp_agents,
-)
 
 
 @dataclass(frozen=True)
@@ -32,38 +25,109 @@ class MCPRegistrySnapshot:
 
 
 class MCPRegistryFacade:
-    """Core namespace facade for MCP registry operations."""
+    """Core namespace facade for MCP registry operations.
+
+    Uses agent.runtime.mcp_client.MCPClientPool as backend.
+    """
+
+    def _get_pool(self) -> Any:
+        try:
+            from agents.runtime.mcp_client import get_mcp_pool
+            return get_mcp_pool()
+        except ImportError:
+            return None
 
     def register_all(self) -> List[str]:
-        registered = scan_and_register_mcp_agents()
-        return list(registered if isinstance(registered, list) else [])
+        """No-op: standard MCP servers auto-register on connect."""
+        return []
 
     def auto_register(self) -> None:
-        auto_register_mcp()
+        """No-op: standard MCP servers auto-register on connect."""
+        pass
 
     def services(self) -> List[str]:
-        services = get_registered_services()
-        return list(services if isinstance(services, list) else [])
+        pool = self._get_pool()
+        if not pool:
+            return []
+        return list(pool.connections.keys())
 
     def service_info(self, service_name: str) -> Dict[str, Any]:
-        info = get_service_info(service_name)
-        return dict(info if isinstance(info, dict) else {})
+        pool = self._get_pool()
+        if not pool:
+            return {}
+        conn = pool.connections.get(service_name)
+        if not conn:
+            return {}
+        return {
+            "name": service_name,
+            "connected": conn.connected,
+            "tools": [t.name for t in conn.tools],
+            "error": conn.error,
+        }
 
     def all_service_info(self) -> Dict[str, Any]:
-        payload = get_all_services_info()
-        return dict(payload if isinstance(payload, dict) else {})
+        pool = self._get_pool()
+        if not pool:
+            return {}
+        return pool.get_status()
 
     def available_tools(self) -> Dict[str, Any]:
-        payload = get_available_tools()
-        return dict(payload if isinstance(payload, dict) else {})
+        pool = self._get_pool()
+        if not pool:
+            return {}
+        tools = pool.get_all_tools()
+        return {
+            "total_tools": len(tools),
+            "tools": [{"name": t.name, "server": t.server_name, "description": t.description} for t in tools],
+        }
 
     def snapshot(self) -> MCPRegistrySnapshot:
-        names = sorted(str(name) for name in MCP_REGISTRY.keys())
+        pool = self._get_pool()
+        if not pool:
+            return MCPRegistrySnapshot(
+                registered_services=0, cached_manifests=0, service_names=[],
+            )
+        names = sorted(pool.connections.keys())
         return MCPRegistrySnapshot(
             registered_services=len(names),
-            cached_manifests=len(MANIFEST_CACHE),
+            cached_manifests=0,
             service_names=names,
         )
+
+
+# Backward-compatible placeholders
+MCP_REGISTRY: Dict[str, Any] = {}
+MANIFEST_CACHE: Dict[str, Any] = {}
+
+
+def auto_register_mcp() -> None:
+    """Deprecated no-op. Standard MCP uses mcp_servers.json config."""
+    pass
+
+
+def scan_and_register_mcp_agents(*_args: Any, **_kwargs: Any) -> List[str]:
+    """Deprecated no-op. Standard MCP auto-discovers tools via tools/list."""
+    return []
+
+
+def get_registered_services() -> List[str]:
+    facade = MCPRegistryFacade()
+    return facade.services()
+
+
+def get_service_info(service_name: str) -> Dict[str, Any]:
+    facade = MCPRegistryFacade()
+    return facade.service_info(service_name)
+
+
+def get_all_services_info() -> Dict[str, Any]:
+    facade = MCPRegistryFacade()
+    return facade.all_service_info()
+
+
+def get_available_tools() -> Dict[str, Any]:
+    facade = MCPRegistryFacade()
+    return facade.available_tools()
 
 
 __all__ = [
@@ -78,4 +142,3 @@ __all__ = [
     "get_service_info",
     "scan_and_register_mcp_agents",
 ]
-

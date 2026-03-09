@@ -1418,12 +1418,17 @@ def build_system_prompt(
     # 添加工具调用指令（不可被前端编辑，通过代码注入）
     if include_tool_instructions:
         try:
-            from mcpserver.mcp_registry import auto_register_mcp
+            from core.mcp.registry import auto_register_mcp
 
-            auto_register_mcp()  # 幂等
-            from mcpserver.mcp_manager import get_mcp_manager
+            auto_register_mcp()  # no-op with standard MCP
+            from agents.runtime.mcp_client import get_mcp_pool
 
-            available_mcp_tools = get_mcp_manager().format_available_services() or "（暂无MCP服务注册）"
+            pool = get_mcp_pool()
+            if pool:
+                tools = pool.get_all_tools()
+                available_mcp_tools = ", ".join(t.name for t in tools) or "（暂无MCP服务注册）"
+            else:
+                available_mcp_tools = "（暂无MCP服务注册）"
         except Exception:
             available_mcp_tools = "（MCP服务未启动）"
 
@@ -1507,12 +1512,17 @@ def build_system_prompt_for_route_semantic(
 
         # 注入工具调用指令（Core 路径始终需要）
         try:
-            from mcpserver.mcp_registry import auto_register_mcp
+            from core.mcp.registry import auto_register_mcp
 
-            auto_register_mcp()
-            from mcpserver.mcp_manager import get_mcp_manager
+            auto_register_mcp()  # no-op with standard MCP
+            from agents.runtime.mcp_client import get_mcp_pool
 
-            available_mcp_tools = get_mcp_manager().format_available_services() or "（暂无MCP服务注册）"
+            pool = get_mcp_pool()
+            if pool:
+                tools = pool.get_all_tools()
+                available_mcp_tools = ", ".join(t.name for t in tools) or "（暂无MCP服务注册）"
+            else:
+                available_mcp_tools = "（暂无MCP服务注册）"
         except Exception:
             available_mcp_tools = "（MCP服务未启动）"
 

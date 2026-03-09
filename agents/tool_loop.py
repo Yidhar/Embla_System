@@ -2103,11 +2103,20 @@ async def _execute_mcp_call(call: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     try:
-        from mcpserver.mcp_manager import get_mcp_manager
+        from agents.runtime.mcp_client import get_mcp_pool
 
-        manager = get_mcp_manager()
-        result = await manager.unified_call(service_name, call)
-        mcp_status, mcp_detail = _extract_mcp_call_status(result)
+        pool = get_mcp_pool()
+        if not pool:
+            return _upgrade_tool_result_contract_payload({
+                "tool_call": call,
+                "result": "MCP client pool not initialized",
+                "status": "error",
+                "service_name": service_name,
+                "tool_name": tool_name,
+            })
+        result = await pool.call_tool(service_name, tool_name, call)
+        mcp_status = result.get("status", "error")
+        mcp_detail = str(result.get("result") or result.get("error", ""))[:200]
         if mcp_status == "error":
             logger.warning(
                 "[AgenticLoop] MCP tool failed id=%s service=%s tool=%s detail=%s",
