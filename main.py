@@ -1,1004 +1,322 @@
-# ruff: noqa: E402
-# pyinstaller适配
-import os
-import sys
-import subprocess
-import locale
+#!/usr/bin/env python3
+"""NagaAgent — unified entry point.
 
-# Windows 控制台输出编码处理：
-# 不强制改成 UTF-8，避免在非 UTF-8 codepage 下出现中文乱码。
-def _configure_windows_console_streams():
+Starts the API server in a daemon thread, initialises MCP & memory subsystems,
+and runs a WatchdogDaemon loop on the main thread for health monitoring.
+"""
+# ruff: noqa: E402
+from __future__ import annotations
+
+import argparse
+import asyncio
+import locale
+import logging
+import os
+import signal
+import socket
+import sys
+import threading
+import time
+import warnings
+from dataclasses import dataclass
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Console encoding (must run before any output)
+# ---------------------------------------------------------------------------
+
+def _configure_console() -> None:
+    """Fix Windows console encoding for non-UTF-8 codepages."""
     if sys.platform != "win32":
         return
-
-    for stream_name in ("stdout", "stderr"):
-        stream = getattr(sys, stream_name, None)
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
         if stream is None:
             continue
         try:
             is_tty = bool(getattr(stream, "isatty", lambda: False)())
-            # Pipe output: force UTF-8 to avoid mojibake in downstream logs.
-            target_encoding = "utf-8" if not is_tty else (getattr(stream, "encoding", None) or locale.getpreferredencoding(False) or "utf-8")
+            enc = (
+                "utf-8"
+                if not is_tty
+                else (getattr(stream, "encoding", None) or locale.getpreferredencoding(False) or "utf-8")
+            )
             if hasattr(stream, "reconfigure"):
-                stream.reconfigure(encoding=target_encoding, errors="replace")
+                stream.reconfigure(encoding=enc, errors="replace")
             elif hasattr(stream, "buffer"):
                 import io
-
-                setattr(sys, stream_name, io.TextIOWrapper(stream.buffer, encoding=target_encoding, errors="replace"))
+                setattr(sys, name, io.TextIOWrapper(stream.buffer, encoding=enc, errors="replace"))
         except Exception:
             pass
 
 
-_configure_windows_console_streams()
-if os.path.exists("_internal"):
-    os.chdir("_internal")
+_configure_console()
 
-# 打包库识别适配
-
-# 检测是否在打包环境中
-# PyInstaller打包后的程序会设置sys.frozen属性
-IS_PACKAGED = getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
-
-# 标准库导入
-import argparse
-import asyncio
-from dataclasses import dataclass
-import json as _json
-import logging
-from pathlib import Path
-import re
-import socket
-import threading
-import time
-import warnings
-from urllib.parse import urlparse
-from urllib.request import getproxies
-
-# 过滤弃用警告，提升启动体验
+# Suppress noisy deprecation warnings from dependencies
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="websockets")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="uvicorn")
-warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*websockets.legacy.*")
-warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*WebSocketServerProtocol.*")
-warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*websockets.*")
-warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*uvicorn.*")
 
-# 修复Windows socket兼容性问题
-if not hasattr(socket, 'EAI_ADDRFAMILY'):
-    # Windows系统缺少这些错误码，添加兼容性常量
-    socket.EAI_ADDRFAMILY = -9
-    socket.EAI_AGAIN = -3
-    socket.EAI_BADFLAGS = -1
-    socket.EAI_FAIL = -4
-    socket.EAI_MEMORY = -10
-    socket.EAI_NODATA = -5
-    socket.EAI_NONAME = -2
-    socket.EAI_OVERFLOW = -12
-    socket.EAI_SERVICE = -8
-    socket.EAI_SOCKTYPE = -7
-    socket.EAI_SYSTEM = -11
+# Fix missing Windows socket constants
+if not hasattr(socket, "EAI_ADDRFAMILY"):
+    for attr, val in [
+        ("EAI_ADDRFAMILY", -9), ("EAI_AGAIN", -3), ("EAI_BADFLAGS", -1),
+        ("EAI_FAIL", -4), ("EAI_MEMORY", -10), ("EAI_NODATA", -5),
+        ("EAI_NONAME", -2), ("EAI_OVERFLOW", -12), ("EAI_SERVICE", -8),
+        ("EAI_SOCKTYPE", -7), ("EAI_SYSTEM", -11),
+    ]:
+        setattr(socket, attr, val)
 
-# 本地模块导入
-from system.system_checker import run_system_check, run_quick_check
-from system.config import config, AI_NAME
+# ---------------------------------------------------------------------------
+# Logging — single unified setup for the whole process
+# ---------------------------------------------------------------------------
 
-# V14版本已移除早期拦截器，采用运行时猴子补丁
-
-# conversation_core已删除，相关功能已迁移到apiserver
-from summer_memory.memory_manager import memory_manager
-from summer_memory.task_manager import task_manager
-
-# 统一日志系统初始化
 from system.logging_setup import setup_logging
+
 setup_logging()
+logger = logging.getLogger("nagaagent")
 
-logger = logging.getLogger("summer_memory")
-logger.setLevel(logging.INFO)
-
+# Quiet noisy libraries
 logging.getLogger("OpenGL").setLevel(logging.WARNING)
 logging.getLogger("OpenGL.acceleratesupport").setLevel(logging.WARNING)
 
-_BRAINSTEM_MAIN_BOOTSTRAP_ENV = "EMBLA_BRAINSTEM_MAIN_BOOTSTRAP"
-_BRAINSTEM_BOOTSTRAP_OWNER_ENV = "EMBLA_BRAINSTEM_BOOTSTRAP_OWNER"
-_BRAINSTEM_BOOTSTRAP_OWNER_MAIN = "main"
-_BRAINSTEM_API_AUTOSTART_ENV = "EMBLA_BRAINSTEM_AUTOSTART"
-_BRAINSTEM_API_AUTOSTART_TIMEOUT_ENV = "EMBLA_BRAINSTEM_AUTOSTART_TIMEOUT_SECONDS"
-_USE_SYSTEM_PROXY_ENV = "EMBLA_USE_SYSTEM_PROXY"
-_BRAINSTEM_MAIN_STARTUP_OUTPUT = Path("scratch/reports/brainstem_control_plane_main_startup_ws28_024.json")
-
-
-def _emit_progress(percent: int, phase: str):
-    """向 stdout 发送结构化进度信号，供上游启动器解析"""
-    payload = {'percent': percent, 'phase': phase}
-
-    try:
-        api_port = int(getattr(config.api_server, 'port', 0))
-        if 1 <= api_port <= 65535:
-            payload['apiPort'] = api_port
-    except Exception:
-        pass
-
-    print(f"##PROGRESS##{_json.dumps(payload)}", flush=True)
-
-
-def _read_optional_bool_env(name: str) -> bool | None:
-    raw = os.environ.get(str(name))
-    if raw is None:
-        return None
-    normalized = str(raw).strip().lower()
-    if normalized in {"1", "true", "yes", "on", "y"}:
-        return True
-    if normalized in {"0", "false", "no", "off", "n"}:
-        return False
-    return None
-
-
-def _read_bool_env_flag(name: str, default: bool) -> bool:
-    value = _read_optional_bool_env(name)
-    if value is None:
-        return bool(default)
-    return value
-
-
-def _read_float_env(name: str, default: float) -> float:
-    raw = os.environ.get(str(name))
-    if raw is None:
-        return float(default)
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return float(default)
-
-
-# 服务管理器类
-class ServiceManager:
-    """服务管理器 - 统一管理所有后台服务"""
-    
-    def __init__(self):
-        self.loop = asyncio.new_event_loop()
-        self.bg_thread = None
-        self.api_thread = None
-        self.system_agent = None
-        self._autonomous_task = None
-        self._services_ready = False  # 服务就绪状态
-        self.brainstem_bootstrap = {}
-    
-    def start_background_services(self):
-        """启动后台服务 - 异步非阻塞"""
-        # 启动后台任务管理器
-        self.bg_thread = threading.Thread(target=self._run_event_loop, daemon=True)
-        self.bg_thread.start()
-        logger.info(f"后台服务线程已启动: {self.bg_thread.name}")
-        
-        # 移除阻塞等待，改为异步检查
-        # time.sleep(1)  # 删除阻塞等待
-    
-    def _run_event_loop(self):
-        """运行事件循环"""
-        asyncio.set_event_loop(self.loop)
-        self.loop.run_until_complete(self._init_background_services())
-        logger.info("后台服务事件循环已启动")
-    
-    async def _init_background_services(self):
-        """初始化后台服务 - 优化启动流程"""
-        logger.info("正在启动后台服务...")
-        try:
-            # 任务管理器由memory_manager自动启动，无需手动启动
-            # await start_task_manager()
-            
-            # 标记服务就绪
-            self._services_ready = True
-            logger.info(f"任务管理器状态: running={task_manager.is_running}")
-            await self._try_start_autonomous_agent()
-            
-            # 保持事件循环活跃
-            while True:
-                await asyncio.sleep(3600)  # 每小时检查一次
-        except Exception as e:
-            logger.error(f"后台服务异常: {e}")
-
-    async def _try_start_autonomous_agent(self):
-        """Autonomous runtime stays on the single control-plane."""
-        try:
-            auto_cfg = getattr(config, "autonomous", None)
-            auto_enabled = bool(getattr(auto_cfg, "enabled", False)) if auto_cfg is not None else False
-            logger.info(
-                "[RuntimeControlPlane] runtime_mode=single_control_plane chat_pipeline=enabled autonomous_enabled=%s "
-                "reason=single_control_plane_enforced",
-                str(auto_enabled).lower(),
-            )
-        except Exception as exc:
-            logger.error(f"[Autonomous] failed to start: {exc}")
-
-    def _bootstrap_brainstem_control_plane_main_startup(
-        self,
-        *,
-        manager=None,
-        api_autostart_enabled=None,
-        repo_root: Path | None = None,
-    ):
-        """主启动链托管 Brainstem 控制面，并声明 ownership，避免 API lifespan 重复托管。"""
-
-        root = (repo_root or Path(os.getcwd())).resolve()
-        enabled = _read_bool_env_flag(_BRAINSTEM_MAIN_BOOTSTRAP_ENV, default=True)
-        api_enabled = (
-            bool(config.api_server.enabled and config.api_server.auto_start)
-            if api_autostart_enabled is None
-            else bool(api_autostart_enabled)
-        )
-        report = {
-            "enabled": False,
-            "passed": False,
-            "repo_root": str(root).replace("\\", "/"),
-            "reason": "",
-            "env": {
-                "main_bootstrap_env": _BRAINSTEM_MAIN_BOOTSTRAP_ENV,
-                "owner_env": _BRAINSTEM_BOOTSTRAP_OWNER_ENV,
-                "api_autostart_env": _BRAINSTEM_API_AUTOSTART_ENV,
-                "api_autostart_timeout_env": _BRAINSTEM_API_AUTOSTART_TIMEOUT_ENV,
-            },
-        }
-        if not api_enabled:
-            report["reason"] = "api_autostart_disabled"
-            self.brainstem_bootstrap = report
-            return report
-        if not enabled:
-            report["reason"] = "env_disabled"
-            self.brainstem_bootstrap = report
-            return report
-
-        run_manager = manager
-        if run_manager is None:
-            from scripts.manage_brainstem_control_plane_ws28_017 import run_manage_brainstem_control_plane_ws28_017
-
-            run_manager = run_manage_brainstem_control_plane_ws28_017
-
-        report["enabled"] = True
-        timeout_seconds = max(2.0, _read_float_env(_BRAINSTEM_API_AUTOSTART_TIMEOUT_ENV, default=8.0))
-        try:
-            startup_report = run_manager(
-                repo_root=root,
-                action="start",
-                output_file=_BRAINSTEM_MAIN_STARTUP_OUTPUT,
-                start_timeout_seconds=timeout_seconds,
-                force_restart=False,
-            )
-            report["startup_report"] = startup_report
-            report["passed"] = bool(startup_report.get("passed"))
-            if report["passed"]:
-                os.environ[_BRAINSTEM_BOOTSTRAP_OWNER_ENV] = _BRAINSTEM_BOOTSTRAP_OWNER_MAIN
-                os.environ[_BRAINSTEM_API_AUTOSTART_ENV] = "0"
-                report["reason"] = "main_startup_managed"
-                report["api_lifespan_autostart_disabled"] = True
-                logger.info("[brainstem_bootstrap_main] control plane startup ensured and ownership set to main")
-            else:
-                report["reason"] = "main_startup_failed"
-                report["api_lifespan_autostart_disabled"] = False
-                logger.warning("[brainstem_bootstrap_main] control plane startup failed; api lifespan fallback remains enabled")
-        except Exception as exc:
-            report["reason"] = "main_startup_error"
-            report["error"] = f"{type(exc).__name__}:{exc}"
-            report["api_lifespan_autostart_disabled"] = False
-            logger.error(f"[brainstem_bootstrap_main] startup error: {exc}")
-
-        self.brainstem_bootstrap = report
-        return report
-    
-    def check_port_available(self, host, port):
-        """检查端口是否可用"""
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind((host, port))
-                return True
-        except OSError:
-            return False
-
-    def start_all_servers(self):
-        """并行启动所有服务：API(可选)、MCP（不自动启动 Agent Server）"""
-        print("🚀 正在并行启动所有服务...")
-        print("=" * 50)
-        threads = []
-        service_status = {}  # 服务状态跟踪
-
-        try:
-            self._init_proxy_settings()
-            brainstem_bootstrap = self._bootstrap_brainstem_control_plane_main_startup()
-            if brainstem_bootstrap.get("enabled"):
-                if brainstem_bootstrap.get("passed"):
-                    print("✅ Brainstem 控制面: 主启动链托管成功（已禁用 API lifespan 重复托管）")
-                    service_status["Brainstem"] = "主启动链托管"
-                else:
-                    print("⚠️ Brainstem 控制面: 主启动链托管失败，保留 API lifespan 自动托管回退")
-                    service_status["Brainstem"] = "托管失败，保留回退"
-            else:
-                reason = str(brainstem_bootstrap.get("reason") or "disabled")
-                service_status["Brainstem"] = f"跳过({reason})"
-            # 预检查所有端口（端口已在启动前由 kill_port_occupiers 清理）
-            from system.config import get_server_port
-            port_checks = {
-                'api': config.api_server.enabled and config.api_server.auto_start and
-                      self.check_port_available(config.api_server.host, config.api_server.port),
-                'mcp': self.check_port_available("0.0.0.0", get_server_port("mcp_server")),
-            }
-
-            # API服务器（可选）
-            if port_checks['api']:
-                api_thread = threading.Thread(target=self._start_api_server, daemon=True)
-                threads.append(("API", api_thread))
-                service_status['API'] = "准备启动"
-            elif config.api_server.enabled and config.api_server.auto_start:
-                print(f"⚠️  API服务器: 端口 {config.api_server.port} 已被占用，跳过启动")
-                service_status['API'] = "端口占用"
-
-            # MCP服务器（提供外部统一HTTP API）
-            if port_checks['mcp']:
-                mcp_thread = threading.Thread(target=self._start_mcp_server, daemon=True)
-                threads.append(("MCP", mcp_thread))
-                service_status['MCP'] = "准备启动"
-            else:
-                print(f"⚠️  MCP服务器: 端口 {get_server_port('mcp_server')} 已被占用，跳过启动")
-                service_status['MCP'] = "端口占用"
-
-            # 显示服务启动计划
-            print("\n📋 服务启动计划:")
-            for service, status in service_status.items():
-                if status == "准备启动":
-                    print(f"   🔄 {service}服务器: 正在启动...")
-                else:
-                    print(f"   ⚠️  {service}服务器: {status}")
-            
-            print("\n🚀 开始启动服务...")
-            print("-" * 30)
-
-            # 批量启动所有线程
-            for name, thread in threads:
-                thread.start()
-                print(f"✅ {name}服务器: 启动线程已创建")
-
-            # 等待服务启动：轮询端口可连接性，最长等 3s
-            print("⏳ 等待服务初始化...")
-            expected_ports = []
-            if port_checks.get('api'):
-                expected_ports.append(config.api_server.port)
-            if port_checks.get('mcp'):
-                expected_ports.append(get_server_port("mcp_server"))
-
-            if expected_ports:
-                for _ in range(15):  # 最多 15 × 0.2s = 3s
-                    all_ready = True
-                    for p in expected_ports:
-                        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        s.settimeout(0.1)
-                        if s.connect_ex(('127.0.0.1', p)) != 0:
-                            all_ready = False
-                        s.close()
-                        if not all_ready:
-                            break
-                    if all_ready:
-                        break
-                    time.sleep(0.2)
-
-            _emit_progress(45, "等待服务就绪...")
-
-            print("-" * 30)
-            print(f"🎉 服务启动完成: {len(threads)} 个服务正在运行")
-            print("=" * 50)
-            
-        except Exception as e:
-            print(f"❌ 并行启动服务异常: {e}")
-
-    def _init_proxy_settings(self):
-        """初始化代理设置：本地地址始终 NO_PROXY，系统代理按配置/环境变量开关控制。"""
-
-        def _split_no_proxy(raw: str):
-            values = []
-            if not raw:
-                return values
-            for segment in str(raw).replace(";", ",").split(","):
-                item = segment.strip()
-                if item:
-                    values.append(item)
-            return values
-
-        def _sanitize_proxy_url(proxy_url: str):
-            try:
-                parsed = urlparse(str(proxy_url))
-            except Exception:
-                return str(proxy_url)
-
-            if not parsed.scheme:
-                return str(proxy_url)
-
-            host = parsed.hostname or ""
-            port = f":{parsed.port}" if parsed.port else ""
-            auth = ""
-            if parsed.username:
-                auth = f"{parsed.username}:***@"
-            return f"{parsed.scheme}://{auth}{host}{port}"
-
-        config_proxy_enabled = bool(getattr(config.api, "applied_proxy", False))
-        env_proxy_override = _read_optional_bool_env(_USE_SYSTEM_PROXY_ENV)
-        use_system_proxy = config_proxy_enabled if env_proxy_override is None else env_proxy_override
-        print(
-            f"系统代理开关: {use_system_proxy} "
-            f"(config.api.applied_proxy={config_proxy_enabled}, env.{_USE_SYSTEM_PROXY_ENV}={env_proxy_override})"
-        )
-
-        proxy_vars = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]
-        has_env_proxy = any(os.environ.get(var) for var in proxy_vars)
-
-        def _get_windows_registry_proxy():
-            proxies = {}
-            bypass = []
-            if sys.platform != "win32":
-                return proxies, bypass
-
-            try:
-                import winreg
-            except ImportError:
-                return proxies, bypass
-
-            key = None
-            try:
-                key = winreg.OpenKey(
-                    winreg.HKEY_CURRENT_USER,
-                    r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
-                )
-                proxy_enable = int(winreg.QueryValueEx(key, "ProxyEnable")[0])
-                if proxy_enable:
-                    proxy_server = str(winreg.QueryValueEx(key, "ProxyServer")[0] or "").strip()
-                    if proxy_server:
-                        if "=" not in proxy_server and ";" not in proxy_server:
-                            proxy_server = f"http={proxy_server};https={proxy_server};ftp={proxy_server}"
-
-                        for segment in proxy_server.split(";"):
-                            segment = segment.strip()
-                            if not segment:
-                                continue
-                            if "=" in segment:
-                                protocol, address = segment.split("=", 1)
-                            else:
-                                protocol, address = "http", segment
-                            protocol = protocol.strip().lower()
-                            address = address.strip()
-                            if not address:
-                                continue
-                            if not re.match(r"(?:[^/:]+)://", address):
-                                if protocol in ("http", "https", "ftp"):
-                                    address = "http://" + address
-                                elif protocol == "socks":
-                                    address = "socks://" + address
-                            proxies[protocol] = address
-
-                        if proxies.get("socks"):
-                            socks_proxy = re.sub(r"^socks://", "socks4://", proxies["socks"])
-                            proxies["http"] = proxies.get("http") or socks_proxy
-                            proxies["https"] = proxies.get("https") or socks_proxy
-
-                try:
-                    override_raw = str(winreg.QueryValueEx(key, "ProxyOverride")[0] or "")
-                except OSError:
-                    override_raw = ""
-
-                if override_raw:
-                    for item in override_raw.split(";"):
-                        value = item.strip()
-                        if not value:
-                            continue
-                        if value.lower() == "<local>":
-                            bypass.extend(["localhost", "127.0.0.1", "::1"])
-                        else:
-                            bypass.append(value)
-            except (OSError, ValueError, TypeError):
-                pass
-            finally:
-                if key is not None:
-                    key.Close()
-
-            return proxies, bypass
-
-        registry_proxies, registry_bypass = _get_windows_registry_proxy()
-        synced_from_registry = False
-        if has_env_proxy:
-            proxy_source = "env"
-        elif sys.platform == "win32" and registry_proxies:
-            proxy_source = "windows_registry"
-        else:
-            proxy_source = "none"
-
-        # Windows 下若仅使用系统代理（注册表）且无环境变量代理，
-        # 先写入 HTTP(S)_PROXY，避免后续设置 NO_PROXY 使 urllib.getproxies 失去注册表回退。
-        if use_system_proxy and sys.platform == "win32" and not has_env_proxy and registry_proxies:
-            hydrate_mapping = {
-                "http": ("HTTP_PROXY", "http_proxy"),
-                "https": ("HTTPS_PROXY", "https_proxy"),
-                "all": ("ALL_PROXY", "all_proxy"),
-            }
-            hydrated = []
-            for scheme, env_names in hydrate_mapping.items():
-                proxy_value = registry_proxies.get(scheme)
-                if not proxy_value:
-                    continue
-                for env_name in env_names:
-                    if not os.environ.get(env_name):
-                        os.environ[env_name] = proxy_value
-                hydrated.append(f"{scheme}={_sanitize_proxy_url(proxy_value)}")
-
-            if hydrated:
-                print(
-                    "代理来源: Windows 系统代理（注册表），已同步到当前进程环境变量: "
-                    + ", ".join(hydrated)
-                )
-                synced_from_registry = True
-            has_env_proxy = True
-            proxy_source = "windows_registry"
-
-        # 始终确保本地服务通信不走代理，同时尽量保留系统代理例外列表
-        no_proxy_values = ["localhost", "127.0.0.1", "0.0.0.0"]
-        existing_no_proxy = os.environ.get("NO_PROXY", os.environ.get("no_proxy", ""))
-        if not existing_no_proxy and registry_bypass:
-            existing_no_proxy = ",".join(registry_bypass)
-        if existing_no_proxy:
-            no_proxy_values = _split_no_proxy(existing_no_proxy) + no_proxy_values
-
-        dedup_no_proxy = []
-        seen = set()
-        for host in no_proxy_values:
-            if host not in seen:
-                seen.add(host)
-                dedup_no_proxy.append(host)
-        no_proxy_hosts = ",".join(dedup_no_proxy)
-        os.environ["NO_PROXY"] = no_proxy_hosts
-        os.environ["no_proxy"] = no_proxy_hosts
-        print(f"已设置 NO_PROXY={no_proxy_hosts}")
-
-        if use_system_proxy:
-            if proxy_source == "env":
-                print("代理来源: 进程环境变量（HTTP(S)_PROXY/ALL_PROXY）")
-            elif proxy_source == "windows_registry":
-                if not synced_from_registry:
-                    print("代理来源: Windows 系统代理（已同步到当前进程环境变量）")
-            else:
-                print("代理来源: 未检测到环境变量或系统代理配置")
-
-            detected_proxies = getproxies()
-            proxy_entries = []
-            for key in ("https", "http", "all", "socks", "ftp"):
-                value = detected_proxies.get(key)
-                if value:
-                    proxy_entries.append(f"{key}={_sanitize_proxy_url(str(value))}")
-
-            if proxy_entries:
-                print(
-                    "系统代理生效配置（当前进程）: "
-                    + ", ".join(proxy_entries)
-                )
-            else:
-                print("系统代理已启用，但当前进程未解析到可用代理配置")
-            return
-
-        print("检测到不启用代理，正在清空系统代理环境变量...")
-        for var in proxy_vars:
-            if var in os.environ:
-                del os.environ[var]
-                print(f"已清除代理环境变量: {var}")
-    def _start_api_server(self):
-        """内部API服务器启动方法"""
-        try:
-            import uvicorn
-            from apiserver.api_server import app
-
-            print(f"   🚀 API服务器: 正在启动 on {config.api_server.host}:{config.api_server.port}...")
-
-            uvicorn.run(
-                app,
-                host=config.api_server.host,
-                port=config.api_server.port,
-                log_level="info",
-                access_log=False,
-                reload=False,
-                ws_ping_interval=None,
-                ws_ping_timeout=None
-            )
-        except ImportError as e:
-            print(f"   ❌ API服务器依赖缺失: {e}", flush=True)
-        except Exception as e:
-            print(f"   ❌ API服务器启动失败: {e}", flush=True)
-    
-    def _start_mcp_server(self):
-        """内部MCP服务器启动方法"""
-        try:
-            import uvicorn
-            from mcpserver.mcp_server import app
-            from system.config import get_server_port
-
-            uvicorn.run(
-                app,
-                host="0.0.0.0",
-                port=get_server_port("mcp_server"),
-                log_level="error",
-                access_log=False,
-                reload=False,
-                ws_ping_interval=None,
-                ws_ping_timeout=None
-            )
-        except Exception as e:
-            import traceback
-            print(f"   ❌ MCP服务器启动失败: {e}", flush=True)
-            traceback.print_exc()
-
-    def _init_memory_system(self):
-        """初始化记忆系统"""
-        try:
-            if memory_manager and memory_manager.enabled:
-                logger.info("夏园记忆系统已初始化（本地模式）")
-            else:
-                logger.info("夏园记忆系统已禁用（本地模式）")
-        except Exception as e:
-            logger.warning(f"记忆系统初始化失败: {e}")
-    
-    def _init_mcp_services(self):
-        """初始化MCP服务系统 - in-process 注册 agent"""
-        try:
-            from mcpserver.mcp_registry import auto_register_mcp
-            registered = auto_register_mcp()
-            logger.info(f"MCP服务已注册（in-process），共 {len(registered)} 个: {registered}")
-        except Exception as e:
-            logger.error(f"MCP服务系统初始化失败: {e}")
-
-def kill_port_occupiers():
-    """启动前杀掉占用后端端口的进程（跨平台）"""
-    def _decode_subprocess_output(data):
-        if not data:
-            return ""
-        if isinstance(data, str):
-            return data
-        for encoding in ("utf-8", "cp936", "gbk"):
-            try:
-                return data.decode(encoding)
-            except UnicodeDecodeError:
-                continue
-        return data.decode("utf-8", errors="replace")
-
-    from system.config import get_all_server_ports
-    all_ports = get_all_server_ports()
-    ports = [
-        all_ports["api_server"],
-        all_ports["mcp_server"],
-    ]
-    my_pid = os.getpid()
-    killed = False
-
-    if sys.platform == "win32":
-        for port in ports:
-            try:
-                result = subprocess.run(
-                    ["netstat", "-ano"], capture_output=True, text=False, check=False
-                )
-                stdout_text = _decode_subprocess_output(result.stdout)
-                for line in stdout_text.splitlines():
-                    if f":{port}" in line and "LISTENING" in line:
-                        parts = line.split()
-                        if not parts:
-                            continue
-                        pid_str = parts[-1].strip()
-                        if not pid_str.isdigit():
-                            continue
-                        pid = int(pid_str)
-                        if pid != my_pid and pid > 0:
-                            subprocess.run(
-                                ["taskkill", "/F", "/PID", str(pid)],
-                                capture_output=True,
-                                text=False,
-                                check=False,
-                            )
-                            print(f"   已终止占用端口 {port} 的进程 (PID {pid})")
-                            killed = True
-            except Exception as e:
-                print(f"   ⚠️ 清理端口 {port} 时出错: {e}")
-    else:
-        # macOS/Linux: 合并为单次 lsof 调用
-        try:
-            port_args = ",".join(str(p) for p in ports)
-            result = subprocess.run(
-                ["lsof", "-ti", f":{port_args}"], capture_output=True, text=True
-            )
-            if result.stdout.strip():
-                for pid_str in result.stdout.strip().split("\n"):
-                    try:
-                        pid = int(pid_str.strip())
-                        if pid != my_pid and pid > 0:
-                            os.kill(pid, 9)
-                            print(f"   已终止占用端口的进程 (PID {pid})")
-                            killed = True
-                    except (ValueError, ProcessLookupError):
-                        pass
-        except Exception as e:
-            print(f"   ⚠️ 清理端口时出错: {e}")
-
-    if killed:
-        time.sleep(0.5)  # SIGKILL 后端口释放很快，0.5s 足够
-
-
-# 工具函数
-def show_help():
-    print('系统命令: 清屏, 查看索引, 帮助, 退出')
-
-def show_index():
-    print('主题分片索引已集成，无需单独索引查看')
-
-def clear():
-    os.system('cls' if os.name == 'nt' else 'clear')
-
-
-def check_and_update_if_needed() -> bool:
-    """检查上次系统检测时间，如果检测通过且超过5天则执行更新"""
-    from datetime import datetime
-    import json5
-
-    config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-
-    if not os.path.exists(config_file):
-        return False
-
-    try:
-        # 直接用 UTF-8 读取（本项目 config.json 始终为 UTF-8 编码）
-        with open(config_file, 'r', encoding='utf-8') as f:
-            config_data = json5.load(f)
-
-        system_check = config_data.get('system_check', {})
-        timestamp_str = system_check.get('timestamp')
-        passed = system_check.get('passed', False)
-
-        if not timestamp_str:
-            return False
-
-        # 只在检测通过的情况下才检查时间
-        if not passed:
-            return False
-
-        # 解析时间戳
-        last_check_time = datetime.fromisoformat(timestamp_str)
-        now = datetime.now()
-        days_since_last_check = (now - last_check_time).days
-
-        # 如果超过5天
-        if days_since_last_check >= 5:
-            print(f"⚠️ 上次系统检测已超过 {days_since_last_check} 天，开始执行更新...")
-            print("=" * 50)
-
-            # 执行 update.py
-            update_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "update.py")
-            if os.path.exists(update_script):
-                result = subprocess.run([sys.executable, update_script], cwd=os.path.dirname(os.path.abspath(__file__)))
-                if result.returncode == 0:
-                    print("✅ 更新成功")
-                else:
-                    print(f"⚠️ 更新失败，返回码: {result.returncode}")
-            else:
-                print("⚠️ update.py 不存在，跳过更新")
-
-            # 重置检测状态为 false
-            config_data['system_check']['passed'] = False
-            # 保存配置
-            import json
-            with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(config_data, f, ensure_ascii=False, indent=2)
-
-            print("✅ 检测状态已重置为 false")
-            print("=" * 50)
-            print("🔄 正在重启程序...")
-            # 重启程序
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-
-        return False
-
-    except Exception as e:
-        print(f"⚠️ 检查上次检测时间失败: {e}")
-        return False
+# ---------------------------------------------------------------------------
+# Local imports (after logging is ready)
+# ---------------------------------------------------------------------------
+
+from system.config import config, AI_NAME
+from system.system_checker import run_system_check, run_quick_check
+
+# ---------------------------------------------------------------------------
+# Args
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
-class MainStartupOptions:
+class StartupOptions:
     check_env: bool = False
     quick_check: bool = False
     force_check: bool = False
     headless: bool = False
-    lightweight: bool = False
 
     @property
     def effective_headless(self) -> bool:
-        return bool(self.headless or self.lightweight or not sys.stdin.isatty())
+        return bool(self.headless or not sys.stdin.isatty())
 
 
-_service_manager_singleton: ServiceManager | None = None
-_service_manager_started = False
-_interactive_chat_runtime = None
-
-
-def _print_runtime_status() -> None:
-    print("=" * 30)
-    print(f"GRAG状态: {'启用' if memory_manager.enabled else '禁用'}")
-    if memory_manager.enabled:
-        memory_manager.get_memory_stats()
-        from summer_memory.quintuple_graph import GRAG_ENABLED, get_graph
-
-        graph = get_graph()
-        print(f"Neo4j连接: {'成功' if graph and GRAG_ENABLED else '失败'}")
-    print("=" * 30)
-    print(f"{AI_NAME}系统已启动")
-    print("=" * 30)
-
-
-def ensure_services_started(*, show_help_text: bool = True) -> ServiceManager:
-    global _interactive_chat_runtime, _service_manager_singleton, _service_manager_started
-    if _service_manager_started and _service_manager_singleton is not None:
-        return _service_manager_singleton
-
-    if _service_manager_singleton is None:
-        _service_manager_singleton = ServiceManager()
-
-    manager = _service_manager_singleton
-    manager.start_background_services()
-    _emit_progress(15, "初始化服务...")
-
-    _interactive_chat_runtime = None
-
-    manager._init_mcp_services()
-    _emit_progress(20, "注册MCP服务...")
-    manager._init_memory_system()
-    _emit_progress(25, "初始化子系统...")
-    _print_runtime_status()
-
-    _emit_progress(30, "启动服务器...")
-    manager.start_all_servers()
-    _emit_progress(50, "后端就绪")
-
-    if show_help_text:
-        show_help()
-
-    _service_manager_started = True
-    return manager
-
-
-def _lazy_init_services():
-    """保留轻量包装入口；内部统一走显式启动函数。"""
-    return ensure_services_started()
-
-
-# Embla System 适配器 - 优化重复初始化
-class EmblaSystemAdapter:
-    def __init__(self):
-        ensure_services_started(show_help_text=False)
-        self.runtime = _interactive_chat_runtime
-
-    async def respond_stream(self, txt):
-        if self.runtime is None or not hasattr(self.runtime, "process"):
-            raise RuntimeError("EmblaSystemAdapter 当前未接入交互式运行时")
-        async for resp in self.runtime.process(txt):
-            yield AI_NAME, resp, None, True, False
-
-
-def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Embla System - 智能运行与对话入口")
+def parse_args(argv: list[str] | None = None) -> StartupOptions:
+    parser = argparse.ArgumentParser(description="NagaAgent — 智能运行入口")
     parser.add_argument("--check-env", action="store_true", help="运行系统环境检测")
     parser.add_argument("--quick-check", action="store_true", help="运行快速环境检测")
-    parser.add_argument("--force-check", action="store_true", help="强制运行系统环境检测（忽略缓存）")
-    parser.add_argument("--headless", action="store_true", help="无头模式（Electron/Web，跳过交互提示）")
-    parser.add_argument("--lightweight", action="store_true", help="轻量模式（跳过更新与阻塞式门检，适配守护回退）")
-    return parser
-
-
-def parse_main_args(argv: list[str] | None = None) -> MainStartupOptions:
-    parsed = build_arg_parser().parse_args(argv)
-    return MainStartupOptions(
-        check_env=bool(parsed.check_env),
-        quick_check=bool(parsed.quick_check),
-        force_check=bool(parsed.force_check),
-        headless=bool(parsed.headless),
-        lightweight=bool(parsed.lightweight),
+    parser.add_argument("--force-check", action="store_true", help="强制检测（忽略缓存）")
+    parser.add_argument("--headless", action="store_true", help="无头模式（跳过交互提示）")
+    ns = parser.parse_args(argv)
+    return StartupOptions(
+        check_env=bool(ns.check_env),
+        quick_check=bool(ns.quick_check),
+        force_check=bool(ns.force_check),
+        headless=bool(ns.headless),
     )
 
+# ---------------------------------------------------------------------------
+# Startup checks
+# ---------------------------------------------------------------------------
 
-def _handle_diagnostic_flags(options: MainStartupOptions) -> int | None:
-    if not options.check_env and not options.quick_check:
+def _run_diagnostic(opts: StartupOptions) -> int | None:
+    """Run env check if requested via CLI flags. Returns exit code or None."""
+    if not opts.check_env and not opts.quick_check:
         return None
-    success = run_quick_check() if options.quick_check else run_system_check(force_check=options.force_check)
-    return 0 if success else 1
+    ok = run_quick_check() if opts.quick_check else run_system_check(force_check=opts.force_check)
+    return 0 if ok else 1
 
 
-def _confirm_continue_after_failed_system_check(*, headless: bool) -> bool:
-    if headless:
-        print("⚠️ 无头/轻量模式：自动继续启动...")
+def _run_startup_gate(opts: StartupOptions) -> bool:
+    """Run system environment check. Returns True if OK to proceed."""
+    if run_system_check(force_check=opts.force_check):
         return True
-    reply = input("是否无视检测结果继续启动？是则按y，否则按其他任意键退出...")
-    return reply in {"y", "Y"}
-
-
-def _run_startup_gates(options: MainStartupOptions) -> bool:
-    print("🚀 正在启动 Embla System...")
-    print("=" * 50)
-
-    if options.lightweight:
-        print("⚙️ Lightweight 模式：跳过更新检查，并将环境检测降级为 best-effort quick-check。")
-        if IS_PACKAGED:
-            print("📦 检测到打包环境，跳过系统环境检测...")
-            return True
-        if not run_quick_check():
-            print("⚠️ Lightweight 模式：快速检查失败，继续启动。")
+    logger.warning("系统环境检测失败")
+    if opts.effective_headless:
+        logger.warning("无头模式：自动继续启动")
         return True
+    reply = input("是否继续启动？(y/N) ")
+    return reply.strip().lower() in {"y", "yes"}
 
-    if IS_PACKAGED:
-        print("📦 检测到打包环境，跳过系统环境检测...")
-        return True
+# ---------------------------------------------------------------------------
+# Service initialisation
+# ---------------------------------------------------------------------------
 
-    if run_system_check(force_check=options.force_check):
-        return True
-
-    print("\n❌ 系统环境检测失败，程序无法启动")
-    print("请根据上述建议修复问题后重新启动")
-    return _confirm_continue_after_failed_system_check(headless=options.effective_headless)
-
-
-def _ensure_main_event_loop() -> None:
+def _init_memory() -> None:
+    """Initialise the summer memory subsystem."""
     try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
+        from summer_memory.memory_manager import memory_manager
+        if memory_manager and memory_manager.enabled:
+            logger.info("记忆系统已初始化")
+        else:
+            logger.info("记忆系统已禁用")
+    except Exception as exc:
+        logger.warning("记忆系统初始化失败: %s", exc)
+
+
+def _init_mcp() -> None:
+    """Initialise the standard MCP client pool."""
+    try:
+        from agents.runtime.mcp_client import get_mcp_pool
+        pool = get_mcp_pool()
+        if pool:
+            tools = pool.get_all_tools()
+            logger.info("MCP 客户端就绪，已发现 %d 个工具", len(tools))
+        else:
+            logger.info("MCP 客户端: 无已配置服务器")
+    except Exception as exc:
+        logger.error("MCP 客户端初始化失败: %s", exc)
+
+
+def _start_api_server() -> None:
+    """Start the uvicorn API server in a daemon thread."""
+    api_cfg = config.api_server
+    if not (api_cfg.enabled and api_cfg.auto_start):
+        logger.info("API 服务器已禁用，跳过")
         return
 
-    if loop.is_closed():
-        asyncio.set_event_loop(asyncio.new_event_loop())
+    host, port = api_cfg.host, api_cfg.port
 
-
-def _install_shutdown_handler() -> None:
-    import signal
-
-    def _shutdown(signum=None, frame=None):
-        print("\n👋 正在关闭后端服务...")
-        os._exit(0)
-
-    signal.signal(signal.SIGTERM, _shutdown)
-
-
-def _wait_forever() -> None:
+    # Check port availability
     try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\n👋 正在关闭后端服务...")
-        os._exit(0)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind((host, port))
+    except OSError:
+        logger.error("API 服务器端口 %d 已被占用，跳过启动", port)
+        return
+
+    def _serve() -> None:
+        try:
+            import uvicorn
+            from apiserver.api_server import app
+            logger.info("API 服务器启动: %s:%d", host, port)
+            uvicorn.run(
+                app,
+                host=host,
+                port=port,
+                log_level="warning",
+                access_log=False,
+                ws_ping_interval=None,
+                ws_ping_timeout=None,
+            )
+        except Exception as exc:
+            logger.error("API 服务器异常退出: %s", exc)
+
+    t = threading.Thread(target=_serve, name="api-server", daemon=True)
+    t.start()
+
+    # Wait for the port to become connectable (max 3s)
+    for _ in range(15):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.1)
+            if s.connect_ex(("127.0.0.1", port)) == 0:
+                logger.info("API 服务器就绪: http://%s:%d", host, port)
+                return
+        time.sleep(0.2)
+    logger.warning("API 服务器启动超时（3s），可能仍在加载")
+
+# ---------------------------------------------------------------------------
+# Watchdog — replaces the old _wait_forever() sleep loop
+# ---------------------------------------------------------------------------
+
+_watchdog_state_file = Path("logs/runtime/watchdog_state.json")
+
+
+def _run_watchdog(stop_event: threading.Event) -> None:
+    """Run the WatchdogDaemon in the main thread.
+
+    Monitors CPU, memory, disk usage and writes state to a JSON file.
+    Exits cleanly when *stop_event* is set (e.g. via signal handler).
+    """
+    try:
+        from core.supervisor.watchdog_daemon import WatchdogDaemon, WatchdogThresholds
+
+        _watchdog_state_file.parent.mkdir(parents=True, exist_ok=True)
+        daemon = WatchdogDaemon(
+            thresholds=WatchdogThresholds(),
+            warn_only=True,
+        )
+        logger.info("看门狗已启动 (state=%s)", _watchdog_state_file)
+        daemon.run_daemon(
+            state_file=_watchdog_state_file,
+            interval_seconds=10.0,
+            stop_requested=stop_event.is_set,
+        )
+    except ImportError:
+        logger.warning("WatchdogDaemon 不可用，回退到简单等待循环")
+        _fallback_wait(stop_event)
+    except Exception as exc:
+        logger.error("看门狗异常: %s，回退到简单等待循环", exc)
+        _fallback_wait(stop_event)
+
+
+def _fallback_wait(stop_event: threading.Event) -> None:
+    """Simple wait loop when WatchdogDaemon is unavailable."""
+    while not stop_event.is_set():
+        stop_event.wait(timeout=5.0)
+
+# ---------------------------------------------------------------------------
+# Shutdown
+# ---------------------------------------------------------------------------
+
+def _install_signal_handlers(stop_event: threading.Event) -> None:
+    """Wire SIGTERM and SIGINT to trigger clean shutdown."""
+    def _handler(signum: int, frame: object) -> None:
+        sig_name = signal.Signals(signum).name
+        logger.info("收到 %s，正在关闭...", sig_name)
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, _handler)
+    signal.signal(signal.SIGINT, _handler)
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
+
+def _ensure_event_loop() -> None:
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            raise RuntimeError
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
 
 
 def main(argv: list[str] | None = None) -> int:
-    options = parse_main_args(argv)
+    opts = parse_args(argv)
 
-    diagnostic_exit = _handle_diagnostic_flags(options)
-    if diagnostic_exit is not None:
-        return diagnostic_exit
+    # Diagnostic-only mode
+    diag = _run_diagnostic(opts)
+    if diag is not None:
+        return diag
 
-    if options.lightweight:
-        print("⚙️ 以 lightweight 模式启动：跳过更新检查，保留 API + MCP + 后台控制面。")
-    else:
-        check_and_update_if_needed()
-
-    print("🔍 检查端口占用...")
-    kill_port_occupiers()
-
-    if not _run_startup_gates(options):
+    # Startup gate
+    if not _run_startup_gate(opts):
         return 1
 
-    startup_summary = "Lightweight 启动准备完成" if options.lightweight else "启动前检查完成"
-    print(f"\n🎉 {startup_summary}，正在启动应用...")
-    print("=" * 50)
+    logger.info("正在启动 %s...", AI_NAME)
+    _ensure_event_loop()
 
-    _ensure_main_event_loop()
-    ensure_services_started(show_help_text=not options.lightweight)
-    print("\n✅ 所有后端服务已启动，等待前端连接...")
+    # Initialise subsystems
+    _init_memory()
+    _init_mcp()
 
-    _install_shutdown_handler()
-    _wait_forever()
+    # Start API server
+    _start_api_server()
+
+    # Watchdog supervision loop (main thread)
+    stop_event = threading.Event()
+    _install_signal_handlers(stop_event)
+
+    logger.info("所有服务已启动，进入看门狗监控循环")
+    try:
+        _run_watchdog(stop_event)
+    except KeyboardInterrupt:
+        pass
+
+    logger.info("NagaAgent 已关闭")
     return 0
 
 
-# 主程序入口
 if __name__ == "__main__":
     raise SystemExit(main())
