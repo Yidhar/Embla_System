@@ -35,7 +35,6 @@ class SystemChecker:
         all_ports = get_all_server_ports()
         self.required_ports = [
             all_ports["api_server"],
-            all_ports["mcp_server"],
         ]
         
         # 镜像源配置
@@ -266,9 +265,9 @@ class SystemChecker:
     def check_directory_structure(self) -> bool:
         """检测目录结构"""
         required_dirs = [
-            ("Embla_core", "Next.js运维面板"),
             ("apiserver", "API服务器"),
-            ("mcpserver", "MCP服务器"),
+            ("agents", "Agent运行时"),
+            ("core", "核心层"),
             ("summer_memory", "记忆系统"),
             ("system", "系统核心")
         ]
