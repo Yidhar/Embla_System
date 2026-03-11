@@ -45,8 +45,8 @@ def test_resolve_reasoning_effort_priority_override_then_global_then_legacy() ->
     assert LLMService._resolve_reasoning_effort(config_api=cfg, override_value="medium") == "medium"
     assert LLMService._resolve_reasoning_effort(config_api=cfg, override_value="") == "low"
 
-    legacy_only_cfg = SimpleNamespace(reasoning_effort="", thinking_intensity="high")
-    assert LLMService._resolve_reasoning_effort(config_api=legacy_only_cfg, override_value=None) == "high"
+    fallback_cfg = SimpleNamespace(reasoning_effort="", thinking_intensity="high")
+    assert LLMService._resolve_reasoning_effort(config_api=fallback_cfg, override_value=None) == "high"
 
 
 def test_resolve_reasoning_effort_accepts_xhigh() -> None:

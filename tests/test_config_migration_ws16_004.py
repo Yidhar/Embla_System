@@ -51,9 +51,7 @@ def test_migrate_payload_preserves_unknown_and_maps_handoff_limits() -> None:
     assert migrated["agentic_loop"]["max_rounds_non_stream"] == 9
     assert migrated["agentic_loop"]["custom_loop_flag"] == "keep"
 
-    assert migrated["tool_contract_rollout"]["mode"] == "new_stack_only"
-    assert migrated["tool_contract_rollout"]["decommission_legacy_gate"] is True
-    assert migrated["tool_contract_rollout"]["emit_observability_metadata"] is True
+    assert migrated["tool_contract_rollout"] == {"emit_observability_metadata": True}
 
 
 def test_migrate_payload_optionally_projects_server_ports() -> None:
@@ -86,10 +84,8 @@ def test_migrate_payload_keeps_existing_tool_contract_rollout_values() -> None:
 
     migrated = migrate_payload(payload)
 
-    # Alias should normalize, explicit booleans should be preserved/coerced.
-    assert migrated["tool_contract_rollout"]["mode"] == "new_stack_only"
-    assert migrated["tool_contract_rollout"]["decommission_legacy_gate"] is True
-    assert migrated["tool_contract_rollout"]["emit_observability_metadata"] is False
+    # Legacy rollout knobs are retired; only observability toggle remains.
+    assert migrated["tool_contract_rollout"] == {"emit_observability_metadata": False}
 
 
 def test_upgrade_creates_backup_before_write_and_restore_roundtrip() -> None:
@@ -121,8 +117,7 @@ def test_upgrade_creates_backup_before_write_and_restore_roundtrip() -> None:
         assert migrated_payload["system"]["config_schema_version"] == 1
         assert migrated_payload["agentic_loop"]["max_rounds_stream"] == 5
         assert migrated_payload["agentic_loop"]["max_rounds_non_stream"] == 6
-        assert migrated_payload["tool_contract_rollout"]["mode"] == "new_stack_only"
-        assert migrated_payload["tool_contract_rollout"]["decommission_legacy_gate"] is True
+        assert migrated_payload["tool_contract_rollout"] == {"emit_observability_metadata": True}
         assert migrated_payload["unknown_field"]["keep"] == 1
 
         _write_json(config_path, {"system": {"config_schema_version": 999}})

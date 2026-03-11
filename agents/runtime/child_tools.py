@@ -197,6 +197,56 @@ def get_child_tool_definitions() -> List[Dict[str, Any]]:
             },
         },
         {
+            "name": "publish_task_heartbeat",
+            "description": (
+                "Publish a factual heartbeat for one of your active tasks. "
+                "Use this during long-running or detached work so your parent can observe liveness and progress."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Stable task identifier for this heartbeat stream.",
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": "Current task status label, such as running or blocked.",
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Short factual progress message.",
+                    },
+                    "progress": {
+                        "type": "number",
+                        "description": "Optional numeric progress indicator.",
+                    },
+                    "stage": {
+                        "type": "string",
+                        "description": "Optional current stage label.",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "description": "Heartbeat scope, defaults to task.",
+                    },
+                    "ttl_seconds": {
+                        "type": "integer",
+                        "description": "Seconds after which the heartbeat becomes stale.",
+                    },
+                    "details": {
+                        "type": "object",
+                        "description": "Optional structured details for observability.",
+                        "additionalProperties": True,
+                    },
+                    "generated_at": {
+                        "type": "string",
+                        "description": "Optional ISO-8601 generation timestamp for deterministic testing or detached execution backfill.",
+                    },
+                },
+                "required": ["task_id"],
+            },
+        },
+        {
             "name": "send_message_to_agent",
             "description": (
                 "Send a message to a peer agent (e.g. another Dev agent). "
@@ -249,6 +299,7 @@ def handle_child_tool_call(
         "report_to_parent": _handle_report,
         "read_parent_messages": _handle_read_parent,
         "update_my_task_status": _handle_update_task,
+        "publish_task_heartbeat": _handle_publish_task_heartbeat,
         "send_message_to_agent": _handle_send_peer,
         "read_agent_messages": _handle_read_peer,
     }
@@ -442,6 +493,41 @@ def _handle_update_task(
         "task_id": task_id,
         "status": status,
         "message": f"Task {task_id} updated to '{status}'.",
+    }
+
+
+
+def _handle_publish_task_heartbeat(
+    args: Dict[str, Any],
+    *,
+    child_session_id: str,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+) -> Dict[str, Any]:
+    del mailbox
+    try:
+        heartbeat = store.publish_task_heartbeat(
+            child_session_id,
+            task_id=args.get("task_id", ""),
+            scope=args.get("scope", "task"),
+            status=args.get("status", "running"),
+            message=args.get("message", ""),
+            progress=args.get("progress"),
+            stage=args.get("stage", ""),
+            ttl_seconds=args.get("ttl_seconds", 90),
+            details=args.get("details"),
+            generated_at=args.get("generated_at"),
+        )
+    except (KeyError, ValueError) as exc:
+        return {"error": str(exc)}
+
+    return {
+        "accepted": True,
+        "heartbeat_id": heartbeat.get("heartbeat_id"),
+        "sequence": int(heartbeat.get("sequence") or 0),
+        "expires_at": str(heartbeat.get("expires_at") or ""),
+        "stale_level": str(heartbeat.get("stale_level") or "fresh"),
+        "heartbeat": heartbeat,
     }
 
 

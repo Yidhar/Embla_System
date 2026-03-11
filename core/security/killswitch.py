@@ -30,6 +30,7 @@ class KillSwitchState:
     reason_code: str
     reason_text: str
     mode: str
+    execution_state: str
     active: bool
     approval_ticket: str
     requested_by: str
@@ -64,15 +65,16 @@ class KillSwitchController:
         self._write_state(
             KillSwitchState(
                 generated_at=_utc_iso(),
-                status="critical" if activate else "warning",
-                reason_code="KILLSWITCH_ENGAGED" if activate else "KILLSWITCH_PLAN_PREVIEWED",
+                status="ok",
+                reason_code="KILLSWITCH_PLAN_GENERATED" if activate else "KILLSWITCH_PLAN_PREVIEWED",
                 reason_text=(
-                    "KillSwitch freeze plan is active."
+                    "KillSwitch freeze plan generated; execute it out-of-band to engage."
                     if activate
                     else "KillSwitch freeze plan generated in preview mode."
                 ),
                 mode=plan.mode,
-                active=bool(activate),
+                execution_state="planned" if activate else "previewed",
+                active=False,
                 approval_ticket=str(approval_ticket or "").strip(),
                 requested_by=str(requested_by or "").strip() or "runtime",
                 oob_allowlist=list(plan.oob_allowlist),
@@ -88,6 +90,7 @@ class KillSwitchController:
             reason_code="KILLSWITCH_RELEASED",
             reason_text="KillSwitch state marked as released.",
             mode="released",
+            execution_state="released",
             active=False,
             approval_ticket=str(approval_ticket or "").strip(),
             requested_by=str(requested_by or "").strip() or "runtime",
@@ -105,6 +108,7 @@ class KillSwitchController:
                 "reason_text": "killswitch state file is missing",
                 "state_file": _to_unix(self.state_file),
                 "active": False,
+                "execution_state": "unknown",
             }
         try:
             payload = json.loads(self.state_file.read_text(encoding="utf-8"))
@@ -115,6 +119,7 @@ class KillSwitchController:
                 "reason_text": "killswitch state payload is invalid",
                 "state_file": _to_unix(self.state_file),
                 "active": False,
+                "execution_state": "invalid",
             }
         if not isinstance(payload, dict):
             return {
@@ -123,12 +128,40 @@ class KillSwitchController:
                 "reason_text": "killswitch state payload is invalid",
                 "state_file": _to_unix(self.state_file),
                 "active": False,
+                "execution_state": "invalid",
             }
+
         payload.setdefault("state_file", _to_unix(self.state_file))
-        payload["active"] = bool(payload.get("active"))
+        payload["requested_by"] = str(payload.get("requested_by") or "")
+        payload["approval_ticket"] = str(payload.get("approval_ticket") or "")
         payload["status"] = str(payload.get("status") or "unknown").strip().lower()
         payload["reason_code"] = str(payload.get("reason_code") or "")
         payload["reason_text"] = str(payload.get("reason_text") or "")
+
+        execution_state = str(payload.get("execution_state") or "").strip().lower()
+        if not execution_state:
+            legacy_native_tool_engaged = (
+                payload["reason_code"] == "KILLSWITCH_ENGAGED"
+                and str(payload.get("requested_by") or "").strip().lower() == "native_tool"
+                and not str(payload.get("approval_ticket") or "").strip()
+            )
+            if legacy_native_tool_engaged:
+                execution_state = "planned"
+                payload["status"] = "ok"
+                payload["reason_code"] = "KILLSWITCH_PLAN_GENERATED"
+                payload["reason_text"] = "KillSwitch freeze plan generated; execute it out-of-band to engage."
+                payload["active"] = False
+            elif bool(payload.get("active")):
+                execution_state = "engaged"
+            elif payload["reason_code"] == "KILLSWITCH_PLAN_PREVIEWED":
+                execution_state = "previewed"
+            elif payload["reason_code"] == "KILLSWITCH_RELEASED":
+                execution_state = "released"
+            else:
+                execution_state = "planned"
+
+        payload["execution_state"] = execution_state
+        payload["active"] = bool(payload.get("active")) and execution_state == "engaged"
         return payload
 
     def _write_state(self, state: KillSwitchState) -> None:

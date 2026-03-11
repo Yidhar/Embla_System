@@ -22,8 +22,8 @@
     - 来源: `SubAgentRuntimeCompleted` / `SubAgentRuntimeFailOpen` / `SubAgentRuntimeFailOpenBlocked`
     - 输出: fail-open 比率、阻断比率、门失败分布、预算消耗与是否超限。
   - `metrics.runtime_lease`
-    - 来源: `LeaseAcquired` / `LeaseLost` 事件 + `workflow.db.orchestrator_lease`
-    - 输出: lease 抖动（lost/acquired）、当前 owner/epoch、剩余 TTL 与健康状态。
+    - 来源: `logs/runtime/global_mutex_lease.json`（与 `lock_status` 共用 live 事实源）
+    - 输出: 当前 owner/epoch、剩余 TTL、idle/healthy/near_expiry/expired 健康状态。
 - 阈值配置扩展:
   - `autonomous.subagent_runtime.rollout_percent`
   - `autonomous.subagent_runtime.fail_open_budget_ratio`

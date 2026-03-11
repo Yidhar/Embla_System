@@ -79,6 +79,7 @@ _CHILD_TOOL_NAMES = {
     "report_to_parent",
     "read_parent_messages",
     "update_my_task_status",
+    "publish_task_heartbeat",
     "send_message_to_agent",
     "read_agent_messages",
 }

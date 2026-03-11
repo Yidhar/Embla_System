@@ -133,6 +133,8 @@
     - 任务状态维护协议（单一状态源、`done` 证据标准、回调与复验流程）。
 49. `doc/task/runbooks/subagent_runtime_native_bridge_sequence_and_gate_runbook.md`
     - Sub-Agent 内生执行桥时序图与 Gate 决策图（排障与 onboarding 入口，覆盖 `SubTaskExecutionCompleted` 主事件语义）。
+50. `doc/task/26-ws30-multi-agent-implementation-tasks.md`
+    - `L2-RUNBOOK`：WS30/WS31 多代理执行面状态刷新，统一 Runtime / Review / worktree / BoxLite 当前实现口径。
 
 ## 4. 任务状态约定（L2）
 

@@ -99,9 +99,27 @@
     "watchdog_loop_window_seconds": 60 // 循环检测时间窗口（秒）
   },
   "tool_contract_rollout": {
-    "mode": "new_stack_only", // 契约模式：已切换至 new_stack_only（legacy/dual 会自动归一）
-    "decommission_legacy_gate": true, // 是否阻断 legacy-only 工具结果
-    "emit_observability_metadata": true // 是否输出 rollout snapshot/metadata
+    "emit_observability_metadata": true // 是否输出结构化工具契约观测元数据
+  },
+  "sandbox": {
+    "default_execution_backend": "boxlite", // 默认执行后端：Embla agent execution 默认走 BoxLite
+    "self_repo_execution_backend": "boxlite", // 自维护仓库默认走 BoxLite（与全局默认一致）
+    "boxlite": {
+      "enabled": true, // 启用 BoxLite-first 自维护执行面
+      "mode": "required", // 默认强制 BoxLite；不可用则阻断可写执行链
+      "provider": "sdk", // 使用本地 Python SDK
+      "base_url": "", // rest provider 时填写
+      "image": "python:slim", // 可替换为预制 Embla devbox 镜像
+      "working_dir": "/workspace", // box 内 canonical 工作根
+      "cpus": 2, // 默认 CPU 配额
+      "memory_mib": 1024, // 默认内存配额(MiB)
+      "auto_remove": true, // 任务结束后自动清理 box
+      "security_preset": "maximum", // BoxLite 安全预设
+      "network_enabled": false, // 默认不开放网络
+      "auto_install_sdk": true, // 首次缺少 BoxLite SDK 时自动安装
+      "install_timeout_seconds": 300, // 自动安装超时时间（秒）
+      "sdk_package_spec": "boxlite" // 自动安装使用的 pip 包规格
+    }
   },
   "autonomous": {
     "enabled": false, // 是否启用 System Agent 自治循环

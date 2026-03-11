@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+from agents.runtime import mcp_client
 from pathlib import Path
 from types import SimpleNamespace
 
 import apiserver.api_server
 from apiserver import routes_ops as api_server
+from core.event_bus import EventStore
 from core.security import AuditLedger
+from agents.runtime.agent_session import AgentSessionStore
+from agents.runtime.mailbox import AgentMailbox
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -307,6 +313,116 @@ def test_ops_workflow_events_payload_includes_event_database_summary(tmp_path, m
     assert any(path.endswith("events_topics.db") for path in payload["source_reports"])
     legacy_namespace = payload["data"]["legacy_event_namespace"]
     assert legacy_namespace["event_counters"]["SubAgentRuntimeFailOpen"] == 1
+
+
+def test_ops_workflow_events_payload_ignores_historical_critical_events_outside_alert_window(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    events_file.parent.mkdir(parents=True, exist_ok=True)
+    events_file.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-03-01T06:00:00+00:00",
+                "event_type": "IncidentOpened",
+                "payload": {"workflow_id": "wf-historical-1"},
+            },
+            ensure_ascii=False,
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "critical"},
+            "metrics": {
+                "queue_depth": {"status": "ok", "value": 0},
+                "lock_status": {"status": "ok", "state": "idle"},
+                "runtime_lease": {"status": "ok", "state": "idle"},
+            },
+            "threshold_profile": {"workflow_critical_event_window_hours": 24},
+            "sources": {
+                "events_file": str(events_file),
+                "events_db": str(events_file.with_name("events_topics.db")),
+                "workflow_db": str(repo_root / "logs" / "autonomous" / "workflow.db"),
+            },
+        }
+
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    payload = api_server._ops_build_workflow_events_payload(events_limit=200, recent_critical_limit=20)
+
+    assert payload["status"] == "success"
+    assert payload["severity"] == "ok"
+    assert payload.get("reason_code") is None
+    summary = payload["data"]["summary"]
+    assert summary["overall_status"] == "ok"
+    assert summary["snapshot_overall_status"] == "critical"
+    assert summary["critical_events_total"] == 0
+    assert summary["critical_events_total_all"] == 1
+    assert summary["historical_critical_events_total"] == 1
+    assert summary["event_alert_window_hours"] == 24
+    assert summary["latest_critical_event_type"] == ""
+    assert payload["data"]["recent_critical_events"] == []
+    assert payload["data"]["event_counters"]["IncidentOpened"] == 0
+    assert payload["data"]["event_counters_total"]["IncidentOpened"] == 1
+
+
+def test_ops_workflow_events_payload_includes_runtime_heartbeat_supervision(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    event_store = EventStore(file_path=events_file)
+    store = AgentSessionStore(db_path=":memory:", event_store=event_store)
+    mailbox = AgentMailbox(db_path=":memory:")
+    try:
+        store.create(role="core", session_id="core-heartbeat-1")
+        store.create(role="expert", parent_id="core-heartbeat-1", session_id="expert-heartbeat-1")
+        store.create(role="dev", parent_id="expert-heartbeat-1", session_id="dev-heartbeat-1")
+        store.publish_task_heartbeat(
+            "dev-heartbeat-1",
+            task_id="task-heartbeat-1",
+            status="running",
+            message="still alive",
+            stage="sandbox_exec",
+            ttl_seconds=30,
+            generated_at="2024-03-11T00:00:00+00:00",
+        )
+        store.get_runtime_heartbeat_snapshot(now="2026-03-11T00:03:40+00:00")
+
+        def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+            return {
+                "summary": {"overall_status": "ok"},
+                "metrics": {"queue_depth": {"status": "ok", "value": 0}},
+                "sources": {
+                    "events_file": str(events_file),
+                    "events_db": str(events_file.with_name("events_topics.db")),
+                    "workflow_db": str(repo_root / "logs" / "autonomous" / "workflow.db"),
+                },
+            }
+
+        monkeypatch.setattr(apiserver.api_server, "_get_pipeline_runtime_handles", lambda: (store, mailbox, object()))
+        from scripts import export_slo_snapshot
+
+        monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+        payload = api_server._ops_build_workflow_events_payload(events_limit=200, recent_critical_limit=20)
+
+        assert payload["status"] == "success"
+        assert payload["severity"] == "critical"
+        summary = payload["data"]["summary"]
+        assert summary["active_heartbeat_tasks"] == 1
+        assert summary["blocked_heartbeat_tasks"] == 1
+
+        heartbeat = payload["data"]["heartbeat_supervision"]
+        assert heartbeat["summary"]["task_count"] == 1
+        assert heartbeat["summary"]["blocked_count"] == 1
+        assert heartbeat["sessions"][0]["session_id"] == "dev-heartbeat-1"
+        assert heartbeat["heartbeats"][0]["task_id"] == "task-heartbeat-1"
+        assert payload["data"]["event_counters"]["TaskHeartbeatEscalatedBlocked"] >= 1
+        assert any(item["event_type"] == "TaskHeartbeatEscalatedBlocked" for item in payload["data"]["recent_critical_events"])
+    finally:
+        mailbox.close()
+        store.close()
 
 
 def test_ops_incidents_latest_payload_includes_brainstem_stale_incident(tmp_path, monkeypatch) -> None:
@@ -852,6 +968,7 @@ def test_ops_runtime_posture_payload_includes_control_plane_guard_summaries(tmp_
             "status": "critical",
             "reason_code": "KILLSWITCH_ENGAGED",
             "reason_text": "KillSwitch is active",
+            "execution_state": "engaged",
             "active": True,
             "mode": "freeze_with_oob_allowlist",
             "commands_count": 8,
@@ -956,6 +1073,7 @@ def test_ops_incidents_latest_payload_includes_control_plane_guard_incidents(tmp
             "status": "critical",
             "reason_code": "KILLSWITCH_ENGAGED",
             "reason_text": "KillSwitch is active",
+            "execution_state": "engaged",
             "active": True,
             "mode": "freeze_with_oob_allowlist",
             "commands_count": 8,
@@ -1075,6 +1193,10 @@ def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_pa
                 "error_rate": {"value": 0.02, "status": "ok"},
                 "latency_p95_ms": {"value": 260.0, "status": "warning"},
                 "prompt_slice_count_by_layer": {"value": 2.1, "status": "ok"},
+                "injection_trigger_distribution": {"value": 20.0, "sample_count": 20, "status": "ok"},
+                "recovery_slice_hit_rate": {"value": 0.1, "sample_count": 20, "status": "warning"},
+                "prompt_conflict_drop_count": {"value": 2.0, "sample_count": 20, "status": "warning"},
+                "delegation_hit_rate": {"value": 0.15, "sample_count": 20, "hit_count": 3, "status": "ok"},
                 "shell_readonly_hit_rate": {"value": 0.4, "status": "ok"},
                 "readonly_write_tool_exposure_rate": {
                     "value": 0.03,
@@ -1106,6 +1228,30 @@ def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_pa
                     "created_count": 4,
                     "status": "warning",
                 },
+                "prompt_prefix_cache_hit_rate": {
+                    "value": 0.0,
+                    "sample_count": 18,
+                    "hit_count": 0,
+                    "min_sample_count": 20,
+                    "status": "unknown",
+                },
+                "prompt_tail_churn_rate": {
+                    "value": 1.0,
+                    "sample_count": 2,
+                    "min_sample_count": 5,
+                    "status": "unknown",
+                },
+                "contract_upgrade_latency_ms": {
+                    "value": 120.0,
+                    "sample_count": 2,
+                    "status": "ok",
+                },
+                "recovery_context_survival_rate": {
+                    "value": 1.0,
+                    "sample_count": 2,
+                    "survived_count": 2,
+                    "status": "ok",
+                },
             },
             "threshold_profile": {"max_error_rate": 0.2},
             "sources": {
@@ -1127,6 +1273,10 @@ def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_pa
 
     metrics = payload["data"]["metrics"]
     assert metrics["prompt_slice_count_by_layer"]["value"] == 2.1
+    assert metrics["injection_trigger_distribution"]["sample_count"] == 20
+    assert metrics["recovery_slice_hit_rate"]["status"] == "warning"
+    assert metrics["prompt_conflict_drop_count"]["value"] == 2.0
+    assert metrics["delegation_hit_rate"]["hit_count"] == 3
     assert metrics["shell_readonly_hit_rate"]["value"] == 0.4
     assert metrics["readonly_write_tool_exposure_rate"]["value"] == 0.03
     assert metrics["readonly_write_tool_exposure_rate"]["sample_count"] == 20
@@ -1135,6 +1285,10 @@ def test_ops_runtime_posture_payload_exposes_prompt_observability_metrics(tmp_pa
     assert metrics["shell_to_core_dispatch_rate"]["value"] == 0.4
     assert metrics["shell_clarify_budget_escalation_rate"]["value"] == 0.25
     assert metrics["core_execution_session_creation_rate"]["created_count"] == 4
+    assert metrics["prompt_prefix_cache_hit_rate"]["min_sample_count"] == 20
+    assert metrics["prompt_tail_churn_rate"]["min_sample_count"] == 5
+    assert metrics["contract_upgrade_latency_ms"]["value"] == 120.0
+    assert metrics["recovery_context_survival_rate"]["survived_count"] == 2
     assert payload["data"]["summary"]["route_quality"]["status"] == "warning"
     assert "CORE_EXECUTION_SESSION_CREATION_WARNING" in payload["data"]["summary"]["route_quality"]["reason_codes"]
     assert payload["data"]["summary"]["route_quality"]["trend"]["status"] == "unknown"
@@ -1201,6 +1355,49 @@ def test_ops_route_quality_trend_detects_degrading_windows(tmp_path) -> None:
     assert trend["window_size"] == 20
     assert isinstance(trend["windows"], list) and len(trend["windows"]) == 2
 
+
+
+
+def test_ops_route_quality_trend_ignores_legacy_noncanonical_prompt_events(tmp_path) -> None:
+    repo_root = tmp_path
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    base = datetime(2026, 3, 1, 8, 0, tzinfo=timezone.utc)
+
+    rows: list[dict] = []
+    for idx in range(20):
+        rows.append(
+            {
+                "timestamp": (base + timedelta(minutes=idx)).isoformat(),
+                "event_type": "PromptInjectionComposed",
+                "payload": {
+                    "trigger": "path-c",
+                    "shell_readonly_hit": False,
+                },
+            }
+        )
+    for idx in range(20):
+        rows.append(
+            {
+                "timestamp": (base + timedelta(hours=1, minutes=idx)).isoformat(),
+                "event_type": "PromptInjectionComposed",
+                "payload": {
+                    "route_semantic": "shell_readonly",
+                    "shell_readonly_hit": True,
+                    "readonly_write_tool_exposed": False,
+                    "readonly_write_tool_selected_count": 0,
+                    "shell_clarify_budget_escalated": False,
+                    "core_execution_session_created": False,
+                },
+            }
+        )
+
+    _write_jsonl(events_file, rows)
+    trend = api_server._ops_build_route_quality_trend(events_file, window_size=20, max_windows=2)
+
+    assert trend["status"] == "ok"
+    assert trend["sample_count"] == 20
+    assert trend["ignored_legacy_noncanonical_sample_count"] == 20
+    assert len(trend["windows"]) == 1
 
 def test_ops_runtime_posture_payload_brainstem_heartbeat_healthy_signal(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
@@ -1356,3 +1553,142 @@ def test_ops_runtime_posture_payload_includes_watchdog_daemon_signal(tmp_path, m
     watchdog_metric = payload["data"]["metrics"]["watchdog_daemon"]
     assert watchdog_metric["status"] == "warning"
     assert watchdog_metric["tick"] == 4
+
+
+def test_ops_mcp_fabric_payload_normalizes_service_status_and_skill_inventory(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    (repo_root / "skills" / "refactor").mkdir(parents=True, exist_ok=True)
+    (repo_root / "skills" / "refactor" / "SKILL.md").write_text("# Refactor\n", encoding="utf-8")
+
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(
+        api_server,
+        "get_mcp_services",
+        lambda: {
+            "status": "success",
+            "services": [
+                {"service_name": "filesystem", "source": "builtin", "available": True},
+                {"name": "exa", "source": "mcporter", "available": False},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        api_server,
+        "_ops_collect_local_tool_inventory",
+        lambda max_tools=40: {
+            "total_tools": 12,
+            "memory_tools": 4,
+            "native_tools": 7,
+            "dynamic_tools": 1,
+            "tool_names": ["memory_read", "read_file", "dyn_tool"],
+        },
+    )
+
+    class _FakePool:
+        def get_all_tools(self):
+            return [
+                {"server_name": "filesystem", "name": "read_text"},
+                {"server_name": "exa", "name": "search_web"},
+                {"server_name": "exa", "name": "search_news"},
+            ]
+
+    monkeypatch.setattr(mcp_client, "get_mcp_pool", lambda: _FakePool())
+
+    payload = api_server._ops_build_mcp_fabric_payload()
+
+    assert payload["status"] == "success"
+    assert payload["severity"] == "warning"
+    assert payload["data"]["summary"]["total_services"] == 2
+    assert payload["data"]["summary"]["available_services"] == 1
+    assert payload["data"]["summary"]["builtin_services"] == 1
+    assert payload["data"]["summary"]["mcporter_services"] == 1
+    assert payload["data"]["summary"]["local_tools"] == 12
+    assert payload["data"]["summary"]["mcp_tools"] == 3
+    assert payload["data"]["summary"]["skills"] == 1
+
+    services = payload["data"]["services"]
+    assert services[0]["name"] == "filesystem"
+    assert services[0]["status_label"] == "online"
+    assert "importable" in services[0]["status_reason"]
+    assert services[1]["name"] == "exa"
+    assert services[1]["status_label"] == "missing_command"
+
+    registry = payload["data"]["registry"]
+    assert registry["registered_services"] == 2
+    assert registry["registered_tool_count"] == 3
+    assert registry["service_names"] == ["exa", "filesystem"]
+
+    tool_inventory = payload["data"]["tool_inventory"]
+    assert tool_inventory["memory_tools"] == 4
+    assert tool_inventory["native_tools"] == 7
+    assert tool_inventory["dynamic_tools"] == 1
+
+    skill_inventory = payload["data"]["skill_inventory"]
+    assert skill_inventory["total_skills"] == 1
+    assert skill_inventory["bundled_skills"][0]["name"] == "refactor"
+    assert skill_inventory["bundled_skills"][0]["path"].endswith("skills/refactor/SKILL.md")
+
+
+def test_get_mcp_services_reports_official_runtime_entries(monkeypatch) -> None:
+    class _Cfg(SimpleNamespace):
+        pass
+
+    class _Conn(SimpleNamespace):
+        pass
+
+    class _Pool:
+        connections = {
+            "fetch": _Conn(connected=True, tools=[SimpleNamespace(name="fetch", server_name="fetch")], error="", config=_Cfg(command="npx", args=["-y", "@modelcontextprotocol/server-fetch"])),
+            "memory": _Conn(connected=False, tools=[], error="spawn failed", config=_Cfg(command="npx", args=["-y", "@modelcontextprotocol/server-memory"])),
+        }
+
+    monkeypatch.setattr(
+        mcp_client,
+        "load_mcp_config",
+        lambda config_path=None: [
+            _Cfg(name="fetch", command="npx", args=["-y", "@modelcontextprotocol/server-fetch"], enabled=True),
+            _Cfg(name="memory", command="npx", args=["-y", "@modelcontextprotocol/server-memory"], enabled=True),
+        ],
+    )
+    monkeypatch.setattr(mcp_client, "get_mcp_pool", lambda: _Pool())
+
+    payload = api_server.get_mcp_services()
+
+    assert payload["status"] == "success"
+    services = payload["services"]
+    assert [item["name"] for item in services] == ["fetch", "memory"]
+    assert services[0]["source"] == "official"
+    assert services[0]["status_label"] == "online"
+    assert "tools discovered" in services[0]["status_reason"]
+    assert services[1]["status_label"] == "offline"
+    assert services[1]["status_reason"] == "spawn failed"
+
+
+def test_import_mcp_config_writes_official_runtime_config(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "mcp_servers.json"
+
+    monkeypatch.setattr(mcp_client, "get_mcp_config_path", lambda config_path=None: target)
+
+    async def _fake_reload(config_path=None):
+        return {
+            "config_path": str(target),
+            "configured_servers": 1,
+            "connected_servers": 1,
+            "results": {"fetch": True},
+        }
+
+    monkeypatch.setattr(mcp_client, "reload_global_mcp_pool", _fake_reload)
+
+    request = apiserver.api_server.McpImportRequest(
+        name="fetch",
+        config={"command": "npx", "args": ["-y", "@modelcontextprotocol/server-fetch"]},
+    )
+
+    payload = asyncio.run(apiserver.api_server.import_mcp_config(request))
+
+    saved = json.loads(target.read_text(encoding="utf-8"))
+    assert saved["mcpServers"]["fetch"]["command"] == "npx"
+    assert saved["mcpServers"]["fetch"]["args"] == ["-y", "@modelcontextprotocol/server-fetch"]
+    assert payload["status"] == "success"
+    assert payload["config_path"] == str(target)
+    assert payload["reload"]["connected_servers"] == 1

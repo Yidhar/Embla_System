@@ -123,7 +123,7 @@ def test_summarize_results_for_frontend_backfills_tool_receipt() -> None:
     summaries = tool_loop._summarize_results_for_frontend(
         result_rows,
         500,
-        rollout=tool_loop.ToolContractRolloutRuntime(mode="new_stack_only", decommission_legacy_gate=True),
+        rollout=tool_loop.ToolContractRolloutRuntime(),
     )
 
     assert len(summaries) == 1

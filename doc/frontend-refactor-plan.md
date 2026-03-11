@@ -79,7 +79,7 @@
 
 1. `runtime_rollout.value`（SubAgent 命中率）
 2. `runtime_fail_open.value`、`budget_exhausted`、`fail_open_blocked_ratio`
-3. `runtime_lease.state`、`fencing_epoch`、`lease_lost_churn_ratio`
+3. `runtime_lease.state`、`fencing_epoch`、`ttl_seconds`（由 `global_mutex` 投影）
 4. `queue_depth.value`、`oldest_pending_age_seconds`
 5. `lock_status.state`、`seconds_to_expiry`
 6. `disk_watermark_ratio.value`、`filesystem_free_gb`
@@ -91,8 +91,8 @@
 2. `scripts/export_ws26_runtime_snapshot_ws26_002.py`（WS26-002 汇总）
 3. `scratch/reports/ws26_runtime_snapshot_ws26_002.json`
 4. `logs/autonomous/events.jsonl`
-5. `logs/autonomous/workflow.db`
-6. `logs/runtime/global_mutex_lease.json`
+5. `logs/autonomous/workflow.db`（queue/outbox）
+6. `logs/runtime/global_mutex_lease.json`（`runtime_lease` / `lock_status` 统一事实源）
 
 ### 5.2 MCP 工具织网域（MCP Fabric）
 

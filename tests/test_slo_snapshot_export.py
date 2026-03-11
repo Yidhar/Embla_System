@@ -37,6 +37,8 @@ def _write_autonomous_config(
     batch_size: int,
     rollout_percent: int = 100,
     fail_open_budget_ratio: float = 0.15,
+    prompt_prefix_cache_min_samples: int = 20,
+    prompt_tail_churn_min_samples: int = 5,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -54,6 +56,9 @@ def _write_autonomous_config(
                 "  subagent_runtime:",
                 f"    rollout_percent: {rollout_percent}",
                 f"    fail_open_budget_ratio: {fail_open_budget_ratio}",
+                "  observability:",
+                f"    prompt_prefix_cache_min_samples: {prompt_prefix_cache_min_samples}",
+                f"    prompt_tail_churn_min_samples: {prompt_tail_churn_min_samples}",
                 "",
             ]
         ),
@@ -184,11 +189,6 @@ def test_build_snapshot_schema_and_values() -> None:
         store.create_workflow(workflow_id="wf-1", task_id="task-1")
         store.enqueue_outbox("wf-1", "TaskApproved", {"ok": True})
         store.enqueue_outbox("wf-1", "TaskApproved", {"ok": True})
-        store.try_acquire_or_renew_lease(
-            lease_name="global_orchestrator",
-            owner_id="owner-a",
-            ttl_seconds=1,
-        )
 
         lock_payload = {
             "lease_id": "lease-test",
@@ -275,10 +275,12 @@ def test_build_snapshot_schema_and_values() -> None:
         assert metrics["runtime_fail_open"]["budget_exhausted"] is False
         assert metrics["runtime_fail_open"]["namespace_status"] == "archived_legacy"
 
-        assert metrics["runtime_lease"]["lease_acquired_count"] == 1
-        assert metrics["runtime_lease"]["lease_lost_count"] == 1
         assert metrics["runtime_lease"]["owner_id"] == "owner-a"
+        assert metrics["runtime_lease"]["fencing_epoch"] == 2
         assert metrics["runtime_lease"]["state"] == "near_expiry"
+        assert metrics["runtime_lease"]["status"] == "warning"
+        assert metrics["runtime_lease"]["source"] == "runtime_lease_via_global_mutex"
+        assert metrics["runtime_lease"]["lease_name"] == "global_orchestrator"
 
         assert metrics["prompt_slice_count_by_layer"]["value"] == pytest.approx(2.5)
         assert metrics["prompt_slice_count_by_layer"]["selected_layer_counts"]["L0_DNA"] == 2
@@ -316,6 +318,88 @@ def test_build_snapshot_schema_and_values() -> None:
         assert written.exists()
         restored = json.loads(written.read_text(encoding="utf-8"))
         assert restored["metrics"]["error_rate"]["value"] == pytest.approx(1 / 3)
+    finally:
+        _cleanup_repo_root(repo_root)
+
+
+def test_build_snapshot_ignores_legacy_noncanonical_prompt_events_and_applies_sample_gates() -> None:
+    repo_root = _make_repo_root()
+    now_dt = datetime.now(timezone.utc)
+
+    try:
+        _write_autonomous_config(
+            repo_root / "config" / "autonomous_runtime.yaml",
+            max_error_rate=0.2,
+            max_latency_p95_ms=300.0,
+            batch_size=1,
+            prompt_prefix_cache_min_samples=5,
+            prompt_tail_churn_min_samples=3,
+        )
+
+        events = [
+            {
+                "timestamp": now_dt.isoformat(),
+                "event_type": "PromptInjectionComposed",
+                "payload": {
+                    "trigger": "path-c",
+                    "selected_slice_count": 2,
+                    "prefix_cache_hit": True,
+                    "tail_hash": "legacy-a",
+                },
+            },
+            {
+                "timestamp": (now_dt + timedelta(seconds=1)).isoformat(),
+                "event_type": "PromptInjectionComposed",
+                "payload": {
+                    "trigger": "path-a",
+                    "selected_slice_count": 1,
+                    "prefix_cache_hit": True,
+                    "tail_hash": "legacy-b",
+                },
+            },
+            {
+                "timestamp": (now_dt + timedelta(seconds=2)).isoformat(),
+                "event_type": "PromptInjectionComposed",
+                "payload": {
+                    "route_semantic": "shell_readonly",
+                    "trigger": "shell_readonly",
+                    "selected_slice_count": 2,
+                    "shell_readonly_hit": True,
+                    "prefix_cache_hit": False,
+                    "tail_hash": "canon-a",
+                },
+            },
+            {
+                "timestamp": (now_dt + timedelta(seconds=3)).isoformat(),
+                "event_type": "PromptInjectionComposed",
+                "payload": {
+                    "route_semantic": "shell_readonly",
+                    "trigger": "shell_readonly",
+                    "selected_slice_count": 1,
+                    "shell_readonly_hit": True,
+                    "prefix_cache_hit": False,
+                    "tail_hash": "canon-b",
+                },
+            },
+        ]
+        _write_jsonl(repo_root / "logs" / "autonomous" / "events.jsonl", events)
+
+        snapshot = build_snapshot(repo_root=repo_root, now=now_dt)
+        metrics = snapshot["metrics"]
+
+        assert metrics["shell_to_core_dispatch_rate"]["sample_count"] == 2
+        assert metrics["shell_to_core_dispatch_rate"]["dispatch_count"] == 0
+        assert metrics["shell_to_core_dispatch_rate"]["value"] == pytest.approx(0.0)
+        assert metrics["shell_to_core_dispatch_rate"]["status"] == "ok"
+        assert metrics["shell_to_core_dispatch_rate"]["ignored_legacy_noncanonical_sample_count"] == 2
+
+        assert metrics["prompt_prefix_cache_hit_rate"]["value"] == pytest.approx(0.0)
+        assert metrics["prompt_prefix_cache_hit_rate"]["status"] == "unknown"
+        assert metrics["prompt_prefix_cache_hit_rate"]["min_sample_count"] == 5
+
+        assert metrics["prompt_tail_churn_rate"]["value"] == pytest.approx(1.0)
+        assert metrics["prompt_tail_churn_rate"]["status"] == "unknown"
+        assert metrics["prompt_tail_churn_rate"]["min_sample_count"] == 3
     finally:
         _cleanup_repo_root(repo_root)
 

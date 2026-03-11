@@ -19,9 +19,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from core.security.killswitch import KillSwitchController
 from system.artifact_store import get_artifact_store
-from system.git_worktree_sandbox import apply_workspace_path_overrides
+from system.execution_backend import ExecutionBackendRegistry
 from system.native_executor import CommandResult, NativeExecutor, NativeSecurityError
 from core.security import get_policy_firewall
+from system.sandbox_context import SandboxContext
 from system.sleep_watch import wait_for_log_pattern
 from system.subagent_contract import validate_parallel_contract
 from system.test_baseline_guard import TestBaselineGuard, TestPoisoningDetector
@@ -499,6 +500,7 @@ class NativeToolExecutor:
             state_file=self.project_root / "scratch" / "runtime" / "killswitch_guard_state_ws28_028.json"
         )
         self.workspace_txn = WorkspaceTransactionManager(project_root=self.project_root)
+        self.backend_registry = ExecutionBackendRegistry()
         self._doc_roots = [
             "doc",
             "docs",
@@ -510,13 +512,15 @@ class NativeToolExecutor:
     def set_agent_session_store(self, store: Optional[AgentSessionStore]) -> None:
         self._agent_session_store = store
 
-    def _resolve_session_workspace_root(self, call: Dict[str, Any], session_id: str) -> Optional[Path]:
+    def _resolve_session_sandbox_context(self, call: Dict[str, Any], session_id: str) -> SandboxContext:
+        effective_call = dict(call) if isinstance(call, dict) else {}
+        normalized_session_id = str(session_id or effective_call.get("_session_id") or effective_call.get("session_id") or "").strip()
         store = self._agent_session_store
         if store is None:
-            return None
+            return SandboxContext.default(session_id=normalized_session_id, project_root=self.project_root)
 
         candidate_ids: List[str] = []
-        for raw in (call.get("_session_id"), session_id, call.get("session_id")):
+        for raw in (effective_call.get("_session_id"), normalized_session_id, effective_call.get("session_id")):
             normalized = str(raw or "").strip()
             if normalized and normalized not in candidate_ids:
                 candidate_ids.append(normalized)
@@ -525,27 +529,28 @@ class NativeToolExecutor:
             session = store.get(candidate_id)
             if session is None:
                 continue
-            raw_root = str(session.metadata.get("workspace_root") or "").strip()
-            if not raw_root:
-                continue
-            resolved_root = Path(raw_root).resolve(strict=False)
-            if not self.executor._is_within_root(resolved_root, self.executor.PROJECT_ROOT):
-                continue
-            return resolved_root
-        return None
+            context = SandboxContext.from_metadata(session.metadata, session_id=candidate_id, project_root=self.project_root)
+            raw_root = str(context.workspace_host_root or "").strip()
+            if raw_root:
+                resolved_root = Path(raw_root).resolve(strict=False)
+                if not self.executor._is_within_root(resolved_root, self.executor.PROJECT_ROOT):
+                    continue
+            return context
+        return SandboxContext.default(session_id=normalized_session_id, project_root=self.project_root)
 
-    def _build_effective_call(self, tool_name: str, call: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+    def _build_effective_call(self, tool_name: str, call: Dict[str, Any], session_id: str) -> tuple[Dict[str, Any], SandboxContext, Any]:
         effective_call = dict(call) if isinstance(call, dict) else {}
         normalized_session_id = str(session_id or effective_call.get("_session_id") or effective_call.get("session_id") or "").strip()
         if normalized_session_id:
             effective_call["_session_id"] = normalized_session_id
         effective_call.pop("session_id", None)
 
-        workspace_root = self._resolve_session_workspace_root(effective_call, normalized_session_id)
-        if workspace_root is not None:
-            effective_call = apply_workspace_path_overrides(tool_name, effective_call, workspace_root)
-            effective_call["_session_workspace_root"] = str(workspace_root)
-        return effective_call
+        context = self._resolve_session_sandbox_context(effective_call, normalized_session_id)
+        backend = self.backend_registry.resolve(context)
+        effective_call = backend.prepare_call(tool_name, effective_call, context=context, native_tool_executor=self)
+        if context.workspace_host_root:
+            effective_call.setdefault("_session_workspace_root", str(context.workspace_host_root))
+        return effective_call, context, backend
 
     async def execute(self, call: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         tool_name = (call.get("tool_name") or call.get("tool") or "").strip().lower()
@@ -591,7 +596,7 @@ class NativeToolExecutor:
             "repl": "python_repl",
         }
         tool_name = aliases.get(tool_name, tool_name)
-        effective_call = self._build_effective_call(tool_name, call, session_id)
+        effective_call, context, backend = self._build_effective_call(tool_name, call, session_id)
 
         decision = self.policy_firewall.validate_native_call(tool_name, effective_call)
         if not decision.allowed:
@@ -599,62 +604,14 @@ class NativeToolExecutor:
             return self._error(call, f"瀹夊叏闄愬埗: {decision.reason}{audit_suffix}", tool_name=tool_name)
 
         try:
-            if tool_name == "read_file":
-                result = await self._read_file(effective_call)
-            elif tool_name == "write_file":
-                result = await self._write_file(effective_call)
-            elif tool_name == "get_cwd":
-                result = await self._get_cwd(effective_call)
-            elif tool_name == "run_cmd":
-                result = await self._run_cmd(effective_call)
-            elif tool_name == "search_keyword":
-                result = await self._search_keyword(effective_call)
-            elif tool_name == "query_docs":
-                result = await self._query_docs(effective_call)
-            # NOTE:
-            # - Web retrieval belongs to Shell's read-only toolchain (`agents/shell_tools.py:search_web`).
-            # - Native executor stays local/sandbox-focused to keep capability boundaries explicit.
-            elif tool_name == "list_files":
-                result = await self._list_files(effective_call)
-            elif tool_name == "git_status":
-                result = await self._git_status(effective_call)
-            elif tool_name == "git_diff":
-                result = await self._git_diff(effective_call)
-            elif tool_name == "git_log":
-                result = await self._git_log(effective_call)
-            elif tool_name == "git_show":
-                result = await self._git_show(effective_call)
-            elif tool_name == "git_blame":
-                result = await self._git_blame(effective_call)
-            elif tool_name == "git_grep":
-                result = await self._git_grep(effective_call)
-            elif tool_name == "git_changed_files":
-                result = await self._git_changed_files(effective_call)
-            elif tool_name == "git_checkout_file":
-                result = await self._git_checkout_file(effective_call)
-            elif tool_name == "python_repl":
-                result = await self._python_repl(effective_call)
-            elif tool_name == "artifact_reader":
-                result = await self._artifact_reader(effective_call)
-            elif tool_name == "file_ast_skeleton":
-                result = await self._file_ast_skeleton(effective_call)
-            elif tool_name == "file_ast_chunk_read":
-                result = await self._file_ast_chunk_read(effective_call)
-            elif tool_name == "workspace_txn_apply":
-                result = await self._workspace_txn_apply(effective_call)
-            elif tool_name == "sleep_and_watch":
-                result = await self._sleep_and_watch(effective_call)
-            elif tool_name == "killswitch_plan":
-                result = await self._killswitch_plan(effective_call)
-            else:
-                return self._error(call, f"不支持的native工具: {tool_name}", tool_name=tool_name)
+            result = await backend.execute_tool(tool_name, effective_call, context=context, native_tool_executor=self)
 
             contract_fields = _build_result_contract_fields(result)
             return {
                 "tool_call": call,
                 "result": result,
                 "status": "success",
-                "service_name": "native",
+                "service_name": getattr(backend, "service_name", "native"),
                 "tool_name": tool_name,
                 **contract_fields,
             }
@@ -1332,6 +1289,8 @@ class NativeToolExecutor:
         )
         lines = [
             f"[mode] {plan.mode}",
+            f"[execution_state] {'planned' if mode == 'freeze' else 'previewed'}",
+            "[engaged] false",
             f"[oob_allowlist] {', '.join(plan.oob_allowlist)}",
             "[commands]",
         ]
@@ -1774,6 +1733,53 @@ class NativeToolExecutor:
             f"[stdout]\n{payload_stdout if payload_stdout else '(empty)'}\n"
             f"[stderr]\n{stderr_preview if stderr_preview else '(empty)'}"
         )
+
+    async def _execute_native_tool(self, tool_name: str, call: Dict[str, Any]) -> str:
+        if tool_name == "read_file":
+            return await self._read_file(call)
+        if tool_name == "write_file":
+            return await self._write_file(call)
+        if tool_name == "get_cwd":
+            return await self._get_cwd(call)
+        if tool_name == "run_cmd":
+            return await self._run_cmd(call)
+        if tool_name == "search_keyword":
+            return await self._search_keyword(call)
+        if tool_name == "query_docs":
+            return await self._query_docs(call)
+        if tool_name == "list_files":
+            return await self._list_files(call)
+        if tool_name == "git_status":
+            return await self._git_status(call)
+        if tool_name == "git_diff":
+            return await self._git_diff(call)
+        if tool_name == "git_log":
+            return await self._git_log(call)
+        if tool_name == "git_show":
+            return await self._git_show(call)
+        if tool_name == "git_blame":
+            return await self._git_blame(call)
+        if tool_name == "git_grep":
+            return await self._git_grep(call)
+        if tool_name == "git_changed_files":
+            return await self._git_changed_files(call)
+        if tool_name == "git_checkout_file":
+            return await self._git_checkout_file(call)
+        if tool_name == "python_repl":
+            return await self._python_repl(call)
+        if tool_name == "artifact_reader":
+            return await self._artifact_reader(call)
+        if tool_name == "file_ast_skeleton":
+            return await self._file_ast_skeleton(call)
+        if tool_name == "file_ast_chunk_read":
+            return await self._file_ast_chunk_read(call)
+        if tool_name == "workspace_txn_apply":
+            return await self._workspace_txn_apply(call)
+        if tool_name == "sleep_and_watch":
+            return await self._sleep_and_watch(call)
+        if tool_name == "killswitch_plan":
+            return await self._killswitch_plan(call)
+        raise ValueError(f"不支持的native工具: {tool_name}")
 
     @staticmethod
     def _error(call: Dict[str, Any], message: str, *, tool_name: Optional[str] = None) -> Dict[str, Any]:

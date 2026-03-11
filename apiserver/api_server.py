@@ -86,7 +86,10 @@ def _get_pipeline_runtime_handles() -> tuple[AgentSessionStore, AgentMailbox, Ta
         if _PIPELINE_SESSION_STORE is None:
             runtime_dir = Path("scratch/runtime")
             runtime_dir.mkdir(parents=True, exist_ok=True)
-            _PIPELINE_SESSION_STORE = AgentSessionStore(db_path=runtime_dir / "agent_sessions.db")
+            _PIPELINE_SESSION_STORE = AgentSessionStore(
+                db_path=runtime_dir / "agent_sessions.db",
+                event_store=EventStore(file_path=Path("logs/autonomous/events.jsonl")),
+            )
             _PIPELINE_MAILBOX = AgentMailbox(db_path=runtime_dir / "agent_mailbox.db")
             _PIPELINE_TASK_BOARD = TaskBoardEngine(
                 boards_dir=Path("memory/working/boards"),
@@ -291,6 +294,7 @@ if hasattr(_routes_chat, "_bind_chat_runtime_context"):
             if globals().get("_CHAT_ROUTE_ARBITER_GUARD") is not None
             else getattr(_routes_chat, "_CHAT_ROUTE_ARBITER_GUARD", None)
         ),
+        agent_session_store_getter=lambda: _get_pipeline_runtime_handles()[0],
         event_store_getter=lambda: (
             globals().get("_CHAT_ROUTE_EVENT_STORE")
             if globals().get("_CHAT_ROUTE_EVENT_STORE") is not None
@@ -681,8 +685,6 @@ async def inject_api_contract_headers(request: Request, call_next):
 SKILLS_TEMPLATE_DIR = Path(__file__).resolve().parent / "skills_templates"
 LOCAL_SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
 LOCAL_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-MCPORTER_DIR = Path.home() / ".mcporter"
-MCPORTER_CONFIG_PATH = MCPORTER_DIR / "config.json"
 
 
 def _is_path_within_root(path: Path, root: Path) -> bool:
@@ -1877,8 +1879,24 @@ def _build_mcp_runtime_snapshot(
     registry_status: Optional[Dict[str, Any]] = None,
     external_services: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """构建 MCP 运行时状态快照（供 /mcp/status 与 /mcp/tasks 复用）。"""
+    """构建官方 MCP 运行时状态快照（供 /mcp/status 与 /mcp/tasks 复用）。"""
     from datetime import datetime
+
+    configured_names: List[str] = []
+    if external_services is None:
+        try:
+            from agents.runtime.mcp_client import load_mcp_config
+
+            configured_names = [
+                str(cfg.name).strip()
+                for cfg in load_mcp_config()
+                if bool(getattr(cfg, "enabled", True)) and str(getattr(cfg, "name", "") or "").strip()
+            ]
+        except Exception as exc:
+            logger.warning(f"读取官方 MCP 配置失败: {exc}")
+            configured_names = []
+    else:
+        configured_names = [str(item).strip() for item in (external_services or []) if str(item).strip()]
 
     if registry_status is None:
         try:
@@ -1887,40 +1905,45 @@ def _build_mcp_runtime_snapshot(
             pool = get_mcp_pool()
             if pool:
                 tools = pool.get_all_tools()
-                service_names = list({t.get("domain", "") for t in tools if t.get("domain", "").startswith("mcp_")})
-                registry_status = {"registered_services": len(service_names), "service_names": service_names}
+                service_names = sorted({str(getattr(tool, "server_name", "") or "").strip() for tool in tools if str(getattr(tool, "server_name", "") or "").strip()})
+                tool_names = sorted({str(getattr(tool, "name", "") or "").strip() for tool in tools if str(getattr(tool, "name", "") or "").strip()})
+                registry_status = {
+                    "registered_services": len(service_names),
+                    "registered_tool_count": len(tool_names),
+                    "cached_manifests": 0,
+                    "service_names": service_names,
+                    "tool_names": tool_names,
+                }
             else:
-                registry_status = {"registered_services": 0, "service_names": []}
+                registry_status = {"registered_services": 0, "registered_tool_count": 0, "service_names": [], "tool_names": []}
         except Exception as exc:  # pragma: no cover - defensive guard
             logger.warning(f"构建 MCP registry 状态失败: {exc}")
-            registry_status = {"registered_services": 0, "service_names": []}
+            registry_status = {"registered_services": 0, "registered_tool_count": 0, "service_names": [], "tool_names": []}
 
-    if external_services is None:
-        cfg = _load_mcporter_config()
-        external_cfg = cfg.get("mcpServers", {}) if isinstance(cfg, dict) else {}
-        external_services = list(external_cfg.keys()) if isinstance(external_cfg, dict) else []
-
-    builtin_names = [str(x) for x in (registry_status.get("service_names") or []) if str(x).strip()]
-    external_names = [str(x) for x in (external_services or []) if str(x).strip() and str(x) not in builtin_names]
-    service_total = len(builtin_names) + len(external_names)
+    connected_names = [str(x) for x in (registry_status.get("service_names") or []) if str(x).strip()]
+    configured_only = [name for name in configured_names if name not in connected_names]
+    service_total = len(set(configured_names) | set(connected_names))
+    connected_count = len(connected_names)
 
     return {
-        "server": "online" if service_total > 0 else "offline",
+        "server": "online" if connected_count > 0 else "offline",
         "timestamp": datetime.now().isoformat(),
         "tasks": {
             "total": service_total,
-            "active": 0,
-            "completed": len(builtin_names),
-            "failed": 0,
+            "active": connected_count,
+            "completed": connected_count,
+            "failed": max(service_total - connected_count, 0),
         },
         "registry": {
             "registered_services": int(registry_status.get("registered_services") or 0),
+            "registered_tool_count": int(registry_status.get("registered_tool_count") or 0),
             "cached_manifests": int(registry_status.get("cached_manifests") or 0),
-            "service_names": builtin_names,
-            "external_service_names": external_names,
+            "service_names": connected_names,
+            "tool_names": [str(x) for x in (registry_status.get("tool_names") or []) if str(x).strip()],
+            "external_service_names": configured_only,
         },
         "scheduler": {
-            "source": "registry_snapshot",
+            "source": "official_mcp_registry_snapshot",
             "tracked_tasks": service_total,
         },
     }
@@ -1939,19 +1962,19 @@ def _build_mcp_task_snapshot(
     for name in registry.get("service_names", []) or []:
         tasks.append(
             {
-                "task_id": f"builtin:{name}",
+                "task_id": f"official:{name}",
                 "service_name": str(name),
-                "status": "registered",
-                "source": "builtin",
+                "status": "online",
+                "source": "official",
             }
         )
     for name in registry.get("external_service_names", []) or []:
         tasks.append(
             {
-                "task_id": f"mcporter:{name}",
+                "task_id": f"official:{name}",
                 "service_name": str(name),
                 "status": "configured",
-                "source": "mcporter",
+                "source": "official",
             }
         )
 
@@ -1988,16 +2011,46 @@ class McpImportRequest(BaseModel):
 
 @app.post("/mcp/import")
 async def import_mcp_config(request: McpImportRequest):
-    """将 MCP JSON 配置写入 ~/.mcporter/config.json"""
-    MCPORTER_DIR.mkdir(parents=True, exist_ok=True)
-    mcporter_config = _load_mcporter_config()
-    servers = mcporter_config.setdefault("mcpServers", {})
-    servers[request.name] = request.config
-    mcporter_config["mcpServers"] = servers
-    MCPORTER_CONFIG_PATH.write_text(
-        json.dumps(mcporter_config, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    return {"status": "success", "message": f"已添加 MCP 服务: {request.name}"}
+    """将官方 MCP stdio 配置写入项目根目录的 mcp_servers.json，并热重载运行时。"""
+    from agents.runtime import mcp_client
+
+    server_name = str(request.name or "").strip()
+    if not server_name:
+        raise HTTPException(status_code=400, detail="MCP 服务名称不能为空")
+
+    config = dict(request.config or {})
+    command = str(config.get("command") or "").strip()
+    if not command:
+        raise HTTPException(status_code=400, detail="当前官方 MCP 安装控件仅支持 stdio command/args/env 配置")
+
+    config_path = mcp_client.upsert_mcp_server_config(server_name, config)
+    reload_summary: Dict[str, Any]
+    reload_error = ""
+    try:
+        reload_summary = await mcp_client.reload_global_mcp_pool()
+    except Exception as exc:
+        reload_summary = {
+            "config_path": str(mcp_client.get_mcp_config_path()),
+            "configured_servers": 0,
+            "connected_servers": 0,
+            "results": {},
+        }
+        reload_error = str(exc)
+
+    connected = bool((reload_summary.get("results") or {}).get(server_name))
+    if connected:
+        message = f"已写入官方 MCP 配置并连接服务: {server_name}"
+    elif reload_error:
+        message = f"已写入官方 MCP 配置: {server_name}；但热重载失败：{reload_error}"
+    else:
+        message = f"已写入官方 MCP 配置: {server_name}；当前尚未成功连接，请检查命令与依赖"
+
+    return {
+        "status": "success",
+        "message": message,
+        "config_path": str(config_path),
+        "reload": reload_summary,
+    }
 
 
 class SkillImportRequest(BaseModel):

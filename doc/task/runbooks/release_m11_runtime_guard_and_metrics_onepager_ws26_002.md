@@ -39,8 +39,8 @@
 - `metrics.runtime_fail_open.budget_exhausted`：是否超限。
 
 4. lease 稳态
-- `metrics.runtime_lease.lease_acquired_count` / `lease_lost_count`。
-- `metrics.runtime_lease.state` 与 `seconds_to_expiry`（`value`）。
+- `metrics.runtime_lease.state`、`fencing_epoch`、`ttl_seconds`。
+- `metrics.runtime_lease.value`（剩余 TTL；idle 时可为空）。
 
 ## 常见异常与处理
 
@@ -53,5 +53,5 @@
 - 进入 `WS26-003` 自动降级策略实施前，手工将 `rollout_percent` 下调并记录审计。
 
 3. lease 抖动高
-- 优先排查 `orchestrator_lease` 写入抖动与部署实例数量。
-- 结合 `LeaseLost` 事件时间窗口确认是否存在并发抢占或租约刷新延迟。
+- 优先排查 `logs/runtime/global_mutex_lease.json` 是否长期停留在 `expired` / `near_expiry`。
+- 结合全局互斥锁审计与 tool loop 续租日志确认是否存在续租停滞或异常退出。

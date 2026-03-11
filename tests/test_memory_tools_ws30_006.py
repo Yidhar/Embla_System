@@ -15,6 +15,22 @@ from agents.runtime.task_board import TaskBoardEngine, TaskItem, TaskStatus
 from agents.runtime.tool_profiles import resolve_child_tool_capabilities
 
 
+def _patch_parent_tool_runtime(monkeypatch, *, execution_backend: str = "boxlite", execution_root: str = "/workspace") -> None:
+    monkeypatch.setattr(
+        "agents.runtime.parent_tools.resolve_execution_runtime_metadata",
+        lambda **kwargs: {
+            "execution_backend_requested": execution_backend,
+            "execution_backend": execution_backend,
+            "execution_root": execution_root,
+            "execution_profile": "default",
+            "box_profile": "default",
+            "box_provider": "sdk",
+            "box_mount_mode": "rw",
+            "box_fallback_reason": "",
+        },
+    )
+
+
 @pytest.fixture
 def memory_dir(tmp_path: Path) -> Path:
     return tmp_path / "memory"
@@ -224,7 +240,8 @@ def test_memory_tools_support_tag_link_deprecate_and_delete(mgr: L1MemoryManager
     assert mgr.resolve_memory_path(delete_result["archived_path"], must_exist=True).exists()
 
 
-def test_parent_spawn_resolves_preset_profile_to_minimal_subset(store: AgentSessionStore, mailbox: AgentMailbox) -> None:
+def test_parent_spawn_resolves_preset_profile_to_minimal_subset(monkeypatch, store: AgentSessionStore, mailbox: AgentMailbox) -> None:
+    _patch_parent_tool_runtime(monkeypatch)
     result = handle_parent_tool_call(
         "spawn_child_agent",
         {
@@ -246,10 +263,12 @@ def test_parent_spawn_resolves_preset_profile_to_minimal_subset(store: AgentSess
 
 
 def test_expert_spawn_devs_infers_memory_profile_for_memory_tasks(
+    monkeypatch,
     store: AgentSessionStore,
     mailbox: AgentMailbox,
     task_board_engine: TaskBoardEngine,
 ) -> None:
+    _patch_parent_tool_runtime(monkeypatch)
     expert = ExpertAgent(
         config=ExpertAgentConfig(expert_type="docs", tool_subset=["read_file"]),
         session_id="expert-memory-1",

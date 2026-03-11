@@ -81,13 +81,14 @@ uvicorn apiserver.llm_service:llm_app --host 127.0.0.1 --port 8001 --reload
 - `GET /mcp/services`
 - `POST /mcp/import`
 
-说明：`/mcp/status` 与 `/mcp/tasks` 当前返回运行态快照语义；底层 `mcpserver` 仍可独立健康检查。
+说明：当前已转向官方 MCP SDK 运行时；`/mcp/status`、`/mcp/tasks`、`/mcp/services` 与 `POST /mcp/import` 围绕项目根目录的 `mcp_servers.json` 工作，旧内嵌 `mcpserver` 不再是活跃执行链。
 
 ### 4.6 OPS 聚合（Embla_core 消费）
 
 - `GET /v1/ops/runtime/posture`
 - `GET /v1/ops/mcp/fabric`
 - `GET /v1/ops/memory/graph`
+- `GET /v1/ops/memory/search`
 - `GET /v1/ops/workflow/events`
 - `GET /v1/ops/incidents/latest`
 - `GET /v1/ops/evidence/index`

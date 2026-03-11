@@ -227,6 +227,35 @@ def test_parent_tool_workspace_lifecycle_updates_owner_metadata(
     assert not worktree_root.exists()
 
 
+def test_core_execution_receipt_includes_layered_scheduler_metrics() -> None:
+    receipt = _build_core_execution_receipt(
+        pipeline_id="pipe-scheduler-1",
+        decomposition={"goal_id": "goal-scheduler-1", "original_goal": "refactor runtime"},
+        expert_results=[{"agent_id": "expert-1"}],
+        reports=[{"session_id": "expert-1", "status": "waiting", "reports": ["work complete"], "metadata": {}}],
+        review_results=[],
+        task_completed=True,
+        stop_reason="submitted_completion",
+        scheduler_metrics={
+            "layer": "expert",
+            "parallel_limit": 2,
+            "peak_parallelism": 2,
+            "layers": {
+                "expert": {"layer": "expert", "parallel_limit": 2, "peak_parallelism": 2},
+                "dev": {"layer": "dev", "parallel_limit": 4, "peak_parallelism": 3},
+            },
+        },
+    )
+
+    scheduler = receipt.get("agent_state", {}).get("scheduler", {})
+    assert scheduler["layer"] == "expert"
+    assert scheduler["parallel_limit"] == 2
+    assert scheduler["peak_parallelism"] == 2
+    assert scheduler["layers"]["expert"]["parallel_limit"] == 2
+    assert scheduler["layers"]["dev"]["parallel_limit"] == 4
+    assert scheduler["layers"]["dev"]["peak_parallelism"] == 3
+
+
 def test_core_execution_receipt_marks_workspace_submission_pending() -> None:
     receipt = _build_core_execution_receipt(
         pipeline_id="pipe-self-1",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from core.security import BudgetGuardController, KillSwitchController
@@ -17,9 +18,10 @@ def test_killswitch_controller_persists_active_state(tmp_path: Path) -> None:
     )
     assert plan.mode == "freeze_with_oob_allowlist"
     state = controller.read_state()
-    assert state["status"] == "critical"
-    assert state["active"] is True
-    assert state["reason_code"] == "KILLSWITCH_ENGAGED"
+    assert state["status"] == "ok"
+    assert state["active"] is False
+    assert state["execution_state"] == "planned"
+    assert state["reason_code"] == "KILLSWITCH_PLAN_GENERATED"
 
     released = controller.release(requested_by="unit-test", approval_ticket="CAB-WS28")
     assert released["status"] == "ok"
@@ -60,3 +62,31 @@ def test_budget_guard_controller_initializes_baseline_state(tmp_path: Path) -> N
     second = controller.ensure_baseline_state(requested_by="unit-test")
     assert second["baseline_written"] is False
     assert second["status"] == "ok"
+
+
+def test_killswitch_controller_normalizes_legacy_native_tool_plan(tmp_path: Path) -> None:
+    controller = KillSwitchController(state_file=tmp_path / "killswitch_state.json")
+    controller.state_file.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-03-09T19:14:42.059384+00:00",
+                "status": "critical",
+                "reason_code": "KILLSWITCH_ENGAGED",
+                "reason_text": "KillSwitch freeze plan is active.",
+                "mode": "freeze_with_oob_allowlist",
+                "active": True,
+                "approval_ticket": "",
+                "requested_by": "native_tool",
+                "oob_allowlist": ["10.0.0.0/24"],
+                "commands_count": 8,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    state = controller.read_state()
+    assert state["status"] == "ok"
+    assert state["active"] is False
+    assert state["execution_state"] == "planned"
+    assert state["reason_code"] == "KILLSWITCH_PLAN_GENERATED"

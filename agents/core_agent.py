@@ -116,6 +116,13 @@ class CoreAgent:
     def values_prompt(self) -> str:
         return self._values_prompt
 
+    @property
+    def max_experts(self) -> int:
+        try:
+            return max(1, int(self._config.max_experts))
+        except Exception:
+            return 1
+
     def decompose_goal(self, dispatch: Dict[str, Any]) -> Dict[str, Any]:
         """Decompose a dispatched goal into expert assignments.
 

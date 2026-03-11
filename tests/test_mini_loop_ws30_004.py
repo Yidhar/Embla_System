@@ -313,12 +313,42 @@ class TestMiniLoop:
             initial_task="Complete t-001",
         ))
 
-        # Executor should NOT have been called (child tool routed internally)
         assert len(executor.calls) == 0
 
-        # But task status should be updated in session metadata
         s = store.get("child-1")
         assert s.metadata.get("task_updates", {}).get("t-001", {}).get("status") == "done"
+
+    def test_publish_task_heartbeat_routes_to_child_handler(self, store, mailbox):
+        store.create(role="expert", session_id="parent-1")
+        store.create(role="dev", parent_id="parent-1", session_id="child-1")
+
+        llm = MockLLM([
+            {
+                "content": "",
+                "tool_calls": [{
+                    "id": "c1",
+                    "name": "publish_task_heartbeat",
+                    "arguments": {"task_id": "t-001", "status": "running", "message": "still alive"},
+                }],
+            },
+            {"content": "Done.", "tool_calls": []},
+        ])
+        executor = MockToolExecutor()
+
+        _collect_events(run_mini_loop(
+            session_id="child-1",
+            store=store,
+            mailbox=mailbox,
+            llm_call=llm,
+            tool_executor=executor,
+            tool_definitions=[],
+            initial_task="Keep parent informed",
+        ))
+
+        assert len(executor.calls) == 0
+        snapshot = store.get_session_heartbeat_snapshot("child-1")
+        assert snapshot["summary"]["task_count"] == 1
+        assert snapshot["heartbeats"][0]["task_id"] == "t-001"
 
     def test_max_rounds(self, store, mailbox):
         """Loop stops at max_rounds if child never reports completion."""

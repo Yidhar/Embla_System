@@ -215,6 +215,14 @@ def inherit_workspace_metadata(parent_metadata: Mapping[str, Any]) -> Dict[str, 
         "workspace_audit_report_path",
         "workspace_audit_diff_path",
         "workspace_submission_changed_files",
+        "execution_backend",
+        "execution_backend_requested",
+        "execution_root",
+        "execution_profile",
+        "box_profile",
+        "box_provider",
+        "box_mount_mode",
+        "box_fallback_reason",
     ):
         value = parent_metadata.get(key)
         if value not in (None, ""):

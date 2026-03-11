@@ -82,28 +82,19 @@ class AgenticLoopRuntimeState:
 
 @dataclass(frozen=True)
 class ToolContractRolloutRuntime:
-    """工具契约灰度运行态（由配置解析得到）。"""
+    """Structured tool-contract runtime policy.
 
-    mode: str = "new_stack_only"
-    decommission_legacy_gate: bool = True
+    The legacy result contract has been retired. Runtime policy now only
+    controls whether observability metadata is emitted alongside the canonical
+    structured payload.
+    """
+
+    contract_mode: str = "structured_only"
     emit_observability_metadata: bool = True
-
-    @property
-    def legacy_contract_enabled(self) -> bool:
-        if self.decommission_legacy_gate:
-            return False
-        return self.mode in {"legacy_only", "dual_stack"}
-
-    @property
-    def new_contract_enabled(self) -> bool:
-        return self.mode in {"dual_stack", "new_stack_only"}
 
     def snapshot(self) -> Dict[str, Any]:
         return {
-            "mode": self.mode,
-            "legacy_contract_enabled": self.legacy_contract_enabled,
-            "new_contract_enabled": self.new_contract_enabled,
-            "decommission_legacy_gate": bool(self.decommission_legacy_gate),
+            "contract_mode": self.contract_mode,
             "emit_observability_metadata": bool(self.emit_observability_metadata),
         }
 
@@ -121,18 +112,6 @@ class ParallelContractGateDecision:
     reason: str = ""
 
 
-_TOOL_CONTRACT_ROLLOUT_MODES = {"legacy_only", "dual_stack", "new_stack_only"}
-_TOOL_CONTRACT_MODE_ALIASES = {
-    "legacy": "new_stack_only",
-    "legacy_stack": "new_stack_only",
-    "old_stack": "new_stack_only",
-    "dual": "new_stack_only",
-    "compat": "new_stack_only",
-    "both": "new_stack_only",
-    "new": "new_stack_only",
-    "new_stack": "new_stack_only",
-    "v2_only": "new_stack_only",
-}
 _TOOL_RESULT_NONE_MARKERS = {"", "(none)", "none", "null", "nil", "n/a", "undefined"}
 _TOOL_RESULT_TAG_LINE_RE = re.compile(r"^\[([A-Za-z0-9_]+)\](?:\s*(.*))?$")
 _BUDGET_GUARD_CONTROLLER: Optional[BudgetGuardController] = None
@@ -321,30 +300,13 @@ def _should_stop_on_watchdog_signal(signal: Dict[str, Any]) -> bool:
     return False
 
 
-def _normalize_tool_contract_rollout_mode(value: Any) -> str:
-    normalized = str(value or "").strip().lower()
-    normalized = _TOOL_CONTRACT_MODE_ALIASES.get(normalized, normalized)
-    if normalized in {"legacy_only", "dual_stack"}:
-        return "new_stack_only"
-    if normalized in _TOOL_CONTRACT_ROLLOUT_MODES:
-        return normalized
-    return "new_stack_only"
-
-
 def _resolve_tool_contract_rollout_runtime() -> ToolContractRolloutRuntime:
     cfg = get_config()
     rollout_cfg = getattr(cfg, "tool_contract_rollout", None)
     if rollout_cfg is None:
         return ToolContractRolloutRuntime()
-
-    mode = _normalize_tool_contract_rollout_mode(getattr(rollout_cfg, "mode", "new_stack_only"))
-    decommission_gate = bool(getattr(rollout_cfg, "decommission_legacy_gate", True))
     emit_metadata = bool(getattr(rollout_cfg, "emit_observability_metadata", True))
-    return ToolContractRolloutRuntime(
-        mode=mode,
-        decommission_legacy_gate=decommission_gate,
-        emit_observability_metadata=emit_metadata,
-    )
+    return ToolContractRolloutRuntime(emit_observability_metadata=emit_metadata)
 
 
 def _coalesce_result_text(result: Dict[str, Any]) -> str:
@@ -584,25 +546,16 @@ def _build_contract_observability_metadata(
 
     stats = {
         "result_count": len(results),
-        "legacy_payload_count": 0,
-        "new_payload_count": 0,
-        "legacy_blocked_count": 0,
+        "structured_payload_count": 0,
     }
     for result in results:
         meta = result.get("_contract_rollout")
         if isinstance(meta, dict):
-            if bool(meta.get("used_legacy")):
-                stats["legacy_payload_count"] += 1
-            if bool(meta.get("used_new")):
-                stats["new_payload_count"] += 1
-            if bool(meta.get("legacy_blocked")):
-                stats["legacy_blocked_count"] += 1
+            if bool(meta.get("structured_payload")):
+                stats["structured_payload_count"] += 1
             continue
-
-        if "result" in result:
-            stats["legacy_payload_count"] += 1
         if _has_new_contract_payload(result):
-            stats["new_payload_count"] += 1
+            stats["structured_payload_count"] += 1
 
     metadata["stats"] = stats
     return metadata
@@ -643,8 +596,6 @@ def _build_default_receipt_next_steps(
         suggestions.append("inspect_error_and_retry")
         if artifact_ref:
             suggestions.append("read_artifact_with_artifact_reader")
-        if error_code == _SCHEMA_ERR_LEGACY_DECOMMISSIONED:
-            suggestions.append("switch_to_new_contract_payload")
         return suggestions
 
     if artifact_ref:
@@ -718,8 +669,6 @@ def _build_tool_receipt(call: Dict[str, Any], result: Dict[str, Any]) -> Dict[st
         risk_items.append("tool_execution_failed")
     if risk_level in {"write_repo", "deploy", "secrets", "self_modify"}:
         risk_items.append(f"high_risk_action:{risk_level}")
-    if error_code == _SCHEMA_ERR_LEGACY_DECOMMISSIONED:
-        risk_items.append("legacy_contract_decommission_gate")
     if error_code == _RISK_ERR_APPROVAL_REQUIRED:
         risk_items.append("approval_required_gate")
     if error_code == _RISK_ERR_POLICY_BLOCKED:
@@ -909,27 +858,17 @@ def _summarize_results_for_frontend(
         summary["preview"] = preview_value
         if preview_truncated:
             summary["preview_truncated"] = True
-        if rollout_runtime.legacy_contract_enabled:
-            result_value, result_truncated = _build_frontend_preview(
-                text=result_text,
-                limit=limit,
-                artifact_ref=artifact_ref,
-            )
-            summary["result"] = result_value
-            if result_truncated:
-                summary["result_truncated"] = True
-        if rollout_runtime.new_contract_enabled:
-            narrative_text = r.get("narrative_summary", r.get("display_preview", result_text))
-            narrative_value, narrative_truncated = _build_frontend_preview(
-                text=narrative_text,
-                limit=limit,
-                artifact_ref=artifact_ref,
-            )
-            summary["narrative_summary"] = narrative_value
-            if narrative_truncated:
-                summary["narrative_summary_truncated"] = True
-            if artifact_ref:
-                summary["forensic_artifact_ref"] = artifact_ref
+        narrative_text = r.get("narrative_summary", r.get("display_preview", result_text))
+        narrative_value, narrative_truncated = _build_frontend_preview(
+            text=narrative_text,
+            limit=limit,
+            artifact_ref=artifact_ref,
+        )
+        summary["narrative_summary"] = narrative_value
+        if narrative_truncated:
+            summary["narrative_summary_truncated"] = True
+        if artifact_ref:
+            summary["forensic_artifact_ref"] = artifact_ref
 
         if rollout_runtime.emit_observability_metadata:
             meta = r.get("_contract_rollout")
@@ -1025,7 +964,6 @@ _CODING_KEYWORDS = (
 _MUTATING_NATIVE_TOOL_NAMES = {"write_file", "git_checkout_file", "workspace_txn_apply"}
 _SCHEMA_ERR_INPUT_INVALID = "E_SCHEMA_INPUT_INVALID"
 _SCHEMA_ERR_OUTPUT_INVALID = "E_SCHEMA_OUTPUT_INVALID"
-_SCHEMA_ERR_LEGACY_DECOMMISSIONED = "E_LEGACY_CONTRACT_DECOMMISSIONED"
 _RISK_ERR_APPROVAL_REQUIRED = "E_RISK_APPROVAL_REQUIRED"
 _RISK_ERR_POLICY_BLOCKED = "E_RISK_POLICY_BLOCKED"
 _NATIVE_TOOL_ALIASES = {
@@ -1476,9 +1414,7 @@ def _enforce_tool_result_schema(
             "error_code": _SCHEMA_ERR_OUTPUT_INVALID,
             "_contract_rollout": {
                 **rollout.snapshot(),
-                "used_legacy": False,
-                "used_new": False,
-                "legacy_blocked": False,
+                "structured_payload": False,
             },
         }
 
@@ -1499,44 +1435,27 @@ def _enforce_tool_result_schema(
     if not has_legacy_payload and not has_new_payload:
         errors.append("missing result payload")
 
-    legacy_blocked = bool(has_legacy_payload and not has_new_payload and not rollout.legacy_contract_enabled)
-    if legacy_blocked:
-        errors.append("legacy-only result blocked by decommission gate")
+    if has_legacy_payload and not has_new_payload:
+        errors.append("legacy-only result payload is no longer supported; provide narrative_summary/display_preview")
 
     if errors:
         detail = "; ".join(errors)
-        error_code = _SCHEMA_ERR_LEGACY_DECOMMISSIONED if legacy_blocked else _SCHEMA_ERR_OUTPUT_INVALID
         return {
             "tool_call": call,
-            "result": _schema_error(error_code, call_id, detail),
+            "result": _schema_error(_SCHEMA_ERR_OUTPUT_INVALID, call_id, detail),
             "status": "error",
             "service_name": default_service_name or "tool_protocol",
             "tool_name": default_tool_name or "validation",
-            "error_code": error_code,
+            "error_code": _SCHEMA_ERR_OUTPUT_INVALID,
             "_contract_rollout": {
                 **rollout.snapshot(),
-                "used_legacy": has_legacy_payload,
-                "used_new": has_new_payload,
-                "legacy_blocked": legacy_blocked,
+                "structured_payload": False,
             },
         }
 
-    if rollout.new_contract_enabled and not has_new_payload and has_legacy_payload:
-        legacy_text = str(normalized_result.get("result", ""))
-        normalized_result.setdefault("narrative_summary", legacy_text)
-        normalized_result.setdefault("display_preview", legacy_text)
-        has_new_payload = True
-
-    if rollout.legacy_contract_enabled and not has_legacy_payload:
-        fallback_text = str(normalized_result.get("narrative_summary") or normalized_result.get("display_preview") or "")
-        normalized_result["result"] = fallback_text
-        has_legacy_payload = True
-
     normalized_result["_contract_rollout"] = {
         **rollout.snapshot(),
-        "used_legacy": has_legacy_payload,
-        "used_new": has_new_payload,
-        "legacy_blocked": False,
+        "structured_payload": has_new_payload,
     }
     return normalized_result
 
@@ -3906,21 +3825,6 @@ async def run_agentic_loop(
         if contract_rollout.emit_observability_metadata:
             tool_results_payload["metadata"] = {"contract_rollout": rollout_metadata}
         yield _build_loop_event("tool_results", tool_results_payload)
-
-        if (
-            contract_rollout.emit_observability_metadata
-            and isinstance(rollout_metadata.get("stats"), dict)
-            and int(rollout_metadata["stats"].get("legacy_blocked_count", 0)) > 0
-        ):
-            yield _build_loop_event(
-                "guardrail",
-                {
-                    "round": round_num,
-                    "type": "legacy_contract_decommission_gate",
-                    "snapshot": rollout_metadata.get("snapshot", {}),
-                    "stats": rollout_metadata.get("stats", {}),
-                },
-            )
 
         assistant_content = complete_text if complete_text else "(工具调用中)"
         messages.append({"role": "assistant", "content": assistant_content})

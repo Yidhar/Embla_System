@@ -1,7 +1,7 @@
 ---
 **文档类型**：As-Is + Target-Aligned（混合文档）
 **实施状态**：Phase 3 桥接主链已落地 + Phase 3 Full 收口
-**最后更新**：2026-02-27
+**最后更新**：2026-03-10
 **执行策略版本**：v3 (Sub-Agent Runtime + NativeExecutionBridge 主路径)
 **当前实现**：agentic_tool_loop + SystemAgent + subagent_runtime + execution_bridge + mcp_manager
 **目标态参考**：`doc/00-omni-operator-architecture.md` + `doc/task/25-subagent-development-fabric-status-matrix.md`
@@ -10,7 +10,7 @@
 # 09 工具调用与任务执行规范（Embla System 对齐版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
-最后更新：2026-02-27
+最后更新：2026-03-10
 
 ## 1. 目标
 
@@ -40,7 +40,9 @@
    - `subagent_runtime`（依赖调度、契约校验、事件编排）
    - `execution_bridge`（补丁意图执行、角色门禁、审计回执）
 4. 执行层：
-   - Native：`native_tools -> native_executor`
+   - Embla 原生工具路由：`native_tools -> ExecutionBackend`
+   - 默认可写执行后端：`BoxLiteExecutionBackend`（Dev / Review / `core_execution` 会话）
+   - 宿主 fallback：`NativeExecutionBackend`（无 session、host-only system 能力、BoxLite 不可用且策略允许时）
    - MCP：`mcp_manager`（本地注册优先，外部 mcporter 兜底）
 5. 返回层：输出 `tool_results` / `tool_stage` / `SubTaskExecutionBridgeReceipt` 到前端与事件通道。
 
@@ -72,6 +74,28 @@
 - `agents/tool_loop.py`：内生执行桥与治理回执
 - `policy/role_executor_semantic_guard.spec`：语义级门禁策略
 - `config/autonomous_runtime.yaml`：`disable_legacy_cli_fallback` 等运行策略
+
+### 3.2 BoxLite-first 执行后端（Target Canonical）
+
+当前默认链已统一为 `host control plane + BoxLite execution plane + host worktree lifecycle`：
+
+- 宿主创建每任务 `git worktree`
+- 宿主以稳定 `box_name` 创建/复用 BoxLite box，并记录运行时 `box_id`；随后将 worktree 以 `rw` 挂载到 box 内 `/workspace`
+- 宿主额外将主 checkout 以 `ro` 挂载到相同绝对路径，并将主仓库 `.venv` 以 `ro` 挂载到 `/workspace/.venv`，用于 worktree `.git` 解析与 `.venv/bin/python` 复用
+- Dev / Review 的 workspace 读写、搜索、命令执行、测试、lint、事务写入通过统一 `ExecutionBackend` 路由；`query_docs`、`file_ast_skeleton`、`file_ast_chunk_read` 也随执行后端进入 box 内 guest helper 路径
+- 宿主仅保留 `artifact_reader` / `killswitch_plan` 等系统级 host-bridge 能力，以及 `audit_child_workspace`、`promote_child_workspace`、`teardown_child_workspace`
+
+因此，BoxLite 在 Embla 中承担的是**Embla 默认可写执行后端**角色，而不是替代 worktree lifecycle。`SandboxContext.default()` 保留 `native` 仅用于无 session / 测试 harness 的宿主 fallback。
+
+配套重构原则：
+
+1. `native_tools` 变为 backend router，而不是唯一执行器。
+2. `SandboxContext` 成为 session 的单一事实源。
+3. `apply_workspace_path_overrides` 仅保留为 native fallback 兼容层。
+4. `execution_receipt` 对 `awaiting_workspace_promotion` 的语义保持不变。
+5. BoxLite runtime 元数据采用 `box_name`（稳定 session 命名）+ `box_id`（运行时实例 ID）双字段口径。
+
+详细设计见 `doc/15-boxlite-first-execution-sandbox-architecture.md`。
 
 ## 4. Tool Contract（统一契约）
 
@@ -210,7 +234,48 @@ MCP 路径（`mcp_manager`）已具备：
 | 驳回重做 | `review_reject_respawn` | `task_ids`, `respawn_dev_count`, `reject_respawn_count` | `reject` 且可恢复时，Expert 重新 spawn fresh Dev |
 | 阻断上报 | `expert_blocked` | `reason`, `review_cycle`, `result` | `reject` 不可恢复、预算耗尽、无任务可重跑或 respawn 失败/未完成 |
 | Expert 汇总 | `expert_report` | `reports[]`, `status` | Expert 给 Core 的聚合报告 |
-| 最终回执 | `execution_receipt` | `stop_reason`, `agent_state.review_count`, `agent_state.review_verdicts` | 多 Agent gate 的最终结构化结果 |
+| 最终回执 | `execution_receipt` | `stop_reason`, `agent_state.review_count`, `agent_state.review_verdicts`, `agent_state.scheduler.parallel_limit`, `agent_state.scheduler.peak_parallelism`, `agent_state.scheduler.layers.dev.peak_parallelism`, `agent_state.heartbeat_summary`, `agent_state.experts_blocked`, `agent_state.blocked_expert_reasons` | 多 Agent gate 的最终结构化结果、分层调度摘要与心跳监管收口 |
+
+### 8.2 心跳监管与自动升级（运行时 canonical）
+
+#### 8.2.0.1 子工具与阈值
+
+- 子 Agent 通过 `publish_task_heartbeat(task_id, status, message, stage, ttl_seconds, progress, details)` 主动发布任务级 heartbeat。
+- stale 等级口径：
+  - `warning`：`seconds_since_heartbeat > ttl_seconds`
+  - `critical`：`seconds_since_heartbeat > max(ttl_seconds * 2, ttl_seconds + 30)`
+  - `blocked`：`seconds_since_heartbeat > critical_threshold + 60`
+- `poll_child_status`、`/v1/chat/route_session_state/{session_id}` 与 `execution_receipt.agent_state.heartbeat_summary` 使用同一套聚合字段。
+
+#### 8.2.0.2 Expert / Core 升级策略
+
+- `warning`：Expert 先向原 Dev 发送提醒，要求刷新 heartbeat。
+- `critical`：Expert 注入更强的恢复指令，要求 Dev 立即汇报当前 stage / 阻塞原因。
+- `blocked`：Expert 优先对对应 task `spawn` fresh Dev 做 `heartbeat_respawn`。
+- respawn 预算耗尽：Expert 发出 `expert_blocked(reason=task_heartbeat_blocked_respawn_exhausted)`，Core 将其汇总进 `execution_receipt`。
+
+### 8.2.1 `destroy_child_agent` 资源清理结果口径
+
+当父节点调用 `destroy_child_agent` 时，运行时返回事实型清理结果：
+
+```json
+{
+  "agent_id": "agent-xxx",
+  "status": "destroyed",
+  "box_cleanup_attempted": true,
+  "box_cleanup_success": true,
+  "box_cleanup_error": "",
+  "workspace_cleanup_attempted": false,
+  "workspace_cleanup_success": true,
+  "workspace_cleanup_error": ""
+}
+```
+
+约束：
+
+- `box_cleanup_*` 仅描述 BoxLite 执行沙箱释放事实。
+- `workspace_cleanup_*` 仅描述 owner worktree 的宿主侧清理事实。
+- 这些字段属于父工具结果，不写入 `execution_receipt`。
 
 ### 8.3 Verdict 到 stop_reason 的归一口径
 
@@ -221,9 +286,12 @@ MCP 路径（`mcp_manager`）已具备：
 | Review 最终 `reject` | `review_rejected` | 最终审查未通过，或被升级为 blocked |
 | Review 未完成 | `review_missing` | 预期应有 Review，但没有收到最终生效结论 |
 | Review 仍停留在返修要求 | `review_requested_changes` | 返修轮次耗尽或任务在返修态结束 |
+| 心跳阻断且 respawn 耗尽 | `task_heartbeat_blocked_respawn_exhausted` | Dev 心跳超过阻断阈值，Expert 自动重拉新 Dev 仍未恢复 |
 
 - `review_result` 事件会保留**每一轮** Review 的输出，便于前端/审计复盘。
 - `execution_receipt.agent_state.review_verdicts` 与最终 `review_results` 聚合只记录**每个 Expert 最终生效的 verdict**，不把中间态 `request_changes` 或可恢复 `reject` 当作最终通过结果。
+- `execution_receipt.agent_state.scheduler` 仅保留编排层摘要；顶层默认对应 Expert 层，当前至少包含 `layer / parallel_limit / peak_parallelism`，并可通过 `layers.expert` / `layers.dev` 读取分层并发度。
+- `execution_receipt.agent_state.heartbeat_summary` 记录本轮心跳监管动作计数（如 `warning_count` / `critical_count` / `blocked_count` / `respawn_count` / `expert_blocked_reasons`）。
 - 当最终 verdict 为 `reject` 时，Expert 对 Core 的报告应以前缀 `[BLOCKED] ...` 标记阻断原因。
 
 ## 9. 开发预备落地清单

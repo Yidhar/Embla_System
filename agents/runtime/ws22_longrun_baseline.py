@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from core.event_bus import EventStore
+from core.security.lease_fencing import GlobalMutexManager, LeaseHandle
 
 from agents.runtime.workflow_store import WorkflowStore
 
@@ -75,6 +77,10 @@ def run_ws22_longrun_baseline(
     event_file = repo / "logs" / "autonomous" / "events.jsonl"
     workflow_store = WorkflowStore(db_path=workflow_db)
     event_store = EventStore(file_path=event_file)
+    global_mutex = GlobalMutexManager(
+        state_file=repo / "logs" / "runtime" / "global_mutex_lease.json",
+        audit_file=repo / "logs" / "runtime" / "global_mutex_events.jsonl",
+    )
 
     rounds = max(1, int(config.rounds))
     virtual_round_seconds = max(0.1, float(config.virtual_round_seconds))
@@ -87,6 +93,8 @@ def run_ws22_longrun_baseline(
     lease_name = "global_orchestrator"
     lease_owner = f"ws22-baseline-{case_id}"
     lease_ttl_seconds = 3600
+    lease_handle: LeaseHandle | None = None
+    global_mutex.ensure_initialized(ttl_seconds=lease_ttl_seconds)
     subagent_gate_metrics: Dict[str, Any] = {
         "rounds_total": rounds,
         "runtime_completed": 0,
@@ -253,15 +261,26 @@ def run_ws22_longrun_baseline(
                 subagent_gate_metrics["release_gate_rejected"] = int(subagent_gate_metrics["release_gate_rejected"]) + 2
 
             if round_idx % lease_renew_every == 0:
-                lease_state = workflow_store.try_acquire_or_renew_lease(
-                    lease_name=lease_name,
-                    owner_id=lease_owner,
-                    ttl_seconds=lease_ttl_seconds,
-                )
-                if not lease_state.is_owner:
-                    unhandled_errors.append(f"round={round_idx}, error=lease_owner_lost")
+                if lease_handle is None:
+                    lease_handle = asyncio.run(
+                        global_mutex.acquire(
+                            owner_id=lease_owner,
+                            job_id=lease_name,
+                            ttl_seconds=lease_ttl_seconds,
+                            wait_timeout_seconds=1.0,
+                            poll_interval_seconds=0.1,
+                        )
+                    )
+                else:
+                    lease_handle = asyncio.run(global_mutex.renew(lease_handle))
         except Exception as exc:  # pragma: no cover - long-run harness safety net
             unhandled_errors.append(f"round={round_idx}, error={type(exc).__name__}:{exc}")
+
+    if lease_handle is not None:
+        try:
+            asyncio.run(global_mutex.release(lease_handle))
+        except Exception as exc:  # pragma: no cover - baseline cleanup best effort
+            unhandled_errors.append(f"release_error={type(exc).__name__}:{exc}")
 
     elapsed_wall_seconds = round(time.time() - started_at, 4)
     virtual_elapsed_seconds = round(rounds * virtual_round_seconds, 2)

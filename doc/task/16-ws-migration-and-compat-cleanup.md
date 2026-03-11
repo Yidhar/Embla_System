@@ -1,4 +1,4 @@
-﻿# WS16 迁移收敛与兼容清理
+# WS16 迁移收敛与兼容清理
 
 ## 目标
 
@@ -66,7 +66,7 @@
 - scope: rollout flags
 - inputs: `doc/07`, `doc/09`
 - depends_on: NGA-WS16-003,NGA-WS16-004
-- deliverables: dual-stack flags + 下线门禁
+- deliverables: 兼容链退役、structured-only 工具契约与配置/文档收口
 - acceptance: 灰度过程可观测、可回退
 - rollback: 回切旧栈 SLA 内完成
 - status: done

@@ -18,3 +18,7 @@ autonomous:
     require_contract_negotiation: true
     require_scaffold_patch: true
     fail_fast_on_subtask_error: true
+  observability:
+    workflow_critical_event_window_hours: 336
+    prompt_prefix_cache_min_samples: 20
+    prompt_tail_churn_min_samples: 5

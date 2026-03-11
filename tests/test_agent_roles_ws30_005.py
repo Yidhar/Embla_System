@@ -96,6 +96,27 @@ def _mock_child_completion_response(tools, *, dev_content: str = "child work com
     }
 
 
+def _patch_parent_tool_runtime(monkeypatch, *, execution_backend: str = "native", execution_root: str = "/workspace") -> None:
+    monkeypatch.setattr(
+        "agents.runtime.parent_tools.resolve_execution_runtime_metadata",
+        lambda **kwargs: {
+            "execution_backend_requested": execution_backend,
+            "execution_backend": execution_backend,
+            "execution_root": execution_root,
+            "execution_profile": "default",
+            "box_profile": "",
+            "box_provider": "",
+            "box_mount_mode": "rw",
+            "box_fallback_reason": "",
+        },
+    )
+
+
+@pytest.fixture(autouse=True)
+def _default_native_parent_tool_runtime(monkeypatch):
+    _patch_parent_tool_runtime(monkeypatch)
+
+
 # ── Shell Agent Tests (Router Integration) ─────────────────────
 
 class TestShellAgent:
@@ -685,6 +706,389 @@ class TestPipeline:
         end_event = next(e for e in events if e["type"] == "pipeline_end")
         assert end_event["reason"] == "completed"
 
+
+    def test_pipeline_executes_multiple_experts_concurrently(self, monkeypatch, store, mailbox):
+        from agents import pipeline as pipeline_module
+        from agents.core_agent import CoreAgent
+
+        start_times = {}
+
+        def _fake_decompose(self, dispatch):
+            goal = str(dispatch.get("goal") or "")
+            return {
+                "goal_id": "g-concurrent-experts",
+                "subtask_count": 2,
+                "model_tier": "primary",
+                "target_repo": "external",
+                "original_goal": goal,
+                "expert_assignments": [
+                    {
+                        "expert_type": "backend",
+                        "scope": "Implement backend endpoint",
+                        "prompt_blocks": [],
+                        "tool_subset": ["read_file", "grep_files", "apply_patch"],
+                        "model_tier": "primary",
+                        "prompt_profile": "",
+                    },
+                    {
+                        "expert_type": "testing",
+                        "scope": "Add API tests",
+                        "prompt_blocks": [],
+                        "tool_subset": ["read_file", "grep_files", "apply_patch"],
+                        "model_tier": "primary",
+                        "prompt_profile": "",
+                    },
+                ],
+            }
+
+        async def _fake_run_mini_loop(
+            *,
+            session_id,
+            store,
+            mailbox,
+            llm_call,
+            tool_executor,
+            tool_definitions,
+            system_prompt,
+            initial_task,
+            config,
+        ):
+            del mailbox, llm_call, tool_executor, tool_definitions, system_prompt, initial_task, config
+            session = store.get(session_id)
+            yield {"type": "loop_start"}
+            if session is not None and session.role == "dev":
+                start_times[session_id] = asyncio.get_running_loop().time()
+                await asyncio.sleep(0.05)
+                store.update_metadata(
+                    session_id,
+                    {
+                        "completion_report": f"{session_id} complete",
+                        "verification_report": _mock_verification_report(
+                            summary=f"{session_id} complete",
+                            changed_files=[f"{session_id}.py"],
+                        ),
+                    },
+                )
+                store.update_status(session_id, AgentStatus.WAITING)
+                yield {"type": "loop_end", "reason": "submitted_completion", "state": {}}
+                return
+            yield {"type": "loop_end", "reason": "no_op", "state": {}}
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, tools, model
+            return {"content": "", "tool_calls": []}
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        monkeypatch.setattr(CoreAgent, "decompose_goal", _fake_decompose)
+        monkeypatch.setattr(CoreAgent, "plan_execution_route", lambda self, dispatch: {"route": "standard", "complexity_hint": "standard", "fast_track_eligible": False, "reason_codes": ["TEST_FORCE_STANDARD"], "max_files": 1, "max_changed_lines": 10, "tool_subset": [], "risk_level": str(dispatch.get("risk_level") or "")})
+        monkeypatch.setattr(pipeline_module, "run_mini_loop", _fake_run_mini_loop)
+
+        events = self._run(self._collect_events(
+            pipeline_module.run_multi_agent_pipeline(
+                message="Implement auth endpoint and tests",
+                session_id="test-session-expert-concurrency",
+                forced_route_semantic="core_execution",
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=None,
+            )
+        ))
+
+        dev_starts = [e for e in events if e.get("type") == "dev_loop_start"]
+        assert len(dev_starts) >= 2
+        assert len(start_times) >= 2
+
+        start_gap = max(start_times.values()) - min(start_times.values())
+        assert start_gap < 0.04
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        scheduler = receipt_event.get("agent_state", {}).get("scheduler", {})
+        assert scheduler.get("layer") == "expert"
+        assert int(scheduler.get("parallel_limit") or 0) == 2
+        assert int(scheduler.get("peak_parallelism") or 0) == 2
+        dev_scheduler = (scheduler.get("layers") or {}).get("dev", {})
+        assert int(dev_scheduler.get("parallel_limit") or 0) == 2
+        assert int(dev_scheduler.get("peak_parallelism") or 0) == 2
+
+
+    def test_pipeline_respects_core_max_experts_parallel_limit(self, monkeypatch, store, mailbox):
+        from agents import pipeline as pipeline_module
+        from agents.core_agent import CoreAgent
+
+        start_times = {}
+        active_devs = {"value": 0, "max": 0}
+
+        def _fake_decompose(self, dispatch):
+            goal = str(dispatch.get("goal") or "")
+            return {
+                "goal_id": "g-expert-parallel-limit",
+                "subtask_count": 3,
+                "model_tier": "primary",
+                "target_repo": "external",
+                "original_goal": goal,
+                "expert_assignments": [
+                    {
+                        "expert_type": "backend",
+                        "scope": "Implement backend endpoint",
+                        "prompt_blocks": [],
+                        "tool_subset": ["read_file", "grep_files", "apply_patch"],
+                        "model_tier": "primary",
+                        "prompt_profile": "",
+                    },
+                    {
+                        "expert_type": "testing",
+                        "scope": "Add API tests",
+                        "prompt_blocks": [],
+                        "tool_subset": ["read_file", "grep_files", "apply_patch"],
+                        "model_tier": "primary",
+                        "prompt_profile": "",
+                    },
+                    {
+                        "expert_type": "docs",
+                        "scope": "Document API behavior",
+                        "prompt_blocks": [],
+                        "tool_subset": ["read_file", "grep_files", "apply_patch"],
+                        "model_tier": "primary",
+                        "prompt_profile": "",
+                    },
+                ],
+            }
+
+        async def _fake_run_mini_loop(
+            *,
+            session_id,
+            store,
+            mailbox,
+            llm_call,
+            tool_executor,
+            tool_definitions,
+            system_prompt,
+            initial_task,
+            config,
+        ):
+            del mailbox, llm_call, tool_executor, tool_definitions, system_prompt, initial_task, config
+            session = store.get(session_id)
+            yield {"type": "loop_start"}
+            if session is not None and session.role == "dev":
+                start_times[session_id] = asyncio.get_running_loop().time()
+                active_devs["value"] += 1
+                active_devs["max"] = max(active_devs["max"], active_devs["value"])
+                await asyncio.sleep(0.05)
+                active_devs["value"] -= 1
+                store.update_metadata(
+                    session_id,
+                    {
+                        "completion_report": f"{session_id} complete",
+                        "verification_report": _mock_verification_report(
+                            summary=f"{session_id} complete",
+                            changed_files=[f"{session_id}.py"],
+                        ),
+                    },
+                )
+                store.update_status(session_id, AgentStatus.WAITING)
+                yield {"type": "loop_end", "reason": "submitted_completion", "state": {}}
+                return
+            yield {"type": "loop_end", "reason": "no_op", "state": {}}
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, tools, model
+            return {"content": "", "tool_calls": []}
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        monkeypatch.setattr(CoreAgent, "decompose_goal", _fake_decompose)
+        monkeypatch.setattr(
+            CoreAgent,
+            "plan_execution_route",
+            lambda self, dispatch: {
+                "route": "standard",
+                "complexity_hint": "standard",
+                "fast_track_eligible": False,
+                "reason_codes": ["TEST_FORCE_STANDARD"],
+                "max_files": 1,
+                "max_changed_lines": 10,
+                "tool_subset": [],
+                "risk_level": str(dispatch.get("risk_level") or ""),
+            },
+        )
+        monkeypatch.setattr(CoreAgent, "max_experts", property(lambda self: 1))
+        monkeypatch.setattr(pipeline_module, "run_mini_loop", _fake_run_mini_loop)
+
+        events = self._run(self._collect_events(
+            pipeline_module.run_multi_agent_pipeline(
+                message="Implement auth endpoint, tests, and docs",
+                session_id="test-session-expert-parallel-limit",
+                forced_route_semantic="core_execution",
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=None,
+            )
+        ))
+
+        dev_starts = [e for e in events if e.get("type") == "dev_loop_start"]
+        assert len(dev_starts) >= 3
+        assert len(start_times) >= 3
+        assert active_devs["max"] == 1
+
+        start_gap = max(start_times.values()) - min(start_times.values())
+        assert start_gap >= 0.08
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        scheduler = receipt_event.get("agent_state", {}).get("scheduler", {})
+        assert scheduler.get("layer") == "expert"
+        assert int(scheduler.get("parallel_limit") or 0) == 1
+        assert int(scheduler.get("peak_parallelism") or 0) == 1
+        dev_scheduler = (scheduler.get("layers") or {}).get("dev", {})
+        assert int(dev_scheduler.get("parallel_limit") or 0) == 1
+        assert int(dev_scheduler.get("peak_parallelism") or 0) == 1
+
+
+    def test_pipeline_executes_multiple_devs_within_expert_concurrently(self, monkeypatch, store, mailbox):
+        from agents import pipeline as pipeline_module
+        from agents.core_agent import CoreAgent
+        from agents.expert_agent import ExpertAgent
+
+        start_times = {}
+
+        def _fake_decompose(self, dispatch):
+            goal = str(dispatch.get("goal") or "")
+            return {
+                "goal_id": "g-concurrent-devs",
+                "subtask_count": 2,
+                "model_tier": "primary",
+                "target_repo": "external",
+                "original_goal": goal,
+                "expert_assignments": [
+                    {
+                        "expert_type": "backend",
+                        "scope": "Implement backend endpoint and add tests",
+                        "prompt_blocks": [],
+                        "tool_subset": ["read_file", "grep_files", "apply_patch"],
+                        "model_tier": "primary",
+                        "prompt_profile": "",
+                    },
+                ],
+            }
+
+        def _fake_plan_tasks(self, scope):
+            del self, scope
+            return [
+                TaskItem(task_id="t-001", title="Implement backend endpoint", status=TaskStatus.PENDING, depends_on=[]),
+                TaskItem(task_id="t-002", title="Add backend tests", status=TaskStatus.PENDING, depends_on=[]),
+            ]
+
+        async def _fake_run_mini_loop(
+            *,
+            session_id,
+            store,
+            mailbox,
+            llm_call,
+            tool_executor,
+            tool_definitions,
+            system_prompt,
+            initial_task,
+            config,
+        ):
+            del mailbox, llm_call, tool_executor, tool_definitions, system_prompt, initial_task, config
+            session = store.get(session_id)
+            yield {"type": "loop_start"}
+            if session is not None and session.role == "dev":
+                start_times[session_id] = asyncio.get_running_loop().time()
+                await asyncio.sleep(0.05)
+                store.update_metadata(
+                    session_id,
+                    {
+                        "completion_report": f"{session_id} complete",
+                        "verification_report": _mock_verification_report(
+                            summary=f"{session_id} complete",
+                            changed_files=[f"{session_id}.py"],
+                        ),
+                    },
+                )
+                store.update_status(session_id, AgentStatus.WAITING)
+                yield {"type": "loop_end", "reason": "submitted_completion", "state": {}}
+                return
+            yield {"type": "loop_end", "reason": "no_op", "state": {}}
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, tools, model
+            return {"content": "", "tool_calls": []}
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        monkeypatch.setattr(CoreAgent, "decompose_goal", _fake_decompose)
+        monkeypatch.setattr(
+            CoreAgent,
+            "plan_execution_route",
+            lambda self, dispatch: {
+                "route": "standard",
+                "complexity_hint": "standard",
+                "fast_track_eligible": False,
+                "reason_codes": ["TEST_FORCE_STANDARD"],
+                "max_files": 1,
+                "max_changed_lines": 10,
+                "tool_subset": [],
+                "risk_level": str(dispatch.get("risk_level") or ""),
+            },
+        )
+        monkeypatch.setattr(ExpertAgent, "plan_tasks", _fake_plan_tasks)
+        monkeypatch.setattr(pipeline_module, "run_mini_loop", _fake_run_mini_loop)
+
+        events = self._run(self._collect_events(
+            pipeline_module.run_multi_agent_pipeline(
+                message="Implement auth endpoint and tests",
+                session_id="test-session-dev-concurrency",
+                forced_route_semantic="core_execution",
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=None,
+            )
+        ))
+
+        dev_starts = [e for e in events if e.get("type") == "dev_loop_start"]
+        assert len(dev_starts) >= 2
+        assert len(start_times) >= 2
+
+        start_gap = max(start_times.values()) - min(start_times.values())
+        assert start_gap < 0.04
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        scheduler = receipt_event.get("agent_state", {}).get("scheduler", {})
+        dev_scheduler = (scheduler.get("layers") or {}).get("dev", {})
+        assert int(dev_scheduler.get("parallel_limit") or 0) == 2
+        assert int(dev_scheduler.get("peak_parallelism") or 0) == 2
+
     def test_pipeline_review_request_changes_resumes_dev_and_re_reviews(self, store, mailbox, task_board_engine):
         from agents.pipeline import run_multi_agent_pipeline
 
@@ -694,7 +1098,7 @@ class TestPipeline:
         async def _mock_child_llm(messages, tools, model):
             del messages, model
             tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
-            is_review = bool({"memory_read", "memory_grep", "memory_tag", "memory_deprecate"} & tool_names)
+            is_review = bool({"memory_tag", "memory_deprecate"} & tool_names)
             if is_review:
                 review_round["value"] += 1
                 if review_round["value"] == 1:
@@ -795,7 +1199,7 @@ class TestPipeline:
         async def _mock_child_llm(messages, tools, model):
             del messages, model
             tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
-            is_review = bool({"memory_read", "memory_grep", "memory_tag", "memory_deprecate"} & tool_names)
+            is_review = bool({"memory_tag", "memory_deprecate"} & tool_names)
             if is_review:
                 review_round["value"] += 1
                 if review_round["value"] == 1:
@@ -896,7 +1300,7 @@ class TestPipeline:
         async def _mock_child_llm(messages, tools, model):
             del messages, model
             tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
-            is_review = bool({"memory_read", "memory_grep", "memory_tag", "memory_deprecate"} & tool_names)
+            is_review = bool({"memory_tag", "memory_deprecate"} & tool_names)
             if is_review:
                 return {
                     "content": "",
@@ -964,6 +1368,179 @@ class TestPipeline:
 
         expert_reports = [e for e in events if e.get("type") == "expert_report"]
         assert any("[BLOCKED]" in "\n".join(map(str, e.get("reports", []))) for e in expert_reports)
+
+    def test_pipeline_heartbeat_blocked_respawns_dev_and_completes(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        async def _mock_child_llm(messages, tools, model):
+            del model
+            tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+            joined_messages = "\n".join(str(item.get("content") or "") for item in messages if isinstance(item, dict))
+            is_review = bool({"memory_tag", "memory_deprecate"} & tool_names)
+            if is_review:
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "review_after_heartbeat_respawn",
+                            "name": "report_to_parent",
+                            "arguments": {
+                                "type": "completed",
+                                "content": "review approved after heartbeat respawn",
+                                "review_result": _mock_review_result(summary="review approved after heartbeat respawn"),
+                            },
+                        }
+                    ],
+                }
+            if "Heartbeat escalation:" in joined_messages:
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "dev_done_after_heartbeat_respawn",
+                            "name": "report_to_parent",
+                            "arguments": {
+                                "type": "completed",
+                                "content": "child work complete after heartbeat respawn",
+                                "verification_report": _mock_verification_report(summary="child work complete after heartbeat respawn"),
+                            },
+                        }
+                    ],
+                }
+            await asyncio.sleep(0.05)
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "dev_stale_heartbeat",
+                        "name": "publish_task_heartbeat",
+                        "arguments": {
+                            "task_id": "task-heartbeat",
+                            "status": "running",
+                            "message": "sandbox task still running",
+                            "stage": "apply_patch",
+                            "generated_at": "2026-03-10T00:00:00+00:00",
+                            "ttl_seconds": 30,
+                        },
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(self._collect_events(
+            run_multi_agent_pipeline(
+                message="Implement auth endpoint",
+                session_id="test-session-heartbeat-respawn",
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+            )
+        ))
+
+        event_types = [e.get("type") for e in events]
+        assert "heartbeat_respawn" in event_types
+        assert "expert_blocked" not in event_types
+
+        respawn_starts = [
+            e for e in events
+            if e.get("type") == "dev_loop_start" and e.get("recovery_mode") == "heartbeat_respawn"
+        ]
+        assert respawn_starts
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        assert receipt_event.get("stop_reason") == "submitted_completion"
+        assert receipt_event.get("agent_state", {}).get("task_completed") is True
+        heartbeat_summary = receipt_event.get("agent_state", {}).get("heartbeat_summary", {})
+        assert int(heartbeat_summary.get("respawn_count") or 0) >= 1
+        assert int(heartbeat_summary.get("blocked_count") or 0) >= 1
+
+    def test_pipeline_heartbeat_respawn_exhausted_escalates_blocked(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        async def _mock_child_llm(messages, tools, model):
+            del model
+            tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+            joined_messages = "\n".join(str(item.get("content") or "") for item in messages if isinstance(item, dict))
+            is_review = bool({"memory_tag", "memory_deprecate"} & tool_names)
+            if is_review:
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "review_should_not_run",
+                            "name": "report_to_parent",
+                            "arguments": {
+                                "type": "completed",
+                                "content": "unexpected review",
+                                "review_result": _mock_review_result(summary="unexpected review"),
+                            },
+                        }
+                    ],
+                }
+            await asyncio.sleep(0.05)
+            heartbeat_task_id = "task-heartbeat-respawn" if "Heartbeat escalation:" in joined_messages else "task-heartbeat"
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"dev_stale_{heartbeat_task_id}",
+                        "name": "publish_task_heartbeat",
+                        "arguments": {
+                            "task_id": heartbeat_task_id,
+                            "status": "running",
+                            "message": "still alive but stale",
+                            "stage": "sandbox_exec",
+                            "generated_at": "2026-03-10T00:00:00+00:00",
+                            "ttl_seconds": 30,
+                        },
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(self._collect_events(
+            run_multi_agent_pipeline(
+                message="Implement auth endpoint",
+                session_id="test-session-heartbeat-blocked",
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+            )
+        ))
+
+        event_types = [e.get("type") for e in events]
+        assert "heartbeat_respawn" in event_types
+        assert "expert_blocked" in event_types
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        assert receipt_event.get("stop_reason") == "task_heartbeat_blocked_respawn_exhausted"
+        assert receipt_event.get("agent_state", {}).get("task_completed") is False
+        assert receipt_event.get("agent_state", {}).get("experts_blocked") is True
+        heartbeat_summary = receipt_event.get("agent_state", {}).get("heartbeat_summary", {})
+        assert int(heartbeat_summary.get("expert_blocked_count") or 0) >= 1
+        assert "task_heartbeat_blocked_respawn_exhausted" in list(heartbeat_summary.get("expert_blocked_reasons") or [])
 
     def test_pipeline_report_collection_is_scoped_to_current_pipeline_run(
         self,

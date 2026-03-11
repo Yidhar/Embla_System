@@ -686,109 +686,20 @@ def _collect_runtime_fail_open(
     }
 
 
-def _collect_runtime_lease(
-    events: List[Dict[str, Any]],
-    *,
-    workflow_db: Path,
-    now_dt: datetime,
-    lease_name: str,
-    lease_ttl_hint_seconds: float,
-) -> Dict[str, Any]:
-    lease_acquired_count = sum(1 for row in events if row.get("event_type") == "LeaseAcquired")
-    lease_lost_count = sum(1 for row in events if row.get("event_type") == "LeaseLost")
-    churn_ratio = (lease_lost_count / lease_acquired_count) if lease_acquired_count > 0 else None
 
-    warning_churn_ratio = 0.1
-    critical_churn_ratio = 0.3
-    churn_status = _classify_numeric(
-        churn_ratio,
-        warning=warning_churn_ratio,
-        critical=critical_churn_ratio,
-        higher_is_bad=True,
-    )
-    if lease_acquired_count <= 0 and lease_lost_count <= 0:
-        churn_status = "unknown"
-
-    owner_id = ""
-    fencing_epoch = 0
-    seconds_to_expiry: Optional[float] = None
-    lease_state = "missing"
-    source = "workflow_db_lease_missing"
-
-    if workflow_db.exists():
-        try:
-            conn = sqlite3.connect(str(workflow_db))
-            with conn:
-                row = conn.execute(
-                    """
-                    SELECT owner_id, fencing_epoch, lease_expire_at
-                    FROM orchestrator_lease
-                    WHERE lease_name = ?
-                    """,
-                    (lease_name,),
-                ).fetchone()
-            if row is not None:
-                owner_id = str(row[0] or "")
-                fencing_epoch = _to_int(row[1], 0)
-                expires_at = _parse_iso_datetime(row[2])
-                if expires_at is not None:
-                    seconds_to_expiry = max(0.0, (expires_at - now_dt).total_seconds())
-                source = "workflow_db_lease"
-        except sqlite3.DatabaseError:
-            source = "workflow_db_lease_query_failed"
-        finally:
-            try:
-                conn.close()  # type: ignore[misc]
-            except Exception:
-                pass
-
-    warn_seconds = max(2.0, lease_ttl_hint_seconds * 0.2)
-    expiry_status = _classify_numeric(
-        seconds_to_expiry,
-        warning=warn_seconds,
-        critical=0.0,
-        higher_is_bad=False,
-    )
-    if seconds_to_expiry is None:
-        lease_state = "missing"
-        expiry_status = "unknown"
-    elif seconds_to_expiry <= 0:
-        lease_state = "expired"
-    elif seconds_to_expiry <= warn_seconds:
-        lease_state = "near_expiry"
-    else:
-        lease_state = "healthy"
-
-    status = _stronger_status(churn_status, expiry_status)
-    if lease_state == "missing" and lease_acquired_count <= 0 and lease_lost_count <= 0:
-        status = "unknown"
-
-    return {
-        "value": seconds_to_expiry,
-        "unit": "seconds_to_expiry",
-        "state": lease_state,
-        "lease_name": str(lease_name or ""),
-        "owner_id": owner_id,
-        "fencing_epoch": fencing_epoch,
-        "lease_acquired_count": lease_acquired_count,
-        "lease_lost_count": lease_lost_count,
-        "lease_lost_churn_ratio": churn_ratio,
-        "source": source,
-        "thresholds": {
-            "warning_seconds_to_expiry": warn_seconds,
-            "critical_seconds_to_expiry": 0.0,
-            "warning_churn_ratio": warning_churn_ratio,
-            "critical_churn_ratio": critical_churn_ratio,
-        },
-        "status": status,
-    }
+_CANONICAL_ROUTE_SEMANTICS = {"shell_readonly", "shell_clarify", "core_execution"}
 
 
 def _normalize_route_semantic(raw_semantic: Any) -> str:
     semantic = str(raw_semantic or "").strip().lower()
-    if semantic in {"shell_readonly", "shell_clarify", "core_execution"}:
+    if semantic in _CANONICAL_ROUTE_SEMANTICS:
         return semantic
     return "core_execution"
+
+
+def _has_canonical_route_semantic(raw_semantic: Any) -> bool:
+    semantic = str(raw_semantic or "").strip().lower()
+    return semantic in _CANONICAL_ROUTE_SEMANTICS
 
 
 def _normalize_core_execution_route(raw_route: Any) -> str:
@@ -802,14 +713,24 @@ def _normalize_core_execution_route(raw_route: Any) -> str:
     return route
 
 
-def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+def _collect_prompt_injection_quality(
+    events: List[Dict[str, Any]],
+    *,
+    prefix_cache_min_samples: int = 20,
+    tail_churn_min_samples: int = 5,
+) -> Dict[str, Dict[str, Any]]:
     decisions: List[Dict[str, Any]] = []
+    ignored_legacy_noncanonical_sample_count = 0
     for row in events:
         if str(row.get("event_type") or "") != "PromptInjectionComposed":
             continue
         payload = row.get("payload")
-        if isinstance(payload, dict):
-            decisions.append(payload)
+        if not isinstance(payload, dict):
+            continue
+        if not _has_canonical_route_semantic(payload.get("route_semantic")):
+            ignored_legacy_noncanonical_sample_count += 1
+            continue
+        decisions.append(payload)
 
     total = len(decisions)
     layer_counts: Dict[str, int] = {}
@@ -1056,7 +977,7 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
         critical=0.6,
         higher_is_bad=False,
     )
-    if total <= 0:
+    if total < max(1, int(prefix_cache_min_samples)):
         prefix_cache_status = "unknown"
     tail_churn_status = _classify_numeric(
         tail_churn_rate,
@@ -1064,7 +985,7 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
         critical=0.6,
         higher_is_bad=True,
     )
-    if total <= 1:
+    if len(tail_hashes) < max(2, int(tail_churn_min_samples)):
         tail_churn_status = "unknown"
     contract_upgrade_latency_status = _classify_numeric(
         contract_upgrade_latency_p95_ms,
@@ -1081,62 +1002,68 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
     if recovery_survival_total <= 0:
         recovery_survival_status = "unknown"
 
+    prompt_metric_meta = {
+        "source": "prompt_injection_events",
+        "sample_scope": "canonical_route_semantic_only",
+        "ignored_legacy_noncanonical_sample_count": ignored_legacy_noncanonical_sample_count,
+    }
+
     return {
         "prompt_slice_count_by_layer": {
             "value": average_selected_slice_count,
             "unit": "avg_selected_slice_count",
             "sample_count": total,
             "selected_layer_counts": layer_counts,
-            "source": "prompt_injection_events",
             "status": prompt_slice_status,
+            **prompt_metric_meta,
         },
         "injection_trigger_distribution": {
-            "value": float(total),
+            "value": float(total) if total > 0 else None,
             "unit": "count",
             "sample_count": total,
             "trigger_counts": trigger_counts,
             "trigger_distribution": trigger_distribution,
-            "source": "prompt_injection_events",
             "status": trigger_status,
+            **prompt_metric_meta,
         },
         "recovery_slice_hit_rate": {
             "value": recovery_slice_hit_rate,
             "unit": "ratio",
             "sample_count": total,
             "hit_count": recovery_hit_count,
-            "source": "prompt_injection_events",
             "thresholds": {
                 "warning": 0.2,
                 "critical": 0.05,
             },
             "status": recovery_slice_status,
+            **prompt_metric_meta,
         },
         "prompt_conflict_drop_count": {
             "value": float(conflict_drop_count) if total > 0 else None,
             "unit": "count",
             "sample_count": total,
-            "source": "prompt_injection_events",
             "thresholds": {
                 "warning": max(1.0, float(total) * 0.3),
                 "critical": max(3.0, float(total) * 0.6),
             },
             "status": conflict_drop_status,
+            **prompt_metric_meta,
         },
         "delegation_hit_rate": {
             "value": delegation_hit_rate,
             "unit": "ratio",
             "sample_count": total,
             "hit_count": delegation_hit_count,
-            "source": "prompt_injection_events",
             "status": delegation_status,
+            **prompt_metric_meta,
         },
         "shell_readonly_hit_rate": {
             "value": shell_readonly_hit_rate,
             "unit": "ratio",
             "sample_count": total,
             "hit_count": shell_readonly_hit_count,
-            "source": "prompt_injection_events",
             "status": shell_readonly_status,
+            **prompt_metric_meta,
         },
         "readonly_write_tool_exposure_rate": {
             "value": readonly_write_tool_exposure_rate,
@@ -1144,24 +1071,24 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
             "sample_count": readonly_exposure_sample_count,
             "exposure_count": readonly_write_tool_exposure_count,
             "exposed_slice_count": readonly_write_tool_exposed_slice_count,
-            "source": "prompt_injection_events",
             "thresholds": {
                 "warning": 0.01,
                 "critical": 0.05,
             },
             "status": readonly_write_tool_exposure_status,
+            **prompt_metric_meta,
         },
         "shell_to_core_dispatch_rate": {
             "value": shell_to_core_dispatch_rate,
             "unit": "ratio",
             "sample_count": total,
             "dispatch_count": dispatch_to_core_count,
-            "source": "prompt_injection_events",
             "thresholds": {
                 "warning": 0.8,
                 "critical": 0.95,
             },
             "status": shell_to_core_dispatch_status,
+            **prompt_metric_meta,
         },
         "agent_route_semantic_distribution": {
             "value": float(total) if total > 0 else None,
@@ -1173,32 +1100,32 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
                 "shell_clarify": shell_clarify_ratio,
                 "core_execution": core_execution_ratio,
             },
-            "source": "prompt_injection_events",
             "status": semantic_distribution_status,
+            **prompt_metric_meta,
         },
         "shell_clarify_budget_escalation_rate": {
             "value": shell_clarify_budget_escalation_rate,
             "unit": "ratio",
             "sample_count": shell_clarify_sample_count,
             "escalated_count": shell_clarify_budget_escalated_count,
-            "source": "prompt_injection_events",
             "thresholds": {
                 "warning": 0.5,
                 "critical": 0.8,
             },
             "status": shell_clarify_budget_escalation_status,
+            **prompt_metric_meta,
         },
         "core_execution_session_creation_rate": {
             "value": core_execution_session_creation_rate,
             "unit": "ratio",
             "sample_count": core_execution_sample_count,
             "created_count": core_execution_session_created_count,
-            "source": "prompt_injection_events",
             "thresholds": {
                 "warning": 0.6,
                 "critical": 0.8,
             },
             "status": core_execution_session_creation_status,
+            **prompt_metric_meta,
         },
         "core_execution_route_distribution": {
             "value": float(core_execution_sample_count) if core_execution_sample_count > 0 else None,
@@ -1206,56 +1133,60 @@ def _collect_prompt_injection_quality(events: List[Dict[str, Any]]) -> Dict[str,
             "sample_count": core_execution_sample_count,
             "route_counts": core_execution_route_counts,
             "route_ratios": core_execution_route_ratios,
-            "source": "prompt_injection_events",
             "status": core_execution_route_distribution_status,
+            **prompt_metric_meta,
         },
         "prompt_prefix_cache_hit_rate": {
             "value": prefix_cache_hit_rate,
             "unit": "ratio",
             "sample_count": total,
             "hit_count": prefix_cache_hit_count,
-            "source": "prompt_injection_events",
             "thresholds": {
                 "warning": 0.8,
                 "critical": 0.6,
             },
+            "min_sample_count": max(1, int(prefix_cache_min_samples)),
             "status": prefix_cache_status,
+            **prompt_metric_meta,
         },
         "prompt_tail_churn_rate": {
             "value": tail_churn_rate,
             "unit": "ratio",
             "sample_count": len(tail_hashes),
-            "source": "prompt_injection_events",
             "thresholds": {
                 "warning": 0.4,
                 "critical": 0.6,
             },
+            "min_sample_count": max(2, int(tail_churn_min_samples)),
             "status": tail_churn_status,
+            **prompt_metric_meta,
         },
         "contract_upgrade_latency_ms": {
             "value": contract_upgrade_latency_p95_ms,
             "unit": "milliseconds",
             "sample_count": len(contract_upgrade_latencies_ms),
-            "source": "prompt_injection_events",
             "thresholds": {
                 "warning": 2_000.0,
                 "critical": 5_000.0,
             },
             "status": contract_upgrade_latency_status,
+            **prompt_metric_meta,
         },
         "recovery_context_survival_rate": {
             "value": recovery_context_survival_rate,
             "unit": "ratio",
             "sample_count": recovery_survival_total,
             "survived_count": recovery_survival_count,
-            "source": "prompt_injection_events",
             "thresholds": {
                 "warning": 0.8,
                 "critical": 0.6,
             },
             "status": recovery_survival_status,
+            **prompt_metric_meta,
         },
     }
+
+
 def _load_threshold_config(config_file: Path) -> Dict[str, Any]:
     defaults = {
         "max_error_rate": 0.02,
@@ -1265,6 +1196,9 @@ def _load_threshold_config(config_file: Path) -> Dict[str, Any]:
         "lease_name": "global_orchestrator",
         "subagent_rollout_percent": 100,
         "fail_open_budget_ratio": 0.15,
+        "workflow_critical_event_window_hours": 336.0,
+        "prompt_prefix_cache_min_samples": 20,
+        "prompt_tail_churn_min_samples": 5,
     }
 
     payload = _read_yaml(config_file)
@@ -1273,6 +1207,7 @@ def _load_threshold_config(config_file: Path) -> Dict[str, Any]:
     outbox = autonomous.get("outbox_dispatch") if isinstance(autonomous.get("outbox_dispatch"), dict) else {}
     lease = autonomous.get("lease") if isinstance(autonomous.get("lease"), dict) else {}
     subagent_runtime = autonomous.get("subagent_runtime") if isinstance(autonomous.get("subagent_runtime"), dict) else {}
+    observability = autonomous.get("observability") if isinstance(autonomous.get("observability"), dict) else {}
 
     defaults["max_error_rate"] = max(0.0, _to_float(release.get("max_error_rate"), defaults["max_error_rate"]) or 0.0)
     defaults["max_latency_p95_ms"] = max(
@@ -1295,6 +1230,27 @@ def _load_threshold_config(config_file: Path) -> Dict[str, Any]:
             1.0,
             _to_float(subagent_runtime.get("fail_open_budget_ratio"), defaults["fail_open_budget_ratio"])
             or defaults["fail_open_budget_ratio"],
+        ),
+    )
+    defaults["workflow_critical_event_window_hours"] = max(
+        1.0,
+        _to_float(
+            observability.get("workflow_critical_event_window_hours"),
+            defaults["workflow_critical_event_window_hours"],
+        ) or defaults["workflow_critical_event_window_hours"],
+    )
+    defaults["prompt_prefix_cache_min_samples"] = max(
+        1,
+        _to_int(
+            observability.get("prompt_prefix_cache_min_samples"),
+            defaults["prompt_prefix_cache_min_samples"],
+        ),
+    )
+    defaults["prompt_tail_churn_min_samples"] = max(
+        2,
+        _to_int(
+            observability.get("prompt_tail_churn_min_samples"),
+            defaults["prompt_tail_churn_min_samples"],
         ),
     )
     return defaults
@@ -1344,14 +1300,18 @@ def build_snapshot(
         events,
         fail_open_budget_ratio=float(thresholds["fail_open_budget_ratio"]),
     )
-    metrics["runtime_lease"] = _collect_runtime_lease(
-        events,
-        workflow_db=paths.workflow_db,
-        now_dt=now_dt,
-        lease_name=str(thresholds["lease_name"]),
-        lease_ttl_hint_seconds=float(thresholds["lease_ttl_seconds"]),
+    metrics["runtime_lease"] = {
+        **metrics["lock_status"],
+        "source": "runtime_lease_via_global_mutex",
+        "lease_name": str(thresholds["lease_name"]),
+    }
+    metrics.update(
+        _collect_prompt_injection_quality(
+            events,
+            prefix_cache_min_samples=int(thresholds["prompt_prefix_cache_min_samples"]),
+            tail_churn_min_samples=int(thresholds["prompt_tail_churn_min_samples"]),
+        )
     )
-    metrics.update(_collect_prompt_injection_quality(events))
 
     snapshot = {
         "schema_version": "1.0.0",

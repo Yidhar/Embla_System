@@ -83,7 +83,9 @@
 
 ### 2.3 单活与防双主
 
-核心实现：`orchestrator_lease` + `fencing_epoch`
+历史实现：`orchestrator_lease` + `fencing_epoch`
+
+> 说明：该链路仅保留为历史归档实现；当前 Runtime 仪表盘与 live lease 观测已收敛到 `logs/runtime/global_mutex_lease.json`。
 
 - lease 续租/抢占。
 - fencing epoch 写入与校验。

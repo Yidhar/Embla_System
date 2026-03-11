@@ -1,4 +1,4 @@
-﻿# 05 开发启动与目录索引（Embla System 开发预备版）
+# 05 开发启动与目录索引（Embla System 开发预备版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-28
@@ -27,9 +27,10 @@ uv run main.py
 
 行为说明：
 
+- 初始化 `summer_memory` 记忆子系统
+- 初始化 MCP client pool / runtime registry
 - 启动 `apiserver`（默认 `8000`）
-- 启动 `mcpserver`（默认 `8003`）
-- 后台循环尝试启动 `autonomous`（仅当 `config.autonomous.enabled=true`）
+- 主线程进入 watchdog 监控循环
 
 ### 2.2 后端（前端调试常用）
 
@@ -69,16 +70,14 @@ uvicorn apiserver.llm_service:llm_app --host 127.0.0.1 --port 8001
 
 说明：该服务用于独立调试 LLM 接入，不属于 `main.py` 默认启动链。
 
-### 3.3 MCP Server 单独启动
+### 3.3 MCP 运行时说明
 
-```powershell
-uvicorn mcpserver.mcp_server:app --host 0.0.0.0 --port 8003
-```
+当前仓库默认通过集成式 MCP client pool / runtime registry 暴露外部工具，不再维护 `mcpserver.mcp_server` 这一独立 FastAPI 启动入口作为主链。
 
 ## 4. 端口基线（`system/config.py`）
 
 - API: `8000`
-- MCP: `8003`
+- MCP 运行时保留端口: `8003`（仅独立 MCP Host 场景使用，不属于 `main.py` 默认启动链）
 - LLM 调试服务（可选）: `8001`
 
 ## 5. 启用 Autonomous（新增）
@@ -115,13 +114,12 @@ uvicorn mcpserver.mcp_server:app --host 0.0.0.0 --port 8003
 
 ```powershell
 curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8003/status
 ```
 
 说明：
 
 - `8001` 仅在手动启动 `apiserver.llm_service` 时可达。
-- `apiserver` 的 `/mcp/status` 输出运行态快照；`mcpserver` 的 `/status` 仍可用于底层服务直接健康检查。
+- MCP 运行态快照通过 `apiserver` 的 `/mcp/status`、`/mcp/tasks` 等接口暴露。
 
 ## 8. 目录索引（开发预备语义）
 
@@ -139,7 +137,7 @@ curl http://127.0.0.1:8003/status
 1. 端口被占用：检查启动日志中的端口提示。
 2. 工具不执行：查看 `agentic_tool_loop` 校验错误与 `tool_stage` 事件。
 3. 模型请求失败：检查 `config.json` / `config.json.example`、`apiserver/llm_service.py` 与当前环境变量中的 `base_url` / `proxy` / `provider` / `protocol`。
-4. 自动化未启动：确认 `config.autonomous.enabled=true`。
+4. MCP 工具未发现：检查 MCP manifest、runtime registry 与 `agents.runtime.mcp_client` 初始化日志。
 
 ## 10. 交叉引用
 

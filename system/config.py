@@ -590,60 +590,16 @@ class AgenticLoopConfig(BaseModel):
 
 
 class ToolContractRolloutConfig(BaseModel):
-    """工具契约双栈灰度与下线门禁配置。"""
+    """Structured tool-contract observability configuration."""
 
-    mode: str = Field(
-        default="new_stack_only",
-        description="工具契约模式（已切换到 new_stack_only；legacy/dual 配置会被自动归一化）",
-    )
-    decommission_legacy_gate: bool = Field(
-        default=True,
-        description="旧契约下线门禁；开启后将阻断 legacy-only 输出",
-    )
     emit_observability_metadata: bool = Field(
         default=True,
-        description="是否输出 rollout snapshot/metadata 便于灰度观测与回退判断",
+        description="是否输出结构化工具契约观测元数据",
     )
-
-    @field_validator("mode")
-    @classmethod
-    def validate_mode(cls, value: str) -> str:
-        normalized = str(value or "").strip().lower()
-        aliases = {
-            "legacy": "new_stack_only",
-            "legacy_stack": "new_stack_only",
-            "old_stack": "new_stack_only",
-            "dual": "new_stack_only",
-            "compat": "new_stack_only",
-            "both": "new_stack_only",
-            "new": "new_stack_only",
-            "new_stack": "new_stack_only",
-            "v2_only": "new_stack_only",
-        }
-        normalized = aliases.get(normalized, normalized)
-        valid_modes = {"legacy_only", "dual_stack", "new_stack_only"}
-        if normalized not in valid_modes:
-            raise ValueError(f"mode 必须是以下之一: {sorted(valid_modes)}")
-        if normalized in {"legacy_only", "dual_stack"}:
-            return "new_stack_only"
-        return normalized
-
-    @property
-    def legacy_contract_enabled(self) -> bool:
-        if self.decommission_legacy_gate:
-            return False
-        return self.mode in {"legacy_only", "dual_stack"}
-
-    @property
-    def new_contract_enabled(self) -> bool:
-        return self.mode in {"dual_stack", "new_stack_only"}
 
     def snapshot(self) -> Dict[str, Any]:
         return {
-            "mode": self.mode,
-            "legacy_contract_enabled": self.legacy_contract_enabled,
-            "new_contract_enabled": self.new_contract_enabled,
-            "decommission_legacy_gate": bool(self.decommission_legacy_gate),
+            "contract_mode": "structured_only",
             "emit_observability_metadata": bool(self.emit_observability_metadata),
         }
 
@@ -698,6 +654,33 @@ class AutonomousConfig(BaseModel):
     lease: AutonomousLeaseConfig = Field(default_factory=AutonomousLeaseConfig)
     outbox_dispatch: AutonomousOutboxDispatchConfig = Field(default_factory=AutonomousOutboxDispatchConfig)
     release: AutonomousReleaseConfig = Field(default_factory=AutonomousReleaseConfig)
+
+
+class SandboxBoxLiteConfig(BaseModel):
+    """BoxLite runtime configuration for execution backend selection."""
+
+    enabled: bool = Field(default=True, description="是否启用 BoxLite execution backend")
+    mode: str = Field(default="required", description="disabled/preferred/required")
+    provider: str = Field(default="sdk", description="sdk/rest")
+    base_url: str = Field(default="", description="REST provider base URL")
+    image: str = Field(default="python:slim", description="默认 BoxLite OCI 镜像")
+    working_dir: str = Field(default="/workspace", description="box 内工作目录")
+    cpus: int = Field(default=2, ge=1, le=64, description="默认 CPU 配额")
+    memory_mib: int = Field(default=1024, ge=128, le=65536, description="默认内存配额(MiB)")
+    auto_remove: bool = Field(default=True, description="box 停止后是否自动清理")
+    security_preset: str = Field(default="maximum", description="development/standard/maximum")
+    network_enabled: bool = Field(default=False, description="是否允许 box 访问网络")
+    auto_install_sdk: bool = Field(default=True, description="缺少 BoxLite SDK 时是否自动安装")
+    install_timeout_seconds: int = Field(default=300, ge=10, le=3600, description="BoxLite SDK 自动安装超时（秒）")
+    sdk_package_spec: str = Field(default="boxlite", description="自动安装使用的 pip 包规格")
+
+
+class SandboxConfig(BaseModel):
+    """Unified sandbox and execution backend configuration."""
+
+    default_execution_backend: str = Field(default="boxlite", description="默认执行后端：native/boxlite")
+    self_repo_execution_backend: str = Field(default="boxlite", description="self 仓库默认执行后端：native/boxlite（当前与全局默认一致）")
+    boxlite: SandboxBoxLiteConfig = Field(default_factory=SandboxBoxLiteConfig)
 
 
 class BrowserConfig(BaseModel):
@@ -1556,6 +1539,7 @@ class EmblaSystemConfig(BaseModel):
     agentic_loop: AgenticLoopConfig = Field(default_factory=AgenticLoopConfig)
     tool_contract_rollout: ToolContractRolloutConfig = Field(default_factory=ToolContractRolloutConfig)
     autonomous: AutonomousConfig = Field(default_factory=AutonomousConfig)
+    sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     filter: FilterConfig = Field(default_factory=FilterConfig)
     difficulty: DifficultyConfig = Field(default_factory=DifficultyConfig)

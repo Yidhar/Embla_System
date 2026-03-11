@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""NagaAgent — unified entry point.
+"""Embla System unified backend entry point.
 
-Starts the API server in a daemon thread, initialises MCP & memory subsystems,
-and runs a WatchdogDaemon loop on the main thread for health monitoring.
+Initialises runtime subsystems, starts the API server when enabled,
+and keeps the process alive via the watchdog supervision loop.
 """
 # ruff: noqa: E402
 from __future__ import annotations
@@ -11,7 +11,6 @@ import argparse
 import asyncio
 import locale
 import logging
-import os
 import signal
 import socket
 import sys
@@ -20,6 +19,7 @@ import time
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+
 
 # ---------------------------------------------------------------------------
 # Console encoding (must run before any output)
@@ -44,6 +44,7 @@ def _configure_console() -> None:
                 stream.reconfigure(encoding=enc, errors="replace")
             elif hasattr(stream, "buffer"):
                 import io
+
                 setattr(sys, name, io.TextIOWrapper(stream.buffer, encoding=enc, errors="replace"))
         except Exception:
             pass
@@ -51,19 +52,25 @@ def _configure_console() -> None:
 
 _configure_console()
 
-# Suppress noisy deprecation warnings from dependencies
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="websockets")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="uvicorn")
 
-# Fix missing Windows socket constants
 if not hasattr(socket, "EAI_ADDRFAMILY"):
     for attr, val in [
-        ("EAI_ADDRFAMILY", -9), ("EAI_AGAIN", -3), ("EAI_BADFLAGS", -1),
-        ("EAI_FAIL", -4), ("EAI_MEMORY", -10), ("EAI_NODATA", -5),
-        ("EAI_NONAME", -2), ("EAI_OVERFLOW", -12), ("EAI_SERVICE", -8),
-        ("EAI_SOCKTYPE", -7), ("EAI_SYSTEM", -11),
+        ("EAI_ADDRFAMILY", -9),
+        ("EAI_AGAIN", -3),
+        ("EAI_BADFLAGS", -1),
+        ("EAI_FAIL", -4),
+        ("EAI_MEMORY", -10),
+        ("EAI_NODATA", -5),
+        ("EAI_NONAME", -2),
+        ("EAI_OVERFLOW", -12),
+        ("EAI_SERVICE", -8),
+        ("EAI_SOCKTYPE", -7),
+        ("EAI_SYSTEM", -11),
     ]:
         setattr(socket, attr, val)
+
 
 # ---------------------------------------------------------------------------
 # Logging — single unified setup for the whole process
@@ -72,18 +79,19 @@ if not hasattr(socket, "EAI_ADDRFAMILY"):
 from system.logging_setup import setup_logging
 
 setup_logging()
-logger = logging.getLogger("nagaagent")
+logger = logging.getLogger("embla.main")
 
-# Quiet noisy libraries
 logging.getLogger("OpenGL").setLevel(logging.WARNING)
 logging.getLogger("OpenGL.acceleratesupport").setLevel(logging.WARNING)
+
 
 # ---------------------------------------------------------------------------
 # Local imports (after logging is ready)
 # ---------------------------------------------------------------------------
 
-from system.config import config, AI_NAME
-from system.system_checker import run_system_check, run_quick_check
+from system.config import AI_NAME, config
+from system.system_checker import run_quick_check, run_system_check
+
 
 # ---------------------------------------------------------------------------
 # Args
@@ -101,8 +109,14 @@ class StartupOptions:
         return bool(self.headless or not sys.stdin.isatty())
 
 
+@dataclass
+class RuntimeServices:
+    api_thread: threading.Thread | None = None
+    api_started: bool = False
+
+
 def parse_args(argv: list[str] | None = None) -> StartupOptions:
-    parser = argparse.ArgumentParser(description="NagaAgent — 智能运行入口")
+    parser = argparse.ArgumentParser(description="Embla System — 统一运行入口")
     parser.add_argument("--check-env", action="store_true", help="运行系统环境检测")
     parser.add_argument("--quick-check", action="store_true", help="运行快速环境检测")
     parser.add_argument("--force-check", action="store_true", help="强制检测（忽略缓存）")
@@ -114,6 +128,7 @@ def parse_args(argv: list[str] | None = None) -> StartupOptions:
         force_check=bool(ns.force_check),
         headless=bool(ns.headless),
     )
+
 
 # ---------------------------------------------------------------------------
 # Startup checks
@@ -138,14 +153,16 @@ def _run_startup_gate(opts: StartupOptions) -> bool:
     reply = input("是否继续启动？(y/N) ")
     return reply.strip().lower() in {"y", "yes"}
 
+
 # ---------------------------------------------------------------------------
-# Service initialisation
+# Runtime service initialization
 # ---------------------------------------------------------------------------
 
 def _init_memory() -> None:
     """Initialise the summer memory subsystem."""
     try:
         from summer_memory.memory_manager import memory_manager
+
         if memory_manager and memory_manager.enabled:
             logger.info("记忆系统已初始化")
         else:
@@ -154,41 +171,107 @@ def _init_memory() -> None:
         logger.warning("记忆系统初始化失败: %s", exc)
 
 
-def _init_mcp() -> None:
-    """Initialise the standard MCP client pool."""
+def _init_boxlite_runtime() -> None:
+    """Preflight BoxLite runtime and trigger first-run SDK bootstrap if needed."""
     try:
-        from agents.runtime.mcp_client import get_mcp_pool
-        pool = get_mcp_pool()
-        if pool:
-            tools = pool.get_all_tools()
-            logger.info("MCP 客户端就绪，已发现 %d 个工具", len(tools))
+        from system.boxlite.manager import load_boxlite_runtime_settings, probe_boxlite_runtime
+
+        settings = load_boxlite_runtime_settings()
+        if not bool(getattr(settings, "enabled", False)):
+            logger.info("BoxLite runtime disabled")
+            return
+
+        status = probe_boxlite_runtime(settings)
+        if bool(getattr(status, "available", False)):
+            logger.info("BoxLite runtime ready (%s, working_dir=%s)", getattr(status, "provider", "sdk"), getattr(status, "working_dir", "/workspace"))
         else:
-            logger.info("MCP 客户端: 无已配置服务器")
+            logger.warning("BoxLite runtime unavailable: %s", getattr(status, "reason", "unknown") or "unknown")
+    except Exception as exc:
+        logger.warning("BoxLite runtime bootstrap failed: %s", exc)
+
+
+def _init_mcp() -> None:
+    """Initialise the official MCP client pool/runtime registry."""
+    try:
+        from agents.runtime.mcp_client import reload_global_mcp_pool
+
+        loop = asyncio.get_event_loop()
+        summary = loop.run_until_complete(reload_global_mcp_pool())
+        configured_servers = int(summary.get("configured_servers") or 0)
+        connected_servers = int(summary.get("connected_servers") or 0)
+        if configured_servers > 0:
+            logger.info(
+                "官方 MCP 运行时已初始化: configured=%d connected=%d",
+                configured_servers,
+                connected_servers,
+            )
+        else:
+            logger.info("官方 MCP 运行时: 无已配置服务器")
     except Exception as exc:
         logger.error("MCP 客户端初始化失败: %s", exc)
 
 
-def _start_api_server() -> None:
+def _resolve_probe_host(host: str) -> str:
+    normalized = str(host or "").strip()
+    if normalized in {"", "0.0.0.0", "::", "[::]"}:
+        return "127.0.0.1"
+    return normalized
+
+
+def _iter_tcp_addresses(host: str, port: int, *, passive: bool = False):
+    flags = socket.AI_PASSIVE if passive else 0
+    try:
+        return socket.getaddrinfo(host, int(port), family=socket.AF_UNSPEC, type=socket.SOCK_STREAM, flags=flags)
+    except socket.gaierror:
+        fallback_family = socket.AF_INET6 if ":" in str(host or "") else socket.AF_INET
+        return [(fallback_family, socket.SOCK_STREAM, 0, "", (host, int(port)))]
+
+
+def _can_bind_tcp_port(host: str, port: int) -> bool:
+    for family, socktype, proto, _, sockaddr in _iter_tcp_addresses(host, port, passive=True):
+        try:
+            with socket.socket(family, socktype, proto) as sock:
+                sock.bind(sockaddr)
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _wait_for_tcp_ready(host: str, port: int, *, timeout_seconds: float = 3.0) -> bool:
+    deadline = time.time() + max(0.1, float(timeout_seconds))
+    probe_host = _resolve_probe_host(host)
+    while time.time() < deadline:
+        for family, socktype, proto, _, sockaddr in _iter_tcp_addresses(probe_host, port, passive=False):
+            try:
+                with socket.socket(family, socktype, proto) as sock:
+                    sock.settimeout(0.1)
+                    if sock.connect_ex(sockaddr) == 0:
+                        return True
+            except OSError:
+                continue
+        time.sleep(0.2)
+    return False
+
+
+def _start_api_server(*, runtime_config=config) -> threading.Thread | None:
     """Start the uvicorn API server in a daemon thread."""
-    api_cfg = config.api_server
+    api_cfg = runtime_config.api_server
     if not (api_cfg.enabled and api_cfg.auto_start):
         logger.info("API 服务器已禁用，跳过")
-        return
+        return None
 
-    host, port = api_cfg.host, api_cfg.port
+    host, port = str(api_cfg.host), int(api_cfg.port)
 
-    # Check port availability
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind((host, port))
-    except OSError:
+    if not _can_bind_tcp_port(host, port):
         logger.error("API 服务器端口 %d 已被占用，跳过启动", port)
-        return
+        return None
 
     def _serve() -> None:
         try:
             import uvicorn
             from apiserver.api_server import app
+
             logger.info("API 服务器启动: %s:%d", host, port)
             uvicorn.run(
                 app,
@@ -202,32 +285,31 @@ def _start_api_server() -> None:
         except Exception as exc:
             logger.error("API 服务器异常退出: %s", exc)
 
-    t = threading.Thread(target=_serve, name="api-server", daemon=True)
-    t.start()
+    thread = threading.Thread(target=_serve, name="api-server", daemon=True)
+    thread.start()
 
-    # Wait for the port to become connectable (max 3s)
-    for _ in range(15):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(0.1)
-            if s.connect_ex(("127.0.0.1", port)) == 0:
-                logger.info("API 服务器就绪: http://%s:%d", host, port)
-                return
-        time.sleep(0.2)
-    logger.warning("API 服务器启动超时（3s），可能仍在加载")
+    if _wait_for_tcp_ready(host, port, timeout_seconds=3.0):
+        logger.info("API 服务器就绪: http://%s:%d", _resolve_probe_host(host), port)
+    else:
+        logger.warning("API 服务器启动超时（3s），可能仍在加载")
+    return thread
+
 
 # ---------------------------------------------------------------------------
-# Watchdog — replaces the old _wait_forever() sleep loop
+# Watchdog supervision
 # ---------------------------------------------------------------------------
 
 _watchdog_state_file = Path("logs/runtime/watchdog_state.json")
 
 
-def _run_watchdog(stop_event: threading.Event) -> None:
-    """Run the WatchdogDaemon in the main thread.
+def _run_idle_wait_loop(stop_event: threading.Event) -> None:
+    """Keep the process alive when the watchdog backend is unavailable."""
+    while not stop_event.is_set():
+        stop_event.wait(timeout=5.0)
 
-    Monitors CPU, memory, disk usage and writes state to a JSON file.
-    Exits cleanly when *stop_event* is set (e.g. via signal handler).
-    """
+
+def _run_watchdog(stop_event: threading.Event) -> None:
+    """Run the watchdog backend in the main thread."""
     try:
         from core.supervisor.watchdog_daemon import WatchdogDaemon, WatchdogThresholds
 
@@ -243,25 +325,22 @@ def _run_watchdog(stop_event: threading.Event) -> None:
             stop_requested=stop_event.is_set,
         )
     except ImportError:
-        logger.warning("WatchdogDaemon 不可用，回退到简单等待循环")
-        _fallback_wait(stop_event)
+        logger.warning("WatchdogDaemon 不可用，进入简单等待循环")
+        _run_idle_wait_loop(stop_event)
     except Exception as exc:
-        logger.error("看门狗异常: %s，回退到简单等待循环", exc)
-        _fallback_wait(stop_event)
+        logger.error("看门狗异常: %s，进入简单等待循环", exc)
+        _run_idle_wait_loop(stop_event)
 
-
-def _fallback_wait(stop_event: threading.Event) -> None:
-    """Simple wait loop when WatchdogDaemon is unavailable."""
-    while not stop_event.is_set():
-        stop_event.wait(timeout=5.0)
 
 # ---------------------------------------------------------------------------
-# Shutdown
+# Shutdown / runtime orchestrator
 # ---------------------------------------------------------------------------
 
 def _install_signal_handlers(stop_event: threading.Event) -> None:
     """Wire SIGTERM and SIGINT to trigger clean shutdown."""
+
     def _handler(signum: int, frame: object) -> None:
+        del frame
         sig_name = signal.Signals(signum).name
         logger.info("收到 %s，正在关闭...", sig_name)
         stop_event.set()
@@ -269,9 +348,6 @@ def _install_signal_handlers(stop_event: threading.Event) -> None:
     signal.signal(signal.SIGTERM, _handler)
     signal.signal(signal.SIGINT, _handler)
 
-# ---------------------------------------------------------------------------
-# Entrypoint
-# ---------------------------------------------------------------------------
 
 def _ensure_event_loop() -> None:
     try:
@@ -282,40 +358,60 @@ def _ensure_event_loop() -> None:
         asyncio.set_event_loop(asyncio.new_event_loop())
 
 
+class EmblaRuntime:
+    """Thin service orchestrator for the current default backend entrypoint."""
+
+    def __init__(self, options: StartupOptions, *, runtime_config=config) -> None:
+        self.options = options
+        self.runtime_config = runtime_config
+        self.stop_event = threading.Event()
+        self.services = RuntimeServices()
+
+    def run_diagnostic(self) -> int | None:
+        return _run_diagnostic(self.options)
+
+    def run_startup_gate(self) -> bool:
+        return _run_startup_gate(self.options)
+
+    def initialize_services(self) -> None:
+        _init_boxlite_runtime()
+        _init_memory()
+        _init_mcp()
+        self.services.api_thread = _start_api_server(runtime_config=self.runtime_config)
+        self.services.api_started = self.services.api_thread is not None
+
+    def install_signal_handlers(self) -> None:
+        _install_signal_handlers(self.stop_event)
+
+    def run_supervision_loop(self) -> None:
+        _run_watchdog(self.stop_event)
+
+    def run(self) -> int:
+        diag = self.run_diagnostic()
+        if diag is not None:
+            return diag
+
+        if not self.run_startup_gate():
+            return 1
+
+        logger.info("正在启动 %s...", AI_NAME)
+        _ensure_event_loop()
+        self.initialize_services()
+        self.install_signal_handlers()
+
+        logger.info("默认服务已启动，进入运行监控循环")
+        try:
+            self.run_supervision_loop()
+        except KeyboardInterrupt:
+            pass
+
+        logger.info("Embla System 已关闭")
+        return 0
+
+
 def main(argv: list[str] | None = None) -> int:
-    opts = parse_args(argv)
-
-    # Diagnostic-only mode
-    diag = _run_diagnostic(opts)
-    if diag is not None:
-        return diag
-
-    # Startup gate
-    if not _run_startup_gate(opts):
-        return 1
-
-    logger.info("正在启动 %s...", AI_NAME)
-    _ensure_event_loop()
-
-    # Initialise subsystems
-    _init_memory()
-    _init_mcp()
-
-    # Start API server
-    _start_api_server()
-
-    # Watchdog supervision loop (main thread)
-    stop_event = threading.Event()
-    _install_signal_handlers(stop_event)
-
-    logger.info("所有服务已启动，进入看门狗监控循环")
-    try:
-        _run_watchdog(stop_event)
-    except KeyboardInterrupt:
-        pass
-
-    logger.info("NagaAgent 已关闭")
-    return 0
+    runtime = EmblaRuntime(parse_args(argv))
+    return runtime.run()
 
 
 if __name__ == "__main__":

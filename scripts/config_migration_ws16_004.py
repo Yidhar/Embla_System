@@ -19,8 +19,6 @@ from charset_normalizer import from_path
 
 
 DEFAULT_SCHEMA_VERSION = 1
-DEFAULT_TOOL_CONTRACT_MODE = "new_stack_only"
-_VALID_TOOL_CONTRACT_MODES = {"legacy_only", "dual_stack", "new_stack_only"}
 
 
 @dataclass(frozen=True)
@@ -206,25 +204,6 @@ def _map_handoff_round_limits(payload: Dict[str, Any]) -> None:
         agentic_loop["max_rounds_non_stream"] = non_stream_rounds
 
 
-def _normalize_tool_contract_mode(value: Any) -> str | None:
-    normalized = str(value or "").strip().lower()
-    aliases = {
-        "legacy": "new_stack_only",
-        "legacy_stack": "new_stack_only",
-        "old_stack": "new_stack_only",
-        "dual": "new_stack_only",
-        "compat": "new_stack_only",
-        "both": "new_stack_only",
-        "new": "new_stack_only",
-        "new_stack": "new_stack_only",
-        "v2_only": "new_stack_only",
-    }
-    normalized = aliases.get(normalized, normalized)
-    if normalized in _VALID_TOOL_CONTRACT_MODES:
-        return normalized
-    return None
-
-
 def _ensure_tool_contract_rollout(payload: Dict[str, Any]) -> None:
     rollout = payload.get("tool_contract_rollout")
     if rollout is None:
@@ -233,16 +212,8 @@ def _ensure_tool_contract_rollout(payload: Dict[str, Any]) -> None:
     if not isinstance(rollout, dict):
         return
 
-    normalized_mode = _normalize_tool_contract_mode(rollout.get("mode"))
-    resolved_mode = normalized_mode or DEFAULT_TOOL_CONTRACT_MODE
-    if resolved_mode in {"legacy_only", "dual_stack"}:
-        resolved_mode = "new_stack_only"
-    rollout["mode"] = resolved_mode
-
-    if "decommission_legacy_gate" not in rollout:
-        rollout["decommission_legacy_gate"] = True
-    else:
-        rollout["decommission_legacy_gate"] = bool(rollout.get("decommission_legacy_gate"))
+    rollout.pop("mode", None)
+    rollout.pop("decommission_legacy_gate", None)
 
     if "emit_observability_metadata" not in rollout:
         rollout["emit_observability_metadata"] = True

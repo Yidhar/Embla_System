@@ -660,16 +660,16 @@ stateDiagram-v2
 sequenceDiagram
     participant ACTIVE as Orchestrator Active
     participant STANDBY as Orchestrator Standby
-    participant LEASE as Lease Store (SQLite)
+    participant LEASE as Global Mutex (logs/runtime/global_mutex_lease.json)
     participant WORKER as Worker Process
 
     Note over ACTIVE,WORKER: === 正常续租 ===
 
     loop 每 2 秒
-        ACTIVE->>LEASE: renew_lease(<br/>  owner=ACTIVE,<br/>  fencing_epoch=42,<br/>  ttl=10s<br/>)
+        ACTIVE->>LEASE: renew(handle,<br/>  owner=ACTIVE,<br/>  fencing_epoch=42,<br/>  ttl=10s<br/>)
         LEASE-->>ACTIVE: OK
 
-        STANDBY->>LEASE: try_acquire_lease()
+        STANDBY->>LEASE: acquire(owner, job, ttl)
         LEASE-->>STANDBY: DENIED (Active 持有中)
     end
 
@@ -677,9 +677,9 @@ sequenceDiagram
     ACTIVE->>ACTIVE: ❌ 进程崩溃 / 网络分区
     Note right of ACTIVE: Lease 10s 后过期
 
-    STANDBY->>LEASE: try_acquire_lease()
-    LEASE->>LEASE: current_lease 已过期!
-    LEASE->>LEASE: CAS: 新 epoch = 43
+    STANDBY->>LEASE: acquire(owner, job, ttl)
+    LEASE->>LEASE: current lease 已过期!
+    LEASE->>LEASE: bump fencing_epoch = 43
     LEASE-->>STANDBY: ACQUIRED (epoch=43) ✅
 
     STANDBY->>STANDBY: 升级为 Active

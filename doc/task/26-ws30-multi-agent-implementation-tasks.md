@@ -1,251 +1,93 @@
-# WS30 — Multi-Agent 协作系统实现任务拆解
+# WS30 — Multi-Agent 协作系统状态刷新
 
-> 对标文档：[Multi Agent Target Architecturev2.1.md](../Multi%20Agent%20Target%20Architecturev2.1.md)  
-> 创建日期：2026-03-03
-> 统一口径说明：实现与验收统一使用 `Shell/Core/Expert/Dev/Review` 与 `route_semantic(shell_readonly|shell_clarify|core_execution)`、`dispatch_to_core`、`core_execution_route(fast_track|standard)` 语义。
+文档状态：执行对齐（Status Refresh）  
+最后更新：2026-03-10  
+适用范围：`WS30` 多代理执行面基础设施 + `WS31` BoxLite-first 自维护执行沙箱并轨结果。
 
----
-
-## Phase 1: 基础设施（止血 + 管道层）
-
-### 1.1 Agent 生命周期运行时
-
-> 优先级：🔴 P0 | 预估：2 WS | 前置：无
-
-- [ ] **定义 Agent 运行时协议**
-  - [ ] `AgentSession` 数据类：session_id, status(Running/Waiting/Destroyed), prompt_blocks, tool_subset, parent_id, created_at
-  - [ ] `AgentSessionStore`：内存 + SQLite 持久化，支持 session 挂起/恢复
-  - [ ] 会话上下文序列化/反序列化（LLM messages list → JSON → 恢复）
-  - 目标文件：`agents/runtime/agent_session.py`
-
-- [ ] **实现父节点工具集**
-  - [ ] `spawn_child_agent`：创建 session + 启动迷你 tool-loop
-  - [ ] `poll_child_status`：从 SessionStore 读取状态
-  - [ ] `send_message_to_child`：写入 child inbox (EventBus topic)
-  - [ ] `resume_child_agent`：注入新指令 → 状态从 Waiting → Running
-  - [ ] `terminate_child_agent`：设置中断标志 → 状态 → Waiting
-  - [ ] `destroy_child_agent`：清理 session + 释放资源
-  - 目标文件：`agents/runtime/parent_tools.py`
-
-- [ ] **实现子节点工具集**
-  - [ ] `report_to_parent`：写入 parent inbox；`completed` 需按角色附带 `verification_report` / `review_result`，校验通过后自身状态 → Waiting
-  - [ ] `read_parent_messages`：从 inbox 读取
-  - [ ] `update_my_task_status`：同步 TaskBoard MD + SQLite
-  - 目标文件：`agents/runtime/child_tools.py`
+> 说明  
+> 本文已从“原始任务拆解清单”收敛为“当前实现状态刷新”。原始 TODO、WS 粗估与阶段性拆卡不再作为当前执行依据；涉及运行时与验收时，统一以本文列出的 canonical 文档、代码锚点与测试证据为准。
 
 ---
 
-### 1.2 Agent Mailbox（基于 EventBus）
+## 1. Canonical 口径
 
-> 优先级：🔴 P0 | 预估：1 WS | 前置：1.1
+发生冲突时，优先使用以下文档：
 
-- [ ] 在 `core/event_bus/topic_bus.py` 添加 `agent.{agent_id}.inbox` topic 支持
-- [ ] 消息格式：`{from, to, content, timestamp, seq}`
-- [ ] 消息持久化（SQLite，复用 event_store 机制）
-- [ ] 同级消息 Expert 中转路由逻辑
-- 目标文件：`agents/runtime/mailbox.py` + `core/event_bus/` 扩展
-
----
-
-### 1.3 TaskBoard 引擎（MD + SQLite）
-
-> 优先级：🔴 P0 | 预估：1 WS | 前置：无
-
-- [ ] SQLite schema：tasks 表 (task_id, board_id, title, status, assigned_to, depends_on, files, updated_at)
-- [ ] MD 读写引擎：解析/生成 checkbox-list 格式
-- [ ] MD↔SQLite 双向同步逻辑
-- [ ] 工具：`create_task_board` / `read_task_board` / `update_task_status` / `query_tasks`
-- 目标文件：`agents/runtime/task_board.py`
+1. `doc/01-module-overview.md`：当前模块主链、`execution_receipt` 与最终收口口径。
+2. `doc/09-tool-execution-specification.md`：父/子工具协议、Review 生命周期、worktree 提交流程与清理事实。
+3. `doc/14-multi-agent-architecture.md`：多代理角色分工与 Dev 自检 / Review 闭环。
+4. `doc/15-boxlite-first-execution-sandbox-architecture.md`：`host worktree + box execution + host audit/promote/teardown` 的自维护执行沙箱设计。
+5. `doc/Multi Agent Target Architecturev2.1.md`：目标态蓝图；仅用于目标定义，不直接等价当前默认运行链。
 
 ---
 
-### 1.4 迷你 Tool-Loop
+## 2. 判定语义（沿用 `doc/task/25-*`）
 
-> 优先级：🔴 P0 | 预估：2 WS | 前置：1.1
-
-- [ ] 从 `agents/tool_loop.py` 提取核心 ReAct 循环为独立模块
-- [ ] 迷你 loop 支持：独立 LLM 会话、可裁剪工具集、中断标志检查
-- [ ] 集成 child_tools（report/read_messages/update_status）
-- [ ] 集成 agent_messages（peer communication，经 Expert 路由与监督）
-- 目标文件：`agents/runtime/mini_loop.py`
+- `TARGET_DONE`：该能力已经达到当前目标态定义，可作为 canonical 能力使用。
+- `BRIDGE_DONE`：能力已工程化落地并具备测试/门禁证据，但仍属于桥接态或局部收口态。
+- `TARGET_PENDING`：目标态仍未闭合，当前只有局部实现、过渡方案或待补齐项。
 
 ---
 
-## Phase 2: Agent 角色实现
+## 3. 当前状态矩阵（2026-03-10）
 
-### 2.1 Shell Agent 改造
-
-> 优先级：🟡 P1 | 预估：2 WS | 前置：Phase 1
-
-- [ ] 从 `apiserver/api_server.py` Shell 首轮路由环提取 Shell 逻辑
-- [ ] 加载 `prompts/dna/shell_persona.md` 不可变人格
-- [ ] 注入只读工具集 (`memory_read`, `memory_list`, `memory_grep`, `memory_search`, `get_system_status`, `list_tasks`, `search_web`)
-- [ ] 实现 `dispatch_to_core` 工具
-- [ ] 集成 Neo4j 图谱查询（复用 summer_memory）
-- 目标文件：`agents/shell_agent.py`
-
----
-
-### 2.2 Core Agent 改造
-
-> 优先级：🟡 P1 | 预估：1.5 WS | 前置：Phase 1
-
-- [ ] 改造 `agents/meta_agent.py`：一级分解调用 LLM（次模型），保留启发式作 fallback
-- [ ] 加载 `prompts/dna/core_values.md` 不可变价值观
-- [ ] 多 Expert 并行派发逻辑 (使用 spawn_child_agent)
-- [ ] 汇总 Review 报告 → 传递回 Shell
-- 目标文件：`agents/core_agent.py` (新) + `agents/meta_agent.py` (改造)
+| 能力项 | 当前实现 | 状态 | 代码锚点 | 测试证据 |
+|---|---|---|---|---|
+| 1.1 Agent 生命周期运行时 | `AgentSession` / `AgentSessionStore` 已具备会话创建、挂起/恢复、消息持久化、metadata 持久化与销毁；`destroy()` 已返回事实型 cleanup report，并可释放 BoxLite / worktree 资源。 | `TARGET_DONE` | `agents/runtime/agent_session.py`、`agents/runtime/parent_tools.py` | `tests/test_agent_runtime_session_ws30_002.py` |
+| 1.2 Agent Mailbox | `AgentMailbox` 已具备 inbox topic 语义、SQLite 持久化、顺序读取与 parent/child 消息通道。 | `TARGET_DONE` | `agents/runtime/mailbox.py` | `tests/test_agent_runtime_session_ws30_002.py` |
+| 1.3 TaskBoard 引擎 | `TaskBoardEngine` 已落地 `MD + SQLite` 双层同步、任务状态查询与 Expert 协作面。 | `TARGET_DONE` | `agents/runtime/task_board.py` | `tests/test_task_board_engine_ws30_003.py` |
+| 1.4 迷你 Tool-Loop | `run_mini_loop()` 已支持独立 LLM 会话、child tools、父消息轮询、中断标志、动态工具激活。 | `TARGET_DONE` | `agents/runtime/mini_loop.py` | `tests/test_mini_loop_ws30_004.py` |
+| 2.1 Shell Agent | `ShellAgent` 已具备只读工具集、`dispatch_to_core`、`route_semantic(shell_readonly/shell_clarify/core_execution)` 与路由上下文封装；API 侧已消费该语义。 | `BRIDGE_DONE` | `agents/shell_agent.py`、`apiserver/routes_chat.py`、`apiserver/api_server.py` | `tests/test_agent_roles_ws30_005.py`、`tests/test_shell_native_tool_boundary_ws30_007.py` |
+| 2.2 Core Agent | `CoreAgent` 已具备分解、Expert 映射、router context 消费、收据聚合与 review gate 收口；但默认入口尚未完全只保留这一条链。 | `BRIDGE_DONE` | `agents/core_agent.py`、`agents/pipeline.py` | `tests/test_agent_roles_ws30_005.py` |
+| 2.3 Expert / Dev / Review 角色闭环 | `ExpertAgent`、`DevAgent`、`ReviewAgent` 均已存在；Dev 必须先自检再 `report_to_parent(completed + verification_report)`，Review 必须输出结构化 `review_result(verdict=approve/request_changes/reject)`，并由 Expert 驱动返修 / 重做 / blocked 分支。 | `BRIDGE_DONE` | `agents/expert_agent.py`、`agents/dev_agent.py`、`agents/review_agent.py`、`agents/runtime/child_tools.py`、`agents/pipeline.py` | `tests/test_agent_roles_ws30_005.py`、`tests/test_agent_runtime_session_ws30_002.py` |
+| P0 L1 记忆 + 精准编辑工具 | `memory_*` 已形成 canonical 名称集合，覆盖读/写/列举/搜索/打标签/精准 patch/insert/append/replace/deprecate/delete/link；冲突返回语义已补齐。 | `TARGET_DONE` | `agents/memory/l1_memory.py`、`agents/memory/memory_tools.py` | `tests/test_memory_tools_ws30_006.py`、`tests/test_l1_memory.py` |
+| P0 动态 Tool Profile（最小注入） | `spawn_child_agent(tool_profile=...)` 已支持 `refactor/new_doc/bugfix/review/cleanup/custom` 预设，并支持 memory task 自动推断，显著缩小子代理注入工具子集。 | `TARGET_DONE` | `agents/runtime/tool_profiles.py`、`agents/runtime/parent_tools.py` | `tests/test_memory_tools_ws30_006.py` |
+| 3.1 原子化 Prompt 引擎 | `PromptAssembler` 已具备 DNA 加载、block 组装、checksum 校验、memory hints 注入与 block 枚举。 | `TARGET_DONE` | `agents/prompt_engine.py` | `tests/test_prompt_engine.py` |
+| 3.2 L1 → L2 / Tool Topology 分层 | `summer_memory/quintuple_graph.py` 已保留 Shell L2 五元组图谱与向量索引能力；`agents/memory/semantic_graph.py` 明确为工具结果拓扑，不再与 Shell L2 混为同一事实源。 | `BRIDGE_DONE` | `summer_memory/quintuple_graph.py`、`agents/memory/semantic_graph.py` | `tests/test_l2_l3_memory.py` |
+| 3.4 Hierarchical RAG | `HierarchicalIndex`、`ast_chunker` 已具备文件摘要 / section index / chunk 按需读取与基础检索；但向量化召回、增量重建触发与专用 `explore_large_file` 接口仍未完全收口到目标态。 | `BRIDGE_DONE` | `agents/memory/hierarchical_rag.py`、`agents/memory/ast_chunker.py` | `tests/test_l2_l3_memory.py` |
+| 4.1 Git worktree 沙箱 | owner worktree 已具备创建、审计、promote、teardown、ledger 记录与提交待审批态；提交链语义已稳定。 | `BRIDGE_DONE` | `system/git_worktree_sandbox.py`、`agents/runtime/parent_tools.py` | `tests/test_worktree_sandbox_ws30_008.py`、`tests/test_worktree_submission_ws30_010.py` |
+| 4.1/WS31 BoxLite-first 执行后端 | 已形成 `native / boxlite` 双后端路由；BoxLite 使用稳定 `box_name` + 运行时 `box_id`，并在 destroy 时释放执行盒；`query_docs` / `file_ast_*` 已进入 box 内 guest helper 路径；宿主仍是 worktree audit/promote/teardown 的唯一事实源。 | `BRIDGE_DONE` | `system/execution_backend/boxlite_backend.py`、`system/boxlite/manager.py`、`system/sandbox_context.py`、`apiserver/native_tools.py` | `tests/test_sandbox_context_boxlite_ws31_001.py`、`tests/test_boxlite_runtime_spawn_ws31_002.py`、`tests/test_native_tools_backend_router_ws31_003.py`、`tests/test_boxlite_backend_exec_ws31_004.py`、`tests/test_boxlite_manager_teardown_ws31_005.py` |
+| 4.2 主链默认切换与遗留入口清理 | 全局默认 `execution_backend` 已切换为 `boxlite`，且默认 `boxlite.mode=required`；缺少 SDK 时会优先通过项目 `.venv` 自动安装 `boxlite`。session runtime 主链统一为 `host control plane + BoxLite execution plane + host worktree lifecycle`。`SandboxContext.default()` 保留 `native` 仅作无 session / 测试 harness fallback。更广泛的 legacy 命名清理继续按仓库级治理推进，但不再阻塞 BoxLite 默认主链。 | `BRIDGE_DONE` | `main.py`、`apiserver/routes_chat.py`、`agents/pipeline.py`、`system/boxlite/manager.py` | `tests/test_main_entrypoint_runtime.py`、`tests/test_chat_route_session_state_snapshot_ws28_011.py`、`tests/test_sandbox_context_boxlite_ws31_001.py`、`tests/test_boxlite_backend_exec_ws31_004.py` |
 
 ---
 
-### 2.3 Expert Agent
+## 4. 已完成的关键口径收敛
 
-> 优先级：🟡 P1 | 预估：2 WS | 前置：1.1 + 1.3
-
-- [ ] Expert 角色定义：接受 Core 分配的 scope → 创建 TaskBoard
-- [ ] TaskBoard 细致规划逻辑（LLM 调用，按文件依赖拆分 task）
-- [ ] Dev spawn 编排：依赖图分析 → 确定并行度 → spawn 多个 Dev
-- [ ] Dev 状态轮询 + 结果收集
-- [ ] TaskBoard 全部完成 → spawn Review Agent
-- [ ] 同级 Dev 消息中转路由
-- 目标文件：`agents/expert_agent.py`
-
----
-
-### 2.4 Dev Agent
-
-> 优先级：🟡 P1 | 预估：1 WS | 前置：1.4
-
-- [ ] Dev Shell：接收 task + prompt_blocks → 启动 mini_loop
-- [ ] 原子化 prompt 加载与组装
-- [ ] L1 经验自动注入（Expert spawn 时检索 _index.md）
-- [ ] 完成后自动写回经验 MD + update_my_task_status + report_to_parent(completed + verification_report)
-- 目标文件：`agents/dev_agent.py`
+1. `Dev completed` 不再是自由文本完成态，必须附带结构化 `verification_report`。
+2. `Review completed` 不再是模糊“通过/打回”，必须附带结构化 `review_result`，且 `verdict` 只能是 `approve / request_changes / reject`。
+3. `reject` 不再只有单一失败路径；当前已有：`request_changes -> resume 原 Dev`、`reject -> respawn fresh Dev`、不可恢复时 `expert_blocked` 上报三类收口分支。
+4. `destroy_child_agent` 的资源释放事实与 `execution_receipt` 已彻底分离：前者返回 `box_cleanup_* / workspace_cleanup_*`，后者只汇总最终审查/提交流程状态。
+5. BoxLite 运行时元数据已统一为：稳定 `box_name` + 实例级 `box_id`，不再混用。
+6. L2 已拆分为两条 canonical 语义：
+   - `summer_memory/quintuple_graph.py`：Shell 会话级事实图谱；
+   - `agents/memory/semantic_graph.py`：Tool-Result Topology / forensics。
 
 ---
 
-### 2.5 Review Agent
+## 5. 对原始任务拆解文档的更正
 
-> 优先级：🟡 P1 | 预估：1 WS | 前置：1.3, 1.4
+以下旧路径/旧命名已不再作为当前实现依据：
 
-- [ ] 五项独立审查实现：
-  - [ ] 需求对齐：对照原始任务检查是否实现
-  - [ ] 代码质量：检查硬编码、TODO、异常吞没、资源泄漏
-  - [ ] 回归风险：读取改动上下文并评估调用方影响
-  - [ ] 测试覆盖：审阅 Dev `verification_report`，识别漏测边界
-  - [ ] 最终结论：输出 `review_result.verdict=approve/request_changes/reject`
-- [ ] 输出审查报告（结构化 `review_result`，而非自由文本“通过/打回/部分通过”）
-- 目标文件：`agents/review_agent.py`
+- 原 `agents/runtime/prompt_engine.py` → 当前 canonical 为 `agents/prompt_engine.py`。
+- 原 `agents/memory/md_file_memory.py` → 当前 canonical 为 `agents/memory/l1_memory.py`。
+- 原“L2 单一事实源”表述 → 当前必须区分 `Shell L2 Graph` 与 `Tool-Result Topology`。
+- 原“只有 worktree 沙箱”表述 → 当前已升级为 `host worktree + execution backend(native/boxlite)` 双层模型。
 
 ---
 
-## Phase 3: Prompt 与记忆系统
+## 6. 当前剩余缺口（下一阶段）
 
-### 3.1 原子化 Prompt 引擎
-
-> 优先级：🟡 P1 | 预估：1 WS | 前置：Phase 2
-
-- [ ] Prompt 块发现与加载（扫描 prompts/ 目录）
-- [ ] 组装引擎：blocks[] → 拼接为完整 system prompt
-- [ ] DNA 保护：拦截对 dna/ 目录的修改
-- [ ] `update_prompt_block` / `create_prompt_block` 工具（按层级授权）
-- 目标文件：`agents/runtime/prompt_engine.py`
+1. 继续收缩剩余 sessionless `native` fallback 与更广泛 legacy 兼容入口，使 BoxLite 默认主链之外只保留明确的宿主系统能力。
+2. 把 `HierarchicalIndex` 从“可用索引器”继续推进到目标态：补强向量召回、增量重建触发与统一工具入口。
+3. 继续对齐 runtime 文档与任务拆解文档，避免目标态蓝图、桥接态实现、历史实施记录三者混写。
 
 ---
 
-### 3.2 L1 — MD 文件系统记忆
+## 7. 推荐阅读顺序
 
-> 优先级：🟡 P1 | 预估：1 WS | 前置：无
-
-- [ ] `memory/` 目录结构初始化 (working / episodic / domain)
-- [ ] `_index.md` 索引生成与标签匹配检索
-- [ ] 经验 MD 自动写入模板
-- [ ] 列表式提取与返回接口
-- 目标文件：`agents/memory/md_file_memory.py`
-
----
-
-### 3.3 L2 — Shell Graph RAG / Tool-Result Topology 对齐
-
-> 优先级：🟠 P2 | 预估：2 WS | 前置：3.2
-
-- [ ] 保持 `summer_memory/quintuple_graph.py` 作为 Shell L2 五元组图谱 canonical 存储
-- [ ] Shell 每轮对话后按当轮完整消息列表抽取五元组（非独立后台次模型管道）
-- [ ] 向量化 + Neo4j 向量索引（用于 L2 召回）
-- [ ] `memory_search` / `query_knowledge_graph` 对接 Shell L2 图谱
-- [ ] `agents/memory/semantic_graph.py` 明确为 Tool-Result Topology，继续服务 agentic loop / forensic 查询
-- 目标文件：`summer_memory/quintuple_graph.py`、`agents/memory/semantic_graph.py`
-
----
-
-### 3.4 L3 — Hierarchical RAG
-
-> 优先级：🟠 P2 | 预估：2 WS | 前置：无
-
-- [ ] 三级索引构建器（摘要 → 函数/段落索引 → chunk）
-- [ ] AST 切分器 (.py) + 标题切分器 (.md)
-- [ ] 摘要生成（次模型）
-- [ ] 索引向量化存储 (ChromaDB/SQLite)
-- [ ] `explore_large_file` 工具（summary/index/chunk 三级查询）
-- [ ] 增量索引更新（文件变更触发重建）
-- 目标文件：`agents/memory/hierarchical_rag.py`
-
----
-
-## Phase 4: 合并冲突与集成
-
-### 4.1 Workspace 双模策略
-
-> 优先级：🟠 P2 | 预估：1.5 WS | 前置：Phase 2
-
-- [ ] Mode A (external)：feature 分支 + 文件锁 + PR 生成
-- [ ] Mode B (self)：沙箱 clone + 双轨测试 + Audit Ledger + Approval Gate
-- [ ] 冲突检测与分级处理（轻/中/严重）
-- [ ] `workspace_transaction.py` 扩展
-- 目标文件：`agents/runtime/workspace_manager.py`
-
----
-
-### 4.2 端到端集成
-
-> 优先级：🟠 P2 | 预估：2 WS | 前置：Phase 2 + 3
-
-- [ ] Shell → Core → Expert → Dev/Review 全链路打通
-- [ ] `main.py` ServiceManager 集成 Agent 运行时
-- [ ] apiserver 路由适配（`core_execution` 接入 Core Agent）
-- [ ] 前端 TaskBoard 展示
-- [ ] 全链路冒烟测试
----
-
-## 依赖关系总览
-
-```mermaid
-graph LR
-    P1_1["1.1 生命周期"] --> P1_2["1.2 Mailbox"]
-    P1_1 --> P1_4["1.4 迷你 Loop"]
-    P1_3["1.3 TaskBoard"]
-
-    P1_1 & P1_3 & P1_4 --> P2_1["2.1 Shell"]
-    P1_1 & P1_3 & P1_4 --> P2_2["2.2 Core"]
-    P1_1 & P1_3 --> P2_3["2.3 Expert"]
-    P1_4 --> P2_4["2.4 Dev"]
-    P1_3 & P1_4 --> P2_5["2.5 Review"]
-
-    P2_1 & P2_2 & P2_3 & P2_4 & P2_5 --> P3_1["3.1 Prompt 引擎"]
-    P3_2["3.2 L1 MD 记忆"]
-    P3_2 --> P3_3["3.3 Shell Graph RAG / Tool-Result Topology"]
-    P3_4["3.4 L3 Hierarchical"]
-
-    P2_3 & P2_4 & P3_1 --> P4_1["4.1 Workspace"]
-    P4_1 & P3_3 & P3_4 --> P4_2["4.2 集成"]
-```
-
-## 工作量估算
-
-| Phase | 内容 | 估算 |
-|-------|------|------|
-| Phase 1 | 基础设施 | 6 WS |
-| Phase 2 | Agent 角色 | 7.5 WS |
-| Phase 3 | Prompt + 记忆 | 6 WS |
-| Phase 4 | 集成 | 3.5 WS |
-| **合计** | | **~23 WS** |
+1. `doc/01-module-overview.md`
+2. `doc/09-tool-execution-specification.md`
+3. `doc/14-multi-agent-architecture.md`
+4. `doc/15-boxlite-first-execution-sandbox-architecture.md`
+5. `doc/task/25-subagent-development-fabric-status-matrix.md`
+6. `doc/Multi Agent Target Architecturev2.1.md`

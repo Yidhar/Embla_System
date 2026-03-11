@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -154,3 +155,33 @@ def test_budget_guard_bootstrap_initializes_baseline_state(tmp_path: Path) -> No
     )
     assert second["passed"] is True
     assert second["baseline_written"] is False
+
+
+def test_budget_guard_bootstrap_resets_stale_state_to_baseline(tmp_path: Path) -> None:
+    state_file = tmp_path / "scratch" / "runtime" / "budget_guard_state_ws28_028.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-03-01T00:00:00+00:00",
+                "status": "critical",
+                "reason_code": "TASK_COST_LIMIT_EXCEEDED",
+                "reason_text": "budget guard triggered",
+                "task_id": "task-old",
+                "tool_name": "run_cmd",
+                "action": "terminate_task_budget_exceeded",
+                "details": {"task_cost": 5.6},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = api_server._bootstrap_budget_guard_state(  # noqa: SLF001
+        repo_root=tmp_path,
+    )
+    assert report["passed"] is True
+    assert report["baseline_written"] is True
+    assert report["reset_stale_state"] is True
+    assert report["status"] == "ok"
+    assert report["reason_code"] == "BUDGET_GUARD_BASELINE_READY"

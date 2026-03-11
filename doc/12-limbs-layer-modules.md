@@ -35,6 +35,24 @@
 
 ---
 
+## 0. BoxLite-first 执行边界（Target Canonical）
+
+自维护任务的手脚层 target canonical 不再是“宿主直接执行 + 路径重写补丁”，而是：
+
+- 宿主继续负责 `git worktree` 生命周期与 `audit/promote/teardown`。
+- Dev / Review 的文件读写、搜索、命令执行、测试、lint、事务写入默认在 BoxLite box 内完成。
+- `native_tools` 需要重构为 backend router，按 session 的 `SandboxContext` 选择 `NativeExecutionBackend` 或 `BoxLiteExecutionBackend`。
+- `apply_workspace_path_overrides` 从主路径降级为 native fallback 兼容层。
+
+手脚层在该方案中的新增目标模块：
+
+- `SandboxContext`：统一 `workspace_host_root / execution_root / execution_backend / box_name / box_id`
+- `ExecutionBackend`：统一文件、命令、事务与 Python 执行接口
+- `BoxLiteManager`：负责 box 生命周期、volume mount、exec、artifact 收集
+- `BoxLiteExecutionBackend`：作为自维护任务默认执行后端
+
+详细设计见 `doc/15-boxlite-first-execution-sandbox-architecture.md`。
+
 ## 1. MCP Host 与 Tool Registry
 
 ### 1.1 模块职责

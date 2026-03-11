@@ -23,29 +23,8 @@ def _now_iso() -> str:
     return _now_utc().isoformat()
 
 
-def _parse_iso(timestamp: str) -> datetime:
-    normalized = str(timestamp or "").replace("Z", "+00:00")
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return datetime.fromtimestamp(0, tz=timezone.utc)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
 def _json(payload: Dict[str, Any] | None) -> str:
     return json.dumps(payload or {}, ensure_ascii=False)
-
-
-@dataclass(frozen=True)
-class LeaseStatus:
-    lease_name: str
-    owner_id: str
-    fencing_epoch: int
-    lease_expire_at: str
-    is_owner: bool
-    changed: bool
 
 
 @dataclass
@@ -77,6 +56,7 @@ class WorkflowStore:
             with self._connect() as conn:
                 conn.executescript(schema)
                 self._ensure_outbox_columns(conn)
+                self._drop_legacy_lease_table(conn)
                 conn.commit()
 
     @staticmethod
@@ -93,6 +73,10 @@ class WorkflowStore:
             if column in existing:
                 continue
             conn.execute(f"ALTER TABLE outbox_event ADD COLUMN {column} {ddl}")
+
+    @staticmethod
+    def _drop_legacy_lease_table(conn: sqlite3.Connection) -> None:
+        conn.execute("DROP TABLE IF EXISTS orchestrator_lease")
 
     def create_workflow(
         self,
@@ -465,137 +449,6 @@ class WorkflowStore:
             "exhausted": exhausted,
             "next_retry_at": next_retry_at,
         }
-
-    def try_acquire_or_renew_lease(self, lease_name: str, owner_id: str, ttl_seconds: int) -> LeaseStatus:
-        ttl = max(1, int(ttl_seconds))
-        now_dt = _now_utc()
-        expire_at = (now_dt + timedelta(seconds=ttl)).isoformat()
-        now = now_dt.isoformat()
-
-        with self._lock:
-            with self._connect() as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                row = conn.execute(
-                    """
-                    SELECT lease_name, owner_id, fencing_epoch, lease_expire_at
-                    FROM orchestrator_lease
-                    WHERE lease_name = ?
-                    """,
-                    (lease_name,),
-                ).fetchone()
-
-                if row is None:
-                    conn.execute(
-                        """
-                        INSERT INTO orchestrator_lease
-                        (lease_name, owner_id, fencing_epoch, lease_expire_at, updated_at)
-                        VALUES (?, ?, 1, ?, ?)
-                        """,
-                        (lease_name, owner_id, expire_at, now),
-                    )
-                    conn.commit()
-                    return LeaseStatus(
-                        lease_name=lease_name,
-                        owner_id=owner_id,
-                        fencing_epoch=1,
-                        lease_expire_at=expire_at,
-                        is_owner=True,
-                        changed=True,
-                    )
-
-                current_owner = str(row["owner_id"])
-                current_epoch = int(row["fencing_epoch"])
-                current_expire = str(row["lease_expire_at"])
-                expired = _parse_iso(current_expire) <= now_dt
-
-                if current_owner == owner_id:
-                    conn.execute(
-                        """
-                        UPDATE orchestrator_lease
-                        SET lease_expire_at = ?, updated_at = ?
-                        WHERE lease_name = ?
-                        """,
-                        (expire_at, now, lease_name),
-                    )
-                    conn.commit()
-                    return LeaseStatus(
-                        lease_name=lease_name,
-                        owner_id=owner_id,
-                        fencing_epoch=current_epoch,
-                        lease_expire_at=expire_at,
-                        is_owner=True,
-                        changed=False,
-                    )
-
-                if expired:
-                    next_epoch = current_epoch + 1
-                    conn.execute(
-                        """
-                        UPDATE orchestrator_lease
-                        SET owner_id = ?, fencing_epoch = ?, lease_expire_at = ?, updated_at = ?
-                        WHERE lease_name = ?
-                        """,
-                        (owner_id, next_epoch, expire_at, now, lease_name),
-                    )
-                    conn.commit()
-                    return LeaseStatus(
-                        lease_name=lease_name,
-                        owner_id=owner_id,
-                        fencing_epoch=next_epoch,
-                        lease_expire_at=expire_at,
-                        is_owner=True,
-                        changed=True,
-                    )
-
-                conn.commit()
-                return LeaseStatus(
-                    lease_name=lease_name,
-                    owner_id=current_owner,
-                    fencing_epoch=current_epoch,
-                    lease_expire_at=current_expire,
-                    is_owner=False,
-                    changed=False,
-                )
-
-    def read_lease(self, lease_name: str) -> Optional[Dict[str, Any]]:
-        with self._lock:
-            with self._connect() as conn:
-                row = conn.execute(
-                    """
-                    SELECT lease_name, owner_id, fencing_epoch, lease_expire_at, updated_at
-                    FROM orchestrator_lease
-                    WHERE lease_name = ?
-                    """,
-                    (lease_name,),
-                ).fetchone()
-        if row is None:
-            return None
-        return {
-            "lease_name": row["lease_name"],
-            "owner_id": row["owner_id"],
-            "fencing_epoch": int(row["fencing_epoch"]),
-            "lease_expire_at": row["lease_expire_at"],
-            "updated_at": row["updated_at"],
-        }
-
-    def is_lease_owner(self, lease_name: str, owner_id: str, fencing_epoch: int) -> bool:
-        with self._lock:
-            with self._connect() as conn:
-                row = conn.execute(
-                    """
-                    SELECT owner_id, fencing_epoch, lease_expire_at
-                    FROM orchestrator_lease
-                    WHERE lease_name = ?
-                    """,
-                    (lease_name,),
-                ).fetchone()
-        if row is None:
-            return False
-        return (
-            str(row["owner_id"]) == owner_id
-            and int(row["fencing_epoch"]) == int(fencing_epoch)
-            and _parse_iso(str(row["lease_expire_at"])) > _now_utc()
-        )
 
     def get_workflow(self, workflow_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:

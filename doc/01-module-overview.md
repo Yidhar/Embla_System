@@ -1,4 +1,4 @@
-﻿# 01 模块总览（Embla System 开发预备版）
+# 01 模块总览（Embla System 开发预备版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-28
@@ -33,16 +33,17 @@
 
 ## 3. 服务启动链路（As-Is）
 
-当前 `main.py` 的 `start_all_servers` 行为：
+当前 `main.py` 的默认启动行为：
 
-1. 启动 API 服务（`apiserver`，默认端口 `8000`）。
-2. 启动 MCP 服务（`mcpserver`，默认端口 `8003`）。
-3. 后台事件循环按 `config.autonomous.enabled` 条件启动 `agents/pipeline.py`。
+1. 初始化 `summer_memory` 记忆子系统。
+2. 初始化 MCP client pool / runtime registry（不单独启动 `mcpserver.mcp_server`）。
+3. 启动 API 服务（`apiserver`，默认端口 `8000`）。
+4. 主线程进入 watchdog 监控循环；Brainstem bootstrap 由 API 侧按配置决定。
 
 端口默认值来源：`system/config.py`（`ServerPortsConfig`）。
 
 - API: `8000`
-- MCP: `8003`
+- MCP 运行时保留端口: `8003`（仅独立 MCP Host 场景使用，不属于 `main.py` 默认启动链）
 - LLM 调试服务（可选）: `8001`（`apiserver/start_server.py llm`，不在 `main.py` 默认启动链）
 
 ## 4. 运行时调用链路（As-Is）
@@ -68,11 +69,20 @@
 
 中间态审查结果会通过 `review_result` / `review_rework_requested` / `review_reject_respawn` / `expert_blocked` 等事件暴露；`execution_receipt` 只汇总每个 Expert **最终生效**的审查结论，不把中间 `request_changes` 或可恢复 `reject` 视为最终通过结果。
 
+补充口径：
+
+- `execution_receipt` 仍只表达编排/审查/提交流程的最终状态，不承载 BoxLite box 的运行时实例细节。
+- `execution_receipt.agent_state.scheduler` 可暴露父级调度摘要；顶层字段默认对应 Expert 层，`layers.expert` / `layers.dev` 进一步给出分层 `parallel_limit / peak_parallelism`。
+- `execution_receipt.agent_state.heartbeat_summary` 汇总本轮 Expert/Dev 心跳监管结果；`experts_blocked` / `blocked_expert_reasons` 表示是否已因心跳或审查生命周期进入阻断态。
+- 若 Dev 心跳阻断且 respawn 预算耗尽，`execution_receipt.stop_reason` 可显式收口为 `task_heartbeat_blocked_respawn_exhausted`，供 Shell/Core 直接判定当前轮次已不可恢复。
+- 对自维护任务，只要 worktree 尚未 `promote/teardown` 收口，`execution_receipt.stop_reason` 仍可保持 `awaiting_workspace_promotion`。
+- `destroy_child_agent` 的资源释放事实（如 `box_cleanup_*` / `workspace_cleanup_*`）通过父工具结果单独暴露，不混入 `execution_receipt`。
+
 ### 4.2 MCP 运行态说明
 
 当前链路状态：
 
-- `main.py` 会启动独立 `mcpserver`。
+- `main.py` 会初始化集成式 MCP client pool / runtime registry。
 - `apiserver` 的 `/mcp/status`、`/mcp/tasks` 输出运行态快照（对齐前端 status/tasks 展示口径）。
 - `apiserver` 的 `/mcp/services`、`/mcp/import` 提供服务发现与导入管理能力。
 
@@ -108,6 +118,12 @@
 - `agents/runtime/mini_loop.py`（子代理依赖调度、契约协商前置与统一提交）
 - `autonomous/scaffold_engine.py`（archived）（契约门禁 + verify pipeline + 多文件事务回滚）
 
+目标态演进（L1 参考）：
+
+- 自维护任务的执行面已从 `native_tools + native_executor` 收敛为统一 `ExecutionBackend` 抽象。
+- 当前默认路径为 `host git worktree + BoxLite execution box + host audit/promote/teardown`。
+- 无 session / 测试 harness 仍允许 `native` 宿主 fallback；详细设计见 `doc/15-boxlite-first-execution-sandbox-architecture.md`。
+
 ## 6. Legacy AgentServer 状态（已移除）
 
 **当前状态**：
@@ -139,13 +155,13 @@
 
 在 Embla System 开发生命周期中，统一采用以下反直觉原则：
 
-- `逻辑并发，执行串行（Logical Concurrency, Serial Execution）`
+- `分层并发，受限执行（Layered Concurrency, Bounded Execution）`
 
 解释：
 
-- 允许多个 Agent 并发“思考、读文档、只读分析”。
-- 所有会改变物理宿主机状态的动作（写文件、装依赖、启停服务、Git 变更）必须经 Event Bus 串行排队执行。
-- 该规则同时服务于稳定性与成本目标：避免主机状态雪崩与无效重试导致的 Token 放大。
+- 单 Core 维持串行决策与汇总；多个 Expert 可并发推进。
+- 每个 Expert 内，互不依赖的 Dev 可并发执行；会改物理宿主机状态的动作仍需受执行面约束。
+- Expert 并发受 `CoreAgent.max_experts` 限流，避免一次性打满执行面并放大技术债。
 
 ## 9. 交叉引用
 

@@ -67,10 +67,3 @@ CREATE TABLE IF NOT EXISTS inbox_dedup (
   PRIMARY KEY(consumer, message_id)
 );
 
-CREATE TABLE IF NOT EXISTS orchestrator_lease (
-  lease_name        TEXT PRIMARY KEY,
-  owner_id          TEXT NOT NULL,
-  fencing_epoch     INTEGER NOT NULL,
-  lease_expire_at   TEXT NOT NULL,
-  updated_at        TEXT NOT NULL
-);

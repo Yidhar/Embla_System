@@ -9,6 +9,7 @@ calls dispatch_to_core for execution tasks.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -30,6 +31,7 @@ from agents.review_agent import ReviewAgent, ReviewAgentConfig
 from agents.runtime.mini_loop import MiniLoopConfig, run_mini_loop
 from agents.runtime.parent_tools import get_parent_tool_definitions, handle_parent_tool_call
 from system.git_worktree_sandbox import apply_workspace_path_overrides
+from system.sandbox_context import SandboxContext
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,8 @@ _FAST_TRACK_PROTECTED_EXACT = {
 }
 _MAX_REVIEW_REMEDIATION_CYCLES = 3
 _MAX_REVIEW_REJECT_RESPAWNS = 1
+_MAX_HEARTBEAT_BLOCKED_RESPAWNS = 1
+_HEARTBEAT_MONITOR_POLL_SECONDS = 0.05
 
 
 def _trim_text(value: Any, *, limit: int = 220) -> str:
@@ -105,16 +109,22 @@ def _prepare_child_tool_arguments(
     session = store.get(child_session_id)
     if session is None:
         return dict(arguments) if isinstance(arguments, dict) else {}
-    workspace_root = str(session.metadata.get("workspace_root") or "").strip()
+    context = SandboxContext.from_metadata(session.metadata, session_id=child_session_id)
+    workspace_root = str(context.workspace_host_root or "").strip()
     if not workspace_root:
         return dict(arguments) if isinstance(arguments, dict) else {}
-    return apply_workspace_path_overrides(tool_name, arguments, workspace_root)
+    prepared = apply_workspace_path_overrides(tool_name, arguments, workspace_root)
+    prepared.setdefault("_execution_backend", str(context.execution_backend or "native"))
+    prepared.setdefault("_execution_root", str(context.execution_root or workspace_root))
+    return prepared
 
 
 def _collect_expert_dev_artifacts(store: AgentSessionStore, expert_id: str) -> List[Dict[str, Any]]:
     artifacts: List[Dict[str, Any]] = []
     for child in store.list_children(expert_id):
         if str(child.role or "").strip().lower() != "dev":
+            continue
+        if bool(child.metadata.get("heartbeat_superseded")):
             continue
         verification_report = child.metadata.get("verification_report")
         if not isinstance(verification_report, dict):
@@ -221,6 +231,117 @@ def _select_reject_respawn_task_ids(tasks: List[Any], changed_files: List[str]) 
         if task_id and (not task_files or task_files & normalized_changed_files):
             selected.append(task_id)
     return selected or [str(getattr(task, "task_id", "") or "").strip() for task in tasks if str(getattr(task, "task_id", "") or "").strip()]
+
+
+_HEARTBEAT_LEVEL_RANK = {"none": -1, "fresh": 0, "warning": 1, "critical": 2, "blocked": 3}
+
+
+def _heartbeat_level_rank(level: Any) -> int:
+    return int(_HEARTBEAT_LEVEL_RANK.get(str(level or "none").strip().lower(), -1))
+
+
+def _new_heartbeat_escalation_summary(*, expert_id: str, expert_type: str) -> Dict[str, Any]:
+    return {
+        "expert_id": str(expert_id or ""),
+        "expert_type": str(expert_type or "expert"),
+        "observed_session_count": 0,
+        "observed_task_count": 0,
+        "warning_count": 0,
+        "critical_count": 0,
+        "blocked_count": 0,
+        "respawn_count": 0,
+        "expert_blocked_count": 0,
+        "expert_blocked_reasons": [],
+        "actions": [],
+    }
+
+
+def _merge_heartbeat_escalation_summaries(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    merged = {
+        "expert_count": 0,
+        "observed_session_count": 0,
+        "observed_task_count": 0,
+        "warning_count": 0,
+        "critical_count": 0,
+        "blocked_count": 0,
+        "respawn_count": 0,
+        "expert_blocked_count": 0,
+        "expert_blocked_reasons": [],
+        "experts": [],
+        "actions": [],
+    }
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        merged["expert_count"] += 1
+        merged["observed_session_count"] += max(0, int(item.get("observed_session_count") or 0))
+        merged["observed_task_count"] += max(0, int(item.get("observed_task_count") or 0))
+        merged["warning_count"] += max(0, int(item.get("warning_count") or 0))
+        merged["critical_count"] += max(0, int(item.get("critical_count") or 0))
+        merged["blocked_count"] += max(0, int(item.get("blocked_count") or 0))
+        merged["respawn_count"] += max(0, int(item.get("respawn_count") or 0))
+        merged["expert_blocked_count"] += max(0, int(item.get("expert_blocked_count") or 0))
+        merged["expert_blocked_reasons"].extend(
+            str(reason).strip() for reason in list(item.get("expert_blocked_reasons") or []) if str(reason).strip()
+        )
+        merged["experts"].append(
+            {
+                "expert_id": str(item.get("expert_id") or ""),
+                "expert_type": str(item.get("expert_type") or "expert"),
+                "observed_session_count": max(0, int(item.get("observed_session_count") or 0)),
+                "observed_task_count": max(0, int(item.get("observed_task_count") or 0)),
+                "warning_count": max(0, int(item.get("warning_count") or 0)),
+                "critical_count": max(0, int(item.get("critical_count") or 0)),
+                "blocked_count": max(0, int(item.get("blocked_count") or 0)),
+                "respawn_count": max(0, int(item.get("respawn_count") or 0)),
+                "expert_blocked_count": max(0, int(item.get("expert_blocked_count") or 0)),
+                "expert_blocked_reasons": list(item.get("expert_blocked_reasons") or []),
+            }
+        )
+        merged["actions"].extend(list(item.get("actions") or []))
+    merged["actions"] = list(merged["actions"][:20])
+    deduped_reasons: List[str] = []
+    for reason in merged["expert_blocked_reasons"]:
+        if reason not in deduped_reasons:
+            deduped_reasons.append(reason)
+    merged["expert_blocked_reasons"] = deduped_reasons[:20]
+    return merged
+
+
+def _build_heartbeat_attention_instruction(*, heartbeat: Dict[str, Any], severity: str) -> str:
+    task_id = str(heartbeat.get("task_id") or "").strip() or "task"
+    stage = str(heartbeat.get("stage") or "").strip()
+    message = str(heartbeat.get("message") or "").strip()
+    stale_level = str(heartbeat.get("stale_level") or severity).strip().lower()
+    if severity == "critical":
+        lead = f"Task {task_id} heartbeat is critically stale ({stale_level})."
+    else:
+        lead = f"Task {task_id} heartbeat is stale ({stale_level})."
+    parts = [
+        lead,
+        "Publish a fresh task heartbeat immediately or report blocked/completed with current facts.",
+    ]
+    if stage:
+        parts.append(f"Last stage: {stage}")
+    if message:
+        parts.append(f"Last message: {message}")
+    return "\n".join(parts)
+
+
+def _build_heartbeat_respawn_feedback(*, heartbeat: Dict[str, Any]) -> str:
+    task_id = str(heartbeat.get("task_id") or "").strip() or "task"
+    stage = str(heartbeat.get("stage") or "").strip()
+    message = str(heartbeat.get("message") or "").strip()
+    parts = [
+        "Heartbeat escalation: the previous dev session stopped emitting fresh task heartbeats and was replaced.",
+        f"Continue task {task_id} from the latest visible workspace state.",
+        "Before reporting completed, rerun self-verification and publish task heartbeats if the task becomes long-running again.",
+    ]
+    if stage:
+        parts.append(f"Previous stage: {stage}")
+    if message:
+        parts.append(f"Previous heartbeat message: {message}")
+    return "\n".join(parts)
 
 
 def _build_review_reject_respawn_instruction(
@@ -651,6 +772,72 @@ def _build_core_loop_initial_task(
     ).strip()
 
 
+def _new_scheduler_metrics(layer: str) -> Dict[str, Any]:
+    return {
+        "layer": str(layer or "").strip() or "unknown",
+        "parallel_limit": 0,
+        "peak_parallelism": 0,
+    }
+
+
+def _normalize_scheduler_metrics(metrics: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(metrics, dict):
+        return None
+    layer = str(metrics.get("layer") or "").strip() or "unknown"
+    try:
+        parallel_limit = max(0, int(metrics.get("parallel_limit") or 0))
+    except Exception:
+        parallel_limit = 0
+    try:
+        peak_parallelism = max(0, int(metrics.get("peak_parallelism") or 0))
+    except Exception:
+        peak_parallelism = 0
+    normalized: Dict[str, Any] = {
+        "layer": layer,
+        "parallel_limit": parallel_limit,
+        "peak_parallelism": peak_parallelism,
+    }
+    raw_layers = metrics.get("layers")
+    if isinstance(raw_layers, dict):
+        normalized_layers: Dict[str, Dict[str, Any]] = {}
+        for raw_name, raw_metrics in raw_layers.items():
+            normalized_leaf = _normalize_scheduler_metrics(raw_metrics)
+            if not isinstance(normalized_leaf, dict):
+                continue
+            layer_name = str(raw_name or normalized_leaf.get("layer") or "").strip() or str(normalized_leaf.get("layer") or "unknown")
+            normalized_layers[layer_name] = {
+                "layer": str(normalized_leaf.get("layer") or layer_name),
+                "parallel_limit": max(0, int(normalized_leaf.get("parallel_limit") or 0)),
+                "peak_parallelism": max(0, int(normalized_leaf.get("peak_parallelism") or 0)),
+            }
+        if normalized_layers:
+            normalized["layers"] = normalized_layers
+    return normalized
+
+
+def _note_scheduler_batch_capacity(metrics: Optional[Dict[str, Any]], parallel_width: int) -> None:
+    if not isinstance(metrics, dict):
+        return
+    active_runs = max(0, int(metrics.get("_active_runs") or 0))
+    target_width = max(0, int(parallel_width))
+    metrics["parallel_limit"] = max(max(0, int(metrics.get("parallel_limit") or 0)), active_runs + target_width)
+
+
+def _mark_scheduler_run_start(metrics: Optional[Dict[str, Any]]) -> None:
+    if not isinstance(metrics, dict):
+        return
+    active_runs = max(0, int(metrics.get("_active_runs") or 0)) + 1
+    metrics["_active_runs"] = active_runs
+    metrics["parallel_limit"] = max(max(0, int(metrics.get("parallel_limit") or 0)), active_runs)
+    metrics["peak_parallelism"] = max(max(0, int(metrics.get("peak_parallelism") or 0)), active_runs)
+
+
+def _mark_scheduler_run_end(metrics: Optional[Dict[str, Any]]) -> None:
+    if not isinstance(metrics, dict):
+        return
+    metrics["_active_runs"] = max(0, int(metrics.get("_active_runs") or 0) - 1)
+
+
 def _build_core_execution_receipt(
     *,
     pipeline_id: str,
@@ -660,6 +847,9 @@ def _build_core_execution_receipt(
     review_results: List[Dict[str, Any]],
     task_completed: bool,
     stop_reason: str,
+    scheduler_metrics: Optional[Dict[str, Any]] = None,
+    heartbeat_summary: Optional[Dict[str, Any]] = None,
+    blocked_expert_reasons: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     deliverables: List[str] = []
     summary_lines: List[str] = []
@@ -694,10 +884,13 @@ def _build_core_execution_receipt(
     if not review_lines:
         review_lines.append("- [info] review stage was not executed")
 
+    normalized_blocked_reasons = [str(item).strip() for item in list(blocked_expert_reasons or []) if str(item).strip()]
     if task_completed and workspace_submission_required:
         header = "Core execution pipeline completed in sandbox and is awaiting workspace promotion approval."
     elif task_completed:
         header = "Core execution pipeline completed."
+    elif normalized_blocked_reasons or "blocked" in str(stop_reason or "").strip().lower():
+        header = "Core execution pipeline is blocked and requires orchestration recovery."
     else:
         header = "Core execution pipeline delegated tasks and is waiting for child completion."
 
@@ -714,22 +907,1184 @@ def _build_core_execution_receipt(
 
     combined_deliverables = (deliverables + review_lines)[:12]
 
+    agent_state = {
+        "task_completed": bool(task_completed),
+        "final_answer": final_answer,
+        "completion_summary": final_answer,
+        "deliverables": combined_deliverables,
+        "expert_count": len(expert_results),
+        "review_count": len(review_results),
+        "review_verdicts": review_verdicts,
+        "goal_id": str(decomposition.get("goal_id") or ""),
+        "workspace_submission_required": bool(workspace_submission_required),
+        "workspace_submissions": workspace_submissions[:8],
+    }
+    normalized_scheduler_metrics = _normalize_scheduler_metrics(scheduler_metrics)
+    if isinstance(normalized_scheduler_metrics, dict):
+        agent_state["scheduler"] = normalized_scheduler_metrics
+    if isinstance(heartbeat_summary, dict):
+        agent_state["heartbeat_summary"] = dict(heartbeat_summary)
+    if normalized_blocked_reasons:
+        agent_state["blocked_expert_reasons"] = list(normalized_blocked_reasons[:20])
+        agent_state["experts_blocked"] = True
+    else:
+        agent_state["experts_blocked"] = False
+
     return {
         "type": "execution_receipt",
         "pipeline_id": pipeline_id,
         "stop_reason": str(stop_reason or ""),
-        "agent_state": {
-            "task_completed": bool(task_completed),
-            "final_answer": final_answer,
-            "completion_summary": final_answer,
-            "deliverables": combined_deliverables,
-            "expert_count": len(expert_results),
-            "review_count": len(review_results),
-            "review_verdicts": review_verdicts,
-            "goal_id": str(decomposition.get("goal_id") or ""),
-            "workspace_submission_required": bool(workspace_submission_required),
-            "workspace_submissions": workspace_submissions[:8],
-        },
+        "agent_state": agent_state,
+    }
+
+
+def _collect_dev_loop_result(*, store: AgentSessionStore, session_id: str, task_id: str) -> Dict[str, Any]:
+    final_session = store.get(session_id)
+    final_status = str(final_session.status.value) if final_session is not None else "missing"
+    completion_report = ""
+    verification_report: Dict[str, Any] = {}
+    changed_files: List[str] = []
+    metadata: Dict[str, Any] = {}
+    if final_session is not None:
+        metadata = dict(final_session.metadata or {})
+        completion_report = str(final_session.metadata.get("completion_report") or "").strip()
+        raw_verification_report = final_session.metadata.get("verification_report")
+        if isinstance(raw_verification_report, dict):
+            verification_report = dict(raw_verification_report)
+        changed_files = _normalize_changed_files(
+            verification_report.get("changed_files") if verification_report else final_session.metadata.get("changed_files")
+        )
+    return {
+        "agent_id": str(session_id or "").strip(),
+        "task_id": str(task_id or "").strip(),
+        "status": final_status,
+        "completion_report": completion_report,
+        "verification_report": verification_report,
+        "changed_files": changed_files,
+        "metadata": metadata,
+    }
+
+
+def _update_dev_task_board(
+    *,
+    task_board_engine: Optional[TaskBoardEngine],
+    board_id: str,
+    task_id: str,
+    result: Dict[str, Any],
+    log_context: str,
+) -> None:
+    if task_board_engine is None or not str(board_id or "").strip() or not str(task_id or "").strip():
+        return
+    final_status = str(result.get("status") or "").strip()
+    completion_report = str(result.get("completion_report") or "").strip()
+    changed_files = _normalize_changed_files(result.get("changed_files"))
+    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    if bool(metadata.get("heartbeat_superseded")):
+        return
+    blocked_reason = str(metadata.get("blocked_reason") or metadata.get("heartbeat_blocked_reason") or "").strip()
+    try:
+        if final_status == AgentStatus.WAITING.value and blocked_reason:
+            task_board_engine.update_task(
+                board_id,
+                task_id,
+                status=TaskStatus.BLOCKED,
+                summary=blocked_reason,
+            )
+        elif final_status == AgentStatus.WAITING.value:
+            task_board_engine.update_task(
+                board_id,
+                task_id,
+                status=TaskStatus.DONE,
+                summary=completion_report or "child loop completed",
+                files_changed=changed_files if changed_files else None,
+            )
+        elif final_status == AgentStatus.RUNNING.value:
+            task_board_engine.update_task(
+                board_id,
+                task_id,
+                status=TaskStatus.IN_PROGRESS,
+            )
+    except Exception:
+        logger.debug(
+            "Failed to update task board after %s (board=%s task=%s)",
+            log_context,
+            board_id,
+            task_id,
+            exc_info=True,
+        )
+
+
+async def _run_dev_mini_loop(
+    *,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    child_llm_call: ChildLLMCallFn,
+    child_tool_executor: ChildToolExecutorFn,
+    child_max_rounds: int,
+    emit: Callable[[Dict[str, Any]], Awaitable[None]],
+    pipeline_id: str,
+    expert_id: str,
+    expert_type: str,
+    task_board_engine: Optional[TaskBoardEngine],
+    board_id: str,
+    session_id: str,
+    task_id: str,
+    fallback_tool_subset: List[str],
+    fallback_prompt_blocks: List[str],
+    fallback_task_description: str,
+    start_event_type: str,
+    loop_event_type: str,
+    end_event_type: str,
+    board_log_context: str,
+    extra_event_fields: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    normalized_session_id = str(session_id or "").strip()
+    normalized_task_id = str(task_id or "").strip()
+    event_fields = {
+        "pipeline_id": pipeline_id,
+        "expert_id": expert_id,
+        "expert_type": expert_type,
+        "agent_id": normalized_session_id,
+        "task_id": normalized_task_id,
+    }
+    if isinstance(extra_event_fields, dict):
+        event_fields.update({k: v for k, v in extra_event_fields.items()})
+
+    session = store.get(normalized_session_id)
+    if session is None:
+        result = _collect_dev_loop_result(store=store, session_id=normalized_session_id, task_id=normalized_task_id)
+        await emit({
+            "type": end_event_type,
+            **event_fields,
+            "status": str(result.get("status") or "missing"),
+            "completion_report": str(result.get("completion_report") or ""),
+            "verification_report": dict(result.get("verification_report") or {}),
+            "changed_files": list(result.get("changed_files") or []),
+        })
+        return result
+
+    resolved_tool_subset = list(session.tool_subset or fallback_tool_subset or [])
+    resolved_prompt_blocks = list(session.prompt_blocks or fallback_prompt_blocks or [])
+    dev_agent = DevAgent(
+        config=DevAgentConfig(
+            prompt_blocks=resolved_prompt_blocks,
+            tool_subset=resolved_tool_subset,
+            prompts_root="system/prompts",
+        ),
+        session_id=normalized_session_id,
+        store=store,
+        mailbox=mailbox,
+    )
+    runtime_tool_defs = _build_runtime_tool_definitions(resolved_tool_subset)
+    dev_initial_task = str(session.task_description or fallback_task_description or "").strip()
+    loop_config = MiniLoopConfig(max_rounds=max(1, int(child_max_rounds)), poll_parent_every_n=3)
+
+    async def _execute_dev_tool(
+        tool_name: str,
+        arguments: Dict[str, Any],
+        *,
+        _allowed_tools: List[str] = resolved_tool_subset,
+        _dev_session_id: str = normalized_session_id,
+    ) -> Dict[str, Any]:
+        normalized_tool = str(tool_name or "").strip()
+        if _allowed_tools and normalized_tool not in _allowed_tools:
+            return {
+                "error": f"tool_not_allowed:{normalized_tool}",
+                "status": "blocked",
+                "tool_name": normalized_tool,
+            }
+        safe_arguments = arguments if isinstance(arguments, dict) else {}
+        if is_memory_tool(normalized_tool):
+            return handle_memory_tool(normalized_tool, safe_arguments)
+        prepared_arguments = _prepare_child_tool_arguments(
+            store=store,
+            child_session_id=_dev_session_id,
+            tool_name=normalized_tool,
+            arguments=safe_arguments,
+        )
+        return await child_tool_executor(normalized_tool, prepared_arguments, _dev_session_id)
+
+    await emit({
+        "type": start_event_type,
+        **event_fields,
+        "tool_subset": resolved_tool_subset,
+    })
+    async for mini_event in run_mini_loop(
+        session_id=normalized_session_id,
+        store=store,
+        mailbox=mailbox,
+        llm_call=child_llm_call,
+        tool_executor=_execute_dev_tool,
+        tool_definitions=runtime_tool_defs,
+        system_prompt=dev_agent.build_system_prompt(),
+        initial_task=dev_initial_task,
+        config=loop_config,
+    ):
+        await emit({
+            "type": loop_event_type,
+            **event_fields,
+            "event": mini_event,
+        })
+
+    result = _collect_dev_loop_result(store=store, session_id=normalized_session_id, task_id=normalized_task_id)
+    _update_dev_task_board(
+        task_board_engine=task_board_engine,
+        board_id=board_id,
+        task_id=normalized_task_id,
+        result=result,
+        log_context=board_log_context,
+    )
+    await emit({
+        "type": end_event_type,
+        **event_fields,
+        "status": str(result.get("status") or ""),
+        "completion_report": str(result.get("completion_report") or ""),
+        "verification_report": dict(result.get("verification_report") or {}),
+        "changed_files": list(result.get("changed_files") or []),
+    })
+    return result
+
+
+async def _run_dev_batch(
+    *,
+    jobs: List[Dict[str, Any]],
+    scheduler_metrics: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    if not jobs:
+        return []
+    _note_scheduler_batch_capacity(scheduler_metrics, len(jobs))
+
+    async def _run_dev_job(job: Dict[str, Any]) -> Dict[str, Any]:
+        _mark_scheduler_run_start(scheduler_metrics)
+        try:
+            return await _run_dev_mini_loop(**job)
+        finally:
+            _mark_scheduler_run_end(scheduler_metrics)
+
+    tasks = [asyncio.create_task(_run_dev_job(job)) for job in jobs]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    final_results: List[Dict[str, Any]] = []
+    failures: List[BaseException] = []
+    for item in results:
+        if isinstance(item, BaseException):
+            failures.append(item)
+            continue
+        if isinstance(item, dict):
+            final_results.append(item)
+    if failures:
+        raise failures[0]
+    return final_results
+
+
+async def _run_dev_jobs_with_heartbeat_supervision(
+    *,
+    jobs: List[Dict[str, Any]],
+    expert: ExpertAgent,
+    tasks: List[Any],
+    assignment: Dict[str, Any],
+    scope: str,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    child_llm_call: ChildLLMCallFn,
+    child_tool_executor: ChildToolExecutorFn,
+    child_max_rounds: int,
+    task_board_engine: Optional[TaskBoardEngine],
+    emit: Callable[[Dict[str, Any]], Awaitable[None]],
+    pipeline_id: str,
+    expert_id: str,
+    expert_type: str,
+    board_id: str,
+    scheduler_metrics: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    summary = _new_heartbeat_escalation_summary(expert_id=expert_id, expert_type=expert_type)
+    if not jobs:
+        return {"results": [], "heartbeat_summary": summary, "expert_blocked_reason": ""}
+
+    observed_sessions: set[str] = set()
+    observed_tasks: set[str] = set()
+    last_levels: Dict[tuple[str, str], str] = {}
+    respawn_count_by_task: Dict[str, int] = {}
+    expert_blocked_reason = ""
+    final_results: List[Dict[str, Any]] = []
+    failures: List[BaseException] = []
+    running_jobs: Dict[asyncio.Task, Dict[str, Any]] = {}
+
+    async def _run_job(job: Dict[str, Any]) -> Dict[str, Any]:
+        _mark_scheduler_run_start(scheduler_metrics)
+        try:
+            return await _run_dev_mini_loop(**job)
+        finally:
+            _mark_scheduler_run_end(scheduler_metrics)
+
+    def _launch_job(job: Dict[str, Any]) -> None:
+        _note_scheduler_batch_capacity(scheduler_metrics, max(1, len(running_jobs) + 1))
+        task = asyncio.create_task(_run_job(job))
+        running_jobs[task] = job
+
+    async def _emit_action(event_type: str, payload: Dict[str, Any]) -> None:
+        await emit({"type": event_type, "pipeline_id": pipeline_id, "expert_id": expert_id, "expert_type": expert_type, **payload})
+
+    for job in jobs:
+        _launch_job(job)
+
+    while running_jobs:
+        done, _ = await asyncio.wait(
+            list(running_jobs.keys()),
+            timeout=_HEARTBEAT_MONITOR_POLL_SECONDS,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for completed in done:
+            job = running_jobs.pop(completed, None)
+            if job is None:
+                continue
+            try:
+                result = completed.result()
+            except BaseException as exc:
+                failures.append(exc)
+                continue
+            if isinstance(result, dict):
+                final_results.append(result)
+
+        for task_handle, job in list(running_jobs.items()):
+            del task_handle
+            session_id = str(job.get("session_id") or "").strip()
+            fallback_task_id = str(job.get("task_id") or "").strip()
+            if not session_id:
+                continue
+            session = store.get(session_id)
+            if session is None or session.status != AgentStatus.RUNNING:
+                continue
+            snapshot = store.get_session_heartbeat_snapshot(session_id)
+            heartbeats = list(snapshot.get("heartbeats") or [])
+            if not heartbeats:
+                continue
+            observed_sessions.add(session_id)
+            for heartbeat in heartbeats:
+                heartbeat_task_id = str(fallback_task_id or heartbeat.get("task_id") or "").strip() or "task"
+                observed_tasks.add(f"{session_id}:{heartbeat_task_id}")
+                current_level = str(heartbeat.get("stale_level") or "fresh").strip().lower()
+                key = (session_id, heartbeat_task_id)
+                previous_level = str(last_levels.get(key) or "fresh")
+                if _heartbeat_level_rank(current_level) < _heartbeat_level_rank(previous_level):
+                    last_levels[key] = current_level
+                    continue
+                if current_level == previous_level:
+                    continue
+                last_levels[key] = current_level
+
+                action_record = {
+                    "session_id": session_id,
+                    "task_id": heartbeat_task_id,
+                    "stale_level": current_level,
+                    "sequence": int(heartbeat.get("sequence") or 0),
+                    "stage": str(heartbeat.get("stage") or ""),
+                    "message": str(heartbeat.get("message") or ""),
+                }
+
+                if current_level == "warning":
+                    summary["warning_count"] += 1
+                    instruction = _build_heartbeat_attention_instruction(heartbeat=heartbeat, severity="warning")
+                    mailbox.send(expert_id, session_id, instruction, message_type="system")
+                    action_record["action"] = "notify_child"
+                    summary["actions"].append(dict(action_record))
+                    await _emit_action("task_heartbeat_escalation", dict(action_record))
+                    continue
+
+                if current_level == "critical":
+                    summary["critical_count"] += 1
+                    instruction = _build_heartbeat_attention_instruction(heartbeat=heartbeat, severity="critical")
+                    mailbox.send(expert_id, session_id, instruction, message_type="system")
+                    _inject_system_instruction(store, session_id, instruction)
+                    action_record["action"] = "inject_instruction"
+                    summary["actions"].append(dict(action_record))
+                    await _emit_action("task_heartbeat_escalation", dict(action_record))
+                    continue
+
+                if current_level != "blocked":
+                    continue
+
+                summary["blocked_count"] += 1
+                stale_reason = f"task_heartbeat_blocked:{heartbeat_task_id}"
+                session_updates = {
+                    "heartbeat_last_stale_level": current_level,
+                    "heartbeat_blocked_task_id": heartbeat_task_id,
+                    "heartbeat_last_message": str(heartbeat.get("message") or ""),
+                    "heartbeat_last_stage": str(heartbeat.get("stage") or ""),
+                }
+                current_respawns = int(respawn_count_by_task.get(heartbeat_task_id) or 0)
+                respawned_child_ids: List[str] = []
+                blocked_reason_candidate = ""
+
+                if current_respawns < _MAX_HEARTBEAT_BLOCKED_RESPAWNS:
+                    respawn_feedback = _build_heartbeat_respawn_feedback(heartbeat=heartbeat)
+                    retry_children = expert.spawn_retry_devs(
+                        tasks,
+                        task_ids=[heartbeat_task_id],
+                        review_feedback=respawn_feedback,
+                        prompt_blocks=list(assignment.get("prompt_blocks", [])),
+                    )
+                    for retry_child in retry_children:
+                        retry_id = str(retry_child.get("agent_id") or "").strip()
+                        retry_task_id = str(retry_child.get("task_id") or heartbeat_task_id).strip() or heartbeat_task_id
+                        if not retry_id or str(retry_child.get("status") or "").strip().lower() != AgentStatus.RUNNING.value:
+                            continue
+                        respawned_child_ids.append(retry_id)
+                        _launch_job(
+                            {
+                                "store": store,
+                                "mailbox": mailbox,
+                                "child_llm_call": child_llm_call,
+                                "child_tool_executor": child_tool_executor,
+                                "child_max_rounds": child_max_rounds,
+                                "emit": emit,
+                                "pipeline_id": pipeline_id,
+                                "expert_id": expert_id,
+                                "expert_type": expert_type,
+                                "task_board_engine": task_board_engine,
+                                "board_id": board_id,
+                                "session_id": retry_id,
+                                "task_id": retry_task_id,
+                                "fallback_tool_subset": list(assignment.get("tool_subset", [])),
+                                "fallback_prompt_blocks": list(assignment.get("prompt_blocks", [])),
+                                "fallback_task_description": str(scope or ""),
+                                "start_event_type": "dev_loop_start",
+                                "loop_event_type": "dev_loop_event",
+                                "end_event_type": "dev_loop_end",
+                                "board_log_context": "heartbeat respawn dev loop",
+                                "extra_event_fields": {
+                                    "recovery_mode": "heartbeat_respawn",
+                                    "replaced_agent_id": session_id,
+                                    "trigger_task_id": heartbeat_task_id,
+                                },
+                            }
+                        )
+                    if respawned_child_ids:
+                        respawn_count_by_task[heartbeat_task_id] = current_respawns + 1
+                        session_updates.update(
+                            {
+                                "heartbeat_superseded": True,
+                                "heartbeat_replaced_by_agent_ids": list(respawned_child_ids),
+                                "heartbeat_blocked_reason": stale_reason,
+                            }
+                        )
+                        summary["respawn_count"] += len(respawned_child_ids)
+                        action_record.update({"action": "respawn_dev", "replacement_agent_ids": list(respawned_child_ids)})
+                        summary["actions"].append(dict(action_record))
+                        await _emit_action("heartbeat_respawn", dict(action_record))
+                    else:
+                        blocked_reason_candidate = "task_heartbeat_blocked_respawn_failed"
+                else:
+                    blocked_reason_candidate = "task_heartbeat_blocked_respawn_exhausted"
+
+                if session.status == AgentStatus.RUNNING:
+                    try:
+                        store.set_interrupt(session_id)
+                    except Exception:
+                        logger.debug("Failed to set interrupt on heartbeat-blocked child: %s", session_id, exc_info=True)
+                    try:
+                        store.update_status(session_id, AgentStatus.WAITING)
+                    except Exception:
+                        logger.debug("Failed to set waiting on heartbeat-blocked child: %s", session_id, exc_info=True)
+
+                if blocked_reason_candidate:
+                    session_updates["blocked_reason"] = blocked_reason_candidate
+                    if not expert_blocked_reason:
+                        expert_blocked_reason = blocked_reason_candidate
+                    if blocked_reason_candidate not in summary["expert_blocked_reasons"]:
+                        summary["expert_blocked_reasons"].append(blocked_reason_candidate)
+                    if not any(item.get("action") == "expert_blocked" and item.get("task_id") == heartbeat_task_id for item in summary["actions"]):
+                        summary["expert_blocked_count"] = 1
+                        blocked_payload = {
+                            "reason": blocked_reason_candidate,
+                            "blocked_child_id": session_id,
+                            "task_id": heartbeat_task_id,
+                            "stale_level": current_level,
+                        }
+                        summary["actions"].append({**action_record, "action": "expert_blocked", "reason": blocked_reason_candidate})
+                        await _emit_action("expert_blocked", blocked_payload)
+
+                store.update_metadata(session_id, session_updates)
+
+        if failures:
+            raise failures[0]
+
+    summary["observed_session_count"] = len(observed_sessions)
+    summary["observed_task_count"] = len(observed_tasks)
+    summary["actions"] = list(summary.get("actions") or [])[:20]
+    return {
+        "results": final_results,
+        "heartbeat_summary": summary,
+        "expert_blocked_reason": str(expert_blocked_reason or ""),
+    }
+
+
+async def _run_single_expert_phase(
+    *,
+    er: Dict[str, Any],
+    decomposition: Dict[str, Any],
+    message: str,
+    pipeline_id: str,
+    resolved_core_execution_session_id: str,
+    child_execution_enabled: bool,
+    child_llm_call: Optional[ChildLLMCallFn],
+    child_tool_executor: Optional[ChildToolExecutorFn],
+    child_max_rounds: int,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    task_board_engine: Optional[TaskBoardEngine],
+    emit: Callable[[Dict[str, Any]], Awaitable[None]],
+    dev_scheduler_metrics: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    _store = store
+    _mailbox = mailbox
+    review_results_local: List[Dict[str, Any]] = []
+    review_expected_count = 0
+
+    agent_id = er.get("agent_id", "")
+    expert_type = er.get("expert_type", "backend")
+    assignment = next(
+        (a for a in decomposition.get("expert_assignments", []) if a["expert_type"] == expert_type),
+        {},
+    )
+    expert = ExpertAgent(
+        config=ExpertAgentConfig(
+            expert_type=expert_type,
+            prompt_blocks=assignment.get("prompt_blocks", []),
+            tool_subset=assignment.get("tool_subset", []),
+            model_tier=assignment.get("model_tier", "primary"),
+            prompt_profile=assignment.get("prompt_profile", ""),
+        ),
+        session_id=agent_id,
+        store=_store,
+        mailbox=_mailbox,
+        task_board_engine=task_board_engine,
+    )
+    scope = er.get("scope", assignment.get("scope", ""))
+    tasks = expert.plan_tasks(scope)
+    devs: List[Dict[str, Any]] = []
+    dev_task_map: Dict[str, str] = {}
+    heartbeat_summary = _new_heartbeat_escalation_summary(expert_id=str(agent_id), expert_type=expert_type)
+    expert_blocked_reason = ""
+    if tasks:
+        devs = expert.spawn_devs(tasks)
+        dev_task_map = {
+            str(item.get("agent_id") or "").strip(): str(item.get("task_id") or "").strip()
+            for item in devs
+            if str(item.get("agent_id") or "").strip()
+        }
+        await emit({
+            "type": "expert_progress",
+            "pipeline_id": pipeline_id,
+            "expert_type": expert_type,
+            "agent_id": agent_id,
+            "board_id": expert.board_id,
+            "tasks_planned": len(tasks),
+            "devs_spawned": len(devs),
+        })
+
+    # Run real child mini-loops when runtime callbacks are injected by caller.
+    if child_execution_enabled and devs and child_llm_call is not None and child_tool_executor is not None:
+        dev_jobs: List[Dict[str, Any]] = []
+        for dev in devs:
+            dev_agent_id = str(dev.get("agent_id") or "").strip()
+            task_id = str(dev.get("task_id") or "").strip()
+            if not dev_agent_id:
+                continue
+            if _store.get(dev_agent_id) is None:
+                continue
+            dev_jobs.append(
+                {
+                    "store": _store,
+                    "mailbox": _mailbox,
+                    "child_llm_call": child_llm_call,
+                    "child_tool_executor": child_tool_executor,
+                    "child_max_rounds": child_max_rounds,
+                    "emit": emit,
+                    "pipeline_id": pipeline_id,
+                    "expert_id": str(agent_id),
+                    "expert_type": expert_type,
+                    "task_board_engine": task_board_engine,
+                    "board_id": expert.board_id,
+                    "session_id": dev_agent_id,
+                    "task_id": task_id,
+                    "fallback_tool_subset": list(assignment.get("tool_subset", [])),
+                    "fallback_prompt_blocks": list(assignment.get("prompt_blocks", [])),
+                    "fallback_task_description": str(scope or ""),
+                    "start_event_type": "dev_loop_start",
+                    "loop_event_type": "dev_loop_event",
+                    "end_event_type": "dev_loop_end",
+                    "board_log_context": "dev loop",
+                    "extra_event_fields": {},
+                }
+            )
+        supervision_result = await _run_dev_jobs_with_heartbeat_supervision(
+            jobs=dev_jobs,
+            expert=expert,
+            tasks=tasks,
+            assignment=assignment,
+            scope=str(scope or ""),
+            store=_store,
+            mailbox=_mailbox,
+            child_llm_call=child_llm_call,
+            child_tool_executor=child_tool_executor,
+            child_max_rounds=child_max_rounds,
+            task_board_engine=task_board_engine,
+            emit=emit,
+            pipeline_id=pipeline_id,
+            expert_id=str(agent_id),
+            expert_type=expert_type,
+            board_id=expert.board_id,
+            scheduler_metrics=dev_scheduler_metrics,
+        )
+        if isinstance(supervision_result.get("heartbeat_summary"), dict):
+            heartbeat_summary = dict(supervision_result.get("heartbeat_summary") or {})
+        expert_blocked_reason = str(supervision_result.get("expert_blocked_reason") or expert_blocked_reason or "")
+
+    expert_progress = expert.check_progress()
+    expert_completed = bool(expert_progress.get("all_devs_done"))
+    if not tasks:
+        expert_completed = True
+
+    if expert_completed and not expert_blocked_reason:
+        review_payload: Optional[Dict[str, Any]] = None
+        final_review_payload: Optional[Dict[str, Any]] = None
+        review_agent_id = ""
+        if task_board_engine is not None and expert.board_id:
+            review_expected_count += 1
+            original_task_text = str(decomposition.get("original_goal") or message)
+            review_cycle_limit = _MAX_REVIEW_REMEDIATION_CYCLES if child_execution_enabled else 1
+            reject_respawn_budget = _MAX_REVIEW_REJECT_RESPAWNS if child_execution_enabled else 0
+            reject_respawn_count = 0
+            for review_cycle in range(1, review_cycle_limit + 1):
+                review_payload = None
+                review_agent_id = ""
+                dev_artifacts = _collect_expert_dev_artifacts(_store, str(agent_id))
+                changed_files = sorted(
+                    {
+                        path
+                        for artifact in dev_artifacts
+                        for path in list(artifact.get("changed_files") or [])
+                        if str(path).strip()
+                    }
+                )
+                aggregate_test_results = _build_aggregate_test_results(dev_artifacts)
+                spawned_review = expert.spawn_review(
+                    original_task=original_task_text,
+                    changed_files=changed_files,
+                    verification_reports=dev_artifacts,
+                    cycle=review_cycle,
+                )
+                review_agent_id = str(spawned_review.get("agent_id") or "").strip()
+                await emit({
+                    "type": "review_spawned",
+                    "pipeline_id": pipeline_id,
+                    "expert_id": str(agent_id),
+                    "expert_type": expert_type,
+                    "board_id": expert.board_id,
+                    "review_agent_id": review_agent_id,
+                    "review_cycle": review_cycle,
+                })
+
+                if child_execution_enabled and child_llm_call is not None and child_tool_executor is not None and review_agent_id:
+                    review_session = _store.get(review_agent_id)
+                    review_tool_subset = list(review_session.tool_subset or []) if review_session is not None else []
+                    review_prompt_blocks = list(review_session.prompt_blocks or []) if review_session is not None else []
+                    review_memory_hints = []
+                    if review_session is not None:
+                        raw_hints = review_session.metadata.get("memory_hints")
+                        if isinstance(raw_hints, list):
+                            review_memory_hints = [str(item).strip() for item in raw_hints if str(item).strip()]
+                    review_runtime = ReviewAgent(
+                        config=ReviewAgentConfig(
+                            prompt_blocks=review_prompt_blocks,
+                            memory_hints=review_memory_hints,
+                            prompts_root="system/prompts",
+                        ),
+                        task_board_engine=task_board_engine,
+                    )
+                    review_runtime_tool_defs = _build_runtime_tool_definitions(review_tool_subset)
+                    review_allowed_tools = {str(item).strip() for item in review_tool_subset if str(item).strip()}
+                    review_initial_task = "Review the completed work and produce a structured review_result."
+                    if review_session is not None and str(review_session.task_description or "").strip():
+                        review_initial_task = str(review_session.task_description or "").strip()
+                    review_loop_config = MiniLoopConfig(
+                        max_rounds=max(1, min(int(child_max_rounds), 6)),
+                        poll_parent_every_n=3,
+                    )
+
+                    async def _execute_review_tool(tool_name, arguments, _review_session_id=review_agent_id):
+                        normalized_tool = str(tool_name or "").strip()
+                        if normalized_tool not in review_allowed_tools:
+                            return {
+                                "error": f"tool_not_allowed:{normalized_tool}",
+                                "status": "blocked",
+                                "tool_name": normalized_tool,
+                            }
+                        safe_arguments = arguments if isinstance(arguments, dict) else {}
+                        if is_memory_tool(normalized_tool):
+                            return handle_memory_tool(normalized_tool, safe_arguments)
+                        prepared_arguments = _prepare_child_tool_arguments(store=_store, child_session_id=_review_session_id, tool_name=normalized_tool, arguments=safe_arguments)
+                        return await child_tool_executor(normalized_tool, prepared_arguments, _review_session_id)
+
+                    await emit({
+                        "type": "review_loop_start",
+                        "pipeline_id": pipeline_id,
+                        "expert_id": str(agent_id),
+                        "expert_type": expert_type,
+                        "board_id": expert.board_id,
+                        "review_agent_id": review_agent_id,
+                        "tool_subset": review_tool_subset,
+                        "review_cycle": review_cycle,
+                    })
+                    async for mini_event in run_mini_loop(
+                        session_id=review_agent_id,
+                        store=_store,
+                        mailbox=_mailbox,
+                        llm_call=child_llm_call,
+                        tool_executor=_execute_review_tool,
+                        tool_definitions=review_runtime_tool_defs,
+                        system_prompt=review_runtime.build_system_prompt(),
+                        initial_task=review_initial_task,
+                        config=review_loop_config,
+                    ):
+                        await emit({
+                            "type": "review_loop_event",
+                            "pipeline_id": pipeline_id,
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "task_board_engine": task_board_engine,
+                            "board_id": expert.board_id,
+                            "review_agent_id": review_agent_id,
+                            "review_cycle": review_cycle,
+                            "event": mini_event,
+                        })
+
+                    final_review_session = _store.get(review_agent_id)
+                    final_review_status = str(final_review_session.status.value) if final_review_session is not None else "missing"
+                    review_completion_report = ""
+                    if final_review_session is not None:
+                        review_completion_report = str(final_review_session.metadata.get("completion_report") or "").strip()
+                        raw_review_payload = final_review_session.metadata.get("review_result")
+                        if isinstance(raw_review_payload, dict):
+                            review_payload = dict(raw_review_payload)
+                    if not isinstance(review_payload, dict):
+                        review_payload = {
+                            "verdict": "reject",
+                            "requirement_alignment": [],
+                            "code_quality": {"status": "failed", "summary": "Review agent did not emit a valid review_result."},
+                            "regression_risk": {"level": "high", "summary": "No valid review_result was produced."},
+                            "test_coverage": {"status": "unknown", "summary": "No valid review_result was produced.", "missing_cases": []},
+                            "issues": ["Review agent completed without a valid review_result payload."],
+                            "suggestions": ["Rerun the independent review with a valid structured completion payload."],
+                            "summary": review_completion_report or "Review agent failed to produce a valid structured review result.",
+                        }
+                    await emit({
+                        "type": "review_loop_end",
+                        "pipeline_id": pipeline_id,
+                        "expert_id": str(agent_id),
+                        "expert_type": expert_type,
+                        "board_id": expert.board_id,
+                        "review_agent_id": review_agent_id,
+                        "review_cycle": review_cycle,
+                        "status": final_review_status,
+                        "completion_report": review_completion_report,
+                        "result": review_payload,
+                    })
+                else:
+                    review_runtime = ReviewAgent(task_board_engine=task_board_engine)
+                    review_result = review_runtime.run_full_review(
+                        board_id=expert.board_id,
+                        actual_changed_files=changed_files,
+                        test_results=aggregate_test_results,
+                    )
+                    review_payload = review_result.to_dict()
+                    if review_agent_id:
+                        summary_text = str(review_payload.get("summary") or "").strip()
+                        if not summary_text:
+                            summary_text = _trim_text(json.dumps(review_payload, ensure_ascii=False), limit=600)
+                        _mailbox.send(
+                            review_agent_id,
+                            str(agent_id),
+                            summary_text,
+                            message_type="report",
+                        )
+                        try:
+                            _store.update_status(review_agent_id, AgentStatus.WAITING)
+                        except Exception:
+                            logger.debug("Failed to set review status waiting: %s", review_agent_id, exc_info=True)
+
+                if isinstance(review_payload, dict):
+                    review_payload.update(
+                        {
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "board_id": expert.board_id,
+                            "review_agent_id": review_agent_id,
+                            "review_cycle": review_cycle,
+                        }
+                    )
+                    await emit({
+                        "type": "review_result",
+                        "pipeline_id": pipeline_id,
+                        "expert_id": str(agent_id),
+                        "expert_type": expert_type,
+                        "board_id": expert.board_id,
+                        "review_agent_id": review_agent_id,
+                        "review_cycle": review_cycle,
+                        "result": review_payload,
+                    })
+
+                verdict = str((review_payload or {}).get("verdict") or "").strip().lower()
+                if verdict == "approve":
+                    final_review_payload = dict(review_payload or {})
+                    break
+
+                if verdict == "reject":
+                    recoverable_reject = _is_review_reject_recoverable(review_payload or {})
+                    can_respawn = bool(recoverable_reject and reject_respawn_count < reject_respawn_budget and child_execution_enabled)
+                    if not can_respawn:
+                        expert_blocked_reason = "review_rejected_unrecoverable" if not recoverable_reject else "review_rejected_respawn_exhausted"
+                        final_review_payload = dict(review_payload or {})
+                        await emit({
+                            "type": "expert_blocked",
+                            "pipeline_id": pipeline_id,
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "board_id": expert.board_id,
+                            "reason": expert_blocked_reason,
+                            "review_cycle": review_cycle,
+                            "review_agent_id": review_agent_id,
+                            "result": final_review_payload,
+                        })
+                        break
+
+                    respawn_task_ids = _select_reject_respawn_task_ids(tasks, changed_files)
+                    if not respawn_task_ids:
+                        expert_blocked_reason = "review_rejected_no_respawn_tasks"
+                        final_review_payload = dict(review_payload or {})
+                        await emit({
+                            "type": "expert_blocked",
+                            "pipeline_id": pipeline_id,
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "board_id": expert.board_id,
+                            "reason": expert_blocked_reason,
+                            "review_cycle": review_cycle,
+                            "review_agent_id": review_agent_id,
+                            "result": final_review_payload,
+                        })
+                        break
+
+                    reject_respawn_count += 1
+                    respawn_instruction = _build_review_reject_respawn_instruction(
+                        original_task=original_task_text,
+                        review_payload=review_payload or {},
+                        review_cycle=review_cycle,
+                    )
+                    respawned_devs = expert.spawn_retry_devs(
+                        tasks,
+                        task_ids=respawn_task_ids,
+                        review_feedback=respawn_instruction,
+                        prompt_blocks=assignment.get("prompt_blocks", []),
+                    )
+                    if not respawned_devs:
+                        expert_blocked_reason = "review_rejected_respawn_failed"
+                        final_review_payload = dict(review_payload or {})
+                        await emit({
+                            "type": "expert_blocked",
+                            "pipeline_id": pipeline_id,
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "board_id": expert.board_id,
+                            "reason": expert_blocked_reason,
+                            "review_cycle": review_cycle,
+                            "review_agent_id": review_agent_id,
+                            "result": final_review_payload,
+                        })
+                        break
+
+                    for spawned_dev in respawned_devs:
+                        spawned_dev_id = str(spawned_dev.get("agent_id") or "").strip()
+                        spawned_task_id = str(spawned_dev.get("task_id") or "").strip()
+                        if spawned_dev_id:
+                            dev_task_map[spawned_dev_id] = spawned_task_id
+                    await emit({
+                        "type": "review_reject_respawn",
+                        "pipeline_id": pipeline_id,
+                        "expert_id": str(agent_id),
+                        "expert_type": expert_type,
+                        "board_id": expert.board_id,
+                        "review_cycle": review_cycle,
+                        "review_agent_id": review_agent_id,
+                        "task_ids": list(respawn_task_ids),
+                        "respawn_dev_count": len(respawned_devs),
+                        "reject_respawn_count": reject_respawn_count,
+                    })
+
+                    reject_respawn_failed = False
+                    reject_respawn_jobs: List[Dict[str, Any]] = []
+                    for spawned_dev in respawned_devs:
+                        spawned_dev_id = str(spawned_dev.get("agent_id") or "").strip()
+                        spawned_task_id = str(spawned_dev.get("task_id") or "").strip()
+                        if not spawned_dev_id:
+                            reject_respawn_failed = True
+                            continue
+                        if _store.get(spawned_dev_id) is None:
+                            reject_respawn_failed = True
+                            continue
+                        reject_respawn_jobs.append(
+                            {
+                                "store": _store,
+                                "mailbox": _mailbox,
+                                "child_llm_call": child_llm_call,
+                                "child_tool_executor": child_tool_executor,
+                                "child_max_rounds": child_max_rounds,
+                                "emit": emit,
+                                "pipeline_id": pipeline_id,
+                                "expert_id": str(agent_id),
+                                "expert_type": expert_type,
+                                "task_board_engine": task_board_engine,
+                                "board_id": expert.board_id,
+                                "session_id": spawned_dev_id,
+                                "task_id": spawned_task_id,
+                                "fallback_tool_subset": list(assignment.get("tool_subset", [])),
+                                "fallback_prompt_blocks": list(assignment.get("prompt_blocks", [])),
+                                "fallback_task_description": str(scope or ""),
+                                "start_event_type": "dev_loop_start",
+                                "loop_event_type": "dev_loop_event",
+                                "end_event_type": "dev_loop_end",
+                                "board_log_context": "reject respawn dev loop",
+                                "extra_event_fields": {
+                                    "review_cycle": review_cycle,
+                                    "recovery_mode": "reject_respawn",
+                                },
+                            }
+                        )
+
+                    reject_respawn_results = await _run_dev_batch(jobs=reject_respawn_jobs, scheduler_metrics=dev_scheduler_metrics)
+                    reject_respawn_failed = reject_respawn_failed or any(
+                        str(item.get("status") or "") != AgentStatus.WAITING.value for item in reject_respawn_results
+                    )
+
+                    refreshed_progress = expert.check_progress()
+                    if reject_respawn_failed or not bool(refreshed_progress.get("all_devs_done")):
+                        expert_blocked_reason = "review_rejected_respawn_incomplete"
+                        final_review_payload = dict(review_payload or {})
+                        await emit({
+                            "type": "expert_blocked",
+                            "pipeline_id": pipeline_id,
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "board_id": expert.board_id,
+                            "reason": expert_blocked_reason,
+                            "review_cycle": review_cycle,
+                            "review_agent_id": review_agent_id,
+                            "result": final_review_payload,
+                        })
+                        break
+                    continue
+
+                if verdict != "request_changes":
+                    final_review_payload = dict(review_payload or {})
+                    break
+
+                if review_cycle >= review_cycle_limit:
+                    if isinstance(review_payload, dict):
+                        issues = list(review_payload.get("issues") or [])
+                        issues.append("Review requested changes but the remediation cycle limit was reached.")
+                        review_payload["issues"] = issues
+                        summary_text = str(review_payload.get("summary") or "").strip()
+                        review_payload["summary"] = (
+                            f"{summary_text} | remediation limit reached" if summary_text else "Review requested changes but the remediation cycle limit was reached."
+                        )
+                    final_review_payload = dict(review_payload or {})
+                    break
+
+                resumable_devs = [
+                    child
+                    for child in _store.list_children(str(agent_id))
+                    if str(child.role or "").strip().lower() == "dev" and child.status == AgentStatus.WAITING
+                ]
+                if not resumable_devs:
+                    if isinstance(review_payload, dict):
+                        issues = list(review_payload.get("issues") or [])
+                        issues.append("Review requested changes but no waiting dev agents were available for remediation.")
+                        review_payload["issues"] = issues
+                    final_review_payload = dict(review_payload or {})
+                    break
+
+                review_instruction = _build_review_rework_instruction(
+                    original_task=original_task_text,
+                    review_payload=review_payload or {},
+                    review_cycle=review_cycle,
+                )
+                await emit({
+                    "type": "review_rework_requested",
+                    "pipeline_id": pipeline_id,
+                    "expert_id": str(agent_id),
+                    "expert_type": expert_type,
+                    "board_id": expert.board_id,
+                    "review_agent_id": review_agent_id,
+                    "review_cycle": review_cycle,
+                    "dev_count": len(resumable_devs),
+                    "issues": list((review_payload or {}).get("issues") or []),
+                })
+
+                remediation_failed = False
+                resumed_jobs: List[Dict[str, Any]] = []
+                for resumed_dev in resumable_devs:
+                    resumed_dev_id = str(resumed_dev.session_id or "").strip()
+                    resumed_task_id = str(dev_task_map.get(resumed_dev_id) or "").strip()
+                    if not resumed_dev_id:
+                        remediation_failed = True
+                        continue
+                    resume_result = handle_parent_tool_call(
+                        "resume_child_agent",
+                        {"agent_id": resumed_dev_id, "instruction": review_instruction},
+                        parent_session_id=str(agent_id),
+                        store=_store,
+                        mailbox=_mailbox,
+                    )
+                    if resume_result.get("error"):
+                        remediation_failed = True
+                        await emit({
+                            "type": "dev_review_resume_end",
+                            "pipeline_id": pipeline_id,
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "agent_id": resumed_dev_id,
+                            "task_id": resumed_task_id,
+                            "review_cycle": review_cycle,
+                            "status": "resume_failed",
+                            "error": str(resume_result.get("error") or ""),
+                        })
+                        continue
+
+                    _inject_system_instruction(_store, resumed_dev_id, review_instruction)
+                    resumed_dev_session = _store.get(resumed_dev_id)
+                    if resumed_dev_session is None or resumed_dev_session.status != AgentStatus.RUNNING:
+                        remediation_failed = True
+                        await emit({
+                            "type": "dev_review_resume_end",
+                            "pipeline_id": pipeline_id,
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "agent_id": resumed_dev_id,
+                            "task_id": resumed_task_id,
+                            "review_cycle": review_cycle,
+                            "status": "not_running",
+                        })
+                        continue
+
+                    resumed_jobs.append(
+                        {
+                            "store": _store,
+                            "mailbox": _mailbox,
+                            "child_llm_call": child_llm_call,
+                            "child_tool_executor": child_tool_executor,
+                            "child_max_rounds": child_max_rounds,
+                            "emit": emit,
+                            "pipeline_id": pipeline_id,
+                            "expert_id": str(agent_id),
+                            "expert_type": expert_type,
+                            "task_board_engine": task_board_engine,
+                            "board_id": expert.board_id,
+                            "session_id": resumed_dev_id,
+                            "task_id": resumed_task_id,
+                            "fallback_tool_subset": list(assignment.get("tool_subset", [])),
+                            "fallback_prompt_blocks": list(assignment.get("prompt_blocks", [])),
+                            "fallback_task_description": str(scope or ""),
+                            "start_event_type": "dev_review_resume_start",
+                            "loop_event_type": "dev_review_resume_event",
+                            "end_event_type": "dev_review_resume_end",
+                            "board_log_context": "dev review resume loop",
+                            "extra_event_fields": {"review_cycle": review_cycle},
+                        }
+                    )
+
+                resumed_results = await _run_dev_batch(jobs=resumed_jobs, scheduler_metrics=dev_scheduler_metrics)
+                remediation_failed = remediation_failed or any(
+                    str(item.get("status") or "") != AgentStatus.WAITING.value for item in resumed_results
+                )
+
+                refreshed_progress = expert.check_progress()
+                if remediation_failed or not bool(refreshed_progress.get("all_devs_done")):
+                    if isinstance(review_payload, dict):
+                        issues = list(review_payload.get("issues") or [])
+                        issues.append("One or more dev agents did not complete the requested review remediation.")
+                        review_payload["issues"] = issues
+                    final_review_payload = dict(review_payload or {})
+                    break
+
+            if final_review_payload is None and isinstance(review_payload, dict):
+                final_review_payload = dict(review_payload)
+            if isinstance(final_review_payload, dict):
+                review_results_local.append(final_review_payload)
+
+        report_text = expert.aggregate_results()
+        if final_review_payload is not None:
+            review_summary = str(final_review_payload.get("summary") or "").strip()
+            if review_summary:
+                report_text = f"{report_text}\n\n### Review Summary\n{review_summary}"
+        final_verdict = str((final_review_payload or {}).get("verdict") or "").strip().lower()
+        if final_verdict == "reject":
+            blocked_reason_text = expert_blocked_reason or "review_rejected"
+            report_text = f"[BLOCKED] {blocked_reason_text}\n\n{report_text}"
+            try:
+                _store.update_metadata(str(agent_id), {"blocked_reason": blocked_reason_text, "final_review_verdict": final_verdict, "heartbeat_summary": heartbeat_summary})
+            except Exception:
+                logger.debug("Failed to persist blocked metadata for expert: %s", agent_id, exc_info=True)
+        else:
+            try:
+                _store.update_metadata(str(agent_id), {"heartbeat_summary": heartbeat_summary})
+            except Exception:
+                logger.debug("Failed to persist heartbeat summary for expert: %s", agent_id, exc_info=True)
+        _mailbox.send(
+            str(agent_id),
+            resolved_core_execution_session_id,
+            report_text,
+            message_type="report",
+        )
+        try:
+            _store.update_status(str(agent_id), AgentStatus.WAITING)
+        except Exception:
+            logger.debug("Failed to set expert status waiting: %s", agent_id, exc_info=True)
+
+    elif expert_blocked_reason:
+        report_text = f"[BLOCKED] {expert_blocked_reason}\n\n{expert.aggregate_results()}"
+        try:
+            _store.update_metadata(str(agent_id), {"blocked_reason": expert_blocked_reason, "heartbeat_summary": heartbeat_summary})
+        except Exception:
+            logger.debug("Failed to persist heartbeat-blocked metadata for expert: %s", agent_id, exc_info=True)
+        _mailbox.send(
+            str(agent_id),
+            resolved_core_execution_session_id,
+            report_text,
+            message_type="report",
+        )
+        try:
+            _store.update_status(str(agent_id), AgentStatus.WAITING)
+        except Exception:
+            logger.debug("Failed to set heartbeat-blocked expert waiting: %s", agent_id, exc_info=True)
+
+    await emit({
+        "type": "expert_progress",
+        "pipeline_id": pipeline_id,
+        "expert_type": expert_type,
+        "agent_id": agent_id,
+        "board_id": expert.board_id,
+        "all_devs_done": bool(expert_completed),
+        "child_execution_enabled": bool(child_execution_enabled),
+        "expert_blocked_reason": str(expert_blocked_reason or ""),
+        "heartbeat_summary": heartbeat_summary,
+    })
+
+    return {
+        "expert": expert,
+        "review_results": review_results_local,
+        "review_expected_count": int(review_expected_count),
+        "heartbeat_summary": heartbeat_summary,
+        "expert_blocked_reason": str(expert_blocked_reason or ""),
     }
 
 
@@ -1212,875 +2567,125 @@ async def run_multi_agent_pipeline(
     expert_instances: List[ExpertAgent] = []
     review_results: List[Dict[str, Any]] = []
     review_expected_count = 0
+    expert_heartbeat_summaries: List[Dict[str, Any]] = []
+    expert_scheduler_metrics = _new_scheduler_metrics("expert")
+    dev_scheduler_metrics = _new_scheduler_metrics("dev")
     child_execution_enabled = bool(
         enable_child_execution and child_llm_call is not None and child_tool_executor is not None
     )
-    for er in expert_results:
-        agent_id = er.get("agent_id", "")
-        expert_type = er.get("expert_type", "backend")
-        assignment = next(
-            (a for a in decomposition.get("expert_assignments", []) if a["expert_type"] == expert_type),
-            {},
-        )
-        expert = ExpertAgent(
-            config=ExpertAgentConfig(
-                expert_type=expert_type,
-                prompt_blocks=assignment.get("prompt_blocks", []),
-                tool_subset=assignment.get("tool_subset", []),
-                model_tier=assignment.get("model_tier", "primary"),
-                prompt_profile=assignment.get("prompt_profile", ""),
+    if expert_results:
+        expert_queue: asyncio.Queue = asyncio.Queue()
+        expert_run_results: Dict[int, Dict[str, Any]] = {}
+        expert_run_errors: List[BaseException] = []
+        expert_parallel_limit = max(
+            1,
+            min(
+                len(expert_results),
+                int(getattr(core, "max_experts", len(expert_results)) or len(expert_results)),
             ),
-            session_id=agent_id,
-            store=_store,
-            mailbox=_mailbox,
-            task_board_engine=task_board_engine,
         )
-        scope = er.get("scope", assignment.get("scope", ""))
-        tasks = expert.plan_tasks(scope)
-        devs: List[Dict[str, Any]] = []
-        dev_task_map: Dict[str, str] = {}
-        if tasks:
-            devs = expert.spawn_devs(tasks)
-            dev_task_map = {
-                str(item.get("agent_id") or "").strip(): str(item.get("task_id") or "").strip()
-                for item in devs
-                if str(item.get("agent_id") or "").strip()
-            }
-            yield {
-                "type": "expert_progress",
-                "pipeline_id": pipeline_id,
-                "expert_type": expert_type,
-                "agent_id": agent_id,
-                "board_id": expert.board_id,
-                "tasks_planned": len(tasks),
-                "devs_spawned": len(devs),
-            }
+        expert_scheduler_metrics["parallel_limit"] = int(expert_parallel_limit)
+        expert_semaphore = asyncio.Semaphore(expert_parallel_limit)
+        active_expert_runs = 0
 
-        # Run real child mini-loops when runtime callbacks are injected by caller.
-        if child_execution_enabled and devs and child_llm_call is not None and child_tool_executor is not None:
-            for dev in devs:
-                dev_agent_id = str(dev.get("agent_id") or "").strip()
-                task_id = str(dev.get("task_id") or "").strip()
-                if not dev_agent_id:
-                    continue
-                dev_session = _store.get(dev_agent_id)
-                if dev_session is None:
-                    continue
+        async def _emit_expert_event(event: Dict[str, Any]) -> None:
+            await expert_queue.put({"kind": "event", "event": dict(event)})
 
-                dev_tool_subset = list(dev_session.tool_subset or assignment.get("tool_subset", []))
-                dev_prompt_blocks = list(dev_session.prompt_blocks or assignment.get("prompt_blocks", []))
-                dev_agent = DevAgent(
-                    config=DevAgentConfig(
-                        prompt_blocks=dev_prompt_blocks,
-                        tool_subset=dev_tool_subset,
-                        prompts_root="system/prompts",
-                    ),
-                    session_id=dev_agent_id,
-                    store=_store,
-                    mailbox=_mailbox,
-                )
-                runtime_tool_defs = _build_runtime_tool_definitions(dev_tool_subset)
-                dev_initial_task = str(dev_session.task_description or scope or "").strip()
-                max_rounds = max(1, int(child_max_rounds))
-                loop_config = MiniLoopConfig(max_rounds=max_rounds, poll_parent_every_n=3)
-
-                async def _execute_dev_tool(
-                    tool_name: str,
-                    arguments: Dict[str, Any],
-                    *,
-                    _allowed_tools: List[str] = dev_tool_subset,
-                    _dev_session_id: str = dev_agent_id,
-                ) -> Dict[str, Any]:
-                    normalized_tool = str(tool_name or "").strip()
-                    if _allowed_tools and normalized_tool not in _allowed_tools:
-                        return {
-                            "error": f"tool_not_allowed:{normalized_tool}",
-                            "status": "blocked",
-                            "tool_name": normalized_tool,
-                        }
-                    safe_arguments = arguments if isinstance(arguments, dict) else {}
-                    if is_memory_tool(normalized_tool):
-                        return handle_memory_tool(normalized_tool, safe_arguments)
-                    prepared_arguments = _prepare_child_tool_arguments(store=_store, child_session_id=_dev_session_id, tool_name=normalized_tool, arguments=safe_arguments)
-                    return await child_tool_executor(normalized_tool, prepared_arguments, _dev_session_id)
-
-                yield {
-                    "type": "dev_loop_start",
-                    "pipeline_id": pipeline_id,
-                    "expert_id": agent_id,
-                    "expert_type": expert_type,
-                    "agent_id": dev_agent_id,
-                    "task_id": task_id,
-                    "tool_subset": dev_tool_subset,
-                }
-
-                async for mini_event in run_mini_loop(
-                    session_id=dev_agent_id,
-                    store=_store,
-                    mailbox=_mailbox,
-                    llm_call=child_llm_call,
-                    tool_executor=_execute_dev_tool,
-                    tool_definitions=runtime_tool_defs,
-                    system_prompt=dev_agent.build_system_prompt(),
-                    initial_task=dev_initial_task,
-                    config=loop_config,
-                ):
-                    yield {
-                        "type": "dev_loop_event",
-                        "pipeline_id": pipeline_id,
-                        "expert_id": agent_id,
-                        "expert_type": expert_type,
-                        "agent_id": dev_agent_id,
-                        "task_id": task_id,
-                        "event": mini_event,
-                    }
-
-                final_session = _store.get(dev_agent_id)
-                final_status = str(final_session.status.value) if final_session is not None else "missing"
-                completion_report = ""
-                verification_report: Dict[str, Any] = {}
-                changed_files: List[str] = []
-                if final_session is not None:
-                    completion_report = str(final_session.metadata.get("completion_report") or "").strip()
-                    raw_verification_report = final_session.metadata.get("verification_report")
-                    if isinstance(raw_verification_report, dict):
-                        verification_report = dict(raw_verification_report)
-                    changed_files = _normalize_changed_files(
-                        verification_report.get("changed_files") if verification_report else final_session.metadata.get("changed_files")
-                    )
-
-                if task_board_engine is not None and expert.board_id and task_id:
-                    try:
-                        if final_status == AgentStatus.WAITING.value:
-                            task_board_engine.update_task(
-                                expert.board_id,
-                                task_id,
-                                status=TaskStatus.DONE,
-                                summary=completion_report or "child loop completed",
-                                files_changed=changed_files if changed_files else None,
-                            )
-                        elif final_status == AgentStatus.RUNNING.value:
-                            task_board_engine.update_task(
-                                expert.board_id,
-                                task_id,
-                                status=TaskStatus.IN_PROGRESS,
-                            )
-                    except Exception:
-                        logger.debug(
-                            "Failed to update task board after dev loop (board=%s task=%s)",
-                            expert.board_id,
-                            task_id,
-                            exc_info=True,
-                        )
-
-                yield {
-                    "type": "dev_loop_end",
-                    "pipeline_id": pipeline_id,
-                    "expert_id": agent_id,
-                    "expert_type": expert_type,
-                    "agent_id": dev_agent_id,
-                    "task_id": task_id,
-                    "status": final_status,
-                    "completion_report": completion_report,
-                    "verification_report": verification_report,
-                    "changed_files": changed_files,
-                }
-
-        expert_progress = expert.check_progress()
-        expert_completed = bool(expert_progress.get("all_devs_done"))
-        if not tasks:
-            expert_completed = True
-
-        if expert_completed:
-            review_payload: Optional[Dict[str, Any]] = None
-            final_review_payload: Optional[Dict[str, Any]] = None
-            review_agent_id = ""
-            if task_board_engine is not None and expert.board_id:
-                review_expected_count += 1
-                original_task_text = str(decomposition.get("original_goal") or message)
-                review_cycle_limit = _MAX_REVIEW_REMEDIATION_CYCLES if child_execution_enabled else 1
-                reject_respawn_budget = _MAX_REVIEW_REJECT_RESPAWNS if child_execution_enabled else 0
-                reject_respawn_count = 0
-                expert_blocked_reason = ""
-                for review_cycle in range(1, review_cycle_limit + 1):
-                    review_payload = None
-                    review_agent_id = ""
-                    dev_artifacts = _collect_expert_dev_artifacts(_store, str(agent_id))
-                    changed_files = sorted(
-                        {
-                            path
-                            for artifact in dev_artifacts
-                            for path in list(artifact.get("changed_files") or [])
-                            if str(path).strip()
-                        }
-                    )
-                    aggregate_test_results = _build_aggregate_test_results(dev_artifacts)
-                    spawned_review = expert.spawn_review(
-                        original_task=original_task_text,
-                        changed_files=changed_files,
-                        verification_reports=dev_artifacts,
-                        cycle=review_cycle,
-                    )
-                    review_agent_id = str(spawned_review.get("agent_id") or "").strip()
-                    yield {
-                        "type": "review_spawned",
-                        "pipeline_id": pipeline_id,
-                        "expert_id": str(agent_id),
-                        "expert_type": expert_type,
-                        "board_id": expert.board_id,
-                        "review_agent_id": review_agent_id,
-                        "review_cycle": review_cycle,
-                    }
-
-                    if child_execution_enabled and child_llm_call is not None and child_tool_executor is not None and review_agent_id:
-                        review_session = _store.get(review_agent_id)
-                        review_tool_subset = list(review_session.tool_subset or []) if review_session is not None else []
-                        review_prompt_blocks = list(review_session.prompt_blocks or []) if review_session is not None else []
-                        review_memory_hints = []
-                        if review_session is not None:
-                            raw_hints = review_session.metadata.get("memory_hints")
-                            if isinstance(raw_hints, list):
-                                review_memory_hints = [str(item).strip() for item in raw_hints if str(item).strip()]
-                        review_runtime = ReviewAgent(
-                            config=ReviewAgentConfig(
-                                prompt_blocks=review_prompt_blocks,
-                                memory_hints=review_memory_hints,
-                                prompts_root="system/prompts",
-                            ),
-                            task_board_engine=task_board_engine,
-                        )
-                        review_runtime_tool_defs = _build_runtime_tool_definitions(review_tool_subset)
-                        review_allowed_tools = {str(item).strip() for item in review_tool_subset if str(item).strip()}
-                        review_initial_task = "Review the completed work and produce a structured review_result."
-                        if review_session is not None and str(review_session.task_description or "").strip():
-                            review_initial_task = str(review_session.task_description or "").strip()
-                        review_loop_config = MiniLoopConfig(
-                            max_rounds=max(1, min(int(child_max_rounds), 6)),
-                            poll_parent_every_n=3,
-                        )
-
-                        async def _execute_review_tool(tool_name, arguments, _review_session_id=review_agent_id):
-                            normalized_tool = str(tool_name or "").strip()
-                            if normalized_tool not in review_allowed_tools:
-                                return {
-                                    "error": f"tool_not_allowed:{normalized_tool}",
-                                    "status": "blocked",
-                                    "tool_name": normalized_tool,
-                                }
-                            safe_arguments = arguments if isinstance(arguments, dict) else {}
-                            if is_memory_tool(normalized_tool):
-                                return handle_memory_tool(normalized_tool, safe_arguments)
-                            prepared_arguments = _prepare_child_tool_arguments(store=_store, child_session_id=_review_session_id, tool_name=normalized_tool, arguments=safe_arguments)
-                            return await child_tool_executor(normalized_tool, prepared_arguments, _review_session_id)
-
-                        yield {
-                            "type": "review_loop_start",
-                            "pipeline_id": pipeline_id,
-                            "expert_id": str(agent_id),
-                            "expert_type": expert_type,
-                            "board_id": expert.board_id,
-                            "review_agent_id": review_agent_id,
-                            "tool_subset": review_tool_subset,
-                            "review_cycle": review_cycle,
-                        }
-                        async for mini_event in run_mini_loop(
-                            session_id=review_agent_id,
-                            store=_store,
-                            mailbox=_mailbox,
-                            llm_call=child_llm_call,
-                            tool_executor=_execute_review_tool,
-                            tool_definitions=review_runtime_tool_defs,
-                            system_prompt=review_runtime.build_system_prompt(),
-                            initial_task=review_initial_task,
-                            config=review_loop_config,
-                        ):
-                            yield {
-                                "type": "review_loop_event",
-                                "pipeline_id": pipeline_id,
-                                "expert_id": str(agent_id),
-                                "expert_type": expert_type,
-                                "board_id": expert.board_id,
-                                "review_agent_id": review_agent_id,
-                                "review_cycle": review_cycle,
-                                "event": mini_event,
-                            }
-
-                        final_review_session = _store.get(review_agent_id)
-                        final_review_status = str(final_review_session.status.value) if final_review_session is not None else "missing"
-                        review_completion_report = ""
-                        if final_review_session is not None:
-                            review_completion_report = str(final_review_session.metadata.get("completion_report") or "").strip()
-                            raw_review_payload = final_review_session.metadata.get("review_result")
-                            if isinstance(raw_review_payload, dict):
-                                review_payload = dict(raw_review_payload)
-                        if not isinstance(review_payload, dict):
-                            review_payload = {
-                                "verdict": "reject",
-                                "requirement_alignment": [],
-                                "code_quality": {"status": "failed", "summary": "Review agent did not emit a valid review_result."},
-                                "regression_risk": {"level": "high", "summary": "No valid review_result was produced."},
-                                "test_coverage": {"status": "unknown", "summary": "No valid review_result was produced.", "missing_cases": []},
-                                "issues": ["Review agent completed without a valid review_result payload."],
-                                "suggestions": ["Rerun the independent review with a valid structured completion payload."],
-                                "summary": review_completion_report or "Review agent failed to produce a valid structured review result.",
-                            }
-                        yield {
-                            "type": "review_loop_end",
-                            "pipeline_id": pipeline_id,
-                            "expert_id": str(agent_id),
-                            "expert_type": expert_type,
-                            "board_id": expert.board_id,
-                            "review_agent_id": review_agent_id,
-                            "review_cycle": review_cycle,
-                            "status": final_review_status,
-                            "completion_report": review_completion_report,
-                            "result": review_payload,
-                        }
-                    else:
-                        review_runtime = ReviewAgent(task_board_engine=task_board_engine)
-                        review_result = review_runtime.run_full_review(
-                            board_id=expert.board_id,
-                            actual_changed_files=changed_files,
-                            test_results=aggregate_test_results,
-                        )
-                        review_payload = review_result.to_dict()
-                        if review_agent_id:
-                            summary_text = str(review_payload.get("summary") or "").strip()
-                            if not summary_text:
-                                summary_text = _trim_text(json.dumps(review_payload, ensure_ascii=False), limit=600)
-                            _mailbox.send(
-                                review_agent_id,
-                                str(agent_id),
-                                summary_text,
-                                message_type="report",
-                            )
-                            try:
-                                _store.update_status(review_agent_id, AgentStatus.WAITING)
-                            except Exception:
-                                logger.debug("Failed to set review status waiting: %s", review_agent_id, exc_info=True)
-
-                    if isinstance(review_payload, dict):
-                        review_payload.update(
-                            {
-                                "expert_id": str(agent_id),
-                                "expert_type": expert_type,
-                                "board_id": expert.board_id,
-                                "review_agent_id": review_agent_id,
-                                "review_cycle": review_cycle,
-                            }
-                        )
-                        yield {
-                            "type": "review_result",
-                            "pipeline_id": pipeline_id,
-                            "expert_id": str(agent_id),
-                            "expert_type": expert_type,
-                            "board_id": expert.board_id,
-                            "review_agent_id": review_agent_id,
-                            "review_cycle": review_cycle,
-                            "result": review_payload,
-                        }
-
-                    verdict = str((review_payload or {}).get("verdict") or "").strip().lower()
-                    if verdict == "approve":
-                        final_review_payload = dict(review_payload or {})
-                        break
-
-                    if verdict == "reject":
-                        recoverable_reject = _is_review_reject_recoverable(review_payload or {})
-                        can_respawn = bool(recoverable_reject and reject_respawn_count < reject_respawn_budget and child_execution_enabled)
-                        if not can_respawn:
-                            expert_blocked_reason = "review_rejected_unrecoverable" if not recoverable_reject else "review_rejected_respawn_exhausted"
-                            final_review_payload = dict(review_payload or {})
-                            yield {
-                                "type": "expert_blocked",
-                                "pipeline_id": pipeline_id,
-                                "expert_id": str(agent_id),
-                                "expert_type": expert_type,
-                                "board_id": expert.board_id,
-                                "reason": expert_blocked_reason,
-                                "review_cycle": review_cycle,
-                                "review_agent_id": review_agent_id,
-                                "result": final_review_payload,
-                            }
-                            break
-
-                        respawn_task_ids = _select_reject_respawn_task_ids(tasks, changed_files)
-                        if not respawn_task_ids:
-                            expert_blocked_reason = "review_rejected_no_respawn_tasks"
-                            final_review_payload = dict(review_payload or {})
-                            yield {
-                                "type": "expert_blocked",
-                                "pipeline_id": pipeline_id,
-                                "expert_id": str(agent_id),
-                                "expert_type": expert_type,
-                                "board_id": expert.board_id,
-                                "reason": expert_blocked_reason,
-                                "review_cycle": review_cycle,
-                                "review_agent_id": review_agent_id,
-                                "result": final_review_payload,
-                            }
-                            break
-
-                        reject_respawn_count += 1
-                        respawn_instruction = _build_review_reject_respawn_instruction(
-                            original_task=original_task_text,
-                            review_payload=review_payload or {},
-                            review_cycle=review_cycle,
-                        )
-                        respawned_devs = expert.spawn_retry_devs(
-                            tasks,
-                            task_ids=respawn_task_ids,
-                            review_feedback=respawn_instruction,
-                            prompt_blocks=assignment.get("prompt_blocks", []),
-                        )
-                        if not respawned_devs:
-                            expert_blocked_reason = "review_rejected_respawn_failed"
-                            final_review_payload = dict(review_payload or {})
-                            yield {
-                                "type": "expert_blocked",
-                                "pipeline_id": pipeline_id,
-                                "expert_id": str(agent_id),
-                                "expert_type": expert_type,
-                                "board_id": expert.board_id,
-                                "reason": expert_blocked_reason,
-                                "review_cycle": review_cycle,
-                                "review_agent_id": review_agent_id,
-                                "result": final_review_payload,
-                            }
-                            break
-
-                        for spawned_dev in respawned_devs:
-                            spawned_dev_id = str(spawned_dev.get("agent_id") or "").strip()
-                            spawned_task_id = str(spawned_dev.get("task_id") or "").strip()
-                            if spawned_dev_id:
-                                dev_task_map[spawned_dev_id] = spawned_task_id
-                        yield {
-                            "type": "review_reject_respawn",
-                            "pipeline_id": pipeline_id,
-                            "expert_id": str(agent_id),
-                            "expert_type": expert_type,
-                            "board_id": expert.board_id,
-                            "review_cycle": review_cycle,
-                            "review_agent_id": review_agent_id,
-                            "task_ids": list(respawn_task_ids),
-                            "respawn_dev_count": len(respawned_devs),
-                            "reject_respawn_count": reject_respawn_count,
-                        }
-
-                        reject_respawn_failed = False
-                        for spawned_dev in respawned_devs:
-                            spawned_dev_id = str(spawned_dev.get("agent_id") or "").strip()
-                            spawned_task_id = str(spawned_dev.get("task_id") or "").strip()
-                            if not spawned_dev_id:
-                                reject_respawn_failed = True
-                                continue
-                            spawned_dev_session = _store.get(spawned_dev_id)
-                            if spawned_dev_session is None:
-                                reject_respawn_failed = True
-                                continue
-
-                            dev_tool_subset = list(spawned_dev_session.tool_subset or assignment.get("tool_subset", []))
-                            dev_prompt_blocks = list(spawned_dev_session.prompt_blocks or assignment.get("prompt_blocks", []))
-                            respawned_dev_agent = DevAgent(
-                                config=DevAgentConfig(
-                                    prompt_blocks=dev_prompt_blocks,
-                                    tool_subset=dev_tool_subset,
-                                    prompts_root="system/prompts",
-                                ),
-                                session_id=spawned_dev_id,
-                                store=_store,
-                                mailbox=_mailbox,
-                            )
-                            runtime_tool_defs = _build_runtime_tool_definitions(dev_tool_subset)
-                            dev_initial_task = str(spawned_dev_session.task_description or scope or "").strip()
-                            max_rounds = max(1, int(child_max_rounds))
-                            loop_config = MiniLoopConfig(max_rounds=max_rounds, poll_parent_every_n=3)
-
-                            async def _execute_reject_respawn_dev_tool(
-                                tool_name: str,
-                                arguments: Dict[str, Any],
-                                *,
-                                _allowed_tools: List[str] = dev_tool_subset,
-                                _dev_session_id: str = spawned_dev_id,
-                            ) -> Dict[str, Any]:
-                                normalized_tool = str(tool_name or "").strip()
-                                if _allowed_tools and normalized_tool not in _allowed_tools:
-                                    return {
-                                        "error": f"tool_not_allowed:{normalized_tool}",
-                                        "status": "blocked",
-                                        "tool_name": normalized_tool,
-                                    }
-                                safe_arguments = arguments if isinstance(arguments, dict) else {}
-                                if is_memory_tool(normalized_tool):
-                                    return handle_memory_tool(normalized_tool, safe_arguments)
-                                prepared_arguments = _prepare_child_tool_arguments(store=_store, child_session_id=_dev_session_id, tool_name=normalized_tool, arguments=safe_arguments)
-                                return await child_tool_executor(normalized_tool, prepared_arguments, _dev_session_id)
-
-                            yield {
-                                "type": "dev_loop_start",
-                                "pipeline_id": pipeline_id,
-                                "expert_id": str(agent_id),
-                                "expert_type": expert_type,
-                                "agent_id": spawned_dev_id,
-                                "task_id": spawned_task_id,
-                                "tool_subset": dev_tool_subset,
-                                "review_cycle": review_cycle,
-                                "recovery_mode": "reject_respawn",
-                            }
-                            async for mini_event in run_mini_loop(
-                                session_id=spawned_dev_id,
-                                store=_store,
-                                mailbox=_mailbox,
-                                llm_call=child_llm_call,
-                                tool_executor=_execute_reject_respawn_dev_tool,
-                                tool_definitions=runtime_tool_defs,
-                                system_prompt=respawned_dev_agent.build_system_prompt(),
-                                initial_task=dev_initial_task,
-                                config=loop_config,
-                            ):
-                                yield {
-                                    "type": "dev_loop_event",
-                                    "pipeline_id": pipeline_id,
-                                    "expert_id": str(agent_id),
-                                    "expert_type": expert_type,
-                                    "agent_id": spawned_dev_id,
-                                    "task_id": spawned_task_id,
-                                    "review_cycle": review_cycle,
-                                    "recovery_mode": "reject_respawn",
-                                    "event": mini_event,
-                                }
-
-                            final_session = _store.get(spawned_dev_id)
-                            final_status = str(final_session.status.value) if final_session is not None else "missing"
-                            completion_report = ""
-                            verification_report: Dict[str, Any] = {}
-                            respawn_changed_files: List[str] = []
-                            if final_session is not None:
-                                completion_report = str(final_session.metadata.get("completion_report") or "").strip()
-                                raw_verification_report = final_session.metadata.get("verification_report")
-                                if isinstance(raw_verification_report, dict):
-                                    verification_report = dict(raw_verification_report)
-                                respawn_changed_files = _normalize_changed_files(
-                                    verification_report.get("changed_files") if verification_report else final_session.metadata.get("changed_files")
-                                )
-                            if task_board_engine is not None and expert.board_id and spawned_task_id:
-                                try:
-                                    if final_status == AgentStatus.WAITING.value:
-                                        task_board_engine.update_task(
-                                            expert.board_id,
-                                            spawned_task_id,
-                                            status=TaskStatus.DONE,
-                                            summary=completion_report or "child loop completed",
-                                            files_changed=respawn_changed_files if respawn_changed_files else None,
-                                        )
-                                    elif final_status == AgentStatus.RUNNING.value:
-                                        task_board_engine.update_task(
-                                            expert.board_id,
-                                            spawned_task_id,
-                                            status=TaskStatus.IN_PROGRESS,
-                                        )
-                                except Exception:
-                                    logger.debug(
-                                        "Failed to update task board after reject respawn dev loop (board=%s task=%s)",
-                                        expert.board_id,
-                                        spawned_task_id,
-                                        exc_info=True,
-                                    )
-                            if final_status != AgentStatus.WAITING.value:
-                                reject_respawn_failed = True
-                            yield {
-                                "type": "dev_loop_end",
-                                "pipeline_id": pipeline_id,
-                                "expert_id": str(agent_id),
-                                "expert_type": expert_type,
-                                "agent_id": spawned_dev_id,
-                                "task_id": spawned_task_id,
-                                "status": final_status,
-                                "completion_report": completion_report,
-                                "verification_report": verification_report,
-                                "changed_files": respawn_changed_files,
-                                "review_cycle": review_cycle,
-                                "recovery_mode": "reject_respawn",
-                            }
-
-                        refreshed_progress = expert.check_progress()
-                        if reject_respawn_failed or not bool(refreshed_progress.get("all_devs_done")):
-                            expert_blocked_reason = "review_rejected_respawn_incomplete"
-                            final_review_payload = dict(review_payload or {})
-                            yield {
-                                "type": "expert_blocked",
-                                "pipeline_id": pipeline_id,
-                                "expert_id": str(agent_id),
-                                "expert_type": expert_type,
-                                "board_id": expert.board_id,
-                                "reason": expert_blocked_reason,
-                                "review_cycle": review_cycle,
-                                "review_agent_id": review_agent_id,
-                                "result": final_review_payload,
-                            }
-                            break
-                        continue
-
-                    if verdict != "request_changes":
-                        final_review_payload = dict(review_payload or {})
-                        break
-
-                    if review_cycle >= review_cycle_limit:
-                        if isinstance(review_payload, dict):
-                            issues = list(review_payload.get("issues") or [])
-                            issues.append("Review requested changes but the remediation cycle limit was reached.")
-                            review_payload["issues"] = issues
-                            summary_text = str(review_payload.get("summary") or "").strip()
-                            review_payload["summary"] = (
-                                f"{summary_text} | remediation limit reached" if summary_text else "Review requested changes but the remediation cycle limit was reached."
-                            )
-                        final_review_payload = dict(review_payload or {})
-                        break
-
-                    resumable_devs = [
-                        child
-                        for child in _store.list_children(str(agent_id))
-                        if str(child.role or "").strip().lower() == "dev" and child.status == AgentStatus.WAITING
-                    ]
-                    if not resumable_devs:
-                        if isinstance(review_payload, dict):
-                            issues = list(review_payload.get("issues") or [])
-                            issues.append("Review requested changes but no waiting dev agents were available for remediation.")
-                            review_payload["issues"] = issues
-                        final_review_payload = dict(review_payload or {})
-                        break
-
-                    review_instruction = _build_review_rework_instruction(
-                        original_task=original_task_text,
-                        review_payload=review_payload or {},
-                        review_cycle=review_cycle,
-                    )
-                    yield {
-                        "type": "review_rework_requested",
-                        "pipeline_id": pipeline_id,
-                        "expert_id": str(agent_id),
-                        "expert_type": expert_type,
-                        "board_id": expert.board_id,
-                        "review_agent_id": review_agent_id,
-                        "review_cycle": review_cycle,
-                        "dev_count": len(resumable_devs),
-                        "issues": list((review_payload or {}).get("issues") or []),
-                    }
-
-                    remediation_failed = False
-                    for resumed_dev in resumable_devs:
-                        resumed_dev_id = str(resumed_dev.session_id or "").strip()
-                        resumed_task_id = str(dev_task_map.get(resumed_dev_id) or "").strip()
-                        if not resumed_dev_id:
-                            remediation_failed = True
-                            continue
-                        resume_result = handle_parent_tool_call(
-                            "resume_child_agent",
-                            {"agent_id": resumed_dev_id, "instruction": review_instruction},
-                            parent_session_id=str(agent_id),
-                            store=_store,
-                            mailbox=_mailbox,
-                        )
-                        if resume_result.get("error"):
-                            remediation_failed = True
-                            yield {
-                                "type": "dev_review_resume_end",
-                                "pipeline_id": pipeline_id,
-                                "expert_id": str(agent_id),
-                                "expert_type": expert_type,
-                                "agent_id": resumed_dev_id,
-                                "task_id": resumed_task_id,
-                                "review_cycle": review_cycle,
-                                "status": "resume_failed",
-                                "error": str(resume_result.get("error") or ""),
-                            }
-                            continue
-
-                        _inject_system_instruction(_store, resumed_dev_id, review_instruction)
-                        resumed_dev_session = _store.get(resumed_dev_id)
-                        if resumed_dev_session is None or resumed_dev_session.status != AgentStatus.RUNNING:
-                            remediation_failed = True
-                            yield {
-                                "type": "dev_review_resume_end",
-                                "pipeline_id": pipeline_id,
-                                "expert_id": str(agent_id),
-                                "expert_type": expert_type,
-                                "agent_id": resumed_dev_id,
-                                "task_id": resumed_task_id,
-                                "review_cycle": review_cycle,
-                                "status": "not_running",
-                            }
-                            continue
-
-                        dev_tool_subset = list(resumed_dev_session.tool_subset or assignment.get("tool_subset", []))
-                        dev_prompt_blocks = list(resumed_dev_session.prompt_blocks or assignment.get("prompt_blocks", []))
-                        resumed_dev_agent = DevAgent(
-                            config=DevAgentConfig(
-                                prompt_blocks=dev_prompt_blocks,
-                                tool_subset=dev_tool_subset,
-                                prompts_root="system/prompts",
-                            ),
-                            session_id=resumed_dev_id,
-                            store=_store,
-                            mailbox=_mailbox,
-                        )
-                        runtime_tool_defs = _build_runtime_tool_definitions(dev_tool_subset)
-                        dev_initial_task = str(resumed_dev_session.task_description or scope or "").strip()
-                        max_rounds = max(1, int(child_max_rounds))
-                        loop_config = MiniLoopConfig(max_rounds=max_rounds, poll_parent_every_n=3)
-
-                        async def _execute_resumed_review_dev_tool(
-                            tool_name: str,
-                            arguments: Dict[str, Any],
-                            *,
-                            _allowed_tools: List[str] = dev_tool_subset,
-                            _dev_session_id: str = resumed_dev_id,
-                        ) -> Dict[str, Any]:
-                            normalized_tool = str(tool_name or "").strip()
-                            if _allowed_tools and normalized_tool not in _allowed_tools:
-                                return {
-                                    "error": f"tool_not_allowed:{normalized_tool}",
-                                    "status": "blocked",
-                                    "tool_name": normalized_tool,
-                                }
-                            safe_arguments = arguments if isinstance(arguments, dict) else {}
-                            if is_memory_tool(normalized_tool):
-                                return handle_memory_tool(normalized_tool, safe_arguments)
-                            prepared_arguments = _prepare_child_tool_arguments(store=_store, child_session_id=_dev_session_id, tool_name=normalized_tool, arguments=safe_arguments)
-                            return await child_tool_executor(normalized_tool, prepared_arguments, _dev_session_id)
-
-                        yield {
-                            "type": "dev_review_resume_start",
-                            "pipeline_id": pipeline_id,
-                            "expert_id": str(agent_id),
-                            "expert_type": expert_type,
-                            "agent_id": resumed_dev_id,
-                            "task_id": resumed_task_id,
-                            "review_cycle": review_cycle,
-                            "tool_subset": dev_tool_subset,
-                        }
-                        async for mini_event in run_mini_loop(
-                            session_id=resumed_dev_id,
-                            store=_store,
-                            mailbox=_mailbox,
-                            llm_call=child_llm_call,
-                            tool_executor=_execute_resumed_review_dev_tool,
-                            tool_definitions=runtime_tool_defs,
-                            system_prompt=resumed_dev_agent.build_system_prompt(),
-                            initial_task=dev_initial_task,
-                            config=loop_config,
-                        ):
-                            yield {
-                                "type": "dev_review_resume_event",
-                                "pipeline_id": pipeline_id,
-                                "expert_id": str(agent_id),
-                                "expert_type": expert_type,
-                                "agent_id": resumed_dev_id,
-                                "task_id": resumed_task_id,
-                                "review_cycle": review_cycle,
-                                "event": mini_event,
-                            }
-
-                        final_session = _store.get(resumed_dev_id)
-                        final_status = str(final_session.status.value) if final_session is not None else "missing"
-                        completion_report = ""
-                        verification_report: Dict[str, Any] = {}
-                        resumed_changed_files: List[str] = []
-                        if final_session is not None:
-                            completion_report = str(final_session.metadata.get("completion_report") or "").strip()
-                            raw_verification_report = final_session.metadata.get("verification_report")
-                            if isinstance(raw_verification_report, dict):
-                                verification_report = dict(raw_verification_report)
-                            resumed_changed_files = _normalize_changed_files(
-                                verification_report.get("changed_files") if verification_report else final_session.metadata.get("changed_files")
-                            )
-                        if task_board_engine is not None and expert.board_id and resumed_task_id:
-                            try:
-                                if final_status == AgentStatus.WAITING.value:
-                                    task_board_engine.update_task(
-                                        expert.board_id,
-                                        resumed_task_id,
-                                        status=TaskStatus.DONE,
-                                        summary=completion_report or "child loop completed",
-                                        files_changed=resumed_changed_files if resumed_changed_files else None,
-                                    )
-                                elif final_status == AgentStatus.RUNNING.value:
-                                    task_board_engine.update_task(
-                                        expert.board_id,
-                                        resumed_task_id,
-                                        status=TaskStatus.IN_PROGRESS,
-                                    )
-                            except Exception:
-                                logger.debug(
-                                    "Failed to update task board after dev review resume loop (board=%s task=%s)",
-                                    expert.board_id,
-                                    resumed_task_id,
-                                    exc_info=True,
-                                )
-                        if final_status != AgentStatus.WAITING.value:
-                            remediation_failed = True
-                        yield {
-                            "type": "dev_review_resume_end",
-                            "pipeline_id": pipeline_id,
-                            "expert_id": str(agent_id),
-                            "expert_type": expert_type,
-                            "agent_id": resumed_dev_id,
-                            "task_id": resumed_task_id,
-                            "review_cycle": review_cycle,
-                            "status": final_status,
-                            "completion_report": completion_report,
-                            "verification_report": verification_report,
-                            "changed_files": resumed_changed_files,
-                        }
-
-                    refreshed_progress = expert.check_progress()
-                    if remediation_failed or not bool(refreshed_progress.get("all_devs_done")):
-                        if isinstance(review_payload, dict):
-                            issues = list(review_payload.get("issues") or [])
-                            issues.append("One or more dev agents did not complete the requested review remediation.")
-                            review_payload["issues"] = issues
-                        final_review_payload = dict(review_payload or {})
-                        break
-
-                if final_review_payload is None and isinstance(review_payload, dict):
-                    final_review_payload = dict(review_payload)
-                if isinstance(final_review_payload, dict):
-                    review_results.append(final_review_payload)
-
-            report_text = expert.aggregate_results()
-            if final_review_payload is not None:
-                review_summary = str(final_review_payload.get("summary") or "").strip()
-                if review_summary:
-                    report_text = f"{report_text}\n\n### Review Summary\n{review_summary}"
-            final_verdict = str((final_review_payload or {}).get("verdict") or "").strip().lower()
-            if final_verdict == "reject":
-                blocked_reason_text = expert_blocked_reason or "review_rejected"
-                report_text = f"[BLOCKED] {blocked_reason_text}\n\n{report_text}"
-                try:
-                    _store.update_metadata(str(agent_id), {"blocked_reason": blocked_reason_text, "final_review_verdict": final_verdict})
-                except Exception:
-                    logger.debug("Failed to persist blocked metadata for expert: %s", agent_id, exc_info=True)
-            _mailbox.send(
-                str(agent_id),
-                resolved_core_execution_session_id,
-                report_text,
-                message_type="report",
-            )
+        async def _execute_expert(index: int, expert_result: Dict[str, Any]) -> None:
+            nonlocal active_expert_runs
             try:
-                _store.update_status(str(agent_id), AgentStatus.WAITING)
-            except Exception:
-                logger.debug("Failed to set expert status waiting: %s", agent_id, exc_info=True)
+                async with expert_semaphore:
+                    active_expert_runs += 1
+                    expert_scheduler_metrics["peak_parallelism"] = max(
+                        int(expert_scheduler_metrics.get("peak_parallelism") or 0),
+                        active_expert_runs,
+                    )
+                    try:
+                        result = await _run_single_expert_phase(
+                            er=expert_result,
+                            decomposition=decomposition,
+                            message=message,
+                            pipeline_id=pipeline_id,
+                            resolved_core_execution_session_id=resolved_core_execution_session_id,
+                            child_execution_enabled=child_execution_enabled,
+                            child_llm_call=child_llm_call,
+                            child_tool_executor=child_tool_executor,
+                            child_max_rounds=child_max_rounds,
+                            store=_store,
+                            mailbox=_mailbox,
+                            task_board_engine=task_board_engine,
+                            emit=_emit_expert_event,
+                            dev_scheduler_metrics=dev_scheduler_metrics,
+                        )
+                    finally:
+                        active_expert_runs = max(0, active_expert_runs - 1)
+                await expert_queue.put({"kind": "result", "index": index, "result": result})
+            except Exception as exc:
+                logger.exception(
+                    "Expert phase failed: expert_id=%s",
+                    str(expert_result.get("agent_id") or ""),
+                )
+                await expert_queue.put({"kind": "error", "index": index, "error": exc})
 
-        yield {
-            "type": "expert_progress",
-            "pipeline_id": pipeline_id,
-            "expert_type": expert_type,
-            "agent_id": agent_id,
-            "board_id": expert.board_id,
-            "all_devs_done": bool(expert_completed),
-            "child_execution_enabled": bool(child_execution_enabled),
-        }
-        expert_instances.append(expert)
+        expert_tasks = [
+            asyncio.create_task(_execute_expert(index, er))
+            for index, er in enumerate(expert_results)
+        ]
+        pending_expert_tasks = len(expert_tasks)
+        while pending_expert_tasks > 0:
+            queue_item = await expert_queue.get()
+            item_kind = str(queue_item.get("kind") or "")
+            if item_kind == "event":
+                event_payload = queue_item.get("event")
+                if isinstance(event_payload, dict):
+                    yield event_payload
+                continue
+            pending_expert_tasks -= 1
+            if item_kind == "result":
+                try:
+                    result_index = int(queue_item.get("index") or 0)
+                except Exception:
+                    result_index = 0
+                result_payload = queue_item.get("result")
+                if isinstance(result_payload, dict):
+                    expert_run_results[result_index] = result_payload
+            elif item_kind == "error":
+                error_obj = queue_item.get("error")
+                if isinstance(error_obj, BaseException):
+                    expert_run_errors.append(error_obj)
+                else:
+                    expert_run_errors.append(RuntimeError(str(error_obj)))
+
+        gather_results = await asyncio.gather(*expert_tasks, return_exceptions=True)
+        for gather_item in gather_results:
+            if isinstance(gather_item, Exception):
+                expert_run_errors.append(gather_item)
+        if expert_run_errors:
+            raise expert_run_errors[0]
+
+        for expert_index in range(len(expert_results)):
+            expert_result_payload = expert_run_results.get(expert_index)
+            if not isinstance(expert_result_payload, dict):
+                continue
+            expert_obj = expert_result_payload.get("expert")
+            if isinstance(expert_obj, ExpertAgent):
+                expert_instances.append(expert_obj)
+            local_review_results = expert_result_payload.get("review_results")
+            if isinstance(local_review_results, list):
+                review_results.extend(
+                    item for item in local_review_results if isinstance(item, dict)
+                )
+            try:
+                review_expected_count += max(0, int(expert_result_payload.get("review_expected_count") or 0))
+            except Exception:
+                logger.debug(
+                    "Failed to merge review_expected_count for expert index=%s",
+                    expert_index,
+                    exc_info=True,
+                )
+            local_heartbeat_summary = expert_result_payload.get("heartbeat_summary")
+            if isinstance(local_heartbeat_summary, dict):
+                expert_heartbeat_summaries.append(dict(local_heartbeat_summary))
 
     # ── Phase 5: Core lifecycle loop (LLM-driven parent management) ──
 
@@ -2399,26 +3004,31 @@ async def run_multi_agent_pipeline(
                 "tool_subset": dev_tool_subset,
             }
 
-            async for resumed_event in run_mini_loop(
-                session_id=target_child_id,
-                store=_store,
-                mailbox=_mailbox,
-                llm_call=child_llm_call,
-                tool_executor=_execute_resumed_dev_tool,
-                tool_definitions=runtime_tool_defs,
-                system_prompt=dev_agent.build_system_prompt(),
-                initial_task=dev_initial_task,
-                config=loop_config,
-            ):
-                yield {
-                    "type": event_event_type,
-                    "pipeline_id": pipeline_id,
-                    "expert_id": expert_id,
-                    "expert_type": expert_type,
-                    "agent_id": target_child_id,
-                    "source": source,
-                    "event": resumed_event,
-                }
+            _note_scheduler_batch_capacity(dev_scheduler_metrics, 1)
+            _mark_scheduler_run_start(dev_scheduler_metrics)
+            try:
+                async for resumed_event in run_mini_loop(
+                    session_id=target_child_id,
+                    store=_store,
+                    mailbox=_mailbox,
+                    llm_call=child_llm_call,
+                    tool_executor=_execute_resumed_dev_tool,
+                    tool_definitions=runtime_tool_defs,
+                    system_prompt=dev_agent.build_system_prompt(),
+                    initial_task=dev_initial_task,
+                    config=loop_config,
+                ):
+                    yield {
+                        "type": event_event_type,
+                        "pipeline_id": pipeline_id,
+                        "expert_id": expert_id,
+                        "expert_type": expert_type,
+                        "agent_id": target_child_id,
+                        "source": source,
+                        "event": resumed_event,
+                    }
+            finally:
+                _mark_scheduler_run_end(dev_scheduler_metrics)
 
             final_resumed_session = _store.get(target_child_id)
             final_status = str(final_resumed_session.status.value) if final_resumed_session is not None else "missing"
@@ -2487,6 +3097,17 @@ async def run_multi_agent_pipeline(
             "reports": report.get("reports", []),
         }
 
+    heartbeat_summary = _merge_heartbeat_escalation_summaries(expert_heartbeat_summaries)
+    blocked_expert_reasons = [
+        str((report.get("metadata") or {}).get("blocked_reason") or "").strip()
+        for report in reports
+        if isinstance(report.get("metadata"), dict) and str((report.get("metadata") or {}).get("blocked_reason") or "").strip()
+    ]
+    for reason in list(heartbeat_summary.get("expert_blocked_reasons") or []):
+        reason_text = str(reason or "").strip()
+        if reason_text and reason_text not in blocked_expert_reasons:
+            blocked_expert_reasons.append(reason_text)
+
     report_statuses = [str(report.get("status") or "").strip().lower() for report in reports]
     reports_submitted = bool(report_statuses) and all(status == "waiting" for status in report_statuses)
     review_gate_passed = True
@@ -2506,7 +3127,11 @@ async def run_multi_agent_pipeline(
                 else:
                     review_stop_reason = "review_failed"
 
-    task_completed = reports_submitted and review_gate_passed
+    experts_blocked = bool(blocked_expert_reasons)
+    heartbeat_blocked_reasons = [
+        reason for reason in blocked_expert_reasons if str(reason or "").strip().startswith("task_heartbeat_")
+    ]
+    task_completed = reports_submitted and review_gate_passed and not experts_blocked
     pending_workspace_submission = any(
         bool(item.get("promote_pending")) for item in _collect_workspace_submission_summaries(reports)
     )
@@ -2514,10 +3139,20 @@ async def run_multi_agent_pipeline(
         stop_reason = "awaiting_workspace_promotion"
     elif task_completed:
         stop_reason = "submitted_completion"
+    elif heartbeat_blocked_reasons:
+        stop_reason = heartbeat_blocked_reasons[0]
     elif not reports_submitted:
         stop_reason = "completion_not_submitted"
     else:
-        stop_reason = review_stop_reason or "review_not_passed"
+        stop_reason = review_stop_reason or (blocked_expert_reasons[0] if blocked_expert_reasons else "review_not_passed")
+
+    normalized_expert_scheduler = _normalize_scheduler_metrics(expert_scheduler_metrics) or _new_scheduler_metrics("expert")
+    normalized_dev_scheduler = _normalize_scheduler_metrics(dev_scheduler_metrics) or _new_scheduler_metrics("dev")
+    scheduler_summary = dict(normalized_expert_scheduler)
+    scheduler_summary["layers"] = {
+        "expert": dict(normalized_expert_scheduler),
+        "dev": dict(normalized_dev_scheduler),
+    }
 
     receipt_event = _build_core_execution_receipt(
         pipeline_id=pipeline_id,
@@ -2527,6 +3162,9 @@ async def run_multi_agent_pipeline(
         review_results=review_results,
         task_completed=task_completed,
         stop_reason=stop_reason,
+        scheduler_metrics=scheduler_summary,
+        heartbeat_summary=heartbeat_summary,
+        blocked_expert_reasons=blocked_expert_reasons,
     )
     if core_loop_summary:
         state = receipt_event.get("agent_state")
@@ -2541,9 +3179,9 @@ async def run_multi_agent_pipeline(
         "type": "tool_stage",
         "pipeline_id": pipeline_id,
         "phase": "verify",
-        "status": "success" if task_completed else "warning",
+        "status": "success" if task_completed else ("error" if experts_blocked else "warning"),
         "reason": stop_reason,
-        "decision": "stop" if task_completed else "continue",
+        "decision": "stop" if task_completed or experts_blocked else "continue",
         "round": 1,
         "details": {
             "task_completed": bool(task_completed),
@@ -2552,6 +3190,8 @@ async def run_multi_agent_pipeline(
             "review_expected_count": int(review_expected_count),
             "review_count": len(review_results),
             "review_gate_passed": bool(review_gate_passed),
+            "experts_blocked": bool(experts_blocked),
+            "blocked_expert_reasons": list(blocked_expert_reasons[:10]),
         },
     }
 
@@ -2583,7 +3223,7 @@ async def run_multi_agent_pipeline(
     yield {
         "type": "pipeline_end",
         "pipeline_id": pipeline_id,
-        "reason": "completed" if task_completed else "delegated_waiting_child_completion",
+        "reason": "completed" if task_completed else (stop_reason if experts_blocked else "delegated_waiting_child_completion"),
         "duration_ms": int((time.time() - started_at) * 1000),
         "expert_count": len(expert_results),
         "core_execution_session_id": resolved_core_execution_session_id,

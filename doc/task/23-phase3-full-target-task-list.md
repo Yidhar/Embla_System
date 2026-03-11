@@ -195,7 +195,7 @@
   - write 任务 fail-open 默认触发 `SubAgentRuntimeFailOpenBlocked`（archived_legacy 历史事件命名空间仅用于归档回放）
   - 新增回归：`tests/test_native_tools_runtime_hardening.py`
 - `NGA-WS26-002` 已落地 rollout/fail-open/lease 统一指标导出：
-  - `scripts/export_slo_snapshot.py` 新增 `runtime_rollout/runtime_fail_open/runtime_lease` 三组指标
+  - `scripts/export_slo_snapshot.py` 新增 `runtime_rollout/runtime_fail_open/runtime_lease` 三组指标（其中 `runtime_lease` 已收敛为 `global_mutex` live 投影）
   - 新增 WS26 指标导出入口：`scripts/export_ws26_runtime_snapshot_ws26_002.py`
   - 新增 runbook：`doc/task/runbooks/release_m11_runtime_guard_and_metrics_onepager_ws26_002.md`
   - 新增回归：`tests/test_slo_snapshot_export.py`、`tests/test_export_ws26_runtime_snapshot_ws26_002.py`

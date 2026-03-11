@@ -36,6 +36,8 @@ _CHAT_RUNTIME_CONTEXT: Dict[str, Any] = {
     "config_getter": None,
     "route_arbiter_guard": None,
     "route_arbiter_guard_getter": None,
+    "agent_session_store": None,
+    "agent_session_store_getter": None,
     "event_store": None,
     "event_store_getter": None,
     "event_store_factory": None,
@@ -51,6 +53,8 @@ def _bind_chat_runtime_context(
     config_getter: Any = None,
     route_arbiter_guard: Any = None,
     route_arbiter_guard_getter: Any = None,
+    agent_session_store: Any = None,
+    agent_session_store_getter: Any = None,
     event_store: Any = None,
     event_store_getter: Any = None,
     event_store_factory: Any = None,
@@ -68,6 +72,10 @@ def _bind_chat_runtime_context(
         _CHAT_RUNTIME_CONTEXT["route_arbiter_guard"] = route_arbiter_guard
     if route_arbiter_guard_getter is not None:
         _CHAT_RUNTIME_CONTEXT["route_arbiter_guard_getter"] = route_arbiter_guard_getter
+    if agent_session_store is not None:
+        _CHAT_RUNTIME_CONTEXT["agent_session_store"] = agent_session_store
+    if agent_session_store_getter is not None:
+        _CHAT_RUNTIME_CONTEXT["agent_session_store_getter"] = agent_session_store_getter
     if event_store is not None:
         _CHAT_RUNTIME_CONTEXT["event_store"] = event_store
     if event_store_getter is not None:
@@ -115,6 +123,41 @@ def _get_chat_route_arbiter_guard() -> Optional[RouterArbiterGuard]:
     if injected_ctx is not None:
         return injected_ctx
     return _CHAT_ROUTE_ARBITER_GUARD
+
+
+def _get_agent_session_store() -> Any:
+    getter = _CHAT_RUNTIME_CONTEXT.get("agent_session_store_getter")
+    if callable(getter):
+        try:
+            injected = getter()
+            if injected is not None:
+                return injected
+        except Exception:
+            return None
+    return _CHAT_RUNTIME_CONTEXT.get("agent_session_store")
+
+
+def _empty_descendant_heartbeat_snapshot(root_session_id: str) -> Dict[str, Any]:
+    return {
+        "root_session_id": str(root_session_id or ""),
+        "summary": {
+            "root_session_id": str(root_session_id or ""),
+            "session_count": 0,
+            "sessions_with_heartbeats": 0,
+            "task_count": 0,
+            "fresh_count": 0,
+            "warning_count": 0,
+            "critical_count": 0,
+            "blocked_count": 0,
+            "max_stale_level": "none",
+            "latest_generated_at": "",
+            "latest_expires_at": "",
+            "has_stale": False,
+            "has_blocked": False,
+        },
+        "sessions": [],
+        "heartbeats": [],
+    }
 
 
 def _router_arbiter_max_delegate_turns() -> int:
@@ -265,6 +308,31 @@ def _ensure_chat_route_state(session_id: str) -> Dict[str, Any]:
         state["shell_clarify_turns"] = max(0, int(state.get("shell_clarify_turns", 0)))
     except Exception:
         state["shell_clarify_turns"] = 0
+
+    core_execution_session_id = str(state.get("core_execution_session_id") or "").strip()
+    fallback_route_semantic = "core_execution" if core_execution_session_id else "shell_readonly"
+    state["last_route_semantic"] = _normalize_route_semantic(state.get("last_route_semantic") or fallback_route_semantic)
+    state["last_active_agent"] = str(
+        state.get("last_active_agent")
+        or ("core" if state["last_route_semantic"] == "core_execution" else "shell")
+    ).strip()
+    state["last_dispatch_to_core"] = bool(
+        state.get("last_dispatch_to_core")
+        if state.get("last_dispatch_to_core") is not None
+        else state["last_route_semantic"] == "core_execution"
+    )
+    state["last_handoff_tool"] = str(
+        state.get("last_handoff_tool")
+        or ("dispatch_to_core" if state["last_dispatch_to_core"] else "")
+    ).strip()
+    state["last_core_execution_route"] = str(state.get("last_core_execution_route") or "").strip()
+    state["last_risk_level"] = str(
+        state.get("last_risk_level")
+        or ("write_repo" if state["last_route_semantic"] == "core_execution" else "read_only")
+    ).strip()
+    state["last_core_execution_session_id"] = str(
+        state.get("last_core_execution_session_id") or core_execution_session_id
+    ).strip()
     return state
 
 
@@ -357,6 +425,17 @@ def _get_chat_route_quality_guard_summary(*, force_refresh: bool = False) -> Dic
     return summary
 
 
+def _persist_chat_route_snapshot_state(state: Dict[str, Any], route_meta: Dict[str, Any]) -> None:
+    state["last_route_semantic"] = _normalize_route_semantic(route_meta.get("route_semantic"))
+    state["last_active_agent"] = str(route_meta.get("active_agent") or "").strip()
+    state["last_dispatch_to_core"] = bool(route_meta.get("dispatch_to_core"))
+    state["last_handoff_tool"] = str(route_meta.get("handoff_tool") or "").strip()
+    state["last_core_execution_route"] = str(route_meta.get("core_execution_route") or "").strip()
+    state["last_risk_level"] = str(route_meta.get("risk_level") or state.get("last_risk_level") or "").strip()
+    if str(state.get("core_execution_session_id") or "").strip():
+        state["last_core_execution_session_id"] = str(state.get("core_execution_session_id") or "").strip()
+
+
 def _apply_shell_core_session_state(route_meta: Dict[str, Any], *, shell_session_id: str) -> Dict[str, Any]:
     state = _ensure_chat_route_state(shell_session_id)
     route_semantic = _normalize_route_semantic(route_meta.get("route_semantic"))
@@ -366,8 +445,12 @@ def _apply_shell_core_session_state(route_meta: Dict[str, Any], *, shell_session
     route_meta["core_execution_session_created"] = False
 
     if route_semantic != "core_execution":
-        state["last_core_execution_session_id"] = str(shell_session_id or "")
-        return _apply_route_semantic_fields(route_meta)
+        existing_core_execution_session_id = str(state.get("core_execution_session_id") or "").strip()
+        if existing_core_execution_session_id:
+            state["last_core_execution_session_id"] = existing_core_execution_session_id
+        applied = _apply_route_semantic_fields(route_meta)
+        _persist_chat_route_snapshot_state(state, applied)
+        return applied
 
     core_execution_session_id = str(state.get("core_execution_session_id") or "").strip()
     core_execution_session_created = False
@@ -385,7 +468,9 @@ def _apply_shell_core_session_state(route_meta: Dict[str, Any], *, shell_session
 
     route_meta["core_execution_session_id"] = core_execution_session_id
     route_meta["core_execution_session_created"] = core_execution_session_created
-    return _apply_route_semantic_fields(route_meta)
+    applied = _apply_route_semantic_fields(route_meta)
+    _persist_chat_route_snapshot_state(state, applied)
+    return applied
 
 
 def _build_route_model_override(route_semantic: str) -> Optional[Dict[str, str]]:
@@ -947,6 +1032,76 @@ def _collect_chat_route_session_state_events(*, session_ids: List[str], limit: i
     return matched
 
 
+def _build_chat_route_session_state_snapshot_event(shell_session_id: str, state: Dict[str, Any]) -> Dict[str, Any]:
+    core_execution_session_id = str(state.get("core_execution_session_id") or "").strip()
+    route_semantic = _normalize_route_semantic(state.get("last_route_semantic"))
+    route_meta = _apply_route_semantic_fields(
+        {
+            "route_semantic": route_semantic,
+            "active_agent": str(state.get("last_active_agent") or "").strip(),
+            "dispatch_to_core": bool(state.get("last_dispatch_to_core")),
+            "handoff_tool": str(state.get("last_handoff_tool") or "").strip(),
+            "core_execution_route": str(state.get("last_core_execution_route") or "").strip(),
+            "shell_session_id": shell_session_id,
+            "core_execution_session_id": core_execution_session_id,
+        }
+    )
+    delegation_intent = {
+        "core_execution": "core_execution",
+        "shell_clarify": "shell_clarify",
+        "shell_readonly": "read_only_exploration",
+    }.get(route_meta["route_semantic"], "read_only_exploration")
+    return {
+        "timestamp": _ops_utc_iso_now(),
+        "event_type": "RouteSessionStateSnapshot",
+        "session_id": shell_session_id,
+        "shell_session_id": shell_session_id,
+        "core_execution_session_id": core_execution_session_id,
+        "trigger": route_meta["route_semantic"],
+        "route_semantic": route_meta["route_semantic"],
+        "entry_agent": "shell",
+        "active_agent": route_meta["active_agent"],
+        "dispatch_to_core": bool(route_meta["dispatch_to_core"]),
+        "handoff_tool": str(route_meta.get("handoff_tool") or ""),
+        "core_execution_route": str(route_meta.get("core_execution_route") or ""),
+        "risk_level": str(
+            state.get("last_risk_level")
+            or ("write_repo" if route_meta["route_semantic"] == "core_execution" else "read_only")
+        ),
+        "shell_readonly_hit": route_meta["route_semantic"] == "shell_readonly",
+        "delegation_intent": delegation_intent,
+        "prompt_profile": "",
+        "injection_mode": "",
+        "shell_clarify_budget_escalated": False,
+        "shell_clarify_budget_reason": "",
+        "shell_clarify_turns": int(state.get("shell_clarify_turns") or 0),
+        "shell_clarify_limit": _CHAT_ROUTE_SHELL_CLARIFY_LIMIT,
+        "shell_clarify_limit_override": None,
+        "route_quality_guard_status": "unknown",
+        "route_quality_guard_applied": False,
+        "route_quality_guard_action": "",
+        "route_quality_guard_reason": "",
+        "route_quality_guard_reason_codes": [],
+        "route_quality_guard_route_semantic_before": "",
+        "route_quality_guard_route_semantic_after": "",
+        "router_arbiter_status": "unknown",
+        "router_arbiter_applied": False,
+        "router_arbiter_action": "",
+        "router_arbiter_reason": "",
+        "router_arbiter_reason_codes": [],
+        "router_arbiter_route_semantic_before": "",
+        "router_arbiter_route_semantic_after": "",
+        "router_arbiter_delegate_turns": 0,
+        "router_arbiter_max_delegate_turns": int(_router_arbiter_max_delegate_turns() or 0),
+        "router_arbiter_conflict_ticket": "",
+        "router_arbiter_freeze": False,
+        "router_arbiter_hitl": False,
+        "router_arbiter_escalated": False,
+        "core_execution_session_created": False,
+        "source": "session_state_snapshot",
+    }
+
+
 def _build_chat_route_session_state_payload(session_id: str, *, limit: int = 20) -> Dict[str, Any]:
     session = _get_message_manager().get_session(session_id)
     if not isinstance(session, dict):
@@ -961,57 +1116,23 @@ def _build_chat_route_session_state_payload(session_id: str, *, limit: int = 20)
         session_ids.append(core_execution_session_id)
     route_events = _collect_chat_route_session_state_events(session_ids=session_ids, limit=max(1, int(limit)))
     if not route_events:
-        fallback_route_semantic = "core_execution" if core_execution_session_id else "shell_readonly"
-        route_events = [
-            {
-                "timestamp": _ops_utc_iso_now(),
-                "event_type": "RouteSessionStateStateFallback",
-                "session_id": shell_session_id,
-                "shell_session_id": shell_session_id,
-                "core_execution_session_id": core_execution_session_id,
-                "trigger": fallback_route_semantic,
-                "route_semantic": fallback_route_semantic,
-                "entry_agent": "shell",
-                "active_agent": "core" if fallback_route_semantic == "core_execution" else "shell",
-                "dispatch_to_core": fallback_route_semantic == "core_execution",
-                "handoff_tool": "dispatch_to_core" if fallback_route_semantic == "core_execution" else "",
-                "core_execution_route": "",
-                "risk_level": "write_repo" if fallback_route_semantic == "core_execution" else "read_only",
-                "shell_readonly_hit": fallback_route_semantic == "shell_readonly",
-                "delegation_intent": (
-                    "core_execution" if fallback_route_semantic == "core_execution" else "read_only_exploration"
-                ),
-                "prompt_profile": "",
-                "injection_mode": "",
-                "shell_clarify_budget_escalated": False,
-                "shell_clarify_budget_reason": "",
-                "shell_clarify_turns": int(state.get("shell_clarify_turns") or 0),
-                "shell_clarify_limit": _CHAT_ROUTE_SHELL_CLARIFY_LIMIT,
-                "shell_clarify_limit_override": None,
-                "route_quality_guard_status": "unknown",
-                "route_quality_guard_applied": False,
-                "route_quality_guard_action": "",
-                "route_quality_guard_reason": "",
-                "route_quality_guard_reason_codes": [],
-                "route_quality_guard_route_semantic_before": "",
-                "route_quality_guard_route_semantic_after": "",
-                "router_arbiter_status": "unknown",
-                "router_arbiter_applied": False,
-                "router_arbiter_action": "",
-                "router_arbiter_reason": "",
-                "router_arbiter_reason_codes": [],
-                "router_arbiter_route_semantic_before": "",
-                "router_arbiter_route_semantic_after": "",
-                "router_arbiter_delegate_turns": 0,
-                "router_arbiter_max_delegate_turns": int(_router_arbiter_max_delegate_turns() or 0),
-                "router_arbiter_conflict_ticket": "",
-                "router_arbiter_freeze": False,
-                "router_arbiter_hitl": False,
-                "router_arbiter_escalated": False,
-                "core_execution_session_created": False,
-                "source": "state_fallback",
-            }
-        ]
+        route_events = [_build_chat_route_session_state_snapshot_event(shell_session_id, state)]
+
+    heartbeat_snapshot = _empty_descendant_heartbeat_snapshot(core_execution_session_id)
+    if core_execution_session_id:
+        agent_session_store = _get_agent_session_store()
+        if agent_session_store is not None:
+            try:
+                snapshot = agent_session_store.get_descendant_heartbeat_snapshot(core_execution_session_id)
+                if isinstance(snapshot, dict):
+                    heartbeat_snapshot = {
+                        "root_session_id": str(snapshot.get("root_session_id") or core_execution_session_id),
+                        "summary": dict(snapshot.get("summary") or {}),
+                        "sessions": list(snapshot.get("sessions") or []),
+                        "heartbeats": list(snapshot.get("heartbeats") or []),
+                    }
+            except Exception as exc:
+                logger.debug("构建 chat route child heartbeat snapshot 失败: %s", exc)
 
     return {
         "status": "success",
@@ -1021,11 +1142,20 @@ def _build_chat_route_session_state_payload(session_id: str, *, limit: int = 20)
         "core_execution_session_exists": bool(
             core_execution_session_id and _get_message_manager().get_session(core_execution_session_id)
         ),
+        "child_heartbeat_summary": dict(heartbeat_snapshot.get("summary") or {}),
+        "child_heartbeat_sessions": list(heartbeat_snapshot.get("sessions") or []),
+        "child_heartbeats": list(heartbeat_snapshot.get("heartbeats") or []),
         "state": {
             "shell_clarify_turns": int(state.get("shell_clarify_turns") or 0),
             "shell_clarify_limit": _CHAT_ROUTE_SHELL_CLARIFY_LIMIT,
             "last_core_execution_session_id": last_core_execution_session_id,
             "last_core_escalation_at_ms": int(state.get("last_core_escalation_at_ms") or 0),
+            "last_route_semantic": str(state.get("last_route_semantic") or ""),
+            "last_active_agent": str(state.get("last_active_agent") or ""),
+            "last_dispatch_to_core": bool(state.get("last_dispatch_to_core")),
+            "last_handoff_tool": str(state.get("last_handoff_tool") or ""),
+            "last_core_execution_route": str(state.get("last_core_execution_route") or ""),
+            "last_risk_level": str(state.get("last_risk_level") or ""),
         },
         "recent_route_events": route_events,
     }

@@ -6,7 +6,6 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agents.runtime.workflow_store import WorkflowStore
 from scripts.export_ws26_runtime_snapshot_ws26_002 import main
 
 
@@ -65,13 +64,6 @@ def test_export_ws26_runtime_snapshot_cli_main_smoke(monkeypatch) -> None:
         (repo_root / "logs" / "autonomous" / "events.jsonl").write_text(
             "\n".join(json.dumps(row, ensure_ascii=False) for row in events) + "\n",
             encoding="utf-8",
-        )
-
-        store = WorkflowStore(db_path=repo_root / "logs" / "autonomous" / "workflow.db")
-        store.try_acquire_or_renew_lease(
-            lease_name="global_orchestrator",
-            owner_id="owner-a",
-            ttl_seconds=10,
         )
 
         output = (repo_root / "scratch" / "reports" / "ws26.json").resolve()

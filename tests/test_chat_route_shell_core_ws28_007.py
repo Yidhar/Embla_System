@@ -510,3 +510,33 @@ def test_build_shell_system_prompt_with_gateway_falls_back_when_gateway_missing(
     assert "PromptRouteDecision" in prompt
     assert "Route policy: Shell Clarify" in prompt
     assert "## 相关记忆" in prompt
+
+
+def test_shell_core_session_state_preserves_last_core_session_on_readonly_turn() -> None:
+    shell_session_id = api_server.message_manager.create_session(temporary=True)
+    try:
+        core_route = {
+            "route_semantic": "core_execution",
+            "shell_readonly_hit": False,
+            "core_execution_hit": True,
+            "router_decision": {"delegation_intent": "core_execution"},
+        }
+        api_server._apply_shell_core_session_state(core_route, shell_session_id=shell_session_id)
+
+        readonly_route = {
+            "route_semantic": "shell_readonly",
+            "shell_readonly_hit": True,
+            "core_execution_hit": False,
+            "router_decision": {"delegation_intent": "read_only_exploration"},
+        }
+        api_server._apply_shell_core_session_state(readonly_route, shell_session_id=shell_session_id)
+
+        session = api_server.message_manager.get_session(shell_session_id)
+        assert isinstance(session, dict)
+        state = session[api_server._CHAT_ROUTE_STATE_KEY]
+        assert str(state["last_core_execution_session_id"]).endswith("__core")
+        assert state["last_route_semantic"] == "shell_readonly"
+        assert state["last_dispatch_to_core"] is False
+    finally:
+        api_server.message_manager.delete_session(shell_session_id)
+        api_server.message_manager.delete_session(f"{shell_session_id}__core")

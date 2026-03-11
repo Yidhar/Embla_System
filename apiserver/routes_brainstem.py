@@ -422,8 +422,15 @@ def _bootstrap_budget_guard_state(
         else:
             controller = controller_factory(state_file)
 
-        baseline = controller.ensure_baseline_state(requested_by="api_lifespan_bootstrap")
+        stale_reason_codes = {"BUDGET_GUARD_STATE_STALE_WARNING", "BUDGET_GUARD_STATE_STALE_CRITICAL"}
+        existing_state = controller.read_state() if state_file.exists() else {}
+        force_baseline = str(existing_state.get("reason_code") or "") in stale_reason_codes
+        baseline = controller.ensure_baseline_state(
+            requested_by="api_lifespan_bootstrap",
+            force=force_baseline,
+        )
         report["baseline"] = baseline if isinstance(baseline, dict) else {}
+        report["reset_stale_state"] = bool(force_baseline)
         report["status"] = str(report["baseline"].get("status") or "")
         report["reason_code"] = str(report["baseline"].get("reason_code") or "")
         report["baseline_written"] = bool(report["baseline"].get("baseline_written"))

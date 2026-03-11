@@ -291,6 +291,7 @@ stateDiagram-v2
 | `report_to_parent` | 上报（`completed` / `blocked` / `error` / `question`）|
 | `read_parent_messages` | 读取父节点消息 |
 | `update_my_task_status` | 更新 TaskBoard |
+| `publish_task_heartbeat` | 发布任务级 heartbeat，供 Expert/Core 进行 stale 监管与自动恢复 |
 
 ### 完成态契约（运行时 canonical）
 
@@ -367,6 +368,14 @@ graph TB
 6. Expert 评估 → update_contract → resume Dev B 通知变更
 7. 两个 Dev 完成 → Expert 汇总验证
 ```
+
+### Heartbeat 监管与自动恢复
+
+- 长任务、detached/sandbox 执行、并发 Dev 编排时，Dev 必须持续调用 `publish_task_heartbeat`。
+- stale 升级口径：`warning > ttl_seconds`，`critical > max(ttl_seconds*2, ttl_seconds+30)`，`blocked > critical+60`。
+- Expert 的恢复策略固定为：提醒刷新 → 强提醒/恢复指令 → `heartbeat_respawn` fresh Dev。
+- 若 respawn 预算耗尽，则升级为 `expert_blocked(reason=task_heartbeat_blocked_respawn_exhausted)`，Core 在 `execution_receipt` 中统一收口。
+- Shell/Core 通过 `poll_child_status`、`/v1/chat/route_session_state/{session_id}` 和 `execution_receipt.agent_state.heartbeat_summary` 读取同一套聚合结果。
 
 ### 为什么不用 P2P
 

@@ -5,12 +5,14 @@ Run: python scripts/self_check_smoke.py
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 
 def main() -> int:
-    # ---- WorkflowStore: idempotency / outbox-inbox / lease-fencing ----
+    # ---- WorkflowStore + GlobalMutex: idempotency / outbox-inbox / live lease ----
     from agents.runtime.workflow_store import WorkflowStore
+    from core.security.lease_fencing import GlobalMutexManager
 
     tmp_root = Path("logs") / "self_check"
     tmp_root.mkdir(parents=True, exist_ok=True)
@@ -54,10 +56,33 @@ def main() -> int:
     assert store.is_inbox_processed(consumer, msg_id) is True
     assert store.read_pending_outbox(limit=10) == []
 
-    lease_a = store.try_acquire_or_renew_lease("global_orchestrator", "agent-A", ttl_seconds=1)
-    assert lease_a.is_owner is True and lease_a.fencing_epoch == 1
-    lease_b = store.try_acquire_or_renew_lease("global_orchestrator", "agent-B", ttl_seconds=1)
-    assert lease_b.is_owner is False and lease_b.owner_id == "agent-A"
+    mutex = GlobalMutexManager(
+        state_file=tmp_root / "global_mutex_lease.json",
+        audit_file=tmp_root / "global_mutex_events.jsonl",
+    )
+    mutex.ensure_initialized(ttl_seconds=1)
+    lease_a = asyncio.run(
+        mutex.acquire(
+            owner_id="agent-A",
+            job_id="global_orchestrator",
+            ttl_seconds=1,
+            wait_timeout_seconds=0.5,
+            poll_interval_seconds=0.05,
+        )
+    )
+    assert lease_a.fencing_epoch == 1
+    assert asyncio.run(mutex.release(lease_a)) is True
+    lease_b = asyncio.run(
+        mutex.acquire(
+            owner_id="agent-B",
+            job_id="global_orchestrator",
+            ttl_seconds=1,
+            wait_timeout_seconds=0.5,
+            poll_interval_seconds=0.05,
+        )
+    )
+    assert lease_b.owner_id == "agent-B"
+    assert lease_b.fencing_epoch > lease_a.fencing_epoch
 
     # ---- ReleaseController: canary decision should promote on synthetic windows ----
     from agents.release import ReleaseController

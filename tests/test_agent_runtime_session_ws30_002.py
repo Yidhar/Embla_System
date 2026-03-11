@@ -10,6 +10,7 @@ import json
 
 import pytest
 
+from core.event_bus import EventStore
 from agents.runtime.agent_session import AgentSession, AgentSessionStore, AgentStatus
 from agents.runtime.child_tools import get_child_tool_definitions, handle_child_tool_call
 from agents.runtime.mailbox import AgentMailbox
@@ -125,13 +126,40 @@ class TestAgentSessionStore:
 
     def test_destroy_makes_get_return_none(self, store):
         session = store.create(role="dev")
-        store.destroy(session.session_id, reason="task complete")
+        report = store.destroy(session.session_id, reason="task complete")
+        assert report["destroyed"] is True
         assert store.get(session.session_id) is None
 
     def test_destroy_excludes_from_list_children(self, store):
         session = store.create(role="dev", parent_id="parent-1")
         store.destroy(session.session_id)
         assert len(store.list_children("parent-1")) == 0
+
+    def test_destroy_tears_down_boxlite_session(self, store, monkeypatch):
+        calls = []
+
+        def _fake_teardown_box_session(metadata):
+            calls.append({
+                "box_id": str(metadata.get("box_id") or ""),
+                "box_name": str(metadata.get("box_name") or ""),
+            })
+            return True, ""
+
+        monkeypatch.setattr("agents.runtime.agent_session.teardown_box_session", _fake_teardown_box_session)
+
+        session = store.create(
+            role="dev",
+            session_id="agent-box-destroy",
+            metadata={
+                "execution_backend": "boxlite",
+                "box_id": "box-destroy-1",
+                "box_name": "embla-agent-box-destroy",
+            },
+        )
+
+        store.destroy(session.session_id, reason="done")
+
+        assert calls == [{"box_id": "box-destroy-1", "box_name": "embla-agent-box-destroy"}]
 
     def test_sqlite_persistence(self):
         """Create sessions, close store, reopen, verify sessions persist."""
@@ -177,6 +205,132 @@ class TestAgentSessionStore:
         store.update_metadata(session.session_id, {"progress": "50%", "files": ["a.py"]})
         s = store.get(session.session_id)
         assert s.metadata["progress"] == "50%"
+
+    def test_publish_task_heartbeat_snapshot_and_stale_levels(self, store):
+        store.create(role="dev", parent_id="expert-1", session_id="child-1")
+
+        first = store.publish_task_heartbeat(
+            "child-1",
+            task_id="task-a",
+            status="running",
+            message="indexing repository",
+            stage="scan",
+            ttl_seconds=30,
+            generated_at="2026-03-11T00:00:00+00:00",
+        )
+        assert first["sequence"] == 1
+        assert first["stale_level"] == "fresh"
+
+        second = store.publish_task_heartbeat(
+            "child-1",
+            task_id="task-a",
+            status="running",
+            message="building patch",
+            stage="edit",
+            ttl_seconds=30,
+            generated_at="2026-03-11T00:00:20+00:00",
+        )
+        assert second["sequence"] == 2
+
+        snapshot = store.get_session_heartbeat_snapshot("child-1", now="2026-03-11T00:01:00+00:00")
+        assert snapshot["summary"]["task_count"] == 1
+        assert snapshot["summary"]["warning_count"] == 1
+        assert snapshot["summary"]["max_stale_level"] == "warning"
+        assert snapshot["heartbeats"][0]["stage"] == "edit"
+
+        stale_snapshot = store.get_session_heartbeat_snapshot("child-1", now="2026-03-11T00:03:30+00:00")
+        assert stale_snapshot["summary"]["blocked_count"] == 1
+        assert stale_snapshot["heartbeats"][0]["stale_level"] == "blocked"
+
+    def test_descendant_heartbeat_snapshot_aggregates_children(self, store):
+        store.create(role="core", session_id="core-1")
+        store.create(role="expert", parent_id="core-1", session_id="expert-1")
+        store.create(role="dev", parent_id="expert-1", session_id="dev-1")
+        store.create(role="dev", parent_id="expert-1", session_id="dev-2")
+
+        store.publish_task_heartbeat(
+            "dev-1",
+            task_id="task-1",
+            ttl_seconds=45,
+            message="working",
+            generated_at="2026-03-11T00:00:00+00:00",
+        )
+        store.publish_task_heartbeat(
+            "dev-2",
+            task_id="task-2",
+            ttl_seconds=45,
+            message="waiting for build",
+            status="blocked",
+            generated_at="2026-03-11T00:02:00+00:00",
+        )
+
+        snapshot = store.get_descendant_heartbeat_snapshot("core-1", now="2026-03-11T00:03:40+00:00")
+        assert snapshot["summary"]["session_count"] == 3
+        assert snapshot["summary"]["sessions_with_heartbeats"] == 2
+        assert snapshot["summary"]["task_count"] == 2
+        assert snapshot["summary"]["max_stale_level"] in {"warning", "critical", "blocked"}
+        assert len(snapshot["sessions"]) == 2
+        assert {item["session_id"] for item in snapshot["sessions"]} == {"dev-1", "dev-2"}
+
+    def test_runtime_heartbeat_snapshot_aggregates_all_live_sessions(self, store):
+        store.create(role="core", session_id="core-1")
+        store.create(role="expert", parent_id="core-1", session_id="expert-1")
+        store.create(role="dev", parent_id="expert-1", session_id="dev-1")
+        store.create(role="dev", parent_id="expert-1", session_id="dev-2")
+        archived = store.create(role="dev", parent_id="expert-1", session_id="dev-archived")
+        store.update_status(archived.session_id, AgentStatus.DESTROYED)
+
+        store.publish_task_heartbeat(
+            "dev-1",
+            task_id="task-1",
+            ttl_seconds=45,
+            message="working",
+            generated_at="2026-03-11T00:00:00+00:00",
+        )
+        store.publish_task_heartbeat(
+            "dev-2",
+            task_id="task-2",
+            ttl_seconds=45,
+            message="still running",
+            generated_at="2026-03-11T00:02:00+00:00",
+        )
+        store.publish_task_heartbeat(
+            "dev-archived",
+            task_id="task-old",
+            ttl_seconds=45,
+            message="should be ignored",
+            generated_at="2026-03-11T00:02:00+00:00",
+        )
+
+        snapshot = store.get_runtime_heartbeat_snapshot(now="2026-03-11T00:03:40+00:00")
+        assert snapshot["root_session_id"] == "runtime"
+        assert snapshot["summary"]["session_count"] == 4
+        assert snapshot["summary"]["sessions_with_heartbeats"] == 2
+        assert snapshot["summary"]["task_count"] == 2
+        assert {item["session_id"] for item in snapshot["sessions"]} == {"dev-1", "dev-2"}
+        assert {item["session_id"] for item in snapshot["heartbeats"]} == {"dev-1", "dev-2"}
+
+    def test_publish_task_heartbeat_emits_event_bus_records(self, tmp_path):
+        events_file = tmp_path / "logs" / "autonomous" / "events.jsonl"
+        event_store = EventStore(file_path=events_file)
+        store = AgentSessionStore(db_path=tmp_path / "agent_sessions.db", event_store=event_store)
+        try:
+            store.create(role="dev", parent_id="expert-1", session_id="child-1")
+            store.publish_task_heartbeat(
+                "child-1",
+                task_id="task-1",
+                ttl_seconds=30,
+                message="working",
+                generated_at="2026-03-11T00:00:00+00:00",
+            )
+            store.get_session_heartbeat_snapshot("child-1", now="2026-03-11T00:00:40+00:00")
+
+            rows = event_store.read_recent(limit=20)
+            event_types = [str(row.get("event_type") or "") for row in rows]
+            assert "TaskHeartbeatPublished" in event_types
+            assert "TaskHeartbeatStaleWarning" in event_types
+        finally:
+            store.close()
 
     def test_cannot_update_destroyed_session(self, store):
         session = store.create(role="dev")
@@ -259,6 +413,22 @@ class TestAgentMailbox:
         assert parent_msgs[0].from_id == "agent-b"
 
 
+def _patch_parent_tool_runtime(monkeypatch, *, execution_backend: str = "boxlite", execution_root: str = "/workspace") -> None:
+    monkeypatch.setattr(
+        "agents.runtime.parent_tools.resolve_execution_runtime_metadata",
+        lambda **kwargs: {
+            "execution_backend_requested": execution_backend,
+            "execution_backend": execution_backend,
+            "execution_root": execution_root,
+            "execution_profile": "default",
+            "box_profile": "default",
+            "box_provider": "sdk",
+            "box_mount_mode": "rw",
+            "box_fallback_reason": "",
+        },
+    )
+
+
 # ── Parent Tools Tests ─────────────────────────────────────────
 
 class TestParentTools:
@@ -278,7 +448,8 @@ class TestParentTools:
             "destroy_child_agent",
         }
 
-    def test_spawn_and_poll(self, store, mailbox):
+    def test_spawn_and_poll(self, monkeypatch, store, mailbox):
+        _patch_parent_tool_runtime(monkeypatch)
         result = handle_parent_tool_call(
             "spawn_child_agent",
             {"role": "dev", "task_description": "write code"},
@@ -298,8 +469,40 @@ class TestParentTools:
         )
         assert poll["status"] == "running"
         assert poll["role"] == "dev"
+        assert poll["heartbeat_summary"]["task_count"] == 0
+        assert poll["task_heartbeats"] == []
 
-    def test_spawn_child_agent_passes_metadata(self, store, mailbox):
+    def test_poll_child_status_includes_heartbeat_snapshot(self, monkeypatch, store, mailbox):
+        _patch_parent_tool_runtime(monkeypatch)
+        result = handle_parent_tool_call(
+            "spawn_child_agent",
+            {"role": "dev", "task_description": "write code"},
+            parent_session_id="parent-1",
+            store=store,
+            mailbox=mailbox,
+        )
+        agent_id = result["agent_id"]
+        store.publish_task_heartbeat(
+            agent_id,
+            task_id="task-1",
+            status="running",
+            message="editing files",
+            ttl_seconds=60,
+            generated_at="2026-03-11T00:00:00+00:00",
+        )
+
+        poll = handle_parent_tool_call(
+            "poll_child_status",
+            {"agent_id": agent_id},
+            parent_session_id="parent-1",
+            store=store,
+            mailbox=mailbox,
+        )
+        assert poll["heartbeat_summary"]["task_count"] == 1
+        assert poll["task_heartbeats"][0]["task_id"] == "task-1"
+
+    def test_spawn_child_agent_passes_metadata(self, monkeypatch, store, mailbox):
+        _patch_parent_tool_runtime(monkeypatch)
         result = handle_parent_tool_call(
             "spawn_child_agent",
             {
@@ -316,7 +519,8 @@ class TestParentTools:
         assert session.metadata["pipeline_id"] == "pipe_001"
         assert session.metadata["trace_id"] == "trace_001"
 
-    def test_terminate_and_resume(self, store, mailbox):
+    def test_terminate_and_resume(self, monkeypatch, store, mailbox):
+        _patch_parent_tool_runtime(monkeypatch)
         spawn = handle_parent_tool_call(
             "spawn_child_agent",
             {"role": "dev", "task_description": "task"},
@@ -346,7 +550,8 @@ class TestParentTools:
         )
         assert res["status"] == "running"
 
-    def test_destroy(self, store, mailbox):
+    def test_destroy(self, monkeypatch, store, mailbox):
+        _patch_parent_tool_runtime(monkeypatch)
         spawn = handle_parent_tool_call(
             "spawn_child_agent",
             {"role": "dev", "task_description": "temp"},
@@ -374,7 +579,59 @@ class TestParentTools:
         )
         assert "error" in poll
 
-    def test_send_message(self, store, mailbox):
+    def test_destroy_parent_tool_surfaces_cleanup_facts(self, monkeypatch, store, mailbox):
+        _patch_parent_tool_runtime(monkeypatch)
+        spawn = handle_parent_tool_call(
+            "spawn_child_agent",
+            {
+                "role": "dev",
+                "task_description": "temp",
+                "metadata": {
+                    "execution_backend": "boxlite",
+                    "box_id": "box-parent-tool-1",
+                    "box_name": "embla-agent-parent-tool-1",
+                },
+            },
+            parent_session_id="parent-1",
+            store=store,
+            mailbox=mailbox,
+        )
+        aid = spawn["agent_id"]
+
+        original_destroy = store.destroy
+
+        def _wrapped_destroy(session_id, reason=""):
+            report = original_destroy(session_id, reason=reason)
+            report["box_cleanup_attempted"] = True
+            report["box_cleanup_success"] = True
+            return report
+
+        store.destroy = _wrapped_destroy
+        dest = handle_parent_tool_call(
+            "destroy_child_agent",
+            {"agent_id": aid, "reason": "done"},
+            parent_session_id="parent-1",
+            store=store,
+            mailbox=mailbox,
+        )
+
+        assert dest["status"] == "destroyed"
+        assert dest["box_cleanup_attempted"] is True
+        assert dest["box_cleanup_success"] is True
+        assert dest["workspace_cleanup_attempted"] is False
+
+    def test_destroy_missing_agent_returns_error(self, store, mailbox):
+        dest = handle_parent_tool_call(
+            "destroy_child_agent",
+            {"agent_id": "missing-agent", "reason": "done"},
+            parent_session_id="parent-1",
+            store=store,
+            mailbox=mailbox,
+        )
+        assert dest["error"] == "Agent missing-agent not found."
+
+    def test_send_message(self, monkeypatch, store, mailbox):
+        _patch_parent_tool_runtime(monkeypatch)
         spawn = handle_parent_tool_call(
             "spawn_child_agent",
             {"role": "dev", "task_description": "task"},
@@ -409,6 +666,7 @@ class TestChildTools:
             "report_to_parent",
             "read_parent_messages",
             "update_my_task_status",
+            "publish_task_heartbeat",
             "send_message_to_agent",
             "read_agent_messages",
         }
@@ -507,6 +765,30 @@ class TestChildTools:
 
         s = store.get("child-1")
         assert s.metadata["task_updates"]["t-001"]["status"] == "done"
+
+    def test_publish_task_heartbeat(self, store, mailbox):
+        store.create(role="expert", session_id="parent-1")
+        store.create(role="dev", parent_id="parent-1", session_id="child-1")
+
+        result = handle_child_tool_call(
+            "publish_task_heartbeat",
+            {
+                "task_id": "task-1",
+                "status": "running",
+                "message": "updating sandbox",
+                "stage": "patch",
+                "ttl_seconds": 45,
+                "progress": 0.5,
+                "details": {"sandbox": "box-1"},
+            },
+            child_session_id="child-1",
+            store=store,
+            mailbox=mailbox,
+        )
+        assert result["accepted"] is True
+        assert result["heartbeat"]["task_id"] == "task-1"
+        assert result["heartbeat"]["stage"] == "patch"
+        assert result["heartbeat"]["details"]["sandbox"] == "box-1"
 
     def test_peer_messaging(self, store, mailbox):
         store.create(role="expert", session_id="expert-1")

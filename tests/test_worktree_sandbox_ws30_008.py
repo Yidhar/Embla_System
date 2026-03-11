@@ -25,6 +25,22 @@ def mailbox():
     m.close()
 
 
+def _patch_parent_tool_runtime(monkeypatch, *, execution_backend: str = "boxlite", execution_root: str = "/workspace") -> None:
+    monkeypatch.setattr(
+        "agents.runtime.parent_tools.resolve_execution_runtime_metadata",
+        lambda **kwargs: {
+            "execution_backend_requested": execution_backend,
+            "execution_backend": execution_backend,
+            "execution_root": execution_root,
+            "execution_profile": "default",
+            "box_profile": "default",
+            "box_provider": "sdk",
+            "box_mount_mode": "rw",
+            "box_fallback_reason": "",
+        },
+    )
+
+
 def test_apply_workspace_path_overrides_rewrites_file_and_command_paths() -> None:
     workspace_root = Path("/repo/scratch/agent_worktrees/agent-1")
 
@@ -47,6 +63,7 @@ def test_apply_workspace_path_overrides_rewrites_file_and_command_paths() -> Non
 
 
 def test_spawn_child_agent_creates_worktree_metadata(monkeypatch, store, mailbox):
+    _patch_parent_tool_runtime(monkeypatch)
     store.create(role="core", session_id="core-1")
 
     def _fake_create_git_worktree_sandbox(*, owner_session_id: str, ref: str = "HEAD", repo_root=None, git_runner=None):
@@ -86,7 +103,8 @@ def test_spawn_child_agent_creates_worktree_metadata(monkeypatch, store, mailbox
     assert result["workspace_mode"] == "worktree"
 
 
-def test_spawn_child_agent_inherits_parent_workspace(store, mailbox):
+def test_spawn_child_agent_inherits_parent_workspace(monkeypatch, store, mailbox):
+    _patch_parent_tool_runtime(monkeypatch)
     store.create(
         role="expert",
         session_id="expert-1",
@@ -146,6 +164,7 @@ def test_destroy_cleans_owned_worktree(monkeypatch, store):
 
 
 def test_core_spawn_experts_self_repo_requests_worktree(monkeypatch, store, mailbox):
+    _patch_parent_tool_runtime(monkeypatch)
     store.create(role="core", session_id="core-2")
 
     def _fake_create_git_worktree_sandbox(*, owner_session_id: str, ref: str = "HEAD", repo_root=None, git_runner=None):

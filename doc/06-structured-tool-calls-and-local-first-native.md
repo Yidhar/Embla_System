@@ -1,11 +1,11 @@
-﻿# 06 结构化工具调用与本地优先执行（Embla System 对齐版）
+# 06 结构化工具调用与本地优先执行（Embla System 对齐版）
 
 文档状态：开发预备（As-Is + Target-Aligned）
 最后更新：2026-02-22
 
 ## 1. 核心原则
 
-当前工具执行链只接受结构化函数调用，不再接受 legacy 文本协议。
+当前工具执行链只接受结构化函数调用，不再接受 legacy 文本协议；旧 tool-result 双栈 rollout 也已退役。
 
 允许的调用类型：
 
@@ -38,7 +38,7 @@ SSE 关键事件：
 
 与 Embla System 对齐关系：
 
-- MCP Host：`mcpserver/mcp_server.py`（`/schedule`、`/call`、`/services`、`/status`）
+- MCP Host / runtime registry：集成式 MCP client pool + `mcpserver/mcp_registry.py` / `mcpserver/mcp_manager.py`
 - Tool Registry：`mcpserver/mcp_registry.py`（manifest 扫描、实例化注册）
 - Tool Router：`mcpserver/mcp_manager.py`（本地优先 + mcporter 外部兜底）
 

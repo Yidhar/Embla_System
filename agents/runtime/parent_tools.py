@@ -461,7 +461,9 @@ def _handle_poll(
     if not session:
         return {"error": f"Agent {agent_id} not found or already destroyed."}
     summary = session.to_status_summary()
-    # Add unread message count from parent
+    heartbeat_snapshot = store.get_session_heartbeat_snapshot(agent_id)
+    summary["heartbeat_summary"] = dict(heartbeat_snapshot.get("summary") or {})
+    summary["task_heartbeats"] = list(heartbeat_snapshot.get("heartbeats") or [])
     summary["unread_messages_from_child"] = mailbox.count_unread(parent_session_id)
     return summary
 
@@ -732,10 +734,19 @@ def _handle_destroy(
     del parent_session_id, mailbox
     agent_id = args.get("agent_id", "")
     reason = args.get("reason", "")
-    store.destroy(agent_id, reason=reason)
+    session = store.get(agent_id)
+    if not session:
+        return {"error": f"Agent {agent_id} not found."}
+    cleanup = store.destroy(agent_id, reason=reason)
     return {
         "agent_id": agent_id,
         "status": "destroyed",
+        "box_cleanup_attempted": bool(cleanup.get("box_cleanup_attempted", False)),
+        "box_cleanup_success": bool(cleanup.get("box_cleanup_success", True)),
+        "box_cleanup_error": str(cleanup.get("box_cleanup_error") or ""),
+        "workspace_cleanup_attempted": bool(cleanup.get("workspace_cleanup_attempted", False)),
+        "workspace_cleanup_success": bool(cleanup.get("workspace_cleanup_success", True)),
+        "workspace_cleanup_error": str(cleanup.get("workspace_cleanup_error") or ""),
         "message": f"Agent {agent_id} destroyed. All resources released.",
     }
 

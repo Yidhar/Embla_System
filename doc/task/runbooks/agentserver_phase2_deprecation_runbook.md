@@ -24,7 +24,7 @@
 
 2. 自治执行链路
 - 旧链路：`agentserver` 内调度逻辑
-- 新链路：`agents/pipeline.py` + `agents/runtime/workflow_store.py`（lease/fencing + outbox/inbox）
+- 新链路：`agents/pipeline.py` + `core/security/lease_fencing.py` + `agents/runtime/workflow_store.py`（global mutex + outbox/inbox）
 
 ## 4. Phase-2 分阶段执行顺序
 1. D0 冻结新增依赖（当前轮落地）

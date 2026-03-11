@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 import re
 import sqlite3
 import time
@@ -116,9 +117,236 @@ def _ops_read_json_file(path: Path) -> Dict[str, Any]:
 router = APIRouter()
 
 
+
+def _ops_mcp_server_name(tool: Any) -> str:
+    if isinstance(tool, dict):
+        direct = str(tool.get("server_name") or tool.get("server") or "").strip()
+        if direct:
+            return direct
+        domain = str(tool.get("domain") or "").strip()
+    else:
+        direct = str(getattr(tool, "server_name", "") or getattr(tool, "server", "")).strip()
+        if direct:
+            return direct
+        domain = str(getattr(tool, "domain", "") or "").strip()
+    if domain.startswith("mcp_"):
+        return domain[4:]
+    return domain
+
+
+
+def _ops_mcp_tool_name(tool: Any) -> str:
+    if isinstance(tool, dict):
+        return str(tool.get("name") or tool.get("tool_name") or "").strip()
+    return str(getattr(tool, "name", "") or getattr(tool, "tool_name", "")).strip()
+
+
+
+def _ops_collect_mcp_registry_status() -> Dict[str, Any]:
+    try:
+        from agents.runtime.mcp_client import get_mcp_pool
+
+        pool = get_mcp_pool()
+        if not pool:
+            return {
+                "registered_services": 0,
+                "registered_tool_count": 0,
+                "isolated_worker_services": 0,
+                "rejected_plugin_manifests": 0,
+                "cached_manifests": 0,
+                "service_names": [],
+                "tool_names": [],
+                "isolated_worker_names": [],
+                "rejected_plugin_names": [],
+            }
+
+        tools = pool.get_all_tools()
+        service_names = sorted({name for item in tools if (name := _ops_mcp_server_name(item))})
+        tool_names = sorted({name for item in tools if (name := _ops_mcp_tool_name(item))})
+        return {
+            "registered_services": len(service_names),
+            "registered_tool_count": len(tool_names),
+            "isolated_worker_services": 0,
+            "rejected_plugin_manifests": 0,
+            "cached_manifests": 0,
+            "service_names": service_names,
+            "tool_names": tool_names,
+            "isolated_worker_names": [],
+            "rejected_plugin_names": [],
+        }
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning(f"获取 MCP registry 状态失败: {exc}")
+        raise
+
+
+
+def _ops_collect_local_tool_inventory(*, max_tools: int = 40) -> Dict[str, Any]:
+    memory_tool_names: List[str] = []
+    native_tool_names: List[str] = []
+    dynamic_tool_names: List[str] = []
+
+    try:
+        from agents.memory.memory_tools import get_memory_tool_definitions
+
+        memory_tool_names = sorted(
+            {
+                str(item.get("name") or "").strip()
+                for item in get_memory_tool_definitions()
+                if isinstance(item, dict) and str(item.get("name") or "").strip()
+            }
+        )
+    except Exception as exc:
+        logger.debug("统计 memory tools 失败: %s", exc)
+
+    try:
+        from agents.runtime.native_tools import get_native_tool_definitions
+
+        native_tool_names = sorted(
+            {
+                str(item.get("name") or "").strip()
+                for item in get_native_tool_definitions()
+                if isinstance(item, dict) and str(item.get("name") or "").strip()
+            }
+        )
+    except Exception as exc:
+        logger.debug("统计 native tools 失败: %s", exc)
+
+    try:
+        from agents.runtime.custom_tools import load_custom_tools
+
+        dynamic_tool_names = sorted(
+            {
+                str(item.get("name") or "").strip()
+                for item in load_custom_tools()
+                if isinstance(item, dict) and str(item.get("name") or "").strip()
+            }
+        )
+    except Exception as exc:
+        logger.debug("统计 dynamic tools 失败: %s", exc)
+
+    tool_names = sorted({*memory_tool_names, *native_tool_names, *dynamic_tool_names})
+    return {
+        "total_tools": len(tool_names),
+        "memory_tools": len(memory_tool_names),
+        "native_tools": len(native_tool_names),
+        "dynamic_tools": len(dynamic_tool_names),
+        "tool_names": tool_names[: max(1, int(max_tools))],
+    }
+
+
+
+def _ops_build_mcp_runtime_snapshot(*, registry_status: Optional[Dict[str, Any]] = None, external_services: Optional[List[str]] = None) -> Dict[str, Any]:
+    from datetime import datetime
+
+    if registry_status is None:
+        try:
+            registry_status = _ops_collect_mcp_registry_status()
+        except Exception:
+            registry_status = {
+                "registered_services": 0,
+                "registered_tool_count": 0,
+                "cached_manifests": 0,
+                "service_names": [],
+                "tool_names": [],
+            }
+
+    if external_services is None:
+        try:
+            from agents.runtime.mcp_client import load_mcp_config
+
+            external_services = [
+                str(cfg.name).strip()
+                for cfg in load_mcp_config()
+                if bool(getattr(cfg, "enabled", True)) and str(getattr(cfg, "name", "") or "").strip()
+            ]
+        except Exception:
+            external_services = []
+
+    connected_names = [str(item) for item in (registry_status.get("service_names") or []) if str(item).strip()]
+    configured_only = [str(item) for item in (external_services or []) if str(item).strip() and str(item) not in connected_names]
+    service_total = len(set(connected_names) | set(configured_only))
+    connected_count = len(connected_names)
+
+    return {
+        "server": "online" if connected_count > 0 else "offline",
+        "timestamp": datetime.now().isoformat(),
+        "tasks": {
+            "total": service_total,
+            "active": connected_count,
+            "completed": connected_count,
+            "failed": max(service_total - connected_count, 0),
+        },
+        "registry": {
+            "registered_services": int(registry_status.get("registered_services") or 0),
+            "registered_tool_count": int(registry_status.get("registered_tool_count") or 0),
+            "cached_manifests": int(registry_status.get("cached_manifests") or 0),
+            "service_names": connected_names,
+            "tool_names": list(registry_status.get("tool_names") or []),
+            "external_service_names": configured_only,
+        },
+        "scheduler": {
+            "source": "official_mcp_registry_snapshot",
+            "tracked_tasks": service_total,
+        },
+    }
+
+
+
+def _ops_build_mcp_task_snapshot(status: Optional[str] = None, *, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if snapshot is None:
+        snapshot = _ops_build_mcp_runtime_snapshot()
+    registry = snapshot.get("registry", {}) if isinstance(snapshot, dict) else {}
+
+    tasks: List[Dict[str, Any]] = []
+    for name in registry.get("service_names", []) or []:
+        tasks.append(
+            {
+                "task_id": f"official:{name}",
+                "service_name": str(name),
+                "status": "online",
+                "source": "official",
+            }
+        )
+    for name in registry.get("external_service_names", []) or []:
+        tasks.append(
+            {
+                "task_id": f"official:{name}",
+                "service_name": str(name),
+                "status": "configured",
+                "source": "official",
+            }
+        )
+
+    normalized_filter = str(status or "").strip().lower()
+    if normalized_filter:
+        tasks = [item for item in tasks if str(item.get("status", "")).lower() == normalized_filter]
+
+    return {"tasks": tasks, "total": len(tasks)}
+
+
+async def get_memory_stats() -> Dict[str, Any]:
+    from apiserver.api_server import get_memory_stats as _get_memory_stats
+
+    return await _get_memory_stats()
+
+
+async def get_quintuples() -> Dict[str, Any]:
+    from apiserver.api_server import get_quintuples as _get_quintuples
+
+    return await _get_quintuples()
+
+
+_OPS_CANONICAL_ROUTE_SEMANTICS = {"shell_readonly", "shell_clarify", "core_execution"}
+
+
+def _ops_has_canonical_route_semantic(payload: Dict[str, Any]) -> bool:
+    semantic = str(payload.get("route_semantic") or "").strip().lower()
+    return semantic in _OPS_CANONICAL_ROUTE_SEMANTICS
+
+
 def _ops_route_semantic(payload: Dict[str, Any]) -> str:
     semantic = str(payload.get("route_semantic") or "").strip().lower()
-    if semantic in {"shell_readonly", "shell_clarify", "core_execution"}:
+    if semantic in _OPS_CANONICAL_ROUTE_SEMANTICS:
         return semantic
     return "core_execution"
 
@@ -159,11 +387,15 @@ def _ops_build_route_quality_trend(
     max_window_count = max(1, int(max_windows))
     rows = _ops_read_event_rows(events_file, limit=max(200, step * max_window_count * 8))
     prompt_rows: List[Dict[str, Any]] = []
+    ignored_legacy_noncanonical_sample_count = 0
     for row in rows:
         if str(row.get("event_type") or "").strip() != "PromptInjectionComposed":
             continue
         payload = row.get("payload")
         if not isinstance(payload, dict):
+            continue
+        if not _ops_has_canonical_route_semantic(payload):
+            ignored_legacy_noncanonical_sample_count += 1
             continue
         prompt_rows.append(
             {
@@ -180,7 +412,8 @@ def _ops_build_route_quality_trend(
             "windows": [],
             "sample_count": 0,
             "window_size": step,
-            "reason": "no_prompt_injection_events",
+            "reason": "no_canonical_prompt_injection_events" if ignored_legacy_noncanonical_sample_count > 0 else "no_prompt_injection_events",
+            "ignored_legacy_noncanonical_sample_count": ignored_legacy_noncanonical_sample_count,
         }
 
     capped = prompt_rows[-step * max_window_count :]
@@ -217,6 +450,7 @@ def _ops_build_route_quality_trend(
             "sample_count": 0,
             "window_size": step,
             "reason": "no_window_aggregates",
+            "ignored_legacy_noncanonical_sample_count": ignored_legacy_noncanonical_sample_count,
         }
 
     latest = windows[-1]
@@ -255,6 +489,7 @@ def _ops_build_route_quality_trend(
         "sample_count": len(capped),
         "window_size": step,
         "latest_window_status": latest_status,
+        "ignored_legacy_noncanonical_sample_count": ignored_legacy_noncanonical_sample_count,
     }
 
 
@@ -718,6 +953,7 @@ def _ops_build_killswitch_guard_summary(repo_root: Path) -> Dict[str, Any]:
         "exists": bool(state_file.exists()),
         "generated_at": str(state.get("generated_at") or ""),
         "active": active,
+        "execution_state": str(state.get("execution_state") or "unknown"),
         "mode": str(state.get("mode") or ""),
         "approval_ticket": str(state.get("approval_ticket") or ""),
         "requested_by": str(state.get("requested_by") or ""),
@@ -1167,6 +1403,8 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "control_plane_mode_status": control_plane_mode_status,
             "control_plane_mode": str(control_plane_mode.get("runtime_mode") or ""),
             "single_control_plane": bool(control_plane_mode.get("single_control_plane")),
+            "runtime_lease": metrics.get("runtime_lease", {}),
+            "lock_status": metrics.get("lock_status", {}),
             "brainstem_control_plane_status": brainstem_status,
             "watchdog_daemon_status": watchdog_daemon_status,
             "process_guard_status": process_guard_status,
@@ -1190,6 +1428,10 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "error_rate": metrics.get("error_rate", {}),
             "latency_p95_ms": metrics.get("latency_p95_ms", {}),
             "prompt_slice_count_by_layer": metrics.get("prompt_slice_count_by_layer", {}),
+            "injection_trigger_distribution": metrics.get("injection_trigger_distribution", {}),
+            "recovery_slice_hit_rate": metrics.get("recovery_slice_hit_rate", {}),
+            "prompt_conflict_drop_count": metrics.get("prompt_conflict_drop_count", {}),
+            "delegation_hit_rate": metrics.get("delegation_hit_rate", {}),
             "shell_readonly_hit_rate": metrics.get("shell_readonly_hit_rate", {}),
             "readonly_write_tool_exposure_rate": metrics.get("readonly_write_tool_exposure_rate", {}),
             "agent_route_semantic_distribution": metrics.get("agent_route_semantic_distribution", {}),
@@ -1197,6 +1439,10 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "shell_clarify_budget_escalation_rate": metrics.get("shell_clarify_budget_escalation_rate", {}),
             "core_execution_session_creation_rate": metrics.get("core_execution_session_creation_rate", {}),
             "core_execution_route_distribution": metrics.get("core_execution_route_distribution", {}),
+            "prompt_prefix_cache_hit_rate": metrics.get("prompt_prefix_cache_hit_rate", {}),
+            "prompt_tail_churn_rate": metrics.get("prompt_tail_churn_rate", {}),
+            "contract_upgrade_latency_ms": metrics.get("contract_upgrade_latency_ms", {}),
+            "recovery_context_survival_rate": metrics.get("recovery_context_survival_rate", {}),
             "control_plane_mode": {
                 "status": control_plane_mode_status,
                 "value": 0 if bool(control_plane_mode.get("single_control_plane")) else 1,
@@ -1234,6 +1480,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "killswitch_guard": {
                 "status": killswitch_guard_status,
                 "active": killswitch_guard.get("active"),
+                "execution_state": killswitch_guard.get("execution_state"),
                 "mode": killswitch_guard.get("mode"),
                 "commands_count": killswitch_guard.get("commands_count"),
                 "reason_code": killswitch_guard.get("reason_code"),
@@ -1388,6 +1635,16 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             vision_multimodal.get("reason_text")
             or "Vision multimodal QA fallback detected; verify endpoint availability."
         )
+    elif reason_code is None and snapshot_overall_status == "critical":
+        critical_metrics = sorted(key for key, value in metric_status.items() if str(value) == "critical")
+        excerpt = ", ".join(critical_metrics[:3]) if critical_metrics else "runtime_snapshot"
+        reason_code = "RUNTIME_METRIC_SNAPSHOT_CRITICAL"
+        reason_text = f"Critical runtime posture metrics detected: {excerpt}."
+    elif reason_code is None and snapshot_overall_status == "warning":
+        warning_metrics = sorted(key for key, value in metric_status.items() if str(value) == "warning")
+        excerpt = ", ".join(warning_metrics[:3]) if warning_metrics else "runtime_snapshot"
+        reason_code = "RUNTIME_METRIC_SNAPSHOT_WARNING"
+        reason_text = f"Runtime posture metrics require attention: {excerpt}."
     elif severity == "unknown":
         reason_code = "RUNTIME_SIGNAL_UNKNOWN"
         reason_text = "Runtime posture lacks enough signal coverage; verify events/workflow inputs."
@@ -1402,69 +1659,135 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     )
 
 
+def _ops_collect_skill_inventory(*, max_skills: int = 24) -> Dict[str, Any]:
+    repo_root = _ops_repo_root()
+    skills_dir = repo_root / "skills"
+    bundled_skills: List[Dict[str, str]] = []
+
+    skill_paths: List[Path] = []
+    try:
+        if skills_dir.exists():
+            skill_paths = sorted(skills_dir.glob("*/SKILL.md"))
+    except Exception:
+        skill_paths = []
+
+    for skill_path in skill_paths[: max(1, int(max_skills))]:
+        bundled_skills.append(
+            {
+                "name": str(skill_path.parent.name or "").strip(),
+                "path": _ops_unix_path(skill_path),
+            }
+        )
+
+    return {
+        "total_skills": len(skill_paths),
+        "bundled_skills": bundled_skills,
+    }
+
+
+def _ops_normalize_mcp_service_row(item: Any) -> Dict[str, Any]:
+    row = item if isinstance(item, dict) else {}
+    name = str(row.get("name") or row.get("service_name") or row.get("id") or "").strip()
+    display_name = str(row.get("display_name") or row.get("displayName") or name).strip()
+    description = str(row.get("description") or row.get("summary") or "").strip()
+    source = str(row.get("source") or "unknown").strip().lower() or "unknown"
+    if source not in {"official", "builtin", "mcporter"}:
+        source = "unknown"
+    available = bool(row.get("available"))
+
+    status_label = str(row.get("status_label") or "").strip().lower()
+    if not status_label:
+        if source == "official":
+            status_label = "online" if available else "configured"
+        elif source == "builtin":
+            status_label = "online" if available else "offline"
+        elif source == "mcporter":
+            status_label = "configured" if available else "missing_command"
+        else:
+            status_label = "available" if available else "unknown"
+
+    status_reason = str(row.get("status_reason") or "").strip()
+    if not status_reason:
+        if source == "official":
+            status_reason = (
+                "Official MCP server is connected in current runtime."
+                if available
+                else "Official MCP server is configured but not currently connected."
+            )
+        elif source == "builtin":
+            status_reason = (
+                "Builtin MCP module is importable in current runtime."
+                if available
+                else "Builtin MCP module is not importable in current runtime."
+            )
+        elif source == "mcporter":
+            status_reason = (
+                "Mcporter command is available in current runtime."
+                if available
+                else "Mcporter command is missing in current runtime."
+            )
+        else:
+            status_reason = "Service metadata is incomplete."
+
+    return {
+        "name": name,
+        "display_name": display_name or name,
+        "description": description,
+        "source": source,
+        "available": available,
+        "status_label": status_label,
+        "status_reason": status_reason,
+    }
+
+
 def _ops_build_mcp_fabric_payload() -> Dict[str, Any]:
-    registry_status: Dict[str, Any]
     reason_code: Optional[str] = None
     reason_text: Optional[str] = None
 
     try:
-        from agents.runtime.mcp_client import get_mcp_pool
-
-        pool = get_mcp_pool()
-        if pool:
-            tools = pool.get_all_tools()
-            service_names = list({t.get("domain", "") for t in tools if t.get("domain", "").startswith("mcp_")})
-            registry_status = {
-                "registered_services": len(service_names),
-                "isolated_worker_services": 0,
-                "rejected_plugin_manifests": 0,
-                "cached_manifests": 0,
-                "service_names": service_names,
-                "isolated_worker_names": [],
-                "rejected_plugin_names": [],
-            }
-        else:
-            registry_status = {
-                "registered_services": 0,
-                "isolated_worker_services": 0,
-                "rejected_plugin_manifests": 0,
-                "cached_manifests": 0,
-                "service_names": [],
-                "isolated_worker_names": [],
-                "rejected_plugin_names": [],
-            }
+        registry_status = _ops_collect_mcp_registry_status()
     except Exception as exc:
-        logger.warning(f"获取 MCP registry 状态失败: {exc}")
         registry_status = {
             "registered_services": 0,
+            "registered_tool_count": 0,
             "isolated_worker_services": 0,
             "rejected_plugin_manifests": 0,
             "cached_manifests": 0,
             "service_names": [],
+            "tool_names": [],
             "isolated_worker_names": [],
             "rejected_plugin_names": [],
         }
         reason_code = "MCP_REGISTRY_UNAVAILABLE"
         reason_text = f"MCP registry status unavailable: {exc}"
 
-    runtime_snapshot = _build_mcp_runtime_snapshot(registry_status=registry_status)
-    task_snapshot = _build_mcp_task_snapshot(snapshot=runtime_snapshot)
+    runtime_snapshot = _ops_build_mcp_runtime_snapshot(registry_status=registry_status)
+    task_snapshot = _ops_build_mcp_task_snapshot(snapshot=runtime_snapshot)
     services_payload = get_mcp_services()
-    services = services_payload.get("services") if isinstance(services_payload, dict) else []
-    if not isinstance(services, list):
-        services = []
+    raw_services = services_payload.get("services") if isinstance(services_payload, dict) else []
+    services = [
+        _ops_normalize_mcp_service_row(item)
+        for item in (raw_services if isinstance(raw_services, list) else [])
+        if isinstance(_ops_normalize_mcp_service_row(item), dict)
+    ]
+    services = [item for item in services if str(item.get("name") or "").strip()]
+    services.sort(key=lambda item: (str(item.get("source") or "unknown"), str(item.get("name") or "")))
+
+    skill_inventory = _ops_collect_skill_inventory()
+    tool_inventory = _ops_collect_local_tool_inventory()
 
     total_services = len(services)
     available_services = sum(1 for item in services if bool(item.get("available")))
-    builtin_services = sum(1 for item in services if str(item.get("source") or "").strip().lower() == "builtin")
-    mcporter_services = sum(1 for item in services if str(item.get("source") or "").strip().lower() == "mcporter")
+    builtin_services = sum(1 for item in services if str(item.get("source") or "") == "builtin")
+    mcporter_services = sum(1 for item in services if str(item.get("source") or "") == "mcporter")
     isolated_worker_services = int(registry_status.get("isolated_worker_services") or 0)
     rejected_plugin_manifests = int(registry_status.get("rejected_plugin_manifests") or 0)
+    registered_mcp_tools = int(registry_status.get("registered_tool_count") or 0)
 
     if total_services <= 0 and int(registry_status.get("registered_services") or 0) <= 0:
         severity = "unknown"
         reason_code = reason_code or "MCP_FABRIC_EMPTY"
-        reason_text = reason_text or "No builtin or mcporter services discovered."
+        reason_text = reason_text or "No official MCP services discovered."
     elif available_services <= 0:
         severity = "critical"
         reason_code = reason_code or "MCP_FABRIC_UNAVAILABLE"
@@ -1478,8 +1801,20 @@ def _ops_build_mcp_fabric_payload() -> Dict[str, Any]:
         severity = "ok"
 
     source_reports: List[str] = []
-    if MCPORTER_CONFIG_PATH.exists():
-        source_reports.append(_ops_unix_path(MCPORTER_CONFIG_PATH))
+    skills_dir = _ops_repo_root() / "skills"
+    if skills_dir.exists():
+        source_reports.append(_ops_unix_path(skills_dir))
+    try:
+        from agents.runtime.mcp_client import get_mcp_config_path
+
+        mcp_config_path = get_mcp_config_path()
+    except Exception:
+        mcp_config_path = _ops_repo_root() / "mcp_servers.json"
+    if Path(mcp_config_path).exists():
+        source_reports.append(_ops_unix_path(Path(mcp_config_path)))
+    custom_tools_dir = _ops_repo_root() / "memory" / "custom_tools"
+    if custom_tools_dir.exists():
+        source_reports.append(_ops_unix_path(custom_tools_dir))
 
     response_data = {
         "summary": {
@@ -1489,11 +1824,16 @@ def _ops_build_mcp_fabric_payload() -> Dict[str, Any]:
             "mcporter_services": mcporter_services,
             "isolated_worker_services": isolated_worker_services,
             "rejected_plugin_manifests": rejected_plugin_manifests,
+            "local_tools": int(tool_inventory.get("total_tools") or 0),
+            "mcp_tools": registered_mcp_tools,
+            "skills": int(skill_inventory.get("total_skills") or 0),
         },
         "runtime_snapshot": runtime_snapshot,
         "registry": registry_status,
         "tasks": task_snapshot,
         "services": services,
+        "skill_inventory": skill_inventory,
+        "tool_inventory": tool_inventory,
     }
 
     return _ops_build_response(
@@ -1504,6 +1844,7 @@ def _ops_build_mcp_fabric_payload() -> Dict[str, Any]:
         reason_code=reason_code,
         reason_text=reason_text,
     )
+
 
 def _ops_resolve_event_db_path(events_file: Path) -> Path:
     from core.event_bus.topic_bus import resolve_topic_db_path_from_mirror
@@ -2202,6 +2543,31 @@ def _ops_build_vision_multimodal_summary(
     }
 
 
+def _ops_build_runtime_heartbeat_snapshot(*, sample_limit: int = 12) -> Dict[str, Any]:
+    try:
+        import apiserver.api_server as runtime_api
+
+        store, _, _ = runtime_api._get_pipeline_runtime_handles()
+    except Exception as exc:
+        logger.debug("构建 runtime heartbeat snapshot 失败: %s", exc)
+        return {"summary": {}, "sessions": [], "heartbeats": []}
+
+    if store is None or not hasattr(store, "get_runtime_heartbeat_snapshot"):
+        return {"summary": {}, "sessions": [], "heartbeats": []}
+
+    try:
+        snapshot = store.get_runtime_heartbeat_snapshot()
+    except Exception as exc:
+        logger.debug("读取 runtime heartbeat snapshot 失败: %s", exc)
+        return {"summary": {}, "sessions": [], "heartbeats": []}
+
+    return {
+        "summary": dict(snapshot.get("summary") or {}),
+        "sessions": list(snapshot.get("sessions") or [])[: max(1, int(sample_limit))],
+        "heartbeats": list(snapshot.get("heartbeats") or [])[: max(1, int(sample_limit))],
+    }
+
+
 def _ops_build_workflow_events_payload(
     *,
     events_limit: int = 5000,
@@ -2220,26 +2586,56 @@ def _ops_build_workflow_events_payload(
     metrics = snapshot.get("metrics") if isinstance(snapshot.get("metrics"), dict) else {}
     summary = snapshot.get("summary") if isinstance(snapshot.get("summary"), dict) else {}
     sources = snapshot.get("sources") if isinstance(snapshot.get("sources"), dict) else {}
-    severity = _ops_status_to_severity(str(summary.get("overall_status") or "unknown"))
+    threshold_profile = snapshot.get("threshold_profile") if isinstance(snapshot.get("threshold_profile"), dict) else {}
+    snapshot_overall_status = _ops_status_to_severity(str(summary.get("overall_status") or "unknown"))
+    critical_event_window_hours = max(
+        1.0,
+        float(threshold_profile.get("workflow_critical_event_window_hours") or 336.0),
+    )
+    alert_window_started_at = datetime.fromtimestamp(
+        time.time() - (critical_event_window_hours * 3600.0),
+        tz=timezone.utc,
+    ).isoformat()
 
     events_file_raw = str(sources.get("events_file") or "").strip()
     events_file = Path(events_file_raw) if events_file_raw else Path("")
     event_rows = _ops_read_event_rows(events_file, limit=max(100, int(events_limit)))
     legacy_namespace = _ops_collect_archived_legacy_namespace(event_rows)
     event_database = _ops_build_event_database_summary(events_file)
+    heartbeat_supervision = _ops_build_runtime_heartbeat_snapshot(
+        sample_limit=max(6, int(recent_critical_limit))
+    )
 
     critical_event_types = {
         "LeaseLost",
         "IncidentOpened",
         "VisionMultimodalQAError",
+        "TaskHeartbeatStaleCritical",
+        "TaskHeartbeatEscalatedBlocked",
     }
-    event_counters = {name: 0 for name in sorted(critical_event_types)}
+    warning_event_types = {
+        "TaskHeartbeatStaleWarning",
+    }
+    tracked_event_types = critical_event_types | warning_event_types
+    event_counters_total = {name: 0 for name in sorted(tracked_event_types)}
+    event_counters = {name: 0 for name in sorted(tracked_event_types)}
     recent_critical_events: List[Dict[str, Any]] = []
+    historical_critical_events_total = 0
+    alert_window_started_ts = time.time() - (critical_event_window_hours * 3600.0)
     for row in event_rows:
         event_type = str(row.get("event_type") or "").strip()
-        if event_type not in critical_event_types:
+        if event_type not in tracked_event_types:
+            continue
+        event_counters_total[event_type] = int(event_counters_total.get(event_type, 0)) + 1
+        row_ts = _ops_parse_iso_datetime(row.get("timestamp"))
+        in_alert_window = row_ts is not None and float(row_ts) >= float(alert_window_started_ts)
+        if not in_alert_window:
+            if event_type in critical_event_types:
+                historical_critical_events_total += 1
             continue
         event_counters[event_type] = int(event_counters.get(event_type, 0)) + 1
+        if event_type not in critical_event_types:
+            continue
         recent_critical_events.append({
             "timestamp": str(row.get("timestamp") or ""),
             "event_type": event_type,
@@ -2250,13 +2646,25 @@ def _ops_build_workflow_events_payload(
     queue_depth = metrics.get("queue_depth") if isinstance(metrics.get("queue_depth"), dict) else {}
     lock_status = metrics.get("lock_status") if isinstance(metrics.get("lock_status"), dict) else {}
     runtime_lease = metrics.get("runtime_lease") if isinstance(metrics.get("runtime_lease"), dict) else {}
+    heartbeat_summary = heartbeat_supervision.get("summary") if isinstance(heartbeat_supervision.get("summary"), dict) else {}
+    active_heartbeat_tasks = _ops_safe_int(heartbeat_summary.get("task_count"), default=0)
+    stale_heartbeat_tasks = _ops_safe_int(heartbeat_summary.get("warning_count"), default=0) + _ops_safe_int(heartbeat_summary.get("critical_count"), default=0)
+    blocked_heartbeat_tasks = _ops_safe_int(heartbeat_summary.get("blocked_count"), default=0)
 
     queue_status = _ops_status_to_severity(str(queue_depth.get("status") or "unknown"))
-    if queue_status == "critical":
-        severity = "critical"
-    elif queue_status == "warning" and severity != "critical":
+    lock_signal_status = _ops_status_to_severity(str(lock_status.get("status") or "unknown"))
+    runtime_lease_status = _ops_status_to_severity(str(runtime_lease.get("status") or "unknown"))
+    severity = _ops_max_status([queue_status, lock_signal_status, runtime_lease_status])
+    if sum(event_counters.values()) > 0 and severity == "ok":
         severity = "warning"
-    elif sum(event_counters.values()) > 0 and severity == "ok":
+
+    if blocked_heartbeat_tasks > 0 or int(event_counters.get("TaskHeartbeatEscalatedBlocked") or 0) > 0:
+        severity = "critical"
+    elif (
+        stale_heartbeat_tasks > 0
+        or int(event_counters.get("TaskHeartbeatStaleCritical") or 0) > 0
+        or int(event_counters.get("TaskHeartbeatStaleWarning") or 0) > 0
+    ) and severity != "critical":
         severity = "warning"
 
     # Lazy import to avoid circular dependency — these are api_server singletons
@@ -2266,9 +2674,41 @@ def _ops_build_workflow_events_payload(
 
     reason_code: Optional[str] = None
     reason_text: Optional[str] = None
+    latest_critical_event = recent_critical_events[-1] if recent_critical_events else {}
     if severity == "critical":
-        reason_code = "WORKFLOW_RISK_CRITICAL"
-        reason_text = "Critical workflow pressure or high-risk runtime events detected."
+        if blocked_heartbeat_tasks > 0 or int(event_counters.get("TaskHeartbeatEscalatedBlocked") or 0) > 0:
+            reason_code = "WORKFLOW_HEARTBEAT_BLOCKED"
+            reason_text = "One or more task heartbeats escalated to blocked state."
+        elif queue_status == "critical":
+            reason_code = "WORKFLOW_QUEUE_DEPTH_CRITICAL"
+            reason_text = "Workflow outbox queue depth exceeded the critical threshold."
+        elif lock_signal_status == "critical" or runtime_lease_status == "critical":
+            reason_code = "WORKFLOW_LEASE_CRITICAL"
+            reason_text = "Workflow lease or lock state entered a critical condition."
+        else:
+            reason_code = "WORKFLOW_RISK_CRITICAL"
+            reason_text = "Critical workflow pressure or high-risk runtime events detected."
+    elif severity == "warning":
+        if stale_heartbeat_tasks > 0 or int(event_counters.get("TaskHeartbeatStaleCritical") or 0) > 0 or int(event_counters.get("TaskHeartbeatStaleWarning") or 0) > 0:
+            reason_code = "WORKFLOW_HEARTBEAT_STALE_WARNING"
+            reason_text = "One or more task heartbeats are stale within the workflow alert window."
+        elif latest_critical_event:
+            reason_code = "WORKFLOW_RECENT_CRITICAL_EVENT_WARNING"
+            reason_text = (
+                f"Recent workflow critical event detected within the last {int(critical_event_window_hours)}h: "
+                f"{latest_critical_event.get('event_type') or 'unknown'} @ {latest_critical_event.get('timestamp') or 'unknown'}."
+            )
+        elif sum(event_counters.values()) > 0:
+            reason_code = "WORKFLOW_RECENT_EVENT_ACTIVITY_WARNING"
+            reason_text = (
+                f"Workflow runtime events were detected within the last {int(critical_event_window_hours)}h; review recent event activity."
+            )
+        elif queue_status == "warning":
+            reason_code = "WORKFLOW_QUEUE_DEPTH_WARNING"
+            reason_text = "Workflow outbox queue depth requires attention."
+        elif lock_signal_status == "warning" or runtime_lease_status == "warning":
+            reason_code = "WORKFLOW_LEASE_WARNING"
+            reason_text = "Workflow lease or lock state requires attention."
     elif severity == "unknown":
         reason_code = "WORKFLOW_SIGNAL_UNKNOWN"
         reason_text = "Workflow signal coverage is insufficient; verify events/workflow data sources."
@@ -2284,11 +2724,18 @@ def _ops_build_workflow_events_payload(
 
     response_data = {
         "summary": {
-            "overall_status": str(summary.get("overall_status") or "unknown"),
+            "overall_status": severity,
+            "snapshot_overall_status": snapshot_overall_status,
             "events_scanned": _ops_safe_int(sources.get("events_scanned"), default=0),
             "outbox_pending": queue_depth.get("value"),
             "oldest_pending_age_seconds": queue_depth.get("oldest_pending_age_seconds"),
-            "critical_events_total": sum(event_counters.values()),
+            "critical_events_total": sum(int(event_counters.get(name) or 0) for name in critical_event_types),
+            "critical_events_total_all": sum(int(event_counters_total.get(name) or 0) for name in critical_event_types),
+            "historical_critical_events_total": historical_critical_events_total,
+            "event_alert_window_hours": critical_event_window_hours,
+            "alert_window_started_at": alert_window_started_at,
+            "latest_critical_event_type": str(recent_critical_events[-1].get("event_type") or "") if recent_critical_events else "",
+            "latest_critical_event_at": str(recent_critical_events[-1].get("timestamp") or "") if recent_critical_events else "",
             "legacy_event_namespace_status": str(legacy_namespace.get("status") or "unknown"),
             "legacy_event_namespace": str(legacy_namespace.get("namespace") or ""),
             "legacy_subagent_runtime_events_detected": _ops_safe_int(
@@ -2300,14 +2747,19 @@ def _ops_build_workflow_events_payload(
             "event_db_partitions": _ops_safe_int(event_database.get("partition_count"), default=0),
             "event_db_latest_at": str(event_database.get("latest_timestamp") or ""),
             "event_db_status": str(event_database.get("status") or "unknown"),
+            "active_heartbeat_tasks": active_heartbeat_tasks,
+            "stale_heartbeat_tasks": stale_heartbeat_tasks,
+            "blocked_heartbeat_tasks": blocked_heartbeat_tasks,
         },
         "queue_depth": queue_depth,
         "lock_status": lock_status,
         "runtime_lease": runtime_lease,
         "event_counters": event_counters,
+        "event_counters_total": event_counters_total,
         "legacy_event_namespace": legacy_namespace,
         "recent_critical_events": recent_critical_events,
         "event_database": event_database,
+        "heartbeat_supervision": heartbeat_supervision,
         "log_context_statistics": context_stats,
         "tool_status": tool_status,
     }
@@ -2322,16 +2774,171 @@ def _ops_build_workflow_events_payload(
     )
 
 
+def _ops_normalize_memory_stats_payload(memory_stats: Any) -> Dict[str, Any]:
+    stats = dict(memory_stats) if isinstance(memory_stats, dict) else {}
+    task_manager = stats.get("task_manager") if isinstance(stats.get("task_manager"), dict) else {}
+    if not task_manager and isinstance(stats.get("tasks"), dict):
+        task_manager = dict(stats.get("tasks") or {})
+
+    vector_index = stats.get("vector_index") if isinstance(stats.get("vector_index"), dict) else {}
+    if not vector_index and isinstance(stats.get("vectorIndex"), dict):
+        vector_index = dict(stats.get("vectorIndex") or {})
+
+    pending_tasks = _ops_safe_int(task_manager.get("pending_tasks"), default=_ops_safe_int(stats.get("pending_tasks"), default=0))
+    running_tasks = _ops_safe_int(task_manager.get("running_tasks"), default=_ops_safe_int(stats.get("running_tasks"), default=0))
+    failed_tasks = _ops_safe_int(task_manager.get("failed_tasks"), default=_ops_safe_int(stats.get("failed_tasks"), default=0))
+    active_tasks = _ops_safe_int(stats.get("active_tasks"), default=0)
+    active_tasks = max(active_tasks, pending_tasks + running_tasks)
+    total_quintuples = _ops_safe_int(stats.get("total_quintuples"), default=0)
+
+    enabled_raw = stats.get("enabled")
+    enabled = bool(enabled_raw) if enabled_raw is not None else bool(total_quintuples > 0 or active_tasks > 0 or failed_tasks > 0 or task_manager or vector_index)
+
+    normalized_vector_index = dict(vector_index)
+    normalized_vector_index["state"] = str(vector_index.get("state") or vector_index.get("status") or "unknown")
+    normalized_vector_index["ready"] = bool(vector_index.get("ready", False))
+
+    normalized_task_manager = dict(task_manager)
+    normalized_task_manager["pending_tasks"] = pending_tasks
+    normalized_task_manager["running_tasks"] = running_tasks
+    normalized_task_manager["failed_tasks"] = failed_tasks
+
+    stats.update(
+        {
+            "enabled": enabled,
+            "total_quintuples": total_quintuples,
+            "active_tasks": active_tasks,
+            "task_manager": normalized_task_manager,
+            "vector_index": normalized_vector_index,
+        }
+    )
+    return stats
+
+
+def _ops_normalize_memory_quintuple_row(row: Any) -> Optional[Dict[str, str]]:
+    if isinstance(row, dict):
+        subject = str(row.get("subject") or row.get("entity") or "")
+        subject_type = str(row.get("subject_type") or row.get("entity_type") or "")
+        predicate = str(row.get("predicate") or row.get("relation") or "")
+        obj = str(row.get("object") or row.get("target") or "")
+        object_type = str(row.get("object_type") or row.get("target_type") or "")
+    elif isinstance(row, (list, tuple)) and len(row) >= 5:
+        subject = str(row[0] or "")
+        subject_type = str(row[1] or "")
+        predicate = str(row[2] or "")
+        obj = str(row[3] or "")
+        object_type = str(row[4] or "")
+    else:
+        return None
+
+    return {
+        "subject": subject,
+        "subject_type": subject_type,
+        "predicate": predicate,
+        "object": obj,
+        "object_type": object_type,
+    }
+
+
+async def _ops_query_memory_quintuples_by_keywords(keyword_list: List[str]) -> Dict[str, Any]:
+    try:
+        from summer_memory.memory_client import get_remote_memory_client
+
+        remote = get_remote_memory_client()
+        if remote is not None:
+            result = await remote.query_by_keywords(keyword_list)
+            return {
+                "rows": result.get("quintuples") or result.get("results") or result.get("data") or [],
+                "backend": "remote_memory",
+            }
+    except ImportError:
+        pass
+
+    try:
+        from summer_memory.quintuple_graph import query_graph_by_keywords
+
+        return {
+            "rows": list(query_graph_by_keywords(keyword_list)),
+            "backend": "local_quintuple_graph",
+        }
+    except ImportError:
+        return {
+            "rows": [],
+            "backend": "module_missing",
+            "reason_code": "MEMORY_MODULE_MISSING",
+            "reason_text": "记忆系统模块未找到",
+        }
+
+
+async def _ops_build_memory_search_payload(*, keywords: str, limit: int = 50) -> Dict[str, Any]:
+    keyword_list = [item.strip() for item in str(keywords or "").split(",") if item.strip()]
+    if not keyword_list:
+        raise HTTPException(status_code=400, detail="请提供搜索关键词")
+
+    query_result = await _ops_query_memory_quintuples_by_keywords(keyword_list)
+    raw_rows = query_result.get("rows") if isinstance(query_result, dict) else []
+    if not isinstance(raw_rows, list):
+        raw_rows = []
+
+    normalized_rows = [
+        normalized
+        for normalized in (_ops_normalize_memory_quintuple_row(row) for row in raw_rows)
+        if isinstance(normalized, dict)
+    ]
+
+    normalized_limit = max(1, min(200, int(limit)))
+    results = normalized_rows[:normalized_limit]
+    truncated = len(normalized_rows) > len(results)
+    severity = "ok" if normalized_rows else "unknown"
+    reason_code = None
+    reason_text = None
+
+    if not normalized_rows:
+        reason_code = str(query_result.get("reason_code") or "MEMORY_SEARCH_EMPTY") if isinstance(query_result, dict) else "MEMORY_SEARCH_EMPTY"
+        reason_text = str(query_result.get("reason_text") or "当前关键词未命中五元组。") if isinstance(query_result, dict) else "当前关键词未命中五元组。"
+
+    source_reports: List[str] = []
+    quintuples_file = _ops_repo_root() / "logs" / "knowledge_graph" / "quintuples.json"
+    if quintuples_file.exists():
+        source_reports.append(_ops_unix_path(quintuples_file))
+
+    backend = str(query_result.get("backend") or "unknown") if isinstance(query_result, dict) else "unknown"
+
+    return _ops_build_response(
+        data={
+            "summary": {
+                "keyword_count": len(keyword_list),
+                "result_count": len(normalized_rows),
+                "returned_count": len(results),
+                "truncated": truncated,
+                "backend": backend,
+            },
+            "keywords": keyword_list,
+            "results": results,
+        },
+        severity=severity,
+        source_reports=source_reports,
+        source_endpoints=["/memory/quintuples/search"],
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
+
+
 async def _ops_build_memory_graph_payload(*, sample_limit: int = 200) -> Dict[str, Any]:
     stats_response = await get_memory_stats()
-    memory_stats = stats_response.get("memory_stats") if isinstance(stats_response, dict) else {}
-    if not isinstance(memory_stats, dict):
-        memory_stats = {}
+    memory_stats_raw = stats_response.get("memory_stats") if isinstance(stats_response, dict) else {}
+    memory_stats = _ops_normalize_memory_stats_payload(memory_stats_raw)
 
     quintuples_response = await get_quintuples()
-    quintuples = quintuples_response.get("quintuples") if isinstance(quintuples_response, dict) else []
-    if not isinstance(quintuples, list):
-        quintuples = []
+    raw_quintuples = quintuples_response.get("quintuples") if isinstance(quintuples_response, dict) else []
+    if not isinstance(raw_quintuples, list):
+        raw_quintuples = []
+
+    quintuples = [
+        normalized
+        for normalized in (_ops_normalize_memory_quintuple_row(row) for row in raw_quintuples)
+        if isinstance(normalized, dict)
+    ]
 
     task_manager = memory_stats.get("task_manager") if isinstance(memory_stats.get("task_manager"), dict) else {}
     pending_tasks = _ops_safe_int(task_manager.get("pending_tasks"), default=0)
@@ -2344,8 +2951,6 @@ async def _ops_build_memory_graph_payload(*, sample_limit: int = 200) -> Dict[st
     entity_counter: Counter[str] = Counter()
     graph_sample: List[Dict[str, str]] = []
     for row in quintuples[: max(20, min(1000, int(sample_limit)))]:
-        if not isinstance(row, dict):
-            continue
         subject = str(row.get("subject") or "")
         subject_type = str(row.get("subject_type") or "")
         predicate = str(row.get("predicate") or "")
@@ -2357,19 +2962,24 @@ async def _ops_build_memory_graph_payload(*, sample_limit: int = 200) -> Dict[st
             entity_counter[obj] += 1
         if predicate:
             relation_counter[predicate] += 1
-        graph_sample.append({
-            "subject": subject,
-            "subject_type": subject_type,
-            "predicate": predicate,
-            "object": obj,
-            "object_type": object_type,
-        })
+        graph_sample.append(
+            {
+                "subject": subject,
+                "subject_type": subject_type,
+                "predicate": predicate,
+                "object": obj,
+                "object_type": object_type,
+            }
+        )
 
     total_quintuples = _ops_safe_int(
         memory_stats.get("total_quintuples"),
-        default=_ops_safe_int(quintuples_response.get("count"), default=len(quintuples)),
+        default=_ops_safe_int(quintuples_response.get("count") if isinstance(quintuples_response, dict) else 0, default=len(quintuples)),
     )
-    active_tasks = _ops_safe_int(memory_stats.get("active_tasks"), default=0)
+    active_tasks = max(
+        _ops_safe_int(memory_stats.get("active_tasks"), default=0),
+        pending_tasks + running_tasks,
+    )
     vector_index = memory_stats.get("vector_index") if isinstance(memory_stats.get("vector_index"), dict) else {}
     enabled = bool(memory_stats.get("enabled"))
     error_text = str(memory_stats.get("error") or "").strip()
@@ -2394,6 +3004,11 @@ async def _ops_build_memory_graph_payload(*, sample_limit: int = 200) -> Dict[st
         severity = "ok"
         reason_code = None
         reason_text = None
+
+    source_reports: List[str] = []
+    quintuples_file = _ops_repo_root() / "logs" / "knowledge_graph" / "quintuples.json"
+    if quintuples_file.exists():
+        source_reports.append(_ops_unix_path(quintuples_file))
 
     response_data = {
         "summary": {
@@ -2421,7 +3036,7 @@ async def _ops_build_memory_graph_payload(*, sample_limit: int = 200) -> Dict[st
     return _ops_build_response(
         data=response_data,
         severity=severity,
-        source_reports=[],
+        source_reports=source_reports,
         source_endpoints=["/memory/stats", "/memory/quintuples"],
         reason_code=reason_code,
         reason_text=reason_text,
@@ -2588,6 +3203,11 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             else {}
         )
         prompt_safety_summary = {
+            "prompt_slice_count_by_layer": snapshot_metrics.get("prompt_slice_count_by_layer", {}),
+            "injection_trigger_distribution": snapshot_metrics.get("injection_trigger_distribution", {}),
+            "recovery_slice_hit_rate": snapshot_metrics.get("recovery_slice_hit_rate", {}),
+            "prompt_conflict_drop_count": snapshot_metrics.get("prompt_conflict_drop_count", {}),
+            "delegation_hit_rate": snapshot_metrics.get("delegation_hit_rate", {}),
             "shell_readonly_hit_rate": shell_readonly_hit,
             "readonly_write_tool_exposure_rate": readonly_write_exposure,
             "agent_route_semantic_distribution": route_semantic_distribution,
@@ -2595,6 +3215,10 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
             "shell_clarify_budget_escalation_rate": shell_clarify_budget_escalation,
             "core_execution_session_creation_rate": core_execution_session_creation,
             "core_execution_route_distribution": core_execution_route_distribution,
+            "prompt_prefix_cache_hit_rate": snapshot_metrics.get("prompt_prefix_cache_hit_rate", {}),
+            "prompt_tail_churn_rate": snapshot_metrics.get("prompt_tail_churn_rate", {}),
+            "contract_upgrade_latency_ms": snapshot_metrics.get("contract_upgrade_latency_ms", {}),
+            "recovery_context_survival_rate": snapshot_metrics.get("recovery_context_survival_rate", {}),
             "route_quality": _ops_build_route_quality_summary(snapshot_metrics, trend=route_quality_trend),
             "execution_bridge_governance": execution_bridge_governance,
             "agentic_loop_completion": agentic_loop_completion,
@@ -2979,86 +3603,84 @@ def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
 @router.get("/mcp/status")
 async def get_mcp_status_offline():
     """返回 MCP 运行态快照，兼容前端 status/tasks 字段。"""
-    return _build_mcp_runtime_snapshot()
+    return _ops_build_mcp_runtime_snapshot()
 
 
 @router.get("/mcp/tasks")
 async def get_mcp_tasks_offline(status: Optional[str] = None):
     """返回 MCP 任务（服务）快照，避免离线模式 503。"""
-    return _build_mcp_task_snapshot(status)
+    return _ops_build_mcp_task_snapshot(status)
 
 
 # ============ MCP 服务列表 & 导入 ============
 
 
-def _load_mcporter_config() -> Dict[str, Any]:
-    """读取 ~/.mcporter/config.json，不存在或格式错误时返回空 dict"""
-    if not MCPORTER_CONFIG_PATH.exists():
-        return {}
-    try:
-        return json.loads(MCPORTER_CONFIG_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _save_mcporter_config(mcporter_config: Dict[str, Any]) -> Path:
-    MCPORTER_DIR.mkdir(parents=True, exist_ok=True)
-    MCPORTER_CONFIG_PATH.write_text(
-        json.dumps(mcporter_config, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return MCPORTER_CONFIG_PATH
-
-
-def _check_agent_available(manifest: Dict[str, Any]) -> bool:
-    """检查内置 agent 模块是否可导入"""
-    entry = manifest.get("entryPoint", {})
-    module_path = entry.get("module", "")
-    if not module_path:
-        return False
-    try:
-        __import__(module_path)
-        return True
-    except Exception:
-        return False
-
-
 @router.get("/mcp/services")
 def get_mcp_services():
-    """列出所有 MCP 服务并检查可用性（同步端点，由 FastAPI 在线程池中执行）"""
+    """List official MCP services from the canonical runtime config and live pool state."""
     services: List[Dict[str, Any]] = []
 
-    # 1. 内置 agent（扫描 mcpserver/**/agent-manifest.json）
-    mcpserver_dir = Path(__file__).resolve().parent.parent / "mcpserver"
-    for manifest_path in mcpserver_dir.glob("*/agent-manifest.json"):
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if manifest.get("agentType") != "mcp":
-            continue
-        available = _check_agent_available(manifest)
-        services.append({
-            "name": manifest.get("name", manifest_path.parent.name),
-            "display_name": manifest.get("displayName", manifest.get("name", "")),
-            "description": manifest.get("description", ""),
-            "source": "builtin",
-            "available": available,
-        })
+    try:
+        from agents.runtime import mcp_client
+    except Exception:
+        return {"status": "success", "services": services}
 
-    # 2. mcporter 外部配置（~/.mcporter/config.json 中的 mcpServers）
-    mcporter_config = _load_mcporter_config()
-    for name, cfg in mcporter_config.get("mcpServers", {}).items():
-        cmd = cfg.get("command", "")
-        available = shutil.which(cmd) is not None if cmd else False
-        services.append({
-            "name": name,
-            "display_name": name,
-            "description": f"{cmd} {' '.join(cfg.get('args', []))}" if cmd else "",
-            "source": "mcporter",
-            "available": available,
-        })
+    try:
+        configs = [cfg for cfg in mcp_client.load_mcp_config() if bool(getattr(cfg, "enabled", True))]
+    except Exception:
+        configs = []
 
+    pool = None
+    try:
+        pool = mcp_client.get_mcp_pool()
+    except Exception:
+        pool = None
+
+    config_map = {str(cfg.name).strip(): cfg for cfg in configs if str(getattr(cfg, "name", "") or "").strip()}
+    connection_map = dict(getattr(pool, "connections", {}) or {}) if pool else {}
+    all_names = sorted(set(config_map) | set(connection_map))
+
+    for name in all_names:
+        cfg = config_map.get(name)
+        conn = connection_map.get(name)
+        command = ""
+        if cfg is not None:
+            command = " ".join([str(getattr(cfg, "command", "") or "")] + [str(arg) for arg in getattr(cfg, "args", []) or []]).strip()
+        elif conn is not None:
+            command = " ".join([str(getattr(getattr(conn, "config", None), "command", "") or "")] + [str(arg) for arg in getattr(getattr(conn, "config", None), "args", []) or []]).strip()
+
+        if conn is not None and bool(getattr(conn, "connected", False)):
+            status_label = "online"
+            status_reason = f"Official MCP server connected; {len(getattr(conn, 'tools', []) or [])} tools discovered."
+            available = True
+        elif conn is not None and str(getattr(conn, "error", "") or "").strip():
+            status_label = "offline"
+            status_reason = str(getattr(conn, "error", "") or "").strip()
+            available = False
+        elif cfg is not None:
+            status_label = "configured"
+            status_reason = "Official MCP server is configured in mcp_servers.json but has not been connected yet."
+            available = False
+        else:
+            status_label = "unknown"
+            status_reason = "Service metadata is incomplete."
+            available = False
+
+        services.append(
+            _ops_normalize_mcp_service_row(
+                {
+                    "name": name,
+                    "display_name": name,
+                    "description": command,
+                    "source": "official",
+                    "available": available,
+                    "status_label": status_label,
+                    "status_reason": status_reason,
+                }
+            )
+        )
+
+    services.sort(key=lambda item: (str(item.get("source") or "unknown"), str(item.get("name") or "")))
     return {"status": "success", "services": services}
 
 
@@ -3093,6 +3715,19 @@ async def get_ops_memory_graph(sample_limit: int = 200):
         logger.error(f"获取 /v1/ops/memory/graph 失败: {exc}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"获取 memory graph 失败: {str(exc)}")
+
+
+@router.get("/v1/ops/memory/search")
+async def get_ops_memory_search(keywords: str = "", limit: int = 50):
+    """聚合记忆搜索结果：统一关键词检索结果的 schema。"""
+    try:
+        return await _ops_build_memory_search_payload(keywords=keywords, limit=limit)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"获取 /v1/ops/memory/search 失败: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取 memory search 失败: {str(exc)}")
 
 
 @router.get("/v1/ops/workflow/events")

@@ -23,6 +23,11 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _DEFAULT_CONFIG_PATH = _PROJECT_ROOT / "mcp_servers.json"
 
 
+def get_mcp_config_path(config_path: Optional[str] = None) -> Path:
+    """Return the canonical Embla MCP runtime config path."""
+    return Path(config_path) if config_path else _DEFAULT_CONFIG_PATH
+
+
 # ── Data Types ────────────────────────────────────────────────
 
 
@@ -82,7 +87,7 @@ def load_mcp_config(
           }
         }
     """
-    path = Path(config_path) if config_path else _DEFAULT_CONFIG_PATH
+    path = get_mcp_config_path(config_path)
     if not path.is_file():
         logger.debug("MCP config not found at %s, no servers configured", path)
         return []
@@ -111,6 +116,42 @@ def load_mcp_config(
         ))
 
     return configs
+
+
+def load_mcp_config_document(config_path: Optional[str] = None) -> Dict[str, Any]:
+    """Load the raw MCP config document, returning an empty canonical envelope on failure."""
+    path = get_mcp_config_path(config_path)
+    if not path.is_file():
+        return {"mcpServers": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Failed to parse MCP config document %s: %s", path, exc)
+        return {"mcpServers": {}}
+    return data if isinstance(data, dict) else {"mcpServers": {}}
+
+
+def upsert_mcp_server_config(
+    name: str,
+    config: Dict[str, Any],
+    config_path: Optional[str] = None,
+) -> Path:
+    """Create or update a configured MCP server entry in the canonical config file."""
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        raise ValueError("MCP server name is required")
+
+    path = get_mcp_config_path(config_path)
+    document = load_mcp_config_document(config_path)
+    servers = document.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+    servers[normalized_name] = dict(config or {})
+    document["mcpServers"] = servers
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
 
 
 # ── MCP Tool Schema Conversion ────────────────────────────────
@@ -340,6 +381,49 @@ def set_mcp_pool(pool: MCPClientPool) -> None:
     _POOL = pool
 
 
+async def close_global_mcp_pool() -> None:
+    """Close and clear the global MCP client pool."""
+    global _POOL
+    if _POOL is None:
+        return
+    try:
+        await _POOL.close_all()
+    finally:
+        _POOL = None
+
+
+async def reload_global_mcp_pool(config_path: Optional[str] = None) -> Dict[str, Any]:
+    """Reload the global MCP pool from the canonical config file."""
+    global _POOL
+
+    if _POOL is not None:
+        try:
+            await _POOL.close_all()
+        except Exception as exc:
+            logger.warning("Failed to close previous MCP pool: %s", exc)
+        finally:
+            _POOL = None
+
+    pool = MCPClientPool()
+    configured_servers = pool.load_config(config_path)
+    if configured_servers <= 0:
+        return {
+            "config_path": str(get_mcp_config_path(config_path)),
+            "configured_servers": 0,
+            "connected_servers": 0,
+            "results": {},
+        }
+
+    results = await pool.connect_all()
+    _POOL = pool
+    return {
+        "config_path": str(get_mcp_config_path(config_path)),
+        "configured_servers": configured_servers,
+        "connected_servers": sum(1 for ok in results.values() if ok),
+        "results": results,
+    }
+
+
 def get_mcp_tool_definitions(
     tool_names: Optional[Sequence[str]] = None,
 ) -> List[Dict[str, Any]]:
@@ -402,9 +486,14 @@ __all__ = [
     "MCPConnection",
     "MCPServerConfig",
     "MCPToolInfo",
+    "get_mcp_config_path",
     "get_mcp_pool",
     "get_mcp_tool_definitions",
     "load_mcp_config",
+    "load_mcp_config_document",
     "register_mcp_into_registry",
+    "reload_global_mcp_pool",
     "set_mcp_pool",
+    "close_global_mcp_pool",
+    "upsert_mcp_server_config",
 ]

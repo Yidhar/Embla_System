@@ -17,7 +17,7 @@ from agents.runtime.task_board import (
     TaskItem,
     TaskStatus,
 )
-from agents.runtime.workflow_store import LeaseStatus, WorkflowStore
+from agents.runtime.workflow_store import WorkflowStore
 from agents.runtime.ws22_longrun_baseline import WS22LongRunConfig, run_ws22_longrun_baseline
 from agents.runtime.ws25_event_gc_quality_baseline import WS25EventGCQualityConfig, run_ws25_event_gc_quality_baseline
 from agents.runtime.ws27_longrun_endurance import WS27LongRunConfig, run_ws27_72h_endurance_baseline
@@ -33,7 +33,6 @@ __all__ = [
     "TaskItem",
     "TaskStatus",
     "WorkflowStore",
-    "LeaseStatus",
     "DailyCheckpointConfig",
     "DailyCheckpointReport",
     "DailyCheckpointEngine",
