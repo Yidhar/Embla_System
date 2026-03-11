@@ -1,0 +1,83 @@
+@import "./tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.72), transparent 32%),
+    radial-gradient(circle at top right, rgba(191, 219, 254, 0.36), transparent 28%),
+    linear-gradient(180deg, #f9f9fb 0%, #f2f2f7 100%);
+  color: var(--embla-text-primary);
+  font-family: var(--embla-font-stack);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: rgba(30, 64, 175, 0.16);
+}
+
+@layer base {
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply tracking-tight text-[#1C1C1E];
+  }
+
+  p {
+    @apply text-slate-600;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply rounded-[40px] border p-6 shadow-float backdrop-blur-[48px] transition duration-200 ease-embla;
+    background: var(--embla-glass-fill);
+    border-color: var(--embla-stroke-outer);
+    box-shadow:
+      inset 0 1px 0 var(--embla-stroke-inner),
+      var(--embla-shadow-float);
+  }
+
+  .glass-card {
+    @apply rounded-[28px] border p-5 shadow-float backdrop-blur-[44px] transition duration-200 ease-embla;
+    background: rgba(255, 255, 255, 0.52);
+    border-color: rgba(209, 213, 219, 0.42);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.78),
+      var(--embla-shadow-float);
+  }
+
+  .soft-inset {
+    @apply rounded-[22px] border border-white/60 bg-slate-100/60 shadow-insetSoft;
+  }
+
+  .eyebrow {
+    @apply text-[10px] font-bold uppercase tracking-[0.34em] text-slate-500;
+  }
+
+  .grid-overlay {
+    background-image:
+      linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+
+  .page-shell {
+    @apply min-h-screen p-4 lg:p-6;
+  }
+
+  .top-divider {
+    @apply border-t border-white/60;
+  }
+}
