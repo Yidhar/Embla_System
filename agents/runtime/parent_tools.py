@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Tuple
 from agents.runtime.agent_session import AgentSessionStore, AgentStatus
 from agents.runtime.mailbox import AgentMailbox
 from agents.runtime.tool_profiles import resolve_child_tool_capabilities
+from system.agent_profile_registry import resolve_agent_profile_defaults
+from system.boxlite.manager import resolve_execution_runtime_metadata
 from system.git_worktree_sandbox import (
     audit_git_worktree_sandbox,
     create_git_worktree_sandbox,
@@ -24,6 +26,7 @@ from system.git_worktree_sandbox import (
     promote_git_worktree_sandbox,
     teardown_git_worktree_sandbox,
 )
+from system.sandbox_context import inherit_execution_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +47,11 @@ def get_parent_tool_definitions() -> List[Dict[str, Any]]:
                 "properties": {
                     "role": {
                         "type": "string",
-                        "description": "Agent role: expert, dev, review, etc.",
+                        "description": "Lifecycle role for the child agent: expert, dev, review.",
+                    },
+                    "agent_type": {
+                        "type": "string",
+                        "description": "Optional dynamic child-agent profile name resolved from system agent profiles.",
                     },
                     "task_description": {
                         "type": "string",
@@ -71,6 +78,19 @@ def get_parent_tool_definitions() -> List[Dict[str, Any]]:
                     "workspace_ref": {
                         "type": "string",
                         "description": "Git ref used when workspace_mode=worktree. Defaults to HEAD.",
+                    },
+                    "execution_backend": {
+                        "type": "string",
+                        "enum": ["native", "boxlite"],
+                        "description": "Execution backend for child tools. Defaults by runtime policy and target repo.",
+                    },
+                    "execution_profile": {
+                        "type": "string",
+                        "description": "Execution resource/isolation profile name for the selected backend.",
+                    },
+                    "box_profile": {
+                        "type": "string",
+                        "description": "Optional BoxLite box profile preset when execution_backend=boxlite.",
                     },
                     "metadata": {
                         "type": "object",
@@ -314,14 +334,32 @@ def _handle_spawn(
     metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
     role = str(args.get("role", "dev") or "dev").strip() or "dev"
     task_description = str(args.get("task_description", "") or "")
+    requested_agent_type = str(args.get("agent_type") or "").strip()
+    try:
+        profile_defaults = resolve_agent_profile_defaults(
+            role=role,
+            agent_type=requested_agent_type,
+            prompt_blocks=args.get("prompt_blocks") if isinstance(args.get("prompt_blocks"), list) else None,
+            tool_profile=args.get("tool_profile"),
+            tool_subset=args.get("tool_subset") if isinstance(args.get("tool_subset"), list) else None,
+        )
+    except Exception as exc:
+        return {"error": str(exc), "status": "blocked"}
+
+    resolved_prompt_blocks = list(profile_defaults.get("prompt_blocks") or [])
+    resolved_tool_profile = profile_defaults.get("tool_profile")
+    resolved_tool_subset = profile_defaults.get("tool_subset") if isinstance(profile_defaults.get("tool_subset"), list) else None
     resolution = resolve_child_tool_capabilities(
         role=role,
-        tool_profile=args.get("tool_profile"),
-        tool_subset=args.get("tool_subset") if isinstance(args.get("tool_subset"), list) else None,
+        tool_profile=resolved_tool_profile,
+        tool_subset=resolved_tool_subset,
         task_description=task_description,
     )
     requested_workspace_mode = normalize_workspace_mode(args.get("workspace_mode"))
     workspace_ref = str(args.get("workspace_ref") or "HEAD").strip() or "HEAD"
+    requested_execution_backend = str(args.get("execution_backend") or "").strip()
+    execution_profile = str(args.get("execution_profile") or "default").strip() or "default"
+    box_profile = str(args.get("box_profile") or "default").strip() or "default"
     session_id = str(args.get("session_id") or f"agent-{uuid.uuid4().hex[:12]}").strip()
     parent_session = store.get(parent_session_id)
     parent_metadata = dict(parent_session.metadata) if parent_session is not None else {}
@@ -330,6 +368,7 @@ def _handle_spawn(
         inherited = inherit_workspace_metadata(parent_metadata)
         if inherited:
             metadata.update(inherited)
+            metadata.update(inherit_execution_metadata(parent_metadata))
             metadata["workspace_mode"] = "inherit"
         else:
             metadata.setdefault("workspace_mode", "project")
@@ -361,12 +400,35 @@ def _handle_spawn(
     else:
         return {"error": f"unsupported workspace_mode: {requested_workspace_mode}", "status": "blocked"}
 
+    try:
+        metadata.update(
+            resolve_execution_runtime_metadata(
+                requested_backend=requested_execution_backend,
+                workspace_mode=str(metadata.get("workspace_mode") or requested_workspace_mode),
+                workspace_root=str(metadata.get("workspace_root") or ""),
+                parent_metadata=parent_metadata,
+                execution_profile=execution_profile,
+                box_profile=box_profile,
+            )
+        )
+    except Exception as exc:
+        return {"error": str(exc), "status": "blocked"}
+
+    resolved_agent_type = str(profile_defaults.get("agent_type") or requested_agent_type or "").strip()
+    if resolved_agent_type:
+        metadata["agent_type"] = resolved_agent_type
+    profile_row = profile_defaults.get("profile") if isinstance(profile_defaults.get("profile"), dict) else None
+    if profile_row:
+        metadata["agent_profile_label"] = str(profile_row.get("label") or "")
+        metadata["agent_profile_source"] = str(profile_defaults.get("source") or "")
+        metadata["agent_profile_registry_path"] = str(profile_defaults.get("registry_path") or "")
+
     session = store.create(
         session_id=session_id,
         role=role,
         parent_id=parent_session_id,
         task_description=task_description,
-        prompt_blocks=args.get("prompt_blocks"),
+        prompt_blocks=resolved_prompt_blocks,
         tool_profile=resolution.profile_name,
         tool_subset=resolution.tool_subset,
         metadata=metadata,
@@ -374,10 +436,14 @@ def _handle_spawn(
     return {
         "agent_id": session.session_id,
         "role": session.role,
+        "agent_type": str(session.metadata.get("agent_type") or ""),
         "status": session.status.value,
         "tool_profile": session.tool_profile,
         "tool_subset": list(session.tool_subset),
+        "prompt_blocks": list(session.prompt_blocks),
         "workspace_mode": str(session.metadata.get("workspace_mode") or "project"),
+        "execution_backend": str(session.metadata.get("execution_backend") or "native"),
+        "execution_root": str(session.metadata.get("execution_root") or ""),
         "workspace_root": str(session.metadata.get("workspace_root") or ""),
         "message": f"Child agent {session.session_id} created and running.",
     }

@@ -181,6 +181,7 @@ class ExpertAgent:
         memory_hints: Optional[List[str]] = None,
         prompt_blocks: Optional[List[str]] = None,
         cycle: int = 1,
+        agent_type: str = "code_reviewer",
     ) -> Dict[str, Any]:
         """Spawn a Review agent with contextualized review inputs."""
         sections: List[str] = [
@@ -208,21 +209,27 @@ class ExpertAgent:
             sections.append("\n".join(rendered_reports))
 
         task_desc = "\n\n".join(section for section in sections if section).strip()
-        review_prompt_blocks = list(prompt_blocks or ["agents/review/code_reviewer.md"])
         review_metadata: Dict[str, Any] = {
             "memory_hints": list(memory_hints or []),
             "review_cycle": max(1, int(cycle)),
             "changed_files": normalized_files,
         }
+        spawn_args: Dict[str, Any] = {
+            "role": "review",
+            "task_description": task_desc,
+            "metadata": review_metadata,
+        }
+        normalized_agent_type = str(agent_type or "").strip()
+        if normalized_agent_type:
+            spawn_args["agent_type"] = normalized_agent_type
+        if prompt_blocks is not None:
+            spawn_args["prompt_blocks"] = list(prompt_blocks)
+        elif not normalized_agent_type:
+            spawn_args["prompt_blocks"] = ["agents/review/code_reviewer.md"]
+            spawn_args["tool_profile"] = "review"
         return handle_parent_tool_call(
             "spawn_child_agent",
-            {
-                "role": "review",
-                "task_description": task_desc,
-                "prompt_blocks": review_prompt_blocks,
-                "tool_profile": "review",
-                "metadata": review_metadata,
-            },
+            spawn_args,
             parent_session_id=self._session_id,
             store=self._store,
             mailbox=self._mailbox,

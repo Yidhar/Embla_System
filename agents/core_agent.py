@@ -250,6 +250,8 @@ class CoreAgent:
                 "tool_subset": assignment.get("tool_subset", []),
                 "metadata": metadata,
             }
+            if str(assignment.get("agent_type") or "").strip():
+                spawn_args["agent_type"] = str(assignment.get("agent_type") or "").strip()
             if target_repo == "self":
                 spawn_args["workspace_mode"] = "worktree"
             result = handle_parent_tool_call(

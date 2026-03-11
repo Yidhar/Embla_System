@@ -961,6 +961,17 @@ def _normalize_prompt_template_name(name: str) -> str:
     return normalized
 
 
+def _normalize_agent_profile_name(name: str) -> str:
+    normalized = str(name or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="agent_type 不能为空")
+    if len(normalized) > 64:
+        raise HTTPException(status_code=400, detail="agent_type 过长")
+    if not all(ch.isalnum() or ch in {"_", "-"} for ch in normalized):
+        raise HTTPException(status_code=400, detail="agent_type 仅允许字母、数字、下划线、连字符")
+    return normalized
+
+
 def _deep_merge_config_patch(base: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
     merged: Dict[str, Any] = dict(base)
     for key, value in patch.items():
@@ -1132,6 +1143,132 @@ async def update_system_prompt_template(name: str, payload: Dict[str, Any]):
 @app.post("/v1/system/prompts/{name}")
 async def update_system_prompt_template_v1(name: str, payload: Dict[str, Any]):
     return await update_system_prompt_template(name, payload)
+
+
+@app.get("/system/agent-profiles")
+async def list_system_agent_profiles():
+    try:
+        from agents.runtime.tool_profiles import TOOL_PROFILE_PRESETS
+        from system.agent_profile_registry import load_agent_profile_registry
+
+        registry = load_agent_profile_registry()
+        profiles = list(registry.get("profiles") or [])
+        enabled_profiles = [item for item in profiles if isinstance(item, dict) and bool(item.get("enabled", True))]
+        default_profiles = [item for item in profiles if isinstance(item, dict) and bool(item.get("default_for_role"))]
+        return {
+            "status": "success",
+            "schema_version": str(registry.get("schema_version") or ""),
+            "registry_path": str(registry.get("registry_path") or ""),
+            "exists_on_disk": bool(registry.get("exists_on_disk")),
+            "allowed_roles": list(registry.get("allowed_roles") or []),
+            "summary": {
+                "total_profiles": len(profiles),
+                "enabled_profiles": len(enabled_profiles),
+                "default_profiles": len(default_profiles),
+            },
+            "profiles": profiles,
+            "tool_profile_presets": dict(TOOL_PROFILE_PRESETS),
+            "prompt_templates": _list_prompt_template_metas(),
+        }
+    except Exception as e:
+        logger.error(f"读取 agent profile 列表失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"读取 agent profile 列表失败: {str(e)}")
+
+
+@app.get("/v1/system/agent-profiles")
+async def list_system_agent_profiles_v1():
+    return await list_system_agent_profiles()
+
+
+@app.get("/system/agent-profiles/{agent_type}")
+async def get_system_agent_profile(agent_type: str):
+    try:
+        from system.agent_profile_registry import build_prompt_block_previews, get_agent_profile
+
+        normalized = _normalize_agent_profile_name(agent_type)
+        profile = get_agent_profile(normalized)
+        if not isinstance(profile, dict):
+            raise HTTPException(status_code=404, detail=f"agent profile 不存在: {normalized}")
+        return {
+            "status": "success",
+            "profile": profile,
+            "prompt_block_previews": build_prompt_block_previews(
+                list(profile.get("prompt_blocks") or []),
+                prompts_root=str(profile.get("prompts_root") or "system/prompts"),
+            ),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"读取 agent profile 失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"读取 agent profile 失败: {str(e)}")
+
+
+@app.get("/v1/system/agent-profiles/{agent_type}")
+async def get_system_agent_profile_v1(agent_type: str):
+    return await get_system_agent_profile(agent_type)
+
+
+@app.post("/system/agent-profiles/{agent_type}")
+async def upsert_system_agent_profile(agent_type: str, payload: Dict[str, Any]):
+    try:
+        from system.agent_profile_registry import upsert_agent_profile
+
+        normalized = _normalize_agent_profile_name(agent_type)
+        body = dict(payload or {}) if isinstance(payload, dict) else {}
+        body["agent_type"] = normalized
+        saved = upsert_agent_profile(body)
+        return {
+            "status": "success",
+            "message": "agent profile 更新成功",
+            "profile": saved,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新 agent profile 失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"更新 agent profile 失败: {str(e)}")
+
+
+@app.post("/v1/system/agent-profiles/{agent_type}")
+async def upsert_system_agent_profile_v1(agent_type: str, payload: Dict[str, Any]):
+    return await upsert_system_agent_profile(agent_type, payload)
+
+
+@app.delete("/system/agent-profiles/{agent_type}")
+async def delete_system_agent_profile(agent_type: str):
+    try:
+        from system.agent_profile_registry import delete_agent_profile
+
+        normalized = _normalize_agent_profile_name(agent_type)
+        deleted = delete_agent_profile(normalized)
+        return {
+            "status": "success",
+            "message": "agent profile 删除成功",
+            "profile": deleted,
+        }
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"agent profile 不存在: {agent_type}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除 agent profile 失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"删除 agent profile 失败: {str(e)}")
+
+
+@app.delete("/v1/system/agent-profiles/{agent_type}")
+async def delete_system_agent_profile_v1(agent_type: str):
+    return await delete_system_agent_profile(agent_type)
 
 
 @app.post("/chat", response_model=ChatResponse)
