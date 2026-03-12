@@ -1,16 +1,11 @@
 import asyncio
 import json
 import logging
-import os
-import sys
 import time
 from typing import List, Optional
 
 from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel
-
-# 添加项目根目录到路径，以便导入config
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from agents.prompt_engine import PromptAssembler, get_system_prompts_root
 from system.config import config
