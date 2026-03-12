@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { ChatOpsConsole } from "@/components/chatops-console";
 import { EmptyState, GlassPanel, MetricCard, MetricGrid, PageHeader } from "@/components/dashboard-ui";
-import { getChatRouteSessionState, getChatSessionDetail, getChatSessions } from "@/lib/api/ops";
+import { getChatRouteSessionState, getChatSessionDetail, getChatSessions, getShellToolCatalog } from "@/lib/api/ops";
 import { cx, formatNumber, formatTimestamp } from "@/lib/format";
 import { createTranslator, humanizeEnum } from "@/lib/i18n";
 import { getRequestLocale } from "@/lib/request-locale";
@@ -27,9 +27,10 @@ export default async function ChatOpsPage({ searchParams }: ChatOpsPageProps) {
   const sessions = await getChatSessions();
   const sessionId = requestedSessionId || sessions[0]?.session_id || "";
 
-  const [routeState, sessionDetail] = await Promise.all([
+  const [routeState, sessionDetail, shellToolCatalog] = await Promise.all([
     sessionId ? getChatRouteSessionState(sessionId) : Promise.resolve(null),
-    sessionId ? getChatSessionDetail(sessionId) : Promise.resolve(null)
+    sessionId ? getChatSessionDetail(sessionId) : Promise.resolve(null),
+    getShellToolCatalog()
   ]);
   const heartbeatSummary = routeState?.child_heartbeat_summary ?? {};
 
@@ -139,7 +140,12 @@ export default async function ChatOpsPage({ searchParams }: ChatOpsPageProps) {
           )}
         </GlassPanel>
 
-        <ChatOpsConsole locale={locale} selectedSessionId={sessionId} initialMessages={initialMessages} />
+        <ChatOpsConsole
+          locale={locale}
+          selectedSessionId={sessionId}
+          initialMessages={initialMessages}
+          initialTools={shellToolCatalog.tools}
+        />
       </div>
 
       {!sessionId ? (

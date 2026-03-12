@@ -23,6 +23,8 @@ import {
   OpsEnvelope,
   PromptTemplateMeta,
   RuntimePostureData,
+  ShellToolCatalog,
+  ShellToolDefinition,
   SkillInventory,
   SystemConfigData,
   SystemInfoData,
@@ -225,6 +227,19 @@ function normalizeToolInventory(input: unknown): ToolInventory {
     native_tools: numberValue(row.native_tools),
     dynamic_tools: numberValue(row.dynamic_tools),
     tool_names: normalizeStringList(row.tool_names)
+  };
+}
+
+function normalizeShellToolDefinition(input: unknown): ShellToolDefinition | null {
+  const row = recordValue(input);
+  const name = stringValue(row.name);
+  if (!name) {
+    return null;
+  }
+  return {
+    name,
+    description: stringValue(row.description),
+    parameters: recordValue(row.parameters)
   };
 }
 
@@ -860,6 +875,33 @@ export async function getChatRouteSessionState(sessionId: string): Promise<ChatR
     };
   } catch {
     return null;
+  }
+}
+
+export async function getShellToolCatalog(): Promise<ShellToolCatalog> {
+  try {
+    const data = await fetchJson<ShellToolCatalog>("/v1/shell/tools");
+    return {
+      status: stringValue(data.status, "success"),
+      agent: stringValue(data.agent, "shell"),
+      scope: stringValue(data.scope, "entry"),
+      session_id: stringValue(data.session_id),
+      count: numberValue(data.count),
+      tool_names: normalizeStringList(data.tool_names),
+      tools: listValue(data.tools)
+        .map((item) => normalizeShellToolDefinition(item))
+        .filter((item): item is ShellToolDefinition => Boolean(item))
+    };
+  } catch {
+    return {
+      status: "error",
+      agent: "shell",
+      scope: "entry",
+      session_id: "",
+      count: 0,
+      tool_names: [],
+      tools: []
+    };
   }
 }
 

@@ -141,12 +141,16 @@ const zhCNMessages = {
         currentSession: "当前绑定会话",
         noSession: "将创建新会话",
         sessionHint: "留空时会由后端自动创建新的 Shell 会话。",
+        toolSurface: "Shell 工具面",
+        toolSurfaceDescription: "这里展示当前对外 Shell 通道可用的工具清单；流式会话启动时会与后端运行时再次对齐。",
+        toolCount: "{count} 个工具",
+        toolEmpty: "当前没有可展示的 Shell 工具。",
         emptyTitle: "还没有聊天记录",
         emptyDescription: "从这里发送一条消息，就可以验证外层对话链路是否正常。",
         placeholder: "输入一条测试消息，例如：请总结当前 runtime posture。",
         submit: "发送测试消息",
         submitting: "发送中…",
-        submitHint: "会直接调用 /v1/chat，并把返回的 session_id 自动切回当前页面。",
+        submitHint: "会直接调用 /v1/chat/stream，以 Shell 流式链路启动会话并把 session_id 自动切回当前页面。",
         submitError: "测试聊天失败",
         startNew: "新会话",
         reasoning: "Reasoning",
@@ -176,7 +180,7 @@ const zhCNMessages = {
       header: {
         eyebrow: "Control Surface",
         title: "系统设置",
-        description: "把系统信息、提示词仓库、Agent Profile 注册表以及管理控件收拢到同一页，便于进行运行时配置维护。",
+        description: "这里聚焦 Embla System 的框架级设置；MCP 安装与 Agent 提示词配置分别收敛到专门页面，并通过高级展开栏承载低频设置。",
         agentConfigCta: "打开 Agent 配置"
       },
       metrics: {
@@ -666,12 +670,16 @@ const enUSMessages: typeof zhCNMessages = {
         currentSession: "Bound session",
         noSession: "A new session will be created",
         sessionHint: "When blank, the backend will automatically create a fresh Shell session.",
+        toolSurface: "Shell tool surface",
+        toolSurfaceDescription: "Shows the tools currently available to the external Shell channel. Stream startup re-syncs this list with the backend runtime.",
+        toolCount: "{count} tools",
+        toolEmpty: "No Shell tools are available to display right now.",
         emptyTitle: "No chat transcript yet",
         emptyDescription: "Send one message here to verify that the outer conversation path is healthy.",
         placeholder: "Type a test message, for example: summarize the current runtime posture.",
         submit: "Send test message",
         submitting: "Sending…",
-        submitHint: "This calls /v1/chat directly and switches the page to the returned session_id automatically.",
+        submitHint: "This calls /v1/chat/stream directly, starts the session through the Shell streaming path, and switches the page to the returned session_id automatically.",
         submitError: "Test chat failed",
         startNew: "New session",
         reasoning: "Reasoning",
@@ -701,7 +709,7 @@ const enUSMessages: typeof zhCNMessages = {
       header: {
         eyebrow: "Control Surface",
         title: "Settings",
-        description: "Collect system info, prompt inventory, the agent profile registry, and runtime management controls into one page for operational maintenance.",
+        description: "This page focuses on framework-level Embla System settings; MCP installation and agent prompt/profile maintenance now live on dedicated pages, with lower-frequency options tucked into an advanced drawer.",
         agentConfigCta: "Open Agent Config"
       },
       metrics: {

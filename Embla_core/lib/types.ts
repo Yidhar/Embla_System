@@ -185,6 +185,22 @@ export interface ChatRouteSessionStateData {
   recent_route_events: Array<Record<string, unknown>>;
 }
 
+export interface ShellToolDefinition {
+  name: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+}
+
+export interface ShellToolCatalog {
+  status: string;
+  agent: string;
+  scope?: string;
+  session_id?: string;
+  count: number;
+  tool_names: string[];
+  tools: ShellToolDefinition[];
+}
+
 
 export interface PromptTemplateMeta {
   name: string;
