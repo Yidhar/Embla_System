@@ -1,20 +1,27 @@
-# Prompt 任务排期协议（TSP-v1）
+# Routing / Dispatch Prompt 任务排期协议（TSP-v1）
 
 ## 1. 目标
 
-为当前自主运行 agent 架构提供统一的“提示词级任务排期协议”，确保以下能力一致：
+为当前自主运行 agent 架构提供统一的“路由 / 调度提示词级任务排期协议”，确保以下能力一致：
 - 多步骤任务可拆解、可排序、可回退
 - 工具调用顺序与验收链路一致
 - 结果可追溯到证据路径（报告/日志/产物）
 
-本协议用于约束 `system/prompts/*.md` 的行为口径，不替代代码层状态机。
+本协议用于约束 routing / dispatch prompt 的行为口径，不替代代码层状态机。
 
 ## 2. 适用范围
 
-- `system/prompts/conversation_style_prompt.md`
-- `system/prompts/conversation_analyzer_prompt.md`
-- `system/prompts/tool_dispatch_prompt.md`
-- `system/prompts/agentic_tool_prompt.md`
+- `system/prompts/core/routing/conversation_analyzer_prompt.md`
+- `system/prompts/core/routing/tool_dispatch_prompt.md`
+
+不适用范围（当前 canonical）：
+- `system/prompts/dna/shell_persona.md`
+- `system/prompts/dna/core_values.md`
+- `system/prompts/core/dna/conversation_style_prompt.md`
+- `system/prompts/core/dna/agentic_tool_prompt.md`
+
+说明：
+- 上述四份 DNA / contract prompt 只负责身份、表达组织与工具调用真值约束，不承载 `T0->T1->T2->T3` 的任务编排语义。
 
 ## 3. TSP-v1 字段定义（最小集）
 
@@ -45,23 +52,27 @@
 - `T2` 失败时优先修复或回退。
 - `T3` 必须可审计。
 
-## 5. 四份 Prompt 职责分层
+## 5. Prompt 职责分层（当前 canonical）
 
-1. `conversation_style_prompt`
-- 定义执行优先、证据优先、发布语义边界。
-- 约束回答层如何呈现排期与结果。
+1. `shell_persona` / `core_values`
+- 身份 DNA。
+- 只定义人格、自我驱动与稳定价值，不定义路由、排期或工具协议。
 
-2. `conversation_analyzer_prompt`
+2. `conversation_style_prompt`
+- 表达编排 DNA。
+- 只定义回答结构、信息密度与真实性边界，不定义任务排期、路由或发布语义。
+
+3. `conversation_analyzer_prompt`
 - 将“最新用户消息”转换为可执行 JSON 调用。
 - 复合任务按 `T0->T1->T2->T3` 顺序拆分数组。
 
-3. `tool_dispatch_prompt`
+4. `tool_dispatch_prompt`
 - 决策 native/mcp 的路由。
 - 强化“先发现再实施再验证再证据”的调度规则。
 
-4. `agentic_tool_prompt`
-- 约束函数调用模式与执行闭环。
-- 强化 schema 合法性、自治发布治理、交付口径。
+5. `agentic_tool_prompt`
+- 工具调用契约 DNA。
+- 只约束 schema 合法性、工具真值表达与失败处理，不承载 `TSP-v1` 排期或角色分工。
 
 ## 6. 与自治工作流状态机的关系
 
@@ -75,7 +86,7 @@ Prompt 排期协议与状态机互补：
 
 ## 7. 变更落地步骤
 
-1. 修改四份 Prompt 文件
+1. 修改 routing / dispatch prompt 文件
 2. 更新 DNA manifest 哈希（`system/prompts/immutable_dna_manifest.spec`）
 3. 执行最小验证：
 - `python scripts/validate_immutable_dna_gate_ws23_003.py --strict`（或等价命令链）
@@ -93,4 +104,4 @@ Prompt 排期协议与状态机互补：
 
 ## 9. 最后更新
 
-- 2026-02-25
+- 2026-03-12（按当前 canonical 分层修订）

@@ -116,7 +116,7 @@
 40. `doc/task/runbooks/release_m8_phase3_closure_onepager_ws23_006.md`
     - M8 发布收口一页清单（T0-T6 执行顺序、放行条件、产物归档）。
 41. `doc/task/runbooks/prompt_task_scheduling_protocol_tsp_v1.md`
-    - Prompt 层任务排期协议（TSP-v1）：统一 `T0->T1->T2->T3` 执行语义、证据路径与回退口径。
+    - Routing / Dispatch Prompt 任务排期协议（TSP-v1）：约束 `conversation_analyzer` / `tool_dispatch` 的 `T0->T1->T2->T3` 执行语义、证据路径与回退口径，不适用于 DNA 文件。
 42. `doc/task/24-ws-prompt-routing-injection-policy.md`
     - Prompt 路由注入与多职能 Agent 注入时机设计讨论稿（阶段/风险/证据/失败触发模型）。
 43. `scripts/update_immutable_dna_manifest_ws23_003.py`

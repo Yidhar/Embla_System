@@ -309,41 +309,56 @@
 
 2. `S1_CONTROLLED`（可改但强管控）
 - 允许 AI 生成变更，但必须审批票据+DNA 重算+gate 通过。
-- 文件（当前 4/4）：
-  - `system/prompts/conversation_style_prompt.md`
-  - `system/prompts/conversation_analyzer_prompt.md`
-  - `system/prompts/tool_dispatch_prompt.md`
-  - `system/prompts/agentic_tool_prompt.md`
+- 文件（当前 canonical）：
+  - `system/prompts/dna/shell_persona.md`
+  - `system/prompts/dna/core_values.md`
+  - `system/prompts/core/dna/conversation_style_prompt.md`
+  - `system/prompts/core/dna/agentic_tool_prompt.md`
 
 3. `S2_FLEXIBLE`（可放任修改）
-- 非核心专家 prompt、实验型角色 prompt、可回退模板。
-- 当前仓库尚未拆分此目录，现阶段可放任数量：`0`。
+- 路由 / 调度 prompt、原子 runtime blocks、专家角色 prompt、可回退模板。
+- 文件（当前 canonical，示例）：
+  - `system/prompts/core/routing/conversation_analyzer_prompt.md`
+  - `system/prompts/core/routing/tool_dispatch_prompt.md`
+  - `system/prompts/agents/shell/blocks/*.md`
+  - `system/prompts/agents/core_exec/blocks/*.md`
+  - `system/prompts/roles/*.md`
+  - `system/prompts/skills/*.md`
+  - `system/prompts/styles/*.md`
+  - `system/prompts/rules/*.md`
 
 治理结论（当前阶段）：
 
-1. 当前 4 个 DNA prompt 均不是“放任修改”对象。
-2. 在多 Agent Prompt 目录拆分完成前，默认按 `S1_CONTROLLED` 处理。
+1. 身份 DNA / 表达 DNA / 工具调用契约 DNA 均不是“放任修改”对象。
+2. `conversation_analyzer_prompt` 与 `tool_dispatch_prompt` 属于 routing/runtime policy，不再归入 DNA。
+3. 主链以 `system/prompts/specs/prompt_registry.spec` + `system/prompts/specs/prompt_acl.spec` 为准。
 
 ### 6.3 目录规范（多 Agent Prompt）
 
-目标目录（To-Be）：
+当前 canonical 目录：
 
-1. `system/prompts/core/`
-- DNA 受控核心 prompt（S1/S0 配套治理）
+1. `system/prompts/dna/`
+- 身份 DNA（`shell_persona` / `core_values`）
 
-2. `system/prompts/agents/shell/`
+2. `system/prompts/core/dna/`
+- 表达编排 DNA 与工具调用契约 DNA
+
+3. `system/prompts/core/routing/`
+- 路由分析与调度 prompt
+
+4. `system/prompts/agents/shell/`
 - Shell 交互代理 prompt（`shell_readonly`/`shell_clarify`）
 
-3. `system/prompts/agents/core_exec/`
+5. `system/prompts/agents/core_exec/`
 - 核心执行代理 prompt（`core_execution`）
 
-4. `system/prompts/agents/experts/`
+6. `system/prompts/agents/experts/`
 - 专家子代理 prompt（Explore/Plan/Review/Ops 等）
 
-5. `system/prompts/agents/recovery/`
+7. `system/prompts/agents/recovery/`
 - 故障恢复与补救策略 prompt（L4）
 
-6. `system/prompts/specs/`
+8. `system/prompts/specs/`
 - `prompt_registry.spec`（切片注册、层级、TTL、冲突域）
 - `prompt_acl.spec`（文件级修改权限策略）
 
@@ -358,15 +373,15 @@
 
 ### 7.1 双层常驻隔离模型（Two-Layer Persistent Model）
 
-1. 外层交互代理（Shell Chat Agent）
+1. 外层对话代理（Shell Agent）
 - 职能：负责闲聊、需求澄清、生成执行契约（Contract）。
-- 注入包：`L0_DNA + L1_TASK_BASE + L2_ROLE(Chat/Router)`。
+- 注入包：`identity_dna(shell_persona) + style_dna(conversation_style_prompt) + shell runtime blocks`。
 - 工具权限：`ask_user`, `search_kb`, `read_uploaded_file`, `summarize_doc`, `delegate_to_core`（目标态）。
 - 说明：上传文件总结/文档检索默认走 Shell 只读路径，不必直接拉起 Core。
 
 2. 核心执行代理（Core Execution Agent）
 - 职能：后台无头执行，不直接消费闲聊历史，仅消费 Contract。
-- 注入包：`L0_DNA + L3_TOOL_POLICY + L4_RECOVERY`。
+- 注入包：`identity_dna(core_values) + tool_contract_dna(agentic_tool_prompt) + core runtime blocks + L4_RECOVERY`。
 - 工具权限：系统执行工具 + `spawn_sub_agent`（目标态）。
 
 3. 迁移说明

@@ -268,7 +268,9 @@
 
 ## 9. 补充进度（2026-02-26）
 
-- Prompt 治理已完成批量重构（`conversation_style / analyzer / dispatch / agentic_tool`），并统一为 `TSP-v1` 排期语义。
+- Prompt 治理已完成首轮批量重构；当前 canonical 已收敛为：
+  - `conversation_analyzer` / `tool_dispatch` 承载 `TSP-v1`
+  - `shell_persona` / `core_values` / `conversation_style` / `agentic_tool` 只承载 DNA / contract 语义
 - WS23-003 新增一键 manifest 同步工具：
   - `scripts/update_immutable_dna_manifest_ws23_003.py`
   - 报告：`scratch/reports/immutable_dna_manifest_update_ws23_003.json`

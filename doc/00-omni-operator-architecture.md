@@ -141,11 +141,15 @@ Embla_System/
 │       ├── semantic_graph.py
 │       └── gc_pipeline.py
 │
+├── system/prompts/                     # ═══ Prompt 资产（canonical）
+│   ├── dna/                            # 身份 DNA（shell_persona/core_values）
+│   ├── core/dna/                       # 表达编排 / 工具调用契约 DNA
+│   ├── core/routing/                   # conversation_analyzer / tool_dispatch
+│   ├── agents/                         # shell/core_exec runtime blocks
+│   ├── roles/                          # 专家角色块
+│   └── specs/                          # prompt_registry.spec / prompt_acl.spec
+│
 ├── workspace/                          # ═══ 资产与工作区 (受控读写)
-│   ├── prompts/                        # System Prompts（YAML/MD）
-│   │   ├── immutable_dna.md            # 核心安全 DNA（只读）
-│   │   ├── router_policy.md
-│   │   └── role_prompts/
 │   ├── tools_registry/                 # 动态工具注册表（版本化）
 │   │   ├── builtins/
 │   │   ├── plugins/
@@ -207,7 +211,7 @@ Embla_System/
 禁止能力：
 
 - 直接修改 `core/` 脑干层代码。
-- 直接修改 `workspace/prompts/immutable_dna.md`。
+- 直接修改 `system/prompts/dna/*` 或 `system/prompts/core/dna/*`。
 - 绕过审批链注册高风险工具。
 
 ## 4.2 框架维护域（Maintenance Lane）

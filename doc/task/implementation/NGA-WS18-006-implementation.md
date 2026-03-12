@@ -24,11 +24,15 @@
 
 2. 固定注入顺序
 - 默认顺序固定为：
-  1. `conversation_style_prompt.md`
-  2. `conversation_analyzer_prompt.md`
-  3. `tool_dispatch_prompt.md`
-  4. `agentic_tool_prompt.md`
+  1. `dna/shell_persona.md`
+  2. `dna/core_values.md`
+  3. `core/dna/conversation_style_prompt.md`
+  4. `core/dna/agentic_tool_prompt.md`
 - 支持自定义顺序（显式配置），并在 manifest 中固化。
+
+说明：
+- 该实施记录创建时，历史口径曾包含 `conversation_analyzer_prompt.md` / `tool_dispatch_prompt.md`。
+- 当前 canonical 已将这两份文件移出 immutable DNA 注入集，仅保留身份 DNA、表达 DNA 与工具调用契约 DNA。
 
 3. 非授权变更拒绝
 - 文件内容被篡改后 `verify().ok=False`，`inject()` 抛 `PermissionError`。

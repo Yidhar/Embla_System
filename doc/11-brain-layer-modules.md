@@ -187,7 +187,7 @@ flowchart TB
 
     META["Meta-Agent"] -->|"子任务"| CLASSIFY
     CLASSIFY --> ROLE_SEL
-    ROLE_SEL -->|"加载 prompt"| PROMPTS["workspace/prompts/"]
+    ROLE_SEL -->|"加载 prompt"| PROMPTS["system/prompts/ + prompt_registry.spec"]
     ROLE_SEL --> MODEL_SEL
     MODEL_SEL -->|"查询预算"| BUDGET["Token Budget"]
     MODEL_SEL --> TOOL_SEL
@@ -219,8 +219,8 @@ sequenceDiagram
     CLASS-->>RT: type="ops_repair", severity="high"
 
     RT->>ROLE: selectRole("ops_repair")
-    ROLE-->>RT: role="sys_admin"
-    RT->>PROMPT: load("workspace/prompts/sys_admin.md")
+    ROLE-->>RT: role="ops_expert"
+    RT->>PROMPT: load("system/prompts/roles/ops_expert.md")
     PROMPT-->>RT: system_prompt_content
 
     RT->>MODEL: selectModel(severity="high", complexity="medium")
@@ -229,10 +229,10 @@ sequenceDiagram
     MODEL->>MODEL: high severity + 预算充足 → Sonnet
     MODEL-->>RT: model="claude-3.7-sonnet"
 
-    RT->>TOOL: getToolsForRole("sys_admin")
+    RT->>TOOL: getToolsForRole("ops_expert")
     TOOL-->>RT: [os_bash, file_ast, systemd_manager, search_engine]
 
-    RT->>RT: 组装 Payload:<br/>SystemPrompt = DNA + sys_admin.md<br/>Tools = [os_bash, file_ast, ...]<br/>Model = claude-3.7-sonnet
+    RT->>RT: 组装 Payload:<br/>SystemPrompt = identity_dna + ops_expert.md + runtime_blocks<br/>Tools = [os_bash, file_ast, ...]<br/>Model = claude-3.7-sonnet
 
     RT->>LLM: sendRequest(payload)
 ```

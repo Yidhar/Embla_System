@@ -29,12 +29,12 @@ ledger = DNAChangeAuditLedger(
 )
 
 change_id = ledger.request_change(
-    file_path="system/prompts/tool_dispatch_prompt.md",
+    file_path="system/prompts/core/dna/conversation_style_prompt.md",
     old_hash="sha256_old",
     new_hash="sha256_new",
     requested_by="agent-security",
     request_ticket="CHG-2026-0201",
-    notes="tighten high-risk shell policy",
+    notes="refine global conversation composition DNA",
 )
 
 ledger.approve_change(

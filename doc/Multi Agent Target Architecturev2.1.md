@@ -81,7 +81,7 @@ Core 收到 trivial → 直接用 native_call 执行 → 返回结果
 | 约束 | 规则 | 违反时 |
 |------|------|--------|
 | **禁止命令执行** | `run_command/exec_shell` 不可用 | 自动升级到标准路径 |
-| **保护路径** | `core/security/`、`system/dna/`、`.env`、`config.json` 不可写 | 自动升级 |
+| **保护路径** | `core/security/`、`system/prompts/dna/`、`system/prompts/core/dna/`、`.env`、`config.json` 不可写 | 自动升级 |
 | **规模限制** | 单文件 ≤ 10 行改动 | 自动升级 |
 | **禁止配置修改** | `write_config/delete_file` 不可用 | 自动升级 |
 
@@ -92,21 +92,27 @@ Core 收到 trivial → 直接用 native_call 执行 → 返回结果
 ## 4. Prompt 架构：不可变 DNA + 原子化组装
 
 ```
-prompts/
-├── dna/                          # 🔒 不可变
+system/prompts/
+├── dna/                          # 🔒 身份 DNA
 │   ├── shell_persona.md
 │   └── core_values.md
-├── roles/                        # 🧩 原子化
-│   ├── backend_expert.md
-│   └── code_reviewer.md
+├── core/
+│   ├── dna/                      # 🔒 表达 / 工具调用契约 DNA
+│   │   ├── conversation_style_prompt.md
+│   │   └── agentic_tool_prompt.md
+│   └── routing/                  # 🧭 路由 / 调度 prompt
+│       ├── conversation_analyzer_prompt.md
+│       └── tool_dispatch_prompt.md
+├── agents/
+│   ├── shell/blocks/
+│   └── core_exec/blocks/
+├── roles/
 ├── skills/
-│   └── python_ast.md
 ├── styles/
-│   └── code_with_tests.md
 └── rules/
-    └── conventional_commit.md
 ```
 
+- Shell / Core 主链使用受控 DNA + runtime blocks 固定分层
 - Expert spawn Dev 时**自由挑选原子块**组装 prompt + 自动注入相关经验
 - **Core** 可修改所有原子块（受审批链约束）
 - **Expert** 可修改自己域内的技能/风格块

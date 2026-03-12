@@ -58,14 +58,16 @@
 
 ## 补充更新（2026-02-25）
 
-为适配当前自主运行 agent 架构，本轮补充了 Prompt 层任务排期协议（TSP-v1）对齐：
+为适配当时的自主运行 agent 架构，本轮曾补充 Prompt 层任务排期协议（TSP-v1）对齐。
+以下内容属于 `L3-ARCHIVE` 历史实施口径；当前 canonical 已进一步拆分为“身份 DNA / 表达 DNA / 工具调用契约 DNA / routing prompts”四层。
 
 1. Prompt 批量重构（4 文件）
-- `system/prompts/conversation_style_prompt.md`
-- `system/prompts/conversation_analyzer_prompt.md`
-- `system/prompts/tool_dispatch_prompt.md`
-- `system/prompts/agentic_tool_prompt.md`
-- 统一引入 `T0 发现 -> T1 实施 -> T2 验证 -> T3 证据` 的排期语义与交付口径。
+- `system/prompts/core/dna/conversation_style_prompt.md`
+- `system/prompts/core/routing/conversation_analyzer_prompt.md`
+- `system/prompts/core/routing/tool_dispatch_prompt.md`
+- `system/prompts/core/dna/agentic_tool_prompt.md`
+- 历史阶段曾把 `T0 发现 -> T1 实施 -> T2 验证 -> T3 证据` 语义扩展到这 4 份 prompt。
+- 当前 canonical 已收敛为：仅 `conversation_analyzer_prompt` / `tool_dispatch_prompt` 承载 `TSP-v1`，DNA 文件不再承载任务排期语义。
 
 2. 新增 runbook
 - `doc/task/runbooks/prompt_task_scheduling_protocol_tsp_v1.md`
@@ -93,6 +95,6 @@
 - `doc/task/runbooks/prompt_task_scheduling_protocol_tsp_v1.md`
 
 4. 进度状态
-- Prompt 批量重构（TSP-v1）：已完成
+- Prompt 批量重构（历史 TSP-v1 扩展版）：已完成
 - DNA manifest 门禁闭环（含一键同步工具）：已完成
 - 现阶段可直接进入下一批 prompt 实战样本回归与调度行为压测

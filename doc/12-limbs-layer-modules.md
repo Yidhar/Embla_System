@@ -674,14 +674,14 @@ flowchart TB
         REG_TOOL["🔌 register_new_tool<br/>Agent 编写并注册新工具"]
 
         subgraph SafeGuards["安全护栏"]
-            DNA_CHECK["DNA 保护<br/>禁止修改 immutable_dna.md"]
+            DNA_CHECK["DNA 保护<br/>禁止修改 system/prompts/dna/*<br/>与 system/prompts/core/dna/*"]
             DIFF_REVIEW["变更审查<br/>修改前后 diff 记录"]
             VERSION["版本管理<br/>Git 提交每次变更"]
             ROLLBACK["回滚能力<br/>任何时候可 revert"]
         end
     end
 
-    READ_P -->|"读取"| PROMPTS["workspace/prompts/*.md"]
+    READ_P -->|"读取"| PROMPTS["system/prompts/**/*"]
     UPDATE_P -->|"写入"| PROMPTS
     UPDATE_P -->|"校验"| DNA_CHECK
     UPDATE_P -->|"记录"| DIFF_REVIEW
@@ -704,21 +704,21 @@ sequenceDiagram
     participant WATCH as File Watcher
     participant LLM as LLM Client
 
-    AGENT->>EVO: tool_use("update_my_prompt", {<br/>  role: "sys_admin",<br/>  changes: "添加: 遇到 OOM 优先检查 swap"<br/>})
+    AGENT->>EVO: tool_use("update_my_prompt", {<br/>  role: "ops_expert",<br/>  changes: "添加: 遇到 OOM 优先检查 swap"<br/>})
 
-    EVO->>DNA: 目标是 immutable_dna.md?
+    EVO->>DNA: 目标是受控 DNA 文件?
     DNA-->>EVO: No → 允许
 
-    EVO->>FS: read("workspace/prompts/sys_admin.md")
+    EVO->>FS: read("system/prompts/roles/ops_expert.md")
     FS-->>EVO: current_content
 
     EVO->>EVO: 应用修改 (追加新规则)
-    EVO->>FS: write("workspace/prompts/sys_admin.md", new_content)
+    EVO->>FS: write("system/prompts/roles/ops_expert.md", new_content)
 
-    EVO->>GIT: git add + commit<br/>"self-evo: sys_admin 添加 OOM 规则"
+    EVO->>GIT: git add + commit<br/>"self-evo: ops_expert 添加 OOM 规则"
 
     FS-->>WATCH: 文件变更事件
-    WATCH->>LLM: reloadPrompt("sys_admin")
+    WATCH->>LLM: reloadPrompt("ops_expert")
     LLM->>LLM: 清理旧 Cache → 下次请求使用新 Prompt
 
     EVO-->>AGENT: tool_result({<br/>  success: true,<br/>  diff: "+遇到 OOM 优先检查 swap",<br/>  commit: "abc1234"<br/>})
