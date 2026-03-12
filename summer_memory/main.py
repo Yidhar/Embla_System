@@ -10,7 +10,7 @@ from .quintuple_extractor import extract_quintuples
 from .quintuple_graph import store_quintuples
 from .quintuple_rag_query import query_knowledge, set_context
 
-# 添加上级目录以导入 config.py
+# 添加上级目录以导入系统配置
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from system.config import GRAG_NEO4J_USER, GRAG_NEO4J_PASSWORD, GRAG_NEO4J_DATABASE
 
@@ -31,7 +31,7 @@ def generate_docker_compose(template_path="docker-compose.template.yml", output_
         content = template.replace("${NEO4J_AUTH}", auth).replace("${NEO4J_DB}", GRAG_NEO4J_DATABASE)
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(content)
-        logger.info("已根据 config.py 生成 docker-compose.yml")
+        logger.info("已根据系统配置生成 docker-compose.yml")
     except Exception as e:
         logger.error(f"生成 docker-compose.yml 失败: {e}")
         raise

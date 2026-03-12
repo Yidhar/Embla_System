@@ -1,80 +1,47 @@
-# 🧠 中文五元组知识图谱构建与可视化系统
+# `summer_memory`
 
-本项目通过接入 DeepSeek API 实现中文文本的五元组抽取，并借助 Neo4j 构建实体关系图谱，同时使用 PyVis 实现知识图谱的可视化展示与交互式查询。
+`summer_memory` 是 Embla 当前仍在使用的 Shell L2 会话级五元组记忆实现。
+它负责：
 
-**新增功能**: 五元组提取任务管理器，支持并发处理和任务管理。
+- 从 Shell 轮次消息抽取五元组
+- 将五元组写入 `logs/knowledge_graph/quintuples.json`
+- 在 Neo4j 可用时同步写入图数据库与向量索引
+- 基于最近上下文提取关键词并查询五元组图谱
+- 生成 `logs/knowledge_graph/graph.html` 供人工查看
 
----
+## 当前有效文件
 
-## 📦 项目结构
-
-```
-.
-├── main.py                 # 主程序入口，负责流程调度、用户交互
-├── quintuple_extractor.py  # 使用 DeepSeek API 进行五元组抽取
-├── quintuple_graph.py      # 操作 Neo4j，存储与查询五元组
-├── quintuple_visualize.py  # 使用 PyVis 生成 graph.html 知识图谱可视化页面
-├── quintuple_rag_query.py  # 使用 DeepSeek 提取关键词并在图谱中检索答案
-├── task_manager.py         # 🆕 五元组提取任务管理器，支持并发处理
-├── memory_manager.py       # 🆕 记忆管理器，集成任务管理器
-├── test_task_manager.py    # 🆕 任务管理器测试脚本
-├── quintuples.json         # 持久化的五元组缓存文件
-├── graph.html              # 可视化结果文件，生成到 logs/knowledge_graph/
-└── README.md               # 项目说明文档
-```
-
----
-
-## 🚀 使用说明
-
-### 1. 安装依赖
-
-```bash
-pip install py2neo pyvis requests
+```text
+summer_memory/
+├── main.py                  # 本地手动调试入口
+├── memory_manager.py        # 运行时 GRAG 管理器
+├── task_manager.py          # 异步抽取任务队列
+├── quintuple_extractor.py   # 五元组抽取
+├── quintuple_graph.py       # 文件 + Neo4j 双写与查询
+├── quintuple_rag_query.py   # 关键词提取与图谱查询
+├── quintuple_visualize.py   # 从 quintuples.json 生成 graph.html
+└── memory_client.py         # 远程调用封装
 ```
 
-### 2. 安装Neo4j数据库
+已经退役：
 
-**选项A：使用Neo4j Desktop（推荐）**
-- 下载并安装 [Neo4j Desktop](https://neo4j.com/download/)
-- 创建新的数据库项目
-- 设置数据库密码（默认用户名：neo4j）
-- 启动数据库服务
+- 旧三元组链路
+- 旧的解耦说明文档
 
-**选项B：使用Docker**
-```bash
-docker run -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/your_password neo4j:latest
-```
+## 运行时数据目录
 
-**选项C：直接安装Neo4j Community Edition**
-- 从官网下载Neo4j Community Edition
-- 按照官方文档安装和配置
+运行时产物统一写到 `logs/knowledge_graph/`：
 
-### 3. 配置连接信息
+- `logs/knowledge_graph/quintuples.json`
+- `logs/knowledge_graph/graph.html`
 
-在项目根目录的 `config.json` 中配置 Neo4j 连接信息：
+`summer_memory/` 目录下不再维护这些产物副本。
 
-```json
-{
-  "grag": {
-    "neo4j_uri": "bolt://localhost:7687",
-    "neo4j_user": "neo4j",
-    "neo4j_password": "your_password",
-    "neo4j_database": "neo4j"
-  }
-}
-```
+## 配置
 
-### 4. 验证连接
+配置来自项目根目录的 `config.json`。
 
-启动Neo4j Desktop后，可以通过以下方式验证：
-- 访问 http://localhost:7474 打开Neo4j Browser
-- 使用配置的用户名密码登录
-- 执行测试查询：`MATCH (n) RETURN n LIMIT 5`
-
-### 5. 设置 LLM API Key
-
-在项目根目录的 `config.json` 中配置：
+### LLM
 
 ```json
 {
@@ -86,195 +53,113 @@ docker run -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/your_password neo4j:lat
 }
 ```
 
-> DeepSeek 注册地址：https://platform.deepseek.com/
-
----
-
-## 🆕 任务管理器功能
-
-### 任务管理器特性
-
-- **并发处理**: 支持多个五元组提取任务同时进行
-- **任务队列**: 智能队列管理，避免重复任务
-- **状态监控**: 实时监控任务状态和进度
-- **超时控制**: 自动处理超时任务
-- **错误处理**: 完善的错误处理和重试机制
-- **自动清理**: 定期清理已完成的任务
-
-### 配置选项
-
-在 `config.json` 的 `grag` 段中配置提取预算：
+### GRAG / Neo4j
 
 ```json
 {
   "grag": {
     "enabled": true,
     "auto_extract": true,
+    "context_length": 5,
     "extraction_timeout": 12,
-    "extraction_retries": 2
+    "extraction_retries": 2,
+    "neo4j_uri": "neo4j://127.0.0.1:7687",
+    "neo4j_user": "neo4j",
+    "neo4j_password": "your_password",
+    "neo4j_database": "neo4j"
   }
 }
 ```
 
-- `grag.extraction_timeout`: 单轮五元组提取总超时时间（秒）
-- `grag.extraction_retries`: 提取失败后的重试次数
-- 任务管理器仍会在运行时维护并发 worker、队列和清理周期，但这些属于内部调度参数，不再作为外部配置口径
+关键参数：
 
-### 测试任务管理器
+- `grag.enabled`：总开关
+- `grag.auto_extract`：写入轮次后是否自动触发抽取
+- `grag.context_length`：用于问答关键词提取的最近上下文条数
+- `grag.extraction_timeout`：单轮抽取的总超时预算
+- `grag.extraction_retries`：抽取失败后的重试次数
 
-运行测试脚本验证功能：
+## 数据流
+
+当前 live 路径如下：
+
+```text
+Shell 轮次消息
+  → memory_manager.add_shell_round_memory(...)
+  → task_manager.add_task(...)
+  → quintuple_extractor.py
+  → quintuple_graph.py
+  → logs/knowledge_graph/quintuples.json
+  → (可选) Neo4j / 向量索引
+```
+
+问答路径如下：
+
+```text
+用户问题
+  → quintuple_rag_query.py
+  → 提取关键词
+  → quintuple_graph.query_graph_by_keywords(...)
+  → 返回图谱命中结果
+```
+
+可视化路径如下：
+
+```text
+logs/knowledge_graph/quintuples.json
+  → quintuple_visualize.py
+  → logs/knowledge_graph/graph.html
+```
+
+## 手动调试
+
+从仓库根目录运行：
 
 ```bash
-cd summer_memory
-python test_task_manager.py
+.venv/bin/python -m summer_memory.main
 ```
 
----
+这个入口仅用于本地调试：
 
-## 🧪 使用方式
+- 可手动输入文本或从文件读取
+- 会尝试启动本目录下的 Neo4j Docker Compose
+- 成功后打开 `logs/knowledge_graph/graph.html`
+- 支持在终端继续做图谱问答
 
-### 方法一：运行主程序
+## 直接调用
 
-```bash
-python main.py
-```
-
-程序将提示你选择输入方式：
-```
-请选择输入方式：
-1 - 手动输入文本
-2 - 从文件读取文本
-```
-
-- **手动输入**：支持逐段输入中文语句，提取知识。
-- **文件读取**：输入包含多条文本的 `.txt` 文件路径，逐行处理。
-
-成功后将自动打开 `graph.html`，展示生成的知识图谱。
-
-### 方法二：使用任务管理器
-
-```python
-from summer_memory.task_manager import task_manager
-
-# 提交提取任务
-task_id = task_manager.add_task("小明在图书馆里看书。")
-
-# 查询任务状态
-status = task_manager.get_task_status(task_id)
-print(f"任务状态: {status['status']}")
-
-# 获取统计信息
-stats = task_manager.get_stats()
-print(f"运行中任务: {stats['running_tasks']}")
-```
-
-### 方法三：使用记忆管理器
-
-```python
-from summer_memory.memory_manager import memory_manager
-
-# 添加对话记忆（自动使用任务管理器）
-await memory_manager.add_conversation_memory(
-    "用户: 你好，我想了解人工智能",
-    "Embla: 人工智能是一个快速发展的技术领域..."
-)
-
-# 查询记忆
-result = await memory_manager.query_memory("什么是人工智能？")
-```
-
----
-
-### 方法四：构建批处理函数
-
-可独立调用：
+### 批量写入文本
 
 ```python
 from summer_memory.main import batch_add_texts
 
-texts = ["李雷在操场上打篮球。", "韩梅梅喜欢读书。"]
-batch_add_texts(texts)
+rows = ["李雷在操场上打篮球。", "韩梅梅喜欢读书。"]
+ok = batch_add_texts(rows)
 ```
 
----
-
-### 方法五：知识图谱问答
-
-图谱构建完成后支持交互式问答：
-
-```text
-请输入查询问题（输入空行退出）：
-> 谁喜欢读书？
-```
-
-将返回从图谱中提取的实体与关系信息。
-
----
-
-## 📊 可视化效果
-
-使用 PyVis 生成交互式图谱页面 `graph.html`，节点和关系可拖动、放缩、查看信息。
-
-## ✅ 示例输入输出
-
-**输入文本：**
-
-小红在教室里看书。
-小明和小强是好朋友。
-
-**生成五元组：**
-
-[
-  ["小红", "人物", "看", "书", "物品"],
-  ["小明", "人物", "是", "好朋友", "关系"],
-  ["小强", "人物", "是", "好朋友", "关系"]
-]
-
-**可视化图谱：**
-
-- 小红(人物) —[看]→ 书(物品)  
-- 小明(人物) —[是]→ 好朋友(关系)  
-- 小强(人物) —[是]→ 好朋友(关系)  
-
----
-
-## 🔧 高级功能
-
-### 任务管理器API
+### 使用记忆管理器
 
 ```python
-# 获取所有任务状态
-all_tasks = task_manager.get_all_tasks()
+from summer_memory.memory_manager import memory_manager
 
-# 获取运行中的任务
-running_tasks = task_manager.get_running_tasks()
+await memory_manager.add_conversation_memory(
+    "用户: 你好，我想了解人工智能",
+    "Embla: 人工智能是一个快速发展的技术领域。"
+)
 
-# 取消任务
-task_manager.cancel_task(task_id)
-
-# 清理已完成任务
-task_manager.clear_completed_tasks(max_age_hours=24)
+result = await memory_manager.query_memory("什么是人工智能？")
 ```
 
-### 记忆管理器API
+### 生成图谱 HTML
 
 ```python
-# 获取记忆统计
-stats = memory_manager.get_memory_stats()
+from summer_memory.quintuple_visualize import visualize_quintuples
 
-# 获取任务状态
-task_status = memory_manager.get_task_status(task_id)
-
-# 清空记忆
-await memory_manager.clear_memory()
+visualize_quintuples(auto_open=False)
 ```
 
----
+## 说明
 
-## 🚀 性能优化
-
-- **并发提取**: 多个五元组提取任务可以同时进行
-- **智能去重**: 自动识别重复文本，避免重复提取
-- **超时控制**: 防止单个任务长时间阻塞
-- **资源管理**: 自动清理过期任务，释放内存
-- **错误恢复**: 任务失败时自动回退到同步模式
+- `summer_memory.main` 是调试入口，不是主系统启动路径
+- 当前 canonical 口径是五元组，不再维护三元组运行链路
+- prompt 资产已统一迁到 `system/prompts/memory/`

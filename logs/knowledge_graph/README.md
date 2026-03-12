@@ -1,70 +1,43 @@
-# 🧠 知识图谱数据目录
+# `logs/knowledge_graph`
 
-## 📋 目录说明
+这个目录只存放 `summer_memory` 的运行时产物。
 
-本目录用于存储知识图谱相关的数据文件，包括五元组数据和可视化文件。
+## 文件
 
-## 📁 文件结构
-
-```
+```text
 logs/knowledge_graph/
-├── __init__.py              # 目录初始化文件
-├── README.md                # 本说明文档
-├── quintuples.json          # 五元组数据文件（自动生成）
-└── graph.html               # 知识图谱可视化文件（自动生成）
+├── quintuples.json   # 五元组事实缓存
+└── graph.html        # 基于 quintuples.json 生成的可视化页面
 ```
 
-## 📊 文件说明
+## 生成来源
 
-### quintuples.json
-- **用途**: 存储从文本中提取的五元组数据
-- **格式**: JSON数组，每个元素是一个五元组 `[主体, 主体类型, 关系, 客体, 客体类型]`
-- **生成**: 当处理文本时自动生成和更新
-- **示例**:
-```json
-[
-  ["小明", "人物", "喜欢", "读书", "活动"],
-  ["小红", "人物", "在", "学校", "地点"],
-  ["学校", "地点", "位于", "城市", "地点"]
-]
-```
+- `quintuples.json`
+  - 写入方：`summer_memory/quintuple_graph.py`
+  - 触发源：`summer_memory/memory_manager.py` / `summer_memory/main.py`
 
-### graph.html
-- **用途**: 知识图谱的可视化展示
-- **格式**: HTML文件，使用PyVis库生成
-- **功能**: 交互式图谱，支持拖拽、缩放、悬停查看
-- **生成**: 当调用可视化功能时自动生成
+- `graph.html`
+  - 生成方：`summer_memory/quintuple_visualize.py`
+  - 数据源：`quintuples.json`
 
-## 🔄 数据流程
+## 当前口径
 
-1. **文本输入** → 2. **五元组提取** → 3. **保存到quintuples.json**
-                                    ↓
-4. **可视化调用** → 5. **读取quintuples.json** → 6. **生成graph.html**
+- 这是运行时数据目录，不是源码目录
+- 文件内容可以被覆盖、清空或重建
+- 当前 canonical 数据模型是五元组
+- 旧三元组产物已经退役
 
-## 🎯 使用方式
+## 常用操作
 
-### 查看数据
 ```bash
 # 查看五元组数据
 cat logs/knowledge_graph/quintuples.json
 
-# 打开可视化图谱
-open logs/knowledge_graph/graph.html
+# 在 Linux 上打开图谱
+xdg-open logs/knowledge_graph/graph.html
 ```
 
-### 在PyQt界面中
-- 点击🔐按钮自动打开心智云图
-- 系统会自动检查文件是否存在
+## 注意
 
-## ✅ 优势
-
-1. **集中管理**: 所有知识图谱数据集中在一个目录
-2. **易于备份**: 可以轻松备份整个目录
-3. **版本控制**: 可以跟踪数据的变化历史
-4. **清理方便**: 可以轻松清理或重置数据
-
-## 🚀 自动生成
-
-- 目录会在首次使用时自动创建
-- 文件会在处理文本时自动生成和更新
-- 无需手动管理，系统会自动处理 
+- `graph.html` 不是事实源，只是 `quintuples.json` 的可视化投影
+- 清理图谱记忆时，应同时考虑 JSON 文件、Neo4j 节点关系和向量索引
