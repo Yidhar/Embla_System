@@ -19,6 +19,7 @@ import time
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +111,21 @@ class StartupOptions:
 
 
 @dataclass
+class APIServerHandle:
+    thread: threading.Thread
+    server: object
+    host: str
+    port: int
+    stopped_event: threading.Event
+    shutdown_requested: threading.Event
+    startup_complete: bool = False
+    startup_failed: bool = False
+    error: str = ""
+
+
+@dataclass
 class RuntimeServices:
-    api_thread: threading.Thread | None = None
+    api_server: APIServerHandle | None = None
     api_started: bool = False
 
 
@@ -231,6 +245,10 @@ def _can_bind_tcp_port(host: str, port: int) -> bool:
     for family, socktype, proto, _, sockaddr in _iter_tcp_addresses(host, port, passive=True):
         try:
             with socket.socket(family, socktype, proto) as sock:
+                try:
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                except OSError:
+                    pass
                 sock.bind(sockaddr)
                 return True
         except OSError:
@@ -254,8 +272,17 @@ def _wait_for_tcp_ready(host: str, port: int, *, timeout_seconds: float = 3.0) -
     return False
 
 
-def _start_api_server(*, runtime_config=config) -> threading.Thread | None:
-    """Start the uvicorn API server in a daemon thread."""
+def _wait_for_tcp_release(host: str, port: int, *, timeout_seconds: float = 3.0) -> bool:
+    deadline = time.time() + max(0.1, float(timeout_seconds))
+    while time.time() < deadline:
+        if _can_bind_tcp_port(host, port):
+            return True
+        time.sleep(0.1)
+    return _can_bind_tcp_port(host, port)
+
+
+def _start_api_server(*, runtime_config=config) -> APIServerHandle | None:
+    """Start the uvicorn API server in a managed thread."""
     api_cfg = runtime_config.api_server
     if not (api_cfg.enabled and api_cfg.auto_start):
         logger.info("API 服务器已禁用，跳过")
@@ -267,32 +294,72 @@ def _start_api_server(*, runtime_config=config) -> threading.Thread | None:
         logger.error("API 服务器端口 %d 已被占用，跳过启动", port)
         return None
 
+    import uvicorn
+    from apiserver.api_server import app
+
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_level="warning",
+            access_log=False,
+            ws_ping_interval=None,
+            ws_ping_timeout=None,
+        )
+    )
+    server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
+    stopped_event = threading.Event()
+    shutdown_requested = threading.Event()
+    handle = APIServerHandle(
+        thread=threading.Thread(),
+        server=server,
+        host=host,
+        port=port,
+        stopped_event=stopped_event,
+        shutdown_requested=shutdown_requested,
+    )
+
     def _serve() -> None:
         try:
-            import uvicorn
-            from apiserver.api_server import app
-
             logger.info("API 服务器启动: %s:%d", host, port)
-            uvicorn.run(
-                app,
-                host=host,
-                port=port,
-                log_level="warning",
-                access_log=False,
-                ws_ping_interval=None,
-                ws_ping_timeout=None,
-            )
-        except Exception as exc:
-            logger.error("API 服务器异常退出: %s", exc)
+            server.run()
+        except BaseException as exc:
+            handle.error = str(exc or "unknown")
+            if isinstance(exc, SystemExit):
+                logger.error("API 服务器退出: %s", handle.error)
+            else:
+                logger.exception("API 服务器异常退出: %s", exc)
+        finally:
+            if not handle.startup_complete and not shutdown_requested.is_set():
+                handle.startup_failed = True
+                if not handle.error:
+                    handle.error = "startup_failed"
+            stopped_event.set()
 
-    thread = threading.Thread(target=_serve, name="api-server", daemon=True)
+    thread = threading.Thread(target=_serve, name="api-server", daemon=False)
+    handle.thread = thread
     thread.start()
 
-    if _wait_for_tcp_ready(host, port, timeout_seconds=3.0):
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        if bool(getattr(server, "started", False)):
+            handle.startup_complete = True
+            logger.info("API 服务器就绪: http://%s:%d", _resolve_probe_host(host), port)
+            return handle
+        if stopped_event.wait(timeout=0.05):
+            break
+
+    if bool(getattr(server, "started", False)) or _wait_for_tcp_ready(host, port, timeout_seconds=0.2):
+        handle.startup_complete = True
         logger.info("API 服务器就绪: http://%s:%d", _resolve_probe_host(host), port)
+    elif handle.startup_failed or stopped_event.is_set():
+        reason = handle.error or "startup_failed"
+        logger.error("API 服务器启动失败: %s", reason)
+        handle.startup_failed = True
     else:
         logger.warning("API 服务器启动超时（3s），可能仍在加载")
-    return thread
+    return handle
 
 
 # ---------------------------------------------------------------------------
@@ -302,13 +369,13 @@ def _start_api_server(*, runtime_config=config) -> threading.Thread | None:
 _watchdog_state_file = Path("logs/runtime/watchdog_state.json")
 
 
-def _run_idle_wait_loop(stop_event: threading.Event) -> None:
+def _run_idle_wait_loop(stop_requested: Callable[[], bool]) -> None:
     """Keep the process alive when the watchdog backend is unavailable."""
-    while not stop_event.is_set():
-        stop_event.wait(timeout=5.0)
+    while not stop_requested():
+        time.sleep(0.25)
 
 
-def _run_watchdog(stop_event: threading.Event) -> None:
+def _run_watchdog(stop_requested: Callable[[], bool]) -> None:
     """Run the watchdog backend in the main thread."""
     try:
         from core.supervisor.watchdog_daemon import WatchdogDaemon, WatchdogThresholds
@@ -322,14 +389,14 @@ def _run_watchdog(stop_event: threading.Event) -> None:
         daemon.run_daemon(
             state_file=_watchdog_state_file,
             interval_seconds=10.0,
-            stop_requested=stop_event.is_set,
+            stop_requested=stop_requested,
         )
     except ImportError:
         logger.warning("WatchdogDaemon 不可用，进入简单等待循环")
-        _run_idle_wait_loop(stop_event)
+        _run_idle_wait_loop(stop_requested)
     except Exception as exc:
         logger.error("看门狗异常: %s，进入简单等待循环", exc)
-        _run_idle_wait_loop(stop_event)
+        _run_idle_wait_loop(stop_requested)
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +433,7 @@ class EmblaRuntime:
         self.runtime_config = runtime_config
         self.stop_event = threading.Event()
         self.services = RuntimeServices()
+        self._exit_code = 0
 
     def run_diagnostic(self) -> int | None:
         return _run_diagnostic(self.options)
@@ -377,14 +445,57 @@ class EmblaRuntime:
         _init_boxlite_runtime()
         _init_memory()
         _init_mcp()
-        self.services.api_thread = _start_api_server(runtime_config=self.runtime_config)
-        self.services.api_started = self.services.api_thread is not None
+        self.services.api_server = _start_api_server(runtime_config=self.runtime_config)
+        self.services.api_started = bool(self.services.api_server and self.services.api_server.startup_complete)
+        if self.services.api_server and self.services.api_server.startup_failed:
+            raise RuntimeError(self.services.api_server.error or "api_startup_failed")
 
     def install_signal_handlers(self) -> None:
         _install_signal_handlers(self.stop_event)
 
+    def _should_stop_supervision(self) -> bool:
+        if self.stop_event.is_set():
+            return True
+        handle = self.services.api_server
+        if handle and handle.startup_complete and handle.stopped_event.is_set() and not handle.shutdown_requested.is_set():
+            self._exit_code = 1
+            self.stop_event.set()
+            logger.error("API 服务器意外退出: %s", handle.error or "unknown")
+            return True
+        return False
+
     def run_supervision_loop(self) -> None:
-        _run_watchdog(self.stop_event)
+        _run_watchdog(self._should_stop_supervision)
+
+    def shutdown_services(self) -> None:
+        handle = self.services.api_server
+        if handle is None:
+            return
+        logger.info("正在关闭 API 服务器: %s:%d", handle.host, handle.port)
+        handle.shutdown_requested.set()
+        try:
+            setattr(handle.server, "should_exit", True)
+        except Exception:
+            pass
+        if handle.thread.is_alive():
+            handle.thread.join(timeout=5.0)
+        if handle.thread.is_alive():
+            logger.warning("API 服务器未在 5s 内退出，尝试强制关闭")
+            try:
+                setattr(handle.server, "force_exit", True)
+            except Exception:
+                pass
+            handle.thread.join(timeout=1.0)
+        if handle.thread.is_alive():
+            logger.error("API 服务器线程仍未退出，端口可能仍被占用: %s:%d", handle.host, handle.port)
+        elif handle.startup_complete:
+            released = _wait_for_tcp_release(handle.host, handle.port, timeout_seconds=2.0)
+            if released:
+                logger.info("API 服务器端口已释放: %s:%d", handle.host, handle.port)
+            else:
+                logger.warning("API 服务器线程已退出，但端口仍未确认释放: %s:%d", handle.host, handle.port)
+        self.services.api_server = None
+        self.services.api_started = False
 
     def run(self) -> int:
         diag = self.run_diagnostic()
@@ -396,17 +507,26 @@ class EmblaRuntime:
 
         logger.info("正在启动 %s...", AI_NAME)
         _ensure_event_loop()
-        self.initialize_services()
-        self.install_signal_handlers()
+        try:
+            self.initialize_services()
+            self.install_signal_handlers()
+        except Exception as exc:
+            logger.error("服务初始化失败: %s", exc)
+            self._exit_code = 1
+            self.stop_event.set()
+            self.shutdown_services()
+            return self._exit_code
 
         logger.info("默认服务已启动，进入运行监控循环")
         try:
             self.run_supervision_loop()
         except KeyboardInterrupt:
-            pass
+            self.stop_event.set()
+        finally:
+            self.shutdown_services()
 
         logger.info("Embla System 已关闭")
-        return 0
+        return self._exit_code
 
 
 def main(argv: list[str] | None = None) -> int:

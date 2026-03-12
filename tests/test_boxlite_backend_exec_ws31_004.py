@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import subprocess
 import sys
@@ -27,11 +28,17 @@ class _FakeBoxLiteManager:
                 "project_root": project_root,
             }
         )
-        if command == "cat":
-            return {"exit_code": 0, "stdout": "hello from box\n", "stderr": "", "box_id": "box-1"}
         if command == "python":
             argv = list(args or [])
             if len(argv) >= 3 and argv[:2] == ["-m", "system.boxlite.guest_tools"]:
+                if argv[2] == "read_file":
+                    return {"exit_code": 0, "stdout": "hello from box\n", "stderr": "", "box_id": "box-1"}
+                if argv[2] == "write_file":
+                    return {"exit_code": 0, "stdout": "已写入文件: /workspace/tests/demo.txt (mode=overwrite, chars=7)", "stderr": "", "box_id": "box-1"}
+                if argv[2] == "search_keyword":
+                    return {"exit_code": 0, "stdout": "a.txt:1: HELLO", "stderr": "", "box_id": "box-1"}
+                if argv[2] == "query_docs":
+                    return {"exit_code": 0, "stdout": "doc/demo.md:1: Embla docs", "stderr": "", "box_id": "box-1"}
                 if argv[2] == "file_ast_skeleton":
                     return {"exit_code": 0, "stdout": "[symbols]\n   1: class Demo\n", "stderr": "", "box_id": "box-1"}
                 if argv[2] == "file_ast_chunk_read":
@@ -43,7 +50,7 @@ class _FakeBoxLiteManager:
                         "stderr": "",
                         "box_id": "box-1",
                     }
-            return {"exit_code": 0, "stdout": "a.txt:1:HELLO\n", "stderr": "", "box_id": "box-1"}
+            return {"exit_code": 0, "stdout": "python-result", "stderr": "", "box_id": "box-1"}
         return {"exit_code": 0, "stdout": "", "stderr": "", "box_id": "box-1"}
 
 
@@ -68,22 +75,26 @@ def _make_executor_with_box_session() -> tuple[NativeToolExecutor, AgentSessionS
     return executor, store
 
 
+def _patch_boxlite_available(monkeypatch, executor: NativeToolExecutor) -> None:
+    status = lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim")
+    monkeypatch.setattr("system.execution_backend.boxlite_backend.probe_boxlite_runtime", status)
+    monkeypatch.setattr("system.execution_backend.registry.probe_boxlite_runtime", status)
+
+
 def test_boxlite_backend_read_file_uses_guest_workspace(monkeypatch):
     executor, store = _make_executor_with_box_session()
     try:
         fake_manager = _FakeBoxLiteManager()
-        monkeypatch.setattr(
-            "system.execution_backend.boxlite_backend.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim"),
-        )
+        _patch_boxlite_available(monkeypatch, executor)
         monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
 
         result = asyncio.run(executor.execute({"tool_name": "read_file", "path": "README.md"}, session_id="agent-box-real"))
 
         assert result["status"] == "success"
         assert "hello from box" in str(result["result"])
-        assert fake_manager.calls[0]["command"] == "cat"
-        assert fake_manager.calls[0]["args"] == ["/workspace/README.md"]
+        assert fake_manager.calls[0]["command"] == "python"
+        assert fake_manager.calls[0]["args"][:3] == ["-m", "system.boxlite.guest_tools", "read_file"]
+        assert "/workspace/README.md" in fake_manager.calls[0]["args"]
     finally:
         store.close()
 
@@ -92,17 +103,15 @@ def test_boxlite_backend_search_keyword_uses_python_in_box(monkeypatch):
     executor, store = _make_executor_with_box_session()
     try:
         fake_manager = _FakeBoxLiteManager()
-        monkeypatch.setattr(
-            "system.execution_backend.boxlite_backend.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim"),
-        )
+        _patch_boxlite_available(monkeypatch, executor)
         monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
 
         result = asyncio.run(executor.execute({"tool_name": "search_keyword", "keyword": "HELLO"}, session_id="agent-box-real"))
 
         assert result["status"] == "success"
-        assert "a.txt:1:HELLO" in str(result["result"])
+        assert "a.txt:1: HELLO" in str(result["result"])
         assert fake_manager.calls[0]["command"] == "python"
+        assert fake_manager.calls[0]["args"][:3] == ["-m", "system.boxlite.guest_tools", "search_keyword"]
         assert fake_manager.calls[0]["working_dir"] == "/workspace"
     finally:
         store.close()
@@ -118,10 +127,7 @@ def test_boxlite_backend_git_status_uses_git_in_box(monkeypatch):
             return {"exit_code": 0, "stdout": "## main\n M a.txt\n", "stderr": "", "box_id": "box-1"}
 
         fake_manager.exec_in_box = _exec_in_box
-        monkeypatch.setattr(
-            "system.execution_backend.boxlite_backend.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim"),
-        )
+        _patch_boxlite_available(monkeypatch, executor)
         monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
 
         result = asyncio.run(executor.execute({"tool_name": "git_status"}, session_id="agent-box-real"))
@@ -138,10 +144,7 @@ def test_boxlite_backend_workspace_txn_apply_runs_guest_helper_in_box(monkeypatc
     executor, store = _make_executor_with_box_session()
     try:
         fake_manager = _FakeBoxLiteManager()
-        monkeypatch.setattr(
-            "system.execution_backend.boxlite_backend.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim"),
-        )
+        _patch_boxlite_available(monkeypatch, executor)
         monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
 
         result = asyncio.run(
@@ -179,10 +182,7 @@ def test_boxlite_backend_python_repl_runs_safe_payload_and_persists_box_metadata
             }
 
         fake_manager.exec_in_box = _exec_in_box
-        monkeypatch.setattr(
-            "system.execution_backend.boxlite_backend.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim"),
-        )
+        _patch_boxlite_available(monkeypatch, executor)
         monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
 
         result = asyncio.run(
@@ -207,10 +207,7 @@ def test_boxlite_backend_uses_stable_box_name_instead_of_box_id(monkeypatch):
     executor, store = _make_executor_with_box_session()
     try:
         fake_manager = _FakeBoxLiteManager()
-        monkeypatch.setattr(
-            "system.execution_backend.boxlite_backend.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim"),
-        )
+        _patch_boxlite_available(monkeypatch, executor)
         monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
 
         result = asyncio.run(executor.execute({"tool_name": "read_file", "path": "README.md"}, session_id="agent-box-real"))
@@ -225,16 +222,13 @@ def test_boxlite_backend_query_docs_runs_guest_helper_in_box(monkeypatch):
     executor, store = _make_executor_with_box_session()
     try:
         fake_manager = _FakeBoxLiteManager()
-        monkeypatch.setattr(
-            "system.execution_backend.boxlite_backend.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim"),
-        )
+        _patch_boxlite_available(monkeypatch, executor)
         monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
 
         result = asyncio.run(executor.execute({"tool_name": "query_docs", "query": "Embla"}, session_id="agent-box-real"))
 
         assert result["status"] == "success"
-        assert "a.txt:1:HELLO" in str(result["result"])
+        assert "doc/demo.md:1: Embla docs" in str(result["result"])
         assert fake_manager.calls[0]["command"] == "python"
         assert fake_manager.calls[0]["args"][:3] == ["-m", "system.boxlite.guest_tools", "query_docs"]
     finally:
@@ -245,10 +239,7 @@ def test_boxlite_backend_file_ast_skeleton_runs_guest_helper_in_box(monkeypatch)
     executor, store = _make_executor_with_box_session()
     try:
         fake_manager = _FakeBoxLiteManager()
-        monkeypatch.setattr(
-            "system.execution_backend.boxlite_backend.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim"),
-        )
+        _patch_boxlite_available(monkeypatch, executor)
         monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
 
         result = asyncio.run(
@@ -273,10 +264,7 @@ def test_boxlite_backend_git_status_falls_back_to_host_when_git_missing(monkeypa
             return {"exit_code": 127, "stdout": "", "stderr": "git: not found", "box_id": "box-1"}
 
         fake_manager.exec_in_box = _missing_git
-        monkeypatch.setattr(
-            "system.execution_backend.boxlite_backend.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim"),
-        )
+        _patch_boxlite_available(monkeypatch, executor)
         monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
 
         captured = {}
@@ -311,10 +299,7 @@ def test_boxlite_backend_run_cmd_falls_back_to_sh_when_bash_missing(monkeypatch)
             return {"exit_code": 0, "stdout": "ok\n", "stderr": "", "box_id": "box-1"}
 
         fake_manager.exec_in_box = _exec_in_box
-        monkeypatch.setattr(
-            "system.execution_backend.boxlite_backend.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim"),
-        )
+        _patch_boxlite_available(monkeypatch, executor)
         monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
 
         result = asyncio.run(executor.execute({"tool_name": "run_cmd", "command": "echo ok"}, session_id="agent-box-real"))
@@ -330,10 +315,7 @@ def test_boxlite_backend_write_file_honors_test_baseline_guard(monkeypatch):
     executor, store = _make_executor_with_box_session()
     try:
         fake_manager = _FakeBoxLiteManager()
-        monkeypatch.setattr(
-            "system.execution_backend.boxlite_backend.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim"),
-        )
+        _patch_boxlite_available(monkeypatch, executor)
         monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
         monkeypatch.setattr(
             "system.execution_backend.boxlite_backend.TestBaselineGuard.check_modification_allowed",
@@ -366,10 +348,7 @@ def test_boxlite_backend_write_file_blocks_test_poisoning_patterns(monkeypatch):
         poison_path = workspace_root / "tests" / "tmp_poison_guard_case_boxlite.py"
         poison_path.unlink(missing_ok=True)
 
-        monkeypatch.setattr(
-            "system.execution_backend.boxlite_backend.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim"),
-        )
+        _patch_boxlite_available(monkeypatch, executor)
         monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
 
         result = asyncio.run(
@@ -395,10 +374,7 @@ def test_boxlite_backend_run_cmd_respects_call_cwd(monkeypatch):
     executor, store = _make_executor_with_box_session()
     try:
         fake_manager = _FakeBoxLiteManager()
-        monkeypatch.setattr(
-            "system.execution_backend.boxlite_backend.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim"),
-        )
+        _patch_boxlite_available(monkeypatch, executor)
         monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
 
         result = asyncio.run(
@@ -437,22 +413,24 @@ def test_boxlite_backend_search_keyword_honors_regex_and_case_sensitive(monkeypa
             )
             if command != "python":
                 return {"exit_code": 1, "stdout": "", "stderr": f"unexpected command: {command}", "box_id": "box-1"}
-            script = str((args or ["", ""])[1]).replace("/workspace", workspace_host_root.replace("\\", "/"))
+            rewritten_args = [str(item).replace("/workspace", workspace_host_root.replace("\\", "/")) for item in (args or [])]
+            rewritten_env = {
+                key: (str(value).replace("/workspace", workspace_host_root.replace("\\", "/")) if isinstance(value, str) else value)
+                for key, value in dict(env or {}).items()
+            }
             proc = subprocess.run(
-                [sys.executable, "-c", script],
+                [sys.executable, *rewritten_args],
                 capture_output=True,
                 text=True,
-                cwd=workspace_host_root,
+                cwd=str(working_dir or workspace_host_root).replace("/workspace", workspace_host_root.replace("\\", "/")),
+                env={**os.environ, **rewritten_env},
                 timeout=timeout_seconds or 30,
             )
             return {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr, "box_id": "box-1"}
 
     try:
         fake_manager = _LocalPythonBoxLiteManager()
-        monkeypatch.setattr(
-            "system.execution_backend.boxlite_backend.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim"),
-        )
+        _patch_boxlite_available(monkeypatch, executor)
         monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
 
         result = asyncio.run(
@@ -470,8 +448,101 @@ def test_boxlite_backend_search_keyword_honors_regex_and_case_sensitive(monkeypa
 
         text_result = str(result["result"])
         assert result["status"] == "success"
-        assert "src/case_demo.txt:1:HelloWorld" in text_result
+        assert "src/case_demo.txt:1: HelloWorld" in text_result
         assert "helloworld" not in text_result
     finally:
         shutil.rmtree(workspace_root, ignore_errors=True)
         store.close()
+
+
+def test_boxlite_backend_read_file_honors_grep_and_jsonpath_modes(monkeypatch):
+    executor, store = _make_executor_with_box_session()
+    workspace_root = Path(store.get("agent-box-real").metadata["workspace_root"])
+    try:
+        shutil.rmtree(workspace_root, ignore_errors=True)
+        (workspace_root / "src").mkdir(parents=True, exist_ok=True)
+        (workspace_root / "src" / "demo.txt").write_text("Alpha\nBeta\nAlphaBeta\n", encoding="utf-8")
+        (workspace_root / "src" / "payload.json").write_text('{"trace":{"id":"abc"},"items":[{"name":"one"}]}', encoding="utf-8")
+
+        class _LocalPythonBoxLiteManager(_FakeBoxLiteManager):
+            async def exec_in_box(self, *, box_name, workspace_host_root, command, args=None, env=None, working_dir=None, timeout_seconds=None, project_root=None):
+                self.calls.append(
+                    {
+                        "box_name": box_name,
+                        "workspace_host_root": workspace_host_root,
+                        "command": command,
+                        "args": list(args or []),
+                        "env": dict(env or {}),
+                        "working_dir": working_dir,
+                        "project_root": project_root,
+                    }
+                )
+                rewritten_args = [str(item).replace("/workspace", workspace_host_root.replace("\\", "/")) for item in (args or [])]
+                proc = subprocess.run(
+                    [sys.executable, *rewritten_args],
+                    capture_output=True,
+                    text=True,
+                    cwd=workspace_host_root,
+                    env={**os.environ, **dict(env or {})},
+                    timeout=timeout_seconds or 30,
+                )
+                return {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr, "box_id": "box-1"}
+
+        fake_manager = _LocalPythonBoxLiteManager()
+        _patch_boxlite_available(monkeypatch, executor)
+        monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
+
+        grep_result = asyncio.run(
+            executor.execute(
+                {
+                    "tool_name": "read_file",
+                    "path": "src/demo.txt",
+                    "mode": "grep",
+                    "pattern": "^Alpha",
+                    "use_regex": True,
+                    "case_sensitive": True,
+                },
+                session_id="agent-box-real",
+            )
+        )
+        json_result = asyncio.run(
+            executor.execute(
+                {
+                    "tool_name": "read_file",
+                    "path": "src/payload.json",
+                    "mode": "jsonpath",
+                    "jsonpath": "$.trace.id",
+                },
+                session_id="agent-box-real",
+            )
+        )
+
+        grep_text = str(grep_result["result"])
+        json_text = str(json_result["result"])
+        assert grep_result["status"] == "success"
+        assert "[mode] grep" in grep_text
+        assert "   1: Alpha" in grep_text
+        assert "   3: AlphaBeta" in grep_text
+        assert json_result["status"] == "success"
+        assert "[mode] jsonpath" in json_text
+        assert "[1] abc" in json_text
+    finally:
+        shutil.rmtree(workspace_root, ignore_errors=True)
+        store.close()
+
+
+def test_boxlite_guest_helper_module_entrypoint_has_no_bootstrap_noise(tmp_path: Path) -> None:
+    target = tmp_path / "demo.txt"
+    target.write_text("hello\n", encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "system.boxlite.guest_tools", "read_file", "--path", str(target)],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[1],
+        timeout=30,
+    )
+
+    assert proc.returncode == 0
+    assert proc.stdout == "hello\n"
+    assert "检测到配置文件编码" not in proc.stdout

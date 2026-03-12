@@ -134,6 +134,70 @@ def test_native_run_cmd_prunes_bloated_arguments_before_firewall() -> None:
     assert decision.allowed is True
 
 
+def test_native_read_file_preserves_mode_specific_arguments() -> None:
+    calls = [
+        {
+            "id": "schema_call_read_file_modes_1",
+            "name": "native_call",
+            "arguments": {
+                "tool_name": "read_file",
+                "path": "logs/events.json",
+                "mode": "jsonpath",
+                "query": "$..trace_id",
+                "jsonpath": "$..trace_id",
+                "max_results": 10,
+            },
+        }
+    ]
+
+    actionable_calls, validation_errors = _convert_structured_tool_calls(
+        calls,
+        session_id="schema_sess_read_modes_1",
+        trace_id="schema_trace_read_modes_1",
+    )
+
+    assert validation_errors == []
+    assert len(actionable_calls) == 1
+    call = actionable_calls[0]
+    assert call["tool_name"] == "read_file"
+    assert call["mode"] == "jsonpath"
+    assert call["query"] == "$..trace_id"
+    assert call["jsonpath"] == "$..trace_id"
+    assert call["max_results"] == 10
+    assert call.get("_dropped_input_args") in (None, [])
+
+
+def test_native_search_keyword_preserves_use_regex_argument() -> None:
+    calls = [
+        {
+            "id": "schema_call_search_regex_1",
+            "name": "native_call",
+            "arguments": {
+                "tool_name": "search_keyword",
+                "keyword": r"trace-\\d+",
+                "use_regex": True,
+                "case_sensitive": False,
+                "max_results": 5,
+            },
+        }
+    ]
+
+    actionable_calls, validation_errors = _convert_structured_tool_calls(
+        calls,
+        session_id="schema_sess_search_regex_1",
+        trace_id="schema_trace_search_regex_1",
+    )
+
+    assert validation_errors == []
+    assert len(actionable_calls) == 1
+    call = actionable_calls[0]
+    assert call["tool_name"] == "search_keyword"
+    assert call["use_regex"] is True
+    assert call["case_sensitive"] is False
+    assert call["max_results"] == 5
+    assert call.get("_dropped_input_args") in (None, [])
+
+
 def test_output_schema_rejects_result_without_status(monkeypatch) -> None:
     async def _invalid_result(_: dict, __: str) -> dict:
         return {

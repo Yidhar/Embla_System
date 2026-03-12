@@ -262,6 +262,44 @@ def test_route_decision_sse_chunk_json_protocol() -> None:
     assert decoded == payload
 
 
+def test_shell_readonly_prompt_hints_allow_readonly_tools() -> None:
+    prompt_hints = api_server._build_chat_route_prompt_hints(
+        {
+            "route_semantic": "shell_readonly",
+            "dispatch_to_core": False,
+            "router_decision": {"delegation_intent": "read_only_exploration"},
+        }
+    )
+
+    assert "Do not call tools" not in prompt_hints
+    assert "read-only Shell tools" in prompt_hints
+    assert "dispatch_to_core" in prompt_hints
+
+
+def test_route_prompt_hints_include_guard_lines_from_prompt_blocks() -> None:
+    prompt_hints = api_server._build_chat_route_prompt_hints(
+        {
+            "route_semantic": "core_execution",
+            "dispatch_to_core": True,
+            "route_quality_guard_applied": True,
+            "route_quality_guard_status": "warning",
+            "route_quality_guard_action": "freeze_to_core",
+            "router_arbiter_status": "critical",
+            "router_arbiter_action": "freeze_to_core",
+            "router_decision": {
+                "delegation_intent": "core_execution",
+                "prompt_profile": "core_exec_dev",
+                "injection_mode": "minimal",
+            },
+        }
+    )
+
+    assert "[PromptRouteDecision]" in prompt_hints
+    assert "route_quality_guard=warning:freeze_to_core" in prompt_hints
+    assert "router_arbiter_guard=critical:freeze_to_core" in prompt_hints
+    assert "Route policy: Core Execution." in prompt_hints
+
+
 def test_resolve_stream_protocol_is_strict() -> None:
     assert api_server._resolve_stream_protocol(None) == "sse_json_v1"
     assert api_server._resolve_stream_protocol("") == "sse_json_v1"
@@ -297,6 +335,66 @@ def test_chat_stream_rejects_unknown_stream_protocol() -> None:
     assert exc.value.status_code == 400
     assert isinstance(exc.value.detail, dict)
     assert exc.value.detail.get("error") == "unsupported_stream_protocol"
+
+
+def test_shell_tools_endpoint_returns_shell_catalog() -> None:
+    payload = asyncio.run(api_server.get_shell_tools_v1())
+
+    assert payload["status"] == "success"
+    assert payload["agent"] == "shell"
+    assert payload["count"] == len(payload["tool_names"])
+    assert "dispatch_to_core" in payload["tool_names"]
+    assert "memory_search" in payload["tool_names"]
+
+
+def test_chat_stream_emits_shell_available_tools_event(monkeypatch) -> None:
+    class _FakeLLMService:
+        def stream_chat_with_context(self, messages, temperature, model_override=None, tools=None, tool_choice="auto"):
+            del messages, temperature, model_override, tools, tool_choice
+
+            async def _gen():
+                yield "data: {\"type\":\"content\",\"text\":\"hello\"}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return _gen()
+
+    async def _collect_payloads(response):
+        rows = []
+        async for chunk in response.body_iterator:
+            text = chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)
+            for line in text.splitlines():
+                if not line.startswith("data: "):
+                    continue
+                raw = line[6:].strip()
+                if not raw or raw == "[DONE]":
+                    continue
+                rows.append(json.loads(raw))
+        return rows
+
+    async def _no_memory(_question: str, *, limit: int = 5):
+        del limit
+        return []
+
+    monkeypatch.setattr(api_server, "get_llm_service", lambda: _FakeLLMService())
+    monkeypatch.setattr(api_server, "_recall_memory_lines", _no_memory)
+
+    req = api_server.ChatRequest(
+        message="总结当前系统状态",
+        stream=True,
+        session_id="shell-tools-stream-session",
+        stream_protocol="sse_json_v1",
+        temporary=True,
+    )
+    response = asyncio.run(api_server.chat_stream(req))
+    payloads = asyncio.run(_collect_payloads(response))
+
+    assert payloads[0]["type"] == "session_meta"
+    available_tools = next(item for item in payloads if item.get("type") == "available_tools")
+    assert available_tools["agent"] == "shell"
+    assert available_tools["scope"] == "entry"
+    assert "dispatch_to_core" in available_tools["tool_names"]
+    assert any(str(tool.get("name") or "") == "memory_read" for tool in available_tools["tools"])
+    assert any(item.get("type") == "route_decision" for item in payloads)
 
 
 def test_chat_stream_dispatch_to_core_triggers_real_core_pipeline(monkeypatch) -> None:

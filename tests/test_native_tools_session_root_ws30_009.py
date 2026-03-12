@@ -65,6 +65,73 @@ def test_read_file_uses_session_workspace_root(store: AgentSessionStore, cleanup
     assert "session-root-read" in str(result["result"])
 
 
+def test_read_file_grep_mode_honors_pattern_with_session_workspace_root(
+    store: AgentSessionStore,
+    cleanup_paths: list[Path],
+) -> None:
+    workspace_root = Path("scratch/agent_worktrees/ws30_009_read_grep")
+    shutil.rmtree(workspace_root, ignore_errors=True)
+    cleanup_paths.append(workspace_root)
+    target = workspace_root / "docs" / "events.log"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("INFO ready\nERROR trace-123\nINFO done\n", encoding="utf-8")
+
+    _register_workspace_session(store, session_id="agent-read-grep", workspace_root=workspace_root)
+    executor = NativeToolExecutor()
+    executor.set_agent_session_store(store)
+
+    result = asyncio.run(
+        executor.execute(
+                {
+                    "tool_name": "read_file",
+                    "path": "docs/events.log",
+                    "mode": "grep",
+                    "pattern": r"ERROR\s+trace-\d+",
+                    "use_regex": True,
+                    "max_results": 5,
+                },
+            session_id="agent-read-grep",
+        )
+    )
+
+    assert result["status"] == "success"
+    assert "[mode] grep" in str(result["result"])
+    assert "ERROR trace-123" in str(result["result"])
+
+
+def test_read_file_jsonpath_mode_returns_selected_values(
+    store: AgentSessionStore,
+    cleanup_paths: list[Path],
+) -> None:
+    workspace_root = Path("scratch/agent_worktrees/ws30_009_read_jsonpath")
+    shutil.rmtree(workspace_root, ignore_errors=True)
+    cleanup_paths.append(workspace_root)
+    target = workspace_root / "logs" / "events.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('{"events":[{"trace_id":"trace-001"},{"trace_id":"trace-002"}]}\n', encoding="utf-8")
+
+    _register_workspace_session(store, session_id="agent-read-jsonpath", workspace_root=workspace_root)
+    executor = NativeToolExecutor()
+    executor.set_agent_session_store(store)
+
+    result = asyncio.run(
+        executor.execute(
+            {
+                "tool_name": "read_file",
+                "path": "logs/events.json",
+                "mode": "jsonpath",
+                "query": "$..trace_id",
+            },
+            session_id="agent-read-jsonpath",
+        )
+    )
+
+    assert result["status"] == "success"
+    assert "[mode] jsonpath" in str(result["result"])
+    assert "trace-001" in str(result["result"])
+    assert "trace-002" in str(result["result"])
+
+
 def test_write_file_uses_session_workspace_root_and_tolerates_public_session_id(
     store: AgentSessionStore,
     cleanup_paths: list[Path],
@@ -133,6 +200,40 @@ def test_search_keyword_defaults_to_session_workspace_root(
     assert result["status"] == "success"
     assert seen["base"] == expected_base
     assert "scratch/agent_worktrees/ws30_009_search/docs/needle.txt:1:" in str(result["result"]).replace("\\", "/")
+
+
+def test_search_keyword_honors_use_regex(
+    store: AgentSessionStore,
+    cleanup_paths: list[Path],
+) -> None:
+    workspace_root = Path("scratch/agent_worktrees/ws30_009_search_regex")
+    shutil.rmtree(workspace_root, ignore_errors=True)
+    cleanup_paths.append(workspace_root)
+    target = workspace_root / "docs" / "regex.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("trace-100\ntrace-abc\ntrace-200\n", encoding="utf-8")
+
+    _register_workspace_session(store, session_id="agent-search-regex", workspace_root=workspace_root)
+    executor = NativeToolExecutor()
+    executor.set_agent_session_store(store)
+
+    result = asyncio.run(
+        executor.execute(
+            {
+                "tool_name": "search_keyword",
+                "keyword": r"trace-\d+",
+                "use_regex": True,
+                "max_results": 5,
+            },
+            session_id="agent-search-regex",
+        )
+    )
+
+    assert result["status"] == "success"
+    rendered = str(result["result"])
+    assert "trace-100" in rendered
+    assert "trace-200" in rendered
+    assert "trace-abc" not in rendered
 
 
 def test_workspace_txn_apply_rewrites_relative_changes_against_session_workspace_root(

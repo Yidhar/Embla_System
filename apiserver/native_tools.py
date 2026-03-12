@@ -601,7 +601,7 @@ class NativeToolExecutor:
         decision = self.policy_firewall.validate_native_call(tool_name, effective_call)
         if not decision.allowed:
             audit_suffix = f" (audit_id={decision.audit_id})" if decision.audit_id else ""
-            return self._error(call, f"瀹夊叏闄愬埗: {decision.reason}{audit_suffix}", tool_name=tool_name)
+            return self._error(call, f"安全限制: {decision.reason}{audit_suffix}", tool_name=tool_name)
 
         try:
             result = await backend.execute_tool(tool_name, effective_call, context=context, native_tool_executor=self)
@@ -626,9 +626,44 @@ class NativeToolExecutor:
             raise ValueError("read_file 缺少 path")
 
         content = await self.executor.read_file(path)
+        mode = str(call.get("mode") or "").strip().lower()
         start_line = call.get("start_line")
         end_line = call.get("end_line")
         max_chars = _safe_int(call.get("max_chars"), _DEFAULT_PREVIEW_CHARS, 200, 50000)
+        max_results = _safe_int(call.get("max_results"), 50, 1, 5000)
+
+        if mode == "grep":
+            pattern_text = str(
+                call.get("pattern") or call.get("keyword") or call.get("query") or ""
+            ).strip()
+            if not pattern_text:
+                raise ValueError("read_file(mode=grep) 缺少 pattern/keyword/query")
+            use_regex = bool(call.get("use_regex", False))
+            case_sensitive = bool(call.get("case_sensitive", False))
+            flags = 0 if case_sensitive else re.IGNORECASE
+            pattern = re.compile(pattern_text if use_regex else re.escape(pattern_text), flags=flags)
+            matched: List[str] = []
+            for idx, line in enumerate(content.splitlines(), 1):
+                if pattern.search(line):
+                    matched.append(f"{idx:4}: {line}")
+                    if len(matched) >= max_results:
+                        break
+            rendered = "\n".join(matched) if matched else "(no matches)"
+            return "\n".join([f"[path] {path}", "[mode] grep", "[content]", rendered])
+
+        if mode == "jsonpath":
+            query = str(call.get("query") or call.get("jsonpath") or "").strip()
+            if not query:
+                raise ValueError("read_file(mode=jsonpath) 缺少 query/jsonpath")
+            try:
+                values = _jsonpath_extract(content, query, max_items=max_results)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"文件不是合法 JSON，无法执行 jsonpath: {exc}") from exc
+            rendered = [_format_artifact_reader_value(v) for v in values]
+            content_out = "\n".join(f"[{idx}] {item}" for idx, item in enumerate(rendered, 1))
+            if not content_out:
+                content_out = "(no matches)"
+            return "\n".join([f"[path] {path}", "[mode] jsonpath", "[content]", content_out])
 
         if start_line is not None or end_line is not None:
             lines = content.splitlines()
@@ -764,6 +799,7 @@ class NativeToolExecutor:
         search_path = str(call.get("search_path") or ".").strip()
         include_glob = str(call.get("glob") or "").strip()
         case_sensitive = bool(call.get("case_sensitive", False))
+        use_regex = bool(call.get("use_regex", False))
         max_results = _safe_int(call.get("max_results"), 50, 1, 200)
         max_file_size = _safe_int(call.get("max_file_size_kb"), 512, 64, 2048) * 1024
 
@@ -772,7 +808,7 @@ class NativeToolExecutor:
 
         ignore_dirs = {".git", ".venv", "__pycache__", "node_modules", "dist", "release", "logs"}
         flags = 0 if case_sensitive else re.IGNORECASE
-        pattern = re.compile(re.escape(keyword), flags=flags)
+        pattern = re.compile(keyword if use_regex else re.escape(keyword), flags=flags)
 
         for root, dirs, files in os.walk(base):
             dirs[:] = [d for d in dirs if d not in ignore_dirs]

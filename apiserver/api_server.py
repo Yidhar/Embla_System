@@ -560,7 +560,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[ERROR] API服务器初始化失败: {e}")
         traceback.print_exc()
-        sys.exit(1)
+        raise
     finally:
         print("[INFO] 正在清理资源...")
         # MCP服务现在由mcpserver独立管理，无需清理
@@ -625,6 +625,20 @@ def _build_api_contract_snapshot() -> Dict[str, Any]:
             }
             for route, meta in _UNVERSIONED_ROUTE_DEPRECATIONS.items()
         },
+    }
+
+
+def _build_shell_tools_catalog(*, session_id: str = "", scope: str = "entry") -> Dict[str, Any]:
+    shell_agent = ShellAgent()
+    tool_defs = [dict(item) for item in shell_agent.get_tool_definitions() if isinstance(item, dict)]
+    tool_names = [str(item.get("name") or "").strip() for item in tool_defs if str(item.get("name") or "").strip()]
+    return {
+        "agent": "shell",
+        "scope": str(scope or "entry"),
+        "session_id": str(session_id or "").strip(),
+        "count": len(tool_names),
+        "tool_names": tool_names,
+        "tools": tool_defs,
     }
 
 
@@ -834,6 +848,17 @@ async def get_system_info():
 @app.get("/v1/system/info", response_model=SystemInfoResponse)
 async def get_system_info_v1():
     return await get_system_info()
+
+
+@app.get("/shell/tools")
+async def get_shell_tools():
+    payload = _build_shell_tools_catalog()
+    return {"status": "success", **payload}
+
+
+@app.get("/v1/shell/tools")
+async def get_shell_tools_v1():
+    return await get_shell_tools()
 
 
 @app.get("/system/config")
@@ -1380,10 +1405,18 @@ async def chat_stream(request: ChatRequest):
         try:
             # 获取或创建会话ID
             session_id = message_manager.create_session(request.session_id, temporary=request.temporary)
+            shell_agent = ShellAgent()
 
             # 发送会话ID信息
             yield _format_stream_payload_chunk(
                 {"type": "session_meta", "session_id": session_id},
+                protocol=stream_protocol,
+            )
+            yield _format_stream_payload_chunk(
+                {
+                    "type": "available_tools",
+                    **_build_shell_tools_catalog(session_id=session_id, scope="entry"),
+                },
                 protocol=stream_protocol,
             )
 
@@ -1413,7 +1446,7 @@ async def chat_stream(request: ChatRequest):
 
             shell_base_prompt = ""
             try:
-                shell_base_prompt = str(ShellAgent().build_system_prompt() or "")
+                shell_base_prompt = str(shell_agent.build_system_prompt() or "")
             except Exception as _shell_prompt_exc:
                 logger.debug("[prompt_gateway] shell base prompt build fallback: %s", _shell_prompt_exc)
             precomposed_shell_prompt = _build_shell_system_prompt_with_gateway(
@@ -1551,7 +1584,6 @@ async def chat_stream(request: ChatRequest):
                     {"model": cc.model, "api_base": cc.model_url, "api_key": cc.api_key},
                 )
 
-            shell_agent = ShellAgent()
             shell_tool_defs = shell_agent.get_tool_definitions()
             llm_service = get_llm_service()
             shell_max_rounds = 4

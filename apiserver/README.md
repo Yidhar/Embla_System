@@ -57,6 +57,7 @@ uvicorn apiserver.llm_service:llm_app --host 127.0.0.1 --port 8001 --reload
 
 - `POST /chat`、`POST /v1/chat`
 - `POST /chat/stream`、`POST /v1/chat/stream`
+- `GET /shell/tools`、`GET /v1/shell/tools`
 - `GET /chat/route_session_state/{session_id}`、`GET /v1/chat/route_session_state/{session_id}`
 
 ### 4.3 会话

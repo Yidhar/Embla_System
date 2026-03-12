@@ -641,7 +641,7 @@ class BoxLiteExecutionBackend(ExecutionBackend):
         )
         if int(result.get("exit_code", 1)) != 0:
             raise RuntimeError(result.get("stderr") or result.get("stdout") or f"{helper_name} failed")
-        return str(result.get("stdout") or "").strip()
+        return str(result.get("stdout") or "")
 
     async def execute_tool(self, tool_name: str, call: Dict[str, Any], *, context, native_tool_executor) -> str:
         host_bridge_tools = {"artifact_reader", "killswitch_plan"}
@@ -659,14 +659,17 @@ class BoxLiteExecutionBackend(ExecutionBackend):
             query = str(call.get("query") or call.get("keyword") or "").strip()
             if not query:
                 raise ValueError("query_docs 缺少 query/keyword")
+            helper_args = [
+                "--root", str(context.execution_root or "/workspace"),
+                "--query", query,
+                "--max-results", str(_safe_int(call.get("max_results"), 30, 1, 200)),
+                "--max-file-size-kb", str(_safe_int(call.get("max_file_size_kb"), 768, 64, 2048)),
+            ]
+            if bool(call.get("case_sensitive", False)):
+                helper_args.append("--case-sensitive")
             return await self._run_guest_helper(
                 "query_docs",
-                [
-                    "--root", str(context.execution_root or "/workspace"),
-                    "--query", query,
-                    "--max-results", str(_safe_int(call.get("max_results"), 30, 1, 200)),
-                    "--max-file-size-kb", str(_safe_int(call.get("max_file_size_kb"), 768, 64, 2048)),
-                ],
+                helper_args,
                 context=context,
                 native_tool_executor=native_tool_executor,
                 timeout_seconds=60,
@@ -694,15 +697,19 @@ class BoxLiteExecutionBackend(ExecutionBackend):
             start_line = _safe_int(call.get("start_line"), 1, 1, 1_000_000)
             end_default = max(start_line, start_line + 120)
             end_line = _safe_int(call.get("end_line"), end_default, start_line, 1_000_000)
+            helper_args = [
+                "--path", path,
+                "--start-line", str(start_line),
+                "--end-line", str(end_line),
+                "--context-before", str(_safe_int(call.get("context_before"), 3, 0, 200)),
+                "--context-after", str(_safe_int(call.get("context_after"), 3, 0, 200)),
+            ]
+            target_path = str(call.get("target_path") or "").strip()
+            if target_path:
+                helper_args.extend(["--target-path", target_path])
             return await self._run_guest_helper(
                 "file_ast_chunk_read",
-                [
-                    "--path", path,
-                    "--start-line", str(start_line),
-                    "--end-line", str(end_line),
-                    "--context-before", str(_safe_int(call.get("context_before"), 3, 0, 200)),
-                    "--context-after", str(_safe_int(call.get("context_after"), 3, 0, 200)),
-                ],
+                helper_args,
                 context=context,
                 native_tool_executor=native_tool_executor,
                 timeout_seconds=60,
@@ -758,26 +765,33 @@ class BoxLiteExecutionBackend(ExecutionBackend):
             path = str(call.get("path") or call.get("file_path") or "").strip()
             if not path:
                 raise ValueError("read_file 缺少 path")
-            result = await self._run_box_command(
+            helper_args = [
+                "--path", path,
+                "--max-chars", str(_safe_int(call.get("max_chars"), 6000, 200, 50000)),
+                "--max-results", str(_safe_int(call.get("max_results"), 50, 1, 5000)),
+            ]
+            mode = str(call.get("mode") or "").strip().lower()
+            if mode:
+                helper_args.extend(["--mode", mode])
+            if call.get("start_line") is not None:
+                helper_args.extend(["--start-line", str(_safe_int(call.get("start_line"), 1, 1, 1_000_000))])
+            if call.get("end_line") is not None:
+                helper_args.extend(["--end-line", str(_safe_int(call.get("end_line"), 1, 1, 1_000_000))])
+            for key, flag in (("pattern", "--pattern"), ("keyword", "--keyword"), ("query", "--query"), ("jsonpath", "--jsonpath")):
+                value = str(call.get(key) or "").strip()
+                if value:
+                    helper_args.extend([flag, value])
+            if bool(call.get("use_regex", False)):
+                helper_args.append("--use-regex")
+            if bool(call.get("case_sensitive", False)):
+                helper_args.append("--case-sensitive")
+            return await self._run_guest_helper(
+                "read_file",
+                helper_args,
                 context=context,
-                command="cat",
-                args=[path],
-                timeout_seconds=30,
                 native_tool_executor=native_tool_executor,
+                timeout_seconds=30,
             )
-            if int(result["exit_code"]) != 0:
-                raise RuntimeError(result["stderr"] or result["stdout"] or f"failed to read file: {path}")
-            content = str(result["stdout"] or "")
-            start_line = call.get("start_line")
-            end_line = call.get("end_line")
-            max_chars = int(call.get("max_chars") or 6000)
-            if start_line is not None or end_line is not None:
-                lines = content.splitlines()
-                s = max(1, int(start_line or 1))
-                e = min(len(lines) if lines else s, int(end_line or min(s + 200, len(lines) if lines else s)))
-                selected = lines[s - 1 : e]
-                content = "\n".join(f"{idx + s:4}: {line}" for idx, line in enumerate(selected))
-            return content[:max_chars] if len(content) > max_chars else content
 
         if tool_name == "write_file":
             path = str(call.get("path") or call.get("file_path") or "").strip()
@@ -807,80 +821,45 @@ class BoxLiteExecutionBackend(ExecutionBackend):
                 write_text = existing + content_text
 
             native_tool_executor._validate_test_poisoning(safe_path, write_text)
-            python_payload = (
-                "from pathlib import Path; "
-                f"p=Path({path!r}); "
-                "p.parent.mkdir(parents=True, exist_ok=True); "
-                f"p.write_text({write_text!r}, encoding={encoding!r})"
-            )
-            result = await self._run_box_command(
+            return await self._run_guest_helper(
+                "write_file",
+                [
+                    "--path", path,
+                    "--content-base64", base64.b64encode(content_text.encode("utf-8")).decode("ascii"),
+                    "--mode", mode,
+                    "--encoding", encoding,
+                ],
                 context=context,
-                command="python",
-                args=["-c", python_payload],
-                timeout_seconds=30,
                 native_tool_executor=native_tool_executor,
+                timeout_seconds=30,
             )
-            if int(result["exit_code"]) != 0:
-                raise RuntimeError(result["stderr"] or result["stdout"] or f"failed to write file: {path}")
-            return f"已写入文件: {path} (mode={mode}, chars={len(content_text)})"
 
         if tool_name == "search_keyword":
             keyword = str(call.get("keyword") or call.get("query") or "").strip()
             if not keyword:
                 raise ValueError("search_keyword 缺少 keyword/query")
             search_path = str(call.get("search_path") or context.execution_root or "/workspace").strip() or str(context.execution_root or "/workspace")
+            helper_args = [
+                "--root", str(context.execution_root or "/workspace"),
+                "--keyword", keyword,
+                "--search-path", search_path,
+                "--max-results", str(_safe_int(call.get("max_results"), 50, 1, 200)),
+                "--max-file-size-kb", str(_safe_int(call.get("max_file_size_kb"), 512, 64, 2048)),
+            ]
             include_glob = str(call.get("glob") or "").strip()
-            case_sensitive = bool(call.get("case_sensitive", False))
-            use_regex = bool(call.get("use_regex", False))
-            max_results = max(1, min(200, int(call.get("max_results") or 50)))
-            max_file_size = _safe_int(call.get("max_file_size_kb"), 512, 64, 2048) * 1024
-            flags_line = "flags = 0\n" if case_sensitive else "flags = re.IGNORECASE\n"
-            pattern_expr = f"pattern_text" if use_regex else f"re.escape({keyword!r})"
-            py = (
-                "from pathlib import Path\n"
-                "import re\n"
-                f"base = Path({search_path!r})\n"
-                f"pattern_text = {keyword!r}\n"
-                f"include_glob = {include_glob!r}\n"
-                f"max_results = {max_results}\n"
-                f"max_file_size = {max_file_size}\n"
-                + flags_line
-                + f"pat = re.compile({pattern_expr}, flags=flags)\n"
-                + "out = []\n"
-                + "ignore = {'.git', '.venv', '__pycache__', 'node_modules', 'dist', 'release', 'logs'}\n"
-                + "for p in base.rglob('*'):\n"
-                + "    if any(part in ignore for part in p.parts):\n"
-                + "        continue\n"
-                + "    if not p.is_file():\n"
-                + "        continue\n"
-                + "    if include_glob and not Path(p.name).match(include_glob):\n"
-                + "        continue\n"
-                + "    try:\n"
-                + "        if p.stat().st_size > max_file_size:\n"
-                + "            continue\n"
-                + "        text = p.read_text(encoding='utf-8', errors='ignore')\n"
-                + "    except Exception:\n"
-                + "        continue\n"
-                + "    rel = p.relative_to(base)\n"
-                + "    for idx, line in enumerate(text.splitlines(), start=1):\n"
-                + "        if pat.search(line):\n"
-                + "            out.append(f'{rel}:{idx}:{line.strip()}')\n"
-                + "            if len(out) >= max_results:\n"
-                + "                print('\\n'.join(out))\n"
-                + "                raise SystemExit(0)\n"
-                + "print('\\n'.join(out))\n"
-            )
-            result = await self._run_box_command(
+            if include_glob:
+                helper_args.extend(["--glob", include_glob])
+            if bool(call.get("case_sensitive", False)):
+                helper_args.append("--case-sensitive")
+            if bool(call.get("use_regex", False)):
+                helper_args.append("--use-regex")
+            return await self._run_guest_helper(
+                "search_keyword",
+                helper_args,
                 context=context,
-                command="python",
-                args=["-c", py],
-                timeout_seconds=60,
                 native_tool_executor=native_tool_executor,
+                timeout_seconds=60,
             )
-            if int(result["exit_code"]) != 0:
-                raise RuntimeError(result["stderr"] or result["stdout"] or "search failed")
-            body = str(result["stdout"] or "").strip()
-            return body or f"未找到关键字: {keyword}"
 
         if tool_name == "list_files":
             path = str(call.get("path") or context.execution_root or "/workspace").strip()
