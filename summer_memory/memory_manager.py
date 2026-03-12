@@ -5,8 +5,8 @@ import weakref
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from system.asyncio_offload import offload_blocking
-from system.config import AI_NAME, config
 
+from .quintuple_extractor import config as runtime_config
 from .quintuple_extractor import extract_quintuples
 from .quintuple_graph import (
     clear_quintuples_store,
@@ -19,6 +19,8 @@ from .quintuple_rag_query import query_knowledge, set_context
 from .task_manager import start_auto_cleanup, task_manager
 
 logger = logging.getLogger(__name__)
+config = runtime_config
+AI_NAME = config.system.ai_name
 
 
 class GRAGMemoryManager:

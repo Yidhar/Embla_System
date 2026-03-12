@@ -5,8 +5,6 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from system.config import get_config
-
 logger = logging.getLogger(__name__)
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -33,6 +31,12 @@ def _coerce_int(value: Any, *, default: int, minimum: int) -> int:
     except Exception:
         return max(minimum, default)
     return max(minimum, parsed)
+
+
+def get_config():
+    from system.config import get_config as _get_config
+
+    return _get_config()
 
 
 def resolve_embedding_runtime_config() -> EmbeddingRuntimeConfig:

@@ -4,7 +4,7 @@ import json as _json
 import logging
 import os
 import re
-import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 try:
@@ -16,21 +16,11 @@ except ImportError:
     Relationship = None  # type: ignore[assignment,misc]
     ServiceUnavailable = Exception  # type: ignore[assignment,misc]
 
-from charset_normalizer import from_path
-
 from .embedding_openai_compat import embed_texts_openai_compat, resolve_embedding_runtime_config
-
-# 添加项目根目录到路径，以便导入config
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 # 延迟加载的graph实例
 _graph: Optional[Graph] = None
 
-# Neo4j配置变量（全局）
-NEO4J_URI: Optional[str] = None
-NEO4J_USER: Optional[str] = None
-NEO4J_PASSWORD: Optional[str] = None
-NEO4J_DATABASE: Optional[str] = None
 GRAG_ENABLED: bool = False
 
 _VECTOR_INDEX_READY = False
@@ -40,47 +30,8 @@ logger = logging.getLogger(__name__)
 QUINTUPLES_FILE = "logs/knowledge_graph/quintuples.json"
 
 
-def _load_config() -> None:
-    """加载Neo4j配置（兼容旧入口）"""
-    global NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NEO4J_DATABASE, GRAG_ENABLED
-
-    if NEO4J_URI is not None:
-        return
-
-    try:
-        from system.config import config
-
-        GRAG_ENABLED = config.grag.enabled
-        NEO4J_URI = config.grag.neo4j_uri
-        NEO4J_USER = config.grag.neo4j_user
-        NEO4J_PASSWORD = config.grag.neo4j_password
-        NEO4J_DATABASE = config.grag.neo4j_database
-        print(f"[GRAG] 成功从config模块读取配置: enabled={GRAG_ENABLED}, uri={NEO4J_URI}")
-        return
-    except Exception as exc:
-        print(f"[GRAG] 无法从config模块读取Neo4j配置: {exc}", file=sys.stderr)
-
-    try:
-        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
-        charset_results = from_path(config_path)
-        detected_encoding = "utf-8"
-        if charset_results:
-            best_match = charset_results.best()
-            if best_match and best_match.encoding:
-                detected_encoding = best_match.encoding
-
-        with open(config_path, "r", encoding=detected_encoding) as file:
-            cfg = _json.load(file)
-
-        grag_cfg = cfg.get("grag", {})
-        NEO4J_URI = grag_cfg.get("neo4j_uri")
-        NEO4J_USER = grag_cfg.get("neo4j_user")
-        NEO4J_PASSWORD = grag_cfg.get("neo4j_password")
-        NEO4J_DATABASE = grag_cfg.get("neo4j_database")
-        GRAG_ENABLED = bool(grag_cfg.get("enabled", True))
-    except Exception as exc:
-        print(f"[GRAG] 无法从 config.json 读取Neo4j配置: {exc}", file=sys.stderr)
-        GRAG_ENABLED = False
+def _resolve_quintuples_file_path() -> Path:
+    return Path(QUINTUPLES_FILE)
 
 
 def get_graph() -> Optional[Graph]:
@@ -93,36 +44,34 @@ def get_graph() -> Optional[Graph]:
             return None
 
         try:
-            from system.config import config
+            from system.config import get_config
 
-            grag_enabled = bool(config.grag.enabled)
-            neo4j_uri = str(config.grag.neo4j_uri or "").strip()
-            neo4j_user = str(config.grag.neo4j_user or "").strip()
-            neo4j_password = str(config.grag.neo4j_password or "").strip()
-            neo4j_database = str(config.grag.neo4j_database or "neo4j").strip() or "neo4j"
+            grag_cfg = get_config().grag
+            grag_enabled = bool(grag_cfg.enabled)
+            neo4j_uri = str(grag_cfg.neo4j_uri or "").strip()
+            neo4j_user = str(grag_cfg.neo4j_user or "").strip()
+            neo4j_password = str(grag_cfg.neo4j_password or "").strip()
+            neo4j_database = str(grag_cfg.neo4j_database or "neo4j").strip() or "neo4j"
 
             if grag_enabled and neo4j_uri and neo4j_user and neo4j_password:
                 try:
                     _graph = Graph(neo4j_uri, auth=(neo4j_user, neo4j_password), name=neo4j_database)
                     _graph.service.kernel_version
-                    print("[GRAG] 成功连接到 Neo4j。")
+                    logger.info("[GRAG] 成功连接到 Neo4j")
                     GRAG_ENABLED = True
                 except ServiceUnavailable:
-                    print(
-                        "[GRAG] 未能连接到 Neo4j，图数据库功能已临时禁用。请检查 Neo4j 是否正在运行以及配置是否正确。",
-                        file=sys.stderr,
-                    )
+                    logger.warning("[GRAG] 未能连接到 Neo4j，图数据库功能已临时禁用")
                     _graph = None
                     GRAG_ENABLED = False
                 except Exception as exc:
-                    print(f"[GRAG] Neo4j连接失败: {exc}", file=sys.stderr)
+                    logger.warning("[GRAG] Neo4j 连接失败: %s", exc)
                     _graph = None
                     GRAG_ENABLED = False
             else:
-                print(f"[GRAG] GRAG未启用或配置不完整: enabled={grag_enabled}, uri={neo4j_uri}")
+                logger.info("[GRAG] GRAG 未启用或 Neo4j 配置不完整")
                 GRAG_ENABLED = False
         except Exception as exc:
-            print(f"[GRAG] 无法加载配置: {exc}", file=sys.stderr)
+            logger.warning("[GRAG] 加载配置失败: %s", exc)
             GRAG_ENABLED = False
 
     return _graph
@@ -255,16 +204,18 @@ def _upsert_entity_embeddings(graph: Graph, entities: Sequence[Tuple[str, str]])
 
 
 def load_quintuples() -> Set[Tuple[str, str, str, str, str]]:
+    file_path = _resolve_quintuples_file_path()
     try:
-        with open(QUINTUPLES_FILE, "r", encoding="utf-8") as file:
+        with file_path.open("r", encoding="utf-8") as file:
             return set(tuple(t) for t in _json.load(file))
     except FileNotFoundError:
         return set()
 
 
 def save_quintuples(quintuples: Sequence[Tuple[str, str, str, str, str]]) -> None:
-    os.makedirs(os.path.dirname(QUINTUPLES_FILE), exist_ok=True)
-    with open(QUINTUPLES_FILE, "w", encoding="utf-8") as file:
+    file_path = _resolve_quintuples_file_path()
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with file_path.open("w", encoding="utf-8") as file:
         _json.dump(list(quintuples), file, ensure_ascii=False, indent=2)
 
 
@@ -282,10 +233,11 @@ def clear_quintuples_store() -> Dict[str, Any]:
     }
 
     try:
-        if os.path.exists(QUINTUPLES_FILE):
-            os.remove(QUINTUPLES_FILE)
+        file_path = _resolve_quintuples_file_path()
+        if file_path.exists():
+            file_path.unlink()
             status["file_removed"] = True
-        status["file_cleared"] = not os.path.exists(QUINTUPLES_FILE)
+        status["file_cleared"] = not file_path.exists()
     except FileNotFoundError:
         status["file_cleared"] = True
     except Exception as exc:

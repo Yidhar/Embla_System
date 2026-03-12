@@ -1,16 +1,12 @@
 import json
 import logging
-import os
-import sys
 
 import requests
 
-# 添加项目根目录到路径，以便导入config
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-
 from agents.prompt_engine import PromptAssembler, get_system_prompts_root
-from system.config import config
+from .quintuple_extractor import config as runtime_config
 
+config = runtime_config
 API_URL = f"{config.api.base_url.rstrip('/')}/chat/completions"
 
 logging.basicConfig(level=logging.INFO)
@@ -40,7 +36,7 @@ def set_context(texts):
 
 
 def query_knowledge(user_question):
-    """使用 DeepSeek API 提取关键词并查询知识图谱"""
+    """调用当前配置的聊天模型提取关键词并查询知识图谱"""
     context_str = "\n".join(recent_context) if recent_context else "无上下文"
 
     headers = {
@@ -67,7 +63,7 @@ def query_knowledge(user_question):
         content = response.json()
 
         if "choices" not in content or not content["choices"]:
-            logger.error("DeepSeek API 响应中未找到 'choices' 字段")
+            logger.error("LLM API 响应中未找到 'choices' 字段")
             return "无法处理 API 响应，请稍后重试。"
 
         raw_content = content["choices"][0]["message"]["content"]
@@ -79,7 +75,7 @@ def query_knowledge(user_question):
             if not isinstance(keywords, list):
                 raise ValueError("关键词应为列表")
         except (json.JSONDecodeError, ValueError) as exc:
-            logger.error("解析 DeepSeek 响应失败: %s, 错误: %s", raw_content, exc)
+            logger.error("解析 LLM 响应失败: %s, 错误: %s", raw_content, exc)
             return "无法解析关键词，请检查问题格式。"
 
         if not keywords:
@@ -100,11 +96,11 @@ def query_knowledge(user_question):
         return answer
 
     except requests.exceptions.HTTPError as exc:
-        logger.error("DeepSeek API HTTP 错误: %s", exc)
-        return "调用 DeepSeek API 失败，请检查 API 密钥或网络连接。"
+        logger.error("LLM API HTTP 错误: %s", exc)
+        return "调用 LLM API 失败，请检查 API 密钥、服务状态或网络连接。"
     except requests.exceptions.RequestException as exc:
-        logger.error("DeepSeek API 请求失败: %s", exc)
-        return "无法连接到 DeepSeek API，请检查网络。"
+        logger.error("LLM API 请求失败: %s", exc)
+        return "无法连接到 LLM API，请检查网络。"
     except Exception as exc:
         logger.error("查询过程中发生未知错误: %s", exc)
         return "查询过程中发生未知错误，请稍后重试。"
