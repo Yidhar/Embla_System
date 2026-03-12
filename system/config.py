@@ -47,9 +47,13 @@ _EMBLA_SYSTEM_DEFAULT_SECURITY: Dict[str, Any] = {
     "approval_required_scopes": ["core", "policy", "prompt_dna", "tools_registry"],
     "audit_ledger_file": "scratch/runtime/audit_ledger.jsonl",
     "audit_signing_key_env": "EMBLA_AUDIT_SIGNING_KEY",
-    "immutable_dna_locked_prompts": [
+    "immutable_dna_runtime_prompts": [
         "conversation_style_prompt.md",
         "agentic_tool_prompt.md",
+    ],
+    "immutable_agent_identity_prompts": [
+        "shell_persona.md",
+        "core_values.md",
     ],
 }
 _embla_system_config: Dict[str, Any] = {}
@@ -154,17 +158,39 @@ def _normalize_embla_system_payload(payload: Dict[str, Any], *, source: str, loa
                 normalized_scopes.append(text)
         security["approval_required_scopes"] = normalized_scopes or list(_EMBLA_SYSTEM_DEFAULT_SECURITY["approval_required_scopes"])
 
-    if not isinstance(security.get("immutable_dna_locked_prompts"), list):
-        security["immutable_dna_locked_prompts"] = list(_EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_dna_locked_prompts"])
-    else:
-        normalized_locked_prompts = []
-        for item in security.get("immutable_dna_locked_prompts", []):
-            text = str(item or "").strip()
-            if text and text not in normalized_locked_prompts:
-                normalized_locked_prompts.append(text)
-        security["immutable_dna_locked_prompts"] = normalized_locked_prompts or list(
-            _EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_dna_locked_prompts"]
+    legacy_runtime_prompts = security.get("immutable_dna_locked_prompts")
+    if not isinstance(legacy_runtime_prompts, list):
+        legacy_runtime_prompts = []
+
+    if not isinstance(security.get("immutable_dna_runtime_prompts"), list):
+        security["immutable_dna_runtime_prompts"] = (
+            list(legacy_runtime_prompts)
+            if legacy_runtime_prompts
+            else list(_EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_dna_runtime_prompts"])
         )
+    else:
+        normalized_runtime_prompts = []
+        for item in security.get("immutable_dna_runtime_prompts", []):
+            text = str(item or "").strip()
+            if text and text not in normalized_runtime_prompts:
+                normalized_runtime_prompts.append(text)
+        security["immutable_dna_runtime_prompts"] = normalized_runtime_prompts or list(
+            _EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_dna_runtime_prompts"]
+        )
+
+    if not isinstance(security.get("immutable_agent_identity_prompts"), list):
+        security["immutable_agent_identity_prompts"] = list(_EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_agent_identity_prompts"])
+    else:
+        normalized_identity_prompts = []
+        for item in security.get("immutable_agent_identity_prompts", []):
+            text = str(item or "").strip()
+            if text and text not in normalized_identity_prompts:
+                normalized_identity_prompts.append(text)
+        security["immutable_agent_identity_prompts"] = normalized_identity_prompts or list(
+            _EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_agent_identity_prompts"]
+        )
+
+    security["immutable_dna_locked_prompts"] = list(security["immutable_dna_runtime_prompts"])
 
     audit_ledger_file = str(security.get("audit_ledger_file") or "").strip()
     if not audit_ledger_file:
@@ -212,19 +238,47 @@ def get_embla_system_config() -> Dict[str, Any]:
     return copy.deepcopy(_embla_system_config)
 
 
-def get_immutable_dna_locked_prompts() -> List[str]:
+def _normalize_embla_prompt_name_list(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: List[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text and text not in normalized:
+            normalized.append(text)
+    return normalized
+
+
+def get_immutable_dna_runtime_prompts() -> List[str]:
     payload = get_embla_system_config()
     security = payload.get("security") if isinstance(payload.get("security"), dict) else {}
-    rows = security.get("immutable_dna_locked_prompts")
-    if isinstance(rows, list):
-        normalized: List[str] = []
-        for item in rows:
-            text = str(item or "").strip()
-            if text and text not in normalized:
-                normalized.append(text)
-        if normalized:
-            return normalized
-    return list(_EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_dna_locked_prompts"])
+    rows = _normalize_embla_prompt_name_list(security.get("immutable_dna_runtime_prompts"))
+    if rows:
+        return rows
+    return list(_EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_dna_runtime_prompts"])
+
+
+def get_immutable_agent_identity_prompts() -> List[str]:
+    payload = get_embla_system_config()
+    security = payload.get("security") if isinstance(payload.get("security"), dict) else {}
+    rows = _normalize_embla_prompt_name_list(security.get("immutable_agent_identity_prompts"))
+    if rows:
+        return rows
+    return list(_EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_agent_identity_prompts"])
+
+
+def get_all_immutable_dna_prompts() -> List[str]:
+    rows: List[str] = []
+    for item in get_immutable_dna_runtime_prompts() + get_immutable_agent_identity_prompts():
+        text = str(item or "").strip()
+        if text and text not in rows:
+            rows.append(text)
+    return rows
+
+
+def get_immutable_dna_locked_prompts() -> List[str]:
+    """Legacy alias: returns runtime-injected immutable DNA prompts only."""
+    return get_immutable_dna_runtime_prompts()
 
 
 def save_embla_system_config(payload: Dict[str, Any], config_path: str | Path | None = None) -> Dict[str, Any]:
@@ -1012,10 +1066,12 @@ def _resolve_prompts_dir(prompts_dir: Optional[Path] = None) -> Path:
 _DEFAULT_PROMPT_REGISTRY_SPEC: Dict[str, Any] = {
     "schema_version": "ws28-prompt-registry-v1",
     "entries": [
-        {"prompt_name": "conversation_style_prompt", "path": "core/dna/conversation_style_prompt.md", "aliases": ["shell_chat_style"]},
+        {"prompt_name": "shell_persona", "path": "dna/shell_persona.md", "aliases": []},
+        {"prompt_name": "core_values", "path": "dna/core_values.md", "aliases": []},
+        {"prompt_name": "conversation_style_prompt", "path": "core/dna/conversation_style_prompt.md", "aliases": ["conversation_composition_prompt"]},
         {"prompt_name": "conversation_analyzer_prompt", "path": "core/routing/conversation_analyzer_prompt.md", "aliases": []},
         {"prompt_name": "tool_dispatch_prompt", "path": "core/routing/tool_dispatch_prompt.md", "aliases": []},
-        {"prompt_name": "agentic_tool_prompt", "path": "core/dna/agentic_tool_prompt.md", "aliases": []},
+        {"prompt_name": "agentic_tool_prompt", "path": "core/dna/agentic_tool_prompt.md", "aliases": ["tool_call_contract_prompt"]},
         {"prompt_name": "immutable_dna_manifest", "path": "immutable_dna_manifest.spec", "aliases": ["immutable_dna_manifest_spec"]},
         {"prompt_name": "prompt_acl", "path": "specs/prompt_acl.spec", "aliases": []},
         {"prompt_name": "core_exec_base", "path": "agents/core_exec/core_exec_base.md", "aliases": ["core_exec_general"]},
@@ -1024,6 +1080,29 @@ _DEFAULT_PROMPT_REGISTRY_SPEC: Dict[str, Any] = {
         {"prompt_name": "shell_readonly_research", "path": "agents/shell/shell_readonly_research.md", "aliases": []},
         {"prompt_name": "shell_readonly_general", "path": "agents/shell/shell_readonly_general.md", "aliases": []},
         {"prompt_name": "explicit_role_delegate", "path": "agents/shell/explicit_role_delegate.md", "aliases": []},
+        {"prompt_name": "shell_behavior_readonly_tools", "path": "agents/shell/blocks/shell_behavior_readonly_tools.md", "aliases": []},
+        {"prompt_name": "shell_behavior_dispatch_to_core", "path": "agents/shell/blocks/shell_behavior_dispatch_to_core.md", "aliases": []},
+        {"prompt_name": "shell_behavior_no_writes", "path": "agents/shell/blocks/shell_behavior_no_writes.md", "aliases": []},
+        {"prompt_name": "shell_route_decision_base", "path": "agents/shell/blocks/shell_route_decision_base.md", "aliases": []},
+        {"prompt_name": "shell_route_quality_guard", "path": "agents/shell/blocks/shell_route_quality_guard.md", "aliases": []},
+        {"prompt_name": "shell_router_arbiter_guard", "path": "agents/shell/blocks/shell_router_arbiter_guard.md", "aliases": []},
+        {"prompt_name": "shell_route_policy_readonly", "path": "agents/shell/blocks/shell_route_policy_readonly.md", "aliases": []},
+        {"prompt_name": "shell_route_policy_clarify", "path": "agents/shell/blocks/shell_route_policy_clarify.md", "aliases": []},
+        {"prompt_name": "shell_route_policy_core_execution", "path": "agents/shell/blocks/shell_route_policy_core_execution.md", "aliases": []},
+        {"prompt_name": "core_orchestrator_duties", "path": "agents/core_exec/blocks/core_orchestrator_duties.md", "aliases": []},
+        {"prompt_name": "dev_agent_behavior", "path": "agents/dev/dev_agent_behavior.md", "aliases": []},
+        {"prompt_name": "dev_agent_self_verification", "path": "agents/dev/dev_agent_self_verification.md", "aliases": []},
+        {"prompt_name": "review_agent_behavior", "path": "agents/review/review_agent_behavior.md", "aliases": []},
+        {"prompt_name": "review_result_contract", "path": "agents/review/review_result_contract.md", "aliases": []},
+        {"prompt_name": "backend_expert", "path": "roles/backend_expert.md", "aliases": []},
+        {"prompt_name": "frontend_expert", "path": "roles/frontend_expert.md", "aliases": []},
+        {"prompt_name": "ops_expert", "path": "roles/ops_expert.md", "aliases": []},
+        {"prompt_name": "testing_expert", "path": "roles/testing_expert.md", "aliases": []},
+        {"prompt_name": "docs_expert", "path": "roles/docs_expert.md", "aliases": []},
+        {"prompt_name": "file_analysis", "path": "skills/file_analysis.md", "aliases": []},
+        {"prompt_name": "python_ast", "path": "skills/python_ast.md", "aliases": []},
+        {"prompt_name": "code_with_tests", "path": "styles/code_with_tests.md", "aliases": []},
+        {"prompt_name": "conventional_commit", "path": "rules/conventional_commit.md", "aliases": []},
     ],
 }
 
@@ -1159,6 +1238,22 @@ _DEFAULT_PROMPT_ACL_SPEC: Dict[str, Any] = {
         {
             "path_pattern": "immutable_dna_manifest.spec",
             "level": "S0_LOCKED",
+            "require_ticket": True,
+            "require_manifest_refresh": True,
+            "require_gate_verify": True,
+            "allow_ai_direct_write": False,
+        },
+        {
+            "path_pattern": "dna/shell_persona.md",
+            "level": "S1_CONTROLLED",
+            "require_ticket": True,
+            "require_manifest_refresh": True,
+            "require_gate_verify": True,
+            "allow_ai_direct_write": False,
+        },
+        {
+            "path_pattern": "dna/core_values.md",
+            "level": "S1_CONTROLLED",
             "require_ticket": True,
             "require_manifest_refresh": True,
             "require_gate_verify": True,

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from agents.prompt_engine import PromptAssembler
+from agents.prompt_engine import PromptAssembler, get_system_prompts_root
 from agents.router_engine import RouterDecision, RouterRequest, TaskRouterEngine
 from agents.shell_tools import get_shell_tool_definitions, handle_shell_tool, is_shell_tool_supported
 
@@ -120,7 +120,8 @@ def get_dispatch_to_core_definition() -> Dict[str, Any]:
 class ShellAgentConfig:
     """Configuration for the Shell Agent."""
 
-    persona_dna_path: str = "prompts/dna/shell_persona.md"
+    persona_dna_path: str = str(get_system_prompts_root() / "dna" / "shell_persona.md")
+    prompts_root: str = str(get_system_prompts_root())
     readonly_tools: List[str] = field(default_factory=lambda: list(SHELL_READONLY_TOOLS))
     router_decision_log: Optional[str] = None  # path to JSONL log
 
@@ -140,7 +141,7 @@ class ShellAgent:
         self._persona_prompt: str = ""
         log_path = Path(self._config.router_decision_log) if self._config.router_decision_log else None
         self._router = TaskRouterEngine(decision_log=log_path)
-        self._assembler = PromptAssembler()
+        self._assembler = PromptAssembler(prompts_root=self._config.prompts_root)
         self._load_persona()
 
     @property
@@ -290,24 +291,18 @@ class ShellAgent:
 
     def build_system_prompt(self) -> str:
         """Build the complete system prompt for the Shell agent using PromptAssembler."""
-        behavior_rules = (
-            "\n## 行为准则\n"
-            "- 你可以使用只读工具获取信息：memory_read, memory_list, memory_grep, memory_search, get_system_status, list_tasks, search_web\n"
-            "- 有任何需要执行的任务，使用 dispatch_to_core 工具转交给 Core Agent\n"
-            "- 你**绝对不能**修改任何文件或系统状态\n"
-        )
         try:
-            return self._assembler.assemble(
-                dna="shell_persona",
-                extra_sections=[behavior_rules],
+            body = self._assembler.assemble(
+                blocks=[
+                    "agents/shell/blocks/shell_behavior_readonly_tools.md",
+                    "agents/shell/blocks/shell_behavior_dispatch_to_core.md",
+                    "agents/shell/blocks/shell_behavior_no_writes.md",
+                ],
             )
+            parts = [self._persona_prompt.strip(), body.strip()]
+            return "\n\n".join(part for part in parts if part).strip()
         except Exception:
-            # Fallback: use loaded persona if assembler fails
-            parts: List[str] = []
-            if self._persona_prompt:
-                parts.append(self._persona_prompt)
-            parts.append(behavior_rules)
-            return "\n".join(parts)
+            return self._persona_prompt.strip()
 
     def _load_persona(self) -> None:
         """Load persona DNA from file (immutable, never modified at runtime)."""

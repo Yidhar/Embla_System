@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from agents.contract_runtime import CoreExecutionContractInput
 from agents.meta_agent import Goal, MetaAgentRuntime, SubTask
-from agents.prompt_engine import PromptAssembler
+from agents.prompt_engine import PromptAssembler, get_system_prompts_root
 from agents.runtime.agent_session import AgentSessionStore
 from agents.runtime.mailbox import AgentMailbox
 from agents.runtime.parent_tools import handle_parent_tool_call
@@ -79,7 +79,7 @@ FAST_TRACK_HIGH_RISK_LEVELS = {"deploy", "secrets", "self_modify"}
 class CoreAgentConfig:
     """Configuration for the Core Agent."""
 
-    values_dna_path: str = "prompts/dna/core_values.md"
+    values_dna_path: str = str(get_system_prompts_root() / "dna" / "core_values.md")
     prompts_root: str = "system/prompts"
     max_experts: int = 5
     expert_domains: Dict[str, List[str]] = field(default_factory=lambda: dict(EXPERT_DOMAINS))
@@ -110,6 +110,7 @@ class CoreAgent:
         self._values_prompt: str = ""
         self._meta_runtime = MetaAgentRuntime()
         self._assembler = PromptAssembler(prompts_root=self._config.prompts_root)
+        self._runtime_assembler = PromptAssembler(prompts_root=str(get_system_prompts_root()))
         self._load_values()
 
     @property
@@ -314,28 +315,24 @@ class CoreAgent:
                         template_path,
                     )
 
-        core_duties = (
-            "\n## 核心职责\n"
-            "1. 将用户目标分解为能力域（backend/frontend/ops/testing/docs）\n"
-            "2. 为每个能力域创建 Expert Agent\n"
-            "3. 监控 Expert 进度，收集报告\n"
-            "4. 汇总结果返回给 Shell\n"
-        )
         try:
-            body = self._assembler.assemble(
+            parts: List[str] = []
+            profile_body = self._assembler.assemble(
                 blocks=blocks if blocks else None,
-                extra_sections=[core_duties],
             )
+            if profile_body.strip():
+                parts.append(profile_body.strip())
+            runtime_body = self._runtime_assembler.assemble(
+                blocks=["agents/core_exec/blocks/core_orchestrator_duties.md"],
+            )
+            if runtime_body.strip():
+                parts.append(runtime_body.strip())
+            body = "\n\n".join(parts).strip()
             if self._values_prompt.strip():
                 return "\n\n".join([self._values_prompt.strip(), body]).strip()
             return body
         except Exception:
-            # Fallback: use loaded values prompt
-            parts: List[str] = []
-            if self._values_prompt:
-                parts.append(self._values_prompt)
-            parts.append(core_duties)
-            return "\n".join(parts)
+            return self._values_prompt.strip()
 
     # ── Private ────────────────────────────────────────────────
 

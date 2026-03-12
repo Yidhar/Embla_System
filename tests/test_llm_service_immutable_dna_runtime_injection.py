@@ -37,9 +37,9 @@ def _isolate_immutable_dna_env(monkeypatch) -> None:
 
 def _write_required_prompts(root: Path) -> None:
     (root / "conversation_style_prompt.md").write_text("STYLE_PROMPT", encoding="utf-8")
-    (root / "conversation_analyzer_prompt.md").write_text("ANALYZER_PROMPT", encoding="utf-8")
-    (root / "tool_dispatch_prompt.md").write_text("DISPATCH_PROMPT", encoding="utf-8")
     (root / "agentic_tool_prompt.md").write_text("AGENTIC_PROMPT", encoding="utf-8")
+    (root / "shell_persona.md").write_text("SHELL_PERSONA_PROMPT", encoding="utf-8")
+    (root / "core_values.md").write_text("CORE_VALUES_PROMPT", encoding="utf-8")
 
 
 def _bootstrap_manifest(prompts_root: Path, manifest_path: Path, audit_path: Path) -> None:
@@ -47,9 +47,9 @@ def _bootstrap_manifest(prompts_root: Path, manifest_path: Path, audit_path: Pat
         root_dir=prompts_root,
         dna_files=[
             DNAFileSpec(path="conversation_style_prompt.md", required=True),
-            DNAFileSpec(path="conversation_analyzer_prompt.md", required=True),
-            DNAFileSpec(path="tool_dispatch_prompt.md", required=True),
             DNAFileSpec(path="agentic_tool_prompt.md", required=True),
+            DNAFileSpec(path="shell_persona.md", required=True),
+            DNAFileSpec(path="core_values.md", required=True),
         ],
         manifest_path=manifest_path,
         audit_file=audit_path,
@@ -181,6 +181,9 @@ def test_llm_service_immutable_dna_preflight_reports_pass(monkeypatch) -> None:
         verify = report.get("verify")
         assert isinstance(verify, dict)
         assert verify.get("ok") is True
+        identity_verify = report.get("identity_verify")
+        assert isinstance(identity_verify, dict)
+        assert identity_verify.get("ok") is True
     finally:
         _cleanup_case_root(case_root)
 
@@ -214,3 +217,32 @@ def test_llm_service_immutable_dna_preflight_reports_failure_on_mismatch(monkeyp
     finally:
         _cleanup_case_root(case_root)
 
+
+def test_llm_service_immutable_dna_preflight_reports_identity_failure_on_mismatch(monkeypatch) -> None:
+    case_root = _make_case_root("test_llm_service_immutable_dna_preflight_identity")
+    try:
+        prompts_root = case_root / "prompts"
+        prompts_root.mkdir(parents=True, exist_ok=True)
+        manifest_path = prompts_root / "immutable_dna_manifest.spec"
+        audit_path = case_root / "immutable_dna_runtime_injection_audit.jsonl"
+        _write_required_prompts(prompts_root)
+        _bootstrap_manifest(prompts_root, manifest_path, audit_path)
+        (prompts_root / "core_values.md").write_text("CORE_VALUES_PROMPT_TAMPERED", encoding="utf-8")
+
+        monkeypatch.setenv(llm_service_module.LLMService.DNA_RUNTIME_ENABLED_ENV, "1")
+        monkeypatch.setenv(llm_service_module.LLMService.DNA_PROMPTS_ROOT_ENV, str(prompts_root))
+        monkeypatch.setenv(llm_service_module.LLMService.DNA_MANIFEST_PATH_ENV, str(manifest_path))
+        monkeypatch.setenv(llm_service_module.LLMService.DNA_AUDIT_PATH_ENV, str(audit_path))
+
+        service = llm_service_module.LLMService()
+        report = service.immutable_dna_preflight()
+
+        assert report["enabled"] is True
+        assert report["passed"] is False
+        assert report["runtime_passed"] is True
+        assert report["identity_passed"] is False
+        identity_verify = report.get("identity_verify")
+        assert isinstance(identity_verify, dict)
+        assert "core_values.md" in list(identity_verify.get("mismatch_files") or [])
+    finally:
+        _cleanup_case_root(case_root)

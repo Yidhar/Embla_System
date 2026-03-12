@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
+from agents.prompt_engine import PromptAssembler, PromptBlockNotFoundError, get_system_prompts_root
 from agents.router_arbiter_guard import RouterArbiterGuard
 from agents.llm_gateway import LLMGateway
 from core.event_bus import EventStore
@@ -30,6 +31,7 @@ from apiserver.routes_ops import (
 )
 
 logger = logging.getLogger(__name__)
+_ROUTE_PROMPT_ASSEMBLER = PromptAssembler(prompts_root=str(get_system_prompts_root()))
 _CHAT_RUNTIME_CONTEXT: Dict[str, Any] = {
     "message_manager": None,
     "message_manager_getter": None,
@@ -524,40 +526,69 @@ def _merge_model_override(
     return merged or None
 
 
+def _render_chat_route_prompt_block(block_path: str, *, variables: Optional[Dict[str, Any]] = None) -> str:
+    try:
+        return _ROUTE_PROMPT_ASSEMBLER.render_block(block_path, variables=variables).strip()
+    except PromptBlockNotFoundError:
+        logger.warning("Chat route prompt block missing: %s", block_path)
+        return ""
+
+
 def _build_chat_route_prompt_hints(route_meta: Dict[str, Any]) -> str:
     route_semantic = _normalize_route_semantic(route_meta.get("route_semantic"))
     semantic = _derive_route_semantic(route_meta)
     decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
+    dispatch_to_core = bool(
+        route_meta.get("dispatch_to_core")
+        if route_meta.get("dispatch_to_core") is not None
+        else semantic.get("dispatch_to_core")
+    )
     lines = [
-        "[PromptRouteDecision]",
-        f"route_semantic={route_semantic}",
-        f"entry_agent={str(route_meta.get('entry_agent') or 'shell')}",
-        f"active_agent={str(route_meta.get('active_agent') or semantic.get('active_agent') or '')}",
-        f"dispatch_to_core={bool(route_meta.get('dispatch_to_core') if route_meta.get('dispatch_to_core') is not None else semantic.get('dispatch_to_core'))}",
-        f"prompt_profile={str(decision.get('prompt_profile') or '')}",
-        f"injection_mode={str(decision.get('injection_mode') or '')}",
-        f"delegation_intent={str(decision.get('delegation_intent') or '')}",
+        _render_chat_route_prompt_block(
+            "agents/shell/blocks/shell_route_decision_base.md",
+            variables={
+                "route_semantic": route_semantic,
+                "entry_agent": str(route_meta.get("entry_agent") or "shell"),
+                "active_agent": str(route_meta.get("active_agent") or semantic.get("active_agent") or ""),
+                "dispatch_to_core": dispatch_to_core,
+                "prompt_profile": str(decision.get("prompt_profile") or ""),
+                "injection_mode": str(decision.get("injection_mode") or ""),
+                "delegation_intent": str(decision.get("delegation_intent") or ""),
+            },
+        )
     ]
     if bool(route_meta.get("route_quality_guard_applied")):
         lines.append(
-            "route_quality_guard="
-            f"{_ops_status_to_severity(str(route_meta.get('route_quality_guard_status') or 'unknown'))}:"
-            f"{str(route_meta.get('route_quality_guard_action') or 'none')}"
+            _render_chat_route_prompt_block(
+                "agents/shell/blocks/shell_route_quality_guard.md",
+                variables={
+                    "route_quality_guard": (
+                        f"{_ops_status_to_severity(str(route_meta.get('route_quality_guard_status') or 'unknown'))}:"
+                        f"{str(route_meta.get('route_quality_guard_action') or 'none')}"
+                    )
+                },
+            )
         )
     router_arbiter_status = _ops_status_to_severity(str(route_meta.get("router_arbiter_status") or "unknown"))
     if router_arbiter_status in {"warning", "critical"}:
         lines.append(
-            "router_arbiter_guard="
-            f"{router_arbiter_status}:{str(route_meta.get('router_arbiter_action') or 'none')}"
+            _render_chat_route_prompt_block(
+                "agents/shell/blocks/shell_router_arbiter_guard.md",
+                variables={
+                    "router_arbiter_guard": (
+                        f"{router_arbiter_status}:{str(route_meta.get('router_arbiter_action') or 'none')}"
+                    )
+                },
+            )
         )
 
     if route_semantic == "shell_readonly":
-        lines.append("Route policy: Shell Read-Only. Do not call tools. Reply directly with analysis.")
+        lines.append(_render_chat_route_prompt_block("agents/shell/blocks/shell_route_policy_readonly.md"))
     elif route_semantic == "shell_clarify":
-        lines.append("Route policy: Shell Clarify. Ask at most one clarifying question before any execution escalation.")
+        lines.append(_render_chat_route_prompt_block("agents/shell/blocks/shell_route_policy_clarify.md"))
     else:
-        lines.append("Route policy: Core Execution. You may plan and execute through the tool loop.")
-    return "\n".join(lines)
+        lines.append(_render_chat_route_prompt_block("agents/shell/blocks/shell_route_policy_core_execution.md"))
+    return "\n".join(line for line in lines if str(line).strip())
 
 
 def _trim_contract_text(value: Any, *, limit: int = 240) -> str:

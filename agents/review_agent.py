@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from agents.prompt_engine import PromptAssembler
+from agents.prompt_engine import PromptAssembler, get_system_prompts_root
 from agents.runtime.task_board import TaskBoardEngine, TaskStatus
 
 
@@ -67,40 +67,42 @@ class ReviewAgent:
         self._config = config or ReviewAgentConfig()
         self._task_board = task_board_engine
         self._assembler = PromptAssembler(prompts_root=self._config.prompts_root)
+        self._runtime_assembler = PromptAssembler(prompts_root=str(get_system_prompts_root()))
 
     def build_system_prompt(self) -> str:
         """Build the independent reviewer system prompt."""
-        review_rules = (
-            "\n## Review Agent 行为准则\n"
-            "1. 你是独立审查者，不直接修改代码；只做审查、质疑、归纳和结论。\n"
-            "2. 先读原始任务、Dev 的 verification_report、改动文件列表，再做判断。\n"
-            "3. 如有相关 L1 经验提示，可用 memory_read / memory_grep 检查团队经验、规范、历史案例。\n"
-            "4. 必须覆盖以下五项：需求对齐、代码质量、回归风险、测试覆盖、最终结论。\n"
-            "5. 审查完成后，调用 report_to_parent(type='completed')，并附带结构化 review_result。\n"
-            "6. review_result.verdict 只能是 approve / request_changes / reject。\n"
-            "7. 若信息不足以形成可靠结论，优先 request_changes 或 reject，并在 issues 中写清缺口。\n"
-            "\nreview_result 最少必须包含以下字段：\n"
-            "- verdict: approve | request_changes | reject\n"
-            "- requirement_alignment: [{requirement, status, details}, ...]\n"
-            "- code_quality: {status, issues, summary}\n"
-            "- regression_risk: {level, summary}\n"
-            "- test_coverage: {status, summary, missing_cases}\n"
-            "- issues: [issue, ...]\n"
-            "- suggestions: [suggestion, ...]\n"
-        )
         try:
-            return self._assembler.assemble(
-                blocks=list(self._config.prompt_blocks),
-                memory_hints=list(self._config.memory_hints) if self._config.memory_hints else None,
-                extra_sections=[review_rules],
+            parts: List[str] = []
+            if self._config.prompt_blocks:
+                custom_prompt = self._assembler.assemble(blocks=list(self._config.prompt_blocks))
+                if custom_prompt.strip():
+                    parts.append(custom_prompt.strip())
+            runtime_prompt = self._runtime_assembler.assemble(
+                blocks=[
+                    "agents/review/review_agent_behavior.md",
+                    "agents/review/review_result_contract.md",
+                ],
             )
+            if runtime_prompt.strip():
+                parts.append(runtime_prompt.strip())
+            if self._config.memory_hints:
+                memory_prompt = self._assembler.assemble(memory_hints=list(self._config.memory_hints))
+                if memory_prompt.strip():
+                    parts.append(memory_prompt.strip())
+            return "\n\n".join(parts).strip()
         except Exception:
             parts: List[str] = []
             for block_path in self._config.prompt_blocks:
                 full_path = Path(self._config.prompts_root) / block_path
                 if full_path.exists():
                     parts.append(full_path.read_text(encoding="utf-8"))
-            parts.append(review_rules)
+            for block_path in (
+                "agents/review/review_agent_behavior.md",
+                "agents/review/review_result_contract.md",
+            ):
+                full_path = get_system_prompts_root() / block_path
+                if full_path.exists():
+                    parts.append(full_path.read_text(encoding="utf-8"))
             if self._config.memory_hints:
                 parts.append("\n## 相关经验\n")
                 for hint in self._config.memory_hints:

@@ -1,0 +1,1 @@
+Route policy: Shell Read-Only. You may use read-only Shell tools for evidence gathering and status inspection. Do not perform writes, do not simulate execution, and use dispatch_to_core when execution is required.

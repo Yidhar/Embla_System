@@ -13,6 +13,22 @@
       "allow_ai_direct_write": false
     },
     {
+      "path_pattern": "dna/shell_persona.md",
+      "level": "S1_CONTROLLED",
+      "require_ticket": true,
+      "require_manifest_refresh": true,
+      "require_gate_verify": true,
+      "allow_ai_direct_write": false
+    },
+    {
+      "path_pattern": "dna/core_values.md",
+      "level": "S1_CONTROLLED",
+      "require_ticket": true,
+      "require_manifest_refresh": true,
+      "require_gate_verify": true,
+      "allow_ai_direct_write": false
+    },
+    {
       "path_pattern": "core/dna/conversation_style_prompt.md",
       "level": "S1_CONTROLLED",
       "require_ticket": true,

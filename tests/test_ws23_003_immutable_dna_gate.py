@@ -23,6 +23,8 @@ def _write_prompt_files(prompts_root: Path) -> None:
     (prompts_root / "conversation_analyzer_prompt.md").write_text("analyzer-v1\n", encoding="utf-8")
     (prompts_root / "tool_dispatch_prompt.md").write_text("dispatch-v1\n", encoding="utf-8")
     (prompts_root / "agentic_tool_prompt.md").write_text("tool-v1\n", encoding="utf-8")
+    (prompts_root / "shell_persona.md").write_text("shell-v1\n", encoding="utf-8")
+    (prompts_root / "core_values.md").write_text("core-v1\n", encoding="utf-8")
 
 
 def test_immutable_dna_gate_can_bootstrap_and_pass() -> None:

@@ -6,6 +6,7 @@
 
 ## Ops Execution Policy
 - Always confirm current runtime posture before changing runtime state.
+- Use only the runtime-injected tools and parameters that are actually exposed in the current session.
 - Prefer low-blast-radius actions first (config check, health probe, dry-run).
 - For write/deploy actions: emit clear pre-check, action, and verification evidence.
 - If risk is high or rollback path is unclear, stop and request escalation context.

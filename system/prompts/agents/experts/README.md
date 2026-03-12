@@ -1,10 +1,13 @@
 # Expert Prompt Blocks
 
-This namespace is reserved for expert-role atomic prompt blocks.
+Canonical expert role prompts now live under `system/prompts/roles/*.md`.
 
-Planned examples:
-- `backend_expert.md`
-- `frontend_expert.md`
-- `ops_expert.md`
-- `testing_expert.md`
-- `docs_expert.md`
+This namespace remains available for future expert-specific auxiliary blocks,
+but the role identity prompts themselves have been unified into the shared
+prompt root categories:
+
+- `roles/backend_expert.md`
+- `roles/frontend_expert.md`
+- `roles/ops_expert.md`
+- `roles/testing_expert.md`
+- `roles/docs_expert.md`

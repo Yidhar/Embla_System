@@ -23,7 +23,12 @@ from litellm import acompletion
 # Add project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from system.config import get_config, get_immutable_dna_locked_prompts, resolve_prompt_registry_entry
+from system.config import (
+    get_config,
+    get_immutable_agent_identity_prompts,
+    get_immutable_dna_runtime_prompts,
+    resolve_prompt_registry_entry,
+)
 from core.security import DNAFileSpec, ImmutableDNALoader
 
 logger = logging.getLogger("LLMService")
@@ -52,9 +57,13 @@ class LLMService:
     DNA_PROMPTS_ROOT_ENV = "EMBLA_IMMUTABLE_DNA_PROMPTS_ROOT"
     DNA_MANIFEST_PATH_ENV = "EMBLA_IMMUTABLE_DNA_MANIFEST_PATH"
     DNA_AUDIT_PATH_ENV = "EMBLA_IMMUTABLE_DNA_AUDIT_PATH"
-    DNA_REQUIRED_FILES_DEFAULT = (
+    DNA_RUNTIME_REQUIRED_FILES_DEFAULT = (
         "conversation_style_prompt.md",
         "agentic_tool_prompt.md",
+    )
+    DNA_IDENTITY_REQUIRED_FILES_DEFAULT = (
+        "shell_persona.md",
+        "core_values.md",
     )
 
     OPENAI_HINTS = {"openai", "openai_compatible"}
@@ -64,8 +73,10 @@ class LLMService:
     def __init__(self):
         self._initialized = False
         self._immutable_dna_enabled = self._resolve_immutable_dna_runtime_enabled()
-        self._immutable_dna_required_files = self._resolve_immutable_dna_required_files()
+        self._immutable_dna_required_files = self._resolve_immutable_dna_runtime_required_files()
+        self._immutable_identity_required_files = self._resolve_immutable_dna_identity_required_files()
         self._immutable_dna_loader: Optional[ImmutableDNALoader] = None
+        self._immutable_identity_dna_loader: Optional[ImmutableDNALoader] = None
         self._initialize_client()
 
     def _resolve_immutable_dna_runtime_enabled(self) -> bool:
@@ -111,6 +122,42 @@ class LLMService:
             self._immutable_dna_loader = self._build_immutable_dna_loader()
         return self._immutable_dna_loader
 
+    def _build_immutable_identity_dna_loader(self) -> Optional[ImmutableDNALoader]:
+        if not self._immutable_dna_enabled:
+            return None
+
+        try:
+            repo_root = Path(__file__).resolve().parent.parent
+            prompts_root_raw = os.environ.get(
+                self.DNA_PROMPTS_ROOT_ENV,
+                str(repo_root / "system" / "prompts"),
+            )
+            prompts_root = Path(str(prompts_root_raw)).expanduser().resolve()
+            manifest_path_raw = os.environ.get(
+                self.DNA_MANIFEST_PATH_ENV,
+                str(prompts_root / "immutable_dna_manifest.spec"),
+            )
+            manifest_path = Path(str(manifest_path_raw)).expanduser().resolve()
+            audit_path_raw = os.environ.get(
+                self.DNA_AUDIT_PATH_ENV,
+                str(repo_root / "scratch" / "reports" / "immutable_dna_runtime_injection_audit.jsonl"),
+            )
+            audit_path = Path(str(audit_path_raw)).expanduser().resolve()
+            return ImmutableDNALoader(
+                root_dir=prompts_root,
+                dna_files=[DNAFileSpec(path=name, required=True) for name in self._immutable_identity_required_files],
+                manifest_path=manifest_path,
+                audit_file=audit_path,
+            )
+        except Exception as exc:
+            logger.error("Immutable identity DNA loader init failed: %s", exc)
+            return None
+
+    def _ensure_immutable_identity_dna_loader(self) -> Optional[ImmutableDNALoader]:
+        if self._immutable_identity_dna_loader is None:
+            self._immutable_identity_dna_loader = self._build_immutable_identity_dna_loader()
+        return self._immutable_identity_dna_loader
+
     def get_immutable_dna_loader(self) -> Optional[ImmutableDNALoader]:
         return self._ensure_immutable_dna_loader()
 
@@ -122,6 +169,8 @@ class LLMService:
             "passed": False,
             "reason": "uninitialized",
             "required_prompt_files": list(self._immutable_dna_required_files),
+            "runtime_required_prompt_files": list(self._immutable_dna_required_files),
+            "identity_required_prompt_files": list(self._immutable_identity_required_files),
         }
         if not enabled:
             report["passed"] = True
@@ -129,35 +178,44 @@ class LLMService:
             return report
 
         loader = self._ensure_immutable_dna_loader()
+        identity_loader = self._ensure_immutable_identity_dna_loader()
         if loader is None:
             report["reason"] = "immutable_dna_loader_unavailable"
+            return report
+        if identity_loader is None:
+            report["reason"] = "immutable_identity_dna_loader_unavailable"
             return report
 
         report["manifest_path"] = str(loader.manifest_path)
         report["audit_file"] = str(loader.audit_file)
         verify = loader.verify()
         verify_payload = verify.to_dict()
+        identity_verify = identity_loader.verify()
+        identity_verify_payload = identity_verify.to_dict()
         report["verify"] = verify_payload
-        report["passed"] = bool(verify.ok)
-        report["reason"] = str(verify.reason or ("ok" if verify.ok else "verify_failed"))
+        report["identity_verify"] = identity_verify_payload
+        report["runtime_passed"] = bool(verify.ok)
+        report["identity_passed"] = bool(identity_verify.ok)
+        report["passed"] = bool(verify.ok) and bool(identity_verify.ok)
+        if verify.ok and identity_verify.ok:
+            report["reason"] = "ok"
+        elif not verify.ok:
+            report["reason"] = str(verify.reason or "verify_failed")
+        else:
+            report["reason"] = str(identity_verify.reason or "identity_verify_failed")
         if verify_payload.get("manifest_hash"):
             report["manifest_hash"] = str(verify_payload["manifest_hash"])
         return report
 
-    def _resolve_immutable_dna_required_files(self) -> List[str]:
-        repo_root = Path(__file__).resolve().parent.parent
-        prompts_root_raw = os.environ.get(
-            self.DNA_PROMPTS_ROOT_ENV,
-            str(repo_root / "system" / "prompts"),
-        )
-        prompts_dir = Path(str(prompts_root_raw)).expanduser().resolve()
-        try:
-            configured = get_immutable_dna_locked_prompts()
-        except Exception:
-            configured = []
-
+    def _resolve_prompt_file_list(
+        self,
+        *,
+        configured_items: List[str],
+        prompts_dir: Path,
+        default_items: List[str],
+    ) -> List[str]:
         rows: List[str] = []
-        for item in configured:
+        for item in configured_items:
             text = str(item or "").strip()
             if not text:
                 continue
@@ -180,7 +238,41 @@ class LLMService:
                 rows.append(resolved_path)
         if rows:
             return rows
-        return list(self.DNA_REQUIRED_FILES_DEFAULT)
+        return list(default_items)
+
+    def _resolve_immutable_dna_runtime_required_files(self) -> List[str]:
+        repo_root = Path(__file__).resolve().parent.parent
+        prompts_root_raw = os.environ.get(
+            self.DNA_PROMPTS_ROOT_ENV,
+            str(repo_root / "system" / "prompts"),
+        )
+        prompts_dir = Path(str(prompts_root_raw)).expanduser().resolve()
+        try:
+            configured = get_immutable_dna_runtime_prompts()
+        except Exception:
+            configured = []
+        return self._resolve_prompt_file_list(
+            configured_items=configured,
+            prompts_dir=prompts_dir,
+            default_items=list(self.DNA_RUNTIME_REQUIRED_FILES_DEFAULT),
+        )
+
+    def _resolve_immutable_dna_identity_required_files(self) -> List[str]:
+        repo_root = Path(__file__).resolve().parent.parent
+        prompts_root_raw = os.environ.get(
+            self.DNA_PROMPTS_ROOT_ENV,
+            str(repo_root / "system" / "prompts"),
+        )
+        prompts_dir = Path(str(prompts_root_raw)).expanduser().resolve()
+        try:
+            configured = get_immutable_agent_identity_prompts()
+        except Exception:
+            configured = []
+        return self._resolve_prompt_file_list(
+            configured_items=configured,
+            prompts_dir=prompts_dir,
+            default_items=list(self.DNA_IDENTITY_REQUIRED_FILES_DEFAULT),
+        )
 
     def _is_dna_runtime_system_message(self, message: Dict[str, Any]) -> bool:
         if str(message.get("role") or "") != "system":

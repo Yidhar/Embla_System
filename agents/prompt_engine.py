@@ -15,11 +15,12 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_PROMPTS_ROOT = Path(__file__).resolve().parent.parent / "prompts"
+_SYSTEM_PROMPTS_ROOT = Path(__file__).resolve().parent.parent / "system" / "prompts"
+_DEFAULT_PROMPTS_ROOT = _SYSTEM_PROMPTS_ROOT
 
 
 class DNAIntegrityError(Exception):
@@ -28,6 +29,16 @@ class DNAIntegrityError(Exception):
 
 class PromptBlockNotFoundError(FileNotFoundError):
     """Raised when a prompt block file is not found."""
+
+
+class _SafeFormatDict(dict):
+    def __missing__(self, key: str) -> str:
+        return "{" + str(key) + "}"
+
+
+def get_system_prompts_root() -> Path:
+    """Return the canonical runtime prompt asset root."""
+    return _SYSTEM_PROMPTS_ROOT
 
 
 class PromptAssembler:
@@ -74,9 +85,13 @@ class PromptAssembler:
             PromptBlockNotFoundError: If the DNA file does not exist.
             DNAIntegrityError: If strict mode is on and checksum fails.
         """
-        path = self._dna_dir / f"{dna_name}.md"
-        if not path.exists():
-            raise PromptBlockNotFoundError(f"DNA file not found: {path}")
+        candidates = [
+            self._dna_dir / f"{dna_name}.md",
+            self._root / "core" / "dna" / f"{dna_name}.md",
+        ]
+        path = next((candidate for candidate in candidates if candidate.exists()), None)
+        if path is None:
+            raise PromptBlockNotFoundError(f"DNA file not found: {candidates[0]}")
 
         content = self._read_cached(path)
 
@@ -110,6 +125,22 @@ class PromptAssembler:
         if not path.exists():
             raise PromptBlockNotFoundError(f"Prompt block not found: {path}")
         return self._read_cached(path)
+
+    def render_block(
+        self,
+        block_path: str,
+        *,
+        variables: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Load and render a prompt block with safe string substitution."""
+        content = self.load_block(block_path)
+        if not variables:
+            return content
+        try:
+            return content.format_map(_SafeFormatDict(variables))
+        except Exception:
+            logger.warning("Prompt block render failed, returning raw block: %s", block_path, exc_info=True)
+            return content
 
     def assemble(
         self,
@@ -170,19 +201,23 @@ class PromptAssembler:
         blocks: List[str] = []
         for md_file in sorted(search_dir.rglob("*.md")):
             rel = md_file.relative_to(self._root)
-            # Exclude DNA files from general listing
-            if str(rel).startswith("dna"):
+            rel_parts = rel.parts
+            if rel_parts[:1] == ("dna",):
+                continue
+            if rel_parts[:2] == ("core", "dna"):
                 continue
             blocks.append(str(rel).replace("\\", "/"))
         return blocks
 
     def list_dna(self) -> List[str]:
         """List available DNA files."""
-        if not self._dna_dir.exists():
-            return []
-        return sorted(
-            p.stem for p in self._dna_dir.glob("*.md")
-        )
+        names: set[str] = set()
+        for dna_dir in (self._dna_dir, self._root / "core" / "dna"):
+            if not dna_dir.exists():
+                continue
+            for path in dna_dir.glob("*.md"):
+                names.add(path.stem)
+        return sorted(names)
 
     # ── Internal ───────────────────────────────────────────────
 
@@ -197,4 +232,5 @@ __all__ = [
     "DNAIntegrityError",
     "PromptAssembler",
     "PromptBlockNotFoundError",
+    "get_system_prompts_root",
 ]

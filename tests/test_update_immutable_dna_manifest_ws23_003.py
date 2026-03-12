@@ -24,6 +24,8 @@ def _write_prompt_files(prompts_root: Path) -> None:
     (prompts_root / "conversation_analyzer_prompt.md").write_text("analyzer-v1\n", encoding="utf-8")
     (prompts_root / "tool_dispatch_prompt.md").write_text("dispatch-v1\n", encoding="utf-8")
     (prompts_root / "agentic_tool_prompt.md").write_text("tool-v1\n", encoding="utf-8")
+    (prompts_root / "shell_persona.md").write_text("shell-v1\n", encoding="utf-8")
+    (prompts_root / "core_values.md").write_text("core-v1\n", encoding="utf-8")
 
 
 def test_update_immutable_dna_manifest_success_and_verify_passes() -> None:
@@ -43,7 +45,7 @@ def test_update_immutable_dna_manifest_success_and_verify_passes() -> None:
         )
         assert report["passed"] is True
         assert report["reason"] == "ok"
-        assert report["manifest_file_count"] == 2
+        assert report["manifest_file_count"] == 4
         assert report["change_reason"] == "sync dna after controlled prompt update"
         assert report["gate_report"]["passed"] is True
         payload = json.loads((prompts_root / "immutable_dna_manifest.spec").read_text(encoding="utf-8"))

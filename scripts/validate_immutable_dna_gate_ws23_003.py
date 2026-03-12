@@ -9,20 +9,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-from system.config import get_immutable_dna_locked_prompts, resolve_prompt_registry_entry
+from system.config import get_all_immutable_dna_prompts, resolve_prompt_registry_entry
 from core.security.immutable_dna import DNAFileSpec, ImmutableDNALoader
 
 
 REQUIRED_PROMPT_FILES_DEFAULT: tuple[str, ...] = (
     "conversation_style_prompt.md",
     "agentic_tool_prompt.md",
+    "shell_persona.md",
+    "core_values.md",
 )
 
 
 def _resolve_required_prompt_files(*, prompts_root: Path | None = None) -> List[str]:
     resolved_prompts_root = prompts_root.resolve() if prompts_root is not None else (Path("system/prompts").resolve())
     try:
-        configured = get_immutable_dna_locked_prompts()
+        configured = get_all_immutable_dna_prompts()
     except Exception:
         configured = []
     rows: List[str] = []

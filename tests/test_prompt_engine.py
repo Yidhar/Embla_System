@@ -50,6 +50,13 @@ def prompts_dir(tmp_path: Path) -> Path:
         "# Rule: Conventional Commit\nfeat/fix/refactor.", encoding="utf-8"
     )
 
+    templates_dir = tmp_path / "templates"
+    templates_dir.mkdir()
+    (templates_dir / "route_contract.md").write_text(
+        "route_semantic={route_semantic}\ndispatch_to_core={dispatch_to_core}",
+        encoding="utf-8",
+    )
+
     return tmp_path
 
 
@@ -121,6 +128,14 @@ class TestBlockLoading:
         skill = assembler.load_block("skills/python_ast.md")
         assert "Backend" in role
         assert "AST" in skill
+
+    def test_render_block_success(self, assembler: PromptAssembler) -> None:
+        content = assembler.render_block(
+            "templates/route_contract.md",
+            variables={"route_semantic": "shell_readonly", "dispatch_to_core": False},
+        )
+        assert "route_semantic=shell_readonly" in content
+        assert "dispatch_to_core=False" in content
 
 
 # ── Assembly ───────────────────────────────────────────────────
