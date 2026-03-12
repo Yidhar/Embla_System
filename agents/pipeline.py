@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
 
 from agents.router_engine import RouterDecision
+from agents.prompt_engine import PromptAssembler, get_system_prompts_root
 from agents.memory.memory_tools import get_memory_tool_definitions, handle_memory_tool, is_memory_tool
 from agents.runtime.agent_session import AgentSessionStore, AgentStatus
 from agents.runtime.mailbox import AgentMailbox
@@ -34,6 +35,7 @@ from system.git_worktree_sandbox import apply_workspace_path_overrides
 from system.sandbox_context import SandboxContext
 
 logger = logging.getLogger(__name__)
+_PIPELINE_PROMPT_ASSEMBLER = PromptAssembler(prompts_root=str(get_system_prompts_root()))
 
 
 ChildLLMCallFn = Callable[[List[Dict[str, Any]], List[Dict[str, Any]], str], Awaitable[Dict[str, Any]]]
@@ -60,7 +62,8 @@ _FAST_TRACK_BLOCKED_TOOLS = {
 }
 _FAST_TRACK_PROTECTED_PREFIXES = (
     "core/security/",
-    "system/dna/",
+    "system/prompts/dna/",
+    "system/prompts/core/dna/",
 )
 _FAST_TRACK_PROTECTED_EXACT = {
     ".env",
@@ -752,23 +755,14 @@ def _build_core_loop_initial_task(
     if not roster_lines:
         roster_lines.append("- no_active_children")
 
-    return "\n".join(
-        [
-            "You are the Core lifecycle orchestrator for this pipeline run.",
-            (
-                "Decide child lifecycle using only parent tools: "
-                "spawn_child_agent / poll_child_status / resume_child_agent / destroy_child_agent."
-            ),
-            "Allowed spawn roles in this phase: dev, expert, review.",
-            "For expert/review spawns, runtime may defer execution to later requests.",
-            "Do not use any other tools.",
-            f"Pipeline ID: {pipeline_id}",
-            f"Core Session ID: {core_execution_session_id}",
-            f"Goal: {str(message or '').strip()}",
-            "Current descendant roster:",
-            *roster_lines,
-            "If no action is needed, return without tool calls.",
-        ]
+    return _PIPELINE_PROMPT_ASSEMBLER.render_block(
+        "agents/core_exec/blocks/core_lifecycle_orchestrator.md",
+        variables={
+            "pipeline_id": str(pipeline_id or "").strip(),
+            "core_execution_session_id": str(core_execution_session_id or "").strip(),
+            "goal": str(message or "").strip(),
+            "children_roster": "\n".join(roster_lines),
+        },
     ).strip()
 
 

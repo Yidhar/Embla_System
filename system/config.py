@@ -17,6 +17,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 from charset_normalizer import from_path
 import json5  # 支持带注释的JSON解析
+from agents.prompt_engine import PromptAssembler, PromptBlockNotFoundError, get_available_mcp_tools_summary
 
 try:
     import yaml
@@ -110,7 +111,7 @@ def _embla_system_default_payload() -> Dict[str, Any]:
         },
         "security": copy.deepcopy(_EMBLA_SYSTEM_DEFAULT_SECURITY),
         "watchers": {
-            "prompt_root": "workspace/prompts",
+            "prompt_root": "system/prompts",
             "tools_registry_root": "workspace/tools_registry",
             "backend": "watchdog",
         },
@@ -1090,6 +1091,7 @@ _DEFAULT_PROMPT_REGISTRY_SPEC: Dict[str, Any] = {
         {"prompt_name": "shell_route_policy_clarify", "path": "agents/shell/blocks/shell_route_policy_clarify.md", "aliases": []},
         {"prompt_name": "shell_route_policy_core_execution", "path": "agents/shell/blocks/shell_route_policy_core_execution.md", "aliases": []},
         {"prompt_name": "core_orchestrator_duties", "path": "agents/core_exec/blocks/core_orchestrator_duties.md", "aliases": []},
+        {"prompt_name": "core_lifecycle_orchestrator", "path": "agents/core_exec/blocks/core_lifecycle_orchestrator.md", "aliases": []},
         {"prompt_name": "dev_agent_behavior", "path": "agents/dev/dev_agent_behavior.md", "aliases": []},
         {"prompt_name": "dev_agent_self_verification", "path": "agents/dev/dev_agent_self_verification.md", "aliases": []},
         {"prompt_name": "review_agent_behavior", "path": "agents/review/review_agent_behavior.md", "aliases": []},
@@ -1101,6 +1103,7 @@ _DEFAULT_PROMPT_REGISTRY_SPEC: Dict[str, Any] = {
         {"prompt_name": "docs_expert", "path": "roles/docs_expert.md", "aliases": []},
         {"prompt_name": "file_analysis", "path": "skills/file_analysis.md", "aliases": []},
         {"prompt_name": "python_ast", "path": "skills/python_ast.md", "aliases": []},
+        {"prompt_name": "skill_activation_wrapper", "path": "skills/skill_activation_wrapper.md", "aliases": []},
         {"prompt_name": "code_with_tests", "path": "styles/code_with_tests.md", "aliases": []},
         {"prompt_name": "conventional_commit", "path": "rules/conventional_commit.md", "aliases": []},
     ],
@@ -1464,10 +1467,17 @@ def build_system_prompt(
     Returns:
         完整的系统提示词
     """
-    # 基础提示词（可被前端编辑）
-    base_prompt = get_prompt("conversation_style_prompt", ai_name=config.system.ai_name)
-
-    parts = [base_prompt]
+    parts: List[str] = []
+    prompts_dir = _resolve_prompts_dir()
+    assembler = PromptAssembler(prompts_root=str(prompts_dir))
+    for prompt_name in ("shell_persona", "conversation_style_prompt", "shell_readonly_general"):
+        try:
+            resolved = resolve_prompt_registry_entry(prompt_name=prompt_name, prompts_dir=prompts_dir)
+            rendered = assembler.render_block(str(resolved["relative_path"]), variables={"ai_name": config.system.ai_name}).strip()
+            if rendered:
+                parts.append(rendered)
+        except PromptBlockNotFoundError:
+            logging.getLogger(__name__).warning("prompt missing while building shell system prompt: %s", prompt_name)
 
     # ━━━ 附加知识分隔符 ━━━
     parts.append("\n\n━━━━━━━━━━ 以下是附加知识 ━━━━━━━━━━\n")
@@ -1496,25 +1506,15 @@ def build_system_prompt(
     # 添加工具调用指令（不可被前端编辑，通过代码注入）
     if include_tool_instructions:
         try:
-            from core.mcp.registry import auto_register_mcp
-
-            auto_register_mcp()  # no-op with standard MCP
-            from agents.runtime.mcp_client import get_mcp_pool
-
-            pool = get_mcp_pool()
-            if pool:
-                tools = pool.get_all_tools()
-                available_mcp_tools = ", ".join(t.name for t in tools) or "（暂无MCP服务注册）"
-            else:
-                available_mcp_tools = "（暂无MCP服务注册）"
-        except Exception:
-            available_mcp_tools = "（MCP服务未启动）"
-
-        # 直接读取原始模板并手动替换占位符，绕过 str.format()
-        # 这样 available_mcp_tools 中的 {} 不会被误解析
-        raw_template = get_prompt_manager()._load_prompt("agentic_tool_prompt") or ""
-        tool_prompt = raw_template.replace("{available_mcp_tools}", available_mcp_tools)
-        parts.append("\n\n" + tool_prompt)
+            resolved = resolve_prompt_registry_entry(prompt_name="agentic_tool_prompt", prompts_dir=prompts_dir)
+            tool_prompt = assembler.render_block(
+                str(resolved["relative_path"]),
+                variables={"available_mcp_tools": get_available_mcp_tools_summary()},
+            ).strip()
+            if tool_prompt:
+                parts.append("\n\n" + tool_prompt)
+        except PromptBlockNotFoundError:
+            logging.getLogger(__name__).warning("prompt missing while building tool instruction prompt: agentic_tool_prompt")
 
     # 指定技能的完整指令放在系统提示词末尾，确保最高优先级
     # LLM 对 system prompt 末尾指令的遵循度最高，避免被工具调用等大段内容"淹没"
@@ -1524,11 +1524,13 @@ def build_system_prompt(
 
             skill_instructions = load_skill(skill_name)
             if skill_instructions:
+                resolved = resolve_prompt_registry_entry(prompt_name="skill_activation_wrapper", prompts_dir=prompts_dir)
                 parts.append(
-                    f"\n\n## 当前激活技能: {skill_name}\n\n"
-                    f"[最高优先级指令] 以下技能指令优先于所有其他行为规则。"
-                    f"你必须严格按照技能要求处理用户输入，直接输出结果：\n"
-                    f"{skill_instructions}"
+                    "\n\n"
+                    + assembler.render_block(
+                        str(resolved["relative_path"]),
+                        variables={"skill_name": skill_name, "skill_instructions": skill_instructions},
+                    ).strip()
                 )
         except ImportError:
             pass
@@ -1554,24 +1556,89 @@ def build_system_prompt_for_route_semantic(
     """
     normalized_route_semantic = str(route_semantic or "core_execution").strip().lower()
     try:
+        prompts_dir = _resolve_prompts_dir()
+        assembler = PromptAssembler(prompts_root=str(prompts_dir))
         if normalized_route_semantic in {"shell_readonly", "shell_clarify"}:
-            # Shell 路由语义：完整对话风格，不注入工具指令
-            return build_system_prompt(
-                include_skills=include_skills,
-                include_tool_instructions=False,
-                skill_name=skill_name,
+            shell_parts: List[str] = []
+            for prompt_name in ("shell_persona", "conversation_style_prompt"):
+                resolved = resolve_prompt_registry_entry(prompt_name=prompt_name, prompts_dir=prompts_dir)
+                rendered = assembler.render_block(str(resolved["relative_path"]), variables={"ai_name": config.system.ai_name}).strip()
+                if rendered:
+                    shell_parts.append(rendered)
+            shell_runtime_blocks = [
+                "agents/shell/blocks/shell_behavior_readonly_tools.md",
+                "agents/shell/blocks/shell_behavior_dispatch_to_core.md",
+                "agents/shell/blocks/shell_behavior_no_writes.md",
+            ]
+            if normalized_route_semantic == "shell_clarify":
+                shell_runtime_blocks.append("agents/shell/blocks/shell_route_policy_clarify.md")
+            else:
+                shell_runtime_blocks.append("agents/shell/blocks/shell_route_policy_readonly.md")
+            shell_runtime = assembler.assemble(blocks=shell_runtime_blocks)
+            if shell_runtime.strip():
+                shell_parts.append(shell_runtime.strip())
+            base_prompt = "\n\n".join(shell_parts).strip()
+            parts = [base_prompt]
+            parts.append("\n\n━━━━━━━━━━ 以下是附加知识 ━━━━━━━━━━\n")
+            current_time = datetime.now()
+            time_info = (
+                f"\n【当前时间信息】\n"
+                f"当前日期：{current_time.strftime('%Y年%m月%d日')}\n"
+                f"当前时间：{current_time.strftime('%H:%M:%S')}\n"
+                f"当前星期：{current_time.strftime('%A')}"
             )
+            parts.append(time_info)
+            if not skill_name and include_skills:
+                try:
+                    from system.skill_manager import get_skills_prompt
+
+                    skills_prompt = get_skills_prompt()
+                    if skills_prompt:
+                        parts.append("\n\n" + skills_prompt)
+                except ImportError:
+                    pass
+            if skill_name:
+                try:
+                    from system.skill_manager import load_skill
+
+                    skill_instructions = load_skill(skill_name)
+                    if skill_instructions:
+                        resolved = resolve_prompt_registry_entry(prompt_name="skill_activation_wrapper", prompts_dir=prompts_dir)
+                        parts.append(
+                            "\n\n"
+                            + assembler.render_block(
+                                str(resolved["relative_path"]),
+                                variables={"skill_name": skill_name, "skill_instructions": skill_instructions},
+                            ).strip()
+                        )
+                except ImportError:
+                    pass
+            return "".join(parts)
 
         # core_execution: Core 执行路径
-        # 使用精简的 Core 身份 prompt 替代闲聊风格 prompt
-        core_prompt_file = Path(__file__).parent / "prompts" / "agents" / "core_exec" / "core_exec_base.md"
-        if core_prompt_file.exists():
-            base_prompt = core_prompt_file.read_text(encoding="utf-8").strip()
-        else:
-            # 如果 Core prompt 文件不存在，降级到通用身份
-            base_prompt = "你是一个自治执行代理，负责规划和执行用户通过 Contract 提交的任务。"
+        core_parts: List[str] = []
+        for prompt_name in ("core_values",):
+            resolved = resolve_prompt_registry_entry(prompt_name=prompt_name, prompts_dir=prompts_dir)
+            rendered = assembler.render_block(str(resolved["relative_path"]), variables={"ai_name": config.system.ai_name}).strip()
+            if rendered:
+                core_parts.append(rendered)
+        core_runtime = assembler.assemble(
+            blocks=[
+                "agents/core_exec/core_exec_base.md",
+                "agents/core_exec/blocks/core_orchestrator_duties.md",
+            ]
+        ).strip()
+        if core_runtime:
+            core_parts.append(core_runtime)
+        resolved_tool = resolve_prompt_registry_entry(prompt_name="agentic_tool_prompt", prompts_dir=prompts_dir)
+        tool_prompt = assembler.render_block(
+            str(resolved_tool["relative_path"]),
+            variables={"available_mcp_tools": get_available_mcp_tools_summary()},
+        ).strip()
+        if tool_prompt:
+            core_parts.append(tool_prompt)
 
-        parts = [base_prompt]
+        parts = ["\n\n".join(part for part in core_parts if part).strip()]
 
         # 附加知识分隔符
         parts.append("\n\n━━━━━━━━━━ 以下是附加知识 ━━━━━━━━━━\n")
@@ -1585,30 +1652,6 @@ def build_system_prompt_for_route_semantic(
             f"当前星期：{current_time.strftime('%A')}"
         )
         parts.append(time_info)
-
-        # Core 路径不注入技能元数据列表（按 Contract 执行）
-
-        # 注入工具调用指令（Core 路径始终需要）
-        try:
-            from core.mcp.registry import auto_register_mcp
-
-            auto_register_mcp()  # no-op with standard MCP
-            from agents.runtime.mcp_client import get_mcp_pool
-
-            pool = get_mcp_pool()
-            if pool:
-                tools = pool.get_all_tools()
-                available_mcp_tools = ", ".join(t.name for t in tools) or "（暂无MCP服务注册）"
-            else:
-                available_mcp_tools = "（暂无MCP服务注册）"
-        except Exception:
-            available_mcp_tools = "（MCP服务未启动）"
-
-        raw_template = get_prompt_manager()._load_prompt("agentic_tool_prompt") or ""
-        tool_prompt = raw_template.replace("{available_mcp_tools}", available_mcp_tools)
-        parts.append("\n\n" + tool_prompt)
-
-        # Core 路径不注入技能活化指令（技能由 Contract scope 控制）
 
         return "".join(parts)
 

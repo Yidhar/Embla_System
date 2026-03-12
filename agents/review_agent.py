@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from agents.prompt_engine import PromptAssembler, get_system_prompts_root
+from agents.prompt_engine import PromptAssembler, get_available_mcp_tools_summary, get_system_prompts_root
 from agents.runtime.task_board import TaskBoardEngine, TaskStatus
 
 
@@ -77,6 +77,12 @@ class ReviewAgent:
                 custom_prompt = self._assembler.assemble(blocks=list(self._config.prompt_blocks))
                 if custom_prompt.strip():
                     parts.append(custom_prompt.strip())
+            tool_contract = self._runtime_assembler.render_block(
+                "core/dna/agentic_tool_prompt.md",
+                variables={"available_mcp_tools": get_available_mcp_tools_summary()},
+            )
+            if tool_contract.strip():
+                parts.append(tool_contract.strip())
             runtime_prompt = self._runtime_assembler.assemble(
                 blocks=[
                     "agents/review/review_agent_behavior.md",
@@ -97,6 +103,7 @@ class ReviewAgent:
                 if full_path.exists():
                     parts.append(full_path.read_text(encoding="utf-8"))
             for block_path in (
+                "core/dna/agentic_tool_prompt.md",
                 "agents/review/review_agent_behavior.md",
                 "agents/review/review_result_contract.md",
             ):

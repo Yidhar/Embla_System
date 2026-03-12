@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from agents.contract_runtime import CoreExecutionContractInput
 from agents.meta_agent import Goal, MetaAgentRuntime, SubTask
-from agents.prompt_engine import PromptAssembler, get_system_prompts_root
+from agents.prompt_engine import PromptAssembler, get_available_mcp_tools_summary, get_system_prompts_root
 from agents.runtime.agent_session import AgentSessionStore
 from agents.runtime.mailbox import AgentMailbox
 from agents.runtime.parent_tools import handle_parent_tool_call
@@ -64,7 +64,8 @@ FAST_TRACK_ALLOWED_TOOLS = {
 }
 FAST_TRACK_PROTECTED_PREFIXES = (
     "core/security/",
-    "system/dna/",
+    "system/prompts/dna/",
+    "system/prompts/core/dna/",
 )
 FAST_TRACK_PROTECTED_EXACT = {
     ".env",
@@ -299,15 +300,15 @@ class CoreAgent:
 
         Uses prompt_profile from RouterDecision to load the right template.
         """
-        blocks: List[str] = []
+        profile_blocks: List[str] = ["agents/core_exec/core_exec_base.md"]
 
         # Load prompt template based on RouterDecision.prompt_profile
         if prompt_profile:
             template_rel = PROMPT_PROFILE_MAP.get(prompt_profile, "")
             if template_rel:
                 template_path = Path(self._config.prompts_root) / template_rel
-                if template_path.exists():
-                    blocks.append(template_rel)
+                if template_path.exists() and template_rel not in profile_blocks:
+                    profile_blocks.append(template_rel)
                 else:
                     logger.warning(
                         "Core prompt profile template missing: profile=%s path=%s",
@@ -318,7 +319,7 @@ class CoreAgent:
         try:
             parts: List[str] = []
             profile_body = self._assembler.assemble(
-                blocks=blocks if blocks else None,
+                blocks=profile_blocks,
             )
             if profile_body.strip():
                 parts.append(profile_body.strip())
@@ -327,6 +328,12 @@ class CoreAgent:
             )
             if runtime_body.strip():
                 parts.append(runtime_body.strip())
+            tool_contract = self._runtime_assembler.render_block(
+                "core/dna/agentic_tool_prompt.md",
+                variables={"available_mcp_tools": get_available_mcp_tools_summary()},
+            ).strip()
+            if tool_contract:
+                parts.append(tool_contract)
             body = "\n\n".join(parts).strip()
             if self._values_prompt.strip():
                 return "\n\n".join([self._values_prompt.strip(), body]).strip()
@@ -396,12 +403,22 @@ class CoreAgent:
     def _load_values(self) -> None:
         """Load Values DNA from file (immutable)."""
         path = Path(self._config.values_dna_path)
-        if path.exists():
-            self._values_prompt = path.read_text(encoding="utf-8")
-            logger.info("Loaded Core Values DNA from %s", path)
-        else:
-            self._values_prompt = ""
-            logger.warning("Core Values DNA not found at %s", path)
+        canonical_path = (get_system_prompts_root() / "dna" / "core_values.md").resolve()
+        try:
+            if path.resolve() == canonical_path:
+                self._values_prompt = self._runtime_assembler.load_dna("core_values")
+            elif path.exists():
+                self._values_prompt = path.read_text(encoding="utf-8")
+            else:
+                self._values_prompt = ""
+            if self._values_prompt.strip():
+                logger.info("Loaded Core Values DNA from %s", path)
+            else:
+                logger.warning("Core Values DNA not found at %s", path)
+        except Exception:
+            self._values_prompt = path.read_text(encoding="utf-8") if path.exists() else ""
+            if not self._values_prompt.strip():
+                logger.warning("Core Values DNA not found at %s", path)
 
     @staticmethod
     def _normalize_string_list(value: Any) -> List[str]:

@@ -20,6 +20,12 @@ from agents.shell_tools import get_shell_tool_definitions, handle_shell_tool, is
 
 logger = logging.getLogger(__name__)
 
+_SHELL_RUNTIME_BLOCKS = [
+    "agents/shell/blocks/shell_behavior_readonly_tools.md",
+    "agents/shell/blocks/shell_behavior_dispatch_to_core.md",
+    "agents/shell/blocks/shell_behavior_no_writes.md",
+]
+
 
 # ── Shell Tool Definitions ─────────────────────────────────────
 
@@ -292,14 +298,9 @@ class ShellAgent:
     def build_system_prompt(self) -> str:
         """Build the complete system prompt for the Shell agent using PromptAssembler."""
         try:
-            body = self._assembler.assemble(
-                blocks=[
-                    "agents/shell/blocks/shell_behavior_readonly_tools.md",
-                    "agents/shell/blocks/shell_behavior_dispatch_to_core.md",
-                    "agents/shell/blocks/shell_behavior_no_writes.md",
-                ],
-            )
-            parts = [self._persona_prompt.strip(), body.strip()]
+            style_prompt = self._assembler.load_dna("conversation_style_prompt").strip()
+            body = self._assembler.assemble(blocks=list(_SHELL_RUNTIME_BLOCKS))
+            parts = [self._persona_prompt.strip(), style_prompt, body.strip()]
             return "\n\n".join(part for part in parts if part).strip()
         except Exception:
             return self._persona_prompt.strip()
@@ -307,12 +308,22 @@ class ShellAgent:
     def _load_persona(self) -> None:
         """Load persona DNA from file (immutable, never modified at runtime)."""
         path = Path(self._config.persona_dna_path)
-        if path.exists():
-            self._persona_prompt = path.read_text(encoding="utf-8")
-            logger.info("Loaded Shell persona DNA from %s", path)
-        else:
-            self._persona_prompt = ""
-            logger.warning("Shell persona DNA not found at %s — using empty persona", path)
+        canonical_path = (get_system_prompts_root() / "dna" / "shell_persona.md").resolve()
+        try:
+            if path.resolve() == canonical_path:
+                self._persona_prompt = self._assembler.load_dna("shell_persona")
+            elif path.exists():
+                self._persona_prompt = path.read_text(encoding="utf-8")
+            else:
+                self._persona_prompt = ""
+            if self._persona_prompt.strip():
+                logger.info("Loaded Shell persona DNA from %s", path)
+            else:
+                logger.warning("Shell persona DNA not found at %s — using empty persona", path)
+        except Exception:
+            self._persona_prompt = path.read_text(encoding="utf-8") if path.exists() else ""
+            if not self._persona_prompt.strip():
+                logger.warning("Shell persona DNA not found at %s — using empty persona", path)
 
     @staticmethod
     def _normalize_complexity_hint(raw_hint: str, *, fallback_complexity: str = "") -> str:

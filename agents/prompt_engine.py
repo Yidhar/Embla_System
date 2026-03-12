@@ -41,6 +41,23 @@ def get_system_prompts_root() -> Path:
     return _SYSTEM_PROMPTS_ROOT
 
 
+def get_available_mcp_tools_summary() -> str:
+    """Return a best-effort summary of currently registered MCP tools."""
+    try:
+        from core.mcp.registry import auto_register_mcp
+
+        auto_register_mcp()  # no-op with standard MCP
+        from agents.runtime.mcp_client import get_mcp_pool
+
+        pool = get_mcp_pool()
+        if not pool:
+            return "（暂无MCP服务注册）"
+        tools = pool.get_all_tools()
+        return ", ".join(t.name for t in tools) or "（暂无MCP服务注册）"
+    except Exception:
+        return "（MCP服务未启动）"
+
+
 class PromptAssembler:
     """Modular prompt assembly engine.
 
@@ -232,5 +249,6 @@ __all__ = [
     "DNAIntegrityError",
     "PromptAssembler",
     "PromptBlockNotFoundError",
+    "get_available_mcp_tools_summary",
     "get_system_prompts_root",
 ]

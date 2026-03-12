@@ -122,6 +122,11 @@
       "aliases": []
     },
     {
+      "prompt_name": "core_lifecycle_orchestrator",
+      "path": "agents/core_exec/blocks/core_lifecycle_orchestrator.md",
+      "aliases": []
+    },
+    {
       "prompt_name": "dev_agent_behavior",
       "path": "agents/dev/dev_agent_behavior.md",
       "aliases": []
@@ -174,6 +179,11 @@
     {
       "prompt_name": "python_ast",
       "path": "skills/python_ast.md",
+      "aliases": []
+    },
+    {
+      "prompt_name": "skill_activation_wrapper",
+      "path": "skills/skill_activation_wrapper.md",
       "aliases": []
     },
     {

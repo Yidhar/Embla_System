@@ -174,6 +174,7 @@ class TestShellAgent:
         prompt = shell.build_system_prompt()
         assert "dispatch_to_core" in prompt
         assert "绝对不能" in prompt
+        assert "如何组织回答" in prompt
 
     def test_shell_loads_persona(self, tmp_path):
         from agents.shell_agent import ShellAgent, ShellAgentConfig
@@ -237,6 +238,7 @@ class TestCoreAgent:
         core = CoreAgent(store=store, mailbox=mailbox)
         prompt = core.build_system_prompt(prompt_profile="core_exec_dev")
         assert "能力域" in prompt
+        assert "当前可用 MCP 工具摘要" in prompt
 
     def test_core_loads_values(self, store, mailbox, tmp_path):
         from agents.core_agent import CoreAgent, CoreAgentConfig
@@ -369,6 +371,7 @@ class TestDevAgent:
         assert "exp_20260303_001.md" in prompt
         assert "report_to_parent" in prompt
         assert "verification_report" in prompt
+        assert "当前可用 MCP 工具摘要" in prompt
 
     def test_dev_experience_md(self):
         from agents.dev_agent import DevAgent
@@ -459,6 +462,14 @@ class TestReviewAgent:
         )
         assert result.verdict == "approve"
         assert "✅" in result.summary
+
+    def test_review_system_prompt_includes_tool_contract(self, task_board_engine):
+        from agents.review_agent import ReviewAgent
+
+        review = ReviewAgent(task_board_engine=task_board_engine)
+        prompt = review.build_system_prompt()
+        assert "当前可用 MCP 工具摘要" in prompt
+        assert "review_result" in prompt
 
 
 # ── Pipeline Integration Tests ─────────────────────────────────
