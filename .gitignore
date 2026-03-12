@@ -38,6 +38,7 @@ logs/**/*.log
 logs/knowledge_graph/quintuples.json
 logs/knowledge_graph/graph.html
 logs/.auth_session
+summer_memory/docker-compose.yml
 
 # Session and history
 sessions/
