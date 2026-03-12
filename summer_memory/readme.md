@@ -52,12 +52,17 @@ docker run -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/your_password neo4j:lat
 
 ### 3. 配置连接信息
 
-在 `config.py` 中修改Neo4j连接配置：
-```python
-GRAG_NEO4J_URI = "bolt://localhost:7687"  # Neo4j连接地址
-GRAG_NEO4J_USER = "neo4j"                 # 用户名
-GRAG_NEO4J_PASSWORD = "your_password"     # 你设置的密码
-GRAG_NEO4J_DATABASE = "neo4j"             # 数据库名
+在项目根目录的 `config.json` 中配置 Neo4j 连接信息：
+
+```json
+{
+  "grag": {
+    "neo4j_uri": "bolt://localhost:7687",
+    "neo4j_user": "neo4j",
+    "neo4j_password": "your_password",
+    "neo4j_database": "neo4j"
+  }
+}
 ```
 
 ### 4. 验证连接
@@ -67,11 +72,19 @@ GRAG_NEO4J_DATABASE = "neo4j"             # 数据库名
 - 使用配置的用户名密码登录
 - 执行测试查询：`MATCH (n) RETURN n LIMIT 5`
 
-### 5. 设置 DeepSeek API Key
+### 5. 设置 LLM API Key
 
-在 `quintuple_extractor.py` 和 `quintuple_rag_query.py` 中替换：
+在项目根目录的 `config.json` 中配置：
 
-API_KEY = "sk-xxx"  # 替换为你自己的 DeepSeek API 密钥
+```json
+{
+  "api": {
+    "api_key": "sk-xxx",
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat"
+  }
+}
+```
 
 > DeepSeek 注册地址：https://platform.deepseek.com/
 
@@ -163,7 +176,7 @@ from summer_memory.memory_manager import memory_manager
 # 添加对话记忆（自动使用任务管理器）
 await memory_manager.add_conversation_memory(
     "用户: 你好，我想了解人工智能",
-    "娜迦: 人工智能是一个快速发展的技术领域..."
+    "Embla: 人工智能是一个快速发展的技术领域..."
 )
 
 # 查询记忆
@@ -177,8 +190,7 @@ result = await memory_manager.query_memory("什么是人工智能？")
 可独立调用：
 
 ```python
-import requests
-from main_tri import batch_add_texts
+from summer_memory.main import batch_add_texts
 
 texts = ["李雷在操场上打篮球。", "韩梅梅喜欢读书。"]
 batch_add_texts(texts)

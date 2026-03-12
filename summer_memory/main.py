@@ -171,7 +171,7 @@ def main(): # 主程序
             if not texts:
                 print("未输入任何文本，使用默认测试文本。")
                 texts = [
-                    "你好，我是娜迦。"
+                    "你好，我是 Embla。"
                 ]
 
             success = batch_add_texts(texts)

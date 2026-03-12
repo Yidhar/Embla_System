@@ -1,69 +1,65 @@
-import requests
 import json
 import logging
-import sys
 import os
+import sys
+
+import requests
 
 # 添加项目根目录到路径，以便导入config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
+from agents.prompt_engine import PromptAssembler, get_system_prompts_root
 from system.config import config
+
 API_URL = f"{config.api.base_url.rstrip('/')}/chat/completions"
 
-# 设置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 缓存最近处理的文本
+_PROMPT_ASSEMBLER = PromptAssembler(prompts_root=str(get_system_prompts_root()))
+_KEYWORD_PROMPT_BLOCK = "memory/quintuple_rag_keyword_prompt.md"
+_KEYWORD_PROMPT_OLLAMA_BLOCK = "memory/quintuple_rag_keyword_prompt_ollama.md"
+
 recent_context = []
+
+
+def _build_keyword_prompt(context: str, user_question: str, *, ollama: bool) -> str:
+    block_path = _KEYWORD_PROMPT_OLLAMA_BLOCK if ollama else _KEYWORD_PROMPT_BLOCK
+    return _PROMPT_ASSEMBLER.render_block(
+        block_path,
+        variables={"context": context, "user_question": user_question},
+    ).strip()
+
 
 def set_context(texts):
     """设置查询上下文"""
     global recent_context
-    # 使用配置中的上下文长度，默认为5
-    context_length = getattr(config.grag, 'context_length', 5)
-    recent_context = texts[:context_length]  # 限制上下文长度
-    logger.info(f"更新查询上下文: {len(recent_context)} 条记录")
+    context_length = getattr(config.grag, "context_length", 5)
+    recent_context = texts[:context_length]
+    logger.info("更新查询上下文: %s 条记录", len(recent_context))
+
 
 def query_knowledge(user_question):
     """使用 DeepSeek API 提取关键词并查询知识图谱"""
     context_str = "\n".join(recent_context) if recent_context else "无上下文"
-    prompt = (
-        f"基于以下上下文和用户问题，提取与知识图谱相关的关键词（如人物、物体、关系、实体类型），"
-        f"仅以列表的形式返回核心关键词，避免无关词。返回 JSON 格式的关键词列表：\n"
-        f"上下文：\n{context_str}\n"
-        f"问题：{user_question}\n"
-        f"输出格式：```json\n[]\n```"
-    )
 
     headers = {
         "Authorization": f"Bearer {config.api.api_key}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
-    # 检测是否使用ollama并启用结构化输出
     is_ollama = "localhost" in config.api.base_url or "11434" in config.api.base_url
-    
+    prompt = _build_keyword_prompt(context_str, user_question, ollama=is_ollama)
+
     body = {
         "model": config.api.model,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
-                    "max_tokens": config.api.max_tokens,
-        "temperature": 0.5  # 降低温度，提高精准度
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": config.api.max_tokens,
+        "temperature": 0.5,
     }
-    
-    # 为ollama添加结构化输出
+
     if is_ollama:
         body["format"] = "json"
-        # 简化提示词，ollama会自动处理JSON格式
-        simplified_prompt = (
-            f"基于以下上下文和用户问题，提取与知识图谱相关的关键词（如人物、物体、关系、实体类型），"
-            f"仅返回核心关键词，避免无关词。直接返回关键词数组：\n"
-            f"上下文：\n{context_str}\n"
-            f"问题：{user_question}"
-        )
-        body["messages"] = [{"role": "user", "content": simplified_prompt}]
 
     try:
         response = requests.post(API_URL, headers=headers, json=body, timeout=20)
@@ -80,35 +76,35 @@ def query_knowledge(user_question):
             if raw_content.startswith("```json") and raw_content.endswith("```"):
                 raw_content = raw_content[7:-3].strip()
             keywords = json.loads(raw_content)
-            print(keywords)
             if not isinstance(keywords, list):
                 raise ValueError("关键词应为列表")
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.error(f"解析 DeepSeek 响应失败: {raw_content}, 错误: {e}")
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.error("解析 DeepSeek 响应失败: %s, 错误: %s", raw_content, exc)
             return "无法解析关键词，请检查问题格式。"
 
         if not keywords:
             logger.warning("未提取到关键词")
             return "未找到相关关键词，请提供更具体的问题。"
 
-        logger.info(f"提取关键词: {keywords}")
+        logger.info("提取关键词: %s", keywords)
         from .quintuple_graph import query_graph_by_keywords
+
         quintuples = query_graph_by_keywords(keywords)
         if not quintuples:
-            logger.info(f"未找到相关五元组: {keywords}")
+            logger.info("未找到相关五元组: %s", keywords)
             return "未在知识图谱中找到相关信息。"
 
         answer = "我在知识图谱中找到以下相关信息：\n\n"
-        for h, h_type, r, t, t_type in quintuples:
-            answer += f"- {h}({h_type}) —[{r}]→ {t}({t_type})\n"
+        for head, head_type, relation, tail, tail_type in quintuples:
+            answer += f"- {head}({head_type}) —[{relation}]→ {tail}({tail_type})\n"
         return answer
 
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"DeepSeek API HTTP 错误: {e}")
+    except requests.exceptions.HTTPError as exc:
+        logger.error("DeepSeek API HTTP 错误: %s", exc)
         return "调用 DeepSeek API 失败，请检查 API 密钥或网络连接。"
-    except requests.exceptions.RequestException as e:
-        logger.error(f"DeepSeek API 请求失败: {e}")
+    except requests.exceptions.RequestException as exc:
+        logger.error("DeepSeek API 请求失败: %s", exc)
         return "无法连接到 DeepSeek API，请检查网络。"
-    except Exception as e:
-        logger.error(f"查询过程中发生未知错误: {e}")
+    except Exception as exc:
+        logger.error("查询过程中发生未知错误: %s", exc)
         return "查询过程中发生未知错误，请稍后重试。"

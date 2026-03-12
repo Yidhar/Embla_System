@@ -147,6 +147,31 @@
       "aliases": []
     },
     {
+      "prompt_name": "quintuple_extractor_structured_system",
+      "path": "memory/quintuple_extractor_structured_system.md",
+      "aliases": []
+    },
+    {
+      "prompt_name": "quintuple_extractor_structured_user",
+      "path": "memory/quintuple_extractor_structured_user.md",
+      "aliases": []
+    },
+    {
+      "prompt_name": "quintuple_extractor_json_fallback",
+      "path": "memory/quintuple_extractor_json_fallback.md",
+      "aliases": []
+    },
+    {
+      "prompt_name": "quintuple_rag_keyword_prompt",
+      "path": "memory/quintuple_rag_keyword_prompt.md",
+      "aliases": []
+    },
+    {
+      "prompt_name": "quintuple_rag_keyword_prompt_ollama",
+      "path": "memory/quintuple_rag_keyword_prompt_ollama.md",
+      "aliases": []
+    },
+    {
       "prompt_name": "backend_expert",
       "path": "roles/backend_expert.md",
       "aliases": []

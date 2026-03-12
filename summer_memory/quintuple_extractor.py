@@ -1,31 +1,37 @@
+import asyncio
 import json
 import logging
-import sys
 import os
+import sys
 import time
-import asyncio
 from typing import List, Optional
+
+from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel
 
 # 添加项目根目录到路径，以便导入config
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
+from agents.prompt_engine import PromptAssembler, get_system_prompts_root
 from system.config import config
-from openai import OpenAI, AsyncOpenAI
 
-# 初始化OpenAI客户端
 client = OpenAI(
     api_key=config.api.api_key,
-    base_url=config.api.base_url
+    base_url=config.api.base_url,
 )
 
 async_client = AsyncOpenAI(
     api_key=config.api.api_key,
-    base_url=config.api.base_url
+    base_url=config.api.base_url,
 )
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+_PROMPT_ASSEMBLER = PromptAssembler(prompts_root=str(get_system_prompts_root()))
+_STRUCTURED_SYSTEM_PROMPT_BLOCK = "memory/quintuple_extractor_structured_system.md"
+_STRUCTURED_USER_PROMPT_BLOCK = "memory/quintuple_extractor_structured_user.md"
+_JSON_FALLBACK_PROMPT_BLOCK = "memory/quintuple_extractor_json_fallback.md"
 
 
 def _resolve_timeout_seconds(timeout_seconds: Optional[int]) -> int:
@@ -48,7 +54,21 @@ def _remaining_time(deadline: float) -> float:
     return max(0.0, deadline - time.monotonic())
 
 
-# 定义五元组的Pydantic模型
+def _render_prompt_block(block_path: str, **variables: object) -> str:
+    return _PROMPT_ASSEMBLER.render_block(block_path, variables=variables).strip()
+
+
+def _build_structured_messages(text: str) -> List[dict]:
+    return [
+        {"role": "system", "content": _render_prompt_block(_STRUCTURED_SYSTEM_PROMPT_BLOCK)},
+        {"role": "user", "content": _render_prompt_block(_STRUCTURED_USER_PROMPT_BLOCK, text=text)},
+    ]
+
+
+def _build_json_fallback_prompt(text: str) -> str:
+    return _render_prompt_block(_JSON_FALLBACK_PROMPT_BLOCK, text=text)
+
+
 class Quintuple(BaseModel):
     subject: str
     subject_type: str
@@ -68,7 +88,6 @@ async def extract_quintuples_async(
     max_retries: Optional[int] = None,
 ):
     """异步版本的五元组提取"""
-    # DeepSeek API不支持结构化输出，直接使用传统JSON解析方法
     return await _extract_quintuples_async_fallback(
         text,
         timeout_seconds=timeout_seconds,
@@ -83,48 +102,7 @@ async def _extract_quintuples_async_structured(
     max_retries: Optional[int] = None,
 ):
     """使用结构化输出的异步五元组提取"""
-    system_prompt = """
-你是一个专业的中文文本信息抽取专家。你的任务是从给定的中文文本中抽取有价值的五元组关系。
-五元组格式为：(主体, 主体类型, 动作, 客体, 客体类型)。
-
-## 提取规则
-1. 只提取**事实性**信息，包括：
-   - 具体的行为和动作
-   - 明确的实体关系
-   - 实际存在的状态和属性
-   - 用户表达的具体需求、偏好、计划
-
-2. 严格过滤以下内容：
-   - 比喻、拟人、夸张等修辞手法
-   - 虚拟、假设、想象的内容
-   - 纯粹的情感表达（如"我很开心"、"你真棒"）
-   - 赞美、讽刺、调侃等主观评价
-   - 闲聊中的无关信息
-   - 重复或冗余的关系
-
-3. 类型包括但不限于：人物、地点、组织、物品、概念、时间、事件、活动等。
-
-## 示例
-
-输入：小明在公园里踢足球。
-输出：
-- 主体：小明，类型：人物，动作：踢，客体：足球，类型：物品
-- 主体：小明，类型：人物，动作：在，客体：公园，类型：地点
-
-输入：你像小太阳一样温暖。
-输出：[] （比喻句，不提取）
-
-输入：我喜欢吃苹果和香蕉。
-输出：
-- 主体：我，类型：人物，动作：喜欢吃，客体：苹果，类型：物品
-- 主体：我，类型：人物，动作：喜欢吃，客体：香蕉，类型：物品
-
-输入：如果我是鸟，我会飞到月球。
-输出：[] （假设内容，不提取）
-
-请仔细分析文本，只提取有价值的事实性五元组关系。
-"""
-
+    messages = _build_structured_messages(text)
     total_timeout = _resolve_timeout_seconds(timeout_seconds)
     retries = _resolve_max_retries(max_retries)
     attempts = max(1, retries + 1)
@@ -138,34 +116,25 @@ async def _extract_quintuples_async_structured(
             break
 
         try:
-            # 尝试使用结构化输出
             completion = await async_client.beta.chat.completions.parse(
                 model=config.api.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"请从以下文本中提取五元组：\n\n{text}"}
-                ],
+                messages=messages,
                 response_format=QuintupleResponse,
                 max_tokens=config.api.max_tokens,
                 temperature=0.3,
-                timeout=remaining
+                timeout=remaining,
             )
 
-            # 解析结果
             result = completion.choices[0].message.parsed
-            quintuples = []
-            
-            for q in result.quintuples:
-                quintuples.append((
-                    q.subject, q.subject_type, 
-                    q.predicate, q.object, q.object_type
-                ))
-            
-            logger.info(f"结构化输出成功，提取到 {len(quintuples)} 个五元组")
+            quintuples = [
+                (q.subject, q.subject_type, q.predicate, q.object, q.object_type)
+                for q in result.quintuples
+            ]
+            logger.info("结构化输出成功，提取到 %s 个五元组", len(quintuples))
             return quintuples
 
-        except Exception as e:
-            logger.warning(f"结构化输出失败: {str(e)}")
+        except Exception as exc:
+            logger.warning("结构化输出失败: %s", str(exc))
             if attempt >= attempts - 1:
                 logger.info("回退到传统JSON解析方法")
                 remaining_budget = _remaining_time(deadline)
@@ -191,46 +160,7 @@ async def _extract_quintuples_async_fallback(
     max_retries: Optional[int] = None,
 ):
     """传统JSON解析的异步五元组提取（回退方案）"""
-    prompt = f"""
-从以下中文文本中抽取有价值的五元组（主语-主语类型-谓语-宾语-宾语类型）关系，以 JSON 数组格式返回。
-
-## 提取规则
-1. 只提取**事实性**信息，包括：
-   - 具体的行为和动作
-   - 明确的实体关系
-   - 实际存在的状态和属性
-   - 用户表达的具体需求、偏好、计划
-
-2. 严格过滤以下内容：
-   - 比喻、拟人、夸张等修辞手法
-   - 虚拟、假设、想象的内容
-   - 纯粹的情感表达（如"我很开心"、"你真棒"）
-   - 赞美、讽刺、调侃等主观评价
-   - 闲聊中的无关信息
-   - 重复或冗余的关系
-
-3. 类型包括但不限于：人物、地点、组织、物品、概念、时间、事件、活动等。
-
-## 示例
-
-输入：小明在公园里踢足球。
-输出：[["小明", "人物", "踢", "足球", "物品"], ["小明", "人物", "在", "公园", "地点"]]
-
-输入：你像小太阳一样温暖。
-输出：[] （比喻句，不提取）
-
-输入：我喜欢吃苹果和香蕉。
-输出：[["我", "人物", "喜欢吃", "苹果", "物品"], ["我", "人物", "喜欢吃", "香蕉", "物品"]]
-
-输入：如果我是鸟，我会飞到月球。
-输出：[] （假设内容，不提取）
-
-请从文本中提取有价值的事实性五元组：
-{text}
-
-除了JSON数据，请不要输出任何其他数据，例如：```、```json、以下是我提取的数据：。
-"""
-
+    prompt = _build_json_fallback_prompt(text)
     total_timeout = _resolve_timeout_seconds(timeout_seconds)
     retries = _resolve_max_retries(max_retries)
     attempts = max(1, retries + 1)
@@ -247,28 +177,25 @@ async def _extract_quintuples_async_fallback(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=config.api.max_tokens,
                 temperature=0.3,
-                timeout=remaining
+                timeout=remaining,
             )
-            
-            content = response.choices[0].message.content.strip()
-            
-            # 尝试解析JSON
+
+            content = (response.choices[0].message.content or "").strip()
             try:
                 quintuples = json.loads(content)
-                logger.info(f"传统方法成功，提取到 {len(quintuples)} 个五元组")
-                return [tuple(t) for t in quintuples if len(t) == 5]
+                logger.info("传统方法成功，提取到 %s 个五元组", len(quintuples))
+                return [tuple(item) for item in quintuples if len(item) == 5]
             except json.JSONDecodeError:
-                logger.error(f"JSON解析失败，原始内容: {content[:200]}")
-                # 尝试直接提取数组
-                if '[' in content and ']' in content:
-                    start = content.index('[')
-                    end = content.rindex(']') + 1
+                logger.error("JSON解析失败，原始内容: %s", content[:200])
+                if "[" in content and "]" in content:
+                    start = content.index("[")
+                    end = content.rindex("]") + 1
                     quintuples = json.loads(content[start:end])
-                    return [tuple(t) for t in quintuples if len(t) == 5]
+                    return [tuple(item) for item in quintuples if len(item) == 5]
                 raise
 
-        except Exception as e:
-            logger.error(f"传统方法提取失败: {str(e)}")
+        except Exception as exc:
+            logger.error("传统方法提取失败: %s", str(exc))
             sleep_seconds = min(float(1 + attempt), _remaining_time(deadline))
             if attempt < attempts - 1 and sleep_seconds > 0:
                 await asyncio.sleep(sleep_seconds)
@@ -283,7 +210,6 @@ def extract_quintuples(
     max_retries: Optional[int] = None,
 ):
     """同步版本的五元组提取"""
-    # 首先尝试使用结构化输出
     return _extract_quintuples_structured(
         text,
         timeout_seconds=timeout_seconds,
@@ -298,48 +224,7 @@ def _extract_quintuples_structured(
     max_retries: Optional[int] = None,
 ):
     """使用结构化输出的同步五元组提取"""
-    system_prompt = """
-你是一个专业的中文文本信息抽取专家。你的任务是从给定的中文文本中抽取有价值的五元组关系。
-五元组格式为：(主体, 主体类型, 动作, 客体, 客体类型)。
-
-## 提取规则
-1. 只提取**事实性**信息，包括：
-   - 具体的行为和动作
-   - 明确的实体关系
-   - 实际存在的状态和属性
-   - 用户表达的具体需求、偏好、计划
-
-2. 严格过滤以下内容：
-   - 比喻、拟人、夸张等修辞手法
-   - 虚拟、假设、想象的内容
-   - 纯粹的情感表达（如"我很开心"、"你真棒"）
-   - 赞美、讽刺、调侃等主观评价
-   - 闲聊中的无关信息
-   - 重复或冗余的关系
-
-3. 类型包括但不限于：人物、地点、组织、物品、概念、时间、事件、活动等。
-
-## 示例
-
-输入：小明在公园里踢足球。
-输出：
-- 主体：小明，类型：人物，动作：踢，客体：足球，类型：物品
-- 主体：小明，类型：人物，动作：在，客体：公园，类型：地点
-
-输入：你像小太阳一样温暖。
-输出：[] （比喻句，不提取）
-
-输入：我喜欢吃苹果和香蕉。
-输出：
-- 主体：我，类型：人物，动作：喜欢吃，客体：苹果，类型：物品
-- 主体：我，类型：人物，动作：喜欢吃，客体：香蕉，类型：物品
-
-输入：如果我是鸟，我会飞到月球。
-输出：[] （假设内容，不提取）
-
-请仔细分析文本，只提取有价值的事实性五元组关系。
-"""
-
+    messages = _build_structured_messages(text)
     total_timeout = _resolve_timeout_seconds(timeout_seconds)
     retries = _resolve_max_retries(max_retries)
     attempts = max(1, retries + 1)
@@ -353,34 +238,25 @@ def _extract_quintuples_structured(
             break
 
         try:
-            # 尝试使用结构化输出
             completion = client.beta.chat.completions.parse(
                 model=config.api.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"请从以下文本中提取五元组：\n\n{text}"}
-                ],
+                messages=messages,
                 response_format=QuintupleResponse,
                 max_tokens=config.api.max_tokens,
                 temperature=0.3,
-                timeout=remaining
+                timeout=remaining,
             )
 
-            # 解析结果
             result = completion.choices[0].message.parsed
-            quintuples = []
-            
-            for q in result.quintuples:
-                quintuples.append((
-                    q.subject, q.subject_type, 
-                    q.predicate, q.object, q.object_type
-                ))
-            
-            logger.info(f"结构化输出成功，提取到 {len(quintuples)} 个五元组")
+            quintuples = [
+                (q.subject, q.subject_type, q.predicate, q.object, q.object_type)
+                for q in result.quintuples
+            ]
+            logger.info("结构化输出成功，提取到 %s 个五元组", len(quintuples))
             return quintuples
 
-        except Exception as e:
-            logger.warning(f"结构化输出失败: {str(e)}")
+        except Exception as exc:
+            logger.warning("结构化输出失败: %s", str(exc))
             if attempt >= attempts - 1:
                 logger.info("回退到传统JSON解析方法")
                 remaining_budget = _remaining_time(deadline)
@@ -406,46 +282,7 @@ def _extract_quintuples_fallback(
     max_retries: Optional[int] = None,
 ):
     """传统JSON解析的同步五元组提取（回退方案）"""
-    prompt = f"""
-从以下中文文本中抽取有价值的五元组（主语-主语类型-谓语-宾语-宾语类型）关系，以 JSON 数组格式返回。
-
-## 提取规则
-1. 只提取**事实性**信息，包括：
-   - 具体的行为和动作
-   - 明确的实体关系
-   - 实际存在的状态和属性
-   - 用户表达的具体需求、偏好、计划
-
-2. 严格过滤以下内容：
-   - 比喻、拟人、夸张等修辞手法
-   - 虚拟、假设、想象的内容
-   - 纯粹的情感表达（如"我很开心"、"你真棒"）
-   - 赞美、讽刺、调侃等主观评价
-   - 闲聊中的无关信息
-   - 重复或冗余的关系
-
-3. 类型包括但不限于：人物、地点、组织、物品、概念、时间、事件、活动等。
-
-## 示例
-
-输入：小明在公园里踢足球。
-输出：[["小明", "人物", "踢", "足球", "物品"], ["小明", "人物", "在", "公园", "地点"]]
-
-输入：你像小太阳一样温暖。
-输出：[] （比喻句，不提取）
-
-输入：我喜欢吃苹果和香蕉。
-输出：[["我", "人物", "喜欢吃", "苹果", "物品"], ["我", "人物", "喜欢吃", "香蕉", "物品"]]
-
-输入：如果我是鸟，我会飞到月球。
-输出：[] （假设内容，不提取）
-
-请从文本中提取有价值的事实性五元组：
-{text}
-
-除了JSON数据，请不要输出任何其他数据，例如：```、```json、以下是我提取的数据：。
-"""
-
+    prompt = _build_json_fallback_prompt(text)
     total_timeout = _resolve_timeout_seconds(timeout_seconds)
     retries = _resolve_max_retries(max_retries)
     attempts = max(1, retries + 1)
@@ -462,28 +299,25 @@ def _extract_quintuples_fallback(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=config.api.max_tokens,
                 temperature=0.5,
-                timeout=remaining
+                timeout=remaining,
             )
 
-            content = response.choices[0].message.content.strip()
-            
-            # 尝试解析JSON
+            content = (response.choices[0].message.content or "").strip()
             try:
                 quintuples = json.loads(content)
-                logger.info(f"传统方法成功，提取到 {len(quintuples)} 个五元组")
-                return [tuple(t) for t in quintuples if len(t) == 5]
+                logger.info("传统方法成功，提取到 %s 个五元组", len(quintuples))
+                return [tuple(item) for item in quintuples if len(item) == 5]
             except json.JSONDecodeError:
-                logger.error(f"JSON解析失败，原始内容: {content[:200]}")
-                # 尝试直接提取数组
-                if '[' in content and ']' in content:
-                    start = content.index('[')
-                    end = content.rindex(']') + 1
+                logger.error("JSON解析失败，原始内容: %s", content[:200])
+                if "[" in content and "]" in content:
+                    start = content.index("[")
+                    end = content.rindex("]") + 1
                     quintuples = json.loads(content[start:end])
-                    return [tuple(t) for t in quintuples if len(t) == 5]
+                    return [tuple(item) for item in quintuples if len(item) == 5]
                 raise
 
-        except Exception as e:
-            logger.error(f"传统方法提取失败: {str(e)}")
+        except Exception as exc:
+            logger.error("传统方法提取失败: %s", str(exc))
             sleep_seconds = min(1.0, _remaining_time(deadline))
             if attempt < attempts - 1 and sleep_seconds > 0:
                 time.sleep(sleep_seconds)
