@@ -4,7 +4,7 @@ import sys
 import os
 import time
 import asyncio
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
 
 # 添加项目根目录到路径，以便导入config
@@ -28,6 +28,26 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
+def _resolve_timeout_seconds(timeout_seconds: Optional[int]) -> int:
+    configured_raw = getattr(config.grag, "extraction_timeout", 12)
+    configured = int(12 if configured_raw is None else configured_raw)
+    if timeout_seconds is None:
+        return max(1, configured)
+    return max(1, int(timeout_seconds))
+
+
+def _resolve_max_retries(max_retries: Optional[int]) -> int:
+    configured_raw = getattr(config.grag, "extraction_retries", 2)
+    configured = int(2 if configured_raw is None else configured_raw)
+    if max_retries is None:
+        return max(0, configured)
+    return max(0, int(max_retries))
+
+
+def _remaining_time(deadline: float) -> float:
+    return max(0.0, deadline - time.monotonic())
+
+
 # 定义五元组的Pydantic模型
 class Quintuple(BaseModel):
     subject: str
@@ -41,13 +61,27 @@ class QuintupleResponse(BaseModel):
     quintuples: List[Quintuple]
 
 
-async def extract_quintuples_async(text):
+async def extract_quintuples_async(
+    text,
+    *,
+    timeout_seconds: Optional[int] = None,
+    max_retries: Optional[int] = None,
+):
     """异步版本的五元组提取"""
     # DeepSeek API不支持结构化输出，直接使用传统JSON解析方法
-    return await _extract_quintuples_async_fallback(text)
+    return await _extract_quintuples_async_fallback(
+        text,
+        timeout_seconds=timeout_seconds,
+        max_retries=max_retries,
+    )
 
 
-async def _extract_quintuples_async_structured(text):
+async def _extract_quintuples_async_structured(
+    text,
+    *,
+    timeout_seconds: Optional[int] = None,
+    max_retries: Optional[int] = None,
+):
     """使用结构化输出的异步五元组提取"""
     system_prompt = """
 你是一个专业的中文文本信息抽取专家。你的任务是从给定的中文文本中抽取有价值的五元组关系。
@@ -91,11 +125,17 @@ async def _extract_quintuples_async_structured(text):
 请仔细分析文本，只提取有价值的事实性五元组关系。
 """
 
-    # 重试机制配置
-    max_retries = 3
+    total_timeout = _resolve_timeout_seconds(timeout_seconds)
+    retries = _resolve_max_retries(max_retries)
+    attempts = max(1, retries + 1)
+    deadline = time.monotonic() + float(total_timeout)
 
-    for attempt in range(max_retries + 1):
+    for attempt in range(attempts):
         logger.info(f"尝试使用结构化输出提取五元组 (第{attempt + 1}次)")
+        remaining = _remaining_time(deadline)
+        if remaining <= 0:
+            logger.warning("结构化五元组提取超时预算已耗尽")
+            break
 
         try:
             # 尝试使用结构化输出
@@ -108,7 +148,7 @@ async def _extract_quintuples_async_structured(text):
                 response_format=QuintupleResponse,
                 max_tokens=config.api.max_tokens,
                 temperature=0.3,
-                timeout=600 + (attempt * 20)
+                timeout=remaining
             )
 
             # 解析结果
@@ -126,16 +166,30 @@ async def _extract_quintuples_async_structured(text):
 
         except Exception as e:
             logger.warning(f"结构化输出失败: {str(e)}")
-            if attempt == max_retries - 1:  # 最后一次尝试，回退到传统方法
+            if attempt >= attempts - 1:
                 logger.info("回退到传统JSON解析方法")
-                return await _extract_quintuples_async_fallback(text)
-            elif attempt < max_retries:
-                await asyncio.sleep(1 + attempt)
+                remaining_budget = _remaining_time(deadline)
+                if remaining_budget <= 0:
+                    logger.warning("无剩余超时预算，跳过结构化输出回退")
+                    return []
+                return await _extract_quintuples_async_fallback(
+                    text,
+                    timeout_seconds=max(1, int(remaining_budget)),
+                    max_retries=0,
+                )
+            sleep_seconds = min(float(1 + attempt), _remaining_time(deadline))
+            if sleep_seconds > 0:
+                await asyncio.sleep(sleep_seconds)
 
     return []
 
 
-async def _extract_quintuples_async_fallback(text):
+async def _extract_quintuples_async_fallback(
+    text,
+    *,
+    timeout_seconds: Optional[int] = None,
+    max_retries: Optional[int] = None,
+):
     """传统JSON解析的异步五元组提取（回退方案）"""
     prompt = f"""
 从以下中文文本中抽取有价值的五元组（主语-主语类型-谓语-宾语-宾语类型）关系，以 JSON 数组格式返回。
@@ -177,16 +231,23 @@ async def _extract_quintuples_async_fallback(text):
 除了JSON数据，请不要输出任何其他数据，例如：```、```json、以下是我提取的数据：。
 """
 
-    max_retries = 2
+    total_timeout = _resolve_timeout_seconds(timeout_seconds)
+    retries = _resolve_max_retries(max_retries)
+    attempts = max(1, retries + 1)
+    deadline = time.monotonic() + float(total_timeout)
 
-    for attempt in range(max_retries + 1):
+    for attempt in range(attempts):
+        remaining = _remaining_time(deadline)
+        if remaining <= 0:
+            logger.warning("传统五元组提取超时预算已耗尽")
+            break
         try:
             response = await async_client.chat.completions.create(
                 model=config.api.model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=config.api.max_tokens,
                 temperature=0.3,
-                timeout=600 + (attempt * 20)
+                timeout=remaining
             )
             
             content = response.choices[0].message.content.strip()
@@ -208,19 +269,34 @@ async def _extract_quintuples_async_fallback(text):
 
         except Exception as e:
             logger.error(f"传统方法提取失败: {str(e)}")
-            if attempt < max_retries:
-                await asyncio.sleep(1 + attempt)
+            sleep_seconds = min(float(1 + attempt), _remaining_time(deadline))
+            if attempt < attempts - 1 and sleep_seconds > 0:
+                await asyncio.sleep(sleep_seconds)
 
     return []
 
 
-def extract_quintuples(text):
+def extract_quintuples(
+    text,
+    *,
+    timeout_seconds: Optional[int] = None,
+    max_retries: Optional[int] = None,
+):
     """同步版本的五元组提取"""
     # 首先尝试使用结构化输出
-    return _extract_quintuples_structured(text)
+    return _extract_quintuples_structured(
+        text,
+        timeout_seconds=timeout_seconds,
+        max_retries=max_retries,
+    )
 
 
-def _extract_quintuples_structured(text):
+def _extract_quintuples_structured(
+    text,
+    *,
+    timeout_seconds: Optional[int] = None,
+    max_retries: Optional[int] = None,
+):
     """使用结构化输出的同步五元组提取"""
     system_prompt = """
 你是一个专业的中文文本信息抽取专家。你的任务是从给定的中文文本中抽取有价值的五元组关系。
@@ -264,11 +340,17 @@ def _extract_quintuples_structured(text):
 请仔细分析文本，只提取有价值的事实性五元组关系。
 """
 
-    # 重试机制配置
-    max_retries = 3
+    total_timeout = _resolve_timeout_seconds(timeout_seconds)
+    retries = _resolve_max_retries(max_retries)
+    attempts = max(1, retries + 1)
+    deadline = time.monotonic() + float(total_timeout)
 
-    for attempt in range(max_retries + 1):
+    for attempt in range(attempts):
         logger.info(f"尝试使用结构化输出提取五元组 (第{attempt + 1}次)")
+        remaining = _remaining_time(deadline)
+        if remaining <= 0:
+            logger.warning("结构化五元组提取超时预算已耗尽")
+            break
 
         try:
             # 尝试使用结构化输出
@@ -281,7 +363,7 @@ def _extract_quintuples_structured(text):
                 response_format=QuintupleResponse,
                 max_tokens=config.api.max_tokens,
                 temperature=0.3,
-                timeout=600 + (attempt * 20)
+                timeout=remaining
             )
 
             # 解析结果
@@ -299,16 +381,30 @@ def _extract_quintuples_structured(text):
 
         except Exception as e:
             logger.warning(f"结构化输出失败: {str(e)}")
-            if attempt == max_retries - 1:  # 最后一次尝试，回退到传统方法
+            if attempt >= attempts - 1:
                 logger.info("回退到传统JSON解析方法")
-                return _extract_quintuples_fallback(text)
-            elif attempt < max_retries:
-                time.sleep(1 + attempt)
+                remaining_budget = _remaining_time(deadline)
+                if remaining_budget <= 0:
+                    logger.warning("无剩余超时预算，跳过结构化输出回退")
+                    return []
+                return _extract_quintuples_fallback(
+                    text,
+                    timeout_seconds=max(1, int(remaining_budget)),
+                    max_retries=0,
+                )
+            sleep_seconds = min(float(1 + attempt), _remaining_time(deadline))
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
 
     return []
 
 
-def _extract_quintuples_fallback(text):
+def _extract_quintuples_fallback(
+    text,
+    *,
+    timeout_seconds: Optional[int] = None,
+    max_retries: Optional[int] = None,
+):
     """传统JSON解析的同步五元组提取（回退方案）"""
     prompt = f"""
 从以下中文文本中抽取有价值的五元组（主语-主语类型-谓语-宾语-宾语类型）关系，以 JSON 数组格式返回。
@@ -350,16 +446,23 @@ def _extract_quintuples_fallback(text):
 除了JSON数据，请不要输出任何其他数据，例如：```、```json、以下是我提取的数据：。
 """
 
-    max_retries = 2
+    total_timeout = _resolve_timeout_seconds(timeout_seconds)
+    retries = _resolve_max_retries(max_retries)
+    attempts = max(1, retries + 1)
+    deadline = time.monotonic() + float(total_timeout)
 
-    for attempt in range(max_retries + 1):
+    for attempt in range(attempts):
+        remaining = _remaining_time(deadline)
+        if remaining <= 0:
+            logger.warning("传统五元组提取超时预算已耗尽")
+            break
         try:
             response = client.chat.completions.create(
                 model=config.api.model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=config.api.max_tokens,
                 temperature=0.5,
-                timeout=600 + (attempt * 20)
+                timeout=remaining
             )
 
             content = response.choices[0].message.content.strip()
@@ -381,7 +484,8 @@ def _extract_quintuples_fallback(text):
 
         except Exception as e:
             logger.error(f"传统方法提取失败: {str(e)}")
-            if attempt < max_retries:
-                time.sleep(1)
+            sleep_seconds = min(1.0, _remaining_time(deadline))
+            if attempt < attempts - 1 and sleep_seconds > 0:
+                time.sleep(sleep_seconds)
 
     return []

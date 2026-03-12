@@ -90,16 +90,22 @@ API_KEY = "sk-xxx"  # 替换为你自己的 DeepSeek API 密钥
 
 ### 配置选项
 
-在 `config.py` 中可以配置任务管理器：
+在 `config.json` 的 `grag` 段中配置提取预算：
 
-```python
-# 任务管理器配置
-task_manager_enabled: bool = True          # 是否启用任务管理器
-max_workers: int = 3                      # 最大并发工作线程数
-max_queue_size: int = 100                 # 最大任务队列大小
-task_timeout: int = 30                    # 单个任务超时时间（秒）
-auto_cleanup_hours: int = 24              # 自动清理任务保留时间（小时）
+```json
+{
+  "grag": {
+    "enabled": true,
+    "auto_extract": true,
+    "extraction_timeout": 12,
+    "extraction_retries": 2
+  }
+}
 ```
+
+- `grag.extraction_timeout`: 单轮五元组提取总超时时间（秒）
+- `grag.extraction_retries`: 提取失败后的重试次数
+- 任务管理器仍会在运行时维护并发 worker、队列和清理周期，但这些属于内部调度参数，不再作为外部配置口径
 
 ### 测试任务管理器
 

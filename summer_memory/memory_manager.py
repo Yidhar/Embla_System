@@ -9,6 +9,7 @@ from system.config import AI_NAME, config
 
 from .quintuple_extractor import extract_quintuples
 from .quintuple_graph import (
+    clear_quintuples_store,
     get_all_quintuples,
     get_vector_index_status,
     query_graph_by_keywords,
@@ -28,6 +29,10 @@ class GRAGMemoryManager:
         self.auto_extract = config.grag.auto_extract
         self.context_length = config.grag.context_length
         self.similarity_threshold = config.grag.similarity_threshold
+        extraction_timeout_raw = getattr(config.grag, "extraction_timeout", 12)
+        extraction_retries_raw = getattr(config.grag, "extraction_retries", 2)
+        self.extraction_timeout = max(1, int(12 if extraction_timeout_raw is None else extraction_timeout_raw))
+        self.extraction_retries = max(0, int(2 if extraction_retries_raw is None else extraction_retries_raw))
         self.recent_context: List[str] = []
         self.extraction_cache = set()
         self.active_tasks = set()
@@ -48,6 +53,7 @@ class GRAGMemoryManager:
 
             self._weak_ref = weakref.ref(self)
             task_manager.on_task_completed = self._on_task_completed_wrapper
+            task_manager.on_task_failed = self._on_task_failed_wrapper
         except Exception as exc:
             logger.error(f"GRAG记忆系统初始化失败: {exc}")
             self.enabled = False
@@ -225,6 +231,15 @@ class GRAGMemoryManager:
                 loop=asyncio.get_event_loop(),
             )
 
+    def _on_task_failed_wrapper(self, task_id: str, error: str):
+        """包装失败回调，确保超时/失败任务也能回收 active_tasks。"""
+        instance = self._weak_ref()
+        if instance:
+            asyncio.run_coroutine_threadsafe(
+                instance._on_task_failed(task_id, error),
+                loop=asyncio.get_event_loop(),
+            )
+
     async def _on_task_completed(self, task_id: str, quintuples: List) -> None:
         try:
             self.active_tasks.discard(task_id)
@@ -266,11 +281,16 @@ class GRAGMemoryManager:
 
             try:
                 quintuples = await asyncio.wait_for(
-                    offload_blocking(extract_quintuples, text),
-                    timeout=30.0,
+                    offload_blocking(
+                        extract_quintuples,
+                        text,
+                        timeout_seconds=self.extraction_timeout,
+                        max_retries=self.extraction_retries,
+                    ),
+                    timeout=float(self.extraction_timeout + 2),
                 )
             except asyncio.TimeoutError:
-                logger.warning("五元组提取超时，跳过本次提取")
+                logger.warning("五元组提取超时(%ss)，跳过本次提取", self.extraction_timeout)
                 return False
 
             if not quintuples:
@@ -376,7 +396,12 @@ class GRAGMemoryManager:
                 task_manager.cancel_task(task_id)
             self.active_tasks.clear()
 
-            logger.info("记忆已清空")
+            clear_result = clear_quintuples_store()
+            if not clear_result.get("ok", False):
+                logger.error("清空图谱记忆失败: %s", clear_result)
+                return False
+
+            logger.info("记忆已清空: %s", clear_result)
             return True
         except Exception as exc:
             logger.error("清空记忆失败: %s", exc)

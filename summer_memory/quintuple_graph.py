@@ -268,6 +268,59 @@ def save_quintuples(quintuples: Sequence[Tuple[str, str, str, str, str]]) -> Non
         _json.dump(list(quintuples), file, ensure_ascii=False, indent=2)
 
 
+def clear_quintuples_store() -> Dict[str, Any]:
+    global _VECTOR_INDEX_READY, _VECTOR_LAST_ERROR
+
+    status: Dict[str, Any] = {
+        "ok": True,
+        "file_cleared": False,
+        "file_removed": False,
+        "neo4j_cleared": False,
+        "neo4j_state": "unavailable",
+        "deleted_nodes": 0,
+        "deleted_relationships": 0,
+    }
+
+    try:
+        if os.path.exists(QUINTUPLES_FILE):
+            os.remove(QUINTUPLES_FILE)
+            status["file_removed"] = True
+        status["file_cleared"] = not os.path.exists(QUINTUPLES_FILE)
+    except FileNotFoundError:
+        status["file_cleared"] = True
+    except Exception as exc:
+        status["ok"] = False
+        status["file_error"] = str(exc)
+
+    graph = get_graph()
+    if graph is None:
+        status["neo4j_state"] = "unavailable"
+    else:
+        try:
+            count_rows = graph.run(
+                """
+                MATCH (n:Entity)
+                OPTIONAL MATCH (n)-[r]-()
+                RETURN count(DISTINCT n) AS deleted_nodes,
+                       count(DISTINCT r) AS deleted_relationships
+                """
+            ).data()
+            count_row = count_rows[0] if count_rows else {}
+            graph.run("MATCH (n:Entity) DETACH DELETE n")
+            status["neo4j_cleared"] = True
+            status["neo4j_state"] = "cleared"
+            status["deleted_nodes"] = int(count_row.get("deleted_nodes", 0) or 0)
+            status["deleted_relationships"] = int(count_row.get("deleted_relationships", 0) or 0)
+        except Exception as exc:
+            status["ok"] = False
+            status["neo4j_state"] = "clear_failed"
+            status["neo4j_error"] = str(exc)
+
+    _VECTOR_INDEX_READY = False
+    _VECTOR_LAST_ERROR = ""
+    return status
+
+
 def store_quintuples(new_quintuples: Sequence[Tuple[str, str, str, str, str]]) -> bool:
     """存储五元组到文件和Neo4j，返回是否成功。"""
     try:
