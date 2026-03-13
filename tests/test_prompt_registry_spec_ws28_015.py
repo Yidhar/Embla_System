@@ -6,7 +6,7 @@ from pathlib import Path
 import system.config as config_module
 
 
-def _install_temp_prompt_manager_with_registry(tmp_path: Path, monkeypatch):
+def _install_temp_prompts_root_with_registry(tmp_path: Path, monkeypatch):
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
     (prompts_dir / "layers" / "core").mkdir(parents=True, exist_ok=True)
@@ -31,23 +31,22 @@ def _install_temp_prompt_manager_with_registry(tmp_path: Path, monkeypatch):
         ],
     }
     (spec_dir / "prompt_registry.spec").write_text(json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8")
-    manager = config_module.PromptManager(prompts_dir=str(prompts_dir))
-    monkeypatch.setattr(config_module, "_prompt_manager", manager)
-    return prompts_dir, manager
+    monkeypatch.setattr(config_module, "get_system_prompts_root", lambda: prompts_dir)
+    return prompts_dir
 
 
 def test_prompt_registry_alias_can_read_and_write_canonical_file(monkeypatch, tmp_path: Path) -> None:
-    prompts_dir, manager = _install_temp_prompt_manager_with_registry(tmp_path, monkeypatch)
-    assert manager.get_prompt("conversation_composition_prompt") == "STYLE_V1"
+    prompts_dir = _install_temp_prompts_root_with_registry(tmp_path, monkeypatch)
+    assert config_module.read_prompt_template("conversation_composition_prompt", prompts_dir=prompts_dir) == "STYLE_V1"
 
-    manager.save_prompt("conversation_composition_prompt", "STYLE_V2")
+    config_module.write_prompt_template("conversation_composition_prompt", "STYLE_V2", prompts_dir=prompts_dir)
     canonical_file = prompts_dir / "layers" / "core" / "conversation_style_prompt.md"
     assert canonical_file.read_text(encoding="utf-8") == "STYLE_V2"
 
 
 def test_prompt_acl_evaluation_uses_registry_canonical_mapping(monkeypatch, tmp_path: Path) -> None:
-    prompts_dir, _manager = _install_temp_prompt_manager_with_registry(tmp_path, monkeypatch)
-    (prompts_dir / "prompt_acl.spec").write_text(
+    prompts_dir = _install_temp_prompts_root_with_registry(tmp_path, monkeypatch)
+    (prompts_dir / "specs" / "prompt_acl.spec").write_text(
         json.dumps(
             {
                 "enforcement_mode": "block",
@@ -87,12 +86,8 @@ def test_prompt_acl_evaluation_uses_registry_canonical_mapping(monkeypatch, tmp_
     assert decision["matched_rule"]["path_pattern"] == "conversation_style_prompt.md"
 
 
-def test_prompt_acl_loader_prefers_specs_path(monkeypatch, tmp_path: Path) -> None:
-    prompts_dir, _manager = _install_temp_prompt_manager_with_registry(tmp_path, monkeypatch)
-    (prompts_dir / "prompt_acl.spec").write_text(
-        json.dumps({"enforcement_mode": "shadow", "rules": []}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+def test_prompt_acl_loader_uses_canonical_specs_path(monkeypatch, tmp_path: Path) -> None:
+    prompts_dir = _install_temp_prompts_root_with_registry(tmp_path, monkeypatch)
     (prompts_dir / "specs" / "prompt_acl.spec").write_text(
         json.dumps({"enforcement_mode": "block", "rules": []}, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -105,8 +100,7 @@ def test_prompt_acl_loader_prefers_specs_path(monkeypatch, tmp_path: Path) -> No
 def test_prompt_registry_missing_entry_defaults_to_markdown(monkeypatch, tmp_path: Path) -> None:
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
-    manager = config_module.PromptManager(prompts_dir=str(prompts_dir))
-    monkeypatch.setattr(config_module, "_prompt_manager", manager)
+    monkeypatch.setattr(config_module, "get_system_prompts_root", lambda: prompts_dir)
 
     resolved = config_module.resolve_prompt_registry_entry(prompt_name="custom_prompt", prompts_dir=prompts_dir)
     assert resolved["canonical_name"] == "custom_prompt"

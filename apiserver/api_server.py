@@ -31,6 +31,7 @@ from agents.contract_runtime import (
     trim_contract_text as trim_brain_contract_text,
 )
 from agents.pipeline import run_multi_agent_pipeline
+from agents.prompt_engine import get_system_prompts_root
 from agents.shell_agent import ShellAgent
 from agents.runtime.agent_session import AgentSessionStore
 from agents.runtime.mailbox import AgentMailbox
@@ -549,7 +550,10 @@ async def lifespan(app: FastAPI):
         immutable_dna_monitor_bootstrap = _bootstrap_immutable_dna_monitor_startup()
         app.state.immutable_dna_monitor_bootstrap = immutable_dna_monitor_bootstrap
         if bool(immutable_dna_monitor_bootstrap.get("enabled")) and not bool(immutable_dna_monitor_bootstrap.get("passed", True)):
-            print("[WARN] Immutable DNA monitor 启动未通过，篡改告警可能不可用")
+            logger.warning(
+                "Immutable DNA monitor 启动未通过，篡改告警可能不可用: %s",
+                str(immutable_dna_monitor_bootstrap.get("reason") or "unknown"),
+            )
         # 对话核心功能已集成到apiserver
         brainstem_bootstrap = _bootstrap_brainstem_control_plane_startup()
         app.state.brainstem_bootstrap = brainstem_bootstrap
@@ -943,7 +947,7 @@ async def update_system_prompt(payload: Dict[str, Any]):
         content = payload.get("content")
         if not content:
             raise HTTPException(status_code=400, detail="缺少content参数")
-        from system.config import save_prompt, evaluate_prompt_acl
+        from system.config import evaluate_prompt_acl, write_prompt_template
 
         approval_ticket = str(payload.get("approval_ticket") or "").strip()
         change_reason = str(payload.get("change_reason") or "").strip()
@@ -961,7 +965,7 @@ async def update_system_prompt(payload: Dict[str, Any]):
                     "acl": acl_decision,
                 },
             )
-        save_prompt("conversation_style_prompt", content)
+        write_prompt_template("conversation_style_prompt", content)
         return {
             "status": "success",
             "message": "提示词更新成功",
@@ -1026,10 +1030,9 @@ def _build_prompt_template_meta(path: Path) -> Dict[str, Any]:
 
 
 def _list_prompt_template_metas() -> List[Dict[str, Any]]:
-    from system.config import get_prompt_manager, load_prompt_registry_spec
+    from system.config import get_prompt_assets_root, load_prompt_registry_spec
 
-    manager = get_prompt_manager()
-    prompts_dir = Path(manager.prompts_dir)
+    prompts_dir = get_prompt_assets_root()
     prompts_dir.mkdir(parents=True, exist_ok=True)
 
     seen_paths: set[str] = set()
@@ -1099,15 +1102,15 @@ async def list_system_prompts_v1():
 @app.get("/system/prompts/{name}")
 async def get_system_prompt_template(name: str):
     try:
-        from system.config import get_prompt_manager, resolve_prompt_registry_entry
+        from system.config import read_prompt_template, resolve_prompt_template_path
 
         normalized = _normalize_prompt_template_name(name)
-        manager = get_prompt_manager()
-        resolved = resolve_prompt_registry_entry(prompt_name=normalized, prompts_dir=Path(manager.prompts_dir))
-        prompt_file = Path(resolved["path"])
+        prompt_file = resolve_prompt_template_path(normalized)
         if not prompt_file.exists():
             raise HTTPException(status_code=404, detail=f"提示词不存在: {normalized}")
-        content = prompt_file.read_text(encoding="utf-8")
+        content = read_prompt_template(normalized)
+        if content is None:
+            raise HTTPException(status_code=404, detail=f"提示词不存在: {normalized}")
         return {
             "status": "success",
             "name": normalized,
@@ -1130,7 +1133,7 @@ async def get_system_prompt_template_v1(name: str):
 @app.post("/system/prompts/{name}")
 async def update_system_prompt_template(name: str, payload: Dict[str, Any]):
     try:
-        from system.config import save_prompt, evaluate_prompt_acl
+        from system.config import evaluate_prompt_acl, write_prompt_template
 
         normalized = _normalize_prompt_template_name(name)
         content = payload.get("content")
@@ -1152,7 +1155,7 @@ async def update_system_prompt_template(name: str, payload: Dict[str, Any]):
                     "acl": acl_decision,
                 },
             )
-        save_prompt(normalized, content)
+        write_prompt_template(normalized, content)
         return {
             "status": "success",
             "message": "提示词更新成功",
@@ -1222,7 +1225,7 @@ async def get_system_agent_profile(agent_type: str):
             "profile": profile,
             "prompt_block_previews": build_prompt_block_previews(
                 list(profile.get("prompt_blocks") or []),
-                prompts_root=str(profile.get("prompts_root") or "system/prompts"),
+                prompts_root=str(profile.get("prompts_root") or get_system_prompts_root()),
             ),
         }
     except ValueError as e:

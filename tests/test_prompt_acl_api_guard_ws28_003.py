@@ -14,22 +14,22 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _install_temp_prompt_manager(tmp_path: Path, monkeypatch, *, acl_spec_text: str = "") -> Path:
+def _install_temp_prompts_root(tmp_path: Path, monkeypatch, *, acl_spec_text: str = "") -> Path:
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
     (prompts_dir / "core" / "dna").mkdir(parents=True, exist_ok=True)
     (prompts_dir / "core" / "routing").mkdir(parents=True, exist_ok=True)
+    (prompts_dir / "specs").mkdir(parents=True, exist_ok=True)
     (prompts_dir / "core" / "dna" / "conversation_style_prompt.md").write_text("STYLE_V1", encoding="utf-8")
     (prompts_dir / "core" / "routing" / "tool_dispatch_prompt.md").write_text("DISPATCH_V1", encoding="utf-8")
     if acl_spec_text:
-        (prompts_dir / "prompt_acl.spec").write_text(acl_spec_text, encoding="utf-8")
-    manager = config_module.PromptManager(prompts_dir=str(prompts_dir))
-    monkeypatch.setattr(config_module, "_prompt_manager", manager)
+        (prompts_dir / "specs" / "prompt_acl.spec").write_text(acl_spec_text, encoding="utf-8")
+    monkeypatch.setattr(config_module, "get_system_prompts_root", lambda: prompts_dir)
     return prompts_dir
 
 
 def test_prompt_acl_s1_requires_ticket(monkeypatch, tmp_path: Path) -> None:
-    _install_temp_prompt_manager(tmp_path, monkeypatch)
+    _install_temp_prompts_root(tmp_path, monkeypatch)
 
     with pytest.raises(HTTPException) as exc:
         _run(
@@ -44,7 +44,7 @@ def test_prompt_acl_s1_requires_ticket(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_prompt_acl_s0_locked_is_always_rejected(monkeypatch, tmp_path: Path) -> None:
-    _install_temp_prompt_manager(tmp_path, monkeypatch)
+    _install_temp_prompts_root(tmp_path, monkeypatch)
 
     with pytest.raises(HTTPException) as exc:
         _run(
@@ -63,7 +63,7 @@ def test_prompt_acl_s0_locked_is_always_rejected(monkeypatch, tmp_path: Path) ->
 
 
 def test_prompt_acl_s2_flexible_allows_update_without_ticket(monkeypatch, tmp_path: Path) -> None:
-    prompts_dir = _install_temp_prompt_manager(tmp_path, monkeypatch)
+    prompts_dir = _install_temp_prompts_root(tmp_path, monkeypatch)
     (prompts_dir / "custom_prompt.md").write_text("CUSTOM_V1", encoding="utf-8")
 
     payload = _run(

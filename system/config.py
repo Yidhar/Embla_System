@@ -17,12 +17,20 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator
 from charset_normalizer import from_path
 import json5  # 支持带注释的JSON解析
-from agents.prompt_engine import PromptAssembler, PromptBlockNotFoundError, get_available_mcp_tools_summary
+from agents.prompt_engine import (
+    PromptAssembler,
+    PromptBlockNotFoundError,
+    get_available_mcp_tools_summary,
+    get_system_prompts_root,
+)
 
 try:
     import yaml
 except Exception:  # pragma: no cover - graceful fallback when yaml dependency is unavailable
     yaml = None
+
+
+logger = logging.getLogger(__name__)
 
 
 # ========== 服务器端口配置 - 统一管理 ==========
@@ -49,12 +57,12 @@ _EMBLA_SYSTEM_DEFAULT_SECURITY: Dict[str, Any] = {
     "audit_ledger_file": "scratch/runtime/audit_ledger.jsonl",
     "audit_signing_key_env": "EMBLA_AUDIT_SIGNING_KEY",
     "immutable_dna_runtime_prompts": [
-        "conversation_style_prompt.md",
-        "agentic_tool_prompt.md",
+        "conversation_style_prompt",
+        "agentic_tool_prompt",
     ],
     "immutable_agent_identity_prompts": [
-        "shell_persona.md",
-        "core_values.md",
+        "shell_persona",
+        "core_values",
     ],
 }
 _embla_system_config: Dict[str, Any] = {}
@@ -111,7 +119,6 @@ def _embla_system_default_payload() -> Dict[str, Any]:
         },
         "security": copy.deepcopy(_EMBLA_SYSTEM_DEFAULT_SECURITY),
         "watchers": {
-            "prompt_root": "system/prompts",
             "tools_registry_root": "workspace/tools_registry",
             "backend": "watchdog",
         },
@@ -159,22 +166,14 @@ def _normalize_embla_system_payload(payload: Dict[str, Any], *, source: str, loa
                 normalized_scopes.append(text)
         security["approval_required_scopes"] = normalized_scopes or list(_EMBLA_SYSTEM_DEFAULT_SECURITY["approval_required_scopes"])
 
-    legacy_runtime_prompts = security.get("immutable_dna_locked_prompts")
-    if not isinstance(legacy_runtime_prompts, list):
-        legacy_runtime_prompts = []
-
+    prompts_dir = get_system_prompts_root()
     if not isinstance(security.get("immutable_dna_runtime_prompts"), list):
-        security["immutable_dna_runtime_prompts"] = (
-            list(legacy_runtime_prompts)
-            if legacy_runtime_prompts
-            else list(_EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_dna_runtime_prompts"])
-        )
+        security["immutable_dna_runtime_prompts"] = list(_EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_dna_runtime_prompts"])
     else:
-        normalized_runtime_prompts = []
-        for item in security.get("immutable_dna_runtime_prompts", []):
-            text = str(item or "").strip()
-            if text and text not in normalized_runtime_prompts:
-                normalized_runtime_prompts.append(text)
+        normalized_runtime_prompts = _normalize_embla_prompt_name_list(
+            security.get("immutable_dna_runtime_prompts"),
+            prompts_dir=prompts_dir,
+        )
         security["immutable_dna_runtime_prompts"] = normalized_runtime_prompts or list(
             _EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_dna_runtime_prompts"]
         )
@@ -182,16 +181,13 @@ def _normalize_embla_system_payload(payload: Dict[str, Any], *, source: str, loa
     if not isinstance(security.get("immutable_agent_identity_prompts"), list):
         security["immutable_agent_identity_prompts"] = list(_EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_agent_identity_prompts"])
     else:
-        normalized_identity_prompts = []
-        for item in security.get("immutable_agent_identity_prompts", []):
-            text = str(item or "").strip()
-            if text and text not in normalized_identity_prompts:
-                normalized_identity_prompts.append(text)
+        normalized_identity_prompts = _normalize_embla_prompt_name_list(
+            security.get("immutable_agent_identity_prompts"),
+            prompts_dir=prompts_dir,
+        )
         security["immutable_agent_identity_prompts"] = normalized_identity_prompts or list(
             _EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_agent_identity_prompts"]
         )
-
-    security["immutable_dna_locked_prompts"] = list(security["immutable_dna_runtime_prompts"])
 
     audit_ledger_file = str(security.get("audit_ledger_file") or "").strip()
     if not audit_ledger_file:
@@ -200,6 +196,13 @@ def _normalize_embla_system_payload(payload: Dict[str, Any], *, source: str, loa
         security.get("audit_signing_key_env") or _EMBLA_SYSTEM_DEFAULT_SECURITY["audit_signing_key_env"]
     ).strip() or str(_EMBLA_SYSTEM_DEFAULT_SECURITY["audit_signing_key_env"])
     security["enforce_dual_lane"] = bool(security.get("enforce_dual_lane", True))
+    security.pop("immutable_paths", None)
+
+    watchers = merged.get("watchers") if isinstance(merged.get("watchers"), dict) else {}
+    merged["watchers"] = watchers
+    watchers.pop("prompt_root", None)
+    watchers["tools_registry_root"] = str(watchers.get("tools_registry_root") or "workspace/tools_registry").strip() or "workspace/tools_registry"
+    watchers["backend"] = str(watchers.get("backend") or "watchdog").strip() or "watchdog"
 
     merged["config_source"] = str(source).replace("\\", "/")
     merged["config_loaded"] = bool(loaded)
@@ -223,7 +226,7 @@ def load_embla_system_config(config_path: str | Path | None = None) -> Dict[str,
         if isinstance(loaded, dict):
             parsed = loaded
     except Exception as exc:
-        print(f"警告：加载 embla_system 统一配置失败 {path}: {exc}")
+        logger.warning("load embla_system config failed %s: %s", path, exc)
     return _normalize_embla_system_payload(parsed, source=str(path), loaded=bool(parsed))
 
 
@@ -239,12 +242,37 @@ def get_embla_system_config() -> Dict[str, Any]:
     return copy.deepcopy(_embla_system_config)
 
 
-def _normalize_embla_prompt_name_list(value: Any) -> List[str]:
+def _normalize_embla_prompt_name(name: Any, *, prompts_dir: Optional[Path] = None) -> str:
+    text = str(name or "").strip().replace("\\", "/")
+    if not text:
+        return ""
+    resolved_prompts_dir = _resolve_prompts_dir(prompts_dir)
+    candidate_names: List[str] = [text]
+    basename = Path(text).name.strip()
+    if basename and basename not in candidate_names:
+        candidate_names.append(basename)
+    for candidate_name in candidate_names:
+        try:
+            resolved = resolve_prompt_registry_entry(prompt_name=candidate_name, prompts_dir=resolved_prompts_dir)
+            canonical_name = str(resolved.get("canonical_name") or "").strip()
+            if canonical_name and "/" not in canonical_name.replace("\\", "/"):
+                return canonical_name
+        except Exception:
+            logger.debug("normalize embla prompt name fallback: %s", candidate_name, exc_info=True)
+    lowered = text.lower()
+    if lowered.endswith(".md"):
+        return text[:-3]
+    if lowered.endswith(".spec"):
+        return text[:-5]
+    return text
+
+
+def _normalize_embla_prompt_name_list(value: Any, *, prompts_dir: Optional[Path] = None) -> List[str]:
     if not isinstance(value, list):
         return []
     normalized: List[str] = []
     for item in value:
-        text = str(item or "").strip()
+        text = _normalize_embla_prompt_name(item, prompts_dir=prompts_dir)
         if text and text not in normalized:
             normalized.append(text)
     return normalized
@@ -253,7 +281,7 @@ def _normalize_embla_prompt_name_list(value: Any) -> List[str]:
 def get_immutable_dna_runtime_prompts() -> List[str]:
     payload = get_embla_system_config()
     security = payload.get("security") if isinstance(payload.get("security"), dict) else {}
-    rows = _normalize_embla_prompt_name_list(security.get("immutable_dna_runtime_prompts"))
+    rows = _normalize_embla_prompt_name_list(security.get("immutable_dna_runtime_prompts"), prompts_dir=get_system_prompts_root())
     if rows:
         return rows
     return list(_EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_dna_runtime_prompts"])
@@ -262,7 +290,10 @@ def get_immutable_dna_runtime_prompts() -> List[str]:
 def get_immutable_agent_identity_prompts() -> List[str]:
     payload = get_embla_system_config()
     security = payload.get("security") if isinstance(payload.get("security"), dict) else {}
-    rows = _normalize_embla_prompt_name_list(security.get("immutable_agent_identity_prompts"))
+    rows = _normalize_embla_prompt_name_list(
+        security.get("immutable_agent_identity_prompts"),
+        prompts_dir=get_system_prompts_root(),
+    )
     if rows:
         return rows
     return list(_EMBLA_SYSTEM_DEFAULT_SECURITY["immutable_agent_identity_prompts"])
@@ -275,11 +306,6 @@ def get_all_immutable_dna_prompts() -> List[str]:
         if text and text not in rows:
             rows.append(text)
     return rows
-
-
-def get_immutable_dna_locked_prompts() -> List[str]:
-    """Legacy alias: returns runtime-injected immutable DNA prompts only."""
-    return get_immutable_dna_runtime_prompts()
 
 
 def save_embla_system_config(payload: Dict[str, Any], config_path: str | Path | None = None) -> Dict[str, Any]:
@@ -366,8 +392,8 @@ def notify_config_changed():
     for listener in _config_listeners:
         try:
             listener()
-        except Exception as e:
-            print(f"配置监听器执行失败: {e}")
+        except Exception:
+            logger.exception("config listener execution failed")
 
 
 def setup_environment():
@@ -395,8 +421,8 @@ def detect_file_encoding(file_path: str) -> str:
             best_match = charset_results.best()
             if best_match and best_match.encoding:
                 return best_match.encoding
-    except Exception as e:
-        print(f"警告：检测文件编码失败 {file_path}: {e}")
+    except Exception as exc:
+        logger.warning("detect file encoding failed %s: %s", file_path, exc)
     return "utf-8"
 
 
@@ -411,16 +437,16 @@ def bootstrap_config_from_example(config_path: str) -> None:
 
     try:
         detected_encoding = detect_file_encoding(example_path)
-        print(f"检测到配置模板编码: {detected_encoding}")
+        logger.info("detected config template encoding: %s (%s)", detected_encoding, example_path)
         with open(example_path, "r", encoding=detected_encoding) as example_file:
             example_content = example_file.read()
 
         with open(config_path, "w", encoding="utf-8") as config_file:
             config_file.write(example_content)
 
-        print("已自动从 config.json.example 生成 config.json（utf-8）")
-    except Exception as e:
-        print(f"警告：自动生成 config.json 失败: {e}")
+        logger.info("bootstrapped config.json from config.json.example using utf-8")
+    except Exception as exc:
+        logger.warning("bootstrap config.json from example failed: %s", exc)
 
 
 def _normalize_annotation_payload(annotation: Any, value: Any) -> Any:
@@ -929,139 +955,46 @@ class SystemCheckConfig(BaseModel):
 # 提示词管理功能已集成到config.py中
 
 
-class PromptManager:
-    """提示词管理器 - 统一管理所有提示词模板"""
+def get_prompt_assets_root(prompts_dir: str | Path | None = None) -> Path:
+    """Return the effective prompt asset root.
 
-    def __init__(self, prompts_dir: str = None):
-        """初始化提示词管理器"""
-        if prompts_dir is None:
-            # 默认使用system目录下的prompts文件夹
-            prompts_dir = Path(__file__).parent / "prompts"
-
-        self.prompts_dir = Path(prompts_dir)
-        self.prompts_dir.mkdir(exist_ok=True)
-
-        # 内存缓存
-        self._cache = {}
-        self._last_modified = {}
-
-        # 初始化默认提示词
-        self._init_default_prompts()
-
-    def _init_default_prompts(self):
-        """初始化默认提示词 - 现在从文件加载，不再硬编码"""
-        # 检查是否存在默认提示词文件，如果不存在则创建
-        default_prompts = ["conversation_analyzer_prompt", "conversation_style_prompt"]
-
-        for prompt_name in default_prompts:
-            resolved = resolve_prompt_registry_entry(prompt_name=prompt_name, prompts_dir=self.prompts_dir)
-            prompt_file = Path(resolved["path"])
-            if not prompt_file.exists():
-                print(f"警告：提示词文件 {prompt_file.name} 不存在，请手动创建")
-
-    def get_prompt(self, name: str, **kwargs) -> str:
-        """获取提示词模板"""
-        try:
-            # 从缓存或文件加载
-            content = self._load_prompt(name)
-            if content is None:
-                print(f"警告：提示词 '{name}' 不存在，使用默认值")
-                return f"[提示词 {name} 未找到]"
-
-            # 格式化模板
-            if kwargs:
-                try:
-                    return content.format(**kwargs)
-                except KeyError as e:
-                    print(f"错误：提示词 '{name}' 格式化失败，缺少参数: {e}")
-                    return content
-            else:
-                return content
-
-        except Exception as e:
-            print(f"错误：获取提示词 '{name}' 失败: {e}")
-            return f"[提示词 {name} 加载失败: {e}]"
-
-    def save_prompt(self, name: str, content: str):
-        """保存提示词到文件"""
-        try:
-            resolved = resolve_prompt_registry_entry(prompt_name=name, prompts_dir=self.prompts_dir)
-            canonical_name = str(resolved["canonical_name"])
-            prompt_file = Path(resolved["path"])
-            prompt_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(prompt_file, "w", encoding="utf-8") as f:
-                f.write(content)
-
-            # 更新缓存
-            self._cache[canonical_name] = content
-            self._last_modified[canonical_name] = datetime.now()
-
-            print(f"提示词 '{canonical_name}' 已保存")
-
-        except Exception as e:
-            print(f"错误：保存提示词 '{name}' 失败: {e}")
-
-    def _load_prompt(self, name: str) -> Optional[str]:
-        """从文件加载提示词"""
-        try:
-            resolved = resolve_prompt_registry_entry(prompt_name=name, prompts_dir=self.prompts_dir)
-            canonical_name = str(resolved["canonical_name"])
-            prompt_file = Path(resolved["path"])
-
-            if not prompt_file.exists():
-                return None
-
-            # 检查文件是否被修改
-            current_mtime = prompt_file.stat().st_mtime
-            if canonical_name in self._last_modified and self._last_modified[canonical_name].timestamp() >= current_mtime:
-                return self._cache.get(canonical_name)
-
-            # 读取文件
-            with open(prompt_file, "r", encoding="utf-8") as f:
-                content = f.read()
-
-            # 更新缓存
-            self._cache[canonical_name] = content
-            self._last_modified[canonical_name] = datetime.now()
-
-            return content
-
-        except Exception as e:
-            print(f"错误：加载提示词 '{name}' 失败: {e}")
-            return None
+    Resolution order:
+      1. Explicit `prompts_dir`
+      2. Canonical system prompt root
+    """
+    return _resolve_prompts_dir(Path(prompts_dir) if prompts_dir is not None else None)
 
 
-# 全局提示词管理器实例
-_prompt_manager = None
+def resolve_prompt_template_path(name: str, *, prompts_dir: str | Path | None = None) -> Path:
+    resolved_prompts_dir = get_prompt_assets_root(prompts_dir)
+    resolved = resolve_prompt_registry_entry(prompt_name=name, prompts_dir=resolved_prompts_dir)
+    return Path(resolved["path"])
 
 
-def get_prompt_manager() -> PromptManager:
-    """获取全局提示词管理器实例"""
-    global _prompt_manager
-    if _prompt_manager is None:
-        _prompt_manager = PromptManager()
-    return _prompt_manager
+def read_prompt_template(name: str, *, prompts_dir: str | Path | None = None) -> Optional[str]:
+    prompt_file = resolve_prompt_template_path(name, prompts_dir=prompts_dir)
+    if not prompt_file.exists():
+        return None
+    return prompt_file.read_text(encoding="utf-8")
 
 
-def get_prompt(name: str, **kwargs) -> str:
-    """便捷函数：获取提示词"""
-    return get_prompt_manager().get_prompt(name, **kwargs)
-
-
-def save_prompt(name: str, content: str):
-    """便捷函数：保存提示词"""
-    get_prompt_manager().save_prompt(name, content)
+def write_prompt_template(name: str, content: str, *, prompts_dir: str | Path | None = None) -> Dict[str, Any]:
+    resolved_prompts_dir = get_prompt_assets_root(prompts_dir)
+    resolved = resolve_prompt_registry_entry(prompt_name=name, prompts_dir=resolved_prompts_dir)
+    prompt_file = Path(resolved["path"])
+    prompt_file.parent.mkdir(parents=True, exist_ok=True)
+    prompt_file.write_text(content, encoding="utf-8")
+    return {
+        "canonical_name": str(resolved["canonical_name"]),
+        "prompt_file": prompt_file,
+        "relative_path": str(resolved["relative_path"]),
+    }
 
 
 def _resolve_prompts_dir(prompts_dir: Optional[Path] = None) -> Path:
     if prompts_dir is not None:
         return Path(prompts_dir)
-    if _prompt_manager is not None:
-        try:
-            return Path(_prompt_manager.prompts_dir)
-        except Exception:
-            pass
-    return Path(__file__).parent / "prompts"
+    return get_system_prompts_root()
 
 
 _DEFAULT_PROMPT_REGISTRY_SPEC: Dict[str, Any] = {
@@ -1154,7 +1087,6 @@ def load_prompt_registry_spec(*, prompts_dir: Optional[Path] = None) -> Dict[str
     resolved_prompts_dir = _resolve_prompts_dir(prompts_dir)
     candidate_paths = [
         resolved_prompts_dir / "specs" / "prompt_registry.spec",
-        resolved_prompts_dir / "prompt_registry.spec",
     ]
 
     payload: Dict[str, Any] = {}
@@ -1169,7 +1101,7 @@ def load_prompt_registry_spec(*, prompts_dir: Optional[Path] = None) -> Dict[str
                 selected_source = str(candidate).replace("\\", "/")
                 break
         except Exception as e:
-            logging.getLogger(__name__).warning("load prompt_registry.spec failed: %s", e)
+            logger.warning("load prompt_registry.spec failed: %s", e)
 
     if not payload:
         payload = dict(_DEFAULT_PROMPT_REGISTRY_SPEC)
@@ -1236,6 +1168,40 @@ def resolve_prompt_registry_entry(*, prompt_name: str, prompts_dir: Optional[Pat
         "aliases": aliases,
         "path": absolute_path,
     }
+
+
+def resolve_prompt_file_reference(*, prompt_name: str, prompts_dir: Optional[Path] = None) -> str:
+    resolved_prompts_dir = _resolve_prompts_dir(prompts_dir)
+    raw_text = str(prompt_name or "").strip().replace("\\", "/")
+    if not raw_text:
+        return ""
+
+    candidate_rows: List[str] = []
+
+    def _add_candidate(candidate: str) -> None:
+        normalized_candidate = str(candidate or "").strip().replace("\\", "/")
+        if normalized_candidate and normalized_candidate not in candidate_rows:
+            candidate_rows.append(normalized_candidate)
+
+    try:
+        resolved = resolve_prompt_registry_entry(prompt_name=raw_text, prompts_dir=resolved_prompts_dir)
+        _add_candidate(str(resolved.get("relative_path") or ""))
+        _add_candidate(str(resolved.get("filename") or ""))
+    except Exception:
+        logger.debug("resolve prompt file reference fallback: %s", raw_text, exc_info=True)
+
+    canonical_name = _normalize_embla_prompt_name(raw_text, prompts_dir=resolved_prompts_dir)
+    _add_candidate(raw_text)
+    _add_candidate(canonical_name)
+    if canonical_name and not canonical_name.lower().endswith(".md"):
+        _add_candidate(f"{canonical_name}.md")
+
+    for candidate in candidate_rows:
+        candidate_path = (resolved_prompts_dir / candidate).resolve()
+        if candidate_path.exists() and candidate_path.is_file():
+            return candidate
+
+    return candidate_rows[0] if candidate_rows else raw_text
 
 
 _PROMPT_ACL_LEVELS = {"S0_LOCKED", "S1_CONTROLLED", "S2_FLEXIBLE"}
@@ -1336,7 +1302,6 @@ def load_prompt_acl_spec(*, prompts_dir: Optional[Path] = None) -> Dict[str, Any
     resolved_prompts_dir = _resolve_prompts_dir(prompts_dir)
     candidate_paths = [
         resolved_prompts_dir / "specs" / "prompt_acl.spec",
-        resolved_prompts_dir / "prompt_acl.spec",  # secondary lookup
     ]
     payload: Dict[str, Any] = {}
     for spec_path in candidate_paths:
@@ -1348,7 +1313,7 @@ def load_prompt_acl_spec(*, prompts_dir: Optional[Path] = None) -> Dict[str, Any
                 payload = loaded
                 break
         except Exception as e:
-            logging.getLogger(__name__).warning("load prompt_acl.spec failed: %s", e)
+            logger.warning("load prompt_acl.spec failed: %s", e)
 
     if not payload:
         return dict(_DEFAULT_PROMPT_ACL_SPEC)
@@ -1732,7 +1697,7 @@ def load_config():
                 best_match = charset_results.best()
                 if best_match:
                     detected_encoding = best_match.encoding
-                    print(f"检测到配置文件编码: {detected_encoding}")
+                    logger.debug("detected config encoding: %s (%s)", detected_encoding, config_path)
 
                     # 使用检测到的编码直接打开文件，然后使用json5读取
                     with open(config_path, "r", encoding=detected_encoding) as f:
@@ -1740,8 +1705,8 @@ def load_config():
                         try:
                             config_data = normalize_runtime_config_payload(json5.load(f))
                         except Exception as json5_error:
-                            print(f"json5解析失败: {json5_error}")
-                            print("尝试使用标准JSON库解析（将忽略注释）...")
+                            logger.warning("json5 parse failed for %s: %s", config_path, json5_error)
+                            logger.info("falling back to standard JSON parsing after stripping comments")
                             # 回退到标准JSON库，但需要先去除注释
                             f.seek(0)  # 重置文件指针
                             content = f.read()
@@ -1760,24 +1725,24 @@ def load_config():
                     _sync_server_ports_from_config_data(config_data)
                     return EmblaSystemConfig(**config_data)
                 else:
-                    print(f"警告：无法检测 {config_path} 的编码")
+                    logger.warning("unable to detect encoding for %s", config_path)
             else:
-                print(f"警告：无法检测 {config_path} 的编码")
+                logger.warning("unable to detect encoding for %s", config_path)
 
             # 如果自动检测失败，回退到原来的方法
-            print("使用回退方法加载配置")
+            logger.info("loading config via utf-8 fallback path")
             with open(config_path, "r", encoding="utf-8") as f:
                 # 使用json5解析支持注释的JSON
                 config_data = normalize_runtime_config_payload(json5.load(f))
             _sync_server_ports_from_config_data(config_data)
             return EmblaSystemConfig(**config_data)
 
-        except Exception as e:
-            print(f"警告：加载 {config_path} 失败: {e}")
-            print("使用默认配置")
+        except Exception as exc:
+            logger.warning("load config failed %s: %s", config_path, exc)
+            logger.info("falling back to default config")
             return EmblaSystemConfig()
     else:
-        print(f"警告：配置文件 {config_path} 不存在，使用默认配置")
+        logger.warning("config file missing %s, using defaults", config_path)
 
     return EmblaSystemConfig()
 
@@ -1799,7 +1764,7 @@ def hot_reload_config() -> EmblaSystemConfig:
     old_config = config
     config = load_config()
     notify_config_changed()
-    print(f"配置已热更新: {old_config.system.version} -> {config.system.version}")
+    logger.info("config hot reloaded: %s -> %s", old_config.system.version, config.system.version)
     return config
 
 
@@ -1810,11 +1775,14 @@ def get_config() -> EmblaSystemConfig:
 
 # 初始化时打印配置信息
 if config.system.debug:
-    print(f"Embla System {config.system.version} 配置已加载")
-    print(
-        f"API服务器: {'启用' if config.api_server.enabled else '禁用'} ({config.api_server.host}:{config.api_server.port})"
+    logger.info("Embla System %s config loaded", config.system.version)
+    logger.info(
+        "API server: %s (%s:%s)",
+        "enabled" if config.api_server.enabled else "disabled",
+        config.api_server.host,
+        config.api_server.port,
     )
-    print(f"GRAG记忆系统: {'启用' if config.grag.enabled else '禁用'}")
+    logger.info("GRAG memory: %s", "enabled" if config.grag.enabled else "disabled")
 
 # 启动时设置用户显示名：优先config.json，其次系统用户名 #
 try:

@@ -17,12 +17,13 @@ from typing import Any, Dict, List, Optional
 
 import json5
 
+from agents.prompt_engine import get_system_prompts_root
 from agents.runtime.tool_profiles import TOOL_PROFILE_PRESETS, normalize_tool_subset
 
 logger = logging.getLogger(__name__)
 
 _ALLOWED_AGENT_ROLES = {"expert", "dev", "review"}
-_DEFAULT_REGISTRY_PATH = Path("system/prompts/specs/agent_registry.spec")
+_DEFAULT_REGISTRY_PATH = get_system_prompts_root() / "specs" / "agent_registry.spec"
 _AGENT_TYPE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _DEFAULT_AGENT_PROFILE_SPEC = {
     "schema_version": "ws31-agent-profile-v1",
@@ -69,6 +70,22 @@ _DEFAULT_AGENT_PROFILE_SPEC = {
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _default_prompts_root() -> str:
+    return str(get_system_prompts_root())
+
+
+def _normalize_prompts_root(raw_value: Any) -> str:
+    text = str(raw_value or "").strip()
+    if not text:
+        return ""
+    try:
+        if Path(text).expanduser().resolve() == Path(_default_prompts_root()).resolve():
+            return ""
+    except Exception:
+        logger.debug("normalize prompts_root fallback: %s", text, exc_info=True)
+    return text
 
 
 def _resolve_registry_path(spec_path: Optional[Path] = None) -> Path:
@@ -129,10 +146,13 @@ def _normalize_profile(raw_profile: Dict[str, Any], *, previous: Optional[Dict[s
     enabled = bool(raw_profile.get("enabled") if "enabled" in raw_profile else prior.get("enabled", True))
     default_for_role = bool(raw_profile.get("default_for_role") if "default_for_role" in raw_profile else prior.get("default_for_role", False))
     builtin = bool(prior.get("builtin", raw_profile.get("builtin", False)))
-    prompts_root = str(raw_profile.get("prompts_root") or prior.get("prompts_root") or "system/prompts").strip() or "system/prompts"
+    if "prompts_root" in raw_profile:
+        prompts_root = _normalize_prompts_root(raw_profile.get("prompts_root"))
+    else:
+        prompts_root = _normalize_prompts_root(prior.get("prompts_root"))
     created_at = str(prior.get("created_at") or raw_profile.get("created_at") or now).strip() or now
     updated_at = now
-    return {
+    profile = {
         "agent_type": agent_type,
         "role": role,
         "label": label,
@@ -143,10 +163,12 @@ def _normalize_profile(raw_profile: Dict[str, Any], *, previous: Optional[Dict[s
         "enabled": enabled,
         "default_for_role": default_for_role,
         "builtin": builtin,
-        "prompts_root": prompts_root,
         "created_at": created_at,
         "updated_at": updated_at,
     }
+    if prompts_root:
+        profile["prompts_root"] = prompts_root
+    return profile
 
 
 def _sort_profiles(profiles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -346,8 +368,8 @@ def resolve_agent_profile_defaults(
     }
 
 
-def build_prompt_block_previews(prompt_blocks: List[str], *, prompts_root: str = "system/prompts") -> List[Dict[str, Any]]:
-    root = Path(prompts_root).resolve()
+def build_prompt_block_previews(prompt_blocks: List[str], *, prompts_root: Optional[str] = None) -> List[Dict[str, Any]]:
+    root = Path(prompts_root or _default_prompts_root()).resolve()
     previews: List[Dict[str, Any]] = []
     for rel_path in _normalize_string_list(prompt_blocks):
         candidate = (root / rel_path).resolve()

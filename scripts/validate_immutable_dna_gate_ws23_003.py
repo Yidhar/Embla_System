@@ -9,20 +9,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-from system.config import get_all_immutable_dna_prompts, resolve_prompt_registry_entry
+from agents.prompt_engine import get_system_prompts_root
+from system.config import get_all_immutable_dna_prompts, resolve_prompt_file_reference
 from core.security.immutable_dna import DNAFileSpec, ImmutableDNALoader
 
 
 REQUIRED_PROMPT_FILES_DEFAULT: tuple[str, ...] = (
-    "conversation_style_prompt.md",
-    "agentic_tool_prompt.md",
-    "shell_persona.md",
-    "core_values.md",
+    "conversation_style_prompt",
+    "agentic_tool_prompt",
+    "shell_persona",
+    "core_values",
 )
 
 
 def _resolve_required_prompt_files(*, prompts_root: Path | None = None) -> List[str]:
-    resolved_prompts_root = prompts_root.resolve() if prompts_root is not None else (Path("system/prompts").resolve())
+    resolved_prompts_root = prompts_root.resolve() if prompts_root is not None else get_system_prompts_root().resolve()
     try:
         configured = get_all_immutable_dna_prompts()
     except Exception:
@@ -32,19 +33,11 @@ def _resolve_required_prompt_files(*, prompts_root: Path | None = None) -> List[
         text = str(item or "").strip()
         if not text:
             continue
-        resolved_path = text
         try:
-            resolved = resolve_prompt_registry_entry(
+            resolved_path = resolve_prompt_file_reference(
                 prompt_name=text,
                 prompts_dir=resolved_prompts_root,
             )
-            candidate = str(resolved.get("relative_path") or text).strip() or text
-            candidate_path = (resolved_prompts_root / candidate).resolve()
-            legacy_path = (resolved_prompts_root / text).resolve()
-            if candidate_path.exists() or not legacy_path.exists():
-                resolved_path = candidate
-            else:
-                resolved_path = text
         except Exception:
             resolved_path = text
         if resolved_path and resolved_path not in rows:
@@ -161,11 +154,12 @@ def run_immutable_dna_gate(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate immutable DNA gate for WS23-003")
-    parser.add_argument("--prompts-root", type=Path, default=Path("system/prompts"), help="Prompt DNA root directory")
+    canonical_prompts_root = get_system_prompts_root()
+    parser.add_argument("--prompts-root", type=Path, default=canonical_prompts_root, help="Prompt DNA root directory")
     parser.add_argument(
         "--manifest-path",
         type=Path,
-        default=Path("system/prompts/immutable_dna_manifest.spec"),
+        default=canonical_prompts_root / "immutable_dna_manifest.spec",
         help="Immutable DNA manifest path",
     )
     parser.add_argument(

@@ -14,15 +14,14 @@ from apiserver.api_server import (
 import system.config as config_module
 
 
-def _install_temp_prompt_manager(tmp_path: Path, monkeypatch) -> Path:
+def _install_temp_prompts_root(tmp_path: Path, monkeypatch) -> Path:
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
     (prompts_dir / "core" / "dna").mkdir(parents=True, exist_ok=True)
     (prompts_dir / "core" / "routing").mkdir(parents=True, exist_ok=True)
     (prompts_dir / "core" / "dna" / "conversation_style_prompt.md").write_text("STYLE_V1", encoding="utf-8")
     (prompts_dir / "core" / "routing" / "tool_dispatch_prompt.md").write_text("DISPATCH_V1", encoding="utf-8")
-    manager = config_module.PromptManager(prompts_dir=str(prompts_dir))
-    monkeypatch.setattr(config_module, "_prompt_manager", manager)
+    monkeypatch.setattr(config_module, "get_system_prompts_root", lambda: prompts_dir)
     return prompts_dir
 
 
@@ -31,7 +30,7 @@ def _run(coro):
 
 
 def test_v1_system_prompts_list_and_get(monkeypatch, tmp_path: Path) -> None:
-    _install_temp_prompt_manager(tmp_path, monkeypatch)
+    _install_temp_prompts_root(tmp_path, monkeypatch)
 
     payload = _run(list_system_prompts_v1())
     assert payload.get("status") == "success"
@@ -67,8 +66,7 @@ def test_v1_system_prompts_list_prefers_registry_nested_paths(monkeypatch, tmp_p
         """,
         encoding="utf-8",
     )
-    manager = config_module.PromptManager(prompts_dir=str(prompts_dir))
-    monkeypatch.setattr(config_module, "_prompt_manager", manager)
+    monkeypatch.setattr(config_module, "get_system_prompts_root", lambda: prompts_dir)
 
     payload = _run(list_system_prompts_v1())
     prompts = payload.get("prompts", [])
@@ -82,7 +80,7 @@ def test_v1_system_prompts_list_prefers_registry_nested_paths(monkeypatch, tmp_p
 
 
 def test_v1_system_prompts_update(monkeypatch, tmp_path: Path) -> None:
-    prompts_dir = _install_temp_prompt_manager(tmp_path, monkeypatch)
+    prompts_dir = _install_temp_prompts_root(tmp_path, monkeypatch)
 
     payload = _run(
         update_system_prompt_template_v1(
@@ -107,7 +105,7 @@ def test_v1_system_prompts_update(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_v1_system_prompts_reject_invalid_name(monkeypatch, tmp_path: Path) -> None:
-    _install_temp_prompt_manager(tmp_path, monkeypatch)
+    _install_temp_prompts_root(tmp_path, monkeypatch)
 
     with pytest.raises(HTTPException) as exc:
         _run(get_system_prompt_template_v1("bad-name"))

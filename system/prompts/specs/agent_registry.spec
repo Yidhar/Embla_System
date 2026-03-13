@@ -11,8 +11,7 @@
       "tool_subset": [],
       "enabled": true,
       "default_for_role": true,
-      "builtin": true,
-      "prompts_root": "system/prompts"
+      "builtin": true
     },
     {
       "agent_type": "dev_default",
@@ -24,8 +23,7 @@
       "tool_subset": [],
       "enabled": true,
       "default_for_role": true,
-      "builtin": true,
-      "prompts_root": "system/prompts"
+      "builtin": true
     },
     {
       "agent_type": "code_reviewer",
@@ -37,8 +35,7 @@
       "tool_subset": [],
       "enabled": true,
       "default_for_role": true,
-      "builtin": true,
-      "prompts_root": "system/prompts"
+      "builtin": true
     }
   ]
 }

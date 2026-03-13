@@ -42,10 +42,9 @@ This directory stores runtime prompt assets and governance specs.
 - `immutable_dna_audit.jsonl`
   Historical audit file (legacy location; runtime audit is moving to `scratch/runtime/`).
 
-## Compatibility notes
+## Governance notes
 
-- ACL loader now prefers `specs/prompt_acl.spec`.
-- `prompt_acl.spec` at prompt root is treated as legacy fallback for compatibility only.
+- Prompt governance specs are loaded only from `specs/prompt_registry.spec` and `specs/prompt_acl.spec`.
 - Prompt list APIs are registry-driven first, then recursive scan fallback for unregistered files.
 - 原子 prompt 块也应登记到 `specs/prompt_registry.spec`，否则前端按名称读取时无法稳定命中。
 - 旧的仓库根 `prompts/` 已退役；runtime prompt 资产统一收敛到 `system/prompts/`。

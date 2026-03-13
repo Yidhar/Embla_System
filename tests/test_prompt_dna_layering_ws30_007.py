@@ -1,12 +1,12 @@
-from pathlib import Path
+from agents.prompt_engine import get_system_prompts_root
 
 
-def _read(path: str) -> str:
-    return Path(path).read_text(encoding="utf-8")
+def _read(relative_path: str) -> str:
+    return (get_system_prompts_root() / relative_path).read_text(encoding="utf-8")
 
 
 def test_conversation_style_prompt_stays_out_of_shell_identity_and_runtime_contract() -> None:
-    content = _read("system/prompts/core/dna/conversation_style_prompt.md")
+    content = _read("core/dna/conversation_style_prompt.md")
 
     forbidden_markers = (
         "Shell Chat Agent",
@@ -28,14 +28,14 @@ def test_conversation_style_prompt_stays_out_of_shell_identity_and_runtime_contr
 
 
 def test_shell_persona_keeps_identity_dna_separate_from_conversation_style() -> None:
-    content = _read("system/prompts/dna/shell_persona.md")
+    content = _read("dna/shell_persona.md")
 
     assert "你是恩布拉（Embla）" in content
     assert "不定义任务路由、工具边界或执行协议" in content
 
 
 def test_agentic_tool_prompt_stays_out_of_route_and_role_semantics() -> None:
-    content = _read("system/prompts/core/dna/agentic_tool_prompt.md")
+    content = _read("core/dna/agentic_tool_prompt.md")
 
     forbidden_markers = (
         "Shell 路径通常只暴露",

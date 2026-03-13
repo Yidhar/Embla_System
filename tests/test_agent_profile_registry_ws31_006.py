@@ -51,6 +51,7 @@ def test_load_agent_profile_registry_defaults(monkeypatch, tmp_path):
     assert registry["exists_on_disk"] is False
     assert registry["defaults_by_role"]["review"]["agent_type"] == "code_reviewer"
     assert any(item["agent_type"] == "dev_default" for item in registry["profiles"])
+    assert all("prompts_root" not in item for item in registry["profiles"])
 
 
 def test_upsert_agent_profile_overrides_role_default(monkeypatch, tmp_path):
@@ -74,6 +75,28 @@ def test_upsert_agent_profile_overrides_role_default(monkeypatch, tmp_path):
     assert resolved["agent_type"] == "frontend_dev"
     assert resolved["tool_profile"] == "bugfix"
     assert resolved["prompt_blocks"] == ["agents/review/code_reviewer.md"]
+
+
+def test_upsert_agent_profile_keeps_custom_prompts_root(monkeypatch, tmp_path):
+    registry_path = tmp_path / "agent_registry.spec"
+    monkeypatch.setattr("system.agent_profile_registry._DEFAULT_REGISTRY_PATH", registry_path)
+
+    custom_root = tmp_path / "custom_prompts"
+    saved = upsert_agent_profile(
+        {
+            "agent_type": "custom_dev",
+            "role": "dev",
+            "label": "Custom Dev",
+            "prompt_blocks": ["agents/review/code_reviewer.md"],
+            "tool_profile": "bugfix",
+            "prompts_root": str(custom_root),
+        }
+    )
+
+    registry = load_agent_profile_registry()
+    row = next(item for item in registry["profiles"] if item["agent_type"] == "custom_dev")
+    assert saved["prompts_root"] == str(custom_root)
+    assert row["prompts_root"] == str(custom_root)
 
 
 def test_spawn_child_agent_uses_explicit_agent_type(monkeypatch, tmp_path, store, mailbox):

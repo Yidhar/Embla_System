@@ -18,7 +18,11 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
 
 from agents.router_engine import RouterDecision
-from agents.prompt_engine import PromptAssembler, get_system_prompts_root
+from agents.prompt_engine import (
+    PromptAssembler,
+    get_immutable_prompt_protected_prefixes,
+    get_system_prompts_root,
+)
 from agents.memory.memory_tools import get_memory_tool_definitions, handle_memory_tool, is_memory_tool
 from agents.runtime.agent_session import AgentSessionStore, AgentStatus
 from agents.runtime.mailbox import AgentMailbox
@@ -36,6 +40,7 @@ from system.sandbox_context import SandboxContext
 
 logger = logging.getLogger(__name__)
 _PIPELINE_PROMPT_ASSEMBLER = PromptAssembler(prompts_root=str(get_system_prompts_root()))
+_CANONICAL_PROMPTS_ROOT = str(get_system_prompts_root())
 
 
 ChildLLMCallFn = Callable[[List[Dict[str, Any]], List[Dict[str, Any]], str], Awaitable[Dict[str, Any]]]
@@ -60,11 +65,7 @@ _FAST_TRACK_BLOCKED_TOOLS = {
     "workspace_txn_apply",
     "git_checkout_file",
 }
-_FAST_TRACK_PROTECTED_PREFIXES = (
-    "core/security/",
-    "system/prompts/dna/",
-    "system/prompts/core/dna/",
-)
+_FAST_TRACK_PROTECTED_PREFIXES = ("core/security/", *get_immutable_prompt_protected_prefixes())
 _FAST_TRACK_PROTECTED_EXACT = {
     ".env",
     "config.json",
@@ -1063,7 +1064,7 @@ async def _run_dev_mini_loop(
         config=DevAgentConfig(
             prompt_blocks=resolved_prompt_blocks,
             tool_subset=resolved_tool_subset,
-            prompts_root="system/prompts",
+            prompts_root=_CANONICAL_PROMPTS_ROOT,
         ),
         session_id=normalized_session_id,
         store=store,
@@ -1592,7 +1593,7 @@ async def _run_single_expert_phase(
                         config=ReviewAgentConfig(
                             prompt_blocks=review_prompt_blocks,
                             memory_hints=review_memory_hints,
-                            prompts_root="system/prompts",
+                            prompts_root=_CANONICAL_PROMPTS_ROOT,
                         ),
                         task_board_engine=task_board_engine,
                     )
@@ -2399,7 +2400,7 @@ async def run_multi_agent_pipeline(
                     config=DevAgentConfig(
                         prompt_blocks=[],
                         tool_subset=fast_track_tools,
-                        prompts_root="system/prompts",
+                        prompts_root=_CANONICAL_PROMPTS_ROOT,
                     ),
                     session_id=fast_track_agent_id,
                     store=_store,
@@ -2961,7 +2962,7 @@ async def run_multi_agent_pipeline(
                 config=DevAgentConfig(
                     prompt_blocks=dev_prompt_blocks,
                     tool_subset=dev_tool_subset,
-                    prompts_root="system/prompts",
+                    prompts_root=_CANONICAL_PROMPTS_ROOT,
                 ),
                 session_id=target_child_id,
                 store=_store,

@@ -41,6 +41,20 @@ def get_system_prompts_root() -> Path:
     return _SYSTEM_PROMPTS_ROOT
 
 
+def get_immutable_prompt_protected_prefixes() -> tuple[str, ...]:
+    """Return canonical repo-relative prefixes for immutable prompt DNA assets."""
+    repo_root = Path(__file__).resolve().parent.parent
+    prompts_root = get_system_prompts_root().resolve()
+    try:
+        relative_root = prompts_root.relative_to(repo_root).as_posix().strip("/")
+    except Exception:
+        relative_root = "system/prompts"
+    return (
+        f"{relative_root}/dna/",
+        f"{relative_root}/core/dna/",
+    )
+
+
 def get_available_mcp_tools_summary() -> str:
     """Return a best-effort summary of currently registered MCP tools."""
     try:
@@ -249,6 +263,7 @@ __all__ = [
     "DNAIntegrityError",
     "PromptAssembler",
     "PromptBlockNotFoundError",
+    "get_immutable_prompt_protected_prefixes",
     "get_available_mcp_tools_summary",
     "get_system_prompts_root",
 ]

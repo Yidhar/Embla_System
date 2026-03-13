@@ -287,6 +287,27 @@ class TestCoreAgent:
         assert plan["fast_track_eligible"] is False
         assert "FAST_TRACK_PROTECTED_PATH" in plan["reason_codes"]
 
+    def test_core_plan_execution_route_rejects_fast_track_for_prompt_dna(self, store, mailbox):
+        from agents.core_agent import CoreAgent
+        from agents.prompt_engine import get_immutable_prompt_protected_prefixes
+
+        core = CoreAgent(store=store, mailbox=mailbox)
+        protected_path = f"{get_immutable_prompt_protected_prefixes()[0]}shell_persona.md"
+        plan = core.plan_execution_route(
+            {
+                "goal": "快速修改 shell persona DNA",
+                "complexity_hint": "trivial",
+                "risk_level": "write_repo",
+                "target_files": [protected_path],
+                "estimated_changed_lines": 2,
+                "tool_profile": ["read_file", "write_file"],
+            }
+        )
+
+        assert plan["route"] == "standard"
+        assert plan["fast_track_eligible"] is False
+        assert "FAST_TRACK_PROTECTED_PATH" in plan["reason_codes"]
+
 
 # ── Expert Agent Tests ─────────────────────────────────────────
 
@@ -353,7 +374,9 @@ class TestDevAgent:
 
     def test_dev_default_prompts_root_matches_system_prompts(self):
         from agents.dev_agent import DevAgentConfig
-        assert DevAgentConfig().prompts_root == "system/prompts"
+        from agents.prompt_engine import get_system_prompts_root
+
+        assert DevAgentConfig().prompts_root == str(get_system_prompts_root())
 
     def test_dev_system_prompt(self, tmp_path):
         from agents.dev_agent import DevAgent, DevAgentConfig

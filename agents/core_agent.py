@@ -13,7 +13,12 @@ from typing import Any, Dict, List, Optional
 
 from agents.contract_runtime import CoreExecutionContractInput
 from agents.meta_agent import Goal, MetaAgentRuntime, SubTask
-from agents.prompt_engine import PromptAssembler, get_available_mcp_tools_summary, get_system_prompts_root
+from agents.prompt_engine import (
+    PromptAssembler,
+    get_available_mcp_tools_summary,
+    get_immutable_prompt_protected_prefixes,
+    get_system_prompts_root,
+)
 from agents.runtime.agent_session import AgentSessionStore
 from agents.runtime.mailbox import AgentMailbox
 from agents.runtime.parent_tools import handle_parent_tool_call
@@ -62,11 +67,7 @@ FAST_TRACK_ALLOWED_TOOLS = {
     "git_diff",
     "artifact_reader",
 }
-FAST_TRACK_PROTECTED_PREFIXES = (
-    "core/security/",
-    "system/prompts/dna/",
-    "system/prompts/core/dna/",
-)
+FAST_TRACK_PROTECTED_PREFIXES = ("core/security/", *get_immutable_prompt_protected_prefixes())
 FAST_TRACK_PROTECTED_EXACT = {
     ".env",
     "config.json",
@@ -81,7 +82,7 @@ class CoreAgentConfig:
     """Configuration for the Core Agent."""
 
     values_dna_path: str = str(get_system_prompts_root() / "dna" / "core_values.md")
-    prompts_root: str = "system/prompts"
+    prompts_root: str = field(default_factory=lambda: str(get_system_prompts_root()))
     max_experts: int = 5
     expert_domains: Dict[str, List[str]] = field(default_factory=lambda: dict(EXPERT_DOMAINS))
 

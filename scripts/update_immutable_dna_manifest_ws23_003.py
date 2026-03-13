@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from agents.prompt_engine import get_system_prompts_root
 from core.security.immutable_dna import DNAFileSpec, ImmutableDNALoader
 
 try:
@@ -153,11 +154,12 @@ def run_update_immutable_dna_manifest(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Update immutable DNA manifest for WS23-003")
-    parser.add_argument("--prompts-root", type=Path, default=Path("system/prompts"), help="Prompt DNA root directory")
+    canonical_prompts_root = get_system_prompts_root()
+    parser.add_argument("--prompts-root", type=Path, default=canonical_prompts_root, help="Prompt DNA root directory")
     parser.add_argument(
         "--manifest-path",
         type=Path,
-        default=Path("system/prompts/immutable_dna_manifest.spec"),
+        default=canonical_prompts_root / "immutable_dna_manifest.spec",
         help="Immutable DNA manifest path",
     )
     parser.add_argument(
