@@ -32,7 +32,8 @@ type EditorState = {
   approvalRequiredScopes: string;
   auditLedgerFile: string;
   auditSigningKeyEnv: string;
-  immutableLockedPrompts: string;
+  immutableRuntimePrompts: string;
+  immutableIdentityPrompts: string;
   defaultExecutionBackend: string;
   selfRepoExecutionBackend: string;
   boxliteEnabled: boolean;
@@ -47,7 +48,6 @@ type EditorState = {
   boxliteAutoInstallSdk: boolean;
   boxliteInstallTimeoutSeconds: number;
   boxliteSdkPackageSpec: string;
-  watcherPromptRoot: string;
   watcherToolsRegistryRoot: string;
   watcherBackend: string;
   postureEndpoint: string;
@@ -122,7 +122,8 @@ function getCopy(locale: AppLocale): Copy {
         approvalRequiredScopes: "Approval-required scopes",
         auditLedgerFile: "Audit ledger file",
         auditSigningKeyEnv: "Audit signing key env",
-        immutableLockedPrompts: "Immutable DNA locked prompts",
+        immutableRuntimePrompts: "Immutable runtime prompts",
+        immutableIdentityPrompts: "Immutable identity prompts",
         boxliteEnabled: "Enable BoxLite-first execution",
         boxliteMode: "BoxLite availability mode",
         boxliteProvider: "Provider",
@@ -135,7 +136,6 @@ function getCopy(locale: AppLocale): Copy {
         boxliteAutoInstallSdk: "Auto-install SDK",
         boxliteInstallTimeoutSeconds: "SDK install timeout (s)",
         boxliteSdkPackageSpec: "SDK package spec",
-        watcherPromptRoot: "Prompt root",
         watcherToolsRegistryRoot: "Tools registry root",
         watcherBackend: "Watcher backend",
         postureEndpoint: "Posture endpoint",
@@ -185,7 +185,8 @@ function getCopy(locale: AppLocale): Copy {
       approvalRequiredScopes: "需要审批的范围",
       auditLedgerFile: "审计台账文件",
       auditSigningKeyEnv: "审计签名环境变量",
-      immutableLockedPrompts: "Immutable DNA 锁定提示词",
+      immutableRuntimePrompts: "Immutable 运行时提示词",
+      immutableIdentityPrompts: "Immutable 身份提示词",
       boxliteEnabled: "启用 BoxLite-first 执行",
       boxliteMode: "BoxLite 可用性模式",
       boxliteProvider: "Provider",
@@ -198,7 +199,6 @@ function getCopy(locale: AppLocale): Copy {
       boxliteAutoInstallSdk: "自动安装 SDK",
       boxliteInstallTimeoutSeconds: "SDK 安装超时（秒）",
       boxliteSdkPackageSpec: "SDK 包规格",
-      watcherPromptRoot: "提示词根目录",
       watcherToolsRegistryRoot: "工具注册根目录",
       watcherBackend: "Watcher 后端",
       postureEndpoint: "Posture 接口",
@@ -287,7 +287,8 @@ function buildEditorState(config: Record<string, unknown>): EditorState {
     approvalRequiredScopes: listToCsv(security.approval_required_scopes),
     auditLedgerFile: stringValue(security.audit_ledger_file, "scratch/runtime/audit_ledger.jsonl"),
     auditSigningKeyEnv: stringValue(security.audit_signing_key_env, "EMBLA_AUDIT_SIGNING_KEY"),
-    immutableLockedPrompts: listToTextarea(security.immutable_dna_locked_prompts),
+    immutableRuntimePrompts: listToTextarea(security.immutable_dna_runtime_prompts),
+    immutableIdentityPrompts: listToTextarea(security.immutable_agent_identity_prompts),
     defaultExecutionBackend: stringValue(sandbox.default_execution_backend, "boxlite"),
     selfRepoExecutionBackend: stringValue(sandbox.self_repo_execution_backend, "boxlite"),
     boxliteEnabled: booleanValue(boxlite.enabled, true),
@@ -302,7 +303,6 @@ function buildEditorState(config: Record<string, unknown>): EditorState {
     boxliteAutoInstallSdk: booleanValue(boxlite.auto_install_sdk, true),
     boxliteInstallTimeoutSeconds: numberValue(boxlite.install_timeout_seconds, 300),
     boxliteSdkPackageSpec: stringValue(boxlite.sdk_package_spec, "boxlite"),
-    watcherPromptRoot: stringValue(watchers.prompt_root, "workspace/prompts"),
     watcherToolsRegistryRoot: stringValue(watchers.tools_registry_root, "workspace/tools_registry"),
     watcherBackend: stringValue(watchers.backend, "watchdog"),
     postureEndpoint: stringValue(ops.posture_endpoint, "/v1/ops/runtime/posture"),
@@ -328,10 +328,10 @@ function buildPatch(state: EditorState): Record<string, unknown> {
         approval_required_scopes: csvToList(state.approvalRequiredScopes),
         audit_ledger_file: stringValue(state.auditLedgerFile, "scratch/runtime/audit_ledger.jsonl"),
         audit_signing_key_env: stringValue(state.auditSigningKeyEnv, "EMBLA_AUDIT_SIGNING_KEY"),
-        immutable_dna_locked_prompts: textareaToList(state.immutableLockedPrompts)
+        immutable_dna_runtime_prompts: textareaToList(state.immutableRuntimePrompts),
+        immutable_agent_identity_prompts: textareaToList(state.immutableIdentityPrompts)
       },
       watchers: {
-        prompt_root: stringValue(state.watcherPromptRoot, "workspace/prompts"),
         tools_registry_root: stringValue(state.watcherToolsRegistryRoot, "workspace/tools_registry"),
         backend: stringValue(state.watcherBackend, "watchdog")
       },
@@ -552,10 +552,10 @@ export function FrameworkSettingsPanel({ locale, initialConfig, registryPath, pr
 
             <div className="mt-4 grid gap-4 xl:grid-cols-2">
               <TextareaField label={copy.labels.approvalRequiredScopes} value={state.approvalRequiredScopes} onChange={(value) => update("approvalRequiredScopes", value)} />
-              <TextareaField label={copy.labels.immutableLockedPrompts} value={state.immutableLockedPrompts} onChange={(value) => update("immutableLockedPrompts", value)} />
+              <TextareaField label={copy.labels.immutableRuntimePrompts} value={state.immutableRuntimePrompts} onChange={(value) => update("immutableRuntimePrompts", value)} />
+              <TextareaField label={copy.labels.immutableIdentityPrompts} value={state.immutableIdentityPrompts} onChange={(value) => update("immutableIdentityPrompts", value)} />
               <TextField label={copy.labels.auditLedgerFile} value={state.auditLedgerFile} onChange={(value) => update("auditLedgerFile", value)} />
               <TextField label={copy.labels.auditSigningKeyEnv} value={state.auditSigningKeyEnv} onChange={(value) => update("auditSigningKeyEnv", value)} />
-              <TextField label={copy.labels.watcherPromptRoot} value={state.watcherPromptRoot} onChange={(value) => update("watcherPromptRoot", value)} />
               <TextField label={copy.labels.watcherToolsRegistryRoot} value={state.watcherToolsRegistryRoot} onChange={(value) => update("watcherToolsRegistryRoot", value)} />
               <TextField label={copy.labels.watcherBackend} value={state.watcherBackend} onChange={(value) => update("watcherBackend", value)} />
               <TextField label={copy.labels.postureEndpoint} value={state.postureEndpoint} onChange={(value) => update("postureEndpoint", value)} />

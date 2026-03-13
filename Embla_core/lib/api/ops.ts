@@ -731,7 +731,7 @@ function normalizeAgentProfile(input: unknown): AgentProfile | null {
     enabled: row.enabled === undefined ? true : Boolean(row.enabled),
     default_for_role: Boolean(row.default_for_role),
     builtin: Boolean(row.builtin),
-    prompts_root: stringValue(row.prompts_root, "system/prompts"),
+    prompts_root: stringValue(row.prompts_root),
     created_at: stringValue(row.created_at),
     updated_at: stringValue(row.updated_at)
   };

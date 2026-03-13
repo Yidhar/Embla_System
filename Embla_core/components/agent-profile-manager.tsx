@@ -31,7 +31,7 @@ function profileToDraft(profile?: AgentProfile | null) {
     prompt_blocks_text: Array.isArray(profile?.prompt_blocks) ? profile!.prompt_blocks.join("\n") : "",
     tool_profile: String(profile?.tool_profile ?? "").trim(),
     tool_subset_text: Array.isArray(profile?.tool_subset) ? profile!.tool_subset.join(", ") : "",
-    prompts_root: String(profile?.prompts_root ?? "system/prompts").trim() || "system/prompts",
+    prompts_root: String(profile?.prompts_root ?? "").trim(),
     enabled: profile?.enabled !== false,
     default_for_role: Boolean(profile?.default_for_role),
     builtin: Boolean(profile?.builtin),
@@ -143,7 +143,7 @@ export function AgentProfileManager({ locale, initialRegistry, initialDetail = n
             prompt_blocks: linesToList(draft.prompt_blocks_text),
             tool_profile: draft.tool_profile,
             tool_subset: csvToList(draft.tool_subset_text),
-            prompts_root: draft.prompts_root,
+            prompts_root: draft.prompts_root.trim() || undefined,
             enabled: draft.enabled,
             default_for_role: draft.default_for_role,
           }),
@@ -342,7 +342,9 @@ export function AgentProfileManager({ locale, initialRegistry, initialDetail = n
                     value={draft.prompts_root}
                     onChange={(event) => setDraft((current) => ({ ...current, prompts_root: event.target.value }))}
                     className="h-11 w-full rounded-[16px] border border-white/70 bg-white/80 px-4 text-sm text-slate-900 outline-none"
+                    placeholder={t("agentConfig.form.promptsRootPlaceholder")}
                   />
+                  <p className="text-xs leading-5 text-slate-500">{t("agentConfig.form.promptsRootHint")}</p>
                 </label>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="flex items-center gap-2 rounded-[16px] border border-white/70 bg-white/75 px-4 py-3 text-sm text-slate-700">

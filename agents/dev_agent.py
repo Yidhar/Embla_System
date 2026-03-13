@@ -25,7 +25,7 @@ class DevAgentConfig:
     prompt_blocks: List[str] = field(default_factory=list)
     tool_subset: List[str] = field(default_factory=list)
     memory_hints: List[str] = field(default_factory=list)
-    prompts_root: str = "system/prompts"
+    prompts_root: str = field(default_factory=lambda: str(get_system_prompts_root()))
 
 
 class DevAgent:
