@@ -97,7 +97,7 @@ def test_v1_system_prompts_update(monkeypatch, tmp_path: Path) -> None:
     assert isinstance(payload.get("acl"), dict)
     assert payload["acl"]["matched_rule"]["level"] == "S1_CONTROLLED"
 
-    detail = _run(get_system_prompt_template_v1("conversation_style_prompt.md"))
+    detail = _run(get_system_prompt_template_v1("conversation_style_prompt"))
     assert detail.get("content") == "STYLE_V2"
 
     file_content = (prompts_dir / "core" / "dna" / "conversation_style_prompt.md").read_text(encoding="utf-8")

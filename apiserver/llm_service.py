@@ -23,11 +23,12 @@ from litellm import acompletion
 # Add project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from agents.prompt_engine import get_system_prompts_root
 from system.config import (
     get_config,
     get_immutable_agent_identity_prompts,
     get_immutable_dna_runtime_prompts,
-    resolve_prompt_registry_entry,
+    resolve_prompt_file_reference,
 )
 from core.security import DNAFileSpec, ImmutableDNALoader
 
@@ -58,12 +59,12 @@ class LLMService:
     DNA_MANIFEST_PATH_ENV = "EMBLA_IMMUTABLE_DNA_MANIFEST_PATH"
     DNA_AUDIT_PATH_ENV = "EMBLA_IMMUTABLE_DNA_AUDIT_PATH"
     DNA_RUNTIME_REQUIRED_FILES_DEFAULT = (
-        "conversation_style_prompt.md",
-        "agentic_tool_prompt.md",
+        "conversation_style_prompt",
+        "agentic_tool_prompt",
     )
     DNA_IDENTITY_REQUIRED_FILES_DEFAULT = (
-        "shell_persona.md",
-        "core_values.md",
+        "shell_persona",
+        "core_values",
     )
 
     OPENAI_HINTS = {"openai", "openai_compatible"}
@@ -92,11 +93,7 @@ class LLMService:
 
         try:
             repo_root = Path(__file__).resolve().parent.parent
-            prompts_root_raw = os.environ.get(
-                self.DNA_PROMPTS_ROOT_ENV,
-                str(repo_root / "system" / "prompts"),
-            )
-            prompts_root = Path(str(prompts_root_raw)).expanduser().resolve()
+            prompts_root = self._resolve_immutable_dna_prompts_root()
             manifest_path_raw = os.environ.get(
                 self.DNA_MANIFEST_PATH_ENV,
                 str(prompts_root / "immutable_dna_manifest.spec"),
@@ -128,11 +125,7 @@ class LLMService:
 
         try:
             repo_root = Path(__file__).resolve().parent.parent
-            prompts_root_raw = os.environ.get(
-                self.DNA_PROMPTS_ROOT_ENV,
-                str(repo_root / "system" / "prompts"),
-            )
-            prompts_root = Path(str(prompts_root_raw)).expanduser().resolve()
+            prompts_root = self._resolve_immutable_dna_prompts_root()
             manifest_path_raw = os.environ.get(
                 self.DNA_MANIFEST_PATH_ENV,
                 str(prompts_root / "immutable_dna_manifest.spec"),
@@ -214,39 +207,24 @@ class LLMService:
         prompts_dir: Path,
         default_items: List[str],
     ) -> List[str]:
+        source_items = [str(item or "").strip() for item in configured_items if str(item or "").strip()]
+        if not source_items:
+            source_items = [str(item or "").strip() for item in default_items if str(item or "").strip()]
         rows: List[str] = []
-        for item in configured_items:
-            text = str(item or "").strip()
-            if not text:
-                continue
-            resolved_path = text
+        for text in source_items:
             try:
-                resolved = resolve_prompt_registry_entry(
+                resolved_path = resolve_prompt_file_reference(
                     prompt_name=text,
                     prompts_dir=prompts_dir,
                 )
-                candidate = str(resolved.get("relative_path") or text).strip() or text
-                candidate_path = (prompts_dir / candidate).resolve()
-                legacy_path = (prompts_dir / text).resolve()
-                if candidate_path.exists() or not legacy_path.exists():
-                    resolved_path = candidate
-                else:
-                    resolved_path = text
             except Exception:
                 resolved_path = text
             if resolved_path and resolved_path not in rows:
                 rows.append(resolved_path)
-        if rows:
-            return rows
-        return list(default_items)
+        return rows
 
     def _resolve_immutable_dna_runtime_required_files(self) -> List[str]:
-        repo_root = Path(__file__).resolve().parent.parent
-        prompts_root_raw = os.environ.get(
-            self.DNA_PROMPTS_ROOT_ENV,
-            str(repo_root / "system" / "prompts"),
-        )
-        prompts_dir = Path(str(prompts_root_raw)).expanduser().resolve()
+        prompts_dir = self._resolve_immutable_dna_prompts_root()
         try:
             configured = get_immutable_dna_runtime_prompts()
         except Exception:
@@ -258,12 +236,7 @@ class LLMService:
         )
 
     def _resolve_immutable_dna_identity_required_files(self) -> List[str]:
-        repo_root = Path(__file__).resolve().parent.parent
-        prompts_root_raw = os.environ.get(
-            self.DNA_PROMPTS_ROOT_ENV,
-            str(repo_root / "system" / "prompts"),
-        )
-        prompts_dir = Path(str(prompts_root_raw)).expanduser().resolve()
+        prompts_dir = self._resolve_immutable_dna_prompts_root()
         try:
             configured = get_immutable_agent_identity_prompts()
         except Exception:
@@ -273,6 +246,13 @@ class LLMService:
             prompts_dir=prompts_dir,
             default_items=list(self.DNA_IDENTITY_REQUIRED_FILES_DEFAULT),
         )
+
+    def _resolve_immutable_dna_prompts_root(self) -> Path:
+        prompts_root_raw = os.environ.get(
+            self.DNA_PROMPTS_ROOT_ENV,
+            str(get_system_prompts_root()),
+        )
+        return Path(str(prompts_root_raw)).expanduser().resolve()
 
     def _is_dna_runtime_system_message(self, message: Dict[str, Any]) -> bool:
         if str(message.get("role") or "") != "system":

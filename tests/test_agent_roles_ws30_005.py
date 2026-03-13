@@ -290,9 +290,13 @@ class TestCoreAgent:
     def test_core_plan_execution_route_rejects_fast_track_for_prompt_dna(self, store, mailbox):
         from agents.core_agent import CoreAgent
         from agents.prompt_engine import get_immutable_prompt_protected_prefixes
+        from system.config import resolve_prompt_file_reference
 
         core = CoreAgent(store=store, mailbox=mailbox)
-        protected_path = f"{get_immutable_prompt_protected_prefixes()[0]}shell_persona.md"
+        protected_path = (
+            f"{get_immutable_prompt_protected_prefixes()[0]}"
+            f"{resolve_prompt_file_reference(prompt_name='shell_persona', prompts_dir=None).split('/')[-1]}"
+        )
         plan = core.plan_execution_route(
             {
                 "goal": "快速修改 shell persona DNA",

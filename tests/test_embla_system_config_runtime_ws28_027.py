@@ -82,7 +82,7 @@ def test_load_embla_system_config_normalizes_child_session_cleanup_policy(tmp_pa
     assert cleanup["ttl_seconds"] == 0
 
 
-def test_load_embla_system_config_canonicalizes_immutable_prompt_names(tmp_path) -> None:
+def test_load_embla_system_config_normalizes_legacy_immutable_prompt_file_references(tmp_path) -> None:
     config_path = tmp_path / "embla_system.yaml"
     config_path.write_text(
         json.dumps(
@@ -121,8 +121,8 @@ def test_get_immutable_prompt_getters_return_canonical_names(monkeypatch) -> Non
         "system.config.get_embla_system_config",
         lambda: {
             "security": {
-                "immutable_dna_runtime_prompts": ["conversation_style_prompt.md", "tool_call_contract_prompt"],
-                "immutable_agent_identity_prompts": ["dna/shell_persona.md", "core_values.md"],
+                "immutable_dna_runtime_prompts": ["conversation_style_prompt", "agentic_tool_prompt"],
+                "immutable_agent_identity_prompts": ["shell_persona", "core_values"],
             }
         },
     )
