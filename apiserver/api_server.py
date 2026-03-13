@@ -36,6 +36,7 @@ from agents.shell_agent import ShellAgent
 from agents.runtime.agent_session import AgentSessionStore
 from agents.runtime.mailbox import AgentMailbox
 from agents.runtime.task_board import TaskBoardEngine
+from system.runtime_cleanup import close_runtime_network_clients
 from agents.llm_gateway import (
     GatewayRouteRequest,
     LLMGateway,
@@ -522,6 +523,111 @@ def _build_shell_system_prompt_with_gateway(
         return fallback_prompt
 
 
+def _normalize_shell_text_fallback_tool_calls(
+    payload: Any,
+    *,
+    allowed_tool_names: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    allowed = {
+        str(item).strip()
+        for item in (allowed_tool_names or [])
+        if str(item).strip()
+    }
+    if isinstance(payload, dict):
+        rows = [payload]
+    elif isinstance(payload, list):
+        rows = [item for item in payload if isinstance(item, dict)]
+    else:
+        return []
+
+    calls: List[Dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        tool_name = str(row.get("name") or row.get("tool_name") or "").strip()
+        if isinstance(row.get("function"), dict):
+            tool_name = tool_name or str(row["function"].get("name") or "").strip()
+        if not tool_name:
+            continue
+        if allowed and tool_name not in allowed:
+            continue
+
+        arguments = row.get("arguments")
+        if arguments is None and isinstance(row.get("function"), dict):
+            arguments = row["function"].get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except Exception:
+                continue
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            continue
+
+        calls.append(
+            {
+                "id": str(row.get("id") or f"shell_text_fallback_{idx}"),
+                "name": tool_name,
+                "arguments": dict(arguments),
+                "_fallback_source": "content_json",
+            }
+        )
+    return calls
+
+
+def _extract_shell_text_fallback_tool_calls(
+    text: str,
+    *,
+    allowed_tool_names: Optional[List[str]] = None,
+) -> tuple[List[Dict[str, Any]], Optional[tuple[int, int]]]:
+    raw = str(text or "")
+    if not raw:
+        return [], None
+
+    decoder = json.JSONDecoder()
+    for idx, char in enumerate(raw):
+        if char not in "{[":
+            continue
+        try:
+            payload, end_offset = decoder.raw_decode(raw[idx:])
+        except Exception:
+            continue
+        calls = _normalize_shell_text_fallback_tool_calls(
+            payload,
+            allowed_tool_names=allowed_tool_names,
+        )
+        if calls:
+            return calls, (idx, idx + end_offset)
+    return [], None
+
+
+def _strip_shell_text_fallback_segment(text: str, span: Optional[tuple[int, int]]) -> str:
+    raw = str(text or "")
+    if not span:
+        return raw
+    start, end = span
+    start = max(0, int(start))
+    end = max(start, int(end))
+    return (raw[:start] + raw[end:]).strip()
+
+
+def _select_shell_tool_choice(message: str, tool_names: List[str]) -> Any:
+    raw = str(message or "")
+    normalized = raw.lower()
+    matched: List[str] = []
+    for tool_name in tool_names:
+        text = str(tool_name or "").strip()
+        if text and text.lower() in normalized:
+            matched.append(text)
+    if len(matched) == 1:
+        return {
+            "type": "function",
+            "function": {
+                "name": matched[0],
+            },
+        }
+    return "auto"
+
+
 # 历史流式文本切分器已移除，流式处理统一由 chat_stream 主循环管理
 
 
@@ -568,9 +674,16 @@ async def lifespan(app: FastAPI):
         raise
     finally:
         print("[INFO] 正在清理资源...")
-        # MCP服务现在由mcpserver独立管理，无需清理
         app.state.immutable_dna_monitor_shutdown = _bootstrap_immutable_dna_monitor_shutdown()
         app.state.brainstem_shutdown = _bootstrap_brainstem_control_plane_shutdown()
+        try:
+            app.state.runtime_client_shutdown = await close_runtime_network_clients()
+        except Exception as exc:
+            app.state.runtime_client_shutdown = {
+                "litellm": {"attempted": True, "closed": False, "error": str(exc)},
+                "mcp_pool": {"attempted": True, "closed": False, "error": str(exc)},
+            }
+            logger.warning("运行时网络客户端关闭失败: %s", exc)
 
 
 # 创建FastAPI应用
@@ -1416,10 +1529,21 @@ async def chat_stream(request: ChatRequest):
                 {"type": "session_meta", "session_id": session_id},
                 protocol=stream_protocol,
             )
+            shell_tools_catalog = _build_shell_tools_catalog(session_id=session_id, scope="entry")
+            route_tool_names = [
+                str(item).strip()
+                for item in (shell_tools_catalog.get("tool_names") or [])
+                if str(item).strip()
+            ]
+            shell_tool_defs = [
+                dict(item)
+                for item in (shell_tools_catalog.get("tools") or [])
+                if isinstance(item, dict)
+            ]
             yield _format_stream_payload_chunk(
                 {
                     "type": "available_tools",
-                    **_build_shell_tools_catalog(session_id=session_id, scope="entry"),
+                    **shell_tools_catalog,
                 },
                 protocol=stream_protocol,
             )
@@ -1436,6 +1560,8 @@ async def chat_stream(request: ChatRequest):
                 "core_execution_session_id": "",
                 "routing_mode": "dispatch_to_core_only",
                 "core_execution_route": "",
+                "_shell_available_tool_names": route_tool_names,
+                "_shell_available_tool_count": len(route_tool_names),
             }
             route_meta = _apply_shell_core_session_state(route_meta, shell_session_id=session_id)
             route_decision: Dict[str, Any] = {}
@@ -1588,20 +1714,22 @@ async def chat_stream(request: ChatRequest):
                     {"model": cc.model, "api_base": cc.model_url, "api_key": cc.api_key},
                 )
 
-            shell_tool_defs = shell_agent.get_tool_definitions()
             llm_service = get_llm_service()
             shell_max_rounds = 4
             shell_round = 0
             dispatch_payload: Dict[str, Any] = {}
+            shell_tool_choice_hint = _select_shell_tool_choice(request.message, route_tool_names)
             while shell_round < shell_max_rounds:
                 pending_tool_calls: List[Dict[str, Any]] = []
                 assistant_content_parts: List[str] = []
+                assistant_context_content = ""
+                round_shell_tool_choice = shell_tool_choice_hint if shell_round == 0 else "auto"
                 stream_source = llm_service.stream_chat_with_context(
                     shell_messages,
                     get_config().api.temperature,
                     model_override=shell_model_override,
                     tools=shell_tool_defs,
-                    tool_choice="auto",
+                    tool_choice=round_shell_tool_choice,
                 )
                 async for chunk in stream_source:
                     if chunk.startswith("data: "):
@@ -1625,11 +1753,32 @@ async def chat_stream(request: ChatRequest):
                     yield chunk
 
                 if not pending_tool_calls:
+                    assistant_round_text = "".join(assistant_content_parts)
+                    fallback_tool_calls, fallback_span = _extract_shell_text_fallback_tool_calls(
+                        assistant_round_text,
+                        allowed_tool_names=route_tool_names,
+                    )
+                    if fallback_tool_calls:
+                        pending_tool_calls = fallback_tool_calls
+                        assistant_context_content = _strip_shell_text_fallback_segment(
+                            assistant_round_text,
+                            fallback_span,
+                        )
+                        yield _format_stream_payload_chunk(
+                            {
+                                "type": "tool_calls",
+                                "text": pending_tool_calls,
+                                "source": "content_json_fallback",
+                            },
+                            protocol=stream_protocol,
+                        )
+
+                if not pending_tool_calls:
                     break
 
                 assistant_msg: Dict[str, Any] = {
                     "role": "assistant",
-                    "content": "".join(assistant_content_parts),
+                    "content": assistant_context_content or "".join(assistant_content_parts),
                 }
                 assistant_tool_calls: List[Dict[str, Any]] = []
                 for idx, call in enumerate(pending_tool_calls):
@@ -1706,6 +1855,7 @@ async def chat_stream(request: ChatRequest):
             # ── Core handoff only happens when Shell explicitly dispatches. ──
             if dispatch_payload:
                 route_decision = dict(dispatch_payload.get("router_decision") or {})
+                dispatched_goal = str(dispatch_payload.get("goal") or "").strip() or effective_message
                 route_semantic = "core_execution"
                 route_meta["route_semantic"] = route_semantic
                 route_meta["risk_level"] = str(route_decision.get("risk_level") or "write_repo")
@@ -1749,7 +1899,7 @@ async def chat_stream(request: ChatRequest):
                 )
 
                 async for event in run_multi_agent_pipeline(
-                    message=effective_message,
+                    message=dispatched_goal,
                     session_id=core_execution_session_id,
                     risk_level=str(route_meta.get("risk_level") or "write_repo"),
                     route_decision=route_decision,

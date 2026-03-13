@@ -34,6 +34,7 @@ from agents.expert_agent import ExpertAgent, ExpertAgentConfig
 from agents.dev_agent import DevAgent, DevAgentConfig
 from agents.review_agent import ReviewAgent, ReviewAgentConfig
 from agents.runtime.mini_loop import MiniLoopConfig, run_mini_loop
+from agents.runtime.child_tools import handle_child_tool_call
 from agents.runtime.parent_tools import get_parent_tool_definitions, handle_parent_tool_call
 from system.git_worktree_sandbox import apply_workspace_path_overrides
 from system.sandbox_context import SandboxContext
@@ -95,6 +96,13 @@ def _extract_report_text(report: Dict[str, Any]) -> str:
                 except Exception:
                     continue
     return ""
+
+
+def _reports_have_text_payload(reports: List[Dict[str, Any]]) -> bool:
+    for report in reports:
+        if _extract_report_text(report):
+            return True
+    return False
 
 
 def _normalize_changed_files(raw_files: Any) -> List[str]:
@@ -502,6 +510,79 @@ def _build_fast_track_execution_receipt(
             "workspace_submissions": workspace_submissions[:8],
         },
     }
+
+
+def _build_fast_track_readonly_auto_verification_report(summary: str) -> Dict[str, Any]:
+    trimmed_summary = _trim_text(summary, limit=1200) or "read-only analysis completed"
+    return {
+        "tests": {
+            "passed": 0,
+            "failed": 0,
+            "errors": 0,
+            "attempts": 0,
+            "summary": "read-only analysis; no test execution required",
+        },
+        "lint": {
+            "status": "skipped",
+            "errors": 0,
+            "summary": "read-only analysis; no lint execution required",
+        },
+        "diff_review": {
+            "complete": True,
+            "summary": trimmed_summary,
+            "missing_items": [],
+        },
+        "changed_files": [],
+        "risks": [],
+    }
+
+
+def _should_auto_complete_fast_track_analysis(
+    *,
+    dispatch: Dict[str, Any],
+    fast_track_status: str,
+    loop_end_reason: str,
+    last_content: str,
+    touched_files: set[str],
+    guard_blocked_details: List[Dict[str, Any]],
+) -> bool:
+    if str(fast_track_status or "").strip().lower() == AgentStatus.WAITING.value:
+        return False
+    if str(dispatch.get("intent_type") or "").strip().lower() != "analysis":
+        return False
+    if str(loop_end_reason or "").strip().lower() != "no_tool_calls":
+        return False
+    if not str(last_content or "").strip():
+        return False
+    if bool(touched_files):
+        return False
+    if bool(guard_blocked_details):
+        return False
+    return True
+
+
+def _should_force_finalize_fast_track_analysis(
+    *,
+    dispatch: Dict[str, Any],
+    fast_track_status: str,
+    last_content: str,
+    touched_files: set[str],
+    guard_blocked_details: List[Dict[str, Any]],
+    reports: List[Dict[str, Any]],
+) -> bool:
+    if str(fast_track_status or "").strip().lower() == AgentStatus.WAITING.value:
+        return False
+    if str(dispatch.get("intent_type") or "").strip().lower() != "analysis":
+        return False
+    if not str(last_content or "").strip():
+        return False
+    if bool(touched_files):
+        return False
+    if bool(guard_blocked_details):
+        return False
+    if _reports_have_text_payload(reports):
+        return False
+    return True
 
 
 def _normalize_child_session_cleanup_mode(mode: str) -> str:
@@ -2325,6 +2406,8 @@ async def run_multi_agent_pipeline(
             else:
                 touched_files: set[str] = set()
                 guard_blocked_details: List[Dict[str, Any]] = []
+                fast_track_last_content = ""
+                fast_track_loop_end_reason = ""
 
                 async def _execute_fast_track_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
                     normalized_tool = _normalize_fast_track_tool_name(tool_name)
@@ -2432,6 +2515,14 @@ async def run_multi_agent_pipeline(
                     initial_task=str(dispatch.get("goal") or message),
                     config=fast_track_loop_config,
                 ):
+                    if isinstance(mini_event, dict):
+                        mini_event_type = str(mini_event.get("type") or "")
+                        if mini_event_type == "content":
+                            content_text = str(mini_event.get("text") or "").strip()
+                            if content_text:
+                                fast_track_last_content = content_text
+                        elif mini_event_type == "loop_end":
+                            fast_track_loop_end_reason = str(mini_event.get("reason") or "")
                     yield {
                         "type": "fast_track_event",
                         "pipeline_id": pipeline_id,
@@ -2444,12 +2535,81 @@ async def run_multi_agent_pipeline(
                 fast_track_status = (
                     str(fast_track_session.status.value) if fast_track_session is not None else "missing"
                 )
+                if _should_auto_complete_fast_track_analysis(
+                    dispatch=dispatch,
+                    fast_track_status=fast_track_status,
+                    loop_end_reason=fast_track_loop_end_reason,
+                    last_content=fast_track_last_content,
+                    touched_files=touched_files,
+                    guard_blocked_details=guard_blocked_details,
+                ):
+                    auto_report_result = handle_child_tool_call(
+                        "report_to_parent",
+                        {
+                            "type": "completed",
+                            "content": fast_track_last_content,
+                            "verification_report": _build_fast_track_readonly_auto_verification_report(
+                                fast_track_last_content
+                            ),
+                        },
+                        child_session_id=fast_track_agent_id,
+                        store=_store,
+                        mailbox=_mailbox,
+                    )
+                    yield {
+                        "type": "fast_track_auto_complete",
+                        "pipeline_id": pipeline_id,
+                        "core_execution_session_id": resolved_core_execution_session_id,
+                        "agent_id": fast_track_agent_id,
+                        "reason": "readonly_analysis_content_without_explicit_completion",
+                        "result": auto_report_result,
+                    }
+                    fast_track_session = _store.get(fast_track_agent_id)
+                    fast_track_status = (
+                        str(fast_track_session.status.value) if fast_track_session is not None else "missing"
+                    )
                 fast_track_completed = fast_track_status == AgentStatus.WAITING.value
                 stop_reason = "submitted_completion" if fast_track_completed else "completion_not_submitted"
                 if guard_blocked_details and not fast_track_completed:
                     stop_reason = "fast_track_guard_blocked"
 
                 reports = core.collect_reports(resolved_core_execution_session_id, pipeline_id=pipeline_id)
+                if _should_force_finalize_fast_track_analysis(
+                    dispatch=dispatch,
+                    fast_track_status=fast_track_status,
+                    last_content=fast_track_last_content,
+                    touched_files=touched_files,
+                    guard_blocked_details=guard_blocked_details,
+                    reports=reports,
+                ):
+                    auto_report_result = handle_child_tool_call(
+                        "report_to_parent",
+                        {
+                            "type": "completed",
+                            "content": fast_track_last_content,
+                            "verification_report": _build_fast_track_readonly_auto_verification_report(
+                                fast_track_last_content
+                            ),
+                        },
+                        child_session_id=fast_track_agent_id,
+                        store=_store,
+                        mailbox=_mailbox,
+                    )
+                    yield {
+                        "type": "fast_track_auto_complete",
+                        "pipeline_id": pipeline_id,
+                        "core_execution_session_id": resolved_core_execution_session_id,
+                        "agent_id": fast_track_agent_id,
+                        "reason": "readonly_analysis_parent_finalize_without_explicit_report",
+                        "result": auto_report_result,
+                    }
+                    fast_track_session = _store.get(fast_track_agent_id)
+                    fast_track_status = (
+                        str(fast_track_session.status.value) if fast_track_session is not None else "missing"
+                    )
+                    fast_track_completed = fast_track_status == AgentStatus.WAITING.value
+                    stop_reason = "submitted_completion" if fast_track_completed else stop_reason
+                    reports = core.collect_reports(resolved_core_execution_session_id, pipeline_id=pipeline_id)
                 if fast_track_completed:
                     pending_workspace_submission = any(
                         bool(item.get("promote_pending")) for item in _collect_workspace_submission_summaries(reports)

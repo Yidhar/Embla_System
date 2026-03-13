@@ -91,6 +91,7 @@ logging.getLogger("OpenGL.acceleratesupport").setLevel(logging.WARNING)
 # ---------------------------------------------------------------------------
 
 from system.config import AI_NAME, config
+from system.runtime_cleanup import close_runtime_network_clients_sync
 from system.system_checker import run_quick_check, run_system_check
 
 
@@ -469,33 +470,42 @@ class EmblaRuntime:
 
     def shutdown_services(self) -> None:
         handle = self.services.api_server
-        if handle is None:
-            return
-        logger.info("正在关闭 API 服务器: %s:%d", handle.host, handle.port)
-        handle.shutdown_requested.set()
-        try:
-            setattr(handle.server, "should_exit", True)
-        except Exception:
-            pass
-        if handle.thread.is_alive():
-            handle.thread.join(timeout=5.0)
-        if handle.thread.is_alive():
-            logger.warning("API 服务器未在 5s 内退出，尝试强制关闭")
+        if handle is not None:
+            logger.info("正在关闭 API 服务器: %s:%d", handle.host, handle.port)
+            handle.shutdown_requested.set()
             try:
-                setattr(handle.server, "force_exit", True)
+                setattr(handle.server, "should_exit", True)
             except Exception:
                 pass
-            handle.thread.join(timeout=1.0)
-        if handle.thread.is_alive():
-            logger.error("API 服务器线程仍未退出，端口可能仍被占用: %s:%d", handle.host, handle.port)
-        elif handle.startup_complete:
-            released = _wait_for_tcp_release(handle.host, handle.port, timeout_seconds=2.0)
-            if released:
-                logger.info("API 服务器端口已释放: %s:%d", handle.host, handle.port)
-            else:
-                logger.warning("API 服务器线程已退出，但端口仍未确认释放: %s:%d", handle.host, handle.port)
-        self.services.api_server = None
-        self.services.api_started = False
+            if handle.thread.is_alive():
+                handle.thread.join(timeout=5.0)
+            if handle.thread.is_alive():
+                logger.warning("API 服务器未在 5s 内退出，尝试强制关闭")
+                try:
+                    setattr(handle.server, "force_exit", True)
+                except Exception:
+                    pass
+                handle.thread.join(timeout=1.0)
+            if handle.thread.is_alive():
+                logger.error("API 服务器线程仍未退出，端口可能仍被占用: %s:%d", handle.host, handle.port)
+            elif handle.startup_complete:
+                released = _wait_for_tcp_release(handle.host, handle.port, timeout_seconds=2.0)
+                if released:
+                    logger.info("API 服务器端口已释放: %s:%d", handle.host, handle.port)
+                else:
+                    logger.warning("API 服务器线程已退出，但端口仍未确认释放: %s:%d", handle.host, handle.port)
+            self.services.api_server = None
+            self.services.api_started = False
+
+        cleanup_report = close_runtime_network_clients_sync()
+        litellm_error = str(((cleanup_report.get("litellm") or {}).get("error")) or "").strip()
+        mcp_error = str(((cleanup_report.get("mcp_pool") or {}).get("error")) or "").strip()
+        if litellm_error or mcp_error:
+            logger.warning(
+                "运行时网络客户端关闭存在异常: litellm=%s mcp_pool=%s",
+                litellm_error or "ok",
+                mcp_error or "ok",
+            )
 
     def run(self) -> int:
         diag = self.run_diagnostic()

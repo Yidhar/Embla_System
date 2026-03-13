@@ -312,6 +312,26 @@ class TestCoreAgent:
         assert plan["fast_track_eligible"] is False
         assert "FAST_TRACK_PROTECTED_PATH" in plan["reason_codes"]
 
+    def test_core_plan_execution_route_accepts_readonly_analysis_probe_without_trivial_hint(self, store, mailbox):
+        from agents.core_agent import CoreAgent
+
+        core = CoreAgent(store=store, mailbox=mailbox)
+        plan = core.plan_execution_route(
+            {
+                "goal": "Read-only probe: inspect and summarize current Core-side available capabilities.",
+                "intent_type": "analysis",
+                "complexity_hint": "standard",
+                "risk_level": "read_only",
+                "target_files": [],
+                "estimated_changed_lines": 0,
+                "tool_profile": ["read_file", "artifact_reader", "search"],
+            }
+        )
+
+        assert plan["route"] == "fast_track"
+        assert plan["fast_track_eligible"] is True
+        assert "FAST_TRACK_HINT_NOT_TRIVIAL" not in plan["reason_codes"]
+
 
 # ── Expert Agent Tests ─────────────────────────────────────────
 
@@ -627,6 +647,163 @@ class TestPipeline:
         end_event = next(e for e in events if e["type"] == "pipeline_end")
         assert end_event["reason"] == "completed"
         assert end_event.get("execution_mode") == "fast_track"
+
+    def test_pipeline_fast_track_analysis_auto_completes_content_only_result(self, store, mailbox):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        forced_decision = RouterDecision(
+            decision_id="route_analysis_fast_track_001",
+            created_at="2026-03-13T00:00:00+00:00",
+            task_id="chat_analysis_fast_track",
+            trace_id="trace_analysis_fast_track",
+            session_id="analysis-fast-track__core",
+            task_type="research",
+            selected_role="researcher",
+            selected_model_tier="primary",
+            tool_profile=["read_file", "artifact_reader", "search"],
+            prompt_profile="core_exec_general",
+            injection_mode="minimal",
+            delegation_intent="core_execution",
+            complexity_hint="trivial",
+            core_route="fast_track",
+            fast_track_candidate=True,
+            risk_level="read_only",
+            budget_remaining=None,
+            reasoning=["forced_for_test"],
+            replay_fingerprint="analysis_fast_track_fp",
+            workflow_entry_state="planned",
+            controlled_execution_plan={
+                "entry_state": "planned",
+                "states": ["planned", "delegating", "executing", "verifying", "completed", "failed"],
+            },
+        )
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, tools, model
+            return {
+                "content": "当前 core 侧可用能力摘要：可做只读代码/仓库探测，不执行写入。",
+                "tool_calls": [],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(
+            self._collect_events(
+                run_multi_agent_pipeline(
+                    message="只读探测：输出当前 core 侧可用能力摘要，不做任何写入。",
+                    session_id="analysis-fast-track__core",
+                    core_execution_session_id="analysis-fast-track__core",
+                    risk_level="read_only",
+                    route_decision=forced_decision.to_dict(),
+                    forced_route_semantic="core_execution",
+                    enable_child_execution=True,
+                    child_llm_call=_mock_child_llm,
+                    child_tool_executor=_mock_tool_executor,
+                    store=store,
+                    mailbox=mailbox,
+                )
+            )
+        )
+
+        event_types = [e.get("type") for e in events]
+        assert "fast_track_start" in event_types
+        assert "fast_track_auto_complete" in event_types
+
+        stage_event = next(e for e in events if e["type"] == "tool_stage")
+        assert stage_event["reason"] == "submitted_completion"
+        assert stage_event["details"]["execution_mode"] == "fast_track"
+        assert stage_event["details"]["task_completed"] is True
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        assert receipt_event.get("stop_reason") == "submitted_completion"
+        assert receipt_event.get("agent_state", {}).get("task_completed") is True
+        assert "当前 core 侧可用能力摘要" in str(receipt_event.get("agent_state", {}).get("final_answer") or "")
+
+        end_event = next(e for e in events if e["type"] == "pipeline_end")
+        assert end_event["reason"] == "completed"
+        assert end_event.get("execution_mode") == "fast_track"
+
+    def test_pipeline_fast_track_analysis_parent_finalizes_when_no_report_payload(self, monkeypatch, store, mailbox):
+        from agents import pipeline as pipeline_module
+        from agents.pipeline import run_multi_agent_pipeline
+
+        forced_decision = RouterDecision(
+            decision_id="route_analysis_fast_track_parent_finalize_001",
+            created_at="2026-03-13T00:00:00+00:00",
+            task_id="chat_analysis_fast_track_parent_finalize",
+            trace_id="trace_analysis_fast_track_parent_finalize",
+            session_id="analysis-fast-track-parent-finalize__core",
+            task_type="research",
+            selected_role="researcher",
+            selected_model_tier="primary",
+            tool_profile=["read_file", "artifact_reader", "search"],
+            prompt_profile="core_exec_general",
+            injection_mode="minimal",
+            delegation_intent="core_execution",
+            complexity_hint="trivial",
+            core_route="fast_track",
+            fast_track_candidate=True,
+            risk_level="read_only",
+            budget_remaining=None,
+            reasoning=["forced_for_test"],
+            replay_fingerprint="analysis_fast_track_parent_finalize_fp",
+            workflow_entry_state="planned",
+            controlled_execution_plan={
+                "entry_state": "planned",
+                "states": ["planned", "delegating", "executing", "verifying", "completed", "failed"],
+            },
+        )
+
+        async def _mock_run_mini_loop(**kwargs):
+            del kwargs
+            yield {"type": "content", "text": "当前 core 侧可用能力摘要：可做只读探测，不执行写入。"}
+            yield {
+                "type": "loop_end",
+                "reason": "child_reported_completed",
+                "state": {"rounds": 1, "total_tool_calls": 0, "tool_errors": 0},
+            }
+
+        async def _unused_child_llm(messages, tools, model):
+            del messages, tools, model
+            raise AssertionError("run_mini_loop is patched in this test")
+
+        async def _unused_tool_executor(tool_name, arguments, child_session_id):
+            del tool_name, arguments, child_session_id
+            raise AssertionError("run_mini_loop is patched in this test")
+
+        monkeypatch.setattr(pipeline_module, "run_mini_loop", _mock_run_mini_loop)
+
+        events = self._run(
+            self._collect_events(
+                run_multi_agent_pipeline(
+                    message="只读探测：输出当前 core 侧可用能力摘要，不做任何写入。",
+                    session_id="analysis-fast-track-parent-finalize__core",
+                    core_execution_session_id="analysis-fast-track-parent-finalize__core",
+                    risk_level="read_only",
+                    route_decision=forced_decision.to_dict(),
+                    forced_route_semantic="core_execution",
+                    enable_child_execution=True,
+                    child_llm_call=_unused_child_llm,
+                    child_tool_executor=_unused_tool_executor,
+                    store=store,
+                    mailbox=mailbox,
+                )
+            )
+        )
+
+        auto_event = next(e for e in events if e["type"] == "fast_track_auto_complete")
+        assert auto_event["reason"] == "readonly_analysis_parent_finalize_without_explicit_report"
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        assert receipt_event.get("stop_reason") == "submitted_completion"
+        assert receipt_event.get("agent_state", {}).get("task_completed") is True
+        assert "当前 core 侧可用能力摘要" in str(receipt_event.get("agent_state", {}).get("final_answer") or "")
 
     def test_pipeline_experts_spawned(self, store, mailbox, task_board_engine):
         from agents.pipeline import run_multi_agent_pipeline

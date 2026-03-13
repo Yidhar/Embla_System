@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
-from system.boxlite.manager import build_box_session_name, build_boxlite_volume_mounts, teardown_box_session
+from system.boxlite.manager import (
+    _resolve_boxlite_network_mode,
+    build_box_session_name,
+    build_boxlite_volume_mounts,
+    teardown_box_session,
+)
 
 
 def test_build_box_session_name_uses_embla_prefix() -> None:
@@ -56,6 +62,35 @@ def test_build_boxlite_volume_mounts_includes_workspace_project_and_venv(tmp_pat
         project_root=str(project_root),
     )
 
-    assert (str(workspace_root.resolve()), "/workspace", "rw") in mounts
-    assert (str(project_root.resolve()), str(project_root.resolve()), "ro") in mounts
-    assert (str((project_root / ".venv").resolve()), "/workspace/.venv", "ro") in mounts
+    assert (str(workspace_root.resolve()), "/workspace", False) in mounts
+    assert (str(project_root.resolve()), str(project_root.resolve()), True) in mounts
+    assert (str((project_root / ".venv").resolve()), "/workspace/.venv", True) in mounts
+
+
+def test_build_boxlite_volume_mounts_match_sdk_tuple_contract(tmp_path) -> None:
+    boxlite = importlib.import_module("boxlite")
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    mounts = build_boxlite_volume_mounts(
+        workspace_host_root=str(workspace_root),
+        working_dir="/workspace",
+    )
+
+    options = boxlite.BoxOptions(
+        image="python:slim",
+        working_dir="/workspace",
+        volumes=mounts,
+    )
+
+    assert options is not None
+
+
+def test_boxlite_network_mode_matches_sdk_contract() -> None:
+    boxlite = importlib.import_module("boxlite")
+
+    disabled = boxlite.BoxOptions(network=_resolve_boxlite_network_mode(False))
+    enabled = boxlite.BoxOptions(network=_resolve_boxlite_network_mode(True))
+
+    assert disabled is not None
+    assert enabled is not None

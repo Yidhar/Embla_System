@@ -107,6 +107,7 @@ def test_shutdown_services_clears_handle_after_port_release(monkeypatch) -> None
     thread = threading.Thread()
     released_calls: list[tuple[str, int, float]] = []
     flags: list[tuple[str, object]] = []
+    cleanup_calls: list[str] = []
 
     class _Server:
         should_exit = False
@@ -139,6 +140,14 @@ def test_shutdown_services_clears_handle_after_port_release(monkeypatch) -> None
         "_wait_for_tcp_release",
         lambda host, port, timeout_seconds=3.0: released_calls.append((host, port, timeout_seconds)) or True,
     )
+    monkeypatch.setattr(
+        main_module,
+        "close_runtime_network_clients_sync",
+        lambda: cleanup_calls.append("close_runtime_network_clients_sync") or {
+            "litellm": {"attempted": True, "closed": True, "error": ""},
+            "mcp_pool": {"attempted": True, "closed": True, "error": ""},
+        },
+    )
 
     runtime.shutdown_services()
 
@@ -146,5 +155,6 @@ def test_shutdown_services_clears_handle_after_port_release(monkeypatch) -> None
     assert getattr(handle.server, "should_exit") is True
     assert flags == []
     assert released_calls == [("127.0.0.1", 8000, 2.0)]
+    assert cleanup_calls == ["close_runtime_network_clients_sync"]
     assert runtime.services.api_server is None
     assert runtime.services.api_started is False

@@ -80,6 +80,10 @@ def _is_missing_boxlite_module(exc: Exception) -> bool:
     return "No module named 'boxlite'" in str(exc)
 
 
+def _resolve_boxlite_network_mode(enabled: bool) -> str:
+    return "bridge" if bool(enabled) else "none"
+
+
 def _bootstrap_boxlite_sdk(runtime: BoxLiteRuntimeSettings) -> Tuple[bool, str]:
     if not bool(getattr(runtime, "auto_install_sdk", True)):
         return False, "boxlite_sdk_auto_install_disabled"
@@ -167,16 +171,16 @@ def build_boxlite_volume_mounts(
     workspace_host_root: str,
     working_dir: str = "/workspace",
     project_root: str = "",
-) -> List[tuple[str, str, str]]:
+) -> List[tuple[str, str, bool]]:
     workspace_root = Path(str(workspace_host_root or "")).resolve(strict=False)
     if not str(workspace_root).strip():
         raise RuntimeError("workspace_host_root is required for boxlite execution")
 
     resolved_working_dir = str(working_dir or "/workspace").strip() or "/workspace"
-    mounts: List[tuple[str, str, str]] = []
+    mounts: List[tuple[str, str, bool]] = []
     seen: set[tuple[str, str]] = set()
 
-    def _add_mount(host_path: Path, guest_path: str, mode: str) -> None:
+    def _add_mount(host_path: Path, guest_path: str, *, read_only: bool) -> None:
         host_text = str(host_path.resolve(strict=False)).strip()
         guest_text = str(guest_path or "").strip()
         if not host_text or not guest_text:
@@ -185,17 +189,17 @@ def build_boxlite_volume_mounts(
         if key in seen:
             return
         seen.add(key)
-        mounts.append((host_text, guest_text, mode))
+        mounts.append((host_text, guest_text, bool(read_only)))
 
-    _add_mount(workspace_root, resolved_working_dir, "rw")
+    _add_mount(workspace_root, resolved_working_dir, read_only=False)
 
     project_root_path = Path(str(project_root or "")).resolve(strict=False) if str(project_root or "").strip() else None
     if project_root_path is not None:
-        _add_mount(project_root_path, str(project_root_path), "ro")
+        _add_mount(project_root_path, str(project_root_path), read_only=True)
         venv_path = project_root_path / ".venv"
         if venv_path.exists():
             workspace_venv_guest = resolved_working_dir.rstrip("/") + "/.venv"
-            _add_mount(venv_path, workspace_venv_guest, "ro")
+            _add_mount(venv_path, workspace_venv_guest, read_only=True)
 
     return mounts
 
@@ -266,7 +270,7 @@ class BoxLiteManager:
         if "security" in supported:
             option_kwargs["security"] = security
         if "network" in supported:
-            option_kwargs["network"] = bool(self.settings.network_enabled)
+            option_kwargs["network"] = _resolve_boxlite_network_mode(bool(self.settings.network_enabled))
         options = boxlite.BoxOptions(**option_kwargs)
         box, created = await self._runtime.get_or_create(options, name=box_name)
         await box.__aenter__()

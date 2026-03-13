@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sys
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -661,6 +662,42 @@ class LLMService:
             return obj.get(key, default)
         return getattr(obj, key, default)
 
+    @staticmethod
+    def _normalize_openai_tool_schema(tool: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(tool, dict):
+            return None
+
+        tool_type = str(tool.get("type") or "").strip().lower()
+        function_payload = tool.get("function")
+        if tool_type == "function" and isinstance(function_payload, dict):
+            return {
+                "type": "function",
+                "function": deepcopy(function_payload),
+            }
+
+        function_name = str(tool.get("name") or "").strip()
+        parameters = tool.get("parameters")
+        if function_name and isinstance(parameters, dict):
+            function_schema: Dict[str, Any] = {
+                "name": function_name,
+                "description": str(tool.get("description") or "").strip(),
+                "parameters": deepcopy(parameters),
+            }
+            return {
+                "type": "function",
+                "function": function_schema,
+            }
+        return None
+
+    @classmethod
+    def _normalize_openai_tool_schemas(cls, tools: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for tool in tools or []:
+            item = cls._normalize_openai_tool_schema(tool)
+            if item is not None:
+                normalized.append(item)
+        return normalized
+
     def _merge_stream_tool_call_deltas(self, buffers: Dict[int, Dict[str, Any]], delta_tool_calls: Any) -> None:
         if not delta_tool_calls:
             return
@@ -910,7 +947,9 @@ class LLMService:
 
                 request_kwargs: Dict[str, Any] = {}
                 if tools:
-                    request_kwargs["tools"] = tools
+                    normalized_tools = self._normalize_openai_tool_schemas(tools)
+                    if normalized_tools:
+                        request_kwargs["tools"] = normalized_tools
                     if tool_choice is not None:
                         request_kwargs["tool_choice"] = tool_choice
 

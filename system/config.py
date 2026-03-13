@@ -1518,8 +1518,8 @@ def build_system_prompt_for_route_semantic(
     """
     按路由语义构建裁剪后的系统提示词。
 
-    - shell_readonly: Shell 只读 — 完整对话风格 + 技能元数据，不注入工具指令
-    - shell_clarify: Shell 澄清 — 完整对话风格 + 技能元数据，不注入工具指令
+    - shell_readonly: Shell 只读 — 完整对话风格 + 技能元数据；不注入通用 agentic tool DNA，但会注入只读工具曝光口径
+    - shell_clarify: Shell 澄清 — 完整对话风格 + 技能元数据；不注入通用 agentic tool DNA
     - core_execution: Core 执行 — 使用精简 core_exec_base + 工具指令，不注入闲聊风格
 
     异常时降级到原始 build_system_prompt()。

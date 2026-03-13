@@ -584,6 +584,26 @@ def _build_chat_route_prompt_hints(route_meta: Dict[str, Any]) -> str:
 
     if route_semantic == "shell_readonly":
         lines.append(_render_chat_route_prompt_block("agents/shell/blocks/shell_route_policy_readonly.md"))
+        available_tool_names_raw = route_meta.get("_shell_available_tool_names")
+        available_tool_names: List[str] = []
+        if isinstance(available_tool_names_raw, list):
+            for item in available_tool_names_raw:
+                text = str(item or "").strip()
+                if text:
+                    available_tool_names.append(text)
+        available_tool_count = int(
+            route_meta.get("_shell_available_tool_count") or len(available_tool_names)
+        )
+        if available_tool_names or available_tool_count > 0:
+            lines.append(
+                _render_chat_route_prompt_block(
+                    "agents/shell/blocks/shell_runtime_available_tools.md",
+                    variables={
+                        "available_tool_count": available_tool_count,
+                        "available_tool_names": ", ".join(available_tool_names) or "none",
+                    },
+                )
+            )
     elif route_semantic == "shell_clarify":
         lines.append(_render_chat_route_prompt_block("agents/shell/blocks/shell_route_policy_clarify.md"))
     else:

@@ -183,6 +183,7 @@ class CoreAgent:
         """
         router_decision = dispatch.get("router_decision") if isinstance(dispatch.get("router_decision"), dict) else {}
         goal_text = str(dispatch.get("goal") or "").strip()
+        intent_type = str(dispatch.get("intent_type") or router_decision.get("task_type") or "").strip().lower()
         risk_level = str(dispatch.get("risk_level") or router_decision.get("risk_level") or "").strip().lower()
         complexity_hint = self._normalize_complexity_hint(
             dispatch.get("complexity_hint", router_decision.get("complexity_hint", "standard"))
@@ -192,9 +193,15 @@ class CoreAgent:
         estimated_changed_lines = self._safe_non_negative_int(dispatch.get("estimated_changed_lines"))
         requested_tools = self._normalize_string_list(dispatch.get("requested_tools"))
         router_tools = self._normalize_string_list(dispatch.get("tool_profile"))
+        readonly_analysis_probe = (
+            intent_type == "analysis"
+            and risk_level == "read_only"
+            and estimated_changed_lines == 0
+            and not target_files
+        )
 
         reason_codes: List[str] = []
-        if complexity_hint != "trivial":
+        if complexity_hint != "trivial" and not readonly_analysis_probe:
             reason_codes.append("FAST_TRACK_HINT_NOT_TRIVIAL")
         if risk_level in FAST_TRACK_HIGH_RISK_LEVELS:
             reason_codes.append("FAST_TRACK_HIGH_RISK")
@@ -223,6 +230,7 @@ class CoreAgent:
             "blocked_tools": sorted(FAST_TRACK_BLOCKED_TOOLS),
             "tool_subset": fast_track_tools,
             "risk_level": risk_level,
+            "intent_type": intent_type,
         }
 
     def build_contract_input(self, dispatch: Dict[str, Any], *, session_id: str = "") -> CoreExecutionContractInput:

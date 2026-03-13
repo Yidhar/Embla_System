@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -112,6 +113,42 @@ def test_brainstem_bootstrap_shutdown_skips_when_owned_by_main(monkeypatch, tmp_
     assert report["enabled"] is False
     assert report["reason"] == "owned_by_main"
     assert called["value"] is False
+
+
+def test_api_lifespan_shutdown_closes_runtime_network_clients(monkeypatch) -> None:
+    cleanup_calls: list[str] = []
+
+    monkeypatch.setattr(api_server, "_bootstrap_global_mutex_lease_state", lambda: {"passed": True})
+    monkeypatch.setattr(api_server, "_bootstrap_budget_guard_state", lambda: {"passed": True})
+    monkeypatch.setattr(
+        api_server,
+        "_bootstrap_immutable_dna_preflight",
+        lambda: {"required": False, "enabled": False, "passed": True, "reason": "disabled"},
+    )
+    monkeypatch.setattr(api_server, "_bootstrap_immutable_dna_monitor_startup", lambda: {"enabled": False, "passed": True})
+    monkeypatch.setattr(api_server, "_bootstrap_brainstem_control_plane_startup", lambda: {"enabled": False, "passed": True})
+    monkeypatch.setattr(api_server, "_bootstrap_immutable_dna_monitor_shutdown", lambda: {"passed": True})
+    monkeypatch.setattr(api_server, "_bootstrap_brainstem_control_plane_shutdown", lambda: {"passed": True})
+
+    async def _fake_close_runtime_network_clients():
+        cleanup_calls.append("close_runtime_network_clients")
+        return {
+            "litellm": {"attempted": True, "closed": True, "error": ""},
+            "mcp_pool": {"attempted": True, "closed": True, "error": ""},
+        }
+
+    monkeypatch.setattr(api_server, "close_runtime_network_clients", _fake_close_runtime_network_clients)
+
+    async def _run() -> None:
+        async with api_server.lifespan(api_server.app):
+            pass
+
+    asyncio.run(_run())
+
+    assert cleanup_calls == ["close_runtime_network_clients"]
+    report = getattr(api_server.app.state, "runtime_client_shutdown")
+    assert report["litellm"]["closed"] is True
+    assert report["mcp_pool"]["closed"] is True
 
 
 def test_global_mutex_bootstrap_initializes_idle_state(tmp_path: Path) -> None:

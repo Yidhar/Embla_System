@@ -287,12 +287,37 @@ def test_shell_readonly_prompt_hints_allow_readonly_tools() -> None:
             "route_semantic": "shell_readonly",
             "dispatch_to_core": False,
             "router_decision": {"delegation_intent": "read_only_exploration"},
+            "_shell_available_tool_names": ["memory_read", "get_system_status", "dispatch_to_core"],
+            "_shell_available_tool_count": 3,
         }
     )
 
     assert "Do not call tools" not in prompt_hints
     assert "read-only Shell tools" in prompt_hints
     assert "dispatch_to_core" in prompt_hints
+    assert "current_turn_tool_count=3" in prompt_hints
+    assert "memory_read, get_system_status, dispatch_to_core" in prompt_hints
+    assert "Use native tool calling only." in prompt_hints
+    assert "<assistant to=tool>" in prompt_hints
+
+
+def test_select_shell_tool_choice_prefers_explicit_single_tool() -> None:
+    choice = api_server._select_shell_tool_choice(
+        "请先列出工具，再只调用 get_system_status",
+        ["memory_read", "get_system_status", "dispatch_to_core"],
+    )
+
+    assert isinstance(choice, dict)
+    assert choice["type"] == "function"
+    assert choice["function"]["name"] == "get_system_status"
+
+
+def test_select_shell_tool_choice_defaults_to_auto_without_unique_match() -> None:
+    choice = api_server._select_shell_tool_choice(
+        "请总结当前系统状态",
+        ["memory_read", "get_system_status", "dispatch_to_core"],
+    )
+    assert choice == "auto"
 
 
 def test_route_prompt_hints_include_guard_lines_from_prompt_blocks() -> None:
@@ -416,6 +441,57 @@ def test_chat_stream_emits_shell_available_tools_event(monkeypatch) -> None:
     assert any(item.get("type") == "route_decision" for item in payloads)
 
 
+def test_chat_stream_explicit_shell_tool_request_forces_tool_choice(monkeypatch) -> None:
+    captured_tool_choices = []
+
+    class _FakeLLMService:
+        def stream_chat_with_context(self, messages, temperature, model_override=None, tools=None, tool_choice="auto"):
+            del messages, temperature, model_override, tools
+            captured_tool_choices.append(tool_choice)
+
+            async def _gen():
+                yield "data: {\"type\":\"content\",\"text\":\"ok\"}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return _gen()
+
+    async def _collect_payloads(response):
+        rows = []
+        async for chunk in response.body_iterator:
+            text = chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)
+            for line in text.splitlines():
+                if not line.startswith("data: "):
+                    continue
+                raw = line[6:].strip()
+                if not raw or raw == "[DONE]":
+                    continue
+                rows.append(json.loads(raw))
+        return rows
+
+    async def _no_memory(_question: str, *, limit: int = 5):
+        del limit
+        return []
+
+    monkeypatch.setattr(api_server, "get_llm_service", lambda: _FakeLLMService())
+    monkeypatch.setattr(api_server, "_recall_memory_lines", _no_memory)
+
+    req = api_server.ChatRequest(
+        message="只调用 get_system_status，不要做别的事",
+        stream=True,
+        session_id="explicit-shell-tool-choice-session",
+        stream_protocol="sse_json_v1",
+        temporary=True,
+    )
+    response = asyncio.run(api_server.chat_stream(req))
+    payloads = asyncio.run(_collect_payloads(response))
+
+    assert payloads[0]["type"] == "session_meta"
+    assert captured_tool_choices
+    assert isinstance(captured_tool_choices[0], dict)
+    assert captured_tool_choices[0]["function"]["name"] == "get_system_status"
+
+
+
 def test_chat_stream_dispatch_to_core_triggers_real_core_pipeline(monkeypatch) -> None:
     class _FakeLLMService:
         def __init__(self) -> None:
@@ -511,6 +587,7 @@ def test_chat_stream_dispatch_to_core_triggers_real_core_pipeline(monkeypatch) -
     )
 
     assert len(pipeline_calls) == 1
+    assert str(pipeline_calls[0].get("message") or "") == "修复后端bug"
     assert str(pipeline_calls[0].get("forced_route_semantic") or "") == "core_execution"
     assert len(deferred_emits) == 1
     assert str(deferred_emits[0]["chunk_data"].get("agent_id") or "") == "review-child-001"
