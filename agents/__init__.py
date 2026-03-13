@@ -1,49 +1,65 @@
 """Brain-layer public contracts (`agents` is canonical runtime namespace)."""
 
-from agents.contract_runtime import (
-    CoreExecutionContractInput,
-    build_core_execution_contract_payload,
-    build_core_execution_messages,
-)
-from agents.core_agent import CoreAgent, CoreAgentConfig
-from agents.dev_agent import DevAgent, DevAgentConfig
-from agents.expert_agent import ExpertAgent, ExpertAgentConfig
-from agents.meta_agent import DispatchReceipt, Goal, MetaAgentRuntime, ReflectionResult, SubTask, TaskFeedback
-from agents.pipeline import run_multi_agent_pipeline
-from agents.prompt_engine import PromptAssembler
-from agents.review_agent import ReviewAgent, ReviewAgentConfig, ReviewResult
-from agents.router_engine import RouterDecision, RouterRequest, TaskRouterEngine
-from agents.runtime.mini_loop import MiniLoopConfig
-from agents.shell_agent import ShellAgent
-from agents.tool_loop import convert_structured_tool_calls, get_agentic_tool_definitions, run_agentic_loop
+from __future__ import annotations
 
-__all__ = [
-    "CoreExecutionContractInput",
-    "build_core_execution_contract_payload",
-    "build_core_execution_messages",
-    "CoreAgent",
-    "CoreAgentConfig",
-    "ExpertAgent",
-    "ExpertAgentConfig",
-    "DevAgent",
-    "DevAgentConfig",
-    "MetaAgentRuntime",
-    "Goal",
-    "SubTask",
-    "TaskFeedback",
-    "ReflectionResult",
-    "DispatchReceipt",
-    "PromptAssembler",
-    "MiniLoopConfig",
-    "ReviewAgent",
-    "ReviewAgentConfig",
-    "ReviewResult",
-    "TaskRouterEngine",
-    "RouterRequest",
-    "RouterDecision",
-    "ShellAgent",
-    "run_multi_agent_pipeline",
-    "get_agentic_tool_definitions",
-    "convert_structured_tool_calls",
-    "run_agentic_loop",  # public re-export
-]
+from importlib import import_module
+from typing import Any, Dict, Tuple
+
+_ATTR_EXPORTS: Dict[str, Tuple[str, str]] = {
+    "CoreExecutionContractInput": ("agents.contract_runtime", "CoreExecutionContractInput"),
+    "build_core_execution_contract_payload": ("agents.contract_runtime", "build_core_execution_contract_payload"),
+    "build_core_execution_messages": ("agents.contract_runtime", "build_core_execution_messages"),
+    "CoreAgent": ("agents.core_agent", "CoreAgent"),
+    "CoreAgentConfig": ("agents.core_agent", "CoreAgentConfig"),
+    "ExpertAgent": ("agents.expert_agent", "ExpertAgent"),
+    "ExpertAgentConfig": ("agents.expert_agent", "ExpertAgentConfig"),
+    "DevAgent": ("agents.dev_agent", "DevAgent"),
+    "DevAgentConfig": ("agents.dev_agent", "DevAgentConfig"),
+    "MetaAgentRuntime": ("agents.meta_agent", "MetaAgentRuntime"),
+    "Goal": ("agents.meta_agent", "Goal"),
+    "SubTask": ("agents.meta_agent", "SubTask"),
+    "TaskFeedback": ("agents.meta_agent", "TaskFeedback"),
+    "ReflectionResult": ("agents.meta_agent", "ReflectionResult"),
+    "DispatchReceipt": ("agents.meta_agent", "DispatchReceipt"),
+    "PromptAssembler": ("agents.prompt_engine", "PromptAssembler"),
+    "MiniLoopConfig": ("agents.runtime.mini_loop", "MiniLoopConfig"),
+    "ReviewAgent": ("agents.review_agent", "ReviewAgent"),
+    "ReviewAgentConfig": ("agents.review_agent", "ReviewAgentConfig"),
+    "ReviewResult": ("agents.review_agent", "ReviewResult"),
+    "TaskRouterEngine": ("agents.router_engine", "TaskRouterEngine"),
+    "RouterRequest": ("agents.router_engine", "RouterRequest"),
+    "RouterDecision": ("agents.router_engine", "RouterDecision"),
+    "ShellAgent": ("agents.shell_agent", "ShellAgent"),
+    "run_multi_agent_pipeline": ("agents.pipeline", "run_multi_agent_pipeline"),
+    "get_agentic_tool_definitions": ("agents.tool_loop", "get_agentic_tool_definitions"),
+    "convert_structured_tool_calls": ("agents.tool_loop", "convert_structured_tool_calls"),
+    "run_agentic_loop": ("agents.tool_loop", "run_agentic_loop"),
+}
+
+_MODULE_EXPORTS = {
+    "pipeline": "agents.pipeline",
+}
+
+__all__ = list(_ATTR_EXPORTS.keys())
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _MODULE_EXPORTS.get(name)
+    if module_name:
+        module = import_module(module_name)
+        globals()[name] = module
+        return module
+
+    target = _ATTR_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    module_name, attr_name = target
+    module = import_module(module_name)
+    value = getattr(module, attr_name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__) | set(_MODULE_EXPORTS))
