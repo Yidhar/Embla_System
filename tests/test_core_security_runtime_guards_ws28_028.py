@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from core.security import BudgetGuardController, KillSwitchController
@@ -62,6 +63,35 @@ def test_budget_guard_controller_initializes_baseline_state(tmp_path: Path) -> N
     second = controller.ensure_baseline_state(requested_by="unit-test")
     assert second["baseline_written"] is False
     assert second["status"] == "ok"
+
+
+def test_budget_guard_idle_baseline_does_not_become_stale(tmp_path: Path) -> None:
+    controller = BudgetGuardController(state_file=tmp_path / "budget_guard_state.json")
+    stale_generated_at = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    controller.state_file.write_text(
+        json.dumps(
+            {
+                "generated_at": stale_generated_at,
+                "status": "ok",
+                "reason_code": "BUDGET_GUARD_BASELINE_READY",
+                "reason_text": "budget guard baseline state initialized",
+                "task_id": "",
+                "tool_name": "",
+                "action": "",
+                "details": {
+                    "baseline": True,
+                    "requested_by": "unit-test",
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    state = controller.read_state(stale_warning_seconds=60.0, stale_critical_seconds=120.0)
+    assert state["status"] == "ok"
+    assert state["reason_code"] == "BUDGET_GUARD_BASELINE_READY"
+    assert state["details"]["baseline"] is True
 
 
 def test_killswitch_controller_normalizes_legacy_native_tool_plan(tmp_path: Path) -> None:

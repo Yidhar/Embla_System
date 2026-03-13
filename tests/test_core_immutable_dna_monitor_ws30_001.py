@@ -113,3 +113,40 @@ def test_immutable_dna_integrity_monitor_emits_tamper_event() -> None:
         assert state_payload["tamper_detected"] is True
     finally:
         _cleanup_case_root(case_root)
+
+
+def test_immutable_dna_integrity_monitor_resets_baseline_on_restart() -> None:
+    case_root = _make_case_root("test_core_immutable_dna_monitor_ws30_001")
+    try:
+        _write_prompts(case_root)
+        loader = ImmutableDNALoader(
+            root_dir=case_root,
+            manifest_path=case_root / "immutable_dna_manifest.spec",
+            audit_file=case_root / "immutable_dna_audit.jsonl",
+        )
+        loader.bootstrap_manifest()
+        state_file = case_root / "immutable_dna_integrity_state.json"
+
+        first_monitor = ImmutableDNAIntegrityMonitor(
+            loader=loader,
+            state_file=state_file,
+            interval_seconds=5.0,
+        )
+        first = first_monitor.run_once()
+        assert first["status"] == "ok"
+        first_manifest_sha = str(first["manifest_file_sha256"])
+
+        (case_root / "agentic_tool_prompt.md").write_text("AGENTIC_PROMPT_APPROVED_V2", encoding="utf-8")
+        loader.bootstrap_manifest()
+        second_monitor = ImmutableDNAIntegrityMonitor(
+            loader=loader,
+            state_file=state_file,
+            interval_seconds=5.0,
+        )
+        second = second_monitor.run_once()
+        assert second["status"] == "ok"
+        assert second["tamper_detected"] is False
+        assert second["baseline_manifest_file_sha256"] == second["manifest_file_sha256"]
+        assert second["manifest_file_sha256"] != first_manifest_sha
+    finally:
+        _cleanup_case_root(case_root)

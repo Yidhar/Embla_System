@@ -388,7 +388,7 @@ class ImmutableDNAIntegrityMonitor:
         self.interval_seconds = max(1.0, float(interval_seconds))
         self.allow_manifest_hash_rotation = bool(allow_manifest_hash_rotation)
         self._last_tamper_signature = ""
-        self._baseline_manifest_file_sha = self._load_baseline_manifest_sha()
+        self._baseline_manifest_file_sha = ""
 
     def run_once(self) -> Dict[str, Any]:
         generated_at = _utc_iso()
@@ -506,15 +506,6 @@ class ImmutableDNAIntegrityMonitor:
         payload["reason_text"] = str(payload.get("reason_text") or "")
         payload["tamper_detected"] = bool(payload.get("tamper_detected"))
         return payload
-
-    def _load_baseline_manifest_sha(self) -> str:
-        state = self.read_state(self.state_file)
-        if str(state.get("status") or "") in {"unknown", "warning"} and not state.get("manifest_file_sha256"):
-            return ""
-        baseline = str(state.get("baseline_manifest_file_sha256") or "").strip()
-        if baseline:
-            return baseline
-        return str(state.get("manifest_file_sha256") or "").strip()
 
     def _emit_sample(self, payload: Dict[str, Any]) -> None:
         if self.event_emitter is None:

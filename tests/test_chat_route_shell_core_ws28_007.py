@@ -62,6 +62,25 @@ def test_chat_route_prompt_event_payload_prefers_gateway_compose_metrics() -> No
     assert payload["model_id"] == "gpt-4.1-mini"
 
 
+def test_chat_route_prompt_event_payload_treats_empty_tail_as_block1_only_cache_hit() -> None:
+    payload = api_server._build_chat_route_prompt_event_payload(
+        {
+            "route_semantic": "shell_readonly",
+            "_slice_prefix_hash": "abc123",
+            "_slice_tail_hash": "",
+            "_slice_prefix_cache_hit": True,
+            "_slice_block1_cache_hit": True,
+            "_slice_block2_cache_hit": False,
+            "router_decision": {},
+        }
+    )
+
+    assert payload["tail_hash"] == ""
+    assert payload["block1_cache_hit"] is True
+    assert payload["block2_cache_hit"] is False
+    assert payload["prefix_cache_hit"] is True
+
+
 def test_build_route_model_override_resolves_shell_and_core_targets(monkeypatch) -> None:
     fake_cfg = SimpleNamespace(
         api=SimpleNamespace(

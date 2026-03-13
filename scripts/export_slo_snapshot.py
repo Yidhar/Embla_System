@@ -8,7 +8,7 @@ import math
 import shutil
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -25,6 +25,9 @@ STATUS_ORDER: Dict[str, int] = {
     "warning": 2,
     "critical": 3,
 }
+
+_PROMPT_RECOVERY_MIN_SAMPLES_DEFAULT = 5
+_PROMPT_PREFIX_CACHE_WINDOW_HOURS_DEFAULT = 6.0
 
 
 @dataclass(frozen=True)
@@ -713,10 +716,40 @@ def _normalize_core_execution_route(raw_route: Any) -> str:
     return route
 
 
+def _prompt_selected_layers(payload: Dict[str, Any]) -> List[str]:
+    selected_layer_counts = payload.get("selected_layer_counts")
+    if isinstance(selected_layer_counts, dict) and selected_layer_counts:
+        return [str(layer or "L_UNKNOWN") for layer, raw_count in selected_layer_counts.items() if _to_int(raw_count, 0) > 0]
+    selected_layers = payload.get("selected_layers")
+    if isinstance(selected_layers, list):
+        return [str(layer or "L_UNKNOWN") for layer in selected_layers]
+    return []
+
+
+def _prompt_recovery_eligible(payload: Dict[str, Any]) -> bool:
+    if bool(payload.get("recovery_hit")):
+        return True
+    return any(str(layer).strip().upper().startswith("L4") for layer in _prompt_selected_layers(payload))
+
+
+def _prompt_prefix_cache_effective_hit(payload: Dict[str, Any]) -> bool:
+    block1_hit = bool(payload.get("block1_cache_hit"))
+    block2_hit = bool(payload.get("block2_cache_hit"))
+    tail_hash = str(payload.get("tail_hash") or "").strip()
+    if bool(payload.get("prefix_cache_hit")):
+        return True
+    if "block1_cache_hit" in payload or "block2_cache_hit" in payload:
+        return block1_hit and (block2_hit or not tail_hash)
+    return False
+
+
 def _collect_prompt_injection_quality(
     events: List[Dict[str, Any]],
     *,
+    now_dt: Optional[datetime] = None,
+    recovery_min_samples: int = _PROMPT_RECOVERY_MIN_SAMPLES_DEFAULT,
     prefix_cache_min_samples: int = 20,
+    prefix_cache_window_hours: float = _PROMPT_PREFIX_CACHE_WINDOW_HOURS_DEFAULT,
     tail_churn_min_samples: int = 5,
 ) -> Dict[str, Dict[str, Any]]:
     decisions: List[Dict[str, Any]] = []
@@ -730,13 +763,19 @@ def _collect_prompt_injection_quality(
         if not _has_canonical_route_semantic(payload.get("route_semantic")):
             ignored_legacy_noncanonical_sample_count += 1
             continue
-        decisions.append(payload)
+        decisions.append(
+            {
+                "payload": payload,
+                "timestamp": _parse_iso_datetime(row.get("timestamp")),
+            }
+        )
 
     total = len(decisions)
     layer_counts: Dict[str, int] = {}
     trigger_counts: Dict[str, int] = {}
     selected_slice_total = 0
     recovery_hit_count = 0
+    recovery_eligible_count = 0
     conflict_drop_count = 0
     delegation_hit_count = 0
     shell_readonly_hit_count = 0
@@ -759,12 +798,21 @@ def _collect_prompt_injection_quality(
         "unspecified": 0,
     }
     prefix_cache_hit_count = 0
+    prefix_cache_sample_count = 0
+    prefix_seen_hashes: set[str] = set()
+    prefix_cache_cutoff = None
+    if now_dt is not None:
+        prefix_cache_cutoff = now_dt - timedelta(hours=max(0.0, float(prefix_cache_window_hours)))
     tail_hashes: List[str] = []
     contract_upgrade_latencies_ms: List[float] = []
     recovery_survival_total = 0
     recovery_survival_count = 0
 
-    for payload in decisions:
+    for decision in decisions:
+        payload = decision.get("payload") if isinstance(decision, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        decision_ts = decision.get("timestamp") if isinstance(decision, dict) else None
         selected_layer_counts = payload.get("selected_layer_counts")
         if isinstance(selected_layer_counts, dict) and selected_layer_counts:
             for layer, raw_count in selected_layer_counts.items():
@@ -796,8 +844,10 @@ def _collect_prompt_injection_quality(
         if dispatch_to_core:
             dispatch_to_core_count += 1
 
-        if bool(payload.get("recovery_hit")):
-            recovery_hit_count += 1
+        if _prompt_recovery_eligible(payload):
+            recovery_eligible_count += 1
+            if bool(payload.get("recovery_hit")):
+                recovery_hit_count += 1
 
         dropped_conflict_count = _to_int(payload.get("dropped_conflict_count"), -1)
         if dropped_conflict_count < 0:
@@ -849,13 +899,22 @@ def _collect_prompt_injection_quality(
                 core_execution_route_counts.get(core_execution_route, 0)
             ) + 1
 
-        prefix_cache_hit = payload.get("prefix_cache_hit")
-        if isinstance(prefix_cache_hit, bool):
-            if prefix_cache_hit:
-                prefix_cache_hit_count += 1
-        else:
-            if bool(payload.get("block1_cache_hit")) and bool(payload.get("block2_cache_hit")):
-                prefix_cache_hit_count += 1
+        if prefix_cache_cutoff is None or (
+            isinstance(decision_ts, datetime) and decision_ts >= prefix_cache_cutoff
+        ):
+            prefix_hash = str(payload.get("prefix_hash") or "").strip()
+            effective_prefix_hit = _prompt_prefix_cache_effective_hit(payload)
+            if prefix_hash:
+                if prefix_hash in prefix_seen_hashes:
+                    prefix_cache_sample_count += 1
+                    if effective_prefix_hit:
+                        prefix_cache_hit_count += 1
+                else:
+                    prefix_seen_hashes.add(prefix_hash)
+            else:
+                prefix_cache_sample_count += 1
+                if effective_prefix_hit:
+                    prefix_cache_hit_count += 1
 
         tail_hash = str(payload.get("tail_hash") or "").strip()
         if tail_hash:
@@ -874,7 +933,9 @@ def _collect_prompt_injection_quality(
     trigger_distribution = (
         {trigger: (count / total) for trigger, count in trigger_counts.items()} if total > 0 else {}
     )
-    recovery_slice_hit_rate = (recovery_hit_count / total) if total > 0 else None
+    recovery_slice_hit_rate = (
+        (recovery_hit_count / recovery_eligible_count) if recovery_eligible_count > 0 else None
+    )
     delegation_hit_rate = (delegation_hit_count / total) if total > 0 else None
     shell_readonly_hit_rate = (shell_readonly_hit_count / total) if total > 0 else None
     readonly_write_tool_exposure_rate = (
@@ -900,7 +961,9 @@ def _collect_prompt_injection_quality(
         route: (count / core_execution_sample_count) if core_execution_sample_count > 0 else None
         for route, count in core_execution_route_counts.items()
     }
-    prefix_cache_hit_rate = (prefix_cache_hit_count / total) if total > 0 else None
+    prefix_cache_hit_rate = (
+        (prefix_cache_hit_count / prefix_cache_sample_count) if prefix_cache_sample_count > 0 else None
+    )
 
     tail_churn_rate: Optional[float] = None
     if len(tail_hashes) > 1:
@@ -925,7 +988,7 @@ def _collect_prompt_injection_quality(
         critical=0.05,
         higher_is_bad=False,
     )
-    if total <= 0:
+    if recovery_eligible_count < max(1, int(recovery_min_samples)):
         recovery_slice_status = "unknown"
     conflict_drop_status = _classify_numeric(
         float(conflict_drop_count) if total > 0 else None,
@@ -973,11 +1036,11 @@ def _collect_prompt_injection_quality(
     core_execution_route_distribution_status = "ok" if core_execution_sample_count > 0 else "unknown"
     prefix_cache_status = _classify_numeric(
         prefix_cache_hit_rate,
-        warning=0.8,
-        critical=0.6,
+        warning=0.6,
+        critical=0.3,
         higher_is_bad=False,
     )
-    if total < max(1, int(prefix_cache_min_samples)):
+    if prefix_cache_sample_count < max(1, int(prefix_cache_min_samples)):
         prefix_cache_status = "unknown"
     tail_churn_status = _classify_numeric(
         tail_churn_rate,
@@ -1029,8 +1092,10 @@ def _collect_prompt_injection_quality(
         "recovery_slice_hit_rate": {
             "value": recovery_slice_hit_rate,
             "unit": "ratio",
-            "sample_count": total,
+            "sample_count": recovery_eligible_count,
             "hit_count": recovery_hit_count,
+            "observed_total_count": total,
+            "min_sample_count": max(1, int(recovery_min_samples)),
             "thresholds": {
                 "warning": 0.2,
                 "critical": 0.05,
@@ -1139,13 +1204,15 @@ def _collect_prompt_injection_quality(
         "prompt_prefix_cache_hit_rate": {
             "value": prefix_cache_hit_rate,
             "unit": "ratio",
-            "sample_count": total,
+            "sample_count": prefix_cache_sample_count,
             "hit_count": prefix_cache_hit_count,
+            "observed_total_count": total,
             "thresholds": {
-                "warning": 0.8,
-                "critical": 0.6,
+                "warning": 0.6,
+                "critical": 0.3,
             },
             "min_sample_count": max(1, int(prefix_cache_min_samples)),
+            "window_hours": float(prefix_cache_window_hours),
             "status": prefix_cache_status,
             **prompt_metric_meta,
         },
@@ -1197,7 +1264,9 @@ def _load_threshold_config(config_file: Path) -> Dict[str, Any]:
         "subagent_rollout_percent": 100,
         "fail_open_budget_ratio": 0.15,
         "workflow_critical_event_window_hours": 336.0,
+        "prompt_recovery_min_samples": _PROMPT_RECOVERY_MIN_SAMPLES_DEFAULT,
         "prompt_prefix_cache_min_samples": 20,
+        "prompt_prefix_cache_window_hours": _PROMPT_PREFIX_CACHE_WINDOW_HOURS_DEFAULT,
         "prompt_tail_churn_min_samples": 5,
     }
 
@@ -1245,6 +1314,20 @@ def _load_threshold_config(config_file: Path) -> Dict[str, Any]:
             observability.get("prompt_prefix_cache_min_samples"),
             defaults["prompt_prefix_cache_min_samples"],
         ),
+    )
+    defaults["prompt_recovery_min_samples"] = max(
+        1,
+        _to_int(
+            observability.get("prompt_recovery_min_samples"),
+            defaults["prompt_recovery_min_samples"],
+        ),
+    )
+    defaults["prompt_prefix_cache_window_hours"] = max(
+        0.0,
+        _to_float(
+            observability.get("prompt_prefix_cache_window_hours"),
+            defaults["prompt_prefix_cache_window_hours"],
+        ) or defaults["prompt_prefix_cache_window_hours"],
     )
     defaults["prompt_tail_churn_min_samples"] = max(
         2,
@@ -1308,7 +1391,10 @@ def build_snapshot(
     metrics.update(
         _collect_prompt_injection_quality(
             events,
+            now_dt=now_dt,
+            recovery_min_samples=int(thresholds["prompt_recovery_min_samples"]),
             prefix_cache_min_samples=int(thresholds["prompt_prefix_cache_min_samples"]),
+            prefix_cache_window_hours=float(thresholds["prompt_prefix_cache_window_hours"]),
             tail_churn_min_samples=int(thresholds["prompt_tail_churn_min_samples"]),
         )
     )

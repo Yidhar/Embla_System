@@ -287,7 +287,10 @@ def test_build_snapshot_schema_and_values() -> None:
         assert metrics["prompt_slice_count_by_layer"]["selected_layer_counts"]["L4_RECOVERY"] == 1
         assert metrics["injection_trigger_distribution"]["trigger_counts"]["shell_readonly"] == 1
         assert metrics["injection_trigger_distribution"]["trigger_counts"]["core_execution"] == 1
-        assert metrics["recovery_slice_hit_rate"]["value"] == pytest.approx(0.5)
+        assert metrics["recovery_slice_hit_rate"]["value"] == pytest.approx(1.0)
+        assert metrics["recovery_slice_hit_rate"]["sample_count"] == 1
+        assert metrics["recovery_slice_hit_rate"]["observed_total_count"] == 2
+        assert metrics["recovery_slice_hit_rate"]["status"] == "unknown"
         assert metrics["prompt_conflict_drop_count"]["value"] == pytest.approx(2.0)
         assert metrics["delegation_hit_rate"]["value"] == pytest.approx(0.5)
         assert metrics["shell_readonly_hit_rate"]["value"] == pytest.approx(0.5)
@@ -308,6 +311,7 @@ def test_build_snapshot_schema_and_values() -> None:
         assert metrics["core_execution_route_distribution"]["sample_count"] == 1
         assert metrics["core_execution_route_distribution"]["route_counts"]["unspecified"] == 1
         assert metrics["prompt_prefix_cache_hit_rate"]["value"] == pytest.approx(0.5)
+        assert metrics["prompt_prefix_cache_hit_rate"]["window_hours"] == pytest.approx(6.0)
         assert metrics["prompt_tail_churn_rate"]["value"] == pytest.approx(1.0)
         assert metrics["contract_upgrade_latency_ms"]["value"] == pytest.approx(120.0)
         assert metrics["recovery_context_survival_rate"]["value"] == pytest.approx(1.0)
@@ -400,6 +404,72 @@ def test_build_snapshot_ignores_legacy_noncanonical_prompt_events_and_applies_sa
         assert metrics["prompt_tail_churn_rate"]["value"] == pytest.approx(1.0)
         assert metrics["prompt_tail_churn_rate"]["status"] == "unknown"
         assert metrics["prompt_tail_churn_rate"]["min_sample_count"] == 3
+    finally:
+        _cleanup_repo_root(repo_root)
+
+
+def test_build_snapshot_prefix_cache_uses_recent_reuse_window_and_block1_fallback() -> None:
+    repo_root = _make_repo_root()
+    now_dt = datetime.now(timezone.utc)
+
+    try:
+        _write_autonomous_config(
+            repo_root / "config" / "autonomous_runtime.yaml",
+            max_error_rate=0.2,
+            max_latency_p95_ms=300.0,
+            batch_size=1,
+            prompt_prefix_cache_min_samples=1,
+        )
+
+        events = [
+            {
+                "timestamp": (now_dt - timedelta(hours=8)).isoformat(),
+                "event_type": "PromptInjectionComposed",
+                "payload": {
+                    "route_semantic": "shell_readonly",
+                    "trigger": "shell_readonly",
+                    "prefix_hash": "prefix-a",
+                    "tail_hash": "",
+                    "prefix_cache_hit": False,
+                    "block1_cache_hit": False,
+                    "block2_cache_hit": False,
+                },
+            },
+            {
+                "timestamp": (now_dt - timedelta(minutes=10)).isoformat(),
+                "event_type": "PromptInjectionComposed",
+                "payload": {
+                    "route_semantic": "shell_readonly",
+                    "trigger": "shell_readonly",
+                    "prefix_hash": "prefix-a",
+                    "tail_hash": "",
+                    "prefix_cache_hit": False,
+                    "block1_cache_hit": False,
+                    "block2_cache_hit": False,
+                },
+            },
+            {
+                "timestamp": (now_dt - timedelta(minutes=5)).isoformat(),
+                "event_type": "PromptInjectionComposed",
+                "payload": {
+                    "route_semantic": "shell_readonly",
+                    "trigger": "shell_readonly",
+                    "prefix_hash": "prefix-a",
+                    "tail_hash": "",
+                    "prefix_cache_hit": False,
+                    "block1_cache_hit": True,
+                    "block2_cache_hit": False,
+                },
+            },
+        ]
+        _write_jsonl(repo_root / "logs" / "autonomous" / "events.jsonl", events)
+
+        snapshot = build_snapshot(repo_root=repo_root, now=now_dt)
+        metric = snapshot["metrics"]["prompt_prefix_cache_hit_rate"]
+        assert metric["sample_count"] == 1
+        assert metric["hit_count"] == 1
+        assert metric["value"] == pytest.approx(1.0)
+        assert metric["status"] == "ok"
     finally:
         _cleanup_repo_root(repo_root)
 

@@ -164,15 +164,31 @@ class BudgetGuardController:
         status = str(payload.get("status") or "unknown").strip().lower()
         reason_code = str(payload.get("reason_code") or "")
         reason_text = str(payload.get("reason_text") or "")
+        details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+        is_idle_baseline = (
+            bool(details.get("baseline"))
+            and not str(payload.get("task_id") or "").strip()
+            and not str(payload.get("tool_name") or "").strip()
+            and not str(payload.get("action") or "").strip()
+            and status == "ok"
+        )
         if generated_ts is None:
             status = "warning"
             reason_code = "BUDGET_GUARD_TIMESTAMP_INVALID"
             reason_text = "budget guard state timestamp is invalid"
-        elif heartbeat_age_seconds is not None and heartbeat_age_seconds > float(stale_critical_seconds):
+        elif (
+            not is_idle_baseline
+            and heartbeat_age_seconds is not None
+            and heartbeat_age_seconds > float(stale_critical_seconds)
+        ):
             status = "critical"
             reason_code = "BUDGET_GUARD_STATE_STALE_CRITICAL"
             reason_text = "budget guard state is stale beyond critical threshold"
-        elif heartbeat_age_seconds is not None and heartbeat_age_seconds > float(stale_warning_seconds):
+        elif (
+            not is_idle_baseline
+            and heartbeat_age_seconds is not None
+            and heartbeat_age_seconds > float(stale_warning_seconds)
+        ):
             status = "warning"
             reason_code = "BUDGET_GUARD_STATE_STALE_WARNING"
             reason_text = "budget guard state is stale beyond warning threshold"

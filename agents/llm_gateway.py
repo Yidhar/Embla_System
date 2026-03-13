@@ -596,6 +596,11 @@ class LLMGateway:
             core_execution_hit = normalized_route_semantic == "core_execution"
             readonly_write_tool_exposed = shell_readonly_hit and bool(readonly_write_tool_selected_ids)
             readonly_write_tool_candidate_count = len(readonly_write_tool_selected_ids) + len(readonly_write_tool_dropped_ids)
+            prefix_hash = str(compose_decision.prefix_hash or "")
+            tail_hash = str(compose_decision.tail_hash or "")
+            prefix_cache_hit = bool(cache_outcome.block1_hit) and (
+                bool(cache_outcome.block2_hit) or not bool(tail_hash)
+            )
 
             payload: Dict[str, Any] = {
                 "task_type": str(request.task_type or ""),
@@ -622,9 +627,9 @@ class LLMGateway:
                 "selected_layers": selected_layers,
                 "selected_layer_counts": selected_layer_counts,
                 "recovery_hit": recovery_hit,
-                "prefix_hash": str(compose_decision.prefix_hash or ""),
-                "tail_hash": str(compose_decision.tail_hash or ""),
-                "prefix_cache_hit": bool(cache_outcome.block1_hit and cache_outcome.block2_hit),
+                "prefix_hash": prefix_hash,
+                "tail_hash": tail_hash,
+                "prefix_cache_hit": prefix_cache_hit,
                 "block1_cache_hit": bool(cache_outcome.block1_hit),
                 "block2_cache_hit": bool(cache_outcome.block2_hit),
                 "token_budget_before": int(compose_decision.token_budget_before),

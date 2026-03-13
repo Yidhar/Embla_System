@@ -146,3 +146,56 @@ def test_llm_gateway_emits_prompt_injection_composed_event() -> None:
         assert payload_b["trace_id"] == "trace-b"
     finally:
         _cleanup_case_root(case_root)
+
+
+def test_llm_gateway_marks_prefix_cache_hit_when_only_block1_is_cacheable() -> None:
+    case_root = _make_case_root("test_llm_gateway_prompt_observability_p1")
+    try:
+        events_file = case_root / "logs" / "autonomous" / "events.jsonl"
+        gateway = LLMGateway(
+            event_log_file=events_file,
+            block1_ttl_seconds=3600,
+            block2_ttl_seconds=3600,
+            now_fn=lambda: 1_000.0,
+        )
+
+        prompt_input = PromptEnvelopeInput(
+            static_header="",
+            long_term_summary="",
+            dynamic_messages=[],
+            prompt_slices=[
+                PromptSlice(
+                    slice_uid="slice_l0",
+                    layer="L0_DNA",
+                    text="DNA",
+                    cache_segment="prefix_static",
+                    priority=10,
+                ),
+            ],
+        )
+
+        request = GatewayRouteRequest(
+            task_type="qa",
+            severity="low",
+            budget_remaining=10.0,
+            route_semantic="shell_readonly",
+            prompt_profile="shell_readonly",
+            injection_mode="minimal",
+            delegation_intent="read_only_exploration",
+            workflow_id="wf-a",
+            trace_id="trace-a",
+        )
+        gateway.build_plan(request=request, prompt_input=prompt_input)
+        gateway.build_plan(request=request, prompt_input=prompt_input)
+
+        rows = _read_jsonl(events_file)
+        prompt_rows = [row for row in rows if str(row.get("event_type") or "") == "PromptInjectionComposed"]
+        assert len(prompt_rows) == 2
+        payload = prompt_rows[-1].get("data")
+        assert isinstance(payload, dict)
+        assert payload["tail_hash"] == ""
+        assert payload["block1_cache_hit"] is True
+        assert payload["block2_cache_hit"] is False
+        assert payload["prefix_cache_hit"] is True
+    finally:
+        _cleanup_case_root(case_root)

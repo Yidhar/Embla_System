@@ -507,7 +507,8 @@ def _build_shell_system_prompt_with_gateway(
         if cache_outcome is not None:
             block1_hit = bool(getattr(cache_outcome, "block1_hit", False))
             block2_hit = bool(getattr(cache_outcome, "block2_hit", False))
-            route_meta["_slice_prefix_cache_hit"] = bool(block1_hit and block2_hit)
+            tail_hash = str(route_meta.get("_slice_tail_hash") or "")
+            route_meta["_slice_prefix_cache_hit"] = bool(block1_hit and (block2_hit or not tail_hash))
             route_meta["_slice_block1_cache_hit"] = block1_hit
             route_meta["_slice_block2_cache_hit"] = block2_hit
         route_decision = getattr(plan, "route", None)
