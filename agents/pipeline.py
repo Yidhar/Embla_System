@@ -74,6 +74,8 @@ _FAST_TRACK_PROTECTED_EXACT = {
 _MAX_REVIEW_REMEDIATION_CYCLES = 3
 _MAX_REVIEW_REJECT_RESPAWNS = 1
 _MAX_HEARTBEAT_BLOCKED_RESPAWNS = 1
+_MAX_CHILD_LOOP_MAX_ROUNDS_RESUMES = 1
+_MAX_CHILD_LOOP_MAX_ROUNDS_RESPAWNS = 1
 _HEARTBEAT_MONITOR_POLL_SECONDS = 0.05
 
 
@@ -136,7 +138,7 @@ def _collect_expert_dev_artifacts(store: AgentSessionStore, expert_id: str) -> L
     for child in store.list_children(expert_id):
         if str(child.role or "").strip().lower() != "dev":
             continue
-        if bool(child.metadata.get("heartbeat_superseded")):
+        if bool(child.metadata.get("heartbeat_superseded")) or bool(child.metadata.get("superseded")):
             continue
         verification_report = child.metadata.get("verification_report")
         if not isinstance(verification_report, dict):
@@ -196,6 +198,190 @@ def _build_review_rework_instruction(
         parts.append("Issues to fix:\n" + "\n".join(f"- {item}" for item in issues))
     if suggestions:
         parts.append("Reviewer suggestions:\n" + "\n".join(f"- {item}" for item in suggestions))
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def _collect_child_tool_usage(messages: List[Dict[str, Any]]) -> List[str]:
+    counts: Dict[str, int] = {}
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        for raw_call in list(message.get("tool_calls") or []):
+            if not isinstance(raw_call, dict):
+                continue
+            function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
+            name = str(function.get("name") or raw_call.get("name") or "").strip()
+            if not name:
+                continue
+            counts[name] = int(counts.get(name) or 0) + 1
+    ordered = sorted(counts.items(), key=lambda item: (-int(item[1] or 0), str(item[0])))
+    rendered: List[str] = []
+    for name, count in ordered[:6]:
+        rendered.append(f"{name}({count})" if int(count or 0) > 1 else str(name))
+    return rendered
+
+
+def _collect_child_tool_errors(messages: List[Dict[str, Any]]) -> List[str]:
+    tool_name_by_call_id: Dict[str, str] = {}
+    errors: List[str] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").strip().lower() == "assistant":
+            for raw_call in list(message.get("tool_calls") or []):
+                if not isinstance(raw_call, dict):
+                    continue
+                function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
+                call_id = str(raw_call.get("id") or "").strip()
+                name = str(function.get("name") or raw_call.get("name") or "").strip()
+                if call_id and name:
+                    tool_name_by_call_id[call_id] = name
+            continue
+        if str(message.get("role") or "").strip().lower() != "tool":
+            continue
+        raw_payload = str(message.get("content") or "").strip()
+        if not raw_payload:
+            continue
+        try:
+            payload = json.loads(raw_payload)
+        except Exception:
+            continue
+        error_text = str(payload.get("error") or "").strip() if isinstance(payload, dict) else ""
+        if not error_text:
+            continue
+        tool_name = str(tool_name_by_call_id.get(str(message.get("tool_call_id") or "").strip()) or "tool").strip()
+        errors.append(f"{tool_name}: {_trim_text(error_text, limit=140)}")
+    deduped: List[str] = []
+    for item in errors:
+        if item not in deduped:
+            deduped.append(item)
+    return deduped[:4]
+
+
+def _build_child_loop_intermediate_findings(
+    *,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    expert_id: str,
+    child_session_id: str,
+) -> str:
+    session = store.get(child_session_id)
+    if session is None:
+        return ""
+
+    metadata = dict(session.metadata or {})
+    messages = list(session.messages or [])
+    sections: List[str] = []
+
+    assigned_task = _trim_text(session.task_description or "", limit=260)
+    if assigned_task:
+        sections.append(f"Assigned task:\n{assigned_task}")
+
+    task_updates = metadata.get("task_updates") if isinstance(metadata.get("task_updates"), dict) else {}
+    if task_updates:
+        lines: List[str] = []
+        for idx, (raw_task_id, raw_update) in enumerate(task_updates.items()):
+            if idx >= 4:
+                break
+            update = raw_update if isinstance(raw_update, dict) else {}
+            task_id = str(raw_task_id or "").strip() or "task"
+            status = str(update.get("status") or "").strip() or "unknown"
+            summary = _trim_text(update.get("summary") or "", limit=140)
+            files_changed = _normalize_changed_files(update.get("files_changed"))
+            line = f"- {task_id}: {status}"
+            if summary:
+                line += f" — {summary}"
+            if files_changed:
+                line += f" (files: {', '.join(files_changed[:4])})"
+            lines.append(line)
+        if lines:
+            sections.append("Task updates:\n" + "\n".join(lines))
+
+    changed_files = _normalize_changed_files(metadata.get("changed_files"))
+    if changed_files:
+        sections.append("Changed files so far:\n" + "\n".join(f"- {path}" for path in changed_files[:8]))
+
+    tool_usage = _collect_child_tool_usage(messages)
+    if tool_usage:
+        sections.append("Tools used so far:\n- " + ", ".join(tool_usage))
+
+    tool_errors = _collect_child_tool_errors(messages)
+    if tool_errors:
+        sections.append("Recent tool errors:\n" + "\n".join(f"- {item}" for item in tool_errors))
+
+    assistant_notes = [
+        _trim_text(item.get("content") or "", limit=180)
+        for item in messages
+        if isinstance(item, dict)
+        and str(item.get("role") or "").strip().lower() == "assistant"
+        and str(item.get("content") or "").strip()
+    ]
+    if assistant_notes:
+        sections.append("Latest assistant notes:\n" + "\n".join(f"- {item}" for item in assistant_notes[-2:]))
+
+    heartbeat_snapshot = store.get_session_heartbeat_snapshot(child_session_id)
+    heartbeats = list(heartbeat_snapshot.get("heartbeats") or [])
+    if heartbeats:
+        lines = []
+        for heartbeat in heartbeats[:3]:
+            task_id = str(heartbeat.get("task_id") or "").strip() or "task"
+            status = str(heartbeat.get("status") or "").strip() or "running"
+            stage = str(heartbeat.get("stage") or "").strip()
+            message = _trim_text(heartbeat.get("message") or "", limit=120)
+            line = f"- {task_id}: {status}"
+            if stage:
+                line += f" @ {stage}"
+            if message:
+                line += f" — {message}"
+            lines.append(line)
+        if lines:
+            sections.append("Recent heartbeats:\n" + "\n".join(lines))
+
+    expert_messages = mailbox.read(expert_id, since_seq=0, limit=200)
+    child_reports = [
+        _trim_text(item.content, limit=180)
+        for item in expert_messages
+        if str(item.from_id or "").strip() == child_session_id
+        and str(item.message_type or "").strip().lower() == "report"
+        and str(item.content or "").strip()
+    ]
+    if child_reports:
+        sections.append("Reports already sent to parent:\n" + "\n".join(f"- {item}" for item in child_reports[-2:]))
+
+    return _trim_text("\n\n".join(part for part in sections if part).strip(), limit=1600)
+
+
+def _build_child_loop_resume_instruction(
+    *,
+    task_id: str,
+    findings: str,
+    resume_attempt: int,
+) -> str:
+    parts = [
+        f"Task {task_id or 'task'} stopped because the dev mini-loop hit max rounds before you submitted a completed report.",
+        f"This is automatic recovery resume attempt {max(1, int(resume_attempt))}. Continue from the current session and workspace state; do not restart from scratch.",
+        "Finish the remaining delta, run self-verification, and call report_to_parent(type=\"completed\") with an updated verification_report once done.",
+        "If the current approach is stuck, simplify it and prioritize a correct, minimal completion path.",
+    ]
+    if findings:
+        parts.append(f"Compressed intermediate findings:\n{findings}")
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def _build_child_loop_respawn_feedback(
+    *,
+    task_id: str,
+    replaced_agent_id: str,
+    findings: str,
+    respawn_attempt: int,
+) -> str:
+    parts = [
+        f"Automatic recovery: previous Dev session {replaced_agent_id or 'unknown'} for task {task_id or 'task'} hit the mini-loop max-rounds limit before completion.",
+        f"This is fresh-dev retry attempt {max(1, int(respawn_attempt))}. Continue the same task using any useful partial progress already produced.",
+        "Review the current workspace state before editing further. Do not redo solved work; focus on the missing delta, self-verify, then report completed.",
+    ]
+    if findings:
+        parts.append(f"Compressed intermediate findings:\n{findings}")
     return "\n\n".join(part for part in parts if part).strip()
 
 
@@ -262,6 +448,8 @@ def _new_heartbeat_escalation_summary(*, expert_id: str, expert_type: str) -> Di
         "critical_count": 0,
         "blocked_count": 0,
         "respawn_count": 0,
+        "loop_resume_count": 0,
+        "loop_respawn_count": 0,
         "expert_blocked_count": 0,
         "expert_blocked_reasons": [],
         "actions": [],
@@ -277,6 +465,8 @@ def _merge_heartbeat_escalation_summaries(items: List[Dict[str, Any]]) -> Dict[s
         "critical_count": 0,
         "blocked_count": 0,
         "respawn_count": 0,
+        "loop_resume_count": 0,
+        "loop_respawn_count": 0,
         "expert_blocked_count": 0,
         "expert_blocked_reasons": [],
         "experts": [],
@@ -292,6 +482,8 @@ def _merge_heartbeat_escalation_summaries(items: List[Dict[str, Any]]) -> Dict[s
         merged["critical_count"] += max(0, int(item.get("critical_count") or 0))
         merged["blocked_count"] += max(0, int(item.get("blocked_count") or 0))
         merged["respawn_count"] += max(0, int(item.get("respawn_count") or 0))
+        merged["loop_resume_count"] += max(0, int(item.get("loop_resume_count") or 0))
+        merged["loop_respawn_count"] += max(0, int(item.get("loop_respawn_count") or 0))
         merged["expert_blocked_count"] += max(0, int(item.get("expert_blocked_count") or 0))
         merged["expert_blocked_reasons"].extend(
             str(reason).strip() for reason in list(item.get("expert_blocked_reasons") or []) if str(reason).strip()
@@ -306,6 +498,8 @@ def _merge_heartbeat_escalation_summaries(items: List[Dict[str, Any]]) -> Dict[s
                 "critical_count": max(0, int(item.get("critical_count") or 0)),
                 "blocked_count": max(0, int(item.get("blocked_count") or 0)),
                 "respawn_count": max(0, int(item.get("respawn_count") or 0)),
+                "loop_resume_count": max(0, int(item.get("loop_resume_count") or 0)),
+                "loop_respawn_count": max(0, int(item.get("loop_respawn_count") or 0)),
                 "expert_blocked_count": max(0, int(item.get("expert_blocked_count") or 0)),
                 "expert_blocked_reasons": list(item.get("expert_blocked_reasons") or []),
             }
@@ -426,17 +620,27 @@ def _collect_workspace_submission_summaries(reports: List[Dict[str, Any]]) -> Li
         submission_state = str(metadata.get("workspace_submission_state") or "sandboxed").strip().lower() or "sandboxed"
         if not workspace_root or (workspace_mode != "worktree" and sandbox_type != "git_worktree"):
             continue
+
+        change_id = str(metadata.get("workspace_change_id") or "").strip()
+        changed_files = list(metadata.get("workspace_submission_changed_files") or [])
+        audit_report_path = str(metadata.get("workspace_audit_report_path") or "").strip()
+        audit_diff_path = str(metadata.get("workspace_audit_diff_path") or "").strip()
+        has_submission_artifacts = bool(change_id or changed_files or audit_report_path or audit_diff_path)
+        promote_pending = submission_state not in {"promoted", "teardown_complete"} and (
+            submission_state != "sandboxed" or has_submission_artifacts
+        )
+
         submissions.append(
             {
                 "agent_id": str(report.get("session_id") or report.get("agent_id") or "").strip(),
                 "workspace_root": workspace_root,
                 "workspace_origin_root": str(metadata.get("workspace_origin_root") or "").strip(),
-                "change_id": str(metadata.get("workspace_change_id") or "").strip(),
+                "change_id": change_id,
                 "state": submission_state,
-                "changed_files": list(metadata.get("workspace_submission_changed_files") or []),
-                "audit_report_path": str(metadata.get("workspace_audit_report_path") or "").strip(),
-                "audit_diff_path": str(metadata.get("workspace_audit_diff_path") or "").strip(),
-                "promote_pending": submission_state not in {"promoted", "teardown_complete"},
+                "changed_files": changed_files,
+                "audit_report_path": audit_report_path,
+                "audit_diff_path": audit_diff_path,
+                "promote_pending": promote_pending,
             }
         )
     return submissions
@@ -457,7 +661,9 @@ def _build_fast_track_execution_receipt(
     summary_lines: List[str] = []
     deliverables: List[str] = []
     workspace_submissions = _collect_workspace_submission_summaries(reports)
-    workspace_submission_required = any(bool(item.get("promote_pending")) for item in workspace_submissions)
+    workspace_submission_required = bool(touched_files) and any(
+        bool(item.get("promote_pending")) for item in workspace_submissions
+    )
     for report in reports:
         status = str(report.get("status") or "unknown").strip()
         agent_id = str(report.get("session_id") or report.get("agent_id") or "").strip() or "fast_track_dev"
@@ -1270,6 +1476,7 @@ async def _run_dev_jobs_with_heartbeat_supervision(
     expert_id: str,
     expert_type: str,
     board_id: str,
+    dev_task_map: Optional[Dict[str, str]] = None,
     scheduler_metrics: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     summary = _new_heartbeat_escalation_summary(expert_id=expert_id, expert_type=expert_type)
@@ -1279,11 +1486,14 @@ async def _run_dev_jobs_with_heartbeat_supervision(
     observed_sessions: set[str] = set()
     observed_tasks: set[str] = set()
     last_levels: Dict[tuple[str, str], str] = {}
-    respawn_count_by_task: Dict[str, int] = {}
+    heartbeat_respawn_count_by_task: Dict[str, int] = {}
+    loop_resume_count_by_task: Dict[str, int] = {}
+    loop_respawn_count_by_task: Dict[str, int] = {}
     expert_blocked_reason = ""
     final_results: List[Dict[str, Any]] = []
     failures: List[BaseException] = []
     running_jobs: Dict[asyncio.Task, Dict[str, Any]] = {}
+    normalized_dev_task_map = dev_task_map if isinstance(dev_task_map, dict) else {}
 
     async def _run_job(job: Dict[str, Any]) -> Dict[str, Any]:
         _mark_scheduler_run_start(scheduler_metrics)
@@ -1299,6 +1509,227 @@ async def _run_dev_jobs_with_heartbeat_supervision(
 
     async def _emit_action(event_type: str, payload: Dict[str, Any]) -> None:
         await emit({"type": event_type, "pipeline_id": pipeline_id, "expert_id": expert_id, "expert_type": expert_type, **payload})
+
+    def _mark_dev_task_in_progress(*, task_id: str, assigned_to: str, summary_text: str) -> None:
+        if task_board_engine is None or not board_id or not task_id:
+            return
+        try:
+            task_board_engine.update_task(
+                board_id,
+                task_id,
+                assigned_to=assigned_to,
+                status=TaskStatus.IN_PROGRESS,
+                summary=summary_text,
+            )
+        except Exception:
+            logger.debug(
+                "Failed to mark task in progress during dev recovery (board=%s task=%s assigned_to=%s)",
+                board_id,
+                task_id,
+                assigned_to,
+                exc_info=True,
+            )
+
+    def _build_recovery_job(
+        source_job: Dict[str, Any],
+        *,
+        session_id: str,
+        task_id: str,
+        board_log_context: str,
+        extra_event_fields: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        next_job = dict(source_job)
+        next_job["session_id"] = session_id
+        next_job["task_id"] = task_id
+        next_job["board_log_context"] = board_log_context
+        next_job["extra_event_fields"] = dict(extra_event_fields)
+        return next_job
+
+    def _mark_superseded_child(*, session_id: str, replacement_agent_ids: List[str], reason: str) -> None:
+        if not session_id:
+            return
+        updates = {
+            "superseded": True,
+            "superseded_reason": str(reason or "").strip(),
+            "superseded_by_agent_ids": list(replacement_agent_ids),
+        }
+        try:
+            store.update_metadata(session_id, updates)
+        except Exception:
+            logger.debug("Failed to mark child as superseded: %s", session_id, exc_info=True)
+
+    async def _maybe_recover_child_loop_max_rounds(job: Dict[str, Any], result: Dict[str, Any]) -> bool:
+        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        blocked_reason = str(metadata.get("blocked_reason") or "").strip()
+        if blocked_reason != "child_loop_max_rounds_reached":
+            return False
+
+        session_id = str(job.get("session_id") or result.get("agent_id") or "").strip()
+        task_id = str(job.get("task_id") or result.get("task_id") or "").strip() or session_id or "task"
+        findings = _build_child_loop_intermediate_findings(
+            store=store,
+            mailbox=mailbox,
+            expert_id=expert_id,
+            child_session_id=session_id,
+        )
+        action_base = {
+            "agent_id": session_id,
+            "task_id": task_id,
+            "reason": blocked_reason,
+        }
+
+        current_resume_count = int(loop_resume_count_by_task.get(task_id) or 0)
+        if session_id and current_resume_count < _MAX_CHILD_LOOP_MAX_ROUNDS_RESUMES:
+            resume_attempt = current_resume_count + 1
+            resume_instruction = _build_child_loop_resume_instruction(
+                task_id=task_id,
+                findings=findings,
+                resume_attempt=resume_attempt,
+            )
+            resume_result = handle_parent_tool_call(
+                "resume_child_agent",
+                {"agent_id": session_id, "instruction": resume_instruction},
+                parent_session_id=expert_id,
+                store=store,
+                mailbox=mailbox,
+            )
+            if not resume_result.get("error"):
+                store.update_metadata(
+                    session_id,
+                    {
+                        "blocked_reason": "",
+                        "loop_stop_reason": "",
+                        "superseded": False,
+                        "superseded_reason": "",
+                        "superseded_by_agent_ids": [],
+                        "loop_recovery_mode": "max_rounds_resume",
+                        "loop_recovery_attempt": resume_attempt,
+                    },
+                )
+                _inject_system_instruction(store, session_id, resume_instruction)
+                _mark_dev_task_in_progress(
+                    task_id=task_id,
+                    assigned_to=session_id,
+                    summary_text="resumed_after_max_rounds",
+                )
+                loop_resume_count_by_task[task_id] = resume_attempt
+                summary["loop_resume_count"] = max(0, int(summary.get("loop_resume_count") or 0)) + 1
+                action_record = {
+                    **action_base,
+                    "action": "resume_same_dev_after_max_rounds",
+                    "resume_attempt": resume_attempt,
+                }
+                summary["actions"].append(dict(action_record))
+                await _emit_action(
+                    "dev_loop_max_rounds_resume",
+                    {
+                        **action_base,
+                        "resume_attempt": resume_attempt,
+                        "findings_summary": findings,
+                    },
+                )
+                _launch_job(
+                    _build_recovery_job(
+                        job,
+                        session_id=session_id,
+                        task_id=task_id,
+                        board_log_context="max rounds resume dev loop",
+                        extra_event_fields={
+                            **dict(job.get("extra_event_fields") or {}),
+                            "recovery_mode": "max_rounds_resume",
+                            "resume_attempt": resume_attempt,
+                            "recovered_from": blocked_reason,
+                        },
+                    )
+                )
+                return True
+
+            summary["actions"].append(
+                {
+                    **action_base,
+                    "action": "resume_same_dev_after_max_rounds_failed",
+                    "resume_attempt": resume_attempt,
+                    "error": str(resume_result.get("error") or ""),
+                }
+            )
+
+        current_respawn_count = int(loop_respawn_count_by_task.get(task_id) or 0)
+        if current_respawn_count < _MAX_CHILD_LOOP_MAX_ROUNDS_RESPAWNS:
+            respawn_attempt = current_respawn_count + 1
+            respawn_feedback = _build_child_loop_respawn_feedback(
+                task_id=task_id,
+                replaced_agent_id=session_id,
+                findings=findings,
+                respawn_attempt=respawn_attempt,
+            )
+            retry_children = expert.spawn_retry_devs(
+                tasks,
+                task_ids=[task_id],
+                review_feedback=respawn_feedback,
+                prompt_blocks=list(assignment.get("prompt_blocks", [])),
+                retry_reason="child_loop_max_rounds_respawn",
+            )
+            respawned_child_ids: List[str] = []
+            for retry_child in retry_children:
+                retry_id = str(retry_child.get("agent_id") or "").strip()
+                retry_task_id = str(retry_child.get("task_id") or task_id).strip() or task_id
+                retry_status = str(retry_child.get("status") or "").strip().lower()
+                if not retry_id or retry_status != AgentStatus.RUNNING.value:
+                    continue
+                respawned_child_ids.append(retry_id)
+                if normalized_dev_task_map is not None:
+                    normalized_dev_task_map[retry_id] = retry_task_id
+                _launch_job(
+                    _build_recovery_job(
+                        job,
+                        session_id=retry_id,
+                        task_id=retry_task_id,
+                        board_log_context="max rounds respawn dev loop",
+                        extra_event_fields={
+                            **dict(job.get("extra_event_fields") or {}),
+                            "recovery_mode": "max_rounds_respawn",
+                            "respawn_attempt": respawn_attempt,
+                            "replaced_agent_id": session_id,
+                            "trigger_task_id": task_id,
+                        },
+                    )
+                )
+
+            if respawned_child_ids:
+                loop_respawn_count_by_task[task_id] = respawn_attempt
+                summary["loop_respawn_count"] = max(0, int(summary.get("loop_respawn_count") or 0)) + len(respawned_child_ids)
+                _mark_superseded_child(
+                    session_id=session_id,
+                    replacement_agent_ids=respawned_child_ids,
+                    reason=blocked_reason,
+                )
+                action_record = {
+                    **action_base,
+                    "action": "respawn_dev_after_max_rounds",
+                    "respawn_attempt": respawn_attempt,
+                    "replacement_agent_ids": list(respawned_child_ids),
+                }
+                summary["actions"].append(dict(action_record))
+                await _emit_action(
+                    "dev_loop_max_rounds_respawn",
+                    {
+                        **action_base,
+                        "respawn_attempt": respawn_attempt,
+                        "replacement_agent_ids": list(respawned_child_ids),
+                        "findings_summary": findings,
+                    },
+                )
+                return True
+
+            summary["actions"].append(
+                {
+                    **action_base,
+                    "action": "respawn_dev_after_max_rounds_failed",
+                    "respawn_attempt": respawn_attempt,
+                }
+            )
+
+        return False
 
     for job in jobs:
         _launch_job(job)
@@ -1319,6 +1750,8 @@ async def _run_dev_jobs_with_heartbeat_supervision(
                 failures.append(exc)
                 continue
             if isinstance(result, dict):
+                if await _maybe_recover_child_loop_max_rounds(job, result):
+                    continue
                 final_results.append(result)
 
         for task_handle, job in list(running_jobs.items()):
@@ -1387,7 +1820,7 @@ async def _run_dev_jobs_with_heartbeat_supervision(
                     "heartbeat_last_message": str(heartbeat.get("message") or ""),
                     "heartbeat_last_stage": str(heartbeat.get("stage") or ""),
                 }
-                current_respawns = int(respawn_count_by_task.get(heartbeat_task_id) or 0)
+                current_respawns = int(heartbeat_respawn_count_by_task.get(heartbeat_task_id) or 0)
                 respawned_child_ids: List[str] = []
                 blocked_reason_candidate = ""
 
@@ -1398,6 +1831,7 @@ async def _run_dev_jobs_with_heartbeat_supervision(
                         task_ids=[heartbeat_task_id],
                         review_feedback=respawn_feedback,
                         prompt_blocks=list(assignment.get("prompt_blocks", [])),
+                        retry_reason="heartbeat_blocked_respawn",
                     )
                     for retry_child in retry_children:
                         retry_id = str(retry_child.get("agent_id") or "").strip()
@@ -1405,37 +1839,24 @@ async def _run_dev_jobs_with_heartbeat_supervision(
                         if not retry_id or str(retry_child.get("status") or "").strip().lower() != AgentStatus.RUNNING.value:
                             continue
                         respawned_child_ids.append(retry_id)
+                        if normalized_dev_task_map is not None:
+                            normalized_dev_task_map[retry_id] = retry_task_id
                         _launch_job(
-                            {
-                                "store": store,
-                                "mailbox": mailbox,
-                                "child_llm_call": child_llm_call,
-                                "child_tool_executor": child_tool_executor,
-                                "child_max_rounds": child_max_rounds,
-                                "emit": emit,
-                                "pipeline_id": pipeline_id,
-                                "expert_id": expert_id,
-                                "expert_type": expert_type,
-                                "task_board_engine": task_board_engine,
-                                "board_id": board_id,
-                                "session_id": retry_id,
-                                "task_id": retry_task_id,
-                                "fallback_tool_subset": list(assignment.get("tool_subset", [])),
-                                "fallback_prompt_blocks": list(assignment.get("prompt_blocks", [])),
-                                "fallback_task_description": str(scope or ""),
-                                "start_event_type": "dev_loop_start",
-                                "loop_event_type": "dev_loop_event",
-                                "end_event_type": "dev_loop_end",
-                                "board_log_context": "heartbeat respawn dev loop",
-                                "extra_event_fields": {
+                            _build_recovery_job(
+                                job,
+                                session_id=retry_id,
+                                task_id=retry_task_id,
+                                board_log_context="heartbeat respawn dev loop",
+                                extra_event_fields={
+                                    **dict(job.get("extra_event_fields") or {}),
                                     "recovery_mode": "heartbeat_respawn",
                                     "replaced_agent_id": session_id,
                                     "trigger_task_id": heartbeat_task_id,
                                 },
-                            }
+                            )
                         )
                     if respawned_child_ids:
-                        respawn_count_by_task[heartbeat_task_id] = current_respawns + 1
+                        heartbeat_respawn_count_by_task[heartbeat_task_id] = current_respawns + 1
                         session_updates.update(
                             {
                                 "heartbeat_superseded": True,
@@ -1486,6 +1907,21 @@ async def _run_dev_jobs_with_heartbeat_supervision(
 
     summary["observed_session_count"] = len(observed_sessions)
     summary["observed_task_count"] = len(observed_tasks)
+    for result in final_results:
+        if not isinstance(result, dict):
+            continue
+        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        blocked_reason = str(metadata.get("blocked_reason") or "").strip()
+        status_text = str(result.get("status") or "").strip().lower()
+        if not blocked_reason and status_text != AgentStatus.WAITING.value:
+            blocked_reason = "child_loop_incomplete"
+        if not blocked_reason:
+            continue
+        if not expert_blocked_reason:
+            expert_blocked_reason = blocked_reason
+        if blocked_reason not in summary["expert_blocked_reasons"]:
+            summary["expert_blocked_reasons"].append(blocked_reason)
+        summary["expert_blocked_count"] = max(1, int(summary.get("expert_blocked_count") or 0))
     summary["actions"] = list(summary.get("actions") or [])[:20]
     return {
         "results": final_results,
@@ -1610,6 +2046,7 @@ async def _run_single_expert_phase(
             expert_id=str(agent_id),
             expert_type=expert_type,
             board_id=expert.board_id,
+            dev_task_map=dev_task_map,
             scheduler_metrics=dev_scheduler_metrics,
         )
         if isinstance(supervision_result.get("heartbeat_summary"), dict):
@@ -1728,7 +2165,6 @@ async def _run_single_expert_phase(
                             "pipeline_id": pipeline_id,
                             "expert_id": str(agent_id),
                             "expert_type": expert_type,
-                            "task_board_engine": task_board_engine,
                             "board_id": expert.board_id,
                             "review_agent_id": review_agent_id,
                             "review_cycle": review_cycle,
@@ -2170,6 +2606,7 @@ async def run_multi_agent_pipeline(
     session_id: str = "",
     risk_level: str = "",
     route_decision: Optional[Dict[str, Any]] = None,
+    dispatch_payload: Optional[Dict[str, Any]] = None,
     forced_route_semantic: str = "",
     core_execution_session_id: str = "",
     child_llm_call: Optional[ChildLLMCallFn] = None,
@@ -2229,6 +2666,7 @@ async def run_multi_agent_pipeline(
         "child_session_cleanup_mode": _normalize_child_session_cleanup_mode(child_session_cleanup_mode),
         "child_session_cleanup_ttl_seconds": max(0, int(child_session_cleanup_ttl_seconds)),
     }
+    await asyncio.sleep(0)
 
     # ── Phase 1: Shell routes via TaskRouterEngine ─────────────
 
@@ -2269,6 +2707,7 @@ async def run_multi_agent_pipeline(
         "core_route": str(getattr(decision, "core_route", "") or ""),
         "fast_track_candidate": bool(getattr(decision, "fast_track_candidate", False)),
     }
+    await asyncio.sleep(0)
 
     # ── Shell direct reply (no Core dispatch needed) ───────────
     if not needs_core:
@@ -2302,23 +2741,29 @@ async def run_multi_agent_pipeline(
 
     dispatch: Dict[str, Any]
     if precomputed_decision is not None:
+        base_dispatch = dict(dispatch_payload) if isinstance(dispatch_payload, dict) else {}
         dispatch = {
             "dispatched": True,
-            "goal": message,
-            "intent_type": intent_type,
-            "target_repo": "external",
-            "context_summary": "",
-            "relevant_memories": [],
-            "priority": "normal",
+            "goal": str(base_dispatch.get("goal") or message),
+            "intent_type": str(base_dispatch.get("intent_type") or intent_type),
+            "target_repo": str(base_dispatch.get("target_repo") or "external"),
+            "context_summary": str(base_dispatch.get("context_summary") or ""),
+            "relevant_memories": list(base_dispatch.get("relevant_memories") or []),
+            "priority": str(base_dispatch.get("priority") or "normal"),
             "router_decision": decision.to_dict(),
-            "delegation_intent": decision.delegation_intent,
-            "tool_profile": list(decision.tool_profile),
-            "prompt_profile": decision.prompt_profile,
-            "model_tier": decision.selected_model_tier,
-            "selected_role": decision.selected_role,
-            "injection_mode": decision.injection_mode,
-            "complexity_hint": str(getattr(decision, "complexity_hint", "") or ""),
-            "core_route": str(getattr(decision, "core_route", "") or ""),
+            "delegation_intent": str(base_dispatch.get("delegation_intent") or decision.delegation_intent),
+            "tool_profile": list(base_dispatch.get("tool_profile") or decision.tool_profile),
+            "prompt_profile": str(base_dispatch.get("prompt_profile") or decision.prompt_profile),
+            "model_tier": str(base_dispatch.get("model_tier") or decision.selected_model_tier),
+            "selected_role": str(base_dispatch.get("selected_role") or decision.selected_role),
+            "injection_mode": str(base_dispatch.get("injection_mode") or decision.injection_mode),
+            "complexity_hint": str(
+                base_dispatch.get("complexity_hint") or getattr(decision, "complexity_hint", "") or ""
+            ),
+            "core_route": str(base_dispatch.get("core_route") or getattr(decision, "core_route", "") or ""),
+            "target_files": list(base_dispatch.get("target_files") or []),
+            "estimated_changed_lines": base_dispatch.get("estimated_changed_lines", 0),
+            "requested_tools": list(base_dispatch.get("requested_tools") or []),
         }
     else:
         dispatch = shell.dispatch_to_core(
@@ -2346,6 +2791,7 @@ async def run_multi_agent_pipeline(
         "max_files": int(core_route_plan.get("max_files") or 1),
         "max_changed_lines": int(core_route_plan.get("max_changed_lines") or 10),
     }
+    await asyncio.sleep(0)
 
     # ── Phase 2A: Fast-Track direct execution ─────────────────
 
@@ -2611,7 +3057,7 @@ async def run_multi_agent_pipeline(
                     stop_reason = "submitted_completion" if fast_track_completed else stop_reason
                     reports = core.collect_reports(resolved_core_execution_session_id, pipeline_id=pipeline_id)
                 if fast_track_completed:
-                    pending_workspace_submission = any(
+                    pending_workspace_submission = bool(touched_files) and any(
                         bool(item.get("promote_pending")) for item in _collect_workspace_submission_summaries(reports)
                     )
                     if pending_workspace_submission:
@@ -2700,6 +3146,7 @@ async def run_multi_agent_pipeline(
         "model_tier": decomposition.get("model_tier"),
         "core_route": "standard",
     }
+    await asyncio.sleep(0)
 
     # ── Phase 3: Spawn Experts ─────────────────────────────────
 
@@ -2716,6 +3163,7 @@ async def run_multi_agent_pipeline(
             "expert_type": er.get("expert_type"),
             "agent_id": er.get("agent_id"),
         }
+        await asyncio.sleep(0)
 
     # ── Phase 4: Expert planning + Dev spawning ────────────────
 

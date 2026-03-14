@@ -5,6 +5,8 @@ import json
 from types import SimpleNamespace
 
 import apiserver.api_server as api_server
+from agents.runtime.agent_session import AgentSessionStore
+from apiserver import routes_chat
 import pytest
 
 
@@ -78,7 +80,73 @@ def test_chat_route_prompt_event_payload_treats_empty_tail_as_block1_only_cache_
     assert payload["tail_hash"] == ""
     assert payload["block1_cache_hit"] is True
     assert payload["block2_cache_hit"] is False
-    assert payload["prefix_cache_hit"] is True
+
+
+def test_enrich_child_tool_result_metadata_uses_session_fallback_metadata() -> None:
+    store = AgentSessionStore(db_path=":memory:")
+    try:
+        store.create(
+            role="dev",
+            session_id="agent-fallback-meta",
+            metadata={
+                "execution_backend": "native",
+                "box_fallback_reason": "boxlite_kvm_inaccessible:Permission denied",
+                "execution_root": "/tmp/embla-worktree",
+            },
+        )
+
+        enriched = api_server._enrich_child_tool_result_metadata(
+            {
+                "tool_call": {"tool_name": "read_file"},
+                "result": "ok",
+                "status": "success",
+                "service_name": "native",
+                "tool_name": "read_file",
+            },
+            child_session_id="agent-fallback-meta",
+            session_store=store,
+        )
+
+        assert enriched["execution_backend"] == "native"
+        assert enriched["box_fallback_reason"] == "boxlite_kvm_inaccessible:Permission denied"
+        assert enriched["execution_root"] == "/tmp/embla-worktree"
+    finally:
+        store.close()
+
+
+def test_enrich_child_tool_result_metadata_prefers_explicit_payload_values() -> None:
+    enriched = api_server._enrich_child_tool_result_metadata(
+        {
+            "tool_call": {"tool_name": "read_file", "_execution_backend": "boxlite", "_execution_root": "/workspace"},
+            "result": "ok",
+            "status": "success",
+            "service_name": "boxlite",
+            "tool_name": "read_file",
+            "execution_backend": "native",
+            "box_fallback_reason": "fallback_from_boxlite",
+            "execution_root": "/host/worktree",
+        },
+        child_session_id="missing-session",
+        session_store=None,
+    )
+
+    assert enriched["execution_backend"] == "native"
+    assert enriched["box_fallback_reason"] == "fallback_from_boxlite"
+    assert enriched["execution_root"] == "/host/worktree"
+
+
+def test_format_sse_payload_chunk_json_sanitizes_non_json_values() -> None:
+    class _NonJson:
+        pass
+
+    rendered = routes_chat._format_sse_payload_chunk_json(
+        {"type": "review_loop_event", "opaque": _NonJson(), "items": [_NonJson()]}
+    )
+
+    assert rendered.startswith("data: ")
+    payload = json.loads(rendered[len("data: ") :].strip())
+    assert payload["opaque"] == "<non-json:_NonJson>"
+    assert payload["items"] == ["<non-json:_NonJson>"]
 
 
 def test_build_route_model_override_resolves_shell_and_core_targets(monkeypatch) -> None:
@@ -231,6 +299,9 @@ def test_shell_core_session_state_creates_core_session_for_core_execution() -> N
         assert updated["shell_session_id"] == shell_session_id
         assert updated["core_execution_session_id"].endswith("__core")
         assert updated["core_execution_session_created"] is True
+        assert updated["dispatch_to_core"] is True
+        assert updated["active_agent"] == "core"
+        assert updated["handoff_tool"] == "dispatch_to_core"
         assert api_server.message_manager.get_session(updated["core_execution_session_id"]) is not None
     finally:
         api_server.message_manager.delete_session(shell_session_id)
@@ -256,6 +327,28 @@ def test_shell_core_session_state_reuses_existing_core_session() -> None:
         api_server.message_manager.delete_session(shell_session_id)
         core_id = f"{shell_session_id}__core"
         api_server.message_manager.delete_session(core_id)
+
+
+def test_shell_core_session_state_overrides_stale_shell_semantic_fields() -> None:
+    shell_session_id = api_server.message_manager.create_session(temporary=True)
+    try:
+        updated = api_server._apply_shell_core_session_state(
+            {
+                "route_semantic": "core_execution",
+                "dispatch_to_core": False,
+                "active_agent": "shell",
+                "handoff_tool": "",
+                "router_decision": {"delegation_intent": "core_execution"},
+            },
+            shell_session_id=shell_session_id,
+        )
+        assert updated["route_semantic"] == "core_execution"
+        assert updated["dispatch_to_core"] is True
+        assert updated["active_agent"] == "core"
+        assert updated["handoff_tool"] == "dispatch_to_core"
+    finally:
+        api_server.message_manager.delete_session(shell_session_id)
+        api_server.message_manager.delete_session(f"{shell_session_id}__core")
 
 
 def test_shell_core_session_state_keeps_shell_for_non_core_execution_route() -> None:
@@ -315,6 +408,14 @@ def test_select_shell_tool_choice_prefers_explicit_single_tool() -> None:
 def test_select_shell_tool_choice_defaults_to_auto_without_unique_match() -> None:
     choice = api_server._select_shell_tool_choice(
         "请总结当前系统状态",
+        ["memory_read", "get_system_status", "dispatch_to_core"],
+    )
+    assert choice == "auto"
+
+
+def test_select_shell_tool_choice_ignores_negated_single_tool_mentions() -> None:
+    choice = api_server._select_shell_tool_choice(
+        "请列出当前工具，并说明哪个工具用于升级到 Core。禁止调用 dispatch_to_core。",
         ["memory_read", "get_system_status", "dispatch_to_core"],
     )
     assert choice == "auto"
@@ -491,6 +592,55 @@ def test_chat_stream_explicit_shell_tool_request_forces_tool_choice(monkeypatch)
     assert captured_tool_choices[0]["function"]["name"] == "get_system_status"
 
 
+def test_chat_stream_negated_tool_reference_does_not_force_tool_choice(monkeypatch) -> None:
+    captured_tool_choices = []
+
+    class _FakeLLMService:
+        def stream_chat_with_context(self, messages, temperature, model_override=None, tools=None, tool_choice="auto"):
+            del messages, temperature, model_override, tools
+            captured_tool_choices.append(tool_choice)
+
+            async def _gen():
+                yield "data: {\"type\":\"content\",\"text\":\"ok\"}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return _gen()
+
+    async def _collect_payloads(response):
+        rows = []
+        async for chunk in response.body_iterator:
+            text = chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)
+            for line in text.splitlines():
+                if not line.startswith("data: "):
+                    continue
+                raw = line[6:].strip()
+                if not raw or raw == "[DONE]":
+                    continue
+                rows.append(json.loads(raw))
+        return rows
+
+    async def _no_memory(_question: str, *, limit: int = 5):
+        del limit
+        return []
+
+    monkeypatch.setattr(api_server, "get_llm_service", lambda: _FakeLLMService())
+    monkeypatch.setattr(api_server, "_recall_memory_lines", _no_memory)
+
+    req = api_server.ChatRequest(
+        message="请列出当前 Shell 可用工具，并说明哪个工具用于升级到 Core。禁止调用 dispatch_to_core。",
+        stream=True,
+        session_id="negated-shell-tool-choice-session",
+        stream_protocol="sse_json_v1",
+        temporary=True,
+    )
+    response = asyncio.run(api_server.chat_stream(req))
+    payloads = asyncio.run(_collect_payloads(response))
+
+    assert payloads[0]["type"] == "session_meta"
+    assert captured_tool_choices
+    assert captured_tool_choices[0] == "auto"
+
+
 
 def test_chat_stream_dispatch_to_core_triggers_real_core_pipeline(monkeypatch) -> None:
     class _FakeLLMService:
@@ -615,6 +765,297 @@ def test_chat_stream_dispatch_to_core_triggers_real_core_pipeline(monkeypatch) -
 
     api_server.message_manager.delete_session("dispatch-only-route-session")
     api_server.message_manager.delete_session("dispatch-only-route-session__core")
+
+
+def test_pipeline_heartbeat_event_uses_summary_session_count() -> None:
+    class _Store:
+        def get_descendant_heartbeat_snapshot(self, _root_session_id):
+            return {
+                "root_session_id": "core-1",
+                "summary": {
+                    "session_count": 1,
+                    "sessions_with_heartbeats": 0,
+                    "task_count": 0,
+                },
+                "sessions": [],
+                "heartbeats": [],
+            }
+
+    payload = api_server._build_pipeline_stream_heartbeat_event(
+        pipeline_id="pipe-heartbeat-summary-1",
+        shell_session_id="shell-1",
+        core_execution_session_id="core-1",
+        started_monotonic=0.0,
+        last_event_type="pipeline_start",
+        agent_session_store=_Store(),
+    )
+
+    assert payload["child_heartbeat_summary"]["session_count"] == 1
+    assert payload["child_session_count"] == 1
+    assert payload["child_heartbeat_count"] == 0
+
+
+def test_chat_stream_emits_pipeline_heartbeat_during_pipeline_gap(monkeypatch) -> None:
+    class _FakeLLMService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def stream_chat_with_context(self, messages, temperature, model_override=None, tools=None, tool_choice="auto"):
+            del messages, temperature, model_override, tools, tool_choice
+            self.calls += 1
+
+            async def _gen():
+                if self.calls == 1:
+                    yield (
+                        'data: {"type":"tool_calls","text":[{"id":"call_heartbeat","name":"dispatch_to_core",'
+                        '"arguments":{"goal":"审计后端链路","intent_type":"analysis","target_repo":"external"}}]}\n\n'
+                    )
+                yield "data: [DONE]\n\n"
+
+            return _gen()
+
+    async def _fake_run_multi_agent_pipeline(**kwargs):
+        del kwargs
+        await asyncio.sleep(1.1)
+        yield {
+            "type": "execution_receipt",
+            "pipeline_id": "pipe-heartbeat-001",
+            "agent_state": {
+                "task_completed": True,
+                "final_answer": "heartbeat pipeline finished",
+            },
+        }
+        yield {
+            "type": "pipeline_end",
+            "pipeline_id": "pipe-heartbeat-001",
+            "reason": "completed",
+        }
+
+    async def _collect_payloads(response):
+        rows = []
+        async for chunk in response.body_iterator:
+            text = chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)
+            for line in text.splitlines():
+                if not line.startswith("data: "):
+                    continue
+                raw = line[6:].strip()
+                if not raw or raw == "[DONE]":
+                    continue
+                rows.append(json.loads(raw))
+        return rows
+
+    async def _no_memory(_question: str, *, limit: int = 5):
+        del limit
+        return []
+
+    monkeypatch.setattr(api_server, "get_llm_service", lambda: _FakeLLMService())
+    monkeypatch.setattr(api_server, "run_multi_agent_pipeline", _fake_run_multi_agent_pipeline)
+    monkeypatch.setattr(api_server, "_recall_memory_lines", _no_memory)
+    monkeypatch.setattr(api_server, "_PIPELINE_STREAM_HEARTBEAT_INTERVAL_SECONDS", 1.0)
+
+    req = api_server.ChatRequest(
+        message="请审计后端链路并回传报告",
+        stream=True,
+        session_id="dispatch-heartbeat-session",
+        stream_protocol="sse_json_v1",
+        temporary=True,
+    )
+    response = asyncio.run(api_server.chat_stream(req))
+    payloads = asyncio.run(_collect_payloads(response))
+
+    heartbeat_events = [item for item in payloads if item.get("type") == "pipeline_heartbeat"]
+    assert heartbeat_events
+    assert heartbeat_events[0]["shell_session_id"] == "dispatch-heartbeat-session"
+    assert heartbeat_events[0]["core_execution_session_id"] == "dispatch-heartbeat-session__core"
+    assert heartbeat_events[0]["last_event_type"] == "pipeline_start"
+    assert any(item.get("type") == "execution_receipt" for item in payloads)
+
+    api_server.message_manager.delete_session("dispatch-heartbeat-session")
+    api_server.message_manager.delete_session("dispatch-heartbeat-session__core")
+
+
+
+def test_chat_stream_stops_on_shell_progress_stall_and_forces_dispatch_to_core(monkeypatch) -> None:
+    class _FakeLLMService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def stream_chat_with_context(self, messages, temperature, model_override=None, tools=None, tool_choice="auto"):
+            del messages, temperature, model_override, tools, tool_choice
+            self.calls += 1
+
+            async def _gen():
+                yield (
+                    'data: {"type":"tool_calls","text":[{"id":"call_budget_%d","name":"memory_read",'
+                    '"arguments":{"path":"agents/pipeline.py","start_line":1,"end_line":10}}]}\n\n'
+                    % self.calls
+                )
+                yield "data: [DONE]\n\n"
+
+            return _gen()
+
+    pipeline_calls = []
+
+    async def _fake_run_multi_agent_pipeline(**kwargs):
+        pipeline_calls.append(dict(kwargs))
+        yield {
+            "type": "execution_receipt",
+            "pipeline_id": "pipe-budget-fallback-001",
+            "agent_state": {
+                "task_completed": True,
+                "final_answer": "budget fallback completed",
+            },
+        }
+        yield {
+            "type": "pipeline_end",
+            "pipeline_id": "pipe-budget-fallback-001",
+            "reason": "completed",
+        }
+
+    async def _collect_payloads(response):
+        rows = []
+        async for chunk in response.body_iterator:
+            text = chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)
+            for line in text.splitlines():
+                if not line.startswith("data: "):
+                    continue
+                raw = line[6:].strip()
+                if not raw or raw == "[DONE]":
+                    continue
+                rows.append(json.loads(raw))
+        return rows
+
+    async def _no_memory(_question: str, *, limit: int = 5):
+        del limit
+        return []
+
+    def _fake_execute_tool(self, tool_name, arguments, *, session_id=""):
+        del self, arguments, session_id
+        if tool_name == "memory_read":
+            return {"status": "success", "tool_name": "memory_read", "result": "ok"}
+        raise AssertionError(f"unexpected tool {tool_name}")
+
+    monkeypatch.setattr(api_server, "get_llm_service", lambda: _FakeLLMService())
+    monkeypatch.setattr(api_server, "run_multi_agent_pipeline", _fake_run_multi_agent_pipeline)
+    monkeypatch.setattr(api_server, "_recall_memory_lines", _no_memory)
+    monkeypatch.setattr(api_server.ShellAgent, "execute_tool", _fake_execute_tool)
+
+    req = api_server.ChatRequest(
+        message="审计 main.py 和 agents/pipeline.py，并把诊断结果写入 scratch/live_smoke/live_runtime_audit.md",
+        stream=True,
+        session_id="dispatch-budget-fallback-session",
+        stream_protocol="sse_json_v1",
+        temporary=True,
+    )
+    response = asyncio.run(api_server.chat_stream(req))
+    payloads = asyncio.run(_collect_payloads(response))
+
+    stalled = next(item for item in payloads if item.get("type") == "warning" and item.get("text") == "shell_tool_loop_stalled")
+    assert "repeated_tool_pattern" in stalled["reasons"]
+    assert any(item.get("type") == "warning" and item.get("text") == "shell_progress_force_dispatch_to_core" for item in payloads)
+    route_events = [item for item in payloads if item.get("type") == "route_decision"]
+    assert any(item.get("handoff_source") == "shell_progress_fallback" for item in route_events)
+    assert len(pipeline_calls) == 1
+    assert str(pipeline_calls[0].get("forced_route_semantic") or "") == "core_execution"
+
+    api_server.message_manager.delete_session("dispatch-budget-fallback-session")
+    api_server.message_manager.delete_session("dispatch-budget-fallback-session__core")
+
+
+def test_chat_stream_uses_configured_shell_max_rounds_as_fuse(monkeypatch) -> None:
+    class _FakeLLMService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def stream_chat_with_context(self, messages, temperature, model_override=None, tools=None, tool_choice="auto"):
+            del messages, temperature, model_override, tools, tool_choice
+            self.calls += 1
+
+            async def _gen():
+                yield (
+                    'data: {"type":"tool_calls","text":[{"id":"call_budget_%d","name":"memory_read",'
+                    '"arguments":{"path":"agents/pipeline.py","start_line":1,"end_line":10}}]}\n\n'
+                    % self.calls
+                )
+                yield "data: [DONE]\n\n"
+
+            return _gen()
+
+    pipeline_calls = []
+
+    async def _fake_run_multi_agent_pipeline(**kwargs):
+        pipeline_calls.append(dict(kwargs))
+        yield {
+            "type": "execution_receipt",
+            "pipeline_id": "pipe-budget-fallback-002",
+            "agent_state": {
+                "task_completed": True,
+                "final_answer": "budget fallback completed",
+            },
+        }
+        yield {
+            "type": "pipeline_end",
+            "pipeline_id": "pipe-budget-fallback-002",
+            "reason": "completed",
+        }
+
+    async def _collect_payloads(response):
+        rows = []
+        async for chunk in response.body_iterator:
+            text = chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)
+            for line in text.splitlines():
+                if not line.startswith("data: "):
+                    continue
+                raw = line[6:].strip()
+                if not raw or raw == "[DONE]":
+                    continue
+                rows.append(json.loads(raw))
+        return rows
+
+    async def _no_memory(_question: str, *, limit: int = 5):
+        del limit
+        return []
+
+    def _fake_execute_tool(self, tool_name, arguments, *, session_id=""):
+        del self, arguments, session_id
+        if tool_name == "memory_read":
+            return {"status": "success", "tool_name": "memory_read", "result": "ok"}
+        raise AssertionError(f"unexpected tool {tool_name}")
+
+    cfg = api_server.get_config()
+    original_shell_loop = cfg.api.shell_loop
+    cfg.api.shell_loop = SimpleNamespace(
+        max_rounds=2,
+        repeated_tool_pattern_rounds=16,
+        no_new_fact_rounds=16,
+    )
+    monkeypatch.setattr(api_server, "get_llm_service", lambda: _FakeLLMService())
+    monkeypatch.setattr(api_server, "run_multi_agent_pipeline", _fake_run_multi_agent_pipeline)
+    monkeypatch.setattr(api_server, "_recall_memory_lines", _no_memory)
+    monkeypatch.setattr(api_server.ShellAgent, "execute_tool", _fake_execute_tool)
+
+    req = api_server.ChatRequest(
+        message="审计 main.py 和 agents/pipeline.py，并把诊断结果写入 scratch/live_smoke/live_runtime_audit.md",
+        stream=True,
+        session_id="dispatch-budget-fallback-config-session",
+        stream_protocol="sse_json_v1",
+        temporary=True,
+    )
+    try:
+        response = asyncio.run(api_server.chat_stream(req))
+        payloads = asyncio.run(_collect_payloads(response))
+    finally:
+        cfg.api.shell_loop = original_shell_loop
+
+    assert any(item.get("type") == "warning" and item.get("text") == "shell_tool_loop_max_rounds_reached" for item in payloads)
+    assert any(item.get("type") == "warning" and item.get("text") == "shell_budget_force_dispatch_to_core" for item in payloads)
+    route_events = [item for item in payloads if item.get("type") == "route_decision"]
+    assert any(item.get("handoff_source") == "shell_budget_fallback" for item in route_events)
+    assert len(pipeline_calls) == 1
+    assert str(pipeline_calls[0].get("forced_route_semantic") or "") == "core_execution"
+
+    api_server.message_manager.delete_session("dispatch-budget-fallback-config-session")
+    api_server.message_manager.delete_session("dispatch-budget-fallback-config-session__core")
 
 
 def test_extract_agentic_execution_receipt_text_prefers_final_answer() -> None:

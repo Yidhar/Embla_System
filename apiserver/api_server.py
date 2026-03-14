@@ -10,11 +10,13 @@ import sys
 import traceback
 import os
 import logging
+import re
 import time
 import threading
 import uuid
-from contextlib import asynccontextmanager
-from typing import Dict, List, Optional, AsyncGenerator, Any, Callable
+from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, AsyncGenerator, Any, Callable, Mapping, Set, Tuple
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +25,7 @@ from pydantic import BaseModel
 import shutil
 from pathlib import Path
 from system.coding_intent import contains_direct_coding_signal, has_recent_coding_context, is_coding_followup
+from system.asyncio_offload import offload_blocking
 from core.supervisor.watchdog_daemon import WatchdogDaemon
 from core.event_bus import EventStore
 from agents.router_engine import RouterRequest, TaskRouterEngine
@@ -331,6 +334,7 @@ if hasattr(_routes_brainstem, "_bind_brainstem_runtime_context"):
 
 
 STREAM_PROTOCOL_JSON_V1 = "sse_json_v1"
+_PIPELINE_STREAM_HEARTBEAT_INTERVAL_SECONDS = 15.0
 
 
 def _resolve_stream_protocol(raw_value: Optional[str]) -> str:
@@ -357,6 +361,56 @@ def _build_stream_response_headers(*, protocol: str) -> Dict[str, str]:
 def _format_stream_payload_chunk(payload: Dict[str, Any], *, protocol: str) -> str:
     _ = protocol
     return _format_sse_payload_chunk_json(payload)
+
+
+def _enrich_child_tool_result_metadata(
+    result_payload: Any,
+    *,
+    child_session_id: str,
+    session_store: Optional[AgentSessionStore],
+) -> Any:
+    if not isinstance(result_payload, dict):
+        return result_payload
+
+    enriched = dict(result_payload)
+    tool_call = enriched.get("tool_call") if isinstance(enriched.get("tool_call"), dict) else {}
+    metadata: Dict[str, Any] = {}
+    if session_store is not None:
+        try:
+            session = session_store.get(str(child_session_id or "").strip())
+        except Exception:
+            session = None
+        raw_metadata = getattr(session, "metadata", None) if session is not None else None
+        if isinstance(raw_metadata, dict):
+            metadata = raw_metadata
+
+    execution_backend = str(
+        enriched.get("execution_backend")
+        or tool_call.get("_execution_backend")
+        or metadata.get("execution_backend")
+        or ""
+    ).strip()
+    if execution_backend:
+        enriched["execution_backend"] = execution_backend
+
+    fallback_reason = str(
+        enriched.get("box_fallback_reason")
+        or metadata.get("box_fallback_reason")
+        or ""
+    ).strip()
+    if fallback_reason:
+        enriched["box_fallback_reason"] = fallback_reason
+
+    execution_root = str(
+        enriched.get("execution_root")
+        or tool_call.get("_execution_root")
+        or metadata.get("execution_root")
+        or ""
+    ).strip()
+    if execution_root:
+        enriched["execution_root"] = execution_root
+
+    return enriched
 
 
 def _build_gateway_route_request_from_route_meta(route_meta: Dict[str, Any]) -> GatewayRouteRequest:
@@ -610,6 +664,157 @@ def _strip_shell_text_fallback_segment(text: str, span: Optional[tuple[int, int]
     return (raw[:start] + raw[end:]).strip()
 
 
+async def _collect_pipeline_child_llm_turn(
+    *,
+    llm_service: Any,
+    messages: List[Dict[str, Any]],
+    temperature: float,
+    model_override: Optional[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    tool_choice: Optional[Any],
+    timeout_seconds: float,
+) -> Dict[str, Any]:
+    async def _consume_stream() -> Dict[str, Any]:
+        content_parts: List[str] = []
+        collected_tool_calls: List[Dict[str, Any]] = []
+        stream_source = llm_service.stream_chat_with_context(
+            messages,
+            temperature,
+            model_override=model_override,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+        async for chunk in stream_source:
+            if not isinstance(chunk, str) or not chunk.startswith("data: "):
+                continue
+            data_str = chunk[6:].strip()
+            if not data_str or data_str == "[DONE]":
+                continue
+            try:
+                payload = json.loads(data_str)
+            except Exception:
+                continue
+            payload_type = str(payload.get("type", ""))
+            payload_text = payload.get("text")
+            if payload_type == "content":
+                content_parts.append(str(payload_text or ""))
+            elif payload_type == "tool_calls" and isinstance(payload_text, list):
+                collected_tool_calls = [dict(item) for item in payload_text if isinstance(item, dict)]
+        return {
+            "content": "".join(content_parts),
+            "tool_calls": collected_tool_calls,
+        }
+
+    def _run_sync() -> Dict[str, Any]:
+        return asyncio.run(_consume_stream())
+
+    return await offload_blocking(
+        _run_sync,
+        timeout=max(5.0, float(timeout_seconds or 0.0)),
+    )
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _build_pipeline_stream_heartbeat_event(
+    *,
+    pipeline_id: str,
+    shell_session_id: str,
+    core_execution_session_id: str,
+    started_monotonic: float,
+    last_event_type: str,
+    agent_session_store: Optional[AgentSessionStore],
+) -> Dict[str, Any]:
+    heartbeat_snapshot: Dict[str, Any] = {
+        "root_session_id": str(core_execution_session_id or ""),
+        "summary": {},
+        "sessions": [],
+        "heartbeats": [],
+    }
+    if core_execution_session_id and agent_session_store is not None:
+        try:
+            snapshot = agent_session_store.get_descendant_heartbeat_snapshot(core_execution_session_id)
+            if isinstance(snapshot, dict):
+                heartbeat_snapshot = {
+                    "root_session_id": str(snapshot.get("root_session_id") or core_execution_session_id),
+                    "summary": dict(snapshot.get("summary") or {}),
+                    "sessions": list(snapshot.get("sessions") or []),
+                    "heartbeats": list(snapshot.get("heartbeats") or []),
+                }
+        except Exception as exc:
+            logger.debug("构建 pipeline stream heartbeat snapshot 失败: %s", exc)
+    summary = dict(heartbeat_snapshot.get("summary") or {})
+    child_sessions = list(heartbeat_snapshot.get("sessions") or [])
+    child_heartbeats = list(heartbeat_snapshot.get("heartbeats") or [])
+
+    return {
+        "type": "pipeline_heartbeat",
+        "pipeline_id": str(pipeline_id or ""),
+        "shell_session_id": str(shell_session_id or ""),
+        "core_execution_session_id": str(core_execution_session_id or ""),
+        "generated_at": _utc_now_iso(),
+        "elapsed_seconds": round(max(0.0, time.monotonic() - float(started_monotonic or time.monotonic())), 3),
+        "last_event_type": str(last_event_type or ""),
+        "child_heartbeat_summary": summary,
+        "child_session_count": int(summary.get("session_count") or len(child_sessions)),
+        "child_heartbeat_count": int(summary.get("task_count") or len(child_heartbeats)),
+    }
+
+
+async def _stream_async_generator_with_keepalive(
+    source: AsyncGenerator[Dict[str, Any], None],
+    *,
+    heartbeat_interval_seconds: float,
+    heartbeat_builder: Callable[[], Dict[str, Any]],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+    consumer_ack = asyncio.Event()
+
+    async def _put_with_backpressure(kind: str, payload: Any) -> None:
+        consumer_ack.clear()
+        await queue.put((kind, payload))
+        await consumer_ack.wait()
+
+    async def _produce() -> None:
+        try:
+            async for item in source:
+                await _put_with_backpressure("event", item)
+        except Exception as exc:
+            await _put_with_backpressure("error", exc)
+        finally:
+            await _put_with_backpressure("done", None)
+
+    producer = asyncio.create_task(_produce())
+    try:
+        while True:
+            try:
+                kind, payload = await asyncio.wait_for(
+                    queue.get(),
+                    timeout=max(1.0, float(heartbeat_interval_seconds or 0.0)),
+                )
+            except asyncio.TimeoutError:
+                heartbeat_event = heartbeat_builder()
+                if isinstance(heartbeat_event, dict) and heartbeat_event:
+                    yield heartbeat_event
+                continue
+
+            consumer_ack.set()
+
+            if kind == "event":
+                if isinstance(payload, dict):
+                    yield payload
+                continue
+            if kind == "error":
+                raise payload
+            break
+    finally:
+        producer.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await producer
+
+
 def _select_shell_tool_choice(message: str, tool_names: List[str]) -> Any:
     raw = str(message or "")
     normalized = raw.lower()
@@ -618,14 +823,108 @@ def _select_shell_tool_choice(message: str, tool_names: List[str]) -> Any:
         text = str(tool_name or "").strip()
         if text and text.lower() in normalized:
             matched.append(text)
-    if len(matched) == 1:
+    if len(matched) != 1:
+        return "auto"
+
+    tool_name = matched[0]
+    escaped_tool_name = re.escape(tool_name)
+    explicit_positive_patterns = (
+        rf"(?:调用|使用|运行|执行)\s+`?{escaped_tool_name}`?",
+        rf"(?:call|use|run)\s+`?{escaped_tool_name}`?",
+    )
+    negated_patterns = (
+        rf"(?:不要|别|禁止|不用|无需)\s*(?:调用|使用|运行|执行)?\s*`?{escaped_tool_name}`?",
+        rf"(?:do\s+not|don't|not)\s+(?:call|use|run)\s+`?{escaped_tool_name}`?",
+    )
+    if any(re.search(pattern, raw, flags=re.IGNORECASE) for pattern in negated_patterns):
+        return "auto"
+    if any(re.search(pattern, raw, flags=re.IGNORECASE) for pattern in explicit_positive_patterns):
         return {
             "type": "function",
             "function": {
-                "name": matched[0],
+                "name": tool_name,
             },
         }
     return "auto"
+
+
+_SHELL_FACT_VOLATILE_KEYS = {
+    "call_id",
+    "created_at",
+    "duration_ms",
+    "elapsed_ms",
+    "generated_at",
+    "latency_ms",
+    "request_id",
+    "session_id",
+    "task_id",
+    "timestamp",
+    "tool_call_id",
+    "trace_id",
+    "updated_at",
+}
+
+
+def _normalize_shell_fact_payload(payload: Any, *, depth: int = 0) -> Any:
+    if depth >= 6:
+        return str(payload)
+    if isinstance(payload, Mapping):
+        normalized: Dict[str, Any] = {}
+        sorted_items = sorted(
+            ((str(key or ""), value) for key, value in payload.items()),
+            key=lambda item: item[0],
+        )
+        for key, value in sorted_items:
+            if key.lower() in _SHELL_FACT_VOLATILE_KEYS:
+                continue
+            normalized[key] = _normalize_shell_fact_payload(value, depth=depth + 1)
+        return normalized
+    if isinstance(payload, list):
+        return [_normalize_shell_fact_payload(item, depth=depth + 1) for item in payload]
+    if isinstance(payload, tuple):
+        return [_normalize_shell_fact_payload(item, depth=depth + 1) for item in payload]
+    if isinstance(payload, set):
+        return sorted(_normalize_shell_fact_payload(item, depth=depth + 1) for item in payload)
+    if isinstance(payload, str):
+        return payload.strip()
+    if payload is None or isinstance(payload, (int, float, bool)):
+        return payload
+    return str(payload)
+
+
+def _serialize_shell_fact_payload(payload: Any) -> str:
+    normalized = _normalize_shell_fact_payload(payload)
+    try:
+        serialized = json.dumps(normalized, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        serialized = str(normalized)
+    return serialized[:4000]
+
+
+def _build_shell_tool_call_signature(tool_name: str, tool_args: Any) -> str:
+    return f"{str(tool_name or '').strip()}::{_serialize_shell_fact_payload(tool_args if isinstance(tool_args, Mapping) else {'value': tool_args})}"
+
+
+def _extract_shell_round_fact_fingerprints(tool_name: str, tool_result: Any) -> Set[str]:
+    normalized_tool_name = str(tool_name or "").strip()
+    if not normalized_tool_name or normalized_tool_name == "dispatch_to_core":
+        return set()
+    return {f"{normalized_tool_name}::{_serialize_shell_fact_payload(tool_result)}"}
+
+
+def _should_force_core_dispatch_after_shell_budget(
+    *,
+    user_message: str,
+    shell_messages: List[Dict[str, Any]],
+) -> bool:
+    normalized_message = str(user_message or "").strip()
+    if not normalized_message:
+        return False
+    if contains_direct_coding_signal(normalized_message):
+        return True
+    if is_coding_followup(normalized_message) and has_recent_coding_context(shell_messages):
+        return True
+    return False
 
 
 # 历史流式文本切分器已移除，流式处理统一由 chat_stream 主循环管理
@@ -1643,35 +1942,20 @@ async def chat_stream(request: ChatRequest):
                 model_name: str,
             ) -> Dict[str, Any]:
                 del model_name  # model tier is already encoded in route-level override
-                content_parts: List[str] = []
-                collected_tool_calls: List[Dict[str, Any]] = []
-                stream_source = child_loop_llm_service.stream_chat_with_context(
-                    messages,
-                    get_config().api.temperature,
+                api_cfg = get_config().api
+                timeout_seconds = max(
+                    5.0,
+                    float(getattr(api_cfg, "request_timeout", 120) or 120) + 15.0,
+                )
+                return await _collect_pipeline_child_llm_turn(
+                    llm_service=child_loop_llm_service,
+                    messages=messages,
+                    temperature=float(getattr(api_cfg, "temperature", 0.7)),
                     model_override=child_loop_model_override,
                     tools=tools,
                     tool_choice="auto",
+                    timeout_seconds=timeout_seconds,
                 )
-                async for chunk in stream_source:
-                    if not isinstance(chunk, str) or not chunk.startswith("data: "):
-                        continue
-                    data_str = chunk[6:].strip()
-                    if not data_str or data_str == "[DONE]":
-                        continue
-                    try:
-                        payload = json.loads(data_str)
-                    except Exception:
-                        continue
-                    payload_type = str(payload.get("type", ""))
-                    payload_text = payload.get("text")
-                    if payload_type == "content":
-                        content_parts.append(str(payload_text or ""))
-                    elif payload_type == "tool_calls" and isinstance(payload_text, list):
-                        collected_tool_calls = [dict(item) for item in payload_text if isinstance(item, dict)]
-                return {
-                    "content": "".join(content_parts),
-                    "tool_calls": collected_tool_calls,
-                }
 
             async def _pipeline_child_tool_executor(
                 tool_name: str,
@@ -1682,7 +1966,12 @@ async def chat_stream(request: ChatRequest):
                 call_payload["tool_name"] = str(tool_name or "")
                 call_payload["_session_id"] = child_session_id
                 call_payload["session_id"] = child_session_id
-                return await native_tool_executor.execute(call_payload, session_id=child_session_id)
+                raw_result = await native_tool_executor.execute(call_payload, session_id=child_session_id)
+                return _enrich_child_tool_result_metadata(
+                    raw_result,
+                    child_session_id=child_session_id,
+                    session_store=session_store,
+                )
 
             # ── Shell loop first: the model decides whether to dispatch_to_core ──
             shell_prompt = str(route_meta.get("_shell_prompt_value") or "")
@@ -1715,10 +2004,26 @@ async def chat_stream(request: ChatRequest):
                 )
 
             llm_service = get_llm_service()
-            shell_max_rounds = 4
+            shell_loop_cfg = getattr(get_config().api, "shell_loop", None)
+            shell_max_rounds = max(1, int(getattr(shell_loop_cfg, "max_rounds", 12) or 12))
+            repeated_tool_pattern_rounds = max(
+                2,
+                int(getattr(shell_loop_cfg, "repeated_tool_pattern_rounds", 3) or 3),
+            )
+            no_new_fact_rounds_limit = max(
+                1,
+                int(getattr(shell_loop_cfg, "no_new_fact_rounds", 3) or 3),
+            )
             shell_round = 0
             dispatch_payload: Dict[str, Any] = {}
+            handoff_source = "dispatch_to_core"
             shell_tool_choice_hint = _select_shell_tool_choice(request.message, route_tool_names)
+            last_tool_pattern: Tuple[str, ...] = tuple()
+            repeated_tool_pattern_streak = 0
+            seen_fact_fingerprints: Set[str] = set()
+            no_new_fact_streak = 0
+            shell_stop_reason = ""
+            shell_stop_details: Dict[str, Any] = {}
             while shell_round < shell_max_rounds:
                 pending_tool_calls: List[Dict[str, Any]] = []
                 assistant_content_parts: List[str] = []
@@ -1801,17 +2106,21 @@ async def chat_stream(request: ChatRequest):
                 shell_messages.append(assistant_msg)
 
                 should_break_shell_loop = False
+                round_tool_pattern: List[str] = []
+                round_fact_fingerprints: Set[str] = set()
                 for idx, call in enumerate(pending_tool_calls):
                     call_id = str(call.get("id") or f"shell_call_{shell_round}_{idx}")
                     tool_name = str(call.get("name") or "")
                     tool_args = call.get("arguments")
                     if not isinstance(tool_args, dict):
                         tool_args = {}
+                    round_tool_pattern.append(_build_shell_tool_call_signature(tool_name, tool_args))
                     tool_result = shell_agent.execute_tool(
                         tool_name,
                         tool_args,
                         session_id=session_id,
                     )
+                    round_fact_fingerprints.update(_extract_shell_round_fact_fingerprints(tool_name, tool_result))
                     shell_messages.append(
                         {
                             "role": "tool",
@@ -1838,11 +2147,57 @@ async def chat_stream(request: ChatRequest):
                         should_break_shell_loop = True
                         break
 
+                current_tool_pattern = tuple(round_tool_pattern)
+                if current_tool_pattern:
+                    if current_tool_pattern == last_tool_pattern:
+                        repeated_tool_pattern_streak += 1
+                    else:
+                        repeated_tool_pattern_streak = 1
+                        last_tool_pattern = current_tool_pattern
+                else:
+                    repeated_tool_pattern_streak = 0
+
+                new_fact_fingerprints = round_fact_fingerprints - seen_fact_fingerprints
+                if round_fact_fingerprints:
+                    if new_fact_fingerprints:
+                        seen_fact_fingerprints.update(round_fact_fingerprints)
+                        no_new_fact_streak = 0
+                    else:
+                        no_new_fact_streak += 1
+
+                if not should_break_shell_loop:
+                    stagnation_reasons: List[str] = []
+                    if current_tool_pattern and repeated_tool_pattern_streak >= repeated_tool_pattern_rounds:
+                        stagnation_reasons.append("repeated_tool_pattern")
+                    if round_fact_fingerprints and no_new_fact_streak >= no_new_fact_rounds_limit:
+                        stagnation_reasons.append("no_new_facts")
+                    if stagnation_reasons:
+                        shell_stop_reason = "shell_tool_loop_stalled"
+                        shell_stop_details = {
+                            "reasons": list(stagnation_reasons),
+                            "repeated_tool_pattern_streak": repeated_tool_pattern_streak,
+                            "repeated_tool_pattern_rounds": repeated_tool_pattern_rounds,
+                            "no_new_fact_streak": no_new_fact_streak,
+                            "no_new_fact_rounds": no_new_fact_rounds_limit,
+                            "round": shell_round + 1,
+                        }
+                        yield _format_stream_payload_chunk(
+                            {
+                                "type": "warning",
+                                "text": shell_stop_reason,
+                                **shell_stop_details,
+                            },
+                            protocol=stream_protocol,
+                        )
+                        should_break_shell_loop = True
+
                 shell_round += 1
                 if should_break_shell_loop:
                     break
 
-            if shell_round >= shell_max_rounds:
+            if not dispatch_payload and not shell_stop_reason and shell_round >= shell_max_rounds:
+                shell_stop_reason = shell_stop_reason or "shell_tool_loop_max_rounds_reached"
+                shell_stop_details = shell_stop_details or {"max_rounds": shell_max_rounds}
                 yield _format_stream_payload_chunk(
                     {
                         "type": "warning",
@@ -1851,6 +2206,74 @@ async def chat_stream(request: ChatRequest):
                     },
                     protocol=stream_protocol,
                 )
+
+            if shell_stop_reason and not dispatch_payload and _should_force_core_dispatch_after_shell_budget(
+                user_message=effective_message,
+                shell_messages=shell_messages,
+            ):
+                dispatch_payload = shell_agent.dispatch_to_core(
+                    {
+                        "goal": effective_message,
+                        "intent_type": "development",
+                        "target_repo": "external",
+                        "context_summary": (
+                            "Shell readonly tool loop stopped before dispatch. "
+                            "Escalating to Core because the user request carries direct coding/execution signals."
+                        ),
+                        "relevant_memories": list(precomposed_memory_lines),
+                        "priority": "normal",
+                    },
+                    session_id=session_id,
+                    risk_level="write_repo",
+                )
+                if bool(dispatch_payload.get("dispatched")):
+                    handoff_source = (
+                        "shell_budget_fallback"
+                        if shell_stop_reason == "shell_tool_loop_max_rounds_reached"
+                        else "shell_progress_fallback"
+                    )
+                    yield _format_stream_payload_chunk(
+                        {
+                            "type": "warning",
+                            "text": (
+                                "shell_budget_force_dispatch_to_core"
+                                if shell_stop_reason == "shell_tool_loop_max_rounds_reached"
+                                else "shell_progress_force_dispatch_to_core"
+                            ),
+                            "reason": (
+                                "direct_coding_signal_after_readonly_budget"
+                                if shell_stop_reason == "shell_tool_loop_max_rounds_reached"
+                                else "direct_coding_signal_after_shell_progress_stall"
+                            ),
+                            "stop_details": dict(shell_stop_details),
+                            "max_rounds": shell_max_rounds,
+                        },
+                        protocol=stream_protocol,
+                    )
+
+            if shell_stop_reason and not dispatch_payload:
+                stream_source = llm_service.stream_chat_with_context(
+                    shell_messages,
+                    get_config().api.temperature,
+                    model_override=shell_model_override,
+                    tools=None,
+                    tool_choice=None,
+                )
+                async for chunk in stream_source:
+                    if chunk.startswith("data: "):
+                        try:
+                            data_str = chunk[6:].strip()
+                            if data_str and data_str != "[DONE]":
+                                chunk_data = json.loads(data_str)
+                                if str(chunk_data.get("type", "content")) == "content":
+                                    text_piece = str(chunk_data.get("text", "") or "")
+                                    current_round_text += text_piece
+                                    complete_response_parts.append(text_piece)
+                                yield _format_stream_payload_chunk(chunk_data, protocol=stream_protocol)
+                                continue
+                        except Exception as e:
+                            logger.error(f"[API Server] Shell synthesis stream parse error: {e}")
+                    yield chunk
 
             # ── Core handoff only happens when Shell explicitly dispatches. ──
             if dispatch_payload:
@@ -1862,7 +2285,7 @@ async def chat_stream(request: ChatRequest):
                 route_meta["shell_readonly_hit"] = False
                 route_meta["router_decision"] = dict(route_decision)
                 route_meta["routing_mode"] = "dispatch_to_core_tool"
-                route_meta["handoff_source"] = "dispatch_to_core"
+                route_meta["handoff_source"] = handoff_source
                 route_meta["core_execution_route"] = str(route_decision.get("core_route") or "")
                 route_meta = _apply_shell_core_session_state(route_meta, shell_session_id=session_id)
                 core_execution_session_id = str(route_meta.get("core_execution_session_id") or "")
@@ -1893,16 +2316,20 @@ async def chat_stream(request: ChatRequest):
                         ),
                         "core_execution_session_created": core_execution_session_created,
                         "routing_mode": "dispatch_to_core_tool",
-                        "handoff_source": "dispatch_to_core",
+                        "handoff_source": handoff_source,
                     },
                     protocol=stream_protocol,
                 )
 
-                async for event in run_multi_agent_pipeline(
+                pipeline_started_monotonic = time.monotonic()
+                last_pipeline_event_type = "pipeline_start"
+                last_pipeline_id = ""
+                pipeline_stream = run_multi_agent_pipeline(
                     message=dispatched_goal,
                     session_id=core_execution_session_id,
                     risk_level=str(route_meta.get("risk_level") or "write_repo"),
                     route_decision=route_decision,
+                    dispatch_payload=dispatch_payload,
                     forced_route_semantic=route_semantic,
                     core_execution_session_id=core_execution_session_id,
                     child_llm_call=_pipeline_child_llm_call,
@@ -1913,11 +2340,29 @@ async def chat_stream(request: ChatRequest):
                     store=session_store,
                     mailbox=agent_mailbox,
                     task_board_engine=task_board_engine,
+                )
+
+                async for event in _stream_async_generator_with_keepalive(
+                    pipeline_stream,
+                    heartbeat_interval_seconds=_PIPELINE_STREAM_HEARTBEAT_INTERVAL_SECONDS,
+                    heartbeat_builder=lambda: _build_pipeline_stream_heartbeat_event(
+                        pipeline_id=last_pipeline_id,
+                        shell_session_id=session_id,
+                        core_execution_session_id=core_execution_session_id,
+                        started_monotonic=pipeline_started_monotonic,
+                        last_event_type=last_pipeline_event_type,
+                        agent_session_store=session_store,
+                    ),
                 ):
                     if not isinstance(event, dict):
                         continue
                     chunk_type = str(event.get("type", "content"))
                     chunk_text = str(event.get("text", ""))
+                    if chunk_type != "pipeline_heartbeat":
+                        last_pipeline_event_type = chunk_type
+                    pipeline_id_text = str(event.get("pipeline_id") or "").strip()
+                    if pipeline_id_text:
+                        last_pipeline_id = pipeline_id_text
 
                     if chunk_type == "content":
                         current_round_text += chunk_text

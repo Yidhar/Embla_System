@@ -10,7 +10,7 @@ import pytest
 from agents.runtime.agent_session import AgentSessionStore, AgentStatus
 from agents.runtime.mailbox import AgentMailbox
 from agents.runtime.parent_tools import handle_parent_tool_call
-from agents.pipeline import _build_core_execution_receipt
+from agents.pipeline import _build_core_execution_receipt, _build_fast_track_execution_receipt
 from system.git_worktree_sandbox import (
     audit_git_worktree_sandbox,
     create_git_worktree_sandbox,
@@ -296,3 +296,41 @@ def test_core_execution_receipt_marks_workspace_submission_pending() -> None:
     assert agent_state["workspace_submissions"][0]["promote_pending"] is True
     assert agent_state["workspace_submissions"][0]["change_id"] == "wt_expert-1_123"
     assert "awaiting workspace promotion approval" in str(agent_state.get("final_answer") or "").lower()
+
+
+def test_fast_track_readonly_worktree_does_not_mark_workspace_submission_pending() -> None:
+    receipt = _build_fast_track_execution_receipt(
+        pipeline_id="pipe-fast-readonly-1",
+        goal="inspect runtime logs",
+        reports=[
+            {
+                "session_id": "fast-track-dev-1",
+                "status": "completed",
+                "reports": ["read-only analysis complete"],
+                "metadata": {
+                    "workspace_mode": "worktree",
+                    "workspace_sandbox_type": "git_worktree",
+                    "workspace_root": "/repo/scratch/agent_worktrees/fast-track-dev-1",
+                    "workspace_origin_root": "/repo",
+                    "workspace_submission_state": "sandboxed",
+                    "workspace_change_id": "",
+                    "workspace_submission_changed_files": [],
+                    "workspace_audit_report_path": "",
+                    "workspace_audit_diff_path": "",
+                },
+            }
+        ],
+        task_completed=True,
+        stop_reason="completed",
+        fast_track_agent_id="fast-track-dev-1",
+        complexity_hint="simple",
+        guard_blocked_count=0,
+        touched_files=[],
+    )
+
+    agent_state = receipt.get("agent_state", {})
+    assert agent_state["workspace_submission_required"] is False
+    assert agent_state["workspace_submissions"][0]["state"] == "sandboxed"
+    assert agent_state["workspace_submissions"][0]["promote_pending"] is False
+    assert "awaiting workspace promotion approval" not in str(agent_state.get("final_answer") or "").lower()
+
