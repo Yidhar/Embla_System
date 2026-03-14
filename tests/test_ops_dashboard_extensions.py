@@ -614,6 +614,79 @@ def test_ops_runtime_posture_payload_includes_boxlite_runtime_summary(tmp_path, 
     assert payload["data"]["boxlite_runtime"]["asset_name"] == "embla_py311_default"
 
 
+def test_ops_runtime_posture_payload_includes_os_sandbox_summary_and_downgrades_optional_boxlite(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    _write_jsonl(events_file, [])
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "ok", "metric_status": {}},
+            "metrics": {},
+            "threshold_profile": {},
+            "sources": {"events_file": "logs/autonomous/events.jsonl"},
+        }
+
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(
+        api_server,
+        "get_config",
+        lambda: type("Cfg", (), {
+            "sandbox": type("Sandbox", (), {
+                "default_execution_backend": "os_sandbox",
+                "self_repo_execution_backend": "os_sandbox",
+                "os_sandbox": type("OsSandbox", (), {
+                    "runtime_profile": "default",
+                    "enforce_network_guard": True,
+                    "runtime_profiles": {
+                        "default": type("Profile", (), {
+                            "resource_profile": "standard",
+                            "network_enabled": False,
+                            "inject_offline_env": True,
+                            "default_command_timeout_seconds": 120,
+                            "max_command_timeout_seconds": 1200,
+                            "default_python_timeout_seconds": 15,
+                            "max_python_timeout_seconds": 180,
+                        })(),
+                    },
+                })(),
+            })(),
+        })(),
+    )
+    monkeypatch.setattr(
+        "system.boxlite.manager.get_boxlite_runtime_assets_summary",
+        lambda **kwargs: {
+            "enabled": True,
+            "active_profile": "default",
+            "asset_name": "embla_py311_default",
+            "image": "embla/boxlite-runtime:py311",
+            "requested_image": "embla/boxlite-runtime:py311",
+            "resolved_image": "",
+            "status": "unavailable",
+            "severity": "critical",
+            "reason_code": "BOXLITE_RUNTIME_NOT_READY",
+            "reason_text": "BoxLite runtime assets are unavailable.",
+            "runtime_state_file": str(repo_root / "scratch" / "runtime" / "boxlite_runtime_assets.json"),
+            "profiles": [],
+        },
+    )
+
+    payload = api_server._ops_build_runtime_posture_payload(events_limit=50)
+
+    assert payload["status"] == "success"
+    assert payload["severity"] == "warning"
+    assert payload["reason_code"] == "OS_SANDBOX_RUNTIME_WARNING" or payload["reason_code"] == "BOXLITE_RUNTIME_WARNING"
+    assert payload["data"]["summary"]["os_sandbox_runtime_status"] == "ok"
+    assert payload["data"]["summary"]["boxlite_runtime_status"] == "warning"
+    assert payload["data"]["metrics"]["os_sandbox_runtime"]["default_execution_backend"] == "os_sandbox"
+    assert payload["data"]["os_sandbox_runtime"]["default_profile"] == "default"
+    assert payload["data"]["boxlite_runtime"]["optional_backend"] is True
+    assert payload["data"]["boxlite_runtime"]["reason_code"] == "BOXLITE_RUNTIME_OPTIONAL_UNAVAILABLE"
+
+
 def test_ops_runtime_posture_payload_includes_agentic_loop_completion_summary(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
     events_file = repo_root / "logs" / "autonomous" / "events.jsonl"

@@ -1,14 +1,19 @@
-# 15 — BoxLite-First 执行沙箱架构
+# 15 — BoxLite 强隔离执行后端架构
 
 > 文档层级：`L1-TARGET`
-> 版本：v1.0 | 2026-03-10
+> 版本：v1.1 | 2026-03-15
 > 前置依赖：[14-multi-agent-architecture](14-multi-agent-architecture.md) · [12-limbs-layer-modules](12-limbs-layer-modules.md) · [09-tool-execution-specification](09-tool-execution-specification.md)
 
 ---
 
+> 状态说明：
+> - 本文档保留 `BoxLite` 作为 **可选强隔离执行后端** 的设计说明。
+> - 自 2026-03-15 起，Embla 默认可写执行主链的 target canonical 已切换为 `OS-sandbox-first`。
+> - 默认执行架构详见 `doc/16-os-sandbox-default-execution-architecture.md`。
+
 ## 1. 设计结论
 
-Embla System 的可写 Agent 执行面采用以下 canonical 方案：
+本文档描述 `BoxLite` 作为高级/强隔离执行后端时的 canonical 方案：
 
 - **控制面留在宿主**：Session、Memory、Pipeline、Expert/Review 编排、审计账本都继续运行在宿主进程。
 - **工作区边界继续使用 `git worktree`**：每个自维护任务创建独立 worktree，禁止直接对主 checkout 做 `rw` 执行。
@@ -20,7 +25,7 @@ Embla System 的可写 Agent 执行面采用以下 canonical 方案：
 
 `host worktree lifecycle + box execution plane + host audit/promote/teardown`
 
-该方案的目标不是替换现有多 Agent 框架，而是把 `native execution` 重构为可插拔 `execution backend`，并以 BoxLite 作为 Embla 默认可写执行后端。首次缺少 BoxLite SDK 时，运行时会优先通过项目 `.venv` 自动 bootstrap 安装 `boxlite`；只读 Shell 与无 session 宿主工具不在此范围内。
+该方案的目标不是替换现有多 Agent 框架，而是把 `native execution` 重构为可插拔 `execution backend`，并将 `BoxLite` 保留为 Embla 的可选强隔离后端。首次缺少 BoxLite SDK 时，运行时会优先通过项目 `.venv` 自动 bootstrap 安装 `boxlite`；只读 Shell 与无 session 宿主工具不在此范围内。
 
 ---
 

@@ -14,11 +14,15 @@ def normalize_execution_backend(raw: Any) -> str:
         "default": "native",
         "local": "native",
         "host": "native",
+        "sandbox": "os_sandbox",
+        "os": "os_sandbox",
+        "os_sandbox_worktree": "os_sandbox",
+        "worktree": "os_sandbox",
         "box": "boxlite",
         "vm": "boxlite",
     }
     text = aliases.get(text, text)
-    if text not in {"native", "boxlite"}:
+    if text not in {"native", "os_sandbox", "boxlite"}:
         raise ValueError(f"unsupported execution_backend: {raw}")
     return text
 
@@ -30,6 +34,9 @@ def inherit_execution_metadata(parent_metadata: Mapping[str, Any]) -> Dict[str, 
         "execution_backend_requested",
         "execution_root",
         "execution_profile",
+        "sandbox_policy",
+        "network_policy",
+        "resource_profile",
         "box_profile",
         "box_provider",
         "box_mount_mode",
@@ -55,6 +62,9 @@ class SandboxContext:
     execution_backend_requested: str = "native"
     execution_root: str = ""
     execution_profile: str = "default"
+    sandbox_policy: str = "default"
+    network_policy: str = "disabled"
+    resource_profile: str = "standard"
     box_profile: str = "default"
     box_provider: str = "sdk"
     box_name: str = ""
@@ -74,6 +84,9 @@ class SandboxContext:
             execution_backend="native",
             execution_backend_requested="native",
             execution_root=str(root),
+            sandbox_policy="default",
+            network_policy="disabled",
+            resource_profile="standard",
             project_root=str(root),
         )
 
@@ -108,6 +121,9 @@ class SandboxContext:
             execution_backend_requested=execution_backend_requested,
             execution_root=execution_root,
             execution_profile=str(metadata.get("execution_profile") or "default").strip() or "default",
+            sandbox_policy=str(metadata.get("sandbox_policy") or metadata.get("execution_profile") or "default").strip() or "default",
+            network_policy=str(metadata.get("network_policy") or "disabled").strip() or "disabled",
+            resource_profile=str(metadata.get("resource_profile") or "standard").strip() or "standard",
             box_profile=str(metadata.get("box_profile") or "default").strip() or "default",
             box_provider=str(metadata.get("box_provider") or "sdk").strip() or "sdk",
             box_name=str(metadata.get("box_name") or "").strip(),
@@ -123,6 +139,9 @@ class SandboxContext:
             "execution_backend_requested": self.execution_backend_requested,
             "execution_root": self.execution_root,
             "execution_profile": self.execution_profile,
+            "sandbox_policy": self.sandbox_policy,
+            "network_policy": self.network_policy,
+            "resource_profile": self.resource_profile,
             "box_profile": self.box_profile,
             "box_provider": self.box_provider,
             "box_name": self.box_name,

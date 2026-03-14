@@ -41,8 +41,9 @@
    - `execution_bridge`（补丁意图执行、角色门禁、审计回执）
 4. 执行层：
    - Embla 原生工具路由：`native_tools -> ExecutionBackend`
-   - 默认可写执行后端：`BoxLiteExecutionBackend`（Dev / Review / `core_execution` 会话）
-   - 宿主 fallback：`NativeExecutionBackend`（无 session、host-only system 能力、BoxLite 不可用且策略允许时）
+   - 默认可写执行后端：`OsSandboxExecutionBackend`（Dev / Review / 常规 `core_execution` 会话）
+   - 强隔离可选后端：`BoxLiteExecutionBackend`（高风险 / 不可信代码 / browser profile / 远端 execution host）
+   - 宿主 fallback：`NativeExecutionBackend`（无 session、host-only system 能力、`os_sandbox` / `BoxLite` 不可用且策略允许时）
    - MCP：`mcp_manager`（本地注册优先，外部 mcporter 兜底）
 5. 返回层：输出 `tool_results` / `tool_stage` / `SubTaskExecutionBridgeReceipt` 到前端与事件通道。
 
@@ -75,17 +76,18 @@
 - `policy/role_executor_semantic_guard.spec`：语义级门禁策略
 - `config/autonomous_runtime.yaml`：`disable_legacy_cli_fallback` 等运行策略
 
-### 3.2 BoxLite-first 执行后端（Target Canonical）
+### 3.2 OS-sandbox-first 执行后端（Target Canonical）
 
-当前默认链已统一为 `host control plane + BoxLite execution plane + host worktree lifecycle`：
+当前 target canonical 已调整为 `host control plane + os_sandbox execution plane + host worktree lifecycle`：
 
 - 宿主创建每任务 `git worktree`
-- 宿主以稳定 `box_name` 创建/复用 BoxLite box，并记录运行时 `box_id`；随后将 worktree 以 `rw` 挂载到 box 内 `/workspace`
-- 宿主额外将主 checkout 以 `ro` 挂载到相同绝对路径，并将主仓库 `.venv` 以 `ro` 挂载到 `/workspace/.venv`，用于 worktree `.git` 解析与 `.venv/bin/python` 复用
-- Dev / Review 的 workspace 读写、搜索、命令执行、测试、lint、事务写入通过统一 `ExecutionBackend` 路由；`query_docs`、`file_ast_skeleton`、`file_ast_chunk_read` 也随执行后端进入 box 内 guest helper 路径
+- Parent 为子 session 写入 `SandboxContext(workspace_host_root=<worktree>, execution_backend=os_sandbox, execution_root=<worktree>)`
+- Dev / Review 的 workspace 读写、搜索、命令执行、测试、lint、事务写入通过统一 `ExecutionBackend` 路由，并默认落到 `OsSandboxExecutionBackend`
+- `OsSandboxExecutionBackend` 在宿主 OS 上执行，但必须以 worktree 根为 canonical 路径 / cwd / repo_path
 - 宿主仅保留 `artifact_reader` / `killswitch_plan` 等系统级 host-bridge 能力，以及 `audit_child_workspace`、`promote_child_workspace`、`teardown_child_workspace`
+- `BoxLite` 显式请求但不可用时，若该 session 已有 worktree，canonical fallback 必须回到 `os_sandbox`；只有 host-only / sessionless 才回到 `native`
 
-因此，BoxLite 在 Embla 中承担的是**Embla 默认可写执行后端**角色，而不是替代 worktree lifecycle。`SandboxContext.default()` 保留 `native` 仅用于无 session / 测试 harness 的宿主 fallback。
+因此，`os_sandbox` 在 Embla 中承担的是**默认可写执行后端**角色，而不是替代 worktree lifecycle。`BoxLiteExecutionBackend` 保留为可选强隔离后端；`SandboxContext.default()` 仍保留 `native` 仅用于无 session / 测试 harness 的宿主 fallback。
 
 配套重构原则：
 
@@ -93,9 +95,11 @@
 2. `SandboxContext` 成为 session 的单一事实源。
 3. `apply_workspace_path_overrides` 仅保留为 native fallback 兼容层。
 4. `execution_receipt` 对 `awaiting_workspace_promotion` 的语义保持不变。
-5. BoxLite runtime 元数据采用 `box_name`（稳定 session 命名）+ `box_id`（运行时实例 ID）双字段口径。
+5. `BoxLite` 仍采用 `box_name`（稳定 session 命名）+ `box_id`（运行时实例 ID）双字段口径，但只在显式使用强隔离后端时出现。
+6. native tool success / error 回执至少暴露 `execution_backend`、`execution_backend_requested`、`execution_root`、`sandbox_policy`、`network_policy`、`resource_profile`。
+7. pipeline `execution_receipt` 的 `agent_state` 应补充 `execution_runtime` 摘要，供 Shell/Core/前端直接读取本轮执行面的真实收口。
 
-详细设计见 `doc/15-boxlite-first-execution-sandbox-architecture.md`。
+详细设计见 `doc/16-os-sandbox-default-execution-architecture.md`；`BoxLite` 强隔离后端见 `doc/15-boxlite-first-execution-sandbox-architecture.md`。
 
 ## 4. Tool Contract（统一契约）
 
@@ -171,6 +175,11 @@ MCP 路径（`mcp_manager`）已具备：
 - 调用类型：native/mcp
 - 风险等级：read_only/write_repo/deploy/secrets
 - 是否落盘：是/否
+- 执行后端：native/os_sandbox/boxlite
+- sandbox_policy：default/heavy/networked/host/...
+- network_policy：enabled/disabled/host
+- resource_profile：standard/heavy/host/...
+- execution_runtime：按 agent 聚合的执行面摘要（backend/requested_backend/root/policy）
 
 【执行证据】
 - tool_name: ...

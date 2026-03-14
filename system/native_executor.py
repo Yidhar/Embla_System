@@ -71,6 +71,34 @@ class NativeExecutor:
         (r"(?i)\s&\s*$", "background '&'"),
     )
 
+    _NETWORK_TOOL_TOKENS = {
+        "curl",
+        "wget",
+        "ftp",
+        "lftp",
+        "nc",
+        "ncat",
+        "netcat",
+        "telnet",
+        "ssh",
+        "scp",
+        "sftp",
+        "rsync",
+        "socat",
+        "http",
+        "httpie",
+    }
+
+    _NETWORK_FLOW_PATTERNS = (
+        (r"(?i)(^|[\s;&|()<>])git\s+clone\b", "git clone"),
+        (r"(?i)(^|[\s;&|()<>])git\s+fetch\b", "git fetch"),
+        (r"(?i)(^|[\s;&|()<>])git\s+pull\b", "git pull"),
+        (r"(?i)(^|[\s;&|()<>])git\s+push\b", "git push"),
+        (r"(?i)(^|[\s;&|()<>])docker\s+pull\b", "docker pull"),
+        (r"(?i)(^|[\s;&|()<>])docker\s+push\b", "docker push"),
+        (r"(?i)(^|[\s;&|()<>])docker\s+login\b", "docker login"),
+    )
+
     _ABS_PATH_RE = re.compile(
         r"(?i)(?:\"([a-z]:[\\/][^\"]+)\"|'([a-z]:[\\/][^']+)'|([a-z]:[\\/][^\s\"']+))"
     )
@@ -188,6 +216,17 @@ class NativeExecutor:
         if not ok:
             raise NativeSecurityError(reason)
 
+    def _validate_network_disabled_command_string(self, command: str) -> None:
+        cmd = str(command or "").strip()
+        lowered = cmd.lower()
+        for token in sorted(self._NETWORK_TOOL_TOKENS, key=len, reverse=True):
+            pattern = self._TOKEN_BOUNDARY_RE.format(token=re.escape(token))
+            if re.search(pattern, lowered):
+                raise NativeSecurityError(f"Network-disabled policy blocked command: {token}")
+        for pattern, label in self._NETWORK_FLOW_PATTERNS:
+            if re.search(pattern, cmd):
+                raise NativeSecurityError(f"Network-disabled policy blocked command: {label}")
+
     def is_safe_command(self, command: str) -> bool:
         """Best-effort safety precheck for shell command strings."""
         try:
@@ -258,6 +297,17 @@ class NativeExecutor:
                 if not self._is_within_root(resolved, self.PROJECT_ROOT):
                     raise NativeSecurityError(f"Blocked path argument outside project root: {tok}")
 
+    def _validate_network_disabled_argv(self, argv: Sequence[str]) -> None:
+        if not argv:
+            raise ValueError("Command argv is empty")
+        program_key = self._program_key(str(argv[0]))
+        if program_key in self._NETWORK_TOOL_TOKENS:
+            raise NativeSecurityError(f"Network-disabled policy blocked command: {program_key}")
+        joined = " ".join(str(x) for x in argv)
+        for pattern, label in self._NETWORK_FLOW_PATTERNS:
+            if re.search(pattern, joined):
+                raise NativeSecurityError(f"Network-disabled policy blocked command: {label}")
+
     async def execute_shell(
         self,
         command: str,
@@ -267,11 +317,14 @@ class NativeExecutor:
         timeout_s: float | None = None,
         call_id: str | None = None,
         fencing_epoch: int | None = None,
+        network_enabled: bool | None = None,
     ) -> CommandResult:
         """
         Execute a shell command using platform shell launcher and asyncio subprocess.
         """
         self._validate_command_string(command)
+        if network_enabled is False:
+            self._validate_network_disabled_command_string(command)
 
         safe_cwd = self._resolve_safe_path(cwd or self.base_dir, kind="cwd")
         if not safe_cwd.exists() or not safe_cwd.is_dir():
@@ -364,6 +417,7 @@ class NativeExecutor:
         timeout_s: float | None = None,
         call_id: str | None = None,
         fencing_epoch: int | None = None,
+        network_enabled: bool | None = None,
     ) -> CommandResult:
         """
         General async command runner.
@@ -379,6 +433,7 @@ class NativeExecutor:
                 timeout_s=timeout_s,
                 call_id=call_id,
                 fencing_epoch=fencing_epoch,
+                network_enabled=network_enabled,
             )
 
         argv = [str(x) for x in cmd]
@@ -387,6 +442,8 @@ class NativeExecutor:
             raise FileNotFoundError(f"cwd does not exist or is not a directory: {safe_cwd}")
 
         self._validate_argv(argv, cwd=safe_cwd)
+        if network_enabled is False:
+            self._validate_network_disabled_argv(argv)
 
         merged_env = os.environ.copy()
         if env:

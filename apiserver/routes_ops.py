@@ -34,10 +34,18 @@ from ._shared import (
 from core.supervisor.watchdog_daemon import WatchdogDaemon
 
 try:
-    from system.config import get_embla_system_config
+    from system.config import get_config, get_embla_system_config
 except ImportError:
+    def get_config() -> dict:  # type: ignore[misc]
+        return {}
     def get_embla_system_config() -> dict:  # type: ignore[misc]
         return {}
+
+try:
+    from system.sandbox_context import normalize_execution_backend
+except ImportError:
+    def normalize_execution_backend(raw: Any) -> str:  # type: ignore[misc]
+        return str(raw or "native").strip() or "native"
 
 logger = logging.getLogger(__name__)
 _OPS_APP_CONTEXT: Dict[str, Any] = {"app": None}
@@ -1328,6 +1336,8 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     immutable_dna_status = _ops_status_to_severity(str(immutable_dna.get("status") or "unknown"))
     audit_ledger = _ops_build_audit_ledger_summary(repo_root)
     audit_ledger_status = _ops_status_to_severity(str(audit_ledger.get("status") or "unknown"))
+    os_sandbox_runtime = _ops_build_os_sandbox_runtime_summary()
+    os_sandbox_runtime_status = _ops_status_to_severity(str(os_sandbox_runtime.get("severity") or "unknown"))
     try:
         from system.boxlite.manager import get_boxlite_runtime_assets_summary
 
@@ -1342,13 +1352,29 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "runtime_state_file": str((repo_root / "scratch" / "runtime" / "boxlite_runtime_assets.json").resolve()),
             "profiles": [],
         }
+    boxlite_runtime = dict(boxlite_runtime or {})
     boxlite_runtime_status = _ops_status_to_severity(str(boxlite_runtime.get("severity") or "unknown"))
+    boxlite_optional_backend = (
+        str(os_sandbox_runtime.get("default_execution_backend") or "") == "os_sandbox"
+        and str(os_sandbox_runtime.get("self_repo_execution_backend") or "") == "os_sandbox"
+    )
+    if boxlite_optional_backend and boxlite_runtime_status == "critical":
+        boxlite_runtime["raw_status"] = str(boxlite_runtime.get("status") or "")
+        boxlite_runtime["raw_severity"] = str(boxlite_runtime.get("severity") or "")
+        boxlite_runtime["raw_reason_code"] = str(boxlite_runtime.get("reason_code") or "")
+        boxlite_runtime["raw_reason_text"] = str(boxlite_runtime.get("reason_text") or "")
+        boxlite_runtime["optional_backend"] = True
+        boxlite_runtime["severity"] = "warning"
+        boxlite_runtime["reason_code"] = "BOXLITE_RUNTIME_OPTIONAL_UNAVAILABLE"
+        boxlite_runtime["reason_text"] = "BoxLite runtime is unavailable, but the default writable backend remains os_sandbox."
+        boxlite_runtime_status = "warning"
 
     metric_status = summary.get("metric_status") if isinstance(summary.get("metric_status"), dict) else {}
     snapshot_overall_status = str(summary.get("overall_status") or "unknown")
     overall_status = _ops_max_status(
         [
             snapshot_overall_status,
+            os_sandbox_runtime_status,
             control_plane_mode_status,
             brainstem_status,
             watchdog_daemon_status,
@@ -1430,6 +1456,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "budget_guard_status": budget_guard_status,
             "immutable_dna_status": immutable_dna_status,
             "audit_ledger_status": audit_ledger_status,
+            "os_sandbox_runtime_status": os_sandbox_runtime_status,
             "boxlite_runtime_status": boxlite_runtime_status,
             "execution_bridge_governance_status": execution_bridge_governance_status,
             "execution_bridge_governance_reason_codes": list(execution_bridge_governance.get("reason_codes") or []),
@@ -1528,6 +1555,16 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
                 "latest_generated_at": audit_ledger.get("latest_generated_at"),
                 "latest_record_type": audit_ledger.get("latest_record_type"),
             },
+            "os_sandbox_runtime": {
+                "status": os_sandbox_runtime_status,
+                "value": 1 if str(os_sandbox_runtime.get("status") or "") == "ok" else 0,
+                "default_execution_backend": os_sandbox_runtime.get("default_execution_backend"),
+                "self_repo_execution_backend": os_sandbox_runtime.get("self_repo_execution_backend"),
+                "default_profile": os_sandbox_runtime.get("default_profile"),
+                "enforce_network_guard": os_sandbox_runtime.get("enforce_network_guard"),
+                "profiles_count": len(os_sandbox_runtime.get("profiles") or []),
+                "reason_code": os_sandbox_runtime.get("reason_code"),
+            },
             "boxlite_runtime": {
                 "status": boxlite_runtime_status,
                 "value": 1 if str(boxlite_runtime.get("status") or "") == "ready" else 0,
@@ -1591,6 +1628,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         "budget_guard": budget_guard,
         "immutable_dna": immutable_dna,
         "audit_ledger": audit_ledger,
+        "os_sandbox_runtime": os_sandbox_runtime,
         "boxlite_runtime": boxlite_runtime,
         "legacy_event_namespace": legacy_namespace,
         "execution_bridge_governance": execution_bridge_governance,
@@ -1624,6 +1662,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     elif audit_ledger_status == "critical":
         reason_code = "AUDIT_LEDGER_CRITICAL"
         reason_text = str(audit_ledger.get("reason_text") or "Audit ledger integrity check failed.")
+    elif os_sandbox_runtime_status == "critical":
+        reason_code = "OS_SANDBOX_RUNTIME_CRITICAL"
+        reason_text = str(os_sandbox_runtime.get("reason_text") or "OS sandbox runtime is unhealthy.")
     elif boxlite_runtime_status == "critical":
         reason_code = "BOXLITE_RUNTIME_CRITICAL"
         reason_text = str(boxlite_runtime.get("reason_text") or "BoxLite runtime assets are unavailable.")
@@ -1657,6 +1698,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     elif audit_ledger_status == "warning":
         reason_code = "AUDIT_LEDGER_WARNING"
         reason_text = str(audit_ledger.get("reason_text") or "Audit ledger requires attention.")
+    elif os_sandbox_runtime_status == "warning":
+        reason_code = "OS_SANDBOX_RUNTIME_WARNING"
+        reason_text = str(os_sandbox_runtime.get("reason_text") or "OS sandbox runtime requires attention.")
     elif boxlite_runtime_status == "warning":
         reason_code = "BOXLITE_RUNTIME_WARNING"
         reason_text = str(boxlite_runtime.get("reason_text") or "BoxLite runtime assets require attention.")
@@ -1722,6 +1766,59 @@ def _ops_collect_skill_inventory(*, max_skills: int = 24) -> Dict[str, Any]:
     return {
         "total_skills": len(skill_paths),
         "bundled_skills": bundled_skills,
+    }
+
+
+def _ops_build_os_sandbox_runtime_summary() -> Dict[str, Any]:
+    cfg = get_config()
+    sandbox_cfg = getattr(cfg, "sandbox", None)
+    default_backend = normalize_execution_backend(getattr(sandbox_cfg, "default_execution_backend", "native"))
+    self_repo_backend = normalize_execution_backend(getattr(sandbox_cfg, "self_repo_execution_backend", default_backend))
+    os_sandbox_cfg = getattr(sandbox_cfg, "os_sandbox", None)
+    default_profile = str(getattr(os_sandbox_cfg, "runtime_profile", "default") or "default").strip() or "default"
+    enforce_network_guard = bool(getattr(os_sandbox_cfg, "enforce_network_guard", True))
+    raw_profiles = getattr(os_sandbox_cfg, "runtime_profiles", None)
+
+    profiles: List[Dict[str, Any]] = []
+    if isinstance(raw_profiles, dict):
+        for name in sorted(raw_profiles.keys()):
+            profile = raw_profiles.get(name)
+            profiles.append(
+                {
+                    "profile": str(name or "").strip(),
+                    "resource_profile": str(getattr(profile, "resource_profile", "standard") or "standard").strip() or "standard",
+                    "network_enabled": bool(getattr(profile, "network_enabled", False)),
+                    "inject_offline_env": bool(getattr(profile, "inject_offline_env", True)),
+                    "default_command_timeout_seconds": int(getattr(profile, "default_command_timeout_seconds", 120) or 120),
+                    "max_command_timeout_seconds": int(getattr(profile, "max_command_timeout_seconds", 1200) or 1200),
+                    "default_python_timeout_seconds": int(getattr(profile, "default_python_timeout_seconds", 15) or 15),
+                    "max_python_timeout_seconds": int(getattr(profile, "max_python_timeout_seconds", 180) or 180),
+                }
+            )
+
+    status = "ok"
+    severity = "ok"
+    if self_repo_backend == "os_sandbox" or default_backend == "os_sandbox":
+        reason_code = "OS_SANDBOX_DEFAULT_ACTIVE"
+        reason_text = "OS sandbox is the default writable execution backend."
+        target_alignment = "canonical_default"
+    else:
+        reason_code = "OS_SANDBOX_AVAILABLE_NONDEFAULT"
+        reason_text = "OS sandbox runtime is available, but current config still uses a different default backend."
+        target_alignment = "legacy_default_backend"
+
+    return {
+        "enabled": True,
+        "status": status,
+        "severity": severity,
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "target_alignment": target_alignment,
+        "default_execution_backend": default_backend,
+        "self_repo_execution_backend": self_repo_backend,
+        "default_profile": default_profile,
+        "enforce_network_guard": enforce_network_guard,
+        "profiles": profiles,
     }
 
 
@@ -2585,6 +2682,14 @@ def _ops_build_vision_multimodal_summary(
 
 def _ops_build_runtime_heartbeat_snapshot(*, sample_limit: int = 12) -> Dict[str, Any]:
     try:
+        active_repo_root = _ops_repo_root().resolve()
+        module_repo_root = Path(__file__).resolve().parent.parent
+        if active_repo_root != module_repo_root:
+            return {"summary": {}, "sessions": [], "heartbeats": []}
+    except Exception:
+        return {"summary": {}, "sessions": [], "heartbeats": []}
+
+    try:
         import apiserver.api_server as runtime_api
 
         store, _, _ = runtime_api._get_pipeline_runtime_handles()
@@ -2617,7 +2722,7 @@ def _ops_build_workflow_events_payload(
     try:
         from scripts.export_slo_snapshot import build_snapshot
 
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = _ops_repo_root()
         snapshot = build_snapshot(repo_root=repo_root, events_limit=max(1, int(events_limit)))
     except Exception as exc:
         logger.error(f"构建 workflow/events 聚合失败: {exc}")

@@ -786,6 +786,53 @@ def _default_boxlite_runtime_profiles() -> Dict[str, SandboxBoxLiteRuntimeProfil
     }
 
 
+class SandboxOsSandboxRuntimeProfileConfig(BaseModel):
+    """Named OS-sandbox runtime profile used by host-side worktree sessions."""
+
+    resource_profile: str = Field(default="standard", description="资源档位标签：standard/heavy/custom")
+    network_enabled: bool = Field(default=False, description="该 profile 是否允许命令通道访问网络")
+    inject_offline_env: bool = Field(default=True, description="network=false 时是否注入离线环境变量")
+    default_command_timeout_seconds: int = Field(default=120, ge=1, le=3600, description="run_cmd 默认超时（秒）")
+    max_command_timeout_seconds: int = Field(default=1200, ge=1, le=7200, description="run_cmd 最大超时（秒）")
+    default_python_timeout_seconds: int = Field(default=15, ge=1, le=600, description="python_repl 默认超时（秒）")
+    max_python_timeout_seconds: int = Field(default=180, ge=1, le=1800, description="python_repl 最大超时（秒）")
+    default_watch_timeout_seconds: int = Field(default=600, ge=1, le=86400, description="sleep_and_watch 默认超时（秒）")
+    max_watch_timeout_seconds: int = Field(default=86400, ge=1, le=172800, description="sleep_and_watch 最大超时（秒）")
+
+
+def _default_os_sandbox_runtime_profiles() -> Dict[str, SandboxOsSandboxRuntimeProfileConfig]:
+    return {
+        "default": SandboxOsSandboxRuntimeProfileConfig(),
+        "networked": SandboxOsSandboxRuntimeProfileConfig(
+            resource_profile="standard",
+            network_enabled=True,
+            inject_offline_env=False,
+        ),
+        "heavy": SandboxOsSandboxRuntimeProfileConfig(
+            resource_profile="heavy",
+            network_enabled=False,
+            inject_offline_env=True,
+            default_command_timeout_seconds=300,
+            max_command_timeout_seconds=1800,
+            default_python_timeout_seconds=60,
+            max_python_timeout_seconds=600,
+            default_watch_timeout_seconds=1800,
+            max_watch_timeout_seconds=86400,
+        ),
+    }
+
+
+class SandboxOsSandboxConfig(BaseModel):
+    """Host OS sandbox runtime configuration for the default writable backend."""
+
+    runtime_profile: str = Field(default="default", description="默认 execution_profile 对应的 os_sandbox profile")
+    runtime_profiles: Dict[str, SandboxOsSandboxRuntimeProfileConfig] = Field(
+        default_factory=_default_os_sandbox_runtime_profiles,
+        description="命名 os_sandbox runtime profile 注册表",
+    )
+    enforce_network_guard: bool = Field(default=True, description="network=false 时是否启用命令级网络门禁")
+
+
 class SandboxBoxLiteConfig(BaseModel):
     """BoxLite runtime configuration for execution backend selection."""
 
@@ -826,8 +873,9 @@ class SandboxBoxLiteConfig(BaseModel):
 class SandboxConfig(BaseModel):
     """Unified sandbox and execution backend configuration."""
 
-    default_execution_backend: str = Field(default="boxlite", description="默认执行后端：native/boxlite")
-    self_repo_execution_backend: str = Field(default="boxlite", description="self 仓库默认执行后端：native/boxlite（当前与全局默认一致）")
+    default_execution_backend: str = Field(default="os_sandbox", description="默认执行后端：native/os_sandbox/boxlite")
+    self_repo_execution_backend: str = Field(default="os_sandbox", description="self 仓库默认执行后端：native/os_sandbox/boxlite")
+    os_sandbox: SandboxOsSandboxConfig = Field(default_factory=SandboxOsSandboxConfig)
     boxlite: SandboxBoxLiteConfig = Field(default_factory=SandboxBoxLiteConfig)
 
 

@@ -219,6 +219,9 @@ def inherit_workspace_metadata(parent_metadata: Mapping[str, Any]) -> Dict[str, 
         "execution_backend_requested",
         "execution_root",
         "execution_profile",
+        "sandbox_policy",
+        "network_policy",
+        "resource_profile",
         "box_profile",
         "box_provider",
         "box_mount_mode",
@@ -261,28 +264,41 @@ def apply_workspace_path_overrides(
     tool_name: str,
     arguments: Dict[str, Any],
     workspace_root: str | Path,
+    *,
+    strict_absolute: bool = False,
 ) -> Dict[str, Any]:
     root = Path(workspace_root).resolve()
     normalized_tool = str(tool_name or "").strip().lower()
     safe_arguments = dict(arguments) if isinstance(arguments, dict) else {}
 
+    def _resolve_workspace_value(value: Any) -> str:
+        resolved = _resolve_workspace_path(value, root)
+        if strict_absolute and resolved:
+            resolved_path = Path(resolved).resolve(strict=False)
+            if not _is_within_root(resolved_path, root):
+                raise ValueError(f"path escapes worktree root: {value}")
+        return resolved
+
     if normalized_tool in _GIT_CONTEXT_TOOLS:
-        safe_arguments.setdefault("repo_path", str(root))
-        safe_arguments.setdefault("cwd", str(root))
+        current_repo_path = safe_arguments.get("repo_path")
+        current_cwd = safe_arguments.get("cwd")
+        safe_arguments["repo_path"] = str(root) if current_repo_path in (None, "", ".") else _resolve_workspace_value(current_repo_path)
+        safe_arguments["cwd"] = str(root) if current_cwd in (None, "", ".") else _resolve_workspace_value(current_cwd)
         return safe_arguments
 
     if normalized_tool in _CWD_CONTEXT_TOOLS:
-        safe_arguments.setdefault("cwd", str(root))
+        current_cwd = safe_arguments.get("cwd")
+        safe_arguments["cwd"] = str(root) if current_cwd in (None, "", ".") else _resolve_workspace_value(current_cwd)
         if normalized_tool == "sleep_and_watch":
             for key in ("log_file", "path"):
                 if key in safe_arguments:
-                    safe_arguments[key] = _resolve_workspace_path(safe_arguments.get(key), root)
+                    safe_arguments[key] = _resolve_workspace_value(safe_arguments.get(key))
         return safe_arguments
 
     if normalized_tool in _FILE_PATH_TOOLS:
         for key in ("path", "file_path"):
             if key in safe_arguments:
-                safe_arguments[key] = _resolve_workspace_path(safe_arguments.get(key), root)
+                safe_arguments[key] = _resolve_workspace_value(safe_arguments.get(key))
         return safe_arguments
 
     if normalized_tool in _SEARCH_PATH_TOOLS:
@@ -291,7 +307,7 @@ def apply_workspace_path_overrides(
         if current in (None, "", "."):
             safe_arguments[key] = str(root)
         else:
-            safe_arguments[key] = _resolve_workspace_path(current, root)
+            safe_arguments[key] = _resolve_workspace_value(current)
         return safe_arguments
 
     if normalized_tool == "workspace_txn_apply":
@@ -304,7 +320,7 @@ def apply_workspace_path_overrides(
                     continue
                 next_item = dict(item)
                 if "path" in next_item:
-                    next_item["path"] = _resolve_workspace_path(next_item.get("path"), root)
+                    next_item["path"] = _resolve_workspace_value(next_item.get("path"))
                 rewritten.append(next_item)
             safe_arguments["changes"] = rewritten
         return safe_arguments

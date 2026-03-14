@@ -107,11 +107,50 @@
     "emit_observability_metadata": true // 是否输出结构化工具契约观测元数据
   },
   "sandbox": {
-    "default_execution_backend": "boxlite", // 默认执行后端：Embla agent execution 默认走 BoxLite
-    "self_repo_execution_backend": "boxlite", // 自维护仓库默认走 BoxLite（与全局默认一致）
+    "default_execution_backend": "os_sandbox", // 默认执行后端：常规自维护任务默认走宿主 OS 上的 worktree 受控执行
+    "self_repo_execution_backend": "os_sandbox", // 自维护仓库默认走 os_sandbox；高风险任务再显式升级到 BoxLite
+    "os_sandbox": {
+      "runtime_profile": "default", // 默认 os_sandbox execution_profile
+      "enforce_network_guard": true, // network=false 时启用命令级 no-network guard
+      "runtime_profiles": {
+        "default": {
+          "resource_profile": "standard", // 默认资源档位
+          "network_enabled": false, // 默认关闭网络
+          "inject_offline_env": true, // 注入 UV/PIP/Cargo 之类的离线环境变量
+          "default_command_timeout_seconds": 120, // run_cmd 默认超时
+          "max_command_timeout_seconds": 1200, // run_cmd 最大超时
+          "default_python_timeout_seconds": 15, // python_repl 默认超时
+          "max_python_timeout_seconds": 180, // python_repl 最大超时
+          "default_watch_timeout_seconds": 600, // sleep_and_watch 默认超时
+          "max_watch_timeout_seconds": 86400 // sleep_and_watch 最大超时
+        },
+        "networked": {
+          "resource_profile": "standard",
+          "network_enabled": true, // 需要联网的显式 profile
+          "inject_offline_env": false,
+          "default_command_timeout_seconds": 120,
+          "max_command_timeout_seconds": 1200,
+          "default_python_timeout_seconds": 15,
+          "max_python_timeout_seconds": 180,
+          "default_watch_timeout_seconds": 600,
+          "max_watch_timeout_seconds": 86400
+        },
+        "heavy": {
+          "resource_profile": "heavy", // 长测试/大仓库 profile
+          "network_enabled": false,
+          "inject_offline_env": true,
+          "default_command_timeout_seconds": 300,
+          "max_command_timeout_seconds": 1800,
+          "default_python_timeout_seconds": 60,
+          "max_python_timeout_seconds": 600,
+          "default_watch_timeout_seconds": 1800,
+          "max_watch_timeout_seconds": 86400
+        }
+      }
+    },
     "boxlite": {
-      "enabled": true, // 启用 BoxLite-first 自维护执行面
-      "mode": "required", // Core/child 默认优先要求 BoxLite；spawn 前必须 ready，否则自动降级 native
+      "enabled": true, // 启用 BoxLite 强隔离执行后端（不再是默认主链）
+      "mode": "required", // 显式选择 BoxLite 时优先要求 ready；不可用时可按策略降级到 os_sandbox/native
       "provider": "sdk", // 使用本地 Python SDK
       "base_url": "", // rest provider 时填写
       "runtime_profile": "default", // 默认 execution_profile 对应的运行时 profile

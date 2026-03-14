@@ -116,6 +116,7 @@
 当前落点：
 
 - `apiserver/native_tools.py` + `system/native_executor.py`
+- `system/execution_backend/runtime_policy.py`（`os_sandbox` / `boxlite` 的执行策略解析与 fallback 口径）
 - `mcpserver/mcp_registry.py` + `mcpserver/mcp_manager.py`
 - `agents/runtime/mini_loop.py`（子代理依赖调度、契约协商前置与统一提交）
 - `autonomous/scaffold_engine.py`（archived）（契约门禁 + verify pipeline + 多文件事务回滚）
@@ -123,8 +124,8 @@
 目标态演进（L1 参考）：
 
 - 自维护任务的执行面已从 `native_tools + native_executor` 收敛为统一 `ExecutionBackend` 抽象。
-- 当前默认路径为 `host git worktree + BoxLite execution box + host audit/promote/teardown`。
-- 无 session / 测试 harness 仍允许 `native` 宿主 fallback；详细设计见 `doc/15-boxlite-first-execution-sandbox-architecture.md`。
+- 新的 target canonical 为 `host git worktree + os_sandbox execution plane + host audit/promote/teardown`；`BoxLite` 退居可选强隔离后端。
+- 无 session / 测试 harness 仍允许 `native` 宿主 fallback；默认执行架构详见 `doc/16-os-sandbox-default-execution-architecture.md`，强隔离后端详见 `doc/15-boxlite-first-execution-sandbox-architecture.md`。
 
 ## 6. Legacy AgentServer 状态（已移除）
 

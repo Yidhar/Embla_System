@@ -81,12 +81,12 @@ def get_parent_tool_definitions() -> List[Dict[str, Any]]:
                     },
                     "execution_backend": {
                         "type": "string",
-                        "enum": ["native", "boxlite"],
+                        "enum": ["native", "os_sandbox", "boxlite"],
                         "description": "Execution backend for child tools. Defaults by runtime policy and target repo.",
                     },
                     "execution_profile": {
                         "type": "string",
-                        "description": "Execution resource/isolation profile name for the selected backend.",
+                        "description": "Execution profile name for the selected backend; os_sandbox and BoxLite both resolve policy from this profile.",
                     },
                     "box_profile": {
                         "type": "string",
@@ -444,6 +444,9 @@ def _handle_spawn(
         "workspace_mode": str(session.metadata.get("workspace_mode") or "project"),
         "execution_backend": str(session.metadata.get("execution_backend") or "native"),
         "execution_root": str(session.metadata.get("execution_root") or ""),
+        "sandbox_policy": str(session.metadata.get("sandbox_policy") or ""),
+        "network_policy": str(session.metadata.get("network_policy") or ""),
+        "resource_profile": str(session.metadata.get("resource_profile") or ""),
         "workspace_root": str(session.metadata.get("workspace_root") or ""),
         "message": f"Child agent {session.session_id} created and running.",
     }

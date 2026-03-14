@@ -42,10 +42,12 @@
 12. `doc/13-security-blindspots-and-hardening.md`
    - `L2-RUNBOOK`：安全盲区审计与强制加固基线（覆盖命令混淆、插件隔离、锁泄漏、评测毒化等）。
 13. `doc/15-boxlite-first-execution-sandbox-architecture.md`
-   - `L1-TARGET`：自维护任务的 BoxLite-first 执行沙箱设计（`host worktree + box execution + host audit/promote/teardown`）。
-14. `doc/task/README.md`
+   - `L1-TARGET`：可选强隔离 `BoxLite` 执行后端设计（不再是默认可写执行主链）。
+14. `doc/16-os-sandbox-default-execution-architecture.md`
+   - `L1-TARGET`：自维护任务的默认执行架构（`host worktree + os_sandbox execution + host audit/promote/teardown`）。
+15. `doc/task/README.md`
    - `L2/L3`：迁移与增量开发任务拆解总览（结构化工作流 + CSV backlog + 历史归档入口）。
-15. `doc/task/implementation/README.md`
+16. `doc/task/implementation/README.md`
    - `L3-ARCHIVE`：任务实施记录归档层说明（Implementation 目录统一口径）。
 
 ## 当前口径优先级（执行主链）
@@ -63,5 +65,5 @@
 
 1. 先读 `L0`：`doc/01-module-overview.md`、`doc/05-dev-startup-and-index.md`、`doc/06-structured-tool-calls-and-local-first-native.md`。
 2. 再读 `L2`：`doc/task/runbooks/INDEX.md` 与 `doc/09-tool-execution-specification.md`。
-3. 涉及演进方案时补读 `L1`：`doc/00-omni-operator-architecture.md`、`doc/10/11/12-*`、`doc/15-boxlite-first-execution-sandbox-architecture.md`。
+3. 涉及演进方案时补读 `L1`：`doc/00-omni-operator-architecture.md`、`doc/10/11/12-*`、`doc/16-os-sandbox-default-execution-architecture.md`、`doc/15-boxlite-first-execution-sandbox-architecture.md`。
 4. 涉及历史追溯时才进入 `L3`：`doc/07-archived-autonomous-agent-sdlc-architecture.md`、`doc/task/implementation/`。

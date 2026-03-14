@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from system.config import get_config
+from system.execution_backend.runtime_policy import (
+    resolve_os_sandbox_runtime_policy,
+    resolve_worktree_fallback_backend,
+)
 from system.sandbox_context import normalize_execution_backend
 
 
@@ -1393,6 +1397,7 @@ def probe_boxlite_runtime_readiness(
     if not base_status.available:
         return base_status
 
+    preferred_failure_status: BoxLiteRuntimeStatus | None = None
     last_status = BoxLiteRuntimeStatus(
         False,
         "boxlite_runtime_unavailable",
@@ -1450,8 +1455,16 @@ def probe_boxlite_runtime_readiness(
         )
         if ok:
             return candidate_status
+        if (
+            preferred_failure_status is None
+            and str(candidate_status.reason or "").startswith("boxlite_image_pull_")
+            and _is_embla_runtime_image(str(candidate_status.image or ""))
+        ):
+            preferred_failure_status = candidate_status
         last_status = candidate_status
 
+    if preferred_failure_status is not None:
+        return preferred_failure_status
     return last_status
 
 
@@ -1468,8 +1481,9 @@ def resolve_execution_runtime_metadata(
     cfg = get_config()
     sandbox_cfg = getattr(cfg, "sandbox", None)
     boxlite_settings = load_boxlite_runtime_settings()
+    os_sandbox_policy = resolve_os_sandbox_runtime_policy(execution_profile)
     runtime_profile_settings = _settings_for_runtime_profile(boxlite_settings, profile_name=execution_profile)
-    default_backend = normalize_execution_backend(getattr(sandbox_cfg, "default_execution_backend", "boxlite"))
+    default_backend = normalize_execution_backend(getattr(sandbox_cfg, "default_execution_backend", "os_sandbox"))
     self_repo_backend = normalize_execution_backend(getattr(sandbox_cfg, "self_repo_execution_backend", default_backend))
 
     raw_requested = str(requested_backend or "").strip()
@@ -1537,14 +1551,39 @@ def resolve_execution_runtime_metadata(
         if runtime_status.available:
             execution_root = runtime_status.working_dir or "/workspace"
         else:
-            effective = "native"
+            effective = resolve_worktree_fallback_backend(
+                workspace_mode=workspace_mode,
+                workspace_root=workspace_root,
+            )
+            execution_root = (
+                str(workspace_root or project_root or Path(__file__).resolve().parents[2]).strip()
+                if effective == "os_sandbox"
+                else str(project_root or Path(__file__).resolve().parents[2]).strip()
+            )
             fallback_reason = runtime_status.reason or "boxlite_unavailable"
+
+    if effective == "os_sandbox":
+        sandbox_policy = os_sandbox_policy.profile_name
+        network_policy = "enabled" if os_sandbox_policy.network_enabled else "disabled"
+        resource_profile = os_sandbox_policy.resource_profile
+    elif effective == "boxlite":
+        sandbox_policy = str(getattr(runtime_status, "runtime_profile", execution_profile or "default") or "default").strip() or "default"
+        box_network = bool(getattr(runtime_profile_settings, "network_enabled", False))
+        network_policy = "enabled" if box_network else "disabled"
+        resource_profile = f"boxlite:{sandbox_policy}"
+    else:
+        sandbox_policy = "host"
+        network_policy = "host"
+        resource_profile = "host"
 
     return {
         "execution_backend_requested": requested,
         "execution_backend": effective,
         "execution_root": execution_root,
         "execution_profile": str(execution_profile or "default").strip() or "default",
+        "sandbox_policy": sandbox_policy,
+        "network_policy": network_policy,
+        "resource_profile": resource_profile,
         "box_profile": str(box_profile or "default").strip() or "default",
         "box_provider": str(runtime_status.provider or getattr(runtime_profile_settings, "provider", "sdk") or "sdk"),
         "box_mount_mode": "rw",

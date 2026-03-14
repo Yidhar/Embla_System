@@ -6,6 +6,7 @@ from system.boxlite.manager import probe_boxlite_runtime_readiness
 from system.execution_backend.base import ExecutionBackend, ExecutionBackendUnavailableError
 from system.execution_backend.boxlite_backend import BoxLiteExecutionBackend
 from system.execution_backend.native_backend import NativeExecutionBackend
+from system.execution_backend.os_sandbox_backend import OsSandboxExecutionBackend
 from system.sandbox_context import normalize_execution_backend
 
 
@@ -27,10 +28,13 @@ class _UnavailableExecutionBackend(ExecutionBackend):
 class ExecutionBackendRegistry:
     def __init__(self) -> None:
         self._native_backend = NativeExecutionBackend()
+        self._os_sandbox_backend = OsSandboxExecutionBackend()
         self._boxlite_backend = BoxLiteExecutionBackend()
 
     def resolve(self, context) -> ExecutionBackend:
         backend_name = normalize_execution_backend(getattr(context, "execution_backend", "native"))
+        if backend_name == "os_sandbox":
+            return self._os_sandbox_backend
         if backend_name == "boxlite":
             status = probe_boxlite_runtime_readiness(
                 project_root=getattr(context, "project_root", ""),

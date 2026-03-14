@@ -113,7 +113,7 @@ def test_spawn_child_agent_falls_back_to_native_when_boxlite_unready(monkeypatch
     assert result["execution_backend"] == "native"
 
 
-def test_resolve_execution_runtime_metadata_falls_back_to_native_when_boxlite_preferred_unavailable(monkeypatch):
+def test_resolve_execution_runtime_metadata_falls_back_to_os_sandbox_when_boxlite_preferred_unavailable(monkeypatch):
     from system.boxlite.manager import resolve_execution_runtime_metadata
 
     monkeypatch.setattr(
@@ -158,7 +158,11 @@ def test_resolve_execution_runtime_metadata_falls_back_to_native_when_boxlite_pr
     )
 
     assert result["execution_backend_requested"] == "boxlite"
-    assert result["execution_backend"] == "native"
+    assert result["execution_backend"] == "os_sandbox"
+    assert result["execution_root"] == "/repo/scratch/agent_worktrees/agent-1"
+    assert result["sandbox_policy"] == "default"
+    assert result["network_policy"] == "disabled"
+    assert result["resource_profile"] == "standard"
     assert result["box_fallback_reason"] == "boxlite_sdk_import_failed"
 
 
@@ -229,7 +233,7 @@ def test_resolve_execution_runtime_metadata_ensures_boxlite_readiness_inside_run
     assert ensure_calls["count"] == 1
 
 
-def test_resolve_execution_runtime_metadata_falls_back_to_native_when_boxlite_unready_inside_running_loop(monkeypatch):
+def test_resolve_execution_runtime_metadata_falls_back_to_os_sandbox_when_boxlite_unready_inside_running_loop(monkeypatch):
     import system.boxlite.manager as manager
 
     monkeypatch.setattr(
@@ -267,8 +271,11 @@ def test_resolve_execution_runtime_metadata_falls_back_to_native_when_boxlite_un
     result = asyncio.run(_invoke())
 
     assert result["execution_backend_requested"] == "boxlite"
-    assert result["execution_backend"] == "native"
+    assert result["execution_backend"] == "os_sandbox"
     assert result["execution_root"] == "/repo/scratch/agent_worktrees/agent-1"
+    assert result["sandbox_policy"] == "default"
+    assert result["network_policy"] == "disabled"
+    assert result["resource_profile"] == "standard"
     assert result["box_fallback_reason"] == "boxlite_runtime_not_ready"
 
 
@@ -585,6 +592,39 @@ def test_probe_boxlite_runtime_readiness_falls_back_to_public_image_candidate(mo
     assert status.available is True
     assert status.asset_name == "embla_py311_default"
     assert status.image == "python:slim"
+
+
+def test_probe_boxlite_runtime_readiness_prefers_embla_pull_failure_over_later_panic(monkeypatch):
+    import system.boxlite.manager as manager
+
+    manager.clear_boxlite_runtime_readiness_cache()
+    monkeypatch.setenv("EMBLA_BOXLITE_SKIP_KVM_CHECK", "1")
+    monkeypatch.setattr("system.boxlite.manager.importlib.import_module", lambda name: SimpleNamespace(__name__=name))
+
+    async def _fake_prewarm(runtime, **kwargs):
+        del kwargs
+        image = str(getattr(runtime, "image", "") or "")
+        if image == "embla/boxlite-runtime:py311":
+            return False, "boxlite_image_pull_failed:embla/boxlite-runtime:py311"
+        return False, "boxlite_runtime_panic:can't start new thread"
+
+    monkeypatch.setattr("system.boxlite.manager._prewarm_boxlite_runtime", _fake_prewarm)
+
+    status = manager.probe_boxlite_runtime_readiness(
+        manager.BoxLiteRuntimeSettings(
+            enabled=True,
+            mode="required",
+            provider="sdk",
+            asset_name="embla_py311_default",
+            image="embla/boxlite-runtime:py311",
+            image_candidates=("embla/boxlite-runtime:py311", "python:slim"),
+        ),
+        force=True,
+    )
+
+    assert status.available is False
+    assert status.image == "embla/boxlite-runtime:py311"
+    assert status.reason == "boxlite_image_pull_failed:embla/boxlite-runtime:py311"
 
 
 def test_build_local_boxlite_runtime_image_invokes_container_builder(tmp_path, monkeypatch):

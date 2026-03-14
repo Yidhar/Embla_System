@@ -374,21 +374,22 @@ graph TB
 | 策略 | 说明 |
 |------|------|
 | 工作区 | 每任务 `git worktree` 沙箱 |
-| 执行 | 默认 `BoxLite` 执行盒，对 worktree 做 `rw` 挂载 |
+| 执行 | 默认 `os_sandbox` 执行面，以 worktree 作为 canonical 根 |
 | 验证 | Dev 自检 + Review 独立审查 |
 | 审批 | Host 侧 `audit/promote/teardown` + Audit Ledger |
 | 原子性 | 主仓库仅接受 audited worktree 的 promote，否则整体丢弃 |
 
-#### 9.2.1 `BoxLite-first` 自维护沙箱（target canonical）
+#### 9.2.1 `OS-sandbox-first` 自维护沙箱（target canonical）
 
 - **Host / Control Plane**：保留 Shell/Core/Expert/Review 编排、session store、memory、receipt 与审批链。
 - **Worktree Boundary**：Parent 为每个自维护子 Agent 创建独立 `git worktree`。
-- **Execution Plane**：Dev/Review 的 `read/write/search/run_cmd/python_repl/workspace_txn_apply/git_*` 默认在 BoxLite box 内 `/workspace` 执行；`query_docs` / `file_ast_*` 也随执行后端进入 box。
+- **Execution Plane**：Dev/Review 的 `read/write/search/run_cmd/python_repl/workspace_txn_apply/git_*` 默认在宿主 OS 上的 `os_sandbox` 内执行，并以 worktree 根作为唯一 `cwd/repo_path/execution_root`；`query_docs` / `file_ast_*` 也随执行后端进入该路径。
 - **Approval Boundary**：`audit_child_workspace`、`promote_child_workspace`、`teardown_child_workspace` 继续由宿主执行。
 - **Host-only Bridge**：宿主仅保留 `artifact_reader` / `killswitch_plan` 等系统级能力，以及无 session / 测试 harness 的 `native` fallback。
-- **强制约束**：主 checkout 不得直接 `rw` 挂入 box；唯一允许的仓库写面是临时 worktree。
+- **BoxLite Upgrade Path**：当任务被判定为高风险或需要更强隔离时，再显式升级到 `boxlite` 强隔离后端。
+- **强制约束**：主 checkout 不得直接作为可写执行面；唯一允许的仓库写面是临时 worktree。
 
-详细设计见 `doc/15-boxlite-first-execution-sandbox-architecture.md`。
+详细设计见 `doc/16-os-sandbox-default-execution-architecture.md`；`BoxLite` 强隔离后端见 `doc/15-boxlite-first-execution-sandbox-architecture.md`。
 
 ### 9.3 冲突分级
 

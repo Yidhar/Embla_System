@@ -298,6 +298,81 @@ def test_core_execution_receipt_marks_workspace_submission_pending() -> None:
     assert "awaiting workspace promotion approval" in str(agent_state.get("final_answer") or "").lower()
 
 
+def test_core_execution_receipt_includes_execution_runtime_summary() -> None:
+    receipt = _build_core_execution_receipt(
+        pipeline_id="pipe-runtime-1",
+        decomposition={"goal_id": "goal-runtime-1", "original_goal": "refactor runtime"},
+        expert_results=[{"agent_id": "expert-1"}],
+        reports=[
+            {
+                "session_id": "expert-1",
+                "status": "waiting",
+                "reports": ["work complete"],
+                "metadata": {
+                    "workspace_mode": "worktree",
+                    "workspace_root": "/repo/scratch/agent_worktrees/expert-1",
+                    "execution_backend": "os_sandbox",
+                    "execution_backend_requested": "boxlite",
+                    "execution_root": "/repo/scratch/agent_worktrees/expert-1",
+                    "sandbox_policy": "default",
+                    "network_policy": "disabled",
+                    "resource_profile": "standard",
+                },
+            }
+        ],
+        review_results=[],
+        task_completed=True,
+        stop_reason="submitted_completion",
+    )
+
+    agent_state = receipt.get("agent_state", {})
+    runtime = agent_state.get("execution_runtime", {})
+    assert agent_state["execution_backend"] == "os_sandbox"
+    assert agent_state["execution_backend_requested"] == "boxlite"
+    assert agent_state["sandbox_policy"] == "default"
+    assert agent_state["network_policy"] == "disabled"
+    assert agent_state["resource_profile"] == "standard"
+    assert runtime["backends"] == ["os_sandbox"]
+    assert runtime["requested_backends"] == ["boxlite"]
+    assert runtime["agents"][0]["workspace_mode"] == "worktree"
+
+
+def test_fast_track_execution_receipt_includes_execution_runtime_summary() -> None:
+    receipt = _build_fast_track_execution_receipt(
+        pipeline_id="pipe-fast-runtime-1",
+        goal="inspect runtime logs",
+        reports=[
+            {
+                "session_id": "fast-track-dev-1",
+                "status": "completed",
+                "reports": ["read-only analysis complete"],
+                "metadata": {
+                    "workspace_mode": "worktree",
+                    "workspace_root": "/repo/scratch/agent_worktrees/fast-track-dev-1",
+                    "execution_backend": "os_sandbox",
+                    "execution_backend_requested": "os_sandbox",
+                    "execution_root": "/repo/scratch/agent_worktrees/fast-track-dev-1",
+                    "sandbox_policy": "default",
+                    "network_policy": "disabled",
+                    "resource_profile": "standard",
+                },
+            }
+        ],
+        task_completed=True,
+        stop_reason="completed",
+        fast_track_agent_id="fast-track-dev-1",
+        complexity_hint="simple",
+        guard_blocked_count=0,
+        touched_files=[],
+    )
+
+    agent_state = receipt.get("agent_state", {})
+    runtime = agent_state.get("execution_runtime", {})
+    assert agent_state["execution_backend"] == "os_sandbox"
+    assert agent_state["sandbox_policy"] == "default"
+    assert runtime["agents"][0]["execution_root"].endswith("fast-track-dev-1")
+
+
 def test_fast_track_readonly_worktree_does_not_mark_workspace_submission_pending() -> None:
     receipt = _build_fast_track_execution_receipt(
         pipeline_id="pipe-fast-readonly-1",
@@ -333,4 +408,3 @@ def test_fast_track_readonly_worktree_does_not_mark_workspace_submission_pending
     assert agent_state["workspace_submissions"][0]["state"] == "sandboxed"
     assert agent_state["workspace_submissions"][0]["promote_pending"] is False
     assert "awaiting workspace promotion approval" not in str(agent_state.get("final_answer") or "").lower()
-

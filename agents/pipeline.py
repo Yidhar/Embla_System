@@ -113,6 +113,80 @@ def _normalize_changed_files(raw_files: Any) -> List[str]:
     return sorted({str(item).strip() for item in raw_files if str(item).strip()})
 
 
+def _build_execution_runtime_summary(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
+    agent_rows: List[Dict[str, Any]] = []
+    for report in reports:
+        metadata = report.get("metadata") if isinstance(report.get("metadata"), dict) else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        agent_id = str(report.get("session_id") or report.get("agent_id") or "").strip()
+        execution_backend = str(metadata.get("execution_backend") or report.get("execution_backend") or "").strip()
+        execution_backend_requested = str(
+            metadata.get("execution_backend_requested") or report.get("execution_backend_requested") or execution_backend
+        ).strip()
+        sandbox_policy = str(metadata.get("sandbox_policy") or report.get("sandbox_policy") or "").strip()
+        network_policy = str(metadata.get("network_policy") or report.get("network_policy") or "").strip()
+        resource_profile = str(metadata.get("resource_profile") or report.get("resource_profile") or "").strip()
+        execution_root = str(metadata.get("execution_root") or report.get("execution_root") or "").strip()
+        workspace_mode = str(metadata.get("workspace_mode") or report.get("workspace_mode") or "").strip()
+        workspace_root = str(metadata.get("workspace_root") or report.get("workspace_root") or "").strip()
+        if not any(
+            [
+                execution_backend,
+                execution_backend_requested,
+                sandbox_policy,
+                network_policy,
+                resource_profile,
+                execution_root,
+                workspace_mode,
+                workspace_root,
+            ]
+        ):
+            continue
+        agent_rows.append(
+            {
+                "agent_id": agent_id,
+                "execution_backend": execution_backend,
+                "execution_backend_requested": execution_backend_requested,
+                "execution_root": execution_root,
+                "sandbox_policy": sandbox_policy,
+                "network_policy": network_policy,
+                "resource_profile": resource_profile,
+                "workspace_mode": workspace_mode,
+                "workspace_root": workspace_root,
+            }
+        )
+
+    if not agent_rows:
+        return {}
+
+    def _unique_values(key: str) -> List[str]:
+        values = [str(row.get(key) or "").strip() for row in agent_rows]
+        return sorted({value for value in values if value})
+
+    summary: Dict[str, Any] = {
+        "agent_count": len(agent_rows),
+        "backends": _unique_values("execution_backend"),
+        "requested_backends": _unique_values("execution_backend_requested"),
+        "sandbox_policies": _unique_values("sandbox_policy"),
+        "network_policies": _unique_values("network_policy"),
+        "resource_profiles": _unique_values("resource_profile"),
+        "workspace_modes": _unique_values("workspace_mode"),
+        "agents": agent_rows[:8],
+    }
+    if len(summary["backends"]) == 1:
+        summary["execution_backend"] = summary["backends"][0]
+    if len(summary["requested_backends"]) == 1:
+        summary["execution_backend_requested"] = summary["requested_backends"][0]
+    if len(summary["sandbox_policies"]) == 1:
+        summary["sandbox_policy"] = summary["sandbox_policies"][0]
+    if len(summary["network_policies"]) == 1:
+        summary["network_policy"] = summary["network_policies"][0]
+    if len(summary["resource_profiles"]) == 1:
+        summary["resource_profile"] = summary["resource_profiles"][0]
+    return summary
+
+
 def _prepare_child_tool_arguments(
     *,
     store: AgentSessionStore,
@@ -660,6 +734,7 @@ def _build_fast_track_execution_receipt(
 ) -> Dict[str, Any]:
     summary_lines: List[str] = []
     deliverables: List[str] = []
+    execution_runtime = _build_execution_runtime_summary(reports)
     workspace_submissions = _collect_workspace_submission_summaries(reports)
     workspace_submission_required = bool(touched_files) and any(
         bool(item.get("promote_pending")) for item in workspace_submissions
@@ -696,25 +771,39 @@ def _build_fast_track_execution_receipt(
         ]
     ).strip()
 
+    agent_state: Dict[str, Any] = {
+        "task_completed": bool(task_completed),
+        "final_answer": final_answer,
+        "completion_summary": final_answer,
+        "deliverables": deliverables[:12],
+        "execution_mode": "fast_track",
+        "fast_track_agent_id": str(fast_track_agent_id or ""),
+        "goal_id": "",
+        "review_count": 0,
+        "review_verdicts": [],
+        "guard_blocked_count": int(guard_blocked_count),
+        "touched_files": list(touched_files),
+        "workspace_submission_required": bool(workspace_submission_required),
+        "workspace_submissions": workspace_submissions[:8],
+    }
+    if execution_runtime:
+        agent_state["execution_runtime"] = execution_runtime
+        for key in (
+            "execution_backend",
+            "execution_backend_requested",
+            "sandbox_policy",
+            "network_policy",
+            "resource_profile",
+        ):
+            value = str(execution_runtime.get(key) or "").strip()
+            if value:
+                agent_state[key] = value
+
     return {
         "type": "execution_receipt",
         "pipeline_id": pipeline_id,
         "stop_reason": str(stop_reason or ""),
-        "agent_state": {
-            "task_completed": bool(task_completed),
-            "final_answer": final_answer,
-            "completion_summary": final_answer,
-            "deliverables": deliverables[:12],
-            "execution_mode": "fast_track",
-            "fast_track_agent_id": str(fast_track_agent_id or ""),
-            "goal_id": "",
-            "review_count": 0,
-            "review_verdicts": [],
-            "guard_blocked_count": int(guard_blocked_count),
-            "touched_files": list(touched_files),
-            "workspace_submission_required": bool(workspace_submission_required),
-            "workspace_submissions": workspace_submissions[:8],
-        },
+        "agent_state": agent_state,
     }
 
 
@@ -1135,6 +1224,7 @@ def _build_core_execution_receipt(
 ) -> Dict[str, Any]:
     deliverables: List[str] = []
     summary_lines: List[str] = []
+    execution_runtime = _build_execution_runtime_summary(reports)
     workspace_submissions = _collect_workspace_submission_summaries(reports)
     workspace_submission_required = any(bool(item.get("promote_pending")) for item in workspace_submissions)
     for report in reports:
@@ -1201,6 +1291,18 @@ def _build_core_execution_receipt(
         "workspace_submission_required": bool(workspace_submission_required),
         "workspace_submissions": workspace_submissions[:8],
     }
+    if execution_runtime:
+        agent_state["execution_runtime"] = execution_runtime
+        for key in (
+            "execution_backend",
+            "execution_backend_requested",
+            "sandbox_policy",
+            "network_policy",
+            "resource_profile",
+        ):
+            value = str(execution_runtime.get(key) or "").strip()
+            if value:
+                agent_state[key] = value
     normalized_scheduler_metrics = _normalize_scheduler_metrics(scheduler_metrics)
     if isinstance(normalized_scheduler_metrics, dict):
         agent_state["scheduler"] = normalized_scheduler_metrics

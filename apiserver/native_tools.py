@@ -19,7 +19,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from core.security.killswitch import KillSwitchController
 from system.artifact_store import get_artifact_store
-from system.execution_backend import ExecutionBackendRegistry, ExecutionBackendUnavailableError
+from system.execution_backend.base import ExecutionBackendUnavailableError
+from system.execution_backend.registry import ExecutionBackendRegistry
 from system.native_executor import CommandResult, NativeExecutor, NativeSecurityError
 from core.security import get_policy_firewall
 from system.sandbox_context import SandboxContext
@@ -558,11 +559,12 @@ class NativeToolExecutor:
         if store is None or not session_id:
             return
         fallback_root = str(context.workspace_host_root or context.project_root or self.project_root).strip()
+        fallback_backend = "os_sandbox" if str(context.workspace_host_root or "").strip() else "native"
         try:
             store.update_metadata(
                 session_id,
                 {
-                    "execution_backend": "native",
+                    "execution_backend": fallback_backend,
                     "execution_root": fallback_root,
                     "box_fallback_reason": str(reason or "boxlite_runtime_unavailable").strip() or "boxlite_runtime_unavailable",
                 },
@@ -619,7 +621,7 @@ class NativeToolExecutor:
         decision = self.policy_firewall.validate_native_call(tool_name, effective_call)
         if not decision.allowed:
             audit_suffix = f" (audit_id={decision.audit_id})" if decision.audit_id else ""
-            return self._error(call, f"安全限制: {decision.reason}{audit_suffix}", tool_name=tool_name)
+            return self._error(effective_call, f"安全限制: {decision.reason}{audit_suffix}", tool_name=tool_name)
 
         fallback_reason = ""
         execution_backend_name = getattr(backend, "name", "native")
@@ -628,14 +630,14 @@ class NativeToolExecutor:
             service_name = getattr(backend, "service_name", "native")
         except ExecutionBackendUnavailableError as exc:
             if getattr(backend, "name", "native") == "native":
-                return self._error(call, f"执行失败: {exc}", tool_name=tool_name)
+                return self._error(effective_call, f"执行失败: {exc}", tool_name=tool_name)
             fallback_reason = str(exc or "").strip() or "boxlite runtime unavailable"
             self._persist_execution_backend_fallback(context, reason=fallback_reason)
             fallback_call, fallback_context, fallback_backend = self._build_effective_call(tool_name, call, session_id)
             fallback_decision = self.policy_firewall.validate_native_call(tool_name, fallback_call)
             if not fallback_decision.allowed:
                 audit_suffix = f" (audit_id={fallback_decision.audit_id})" if fallback_decision.audit_id else ""
-                return self._error(call, f"安全限制: {fallback_decision.reason}{audit_suffix}", tool_name=tool_name)
+                return self._error(fallback_call, f"安全限制: {fallback_decision.reason}{audit_suffix}", tool_name=tool_name)
             try:
                 result = await fallback_backend.execute_tool(
                     tool_name,
@@ -644,13 +646,20 @@ class NativeToolExecutor:
                     native_tool_executor=self,
                 )
             except Exception as fallback_exc:
-                return self._error(call, f"执行失败: {fallback_exc}", tool_name=tool_name)
+                fallback_message = (
+                    f"执行失败: BoxLite unavailable ({fallback_reason}); "
+                    f"native fallback failed: {fallback_exc}"
+                )
+                response = self._error(fallback_call, fallback_message, tool_name=tool_name)
+                response["box_fallback_reason"] = fallback_reason
+                response["execution_backend"] = getattr(fallback_backend, "name", "native")
+                return response
             service_name = getattr(fallback_backend, "service_name", "native")
             execution_backend_name = getattr(fallback_backend, "name", service_name)
         except NativeSecurityError as e:
-            return self._error(call, f"安全限制: {e}", tool_name=tool_name)
+            return self._error(effective_call, f"安全限制: {e}", tool_name=tool_name)
         except Exception as e:
-            return self._error(call, f"执行失败: {e}", tool_name=tool_name)
+            return self._error(effective_call, f"执行失败: {e}", tool_name=tool_name)
 
         contract_fields = _build_result_contract_fields(result)
         response = {
@@ -659,6 +668,11 @@ class NativeToolExecutor:
             "status": "success",
             "service_name": service_name,
             "execution_backend": execution_backend_name,
+            "execution_backend_requested": str(getattr(context, "execution_backend_requested", execution_backend_name) or execution_backend_name),
+            "execution_root": str(getattr(context, "execution_root", "") or ""),
+            "sandbox_policy": str(getattr(context, "sandbox_policy", "") or ""),
+            "network_policy": str(getattr(context, "network_policy", "") or ""),
+            "resource_profile": str(getattr(context, "resource_profile", "") or ""),
             "tool_name": tool_name,
             **contract_fields,
         }
@@ -777,6 +791,10 @@ class NativeToolExecutor:
 
         cwd = call.get("cwd")
         timeout_s = _safe_int(call.get("timeout_seconds"), 120, 1, 1200)
+        env = call.get("_execution_env") if isinstance(call.get("_execution_env"), dict) else None
+        network_enabled = call.get("_sandbox_network_enabled")
+        if network_enabled is not None:
+            network_enabled = bool(network_enabled)
         stdout_limit, stderr_limit = self._resolve_output_limits(call, default_stdout=6000, default_stderr=3000)
 
         call_id = str(call.get("_tool_call_id") or f"call_{abs(hash(command)) % 10_000_000}")
@@ -788,9 +806,11 @@ class NativeToolExecutor:
         result: CommandResult = await self.executor.execute_shell(
             command,
             cwd=cwd,
+            env=env,
             timeout_s=timeout_s,
             call_id=call_id,
             fencing_epoch=fencing_epoch,
+            network_enabled=network_enabled,
         )
         stdout_text = result.stdout or ""
         content_type = _detect_structured_content_type(stdout_text)
@@ -1866,7 +1886,7 @@ class NativeToolExecutor:
     @staticmethod
     def _error(call: Dict[str, Any], message: str, *, tool_name: Optional[str] = None) -> Dict[str, Any]:
         contract_fields = _build_result_contract_fields(message)
-        return {
+        response = {
             "tool_call": call,
             "result": message,
             "status": "error",
@@ -1874,6 +1894,22 @@ class NativeToolExecutor:
             "tool_name": tool_name or str(call.get("tool_name") or call.get("tool") or "native"),
             **contract_fields,
         }
+        execution_backend = str(call.get("_execution_backend") or "").strip()
+        if execution_backend:
+            response["execution_backend"] = execution_backend
+        execution_root = str(call.get("_execution_root") or "").strip()
+        if execution_root:
+            response["execution_root"] = execution_root
+        sandbox_policy = str(call.get("_sandbox_policy") or "").strip()
+        if sandbox_policy:
+            response["sandbox_policy"] = sandbox_policy
+        network_policy = str(call.get("_network_policy") or "").strip()
+        if network_policy:
+            response["network_policy"] = network_policy
+        resource_profile = str(call.get("_resource_profile") or "").strip()
+        if resource_profile:
+            response["resource_profile"] = resource_profile
+        return response
 
 
 _native_tool_executor: Optional[NativeToolExecutor] = None

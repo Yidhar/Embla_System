@@ -390,7 +390,7 @@ def test_boxlite_backend_run_cmd_respects_call_cwd(monkeypatch):
         store.close()
 
 
-def test_boxlite_backend_falls_back_to_native_and_persists_session_fallback(monkeypatch):
+def test_boxlite_backend_falls_back_to_os_sandbox_and_persists_session_fallback(monkeypatch):
     executor, store = _make_executor_with_box_session()
     try:
         fake_manager = _FakeBoxLiteManager()
@@ -417,11 +417,11 @@ def test_boxlite_backend_falls_back_to_native_and_persists_session_fallback(monk
         assert result["status"] == "success"
         assert result["result"] == "[host fallback read]"
         assert result["service_name"] == "native"
-        assert result["execution_backend"] == "native"
+        assert result["execution_backend"] == "os_sandbox"
         assert "boxlite_runtime_panic" in result["box_fallback_reason"]
         session = store.get("agent-box-real")
         assert session is not None
-        assert session.metadata["execution_backend"] == "native"
+        assert session.metadata["execution_backend"] == "os_sandbox"
         assert session.metadata["execution_root"].replace("\\", "/").endswith("scratch/agent_worktrees/agent-box-real")
         assert "boxlite_runtime_panic" in session.metadata["box_fallback_reason"]
         assert captured["tool_name"] == "read_file"
