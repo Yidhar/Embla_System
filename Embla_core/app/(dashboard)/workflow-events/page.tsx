@@ -14,6 +14,11 @@ export default async function WorkflowEventsPage() {
   const counters = workflow.data.event_counters ?? {};
   const heartbeatSummary = workflow.data.heartbeat_supervision?.summary ?? {};
   const heartbeatTasks = workflow.data.heartbeat_supervision?.heartbeats ?? [];
+  const descendantSessionCount = numberValue(heartbeatSummary.session_count);
+  const sessionsWithHeartbeats = numberValue(heartbeatSummary.sessions_with_heartbeats);
+  const activeHeartbeatTaskCount = numberValue(heartbeatSummary.task_count);
+  const hasObservedDescendantSessions = descendantSessionCount > 0 || sessionsWithHeartbeats > 0;
+  const hasActiveHeartbeatTasks = activeHeartbeatTaskCount > 0 || heartbeatTasks.length > 0;
 
   return (
     <div className="space-y-6">
@@ -97,12 +102,12 @@ export default async function WorkflowEventsPage() {
             </div>
             <div className="soft-inset p-4 sm:col-span-2">
               <div className="flex items-center gap-2 text-slate-500"><Activity className="h-4 w-4" /><span className="text-sm">{t("workflowEvents.contextPulse.agentHeartbeats")}</span></div>
-              {Number(heartbeatSummary.task_count ?? 0) > 0 ? (
+              {hasObservedDescendantSessions || hasActiveHeartbeatTasks ? (
                 <>
                   <div className="mt-4 grid gap-3 sm:grid-cols-4">
                     <div className="rounded-[18px] border border-white/70 bg-white/80 p-3">
                       <p className="text-xs uppercase tracking-[0.24em] text-slate-400">{t("workflowEvents.contextPulse.active")}</p>
-                      <p className="mt-2 text-xl font-bold text-slate-900">{formatNumber(numberValue(heartbeatSummary.task_count), 0, locale)}</p>
+                      <p className="mt-2 text-xl font-bold text-slate-900">{formatNumber(activeHeartbeatTaskCount, 0, locale)}</p>
                     </div>
                     <div className="rounded-[18px] border border-white/70 bg-white/80 p-3">
                       <p className="text-xs uppercase tracking-[0.24em] text-slate-400">{t("workflowEvents.contextPulse.warning")}</p>
@@ -119,23 +124,27 @@ export default async function WorkflowEventsPage() {
                   </div>
                   <p className="mt-3 text-sm text-slate-500">
                     {t("workflowEvents.contextPulse.heartbeatSummary", {
-                      withHeartbeats: formatNumber(numberValue(heartbeatSummary.sessions_with_heartbeats), 0, locale),
-                      sessions: formatNumber(numberValue(heartbeatSummary.session_count), 0, locale),
+                      withHeartbeats: formatNumber(sessionsWithHeartbeats, 0, locale),
+                      sessions: formatNumber(descendantSessionCount, 0, locale),
                       level: humanizeEnum(locale, "staleLevel", heartbeatSummary.max_stale_level ?? "none")
                     })}
                   </p>
-                  <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                    {heartbeatTasks.slice(0, 4).map((item) => (
-                      <div key={`${item.session_id}-${item.task_id}`} className="rounded-[18px] border border-white/70 bg-white/80 p-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="text-sm font-semibold text-slate-900">{item.task_id}</p>
-                          <span className="text-xs uppercase tracking-[0.18em] text-slate-400">{humanizeEnum(locale, "staleLevel", item.stale_level ?? "fresh")}</span>
+                  {hasActiveHeartbeatTasks ? (
+                    <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                      {heartbeatTasks.slice(0, 4).map((item) => (
+                        <div key={`${item.session_id}-${item.task_id}`} className="rounded-[18px] border border-white/70 bg-white/80 p-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-sm font-semibold text-slate-900">{item.task_id}</p>
+                            <span className="text-xs uppercase tracking-[0.18em] text-slate-400">{humanizeEnum(locale, "staleLevel", item.stale_level ?? "fresh")}</span>
+                          </div>
+                          <p className="mt-2 text-sm text-slate-500">{item.session_id} · {item.stage || item.status || t("common.label.running")}</p>
+                          <p className="mt-2 text-sm text-slate-600">{item.message || t("workflowEvents.contextPulse.noHeartbeatMessage")}</p>
                         </div>
-                        <p className="mt-2 text-sm text-slate-500">{item.session_id} · {item.stage || item.status || t("common.label.running")}</p>
-                        <p className="mt-2 text-sm text-slate-600">{item.message || t("workflowEvents.contextPulse.noHeartbeatMessage")}</p>
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-4 text-sm text-slate-500">{t("workflowEvents.contextPulse.noHeartbeatTasksYet")}</p>
+                  )}
                 </>
               ) : (
                 <p className="mt-3 text-sm text-slate-500">{t("workflowEvents.contextPulse.noHeartbeats")}</p>

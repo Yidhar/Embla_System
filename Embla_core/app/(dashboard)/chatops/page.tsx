@@ -33,16 +33,21 @@ export default async function ChatOpsPage({ searchParams }: ChatOpsPageProps) {
     getShellToolCatalog()
   ]);
   const heartbeatSummary = routeState?.child_heartbeat_summary ?? {};
+  const descendantSessionCount = numberValue(heartbeatSummary.session_count);
+  const sessionsWithHeartbeats = numberValue(heartbeatSummary.sessions_with_heartbeats);
+  const activeHeartbeatTaskCount = numberValue(heartbeatSummary.task_count);
 
   const severity = numberValue(heartbeatSummary.blocked_count) > 0
     ? "critical"
-    : numberValue(heartbeatSummary.warning_count) > 0 || numberValue(heartbeatSummary.critical_count) > 0
-      ? "warning"
-      : routeState
-        ? "ok"
-        : sessions.length > 0
-          ? "warning"
-          : "unknown";
+    : numberValue(heartbeatSummary.critical_count) > 0
+      ? "critical"
+      : numberValue(heartbeatSummary.warning_count) > 0
+        ? "warning"
+        : routeState
+          ? "ok"
+          : sessions.length > 0
+            ? "warning"
+            : "unknown";
 
   const selectedRounds = numberValue(sessionDetail?.conversation_rounds ?? sessionDetail?.session_info?.conversation_rounds);
   const initialMessages = sessionDetail?.messages?.slice(-12) ?? [];
@@ -73,9 +78,12 @@ export default async function ChatOpsPage({ searchParams }: ChatOpsPageProps) {
           locale={locale}
         />
         <MetricCard
-          title={t("chatops.metrics.heartbeatTasks.title")}
-          value={formatNumber(numberValue(heartbeatSummary.task_count), 0, locale)}
-          description={t("chatops.metrics.heartbeatTasks.description")}
+          title={t("chatops.metrics.childSessions.title")}
+          value={formatNumber(descendantSessionCount, 0, locale)}
+          description={t("chatops.metrics.childSessions.description", {
+            withHeartbeats: formatNumber(sessionsWithHeartbeats, 0, locale),
+            taskCount: formatNumber(activeHeartbeatTaskCount, 0, locale)
+          })}
           severity={severity}
           locale={locale}
         />

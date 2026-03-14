@@ -131,7 +131,7 @@ const zhCNMessages = {
       metrics: {
         totalSessions: { title: "Total Sessions", description: "当前后端保留的全部会话数。" },
         selectedRounds: { title: "Selected Rounds", description: "当前选中会话的对话轮数。" },
-        heartbeatTasks: { title: "Heartbeat Tasks", description: "当前子任务 heartbeat 数量。" },
+        childSessions: { title: "子会话数", description: "当前选中路由下观测到的后代会话数（其中 {withHeartbeats} 个带 heartbeat，{taskCount} 个活跃任务）。" },
         routeSemantic: { title: "Route Semantic", description: "当前 Shell/Core 路由语义。" }
       },
       console: {
@@ -405,13 +405,14 @@ const zhCNMessages = {
         currentToolStatus: "当前工具状态",
         noToolStatus: "当前没有可见的工具状态。",
         agentHeartbeats: "Agent Heartbeats",
-        active: "活跃",
+        active: "活跃任务",
         warning: "关注",
         critical: "严重",
         blocked: "阻断",
         heartbeatSummary: "{withHeartbeats}/{sessions} 个会话存在 heartbeat，最高陈旧等级 {level}。",
         noHeartbeatMessage: "暂无心跳附加说明",
-        noHeartbeats: "当前没有活跃 heartbeat。",
+        noHeartbeats: "当前没有可见的子任务 heartbeat。",
+        noHeartbeatTasksYet: "当前没有活跃的子任务 heartbeat；上方摘要仍会保留已观测到的子会话统计。",
         keyCounters: "关键计数器"
       }
     },
@@ -662,7 +663,7 @@ const enUSMessages: typeof zhCNMessages = {
       metrics: {
         totalSessions: { title: "Total Sessions", description: "All sessions currently retained by the backend." },
         selectedRounds: { title: "Selected Rounds", description: "Conversation rounds in the selected session." },
-        heartbeatTasks: { title: "Heartbeat Tasks", description: "Current number of child-task heartbeats." },
+        childSessions: { title: "Child Sessions", description: "Observed descendant sessions under the selected route ({withHeartbeats} with heartbeats, {taskCount} active tasks)." },
         routeSemantic: { title: "Route Semantic", description: "Current Shell/Core route semantic." }
       },
       console: {
@@ -936,13 +937,14 @@ const enUSMessages: typeof zhCNMessages = {
         currentToolStatus: "Current tool status",
         noToolStatus: "No visible tool status right now.",
         agentHeartbeats: "Agent Heartbeats",
-        active: "Active",
+        active: "Active tasks",
         warning: "Warning",
         critical: "Critical",
         blocked: "Blocked",
         heartbeatSummary: "{withHeartbeats}/{sessions} sessions currently have heartbeats, highest stale level {level}.",
         noHeartbeatMessage: "No heartbeat detail",
-        noHeartbeats: "There are no active heartbeats right now.",
+        noHeartbeats: "There are no visible child-task heartbeats right now.",
+        noHeartbeatTasksYet: "There are no active child-task heartbeats right now; the summary above still reflects observed descendant sessions.",
         keyCounters: "Key counters"
       }
     },
