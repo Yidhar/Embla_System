@@ -225,3 +225,5 @@ config.json.bak.ws29_003.20260301T144042871202Z
 .bin/
 .gitignore
 node_modules/
+Embla_core/tsconfig.tsbuildinfo
+memory/working/
