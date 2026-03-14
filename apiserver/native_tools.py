@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from core.security.killswitch import KillSwitchController
 from system.artifact_store import get_artifact_store
-from system.execution_backend import ExecutionBackendRegistry
+from system.execution_backend import ExecutionBackendRegistry, ExecutionBackendUnavailableError
 from system.native_executor import CommandResult, NativeExecutor, NativeSecurityError
 from core.security import get_policy_firewall
 from system.sandbox_context import SandboxContext
@@ -552,6 +552,24 @@ class NativeToolExecutor:
             effective_call.setdefault("_session_workspace_root", str(context.workspace_host_root))
         return effective_call, context, backend
 
+    def _persist_execution_backend_fallback(self, context: SandboxContext, *, reason: str) -> None:
+        store = self._agent_session_store
+        session_id = str(getattr(context, "session_id", "") or "").strip()
+        if store is None or not session_id:
+            return
+        fallback_root = str(context.workspace_host_root or context.project_root or self.project_root).strip()
+        try:
+            store.update_metadata(
+                session_id,
+                {
+                    "execution_backend": "native",
+                    "execution_root": fallback_root,
+                    "box_fallback_reason": str(reason or "boxlite_runtime_unavailable").strip() or "boxlite_runtime_unavailable",
+                },
+            )
+        except Exception:
+            return
+
     async def execute(self, call: Dict[str, Any], session_id: str) -> Dict[str, Any]:
         tool_name = (call.get("tool_name") or call.get("tool") or "").strip().lower()
         if not tool_name:
@@ -603,22 +621,50 @@ class NativeToolExecutor:
             audit_suffix = f" (audit_id={decision.audit_id})" if decision.audit_id else ""
             return self._error(call, f"安全限制: {decision.reason}{audit_suffix}", tool_name=tool_name)
 
+        fallback_reason = ""
+        execution_backend_name = getattr(backend, "name", "native")
         try:
             result = await backend.execute_tool(tool_name, effective_call, context=context, native_tool_executor=self)
-
-            contract_fields = _build_result_contract_fields(result)
-            return {
-                "tool_call": call,
-                "result": result,
-                "status": "success",
-                "service_name": getattr(backend, "service_name", "native"),
-                "tool_name": tool_name,
-                **contract_fields,
-            }
+            service_name = getattr(backend, "service_name", "native")
+        except ExecutionBackendUnavailableError as exc:
+            if getattr(backend, "name", "native") == "native":
+                return self._error(call, f"执行失败: {exc}", tool_name=tool_name)
+            fallback_reason = str(exc or "").strip() or "boxlite runtime unavailable"
+            self._persist_execution_backend_fallback(context, reason=fallback_reason)
+            fallback_call, fallback_context, fallback_backend = self._build_effective_call(tool_name, call, session_id)
+            fallback_decision = self.policy_firewall.validate_native_call(tool_name, fallback_call)
+            if not fallback_decision.allowed:
+                audit_suffix = f" (audit_id={fallback_decision.audit_id})" if fallback_decision.audit_id else ""
+                return self._error(call, f"安全限制: {fallback_decision.reason}{audit_suffix}", tool_name=tool_name)
+            try:
+                result = await fallback_backend.execute_tool(
+                    tool_name,
+                    fallback_call,
+                    context=fallback_context,
+                    native_tool_executor=self,
+                )
+            except Exception as fallback_exc:
+                return self._error(call, f"执行失败: {fallback_exc}", tool_name=tool_name)
+            service_name = getattr(fallback_backend, "service_name", "native")
+            execution_backend_name = getattr(fallback_backend, "name", service_name)
         except NativeSecurityError as e:
             return self._error(call, f"安全限制: {e}", tool_name=tool_name)
         except Exception as e:
             return self._error(call, f"执行失败: {e}", tool_name=tool_name)
+
+        contract_fields = _build_result_contract_fields(result)
+        response = {
+            "tool_call": call,
+            "result": result,
+            "status": "success",
+            "service_name": service_name,
+            "execution_backend": execution_backend_name,
+            "tool_name": tool_name,
+            **contract_fields,
+        }
+        if fallback_reason:
+            response["box_fallback_reason"] = fallback_reason
+        return response
 
     async def _read_file(self, call: Dict[str, Any]) -> str:
         path = str(call.get("path") or call.get("file_path") or "").strip()

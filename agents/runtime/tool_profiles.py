@@ -85,30 +85,41 @@ def infer_memory_tool_profile(
     if role_text not in {"dev", "review", "expert"}:
         return ""
 
-    corpus = " ".join(
-        [str(task_description or "")] + [str(item or "") for item in (files or [])]
-    ).lower()
+    normalized_inputs = [str(task_description or "")] + [str(item or "") for item in (files or [])]
+    corpus = " ".join(normalized_inputs).lower()
     if not corpus:
         return ""
 
-    memory_markers = (
+    memory_path_markers = (
         "memory/",
+        "memory\\",
         "episodic/",
+        "episodic\\",
         "domain/",
-        "working/",
-        "knowledge",
+        "domain\\",
+        "knowledge/",
+        "knowledge\\",
+        "knowledge_card",
+        "knowledge graph",
+        "memory card",
+        "l1 memory",
+        "l2 memory",
+    )
+    memory_keywords = (
         "记忆",
         "经验",
+        "知识库",
+        "知识卡",
         "领域知识",
         "索引",
-        "_index.md",
         "标签",
-        "link",
-        "tag",
-        "markdown",
-        ".md",
+        "长期记忆",
+        "语义记忆",
+        "episodic memory",
+        "domain knowledge",
+        "knowledge card",
     )
-    if not any(marker in corpus for marker in memory_markers):
+    if not any(marker in corpus for marker in memory_path_markers) and not any(keyword in corpus for keyword in memory_keywords):
         return ""
 
     if any(token in corpus for token in ("cleanup", "archive", "归档", "清理", "replace", "替换", "delete", "删除")):

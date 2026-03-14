@@ -73,10 +73,12 @@
 
 - `execution_receipt` 仍只表达编排/审查/提交流程的最终状态，不承载 BoxLite box 的运行时实例细节。
 - `execution_receipt.agent_state.scheduler` 可暴露父级调度摘要；顶层字段默认对应 Expert 层，`layers.expert` / `layers.dev` 进一步给出分层 `parallel_limit / peak_parallelism`。
-- `execution_receipt.agent_state.heartbeat_summary` 汇总本轮 Expert/Dev 心跳监管结果；`experts_blocked` / `blocked_expert_reasons` 表示是否已因心跳或审查生命周期进入阻断态。
+- `execution_receipt.agent_state.heartbeat_summary` 汇总本轮 Expert/Dev 心跳监管结果；除 `warning_count` / `critical_count` / `blocked_count` / `respawn_count` 外，还会记录 `loop_resume_count` / `loop_respawn_count`，用于表达 Dev 因 `child_loop_max_rounds_reached` 被自动恢复的次数；`experts_blocked` / `blocked_expert_reasons` 表示是否已因心跳、审查或 Dev mini-loop 生命周期进入阻断态。
 - 若 Dev 心跳阻断且 respawn 预算耗尽，`execution_receipt.stop_reason` 可显式收口为 `task_heartbeat_blocked_respawn_exhausted`，供 Shell/Core 直接判定当前轮次已不可恢复。
+- 若 Dev 因 `child_loop_max_rounds_reached` 中断，Expert 会先自动 `resume` 原 Dev，一次恢复失败后再自动 `spawn` fresh Dev；只有恢复链也耗尽时，才继续按阻断态收口。
 - 对自维护任务，只要 worktree 尚未 `promote/teardown` 收口，`execution_receipt.stop_reason` 仍可保持 `awaiting_workspace_promotion`。
 - `destroy_child_agent` 的资源释放事实（如 `box_cleanup_*` / `workspace_cleanup_*`）通过父工具结果单独暴露，不混入 `execution_receipt`。
+- BoxLite 运行时资产状态单独进入 `/v1/ops/runtime/posture` 的 `boxlite_runtime` 摘要，包含 `active_profile / image / ready|stale|failed|unknown / auto_reconcile_enabled`，不混入 `execution_receipt`。
 
 ### 4.2 MCP 运行态说明
 

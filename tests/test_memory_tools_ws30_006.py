@@ -12,7 +12,7 @@ from agents.runtime.agent_session import AgentSessionStore
 from agents.runtime.mailbox import AgentMailbox
 from agents.runtime.parent_tools import handle_parent_tool_call
 from agents.runtime.task_board import TaskBoardEngine, TaskItem, TaskStatus
-from agents.runtime.tool_profiles import resolve_child_tool_capabilities
+from agents.runtime.tool_profiles import infer_memory_tool_profile, resolve_child_tool_capabilities
 
 
 def _patch_parent_tool_runtime(monkeypatch, *, execution_backend: str = "boxlite", execution_root: str = "/workspace") -> None:
@@ -301,6 +301,15 @@ def test_resolve_child_tool_capabilities_supports_custom_memory_aliases() -> Non
     )
     assert resolution.profile_name == "custom"
     assert resolution.tool_subset == ["memory_read", "memory_patch", "memory_tag"]
+
+
+def test_infer_memory_tool_profile_ignores_non_memory_markdown_audit_tasks() -> None:
+    profile = infer_memory_tool_profile(
+        "Perform a live runtime audit of main.py and system/boxlite/manager.py, then write scratch/live_smoke/live_runtime_audit.md",
+        files=["main.py", "system/boxlite/manager.py", "scratch/live_smoke/live_runtime_audit.md"],
+        role="dev",
+    )
+    assert profile == ""
 
 
 def test_runtime_tool_definitions_only_inject_selected_memory_schemas() -> None:

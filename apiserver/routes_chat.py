@@ -266,26 +266,10 @@ def _derive_route_semantic(route_meta: Dict[str, Any]) -> Dict[str, Any]:
 def _apply_route_semantic_fields(route_meta: Dict[str, Any]) -> Dict[str, Any]:
     semantic = _derive_route_semantic(route_meta)
     route_meta["entry_agent"] = "shell"
-    route_meta["active_agent"] = str(
-        route_meta.get("active_agent")
-        or semantic.get("active_agent")
-        or "shell"
-    )
-    route_meta["route_semantic"] = str(
-        route_meta.get("route_semantic")
-        or semantic.get("route_semantic")
-        or "shell_readonly"
-    )
-    route_meta["dispatch_to_core"] = bool(
-        route_meta.get("dispatch_to_core")
-        if route_meta.get("dispatch_to_core") is not None
-        else semantic.get("dispatch_to_core")
-    )
-    route_meta["handoff_tool"] = str(
-        route_meta.get("handoff_tool")
-        or semantic.get("handoff_tool")
-        or ""
-    )
+    route_meta["route_semantic"] = str(semantic.get("route_semantic") or "shell_readonly")
+    route_meta["active_agent"] = str(semantic.get("active_agent") or "shell")
+    route_meta["dispatch_to_core"] = bool(semantic.get("dispatch_to_core"))
+    route_meta["handoff_tool"] = str(semantic.get("handoff_tool") or "")
     core_execution_route = str(
         route_meta.get("core_execution_route")
         or semantic.get("core_execution_route")
@@ -1213,4 +1197,14 @@ def _build_chat_route_session_state_payload(session_id: str, *, limit: int = 20)
 
 
 def _format_sse_payload_chunk_json(payload: Dict[str, Any]) -> str:
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+    return f"data: {json.dumps(_json_safe_sse_payload(payload), ensure_ascii=False)}\n\n"
+
+
+def _json_safe_sse_payload(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe_sse_payload(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe_sse_payload(item) for item in value]
+    return f"<non-json:{value.__class__.__name__}>"

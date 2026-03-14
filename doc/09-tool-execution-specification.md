@@ -232,6 +232,8 @@ MCP 路径（`mcp_manager`）已具备：
 | 要求返修 | `review_rework_requested` | `review_cycle`, `issues`, `review_agent_id` | `request_changes` 后，Expert 恢复原 Dev |
 | Dev 返修 | `dev_review_resume_start` / `dev_review_resume_event` / `dev_review_resume_end` | `review_cycle`, `agent_id` | 原 Dev 返修并重新自检 |
 | 驳回重做 | `review_reject_respawn` | `task_ids`, `respawn_dev_count`, `reject_respawn_count` | `reject` 且可恢复时，Expert 重新 spawn fresh Dev |
+| Dev 回合耗尽恢复 | `dev_loop_max_rounds_resume` | `task_id`, `agent_id`, `resume_attempt`, `findings_summary` | Dev 因 `child_loop_max_rounds_reached` 中断时，Expert 自动恢复原 Dev |
+| Dev 回合耗尽重拉 | `dev_loop_max_rounds_respawn` | `task_id`, `agent_id`, `respawn_attempt`, `replacement_agent_ids`, `findings_summary` | 原 Dev 恢复仍失败时，Expert 自动 spawn fresh Dev |
 | 阻断上报 | `expert_blocked` | `reason`, `review_cycle`, `result` | `reject` 不可恢复、预算耗尽、无任务可重跑或 respawn 失败/未完成 |
 | Expert 汇总 | `expert_report` | `reports[]`, `status` | Expert 给 Core 的聚合报告 |
 | 最终回执 | `execution_receipt` | `stop_reason`, `agent_state.review_count`, `agent_state.review_verdicts`, `agent_state.scheduler.parallel_limit`, `agent_state.scheduler.peak_parallelism`, `agent_state.scheduler.layers.dev.peak_parallelism`, `agent_state.heartbeat_summary`, `agent_state.experts_blocked`, `agent_state.blocked_expert_reasons` | 多 Agent gate 的最终结构化结果、分层调度摘要与心跳监管收口 |
@@ -253,6 +255,13 @@ MCP 路径（`mcp_manager`）已具备：
 - `critical`：Expert 注入更强的恢复指令，要求 Dev 立即汇报当前 stage / 阻塞原因。
 - `blocked`：Expert 优先对对应 task `spawn` fresh Dev 做 `heartbeat_respawn`。
 - respawn 预算耗尽：Expert 发出 `expert_blocked(reason=task_heartbeat_blocked_respawn_exhausted)`，Core 将其汇总进 `execution_receipt`。
+
+#### 8.2.0.3 Dev mini-loop 回合耗尽自动恢复
+
+- 当 Dev 以 `blocked_reason=child_loop_max_rounds_reached` 结束时，Expert 不直接收口为 blocked。
+- 第一次命中：Expert 自动 `resume_child_agent` 原 Dev，并附带压缩后的中间发现，事件为 `dev_loop_max_rounds_resume`。
+- 若恢复后的原 Dev 再次命中回合上限：Expert 自动 `spawn` fresh Dev，并附带同样的压缩中间发现，事件为 `dev_loop_max_rounds_respawn`。
+- 只有当 `resume` 与 `respawn` 的预算均耗尽或恢复动作失败时，才继续按 blocked / `completion_not_submitted` / `review_missing` 等最终收口路径处理。
 
 ### 8.2.1 `destroy_child_agent` 资源清理结果口径
 
@@ -291,7 +300,7 @@ MCP 路径（`mcp_manager`）已具备：
 - `review_result` 事件会保留**每一轮** Review 的输出，便于前端/审计复盘。
 - `execution_receipt.agent_state.review_verdicts` 与最终 `review_results` 聚合只记录**每个 Expert 最终生效的 verdict**，不把中间态 `request_changes` 或可恢复 `reject` 当作最终通过结果。
 - `execution_receipt.agent_state.scheduler` 仅保留编排层摘要；顶层默认对应 Expert 层，当前至少包含 `layer / parallel_limit / peak_parallelism`，并可通过 `layers.expert` / `layers.dev` 读取分层并发度。
-- `execution_receipt.agent_state.heartbeat_summary` 记录本轮心跳监管动作计数（如 `warning_count` / `critical_count` / `blocked_count` / `respawn_count` / `expert_blocked_reasons`）。
+- `execution_receipt.agent_state.heartbeat_summary` 记录本轮心跳监管与自动恢复动作计数（如 `warning_count` / `critical_count` / `blocked_count` / `respawn_count` / `loop_resume_count` / `loop_respawn_count` / `expert_blocked_reasons`）。
 - 当最终 verdict 为 `reject` 时，Expert 对 Core 的报告应以前缀 `[BLOCKED] ...` 标记阻断原因。
 
 ## 9. 开发预备落地清单
