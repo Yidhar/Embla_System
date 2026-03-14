@@ -48,6 +48,27 @@ def test_agents_namespace_contracts_resolve() -> None:
     assert config.max_total_records > 0
 
 
+def test_meta_agent_runtime_preserves_file_paths_when_splitting_goal() -> None:
+    runtime = MetaAgentRuntime()
+    goal = Goal(
+        goal_id="goal-paths-1",
+        description=(
+            "在不修改正式源码的前提下，对 main.py、system/boxlite/manager.py、agents/pipeline.py 中与 "
+            "BoxLite-first / worktree / execution_receipt 相关的链路做一次审计；"
+            "将诊断结果写入 scratch/live_smoke/live_runtime_audit.md。"
+        ),
+    )
+
+    tasks = runtime.decompose_goal(goal)
+    descriptions = [task.description for task in tasks]
+
+    assert any("main.py" in item for item in descriptions)
+    assert any("system/boxlite/manager.py" in item for item in descriptions)
+    assert any("agents/pipeline.py" in item for item in descriptions)
+    assert any("scratch/live_smoke/live_runtime_audit.md" in item for item in descriptions)
+    assert not any(item.endswith("main") for item in descriptions)
+
+
 def test_agents_namespace_owns_brain_implementations() -> None:
     assert MetaAgentRuntime.__module__.startswith("agents.")
     assert TaskRouterEngine.__module__.startswith("agents.")

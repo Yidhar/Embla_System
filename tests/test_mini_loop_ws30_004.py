@@ -216,7 +216,8 @@ class TestMiniLoop:
         tool_results = [e for e in events if e["type"] == "tool_result"]
         assert tool_results[0]["result"]["error"].startswith("verification_report")
         s = store.get("child-1")
-        assert s.status == AgentStatus.RUNNING
+        assert s.status == AgentStatus.WAITING
+        assert s.metadata["blocked_reason"] == "child_loop_no_tool_calls"
 
     def test_parent_interrupt_stops_loop(self, store, mailbox):
         """Parent sets interrupt flag → child stops at next round."""
@@ -350,10 +351,47 @@ class TestMiniLoop:
         assert snapshot["summary"]["task_count"] == 1
         assert snapshot["heartbeats"][0]["task_id"] == "t-001"
 
+    def test_mini_loop_auto_publishes_heartbeat_for_assigned_task(self, store, mailbox):
+        store.create(role="expert", session_id="parent-1")
+        store.create(
+            role="dev",
+            parent_id="parent-1",
+            session_id="child-1",
+            task_description="Task t-123: audit runtime path",
+            metadata={"task_updates": {"t-123": {"status": "in_progress"}}},
+        )
+
+        llm = MockLLM([
+            {"content": "Observing runtime.", "tool_calls": []},
+        ])
+        executor = MockToolExecutor()
+
+        _collect_events(run_mini_loop(
+            session_id="child-1",
+            store=store,
+            mailbox=mailbox,
+            llm_call=llm,
+            tool_executor=executor,
+            tool_definitions=[],
+            initial_task="Audit runtime path",
+        ))
+
+        snapshot = store.get_session_heartbeat_snapshot("child-1")
+        assert snapshot["summary"]["task_count"] == 1
+        assert snapshot["heartbeats"][0]["task_id"] == "t-123"
+        assert snapshot["heartbeats"][0]["details"]["auto"] is True
+        assert snapshot["heartbeats"][0]["stage"] == "loop_end"
+
     def test_max_rounds(self, store, mailbox):
         """Loop stops at max_rounds if child never reports completion."""
         store.create(role="expert", session_id="parent-1")
-        store.create(role="dev", parent_id="parent-1", session_id="child-1")
+        store.create(
+            role="dev",
+            parent_id="parent-1",
+            session_id="child-1",
+            task_description="Task t-009: keep working",
+            metadata={"task_updates": {"t-009": {"status": "in_progress"}}},
+        )
 
         # LLM always returns tool calls, never stops
         responses = [
@@ -370,13 +408,53 @@ class TestMiniLoop:
             llm_call=llm,
             tool_executor=executor,
             tool_definitions=[{"name": "read_file"}],
-            initial_task="Keep working",
+            initial_task="Task t-009: Keep working",
             config=MiniLoopConfig(max_rounds=3),
         ))
 
         end_events = [e for e in events if e["type"] == "loop_end"]
         assert end_events[0]["reason"] == "max_rounds_reached"
         assert end_events[0]["state"]["rounds"] == 3
+        session = store.get("child-1")
+        assert session is not None
+        assert session.status == AgentStatus.WAITING
+        assert session.metadata["blocked_reason"] == "child_loop_max_rounds_reached"
+        snapshot = store.get_session_heartbeat_snapshot("child-1")
+        assert snapshot["heartbeats"][0]["status"] == "blocked"
+
+    def test_no_tool_calls_marks_child_waiting_with_blocked_reason(self, store, mailbox):
+        store.create(role="expert", session_id="parent-1")
+        store.create(
+            role="review",
+            parent_id="parent-1",
+            session_id="child-1",
+            task_description="Task t-010: review this patch",
+            metadata={"task_updates": {"t-010": {"status": "in_progress"}}},
+        )
+
+        llm = MockLLM([
+            {"content": "I am done.", "tool_calls": []},
+        ])
+        executor = MockToolExecutor()
+
+        events = _collect_events(run_mini_loop(
+            session_id="child-1",
+            store=store,
+            mailbox=mailbox,
+            llm_call=llm,
+            tool_executor=executor,
+            tool_definitions=[],
+            initial_task="Task t-010: Review this patch",
+        ))
+
+        end_events = [e for e in events if e["type"] == "loop_end"]
+        assert end_events[0]["reason"] == "no_tool_calls"
+        session = store.get("child-1")
+        assert session is not None
+        assert session.status == AgentStatus.WAITING
+        assert session.metadata["blocked_reason"] == "child_loop_no_tool_calls"
+        snapshot = store.get_session_heartbeat_snapshot("child-1")
+        assert snapshot["heartbeats"][0]["status"] == "blocked"
 
     def test_event_stream_completeness(self, store, mailbox):
         """Verify event stream contains round_start, tool_call, tool_result, loop_end."""

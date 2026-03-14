@@ -83,7 +83,7 @@ class ExpertAgent:
                 continue
             task = TaskItem(
                 task_id=f"t-{i+1:03d}",
-                title=line[:100],
+                title=line,
                 status=TaskStatus.PENDING,
                 depends_on=[prev_id] if prev_id else [],
             )
@@ -244,6 +244,7 @@ class ExpertAgent:
         prompt_blocks: Optional[List[str]] = None,
         memory_hints: Optional[List[str]] = None,
         tool_profile: Optional[Any] = None,
+        retry_reason: str = "review_reject_respawn",
     ) -> List[Dict[str, Any]]:
         """Spawn fresh Dev agents for a retry pass after review rejection."""
         selected_ids = {str(task_id).strip() for task_id in (task_ids or []) if str(task_id).strip()}
@@ -274,7 +275,7 @@ class ExpertAgent:
                 "role": "dev",
                 "task_description": task_desc,
                 "prompt_blocks": blocks,
-                "metadata": {"retry_reason": "review_reject_respawn"},
+                "metadata": {"retry_reason": str(retry_reason or "review_reject_respawn").strip() or "review_reject_respawn"},
             }
             if selected_profile:
                 spawn_args["tool_profile"] = selected_profile
@@ -342,6 +343,8 @@ class ExpertAgent:
                 parts.append(f"Tasks: {progress.get('done', 0)}/{progress.get('total', 0)} completed\n")
 
         for child in children:
+            if bool(child.metadata.get("superseded")):
+                continue
             child_reports = [m for m in msgs if m.from_id == child.session_id]
             parts.append(f"### {child.role} ({child.session_id})")
             parts.append(f"Status: {child.status.value}")

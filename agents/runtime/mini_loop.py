@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
@@ -30,6 +31,7 @@ from agents.runtime.custom_tools import handle_custom_tool_call
 from agents.runtime.mailbox import AgentMailbox
 
 logger = logging.getLogger(__name__)
+_TASK_ID_RE = re.compile(r"\b(t-\d+)\b", flags=re.IGNORECASE)
 
 
 @dataclass
@@ -83,6 +85,68 @@ _CHILD_TOOL_NAMES = {
     "send_message_to_agent",
     "read_agent_messages",
 }
+
+
+def _infer_auto_heartbeat_task_id(session: Any, *, initial_task: str = "") -> str:
+    metadata = getattr(session, "metadata", {}) if session is not None else {}
+    task_updates = metadata.get("task_updates") if isinstance(metadata, dict) else {}
+    if isinstance(task_updates, dict):
+        for raw_task_id in task_updates.keys():
+            task_id = str(raw_task_id or "").strip()
+            if task_id:
+                return task_id
+    for candidate in (
+        str(getattr(session, "task_description", "") or "").strip(),
+        str(initial_task or "").strip(),
+    ):
+        if not candidate:
+            continue
+        match = _TASK_ID_RE.search(candidate)
+        if match:
+            return str(match.group(1) or "").strip() or "task"
+    return ""
+
+
+def _publish_auto_heartbeat(
+    *,
+    store: AgentSessionStore,
+    session: Any,
+    initial_task: str,
+    status: str,
+    message: str,
+    stage: str,
+    round_num: Optional[int] = None,
+    stop_reason: str = "",
+) -> None:
+    if session is None:
+        return
+    session_id = str(getattr(session, "session_id", "") or "").strip()
+    if not session_id:
+        return
+    task_id = _infer_auto_heartbeat_task_id(session, initial_task=initial_task)
+    if not task_id:
+        return
+    details: Dict[str, Any] = {
+        "auto": True,
+        "role": str(getattr(session, "role", "") or ""),
+    }
+    if round_num is not None:
+        details["round"] = int(round_num)
+    if stop_reason:
+        details["stop_reason"] = str(stop_reason or "")
+    try:
+        store.publish_task_heartbeat(
+            session_id,
+            task_id=task_id,
+            scope="task",
+            status=str(status or "running").strip() or "running",
+            message=str(message or "").strip(),
+            stage=str(stage or "").strip(),
+            ttl_seconds=180,
+            details=details,
+        )
+    except Exception:
+        logger.debug("Failed to publish auto heartbeat for session %s", session_id, exc_info=True)
 
 
 # ── Mini Loop ──────────────────────────────────────────────────
@@ -171,6 +235,15 @@ async def run_mini_loop(
                     "content": f"[Parent message] {latest.content}",
                 })
 
+        _publish_auto_heartbeat(
+            store=store,
+            session=session,
+            initial_task=initial_task,
+            status="running",
+            message=f"mini_loop round {round_num} active",
+            stage="llm_round",
+            round_num=round_num,
+        )
         yield {"type": "round_start", "round": round_num}
 
         # ── LLM call ──────────────────────────────────────────
@@ -306,6 +379,54 @@ async def run_mini_loop(
 
     if not state.stop_reason:
         state.stop_reason = "max_rounds_reached"
+
+    final_session = store.get(session_id)
+    final_metadata = dict(getattr(final_session, "metadata", {}) or {}) if final_session is not None else {}
+    allow_content_completion = bool(final_metadata.get("allow_content_completion")) or str(final_metadata.get("execution_mode") or "").strip().lower() == "fast_track"
+    if (
+        final_session is not None
+        and str(getattr(final_session, "parent_id", "") or "").strip()
+        and final_session.status == AgentStatus.RUNNING
+        and state.stop_reason != "child_reported_completed"
+        and not (state.stop_reason == "no_tool_calls" and allow_content_completion)
+    ):
+        metadata_updates: Dict[str, Any] = {"loop_stop_reason": state.stop_reason}
+        if state.stop_reason in {"max_rounds_reached", "no_tool_calls"} or str(state.stop_reason).startswith("llm_error"):
+            metadata_updates["blocked_reason"] = f"child_loop_{state.stop_reason}"
+        try:
+            store.update_metadata(session_id, metadata_updates)
+        except Exception:
+            logger.debug("Failed to persist mini loop stop metadata for session %s", session_id, exc_info=True)
+        try:
+            store.update_status(session_id, AgentStatus.WAITING)
+        except Exception:
+            logger.debug("Failed to set waiting after incomplete mini loop for session %s", session_id, exc_info=True)
+        final_session = store.get(session_id)
+
+    final_status = "running"
+    if state.stop_reason == "child_reported_completed":
+        final_status = "completed"
+    elif state.stop_reason in {"parent_interrupted", "session_not_running"}:
+        final_status = "blocked"
+    elif (
+        str(getattr(final_session, "parent_id", "") or "").strip()
+        and not (state.stop_reason == "no_tool_calls" and allow_content_completion)
+        and state.stop_reason in {"max_rounds_reached", "no_tool_calls"}
+    ):
+        final_status = "blocked"
+    elif str(state.stop_reason or "").startswith("llm_error"):
+        final_status = "blocked"
+
+    _publish_auto_heartbeat(
+        store=store,
+        session=final_session or store.get(session_id),
+        initial_task=initial_task,
+        status=final_status,
+        message=f"mini_loop ended: {state.stop_reason}",
+        stage="loop_end",
+        round_num=state.round_num or None,
+        stop_reason=state.stop_reason,
+    )
 
     # Save conversation history for resume
     store.save_messages(session_id, messages)

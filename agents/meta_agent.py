@@ -299,8 +299,45 @@ class MetaAgentRuntime:
         if bullet_lines:
             return bullet_lines
 
-        fragments = re.split(r"[；;。.!?\n]+|(?:\s+and\s+)", text)
-        return [fragment.strip() for fragment in fragments if fragment.strip()]
+        fragments: List[str] = []
+        buffer: List[str] = []
+        length = len(text)
+
+        def _flush() -> None:
+            fragment = "".join(buffer).strip()
+            if fragment:
+                fragments.append(fragment)
+            buffer.clear()
+
+        for idx, char in enumerate(text):
+            if char == "\n":
+                _flush()
+                continue
+            if char in {"；", ";", "。", "!", "！", "?", "？"}:
+                _flush()
+                continue
+            if char == ".":
+                prev_char = text[idx - 1] if idx > 0 else ""
+                next_char = text[idx + 1] if idx + 1 < length else ""
+                prev_is_token = prev_char.isalnum() or prev_char in {"_", "-", "/", "\\"}
+                next_is_token = next_char.isalnum() or next_char in {"_", "-", "/", "\\"}
+                if prev_is_token and next_is_token:
+                    buffer.append(char)
+                    continue
+                if next_char and not next_char.isspace():
+                    buffer.append(char)
+                    continue
+                _flush()
+                continue
+            buffer.append(char)
+
+        _flush()
+
+        normalized: List[str] = []
+        for fragment in fragments:
+            parts = re.split(r"(?:\s+and\s+)", fragment, flags=re.IGNORECASE)
+            normalized.extend(part.strip() for part in parts if part.strip())
+        return normalized
 
     @staticmethod
     def _infer_role(description: str) -> str:

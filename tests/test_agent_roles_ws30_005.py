@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -208,6 +209,31 @@ class TestCoreAgent:
             assert "model_tier" in assignment
             assert "tool_subset" in assignment
 
+    def test_core_decompose_preserves_file_paths_in_assignment_scope(self, store, mailbox):
+        from agents.core_agent import CoreAgent
+
+        core = CoreAgent(store=store, mailbox=mailbox)
+        result = core.decompose_goal(
+            {
+                "goal": (
+                    "在不修改正式源码的前提下，对 main.py、system/boxlite/manager.py、agents/pipeline.py "
+                    "做审计；将结果写入 scratch/live_smoke/live_runtime_audit.md。"
+                ),
+                "router_decision": {},
+                "tool_profile": [],
+                "prompt_profile": "core_exec_ops",
+                "model_tier": "primary",
+                "delegation_intent": "core_execution",
+            }
+        )
+
+        scopes = [str(item.get("scope") or "") for item in result["expert_assignments"]]
+        merged_scope = "\n".join(scopes)
+        assert "main.py" in merged_scope
+        assert "system/boxlite/manager.py" in merged_scope
+        assert "agents/pipeline.py" in merged_scope
+        assert "scratch/live_smoke/live_runtime_audit.md" in merged_scope
+
     def test_core_spawn_experts_with_router_tools(self, store, mailbox):
         from agents.shell_agent import ShellAgent
         from agents.core_agent import CoreAgent
@@ -349,6 +375,20 @@ class TestExpertAgent:
         tasks = expert.plan_tasks("Implement AST parser\nAdd optimistic locking\nBuild conflict engine")
         assert len(tasks) == 3
         assert expert.board_id != ""
+
+    def test_expert_plan_tasks_preserves_full_line_titles(self, store, mailbox, task_board_engine):
+        from agents.expert_agent import ExpertAgent, ExpertAgentConfig
+        expert = ExpertAgent(
+            config=ExpertAgentConfig(expert_type="backend"),
+            session_id="expert-1",
+            store=store,
+            mailbox=mailbox,
+            task_board_engine=task_board_engine,
+        )
+        line = "Perform a live runtime audit across main.py, system/boxlite/manager.py, and agents/pipeline.py"
+        tasks = expert.plan_tasks(line)
+        assert len(tasks) == 1
+        assert tasks[0].title == line
 
     def test_expert_spawn_devs(self, store, mailbox, task_board_engine):
         from agents.expert_agent import ExpertAgent, ExpertAgentConfig
@@ -805,6 +845,92 @@ class TestPipeline:
         assert receipt_event.get("agent_state", {}).get("task_completed") is True
         assert "当前 core 侧可用能力摘要" in str(receipt_event.get("agent_state", {}).get("final_answer") or "")
 
+    def test_pipeline_fast_track_uses_explicit_dispatch_intent_for_analysis_autocomplete(self, store, mailbox):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        forced_decision = RouterDecision(
+            decision_id="route_analysis_fast_track_dispatch_payload_001",
+            created_at="2026-03-14T00:00:00+00:00",
+            task_id="chat_analysis_fast_track_dispatch_payload",
+            trace_id="trace_analysis_fast_track_dispatch_payload",
+            session_id="analysis-fast-track-dispatch-payload__core",
+            task_type="general",
+            selected_role="sys_admin",
+            selected_model_tier="primary",
+            tool_profile=["read_file", "artifact_reader"],
+            prompt_profile="core_exec_ops",
+            injection_mode="hardened",
+            delegation_intent="core_execution",
+            complexity_hint="trivial",
+            core_route="fast_track",
+            fast_track_candidate=True,
+            risk_level="write_repo",
+            budget_remaining=None,
+            reasoning=["forced_for_test"],
+            replay_fingerprint="analysis_fast_track_dispatch_payload_fp",
+            workflow_entry_state="planned",
+            controlled_execution_plan={
+                "entry_state": "planned",
+                "states": ["planned", "delegating", "executing", "verifying", "completed", "failed"],
+            },
+        )
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, tools, model
+            return {
+                "content": "CORE_OK",
+                "tool_calls": [],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(
+            self._collect_events(
+                run_multi_agent_pipeline(
+                    message="只读读取 README.md 的首行并最终返回固定短句 CORE_OK",
+                    session_id="analysis-fast-track-dispatch-payload__core",
+                    core_execution_session_id="analysis-fast-track-dispatch-payload__core",
+                    risk_level="write_repo",
+                    route_decision=forced_decision.to_dict(),
+                    dispatch_payload={
+                        "dispatched": True,
+                        "goal": "只读读取 README.md 的首行并最终返回固定短句 CORE_OK",
+                        "intent_type": "analysis",
+                        "target_repo": "self",
+                        "context_summary": "只读任务；不写入。",
+                        "relevant_memories": [],
+                        "priority": "normal",
+                        "requested_tools": ["read_file"],
+                        "target_files": ["README.md"],
+                        "estimated_changed_lines": 0,
+                    },
+                    forced_route_semantic="core_execution",
+                    enable_child_execution=True,
+                    child_llm_call=_mock_child_llm,
+                    child_tool_executor=_mock_tool_executor,
+                    store=store,
+                    mailbox=mailbox,
+                )
+            )
+        )
+
+        auto_event = next(e for e in events if e["type"] == "fast_track_auto_complete")
+        assert auto_event["reason"] == "readonly_analysis_content_without_explicit_completion"
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        assert receipt_event.get("stop_reason") == "submitted_completion"
+        assert receipt_event.get("agent_state", {}).get("task_completed") is True
+        assert "CORE_OK" in str(receipt_event.get("agent_state", {}).get("final_answer") or "")
+
+        end_event = next(e for e in events if e["type"] == "pipeline_end")
+        assert end_event["reason"] == "completed"
+
     def test_pipeline_experts_spawned(self, store, mailbox, task_board_engine):
         from agents.pipeline import run_multi_agent_pipeline
         events = self._run(self._collect_events(
@@ -917,6 +1043,11 @@ class TestPipeline:
 
         review_event = next(e for e in events if e["type"] == "review_result")
         assert review_event.get("result", {}).get("verdict") == "approve"
+        review_loop_event = next(e for e in events if e["type"] == "review_loop_event")
+        assert "task_board_engine" not in review_loop_event
+
+        for event in events:
+            json.dumps(event, ensure_ascii=False)
 
         end_event = next(e for e in events if e["type"] == "pipeline_end")
         assert end_event["reason"] == "completed"
@@ -1756,6 +1887,195 @@ class TestPipeline:
         heartbeat_summary = receipt_event.get("agent_state", {}).get("heartbeat_summary", {})
         assert int(heartbeat_summary.get("expert_blocked_count") or 0) >= 1
         assert "task_heartbeat_blocked_respawn_exhausted" in list(heartbeat_summary.get("expert_blocked_reasons") or [])
+
+    def test_pipeline_max_rounds_resume_recovers_same_dev_and_completes(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        async def _mock_child_llm(messages, tools, model):
+            del model
+            tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+            joined_messages = "\n".join(str(item.get("content") or "") for item in messages if isinstance(item, dict))
+            is_review = bool({"memory_tag", "memory_deprecate"} & tool_names)
+            if is_review:
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "review_after_max_rounds_resume",
+                            "name": "report_to_parent",
+                            "arguments": {
+                                "type": "completed",
+                                "content": "review approved after max-rounds resume",
+                                "review_result": _mock_review_result(summary="review approved after max-rounds resume"),
+                            },
+                        }
+                    ],
+                }
+            if "automatic recovery resume attempt 1" in joined_messages.lower():
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "dev_done_after_resume",
+                            "name": "report_to_parent",
+                            "arguments": {
+                                "type": "completed",
+                                "content": "child work complete after max-rounds resume",
+                                "verification_report": _mock_verification_report(summary="child work complete after max-rounds resume"),
+                            },
+                        }
+                    ],
+                }
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "dev_progress_before_resume",
+                        "name": "update_my_task_status",
+                        "arguments": {
+                            "task_id": "task-max-rounds",
+                            "status": "in_progress",
+                            "summary": "partial progress before forced resume",
+                            "files_changed": ["auth.py"],
+                        },
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(self._collect_events(
+            run_multi_agent_pipeline(
+                message="Implement auth endpoint and tests",
+                session_id="test-session-max-rounds-resume",
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                child_max_rounds=1,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+            )
+        ))
+
+        event_types = [e.get("type") for e in events]
+        assert "dev_loop_max_rounds_resume" in event_types
+        assert "dev_loop_max_rounds_respawn" not in event_types
+
+        resumed_starts = [
+            e for e in events
+            if e.get("type") == "dev_loop_start" and e.get("recovery_mode") == "max_rounds_resume"
+        ]
+        assert resumed_starts
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        assert receipt_event.get("stop_reason") == "submitted_completion"
+        assert receipt_event.get("agent_state", {}).get("task_completed") is True
+        heartbeat_summary = receipt_event.get("agent_state", {}).get("heartbeat_summary", {})
+        assert int(heartbeat_summary.get("loop_resume_count") or 0) >= 1
+        assert int(heartbeat_summary.get("loop_respawn_count") or 0) == 0
+
+    def test_pipeline_max_rounds_respawns_fresh_dev_after_resume_exhausted(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        async def _mock_child_llm(messages, tools, model):
+            del model
+            tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+            joined_messages = "\n".join(str(item.get("content") or "") for item in messages if isinstance(item, dict))
+            is_review = bool({"memory_tag", "memory_deprecate"} & tool_names)
+            if is_review:
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "review_after_max_rounds_respawn",
+                            "name": "report_to_parent",
+                            "arguments": {
+                                "type": "completed",
+                                "content": "review approved after max-rounds respawn",
+                                "review_result": _mock_review_result(summary="review approved after max-rounds respawn"),
+                            },
+                        }
+                    ],
+                }
+            lower_joined = joined_messages.lower()
+            if "fresh-dev retry attempt 1" in lower_joined:
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "dev_done_after_respawn",
+                            "name": "report_to_parent",
+                            "arguments": {
+                                "type": "completed",
+                                "content": "child work complete after max-rounds respawn",
+                                "verification_report": _mock_verification_report(summary="child work complete after max-rounds respawn"),
+                            },
+                        }
+                    ],
+                }
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "dev_progress_before_respawn",
+                        "name": "update_my_task_status",
+                        "arguments": {
+                            "task_id": "task-max-rounds",
+                            "status": "in_progress",
+                            "summary": "still incomplete after current round",
+                            "files_changed": ["auth.py"],
+                        },
+                    }
+                ],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(self._collect_events(
+            run_multi_agent_pipeline(
+                message="Implement auth endpoint and tests",
+                session_id="test-session-max-rounds-respawn",
+                risk_level="write_repo",
+                enable_child_execution=True,
+                child_llm_call=_mock_child_llm,
+                child_tool_executor=_mock_tool_executor,
+                child_max_rounds=1,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+            )
+        ))
+
+        event_types = [e.get("type") for e in events]
+        assert "dev_loop_max_rounds_resume" in event_types
+        assert "dev_loop_max_rounds_respawn" in event_types
+
+        respawn_starts = [
+            e for e in events
+            if e.get("type") == "dev_loop_start" and e.get("recovery_mode") == "max_rounds_respawn"
+        ]
+        assert respawn_starts
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        assert receipt_event.get("stop_reason") == "submitted_completion"
+        assert receipt_event.get("agent_state", {}).get("task_completed") is True
+        heartbeat_summary = receipt_event.get("agent_state", {}).get("heartbeat_summary", {})
+        assert int(heartbeat_summary.get("loop_resume_count") or 0) >= 1
+        assert int(heartbeat_summary.get("loop_respawn_count") or 0) >= 1
 
     def test_pipeline_report_collection_is_scoped_to_current_pipeline_run(
         self,
