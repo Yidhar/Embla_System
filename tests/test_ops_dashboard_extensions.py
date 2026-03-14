@@ -560,6 +560,60 @@ def test_ops_runtime_posture_payload_includes_execution_bridge_governance(tmp_pa
     assert metrics["execution_bridge_governance_warning_ratio"]["value"] == 1.0
 
 
+def test_ops_runtime_posture_payload_includes_boxlite_runtime_summary(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    _write_jsonl(events_file, [])
+
+    def _fake_snapshot(*, repo_root: Path, events_limit: int):  # noqa: ARG001
+        return {
+            "summary": {"overall_status": "ok", "metric_status": {}},
+            "metrics": {},
+            "threshold_profile": {},
+            "sources": {"events_file": "logs/autonomous/events.jsonl"},
+        }
+
+    from scripts import export_slo_snapshot
+
+    monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
+    monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(
+        "system.boxlite.manager.get_boxlite_runtime_assets_summary",
+        lambda **kwargs: {
+            "enabled": True,
+            "active_profile": "default",
+            "asset_name": "embla_py311_default",
+            "image": "python:slim",
+            "requested_image": "embla/boxlite-runtime:py311",
+            "resolved_image": "python:slim",
+            "status": "ready",
+            "severity": "ok",
+            "reason_code": "BOXLITE_RUNTIME_READY",
+            "reason_text": "BoxLite runtime profile is ready.",
+            "runtime_state_file": str(repo_root / "scratch" / "runtime" / "boxlite_runtime_assets.json"),
+            "auto_reconcile_enabled": True,
+            "reconcile_interval_seconds": 900,
+            "profiles": [
+                {
+                    "profile": "default",
+                    "status": "ready",
+                    "severity": "ok",
+                }
+            ],
+        },
+    )
+
+    payload = api_server._ops_build_runtime_posture_payload(events_limit=50)
+
+    assert payload["status"] == "success"
+    assert payload["data"]["summary"]["boxlite_runtime_status"] == "ok"
+    assert payload["data"]["metrics"]["boxlite_runtime"]["profile"] == "default"
+    assert payload["data"]["metrics"]["boxlite_runtime"]["asset_name"] == "embla_py311_default"
+    assert payload["data"]["metrics"]["boxlite_runtime"]["requested_image"] == "embla/boxlite-runtime:py311"
+    assert payload["data"]["metrics"]["boxlite_runtime"]["resolved_image"] == "python:slim"
+    assert payload["data"]["boxlite_runtime"]["asset_name"] == "embla_py311_default"
+
+
 def test_ops_runtime_posture_payload_includes_agentic_loop_completion_summary(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
     events_file = repo_root / "logs" / "autonomous" / "events.jsonl"

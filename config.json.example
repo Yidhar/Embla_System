@@ -43,7 +43,12 @@
     "applied_proxy": false, // 是否应用代理
     "request_timeout": 120, // 模型请求超时时间（秒）
     "extra_headers": {}, // 附加HTTP请求头
-    "extra_body": {} // 附加请求体参数
+    "extra_body": {}, // 附加请求体参数
+    "shell_loop": {
+      "max_rounds": 12, // Shell 只读工具循环的兜底最大轮次；真正优先靠进展型停止条件收口
+      "repeated_tool_pattern_rounds": 3, // 连续重复相同工具模式达到该轮次后停止
+      "no_new_fact_rounds": 3 // 连续无新增事实达到该轮次后停止
+    }
   },
   "api_server": {
     "enabled": true, // 是否启用API服务器
@@ -106,19 +111,47 @@
     "self_repo_execution_backend": "boxlite", // 自维护仓库默认走 BoxLite（与全局默认一致）
     "boxlite": {
       "enabled": true, // 启用 BoxLite-first 自维护执行面
-      "mode": "required", // 默认强制 BoxLite；不可用则阻断可写执行链
+      "mode": "required", // Core/child 默认优先要求 BoxLite；spawn 前必须 ready，否则自动降级 native
       "provider": "sdk", // 使用本地 Python SDK
       "base_url": "", // rest provider 时填写
-      "image": "python:slim", // 可替换为预制 Embla devbox 镜像
-      "working_dir": "/workspace", // box 内 canonical 工作根
-      "cpus": 2, // 默认 CPU 配额
-      "memory_mib": 1024, // 默认内存配额(MiB)
+      "runtime_profile": "default", // 默认 execution_profile 对应的运行时 profile
+      "runtime_profiles": {
+        "default": {
+          "asset_name": "embla_py311_default", // Embla 维护的默认 Python 3.11 runtime 资产
+          "image": "embla/boxlite-runtime:py311", // 优先使用 Embla 运行时镜像
+          "image_candidates": ["embla/boxlite-runtime:py311", "python:slim"], // 本地无 Embla 镜像时退回公共镜像
+          "working_dir": "/workspace", // box 内 canonical 工作根
+          "cpus": 2, // 默认 CPU 配额
+          "memory_mib": 1024, // 默认内存配额(MiB)
+          "security_preset": "maximum", // BoxLite 安全预设
+          "network_enabled": false, // 默认不开放网络
+          "python_cmd": "python", // guest helper 解释器
+          "prewarm_command": ["python", "-V"] // 运行时预热命令
+        }
+      },
+      "runtime_state_file": "scratch/runtime/boxlite_runtime_assets.json", // 运行时资产状态文件
+      "install_prefetch_enabled": true, // 首次安装/显式 prepare 时预取默认 runtime profile
+      "local_image_build_enabled": true, // prepare-runtime 失败时允许本地构建 Embla runtime 镜像
+      "local_image_builder": "auto", // auto/docker/podman
+      "local_image_context_dir": "system/boxlite/runtime_image", // 本地构建上下文目录
+      "local_image_dockerfile": "Dockerfile", // runtime 镜像 Dockerfile
+      "auto_reconcile_enabled": true, // 空闲时自动 reconcile 运行时资产
+      "reconcile_interval_seconds": 900, // 空闲 reconcile 间隔
+      "reconcile_stale_after_seconds": 43200, // 超过该时间未成功 ensure 视为 stale
+      "core_ensure_before_spawn_enabled": true, // spawn child 前主动 ensure 所需 runtime profile
+      "image": "embla/boxlite-runtime:py311", // legacy fallback：未命中 profile 时的默认镜像
+      "working_dir": "/workspace", // legacy fallback：box 内 canonical 工作根
+      "cpus": 2, // legacy fallback：默认 CPU 配额
+      "memory_mib": 1024, // legacy fallback：默认内存配额(MiB)
       "auto_remove": true, // 任务结束后自动清理 box
-      "security_preset": "maximum", // BoxLite 安全预设
-      "network_enabled": false, // 默认不开放网络
+      "security_preset": "maximum", // legacy fallback：BoxLite 安全预设
+      "network_enabled": false, // legacy fallback：默认不开放网络
       "auto_install_sdk": true, // 首次缺少 BoxLite SDK 时自动安装
       "install_timeout_seconds": 300, // 自动安装超时时间（秒）
-      "sdk_package_spec": "boxlite" // 自动安装使用的 pip 包规格
+      "sdk_package_spec": "boxlite", // 自动安装使用的 pip 包规格
+      "ensure_timeout_seconds": 45, // 首次建箱/启动 helper 的超时时间（秒）
+      "startup_prewarm_enabled": true, // 进程启动时预热 BoxLite 运行时与镜像
+      "startup_prewarm_timeout_seconds": 45 // 启动预热超时时间（秒）
     }
   },
   "autonomous": {

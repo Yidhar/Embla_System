@@ -304,6 +304,13 @@ python -m venv .venv
 source .venv/bin/activate  # Windows: .\.venv\Scripts\activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+
+# Optional: prefetch BoxLite runtime assets during first install
+python main.py --prepare-runtime
+# Optional: explicitly build the local Embla runtime image
+python scripts/build_boxlite_runtime_image.py
+# Or prefetch all configured profiles
+python scripts/prepare_boxlite_runtime.py --prepare-runtime-all-profiles
 ```
 
 ### Configuration
@@ -328,6 +335,7 @@ Works with any OpenAI-compatible API (DeepSeek, Qwen, OpenAI, Ollama, etc.).
 python main.py             # Full launch (API + MCP + optional autonomous backend)
 uv run main.py             # Using uv
 python main.py --headless  # Headless mode (skip interactive prompt; for web/remote frontend)
+python main.py --prepare-runtime --force-runtime-refresh  # Refresh BoxLite runtime assets and exit
 ```
 
 All services are orchestrated by `main.py`. For development, each can be started independently:
@@ -435,4 +443,3 @@ Issues and Pull Requests are welcome.
 ## License
 
 [MIT License](LICENSE)
-

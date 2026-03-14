@@ -6,7 +6,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List
 
-from system.boxlite.manager import BoxLiteManager, build_box_session_name, probe_boxlite_runtime
+from system.boxlite.manager import BoxLiteManager, build_box_session_name, probe_boxlite_runtime_readiness
 from system.execution_backend.base import ExecutionBackend, ExecutionBackendUnavailableError
 from system.native_executor import NativeSecurityError
 from system.test_baseline_guard import TestBaselineGuard
@@ -41,6 +41,16 @@ class BoxLiteExecutionBackend(ExecutionBackend):
 
     def __init__(self) -> None:
         self.manager = BoxLiteManager()
+
+    def _resolve_runtime(self, context):
+        profile_name = str(getattr(context, "execution_profile", "default") or "default").strip() or "default"
+        resolver = getattr(self.manager, "runtime_settings_for_profile", None)
+        if callable(resolver):
+            try:
+                return resolver(profile_name)
+            except Exception:
+                pass
+        return type("BoxLiteRuntime", (), {"python_cmd": "python"})()
 
     @staticmethod
     def _map_to_guest_path(value: Any, context) -> str:
@@ -242,16 +252,30 @@ class BoxLiteExecutionBackend(ExecutionBackend):
     ) -> Dict[str, Any]:
         box_name = self._resolve_box_name(context)
         resolved_working_dir = str(working_dir or context.execution_root or "/workspace").strip() or str(context.execution_root or "/workspace")
-        result = await self.manager.exec_in_box(
-            box_name=box_name,
-            workspace_host_root=str(context.workspace_host_root or context.project_root),
-            command=command,
-            args=args,
-            env=env,
-            working_dir=resolved_working_dir,
-            timeout_seconds=timeout_seconds,
-            project_root=str(context.project_root or ""),
-        )
+        exec_kwargs = {
+            "box_name": box_name,
+            "workspace_host_root": str(context.workspace_host_root or context.project_root),
+            "execution_profile": str(getattr(context, "execution_profile", "default") or "default").strip() or "default",
+            "command": command,
+            "args": args,
+            "env": env,
+            "working_dir": resolved_working_dir,
+            "timeout_seconds": timeout_seconds,
+            "project_root": str(context.project_root or ""),
+        }
+        try:
+            try:
+                result = await self.manager.exec_in_box(**exec_kwargs)
+            except TypeError as exc:
+                if "execution_profile" not in str(exc):
+                    raise
+                exec_kwargs.pop("execution_profile", None)
+                result = await self.manager.exec_in_box(**exec_kwargs)
+        except Exception as exc:
+            reason = str(exc or "").strip()
+            if reason.startswith("boxlite_"):
+                raise ExecutionBackendUnavailableError(reason) from exc
+            raise
         result.setdefault("box_name", box_name)
         if native_tool_executor is not None:
             self._persist_box_runtime_metadata(result, context=context, native_tool_executor=native_tool_executor)
@@ -279,7 +303,8 @@ class BoxLiteExecutionBackend(ExecutionBackend):
         max_output_chars = _safe_int(call.get("max_output_chars"), 10000, 200, 500000)
         payload_script = _build_safe_python_payload(code)
         payload_b64 = base64.b64encode(payload_script.encode("utf-8")).decode("ascii")
-        python_cmd = str(call.get("python_cmd") or "python").strip() or "python"
+        runtime = self._resolve_runtime(context)
+        python_cmd = str(call.get("python_cmd") or getattr(runtime, "python_cmd", "python") or "python").strip() or "python"
 
         result = await self._run_box_command(
             context=context,
@@ -631,9 +656,10 @@ class BoxLiteExecutionBackend(ExecutionBackend):
         timeout_seconds: float,
         env: Dict[str, str] | None = None,
     ) -> str:
+        runtime = self._resolve_runtime(context)
         result = await self._run_box_command(
             context=context,
-            command="python",
+            command=str(getattr(runtime, "python_cmd", "python") or "python").strip() or "python",
             args=["-m", "system.boxlite.guest_tools", helper_name, *helper_args],
             env=env,
             timeout_seconds=timeout_seconds,
@@ -648,7 +674,10 @@ class BoxLiteExecutionBackend(ExecutionBackend):
         if tool_name in host_bridge_tools:
             return await self._delegate_to_native_tool(tool_name, call, context=context, native_tool_executor=native_tool_executor)
 
-        status = probe_boxlite_runtime()
+        status = probe_boxlite_runtime_readiness(
+            project_root=getattr(context, "project_root", ""),
+            profile_name=str(getattr(context, "execution_profile", "default") or "default").strip() or "default",
+        )
         if not status.available:
             raise ExecutionBackendUnavailableError(status.reason or "boxlite runtime unavailable")
 

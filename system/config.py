@@ -562,6 +562,24 @@ class APIRoutingConfig(BaseModel):
     )
 
 
+class APIShellLoopConfig(BaseModel):
+    """Shell 只读工具循环的停止条件配置。"""
+
+    max_rounds: int = Field(default=12, ge=1, le=64, description="Shell 只读工具循环的兜底最大轮次")
+    repeated_tool_pattern_rounds: int = Field(
+        default=3,
+        ge=2,
+        le=16,
+        description="连续重复相同工具调用模式达到该轮次后停止继续工具循环",
+    )
+    no_new_fact_rounds: int = Field(
+        default=3,
+        ge=1,
+        le=16,
+        description="连续未获得新增事实达到该轮次后停止继续工具循环",
+    )
+
+
 class APIConfig(BaseModel):
     """API服务配置"""
 
@@ -586,6 +604,10 @@ class APIConfig(BaseModel):
     routing: APIRoutingConfig = Field(
         default_factory=APIRoutingConfig,
         description="按路由（shell/core）覆盖 LLM API 地址与模型",
+    )
+    shell_loop: APIShellLoopConfig = Field(
+        default_factory=APIShellLoopConfig,
+        description="Shell 只读工具循环停止条件",
     )
 
     @field_validator("reasoning_effort", "thinking_intensity")
@@ -737,6 +759,33 @@ class AutonomousConfig(BaseModel):
     release: AutonomousReleaseConfig = Field(default_factory=AutonomousReleaseConfig)
 
 
+class SandboxBoxLiteRuntimeProfileConfig(BaseModel):
+    """Named BoxLite runtime profile used by execution sessions."""
+
+    asset_name: str = Field(default="embla_py311_default", description="Embla 维护的运行时资产名")
+    image: str = Field(default="embla/boxlite-runtime:py311", description="该 profile 优先使用的 OCI 镜像")
+    image_candidates: List[str] = Field(
+        default_factory=lambda: ["embla/boxlite-runtime:py311", "python:slim"],
+        description="按顺序尝试的 OCI 镜像列表；用于本地 Embla 镜像优先、公共镜像兜底",
+    )
+    working_dir: str = Field(default="/workspace", description="box 内工作目录")
+    cpus: int = Field(default=2, ge=1, le=64, description="默认 CPU 配额")
+    memory_mib: int = Field(default=1024, ge=128, le=65536, description="默认内存配额(MiB)")
+    security_preset: str = Field(default="maximum", description="development/standard/maximum")
+    network_enabled: bool = Field(default=False, description="是否允许该 profile 访问网络")
+    python_cmd: str = Field(default="python", description="guest helper 默认解释器命令")
+    prewarm_command: List[str] = Field(
+        default_factory=lambda: ["python", "-V"],
+        description="用于 runtime 预热/校验的 guest 命令",
+    )
+
+
+def _default_boxlite_runtime_profiles() -> Dict[str, SandboxBoxLiteRuntimeProfileConfig]:
+    return {
+        "default": SandboxBoxLiteRuntimeProfileConfig(),
+    }
+
+
 class SandboxBoxLiteConfig(BaseModel):
     """BoxLite runtime configuration for execution backend selection."""
 
@@ -744,16 +793,34 @@ class SandboxBoxLiteConfig(BaseModel):
     mode: str = Field(default="required", description="disabled/preferred/required")
     provider: str = Field(default="sdk", description="sdk/rest")
     base_url: str = Field(default="", description="REST provider base URL")
-    image: str = Field(default="python:slim", description="默认 BoxLite OCI 镜像")
-    working_dir: str = Field(default="/workspace", description="box 内工作目录")
-    cpus: int = Field(default=2, ge=1, le=64, description="默认 CPU 配额")
-    memory_mib: int = Field(default=1024, ge=128, le=65536, description="默认内存配额(MiB)")
+    runtime_profile: str = Field(default="default", description="默认 execution profile 对应的 BoxLite runtime profile")
+    runtime_profiles: Dict[str, SandboxBoxLiteRuntimeProfileConfig] = Field(
+        default_factory=_default_boxlite_runtime_profiles,
+        description="命名 BoxLite runtime profile 注册表",
+    )
+    runtime_state_file: str = Field(default="scratch/runtime/boxlite_runtime_assets.json", description="运行时资产状态文件")
+    install_prefetch_enabled: bool = Field(default=True, description="首次安装/显式 prepare 时是否预取默认 runtime profile")
+    local_image_build_enabled: bool = Field(default=True, description="是否允许本地构建 Embla runtime 镜像")
+    local_image_builder: str = Field(default="auto", description="本地镜像构建器：auto/docker/podman")
+    local_image_context_dir: str = Field(default="system/boxlite/runtime_image", description="本地 runtime 镜像构建上下文目录")
+    local_image_dockerfile: str = Field(default="Dockerfile", description="runtime 镜像 Dockerfile 文件名")
+    auto_reconcile_enabled: bool = Field(default=True, description="是否启用空闲 runtime reconcile")
+    reconcile_interval_seconds: int = Field(default=900, ge=60, le=86400, description="空闲 reconcile 间隔（秒）")
+    reconcile_stale_after_seconds: int = Field(default=43200, ge=300, le=604800, description="运行时资产视为 stale 的阈值（秒）")
+    core_ensure_before_spawn_enabled: bool = Field(default=True, description="spawn child 前是否主动 ensure 所需 runtime profile")
+    image: str = Field(default="embla/boxlite-runtime:py311", description="legacy fallback：默认 BoxLite OCI 镜像")
+    working_dir: str = Field(default="/workspace", description="legacy fallback：box 内工作目录")
+    cpus: int = Field(default=2, ge=1, le=64, description="legacy fallback：默认 CPU 配额")
+    memory_mib: int = Field(default=1024, ge=128, le=65536, description="legacy fallback：默认内存配额(MiB)")
     auto_remove: bool = Field(default=True, description="box 停止后是否自动清理")
-    security_preset: str = Field(default="maximum", description="development/standard/maximum")
-    network_enabled: bool = Field(default=False, description="是否允许 box 访问网络")
+    security_preset: str = Field(default="maximum", description="legacy fallback：development/standard/maximum")
+    network_enabled: bool = Field(default=False, description="legacy fallback：是否允许 box 访问网络")
     auto_install_sdk: bool = Field(default=True, description="缺少 BoxLite SDK 时是否自动安装")
     install_timeout_seconds: int = Field(default=300, ge=10, le=3600, description="BoxLite SDK 自动安装超时（秒）")
     sdk_package_spec: str = Field(default="boxlite", description="自动安装使用的 pip 包规格")
+    ensure_timeout_seconds: int = Field(default=45, ge=5, le=600, description="首次建箱/启动 helper 超时（秒）")
+    startup_prewarm_enabled: bool = Field(default=True, description="启动时是否预热 BoxLite 运行时与镜像")
+    startup_prewarm_timeout_seconds: int = Field(default=45, ge=5, le=600, description="启动预热超时（秒）")
 
 
 class SandboxConfig(BaseModel):

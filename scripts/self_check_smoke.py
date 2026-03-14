@@ -17,8 +17,11 @@ def main() -> int:
     tmp_root = Path("logs") / "self_check"
     tmp_root.mkdir(parents=True, exist_ok=True)
     db_path = tmp_root / "workflow_smoke.db"
-    if db_path.exists():
-        db_path.unlink()
+    lease_state_path = tmp_root / "global_mutex_lease.json"
+    lease_audit_path = tmp_root / "global_mutex_events.jsonl"
+    for stale_file in (db_path, lease_state_path, lease_audit_path):
+        if stale_file.exists():
+            stale_file.unlink()
 
     store = WorkflowStore(db_path=db_path)
     wf = "wf-smoke-1"
@@ -57,8 +60,8 @@ def main() -> int:
     assert store.read_pending_outbox(limit=10) == []
 
     mutex = GlobalMutexManager(
-        state_file=tmp_root / "global_mutex_lease.json",
-        audit_file=tmp_root / "global_mutex_events.jsonl",
+        state_file=lease_state_path,
+        audit_file=lease_audit_path,
     )
     mutex.ensure_initialized(ttl_seconds=1)
     lease_a = asyncio.run(

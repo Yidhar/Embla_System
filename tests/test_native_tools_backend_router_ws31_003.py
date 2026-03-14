@@ -28,8 +28,8 @@ def test_native_executor_routes_boxlite_session_and_surfaces_backend_unavailable
         executor.set_agent_session_store(store)
 
         monkeypatch.setattr(
-            "system.execution_backend.registry.probe_boxlite_runtime",
-            lambda: SimpleNamespace(available=False, reason="boxlite_sdk_import_failed", provider="sdk", working_dir="/workspace", image="python:slim"),
+            "system.execution_backend.registry.probe_boxlite_runtime_readiness",
+            lambda *args, **kwargs: SimpleNamespace(available=False, reason="boxlite_sdk_import_failed", provider="sdk", working_dir="/workspace", image="python:slim"),
         )
 
         result = asyncio.run(

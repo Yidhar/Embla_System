@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from system.boxlite.manager import probe_boxlite_runtime
+from system.boxlite.manager import probe_boxlite_runtime_readiness
 from system.execution_backend.base import ExecutionBackend, ExecutionBackendUnavailableError
 from system.execution_backend.boxlite_backend import BoxLiteExecutionBackend
 from system.execution_backend.native_backend import NativeExecutionBackend
@@ -32,7 +32,10 @@ class ExecutionBackendRegistry:
     def resolve(self, context) -> ExecutionBackend:
         backend_name = normalize_execution_backend(getattr(context, "execution_backend", "native"))
         if backend_name == "boxlite":
-            status = probe_boxlite_runtime()
+            status = probe_boxlite_runtime_readiness(
+                project_root=getattr(context, "project_root", ""),
+                profile_name=str(getattr(context, "execution_profile", "default") or "default").strip() or "default",
+            )
             if not bool(getattr(status, "available", False)):
                 reason = str(getattr(status, "reason", "") or "boxlite runtime unavailable")
                 return _UnavailableExecutionBackend(name="boxlite", reason=reason)

@@ -1328,6 +1328,21 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     immutable_dna_status = _ops_status_to_severity(str(immutable_dna.get("status") or "unknown"))
     audit_ledger = _ops_build_audit_ledger_summary(repo_root)
     audit_ledger_status = _ops_status_to_severity(str(audit_ledger.get("status") or "unknown"))
+    try:
+        from system.boxlite.manager import get_boxlite_runtime_assets_summary
+
+        boxlite_runtime = get_boxlite_runtime_assets_summary(project_root=repo_root)
+    except Exception as exc:
+        boxlite_runtime = {
+            "enabled": False,
+            "status": "unknown",
+            "severity": "unknown",
+            "reason_code": "BOXLITE_RUNTIME_SUMMARY_FAILED",
+            "reason_text": str(exc),
+            "runtime_state_file": str((repo_root / "scratch" / "runtime" / "boxlite_runtime_assets.json").resolve()),
+            "profiles": [],
+        }
+    boxlite_runtime_status = _ops_status_to_severity(str(boxlite_runtime.get("severity") or "unknown"))
 
     metric_status = summary.get("metric_status") if isinstance(summary.get("metric_status"), dict) else {}
     snapshot_overall_status = str(summary.get("overall_status") or "unknown")
@@ -1342,6 +1357,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             budget_guard_status,
             immutable_dna_status,
             audit_ledger_status,
+            boxlite_runtime_status,
             execution_bridge_governance_status,
             agentic_loop_completion_status,
             core_child_spawn_deferred_status,
@@ -1387,6 +1403,8 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         source_reports.append(str(immutable_dna_monitor.get("state_file") or ""))
     if bool(audit_ledger.get("exists")) and str(audit_ledger.get("ledger_file") or "").strip():
         source_reports.append(str(audit_ledger.get("ledger_file") or ""))
+    if str(boxlite_runtime.get("runtime_state_file") or "").strip():
+        source_reports.append(str(boxlite_runtime.get("runtime_state_file") or ""))
 
     response_data: Dict[str, Any] = {
         "summary": {
@@ -1412,6 +1430,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
             "budget_guard_status": budget_guard_status,
             "immutable_dna_status": immutable_dna_status,
             "audit_ledger_status": audit_ledger_status,
+            "boxlite_runtime_status": boxlite_runtime_status,
             "execution_bridge_governance_status": execution_bridge_governance_status,
             "execution_bridge_governance_reason_codes": list(execution_bridge_governance.get("reason_codes") or []),
             "agentic_loop_completion_status": agentic_loop_completion_status,
@@ -1509,6 +1528,20 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
                 "latest_generated_at": audit_ledger.get("latest_generated_at"),
                 "latest_record_type": audit_ledger.get("latest_record_type"),
             },
+            "boxlite_runtime": {
+                "status": boxlite_runtime_status,
+                "value": 1 if str(boxlite_runtime.get("status") or "") == "ready" else 0,
+                "profile": boxlite_runtime.get("active_profile"),
+                "asset_name": boxlite_runtime.get("asset_name"),
+                "image": boxlite_runtime.get("image"),
+                "requested_image": boxlite_runtime.get("requested_image"),
+                "resolved_image": boxlite_runtime.get("resolved_image"),
+                "reason_code": boxlite_runtime.get("reason_code"),
+                "auto_reconcile_enabled": boxlite_runtime.get("auto_reconcile_enabled"),
+                "local_image_build_enabled": boxlite_runtime.get("local_image_build_enabled"),
+                "local_image_builder": boxlite_runtime.get("local_image_builder"),
+                "reconcile_interval_seconds": boxlite_runtime.get("reconcile_interval_seconds"),
+            },
             "execution_bridge_rejection_ratio": {
                 "status": execution_bridge_governance_status,
                 "value": execution_bridge_governance.get("rejection_ratio"),
@@ -1558,6 +1591,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
         "budget_guard": budget_guard,
         "immutable_dna": immutable_dna,
         "audit_ledger": audit_ledger,
+        "boxlite_runtime": boxlite_runtime,
         "legacy_event_namespace": legacy_namespace,
         "execution_bridge_governance": execution_bridge_governance,
         "agentic_loop_completion": agentic_loop_completion,
@@ -1590,6 +1624,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     elif audit_ledger_status == "critical":
         reason_code = "AUDIT_LEDGER_CRITICAL"
         reason_text = str(audit_ledger.get("reason_text") or "Audit ledger integrity check failed.")
+    elif boxlite_runtime_status == "critical":
+        reason_code = "BOXLITE_RUNTIME_CRITICAL"
+        reason_text = str(boxlite_runtime.get("reason_text") or "BoxLite runtime assets are unavailable.")
     elif execution_bridge_governance_status == "critical":
         reason_code = "EXECUTION_BRIDGE_GOVERNANCE_CRITICAL"
         reason_text = "Execution bridge governance has critical rejections; check role guards and policy contracts."
@@ -1620,6 +1657,9 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     elif audit_ledger_status == "warning":
         reason_code = "AUDIT_LEDGER_WARNING"
         reason_text = str(audit_ledger.get("reason_text") or "Audit ledger requires attention.")
+    elif boxlite_runtime_status == "warning":
+        reason_code = "BOXLITE_RUNTIME_WARNING"
+        reason_text = str(boxlite_runtime.get("reason_text") or "BoxLite runtime assets require attention.")
     elif execution_bridge_governance_status == "warning":
         reason_code = "EXECUTION_BRIDGE_GOVERNANCE_WARNING"
         reason_text = "Execution bridge governance has warning signals; review semantic/path guard drift."

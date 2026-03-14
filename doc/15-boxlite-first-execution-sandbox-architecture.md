@@ -14,6 +14,7 @@ Embla System 的可写 Agent 执行面采用以下 canonical 方案：
 - **工作区边界继续使用 `git worktree`**：每个自维护任务创建独立 worktree，禁止直接对主 checkout 做 `rw` 执行。
 - **执行面整体迁入 BoxLite**：Dev / Review 的文件读写、搜索、命令执行、测试、lint、事务写入，以及 `query_docs` / `file_ast_*` 等工作区感知工具都默认在 BoxLite box 内完成。
 - **审批与落库继续留在宿主**：`audit/promote/teardown` 仍由宿主执行，对主仓库拥有最终写入权。
+- **运行时资产改为 profile 化维护**：BoxLite 不再假定“每任务临时拉公共镜像”；Embla 维护稳定 `runtime_profile -> image` 映射，并由启动预热、空闲 reconcile、spawn 前 ensure 共同维持可用性。
 
 简写公式：
 
@@ -179,6 +180,25 @@ BoxLite 执行面负责：
 - profile 到资源策略的映射
 
 `BoxLiteManager` 不拥有 worktree promote 权，不写主仓库 ledger。
+
+### 5.4 Runtime Asset Lifecycle
+
+运行时镜像和 guest helper 采用 canonical 的 profile 生命周期：
+
+- `execution_profile` 解析到命名 `runtime_profile`，而不是“每个任务一张新镜像”。
+- `runtime_profile` 以 Embla canonical asset 为主，例如 `embla_py311_default`；其 `image_candidates` 可优先尝试 Embla 自维护镜像，再在必要时退回公共镜像兜底。
+- 若 `image_candidates[0]` 是 Embla 镜像且本机不存在，`prepare-runtime` 允许通过本地 `docker/podman build` 基于 `system/boxlite/runtime_image/Dockerfile` 构建该镜像，再重试 ensure。
+- 启动期由宿主对默认 `runtime_profile` 执行 prewarm，提前完成 SDK/bootstrap、镜像拉取/启动和 guest helper 校验。
+- 空闲期由后台 reconcile 线程维护 `scratch/runtime/boxlite_runtime_assets.json`，把运行时资产状态统一收口为 `ready/stale/failed/unknown`。
+- Core/Parent 在 `spawn_child_agent(... execution_backend="boxlite")` 前主动 ensure 所需 `execution_profile`，避免首个工具调用才触发冷启动。
+- 安装期/运维期可显式执行 `python main.py --prepare-runtime` 或 `python scripts/prepare_boxlite_runtime.py --prepare-runtime-all-profiles`，提前把 runtime 资产拉齐。
+- 新会话只切换到“已 ready 的 profile”；旧会话继续固定在已有 box / image 上，不与后台 reconcile 过程耦合。
+
+这意味着：
+
+- 可以维护少量稳定 profile，例如 `default`、`node20`、`browser`。
+- repo/bootstrap 依赖仍在 worktree 内按需安装；不会因为单个任务需要 Node/浏览器就生成“任务专属镜像”。
+- `runtime posture` 会直接暴露当前 BoxLite runtime 资产状态，前端可看到 active profile、镜像、reconcile 状态和最近失败原因。
 
 ---
 

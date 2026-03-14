@@ -105,6 +105,10 @@ class StartupOptions:
     quick_check: bool = False
     force_check: bool = False
     headless: bool = False
+    prepare_runtime: bool = False
+    prepare_runtime_all_profiles: bool = False
+    runtime_profile: str = "default"
+    force_runtime_refresh: bool = False
 
     @property
     def effective_headless(self) -> bool:
@@ -128,6 +132,7 @@ class APIServerHandle:
 class RuntimeServices:
     api_server: APIServerHandle | None = None
     api_started: bool = False
+    boxlite_reconciler: threading.Thread | None = None
 
 
 def parse_args(argv: list[str] | None = None) -> StartupOptions:
@@ -136,12 +141,20 @@ def parse_args(argv: list[str] | None = None) -> StartupOptions:
     parser.add_argument("--quick-check", action="store_true", help="运行快速环境检测")
     parser.add_argument("--force-check", action="store_true", help="强制检测（忽略缓存）")
     parser.add_argument("--headless", action="store_true", help="无头模式（跳过交互提示）")
+    parser.add_argument("--prepare-runtime", action="store_true", help="预取/校验 BoxLite runtime 资产后退出")
+    parser.add_argument("--prepare-runtime-all-profiles", action="store_true", help="预取所有已配置 BoxLite runtime profile 后退出")
+    parser.add_argument("--runtime-profile", default="default", help="prepare-runtime 时要处理的 runtime profile 名称")
+    parser.add_argument("--force-runtime-refresh", action="store_true", help="prepare-runtime 时强制刷新 runtime 资产")
     ns = parser.parse_args(argv)
     return StartupOptions(
         check_env=bool(ns.check_env),
         quick_check=bool(ns.quick_check),
         force_check=bool(ns.force_check),
         headless=bool(ns.headless),
+        prepare_runtime=bool(ns.prepare_runtime),
+        prepare_runtime_all_profiles=bool(ns.prepare_runtime_all_profiles),
+        runtime_profile=str(ns.runtime_profile or "default").strip() or "default",
+        force_runtime_refresh=bool(ns.force_runtime_refresh),
     )
 
 
@@ -169,6 +182,42 @@ def _run_startup_gate(opts: StartupOptions) -> bool:
     return reply.strip().lower() in {"y", "yes"}
 
 
+def _run_prepare_runtime(opts: StartupOptions) -> int | None:
+    if not bool(opts.prepare_runtime or opts.prepare_runtime_all_profiles):
+        return None
+    try:
+        from system.boxlite.manager import load_boxlite_runtime_settings, prepare_boxlite_runtime_installation
+
+        settings = load_boxlite_runtime_settings()
+        if not bool(getattr(settings, "enabled", False)):
+            logger.info("BoxLite runtime disabled; skipping prepare")
+            return 0
+        result = prepare_boxlite_runtime_installation(
+            settings,
+            profile_name=str(opts.runtime_profile or "default").strip() or "default",
+            project_root=Path(__file__).resolve().parent,
+            force=bool(opts.force_runtime_refresh),
+            include_all_profiles=bool(opts.prepare_runtime_all_profiles),
+        )
+    except Exception as exc:
+        logger.error("BoxLite runtime prepare failed: %s", exc)
+        return 1
+
+    prepared_profiles = list(result.get("prepared_profiles") or [])
+    for item in prepared_profiles:
+        local_build = item.get("local_build") if isinstance(item.get("local_build"), dict) else {}
+        logger.info(
+            "BoxLite runtime prepared: profile=%s asset=%s image=%s available=%s reason=%s local_build=%s",
+            str(item.get("profile") or ""),
+            str(item.get("asset_name") or ""),
+            str(item.get("image") or ""),
+            bool(item.get("available")),
+            str(item.get("reason") or ""),
+            str(local_build.get("builder") or "") if local_build else "",
+        )
+    return 0 if bool(result.get("ok", False)) else 1
+
+
 # ---------------------------------------------------------------------------
 # Runtime service initialization
 # ---------------------------------------------------------------------------
@@ -189,18 +238,73 @@ def _init_memory() -> None:
 def _init_boxlite_runtime() -> None:
     """Preflight BoxLite runtime and trigger first-run SDK bootstrap if needed."""
     try:
-        from system.boxlite.manager import load_boxlite_runtime_settings, probe_boxlite_runtime
+        from system.boxlite.manager import (
+            build_local_boxlite_runtime_image,
+            ensure_boxlite_runtime_profile,
+            load_boxlite_runtime_settings,
+            probe_boxlite_runtime,
+        )
 
         settings = load_boxlite_runtime_settings()
         if not bool(getattr(settings, "enabled", False)):
             logger.info("BoxLite runtime disabled")
             return
 
-        status = probe_boxlite_runtime(settings)
-        if bool(getattr(status, "available", False)):
-            logger.info("BoxLite runtime ready (%s, working_dir=%s)", getattr(status, "provider", "sdk"), getattr(status, "working_dir", "/workspace"))
+        availability = probe_boxlite_runtime(settings)
+        if not bool(getattr(availability, "available", False)):
+            logger.warning("BoxLite runtime unavailable: %s", getattr(availability, "reason", "unknown") or "unknown")
+            return
+
+        if not bool(getattr(settings, "startup_prewarm_enabled", True)):
+            logger.info(
+                "BoxLite runtime available (%s, working_dir=%s, prewarm=disabled)",
+                getattr(availability, "provider", "sdk"),
+                getattr(availability, "working_dir", "/workspace"),
+            )
+            return
+
+        readiness = ensure_boxlite_runtime_profile(
+            settings,
+            profile_name=str(getattr(settings, "runtime_profile", "default") or "default").strip() or "default",
+            project_root=Path(__file__).resolve().parent,
+            force=True,
+            reason="startup_prewarm",
+        )
+        if (
+            not bool(getattr(readiness, "available", False))
+            and str(getattr(readiness, "reason", "") or "").startswith("boxlite_image_pull_")
+            and str(getattr(readiness, "image", "") or "").strip().lower().startswith("embla/")
+        ):
+            build_result = build_local_boxlite_runtime_image(
+                settings,
+                profile_name=str(getattr(settings, "runtime_profile", "default") or "default").strip() or "default",
+                project_root=Path(__file__).resolve().parent,
+                image_tag=str(getattr(readiness, "image", "") or "").strip() or None,
+            )
+            if bool(build_result.get("ok", False)):
+                logger.info(
+                    "BoxLite local runtime image built (profile=%s image=%s builder=%s)",
+                    getattr(settings, "runtime_profile", "default"),
+                    str(build_result.get("image") or ""),
+                    str(build_result.get("builder") or ""),
+                )
+                readiness = ensure_boxlite_runtime_profile(
+                    settings,
+                    profile_name=str(getattr(settings, "runtime_profile", "default") or "default").strip() or "default",
+                    project_root=Path(__file__).resolve().parent,
+                    force=True,
+                    reason="startup_prewarm_after_local_build",
+                )
+        if bool(getattr(readiness, "available", False)):
+            logger.info(
+                "BoxLite runtime ready (%s, profile=%s, working_dir=%s, image=%s, prewarmed)",
+                getattr(readiness, "provider", "sdk"),
+                getattr(readiness, "runtime_profile", "default"),
+                getattr(readiness, "working_dir", "/workspace"),
+                getattr(readiness, "image", "embla/boxlite-runtime:py311"),
+            )
         else:
-            logger.warning("BoxLite runtime unavailable: %s", getattr(status, "reason", "unknown") or "unknown")
+            logger.warning("BoxLite runtime unavailable: %s", getattr(readiness, "reason", "unknown") or "unknown")
     except Exception as exc:
         logger.warning("BoxLite runtime bootstrap failed: %s", exc)
 
@@ -224,6 +328,36 @@ def _init_mcp() -> None:
             logger.info("官方 MCP 运行时: 无已配置服务器")
     except Exception as exc:
         logger.error("MCP 客户端初始化失败: %s", exc)
+
+
+def _start_boxlite_runtime_reconciler(stop_requested: Callable[[], bool]) -> threading.Thread | None:
+    try:
+        from system.boxlite.manager import load_boxlite_runtime_settings, run_boxlite_runtime_reconciler
+
+        settings = load_boxlite_runtime_settings()
+        if not bool(getattr(settings, "enabled", False)) or not bool(getattr(settings, "auto_reconcile_enabled", True)):
+            return None
+
+        thread = threading.Thread(
+            target=run_boxlite_runtime_reconciler,
+            kwargs={
+                "stop_requested": stop_requested,
+                "settings": settings,
+                "project_root": Path(__file__).resolve().parent,
+            },
+            name="boxlite-runtime-reconciler",
+            daemon=True,
+        )
+        thread.start()
+        logger.info(
+            "BoxLite runtime reconciler started (profile=%s interval=%ss)",
+            getattr(settings, "runtime_profile", "default"),
+            getattr(settings, "reconcile_interval_seconds", 900),
+        )
+        return thread
+    except Exception as exc:
+        logger.warning("BoxLite runtime reconciler failed to start: %s", exc)
+        return None
 
 
 def _resolve_probe_host(host: str) -> str:
@@ -444,6 +578,7 @@ class EmblaRuntime:
 
     def initialize_services(self) -> None:
         _init_boxlite_runtime()
+        self.services.boxlite_reconciler = _start_boxlite_runtime_reconciler(self._should_stop_supervision)
         _init_memory()
         _init_mcp()
         self.services.api_server = _start_api_server(runtime_config=self.runtime_config)
@@ -469,6 +604,13 @@ class EmblaRuntime:
         _run_watchdog(self._should_stop_supervision)
 
     def shutdown_services(self) -> None:
+        thread = self.services.boxlite_reconciler
+        if thread is not None:
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                logger.warning("BoxLite runtime reconciler did not exit within 2s")
+            self.services.boxlite_reconciler = None
+
         handle = self.services.api_server
         if handle is not None:
             logger.info("正在关闭 API 服务器: %s:%d", handle.host, handle.port)
@@ -511,6 +653,9 @@ class EmblaRuntime:
         diag = self.run_diagnostic()
         if diag is not None:
             return diag
+        runtime_prepare = _run_prepare_runtime(self.options)
+        if runtime_prepare is not None:
+            return runtime_prepare
 
         if not self.run_startup_gate():
             return 1

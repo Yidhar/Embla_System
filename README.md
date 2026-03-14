@@ -302,6 +302,13 @@ python -m venv .venv
 source .venv/bin/activate  # Windows: .\.venv\Scripts\activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+
+# 可选：首次安装时预取 BoxLite runtime 资产
+python main.py --prepare-runtime
+# 可选：显式本地构建 Embla runtime 镜像
+python scripts/build_boxlite_runtime_image.py
+# 或预取所有已配置 profile
+python scripts/prepare_boxlite_runtime.py --prepare-runtime-all-profiles
 ```
 
 ### 配置
@@ -326,6 +333,7 @@ pip install -r requirements.txt
 python main.py             # 完整启动（API + MCP + 可选自治后台）
 uv run main.py             # 使用 uv
 python main.py --headless  # 无头模式（跳过交互提示，适配 Web/远程前端）
+python main.py --prepare-runtime --force-runtime-refresh  # 显式刷新 BoxLite runtime 资产后退出
 ```
 
 所有服务由 `main.py` 统一编排，也可单独启动：

@@ -26,20 +26,35 @@ class MCPHostSnapshot:
 
 
 class NativeMCPHost:
-    """Core namespace host for MCP dispatch via standard protocol."""
+    """Core namespace host for MCP dispatch via standard protocol.
 
-    def __init__(self, *, pool: Optional[Any] = None) -> None:
+    The host now prefers the standard MCP pool, but must remain backward
+    compatible with legacy manager-based callers that still construct it as
+    ``NativeMCPHost(manager=...)`` and expect ``unified_call`` /
+    ``get_available_services`` APIs.
+    """
+
+    def __init__(self, *, pool: Optional[Any] = None, manager: Optional[Any] = None) -> None:
+        self._manager = manager
         if pool is not None:
             self._pool = pool
+        elif manager is not None:
+            self._pool = None
         else:
             from agents.runtime.mcp_client import get_mcp_pool
+
             self._pool = get_mcp_pool()
 
     async def call(self, *, service_name: str, tool_call: Dict[str, Any]) -> str:
+        if self._manager is not None and hasattr(self._manager, "unified_call"):
+            return await self._manager.unified_call(service_name, dict(tool_call or {}))
+
         if not self._pool:
             return json.dumps({"status": "error", "error": "MCP pool not initialized"})
         tool_name = str(tool_call.get("tool_name", "")).strip()
-        args = {k: v for k, v in tool_call.items() if k not in ("tool_name", "service_name", "_tool_call_id")}
+        args = {
+            k: v for k, v in tool_call.items() if k not in ("tool_name", "service_name", "_tool_call_id")
+        }
         result = await self._pool.call_tool(service_name, tool_name, args)
         return json.dumps(result, ensure_ascii=False, default=str)
 
@@ -79,11 +94,17 @@ class NativeMCPHost:
         )
 
     def list_services(self) -> List[str]:
+        if self._manager is not None and hasattr(self._manager, "get_available_services"):
+            services = self._manager.get_available_services()
+            return list(services) if services else []
         if not self._pool:
             return []
         return list(self._pool.connections.keys())
 
     def list_services_filtered(self) -> Dict[str, Any]:
+        if self._manager is not None and hasattr(self._manager, "get_available_services_filtered"):
+            status = self._manager.get_available_services_filtered()
+            return dict(status) if isinstance(status, dict) else {}
         if not self._pool:
             return {}
         status = self._pool.get_status()

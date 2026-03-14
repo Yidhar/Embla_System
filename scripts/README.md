@@ -26,6 +26,10 @@ This directory contains release gates, runbook utilities, and one-off task scrip
   - Neo4j + embedding vector smoke gate (strict mode for readiness verification).
 - `scripts/migrate_remove_guide_engine_config_ws29_003.py`
   - Local config migration/check for retired `guide_engine` keys (`check/apply`).
+- `scripts/prepare_boxlite_runtime.py`
+  - Stable wrapper for install-time / explicit BoxLite runtime asset prepare.
+- `scripts/build_boxlite_runtime_image.py`
+  - Manual local build entrypoint for the Embla BoxLite runtime image.
 
 ## Frontend Compatibility Gates
 

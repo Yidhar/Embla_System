@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import threading
+from types import SimpleNamespace
 
 import main as main_module
 
@@ -34,6 +35,43 @@ def test_embla_runtime_run_executes_default_startup_flow(monkeypatch) -> None:
         "run_supervision_loop",
         "shutdown_services",
     ]
+
+
+def test_embla_runtime_run_short_circuits_on_prepare_runtime(monkeypatch) -> None:
+    runtime = main_module.EmblaRuntime(main_module.StartupOptions(headless=True, prepare_runtime=True))
+    calls: list[str] = []
+
+    monkeypatch.setattr(runtime, "run_diagnostic", lambda: None)
+    monkeypatch.setattr(main_module, "_run_prepare_runtime", lambda opts: calls.append(f"prepare:{opts.runtime_profile}") or 0)
+    monkeypatch.setattr(runtime, "run_startup_gate", lambda: (_ for _ in ()).throw(AssertionError("should not run")))
+
+    assert runtime.run() == 0
+    assert calls == ["prepare:default"]
+
+
+def test_init_boxlite_runtime_attempts_local_build_after_embla_image_pull_failure(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "system.boxlite.manager",
+        SimpleNamespace(
+            load_boxlite_runtime_settings=lambda: SimpleNamespace(enabled=True, runtime_profile="default"),
+            probe_boxlite_runtime=lambda settings=None: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace"),
+            ensure_boxlite_runtime_profile=lambda settings=None, **kwargs: (
+                calls.append(f"ensure:{kwargs.get('reason')}") or (
+                    SimpleNamespace(available=False, reason="boxlite_image_pull_failed:embla/boxlite-runtime:py311", image="embla/boxlite-runtime:py311", provider="sdk", runtime_profile="default", working_dir="/workspace")
+                    if len(calls) == 1
+                    else SimpleNamespace(available=True, reason="", image="embla/boxlite-runtime:py311", provider="sdk", runtime_profile="default", working_dir="/workspace")
+                )
+            ),
+            build_local_boxlite_runtime_image=lambda settings=None, **kwargs: calls.append("build") or {"ok": True, "image": "embla/boxlite-runtime:py311", "builder": "docker"},
+        ),
+    )
+
+    main_module._init_boxlite_runtime()
+
+    assert calls == ["ensure:startup_prewarm", "build", "ensure:startup_prewarm_after_local_build"]
 
 
 def test_embla_runtime_run_shuts_down_services_when_initialization_fails(monkeypatch) -> None:

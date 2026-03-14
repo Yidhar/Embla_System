@@ -76,9 +76,9 @@ def _make_executor_with_box_session() -> tuple[NativeToolExecutor, AgentSessionS
 
 
 def _patch_boxlite_available(monkeypatch, executor: NativeToolExecutor) -> None:
-    status = lambda: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim")
-    monkeypatch.setattr("system.execution_backend.boxlite_backend.probe_boxlite_runtime", status)
-    monkeypatch.setattr("system.execution_backend.registry.probe_boxlite_runtime", status)
+    status = lambda *args, **kwargs: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim")
+    monkeypatch.setattr("system.execution_backend.boxlite_backend.probe_boxlite_runtime_readiness", status)
+    monkeypatch.setattr("system.execution_backend.registry.probe_boxlite_runtime_readiness", status)
 
 
 def test_boxlite_backend_read_file_uses_guest_workspace(monkeypatch):
@@ -386,6 +386,46 @@ def test_boxlite_backend_run_cmd_respects_call_cwd(monkeypatch):
 
         assert result["status"] == "success"
         assert fake_manager.calls[0]["working_dir"] == "/workspace/Embla_core"
+    finally:
+        store.close()
+
+
+def test_boxlite_backend_falls_back_to_native_and_persists_session_fallback(monkeypatch):
+    executor, store = _make_executor_with_box_session()
+    try:
+        fake_manager = _FakeBoxLiteManager()
+
+        async def _explode_exec_in_box(**kwargs):
+            fake_manager.calls.append(kwargs)
+            raise RuntimeError("boxlite_runtime_panic: can't start new thread")
+
+        fake_manager.exec_in_box = _explode_exec_in_box
+        _patch_boxlite_available(monkeypatch, executor)
+        monkeypatch.setattr(executor.backend_registry._boxlite_backend, "manager", fake_manager)
+
+        captured = {}
+
+        async def _fake_execute_native_tool(tool_name, call):
+            captured["tool_name"] = tool_name
+            captured["call"] = dict(call)
+            return "[host fallback read]"
+
+        monkeypatch.setattr(executor, "_execute_native_tool", _fake_execute_native_tool)
+
+        result = asyncio.run(executor.execute({"tool_name": "read_file", "path": "README.md"}, session_id="agent-box-real"))
+
+        assert result["status"] == "success"
+        assert result["result"] == "[host fallback read]"
+        assert result["service_name"] == "native"
+        assert result["execution_backend"] == "native"
+        assert "boxlite_runtime_panic" in result["box_fallback_reason"]
+        session = store.get("agent-box-real")
+        assert session is not None
+        assert session.metadata["execution_backend"] == "native"
+        assert session.metadata["execution_root"].replace("\\", "/").endswith("scratch/agent_worktrees/agent-box-real")
+        assert "boxlite_runtime_panic" in session.metadata["box_fallback_reason"]
+        assert captured["tool_name"] == "read_file"
+        assert captured["call"]["path"].replace("\\", "/").endswith("scratch/agent_worktrees/agent-box-real/README.md")
     finally:
         store.close()
 

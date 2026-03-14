@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from system.boxlite.manager import (
+    BoxLiteManager,
+    BoxLiteRuntimeStatus,
     _resolve_boxlite_network_mode,
     build_box_session_name,
     build_boxlite_volume_mounts,
@@ -94,3 +99,45 @@ def test_boxlite_network_mode_matches_sdk_contract() -> None:
 
     assert disabled is not None
     assert enabled is not None
+
+
+def test_teardown_box_skips_runtime_init_when_disallowed(monkeypatch) -> None:
+    default_called = {"value": False}
+
+    def _default():
+        default_called["value"] = True
+        raise AssertionError("should not initialize runtime")
+
+    monkeypatch.setitem(sys.modules, "boxlite", SimpleNamespace(Boxlite=SimpleNamespace(default=staticmethod(_default))))
+
+    ok, error = asyncio.run(BoxLiteManager().teardown_box("box-123", allow_runtime_init=False))
+
+    assert ok is True
+    assert error == ""
+    assert default_called["value"] is False
+
+
+def test_teardown_box_classifies_runtime_init_panic(monkeypatch) -> None:
+    class _Panic(BaseException):
+        pass
+
+    def _default():
+        raise _Panic("PoisonError")
+
+    monkeypatch.setattr(
+        "system.boxlite.manager.BoxLiteManager.availability",
+        lambda self, execution_profile=None: BoxLiteRuntimeStatus(
+            available=True,
+            reason="",
+            mode="required",
+            provider="sdk",
+            working_dir="/workspace",
+            image="embla/boxlite-runtime:py311",
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "boxlite", SimpleNamespace(Boxlite=SimpleNamespace(default=staticmethod(_default))))
+
+    ok, error = asyncio.run(BoxLiteManager().teardown_box("box-123"))
+
+    assert ok is False
+    assert error.startswith("boxlite_runtime_panic")
