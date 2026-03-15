@@ -76,7 +76,7 @@ def _make_executor_with_box_session() -> tuple[NativeToolExecutor, AgentSessionS
 
 
 def _patch_boxlite_available(monkeypatch, executor: NativeToolExecutor) -> None:
-    status = lambda *args, **kwargs: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="python:slim")
+    status = lambda *args, **kwargs: SimpleNamespace(available=True, reason="", provider="sdk", working_dir="/workspace", image="embla/boxlite-runtime:py311")
     monkeypatch.setattr("system.execution_backend.boxlite_backend.probe_boxlite_runtime_readiness", status)
     monkeypatch.setattr("system.execution_backend.registry.probe_boxlite_runtime_readiness", status)
 

@@ -127,7 +127,7 @@ def test_resolve_execution_runtime_metadata_falls_back_to_os_sandbox_when_boxlit
                     "mode": "preferred",
                     "provider": "sdk",
                     "base_url": "",
-                    "image": "python:slim",
+                    "image": "embla/boxlite-runtime:py311",
                     "working_dir": "/workspace",
                     "cpus": 2,
                     "memory_mib": 1024,
@@ -146,7 +146,7 @@ def test_resolve_execution_runtime_metadata_falls_back_to_os_sandbox_when_boxlit
             "mode": "preferred",
             "provider": "sdk",
             "working_dir": "/workspace",
-            "image": "python:slim",
+            "image": "embla/boxlite-runtime:py311",
         })(),
     )
 
@@ -291,12 +291,12 @@ def test_probe_boxlite_runtime_readiness_reports_image_pull_failure(monkeypatch)
             mode="preferred",
             provider="sdk",
             working_dir="/workspace",
-            image="python:slim",
+            image="embla/boxlite-runtime:py311",
         ),
     )
     monkeypatch.setattr(
         "system.boxlite.manager._run_async_sync",
-        lambda coro: (coro.close(), (False, "boxlite_image_pull_failed:docker.io/library/python:slim"))[1],
+        lambda coro: (coro.close(), (False, "boxlite_image_pull_failed:embla/boxlite-runtime:py311"))[1],
     )
 
     status = manager.probe_boxlite_runtime_readiness(
@@ -304,7 +304,7 @@ def test_probe_boxlite_runtime_readiness_reports_image_pull_failure(monkeypatch)
             enabled=True,
             mode="preferred",
             provider="sdk",
-            image="python:slim",
+            image="embla/boxlite-runtime:py311",
         ),
         force=True,
     )
@@ -325,7 +325,7 @@ def test_probe_boxlite_runtime_readiness_uses_cache(monkeypatch):
             mode="preferred",
             provider="sdk",
             working_dir="/workspace",
-            image="python:slim",
+            image="embla/boxlite-runtime:py311",
         ),
     )
     calls = {"count": 0}
@@ -337,7 +337,12 @@ def test_probe_boxlite_runtime_readiness_uses_cache(monkeypatch):
 
     monkeypatch.setattr("system.boxlite.manager._run_async_sync", _fake_run_async_sync)
 
-    settings = manager.BoxLiteRuntimeSettings(enabled=True, mode="preferred", provider="sdk", image="python:slim")
+    settings = manager.BoxLiteRuntimeSettings(
+        enabled=True,
+        mode="preferred",
+        provider="sdk",
+        image="embla/boxlite-runtime:py311",
+    )
     first = manager.probe_boxlite_runtime_readiness(settings, force=False)
     second = manager.probe_boxlite_runtime_readiness(settings, force=False)
 
@@ -562,7 +567,7 @@ def test_ensure_boxlite_runtime_profile_records_runtime_state(tmp_path, monkeypa
     assert summary["profiles"][0]["last_action"] == "unit_test"
 
 
-def test_probe_boxlite_runtime_readiness_falls_back_to_public_image_candidate(monkeypatch):
+def test_probe_boxlite_runtime_readiness_does_not_fall_back_to_public_image_candidate(monkeypatch):
     import system.boxlite.manager as manager
 
     manager.clear_boxlite_runtime_readiness_cache()
@@ -571,9 +576,7 @@ def test_probe_boxlite_runtime_readiness_falls_back_to_public_image_candidate(mo
 
     async def _fake_prewarm(runtime, **kwargs):
         del kwargs
-        if str(getattr(runtime, "image", "") or "") == "embla/boxlite-runtime:py311":
-            return False, "boxlite_image_pull_failed:embla/boxlite-runtime:py311"
-        return True, ""
+        return False, "boxlite_image_pull_failed:embla/boxlite-runtime:py311"
 
     monkeypatch.setattr("system.boxlite.manager._prewarm_boxlite_runtime", _fake_prewarm)
 
@@ -584,14 +587,15 @@ def test_probe_boxlite_runtime_readiness_falls_back_to_public_image_candidate(mo
             provider="sdk",
             asset_name="embla_py311_default",
             image="embla/boxlite-runtime:py311",
-            image_candidates=("embla/boxlite-runtime:py311", "python:slim"),
+            image_candidates=("embla/boxlite-runtime:py311",),
         ),
         force=True,
     )
 
-    assert status.available is True
+    assert status.available is False
     assert status.asset_name == "embla_py311_default"
-    assert status.image == "python:slim"
+    assert status.image == "embla/boxlite-runtime:py311"
+    assert status.reason == "boxlite_image_pull_failed:embla/boxlite-runtime:py311"
 
 
 def test_probe_boxlite_runtime_readiness_prefers_embla_pull_failure_over_later_panic(monkeypatch):
@@ -617,7 +621,7 @@ def test_probe_boxlite_runtime_readiness_prefers_embla_pull_failure_over_later_p
             provider="sdk",
             asset_name="embla_py311_default",
             image="embla/boxlite-runtime:py311",
-            image_candidates=("embla/boxlite-runtime:py311", "python:slim"),
+            image_candidates=("embla/boxlite-runtime:py311",),
         ),
         force=True,
     )

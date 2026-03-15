@@ -648,7 +648,7 @@ class NativeToolExecutor:
             except Exception as fallback_exc:
                 fallback_message = (
                     f"执行失败: BoxLite unavailable ({fallback_reason}); "
-                    f"native fallback failed: {fallback_exc}"
+                    f"fallback backend failed: {fallback_exc}"
                 )
                 response = self._error(fallback_call, fallback_message, tool_name=tool_name)
                 response["box_fallback_reason"] = fallback_reason

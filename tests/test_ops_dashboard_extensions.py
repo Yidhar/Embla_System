@@ -241,6 +241,7 @@ def test_ops_incidents_latest_payload_merges_events_and_report_issues(tmp_path, 
 
 def test_ops_workflow_events_payload_includes_event_database_summary(tmp_path, monkeypatch) -> None:
     repo_root = tmp_path
+    now = datetime(2026, 3, 10, 12, 0, tzinfo=timezone.utc)
     events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
     events_db = events_file.with_name("events_topics.db")
     _write_topic_events_db(
@@ -285,6 +286,7 @@ def test_ops_workflow_events_payload_includes_event_database_summary(tmp_path, m
         }
 
     monkeypatch.setattr(api_server, "_ops_repo_root", lambda: repo_root)
+    monkeypatch.setattr(api_server.time, "time", lambda: now.timestamp())
     from scripts import export_slo_snapshot
 
     monkeypatch.setattr(export_slo_snapshot, "build_snapshot", _fake_snapshot)
@@ -583,9 +585,9 @@ def test_ops_runtime_posture_payload_includes_boxlite_runtime_summary(tmp_path, 
             "enabled": True,
             "active_profile": "default",
             "asset_name": "embla_py311_default",
-            "image": "python:slim",
+            "image": "embla/boxlite-runtime:py311",
             "requested_image": "embla/boxlite-runtime:py311",
-            "resolved_image": "python:slim",
+            "resolved_image": "embla/boxlite-runtime:py311",
             "status": "ready",
             "severity": "ok",
             "reason_code": "BOXLITE_RUNTIME_READY",
@@ -610,7 +612,7 @@ def test_ops_runtime_posture_payload_includes_boxlite_runtime_summary(tmp_path, 
     assert payload["data"]["metrics"]["boxlite_runtime"]["profile"] == "default"
     assert payload["data"]["metrics"]["boxlite_runtime"]["asset_name"] == "embla_py311_default"
     assert payload["data"]["metrics"]["boxlite_runtime"]["requested_image"] == "embla/boxlite-runtime:py311"
-    assert payload["data"]["metrics"]["boxlite_runtime"]["resolved_image"] == "python:slim"
+    assert payload["data"]["metrics"]["boxlite_runtime"]["resolved_image"] == "embla/boxlite-runtime:py311"
     assert payload["data"]["boxlite_runtime"]["asset_name"] == "embla_py311_default"
 
 

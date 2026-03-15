@@ -83,7 +83,7 @@ def test_build_boxlite_volume_mounts_match_sdk_tuple_contract(tmp_path) -> None:
     )
 
     options = boxlite.BoxOptions(
-        image="python:slim",
+        image="embla/boxlite-runtime:py311",
         working_dir="/workspace",
         volumes=mounts,
     )

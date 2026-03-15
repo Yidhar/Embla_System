@@ -62,7 +62,7 @@ class BoxLiteRuntimeProfile:
     name: str = "default"
     asset_name: str = "embla_py311_default"
     image: str = "embla/boxlite-runtime:py311"
-    image_candidates: Tuple[str, ...] = ("embla/boxlite-runtime:py311", "python:slim")
+    image_candidates: Tuple[str, ...] = ("embla/boxlite-runtime:py311",)
     working_dir: str = "/workspace"
     cpus: int = 2
     memory_mib: int = 1024
@@ -92,7 +92,7 @@ class BoxLiteRuntimeSettings:
     core_ensure_before_spawn_enabled: bool = True
     asset_name: str = "embla_py311_default"
     image: str = "embla/boxlite-runtime:py311"
-    image_candidates: Tuple[str, ...] = ("embla/boxlite-runtime:py311", "python:slim")
+    image_candidates: Tuple[str, ...] = ("embla/boxlite-runtime:py311",)
     working_dir: str = "/workspace"
     cpus: int = 2
     memory_mib: int = 1024
@@ -151,7 +151,8 @@ def _resolve_boxlite_runtime_profile(
         name=resolved_name,
         asset_name=str(runtime.asset_name or "embla_py311_default").strip() or "embla_py311_default",
         image=str(runtime.image or "embla/boxlite-runtime:py311").strip() or "embla/boxlite-runtime:py311",
-        image_candidates=tuple(runtime.image_candidates or ("embla/boxlite-runtime:py311", "python:slim")) or ("embla/boxlite-runtime:py311", "python:slim"),
+        image_candidates=tuple(runtime.image_candidates or ("embla/boxlite-runtime:py311",))
+        or ("embla/boxlite-runtime:py311",),
         working_dir=str(runtime.working_dir or "/workspace").strip() or "/workspace",
         cpus=max(1, int(runtime.cpus)),
         memory_mib=max(128, int(runtime.memory_mib)),
@@ -173,7 +174,7 @@ def _settings_for_runtime_profile(
         runtime_profile=str(profile.name or "default").strip() or "default",
         asset_name=str(profile.asset_name or "embla_py311_default").strip() or "embla_py311_default",
         image=str(profile.image or "embla/boxlite-runtime:py311").strip() or "embla/boxlite-runtime:py311",
-        image_candidates=tuple(profile.image_candidates or (profile.image, "python:slim")) or (profile.image, "python:slim"),
+        image_candidates=tuple(profile.image_candidates or (profile.image,)) or (profile.image,),
         working_dir=str(profile.working_dir or "/workspace").strip() or "/workspace",
         cpus=max(1, int(profile.cpus)),
         memory_mib=max(128, int(profile.memory_mib)),
@@ -191,7 +192,7 @@ def _iter_runtime_candidate_settings(runtime: BoxLiteRuntimeSettings) -> List[Bo
         if text and text not in candidates:
             candidates.append(text)
     if not candidates:
-        candidates.append("python:slim")
+        candidates.append(str(runtime.image or "embla/boxlite-runtime:py311").strip() or "embla/boxlite-runtime:py311")
     return [replace(runtime, image=image, image_candidates=tuple(candidates)) for image in candidates]
 
 
@@ -417,7 +418,7 @@ def _boxlite_readiness_cache_key(runtime: BoxLiteRuntimeSettings) -> Tuple[str, 
         str(runtime.runtime_profile or "default").strip() or "default",
         str(runtime.provider or "sdk").strip().lower() or "sdk",
         str(runtime.base_url or "").strip(),
-        str(runtime.image or "").strip() or "python:slim",
+        str(runtime.image or "").strip() or "embla/boxlite-runtime:py311",
         str(runtime.working_dir or "/workspace").strip() or "/workspace",
         str(int(runtime.cpus)),
         str(int(runtime.memory_mib)),
@@ -878,11 +879,11 @@ def _load_runtime_profiles_from_config(boxlite_cfg: Any) -> Dict[str, BoxLiteRun
             str(item or "").strip()
             for item in (
                 getattr(boxlite_cfg, "image_candidates", None)
-                or (getattr(boxlite_cfg, "image", "embla/boxlite-runtime:py311"), "python:slim")
+                or (getattr(boxlite_cfg, "image", "embla/boxlite-runtime:py311"),)
             )
             if str(item or "").strip()
         )
-        or ("embla/boxlite-runtime:py311", "python:slim"),
+        or ("embla/boxlite-runtime:py311",),
         working_dir=str(getattr(boxlite_cfg, "working_dir", "/workspace") or "/workspace").strip() or "/workspace",
         cpus=max(1, int(getattr(boxlite_cfg, "cpus", 2) or 2)),
         memory_mib=max(128, int(getattr(boxlite_cfg, "memory_mib", 1024) or 1024)),
@@ -969,7 +970,7 @@ def load_boxlite_runtime_settings() -> BoxLiteRuntimeSettings:
         core_ensure_before_spawn_enabled=bool(getattr(boxlite_cfg, "core_ensure_before_spawn_enabled", True)),
         asset_name=str(active_profile.asset_name or "embla_py311_default").strip() or "embla_py311_default",
         image=str(active_profile.image or "embla/boxlite-runtime:py311").strip() or "embla/boxlite-runtime:py311",
-        image_candidates=tuple(active_profile.image_candidates or (active_profile.image, "python:slim")) or (active_profile.image, "python:slim"),
+        image_candidates=tuple(active_profile.image_candidates or (active_profile.image,)) or (active_profile.image,),
         working_dir=str(active_profile.working_dir or "/workspace").strip() or "/workspace",
         cpus=max(1, int(active_profile.cpus)),
         memory_mib=max(128, int(active_profile.memory_mib)),

@@ -765,8 +765,8 @@ class SandboxBoxLiteRuntimeProfileConfig(BaseModel):
     asset_name: str = Field(default="embla_py311_default", description="Embla 维护的运行时资产名")
     image: str = Field(default="embla/boxlite-runtime:py311", description="该 profile 优先使用的 OCI 镜像")
     image_candidates: List[str] = Field(
-        default_factory=lambda: ["embla/boxlite-runtime:py311", "python:slim"],
-        description="按顺序尝试的 OCI 镜像列表；用于本地 Embla 镜像优先、公共镜像兜底",
+        default_factory=lambda: ["embla/boxlite-runtime:py311"],
+        description="按顺序尝试的 Embla OCI 镜像列表；不再回退到公共基础镜像",
     )
     working_dir: str = Field(default="/workspace", description="box 内工作目录")
     cpus: int = Field(default=2, ge=1, le=64, description="默认 CPU 配额")

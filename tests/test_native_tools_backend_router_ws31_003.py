@@ -32,7 +32,7 @@ def test_native_executor_routes_boxlite_session_and_falls_back_to_os_sandbox(mon
 
         monkeypatch.setattr(
             "system.execution_backend.registry.probe_boxlite_runtime_readiness",
-            lambda *args, **kwargs: SimpleNamespace(available=False, reason="boxlite_sdk_import_failed", provider="sdk", working_dir="/workspace", image="python:slim"),
+            lambda *args, **kwargs: SimpleNamespace(available=False, reason="boxlite_sdk_import_failed", provider="sdk", working_dir="/workspace", image="embla/boxlite-runtime:py311"),
         )
 
         result = asyncio.run(

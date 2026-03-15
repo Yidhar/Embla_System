@@ -238,6 +238,7 @@ def _init_memory() -> None:
 def _init_boxlite_runtime() -> None:
     """Preflight BoxLite runtime and trigger first-run SDK bootstrap if needed."""
     try:
+        from system.sandbox_context import normalize_execution_backend
         from system.boxlite.manager import (
             build_local_boxlite_runtime_image,
             ensure_boxlite_runtime_profile,
@@ -248,6 +249,19 @@ def _init_boxlite_runtime() -> None:
         settings = load_boxlite_runtime_settings()
         if not bool(getattr(settings, "enabled", False)):
             logger.info("BoxLite runtime disabled")
+            return
+
+        sandbox_cfg = getattr(config, "sandbox", None)
+        default_backend = normalize_execution_backend(getattr(sandbox_cfg, "default_execution_backend", "native"))
+        self_repo_backend = normalize_execution_backend(
+            getattr(sandbox_cfg, "self_repo_execution_backend", default_backend)
+        )
+        if default_backend != "boxlite" and self_repo_backend != "boxlite":
+            logger.info(
+                "BoxLite startup prewarm skipped (default_execution_backend=%s, self_repo_execution_backend=%s)",
+                default_backend,
+                self_repo_backend,
+            )
             return
 
         availability = probe_boxlite_runtime(settings)

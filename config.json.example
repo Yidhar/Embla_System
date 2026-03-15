@@ -158,7 +158,7 @@
         "default": {
           "asset_name": "embla_py311_default", // Embla 维护的默认 Python 3.11 runtime 资产
           "image": "embla/boxlite-runtime:py311", // 优先使用 Embla 运行时镜像
-          "image_candidates": ["embla/boxlite-runtime:py311", "python:slim"], // 本地无 Embla 镜像时退回公共镜像
+          "image_candidates": ["embla/boxlite-runtime:py311"], // 仅使用 Embla 自维护运行时镜像
           "working_dir": "/workspace", // box 内 canonical 工作根
           "cpus": 2, // 默认 CPU 配额
           "memory_mib": 1024, // 默认内存配额(MiB)
