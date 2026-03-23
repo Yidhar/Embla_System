@@ -979,7 +979,7 @@ _NATIVE_TOOL_ALIASES = {
     "log": "git_log",
     "show": "git_show",
     "blame": "git_blame",
-    "grep": "git_grep",
+    "grep": "search_keyword",
     "changed": "git_changed_files",
     "checkout": "git_checkout_file",
     "python": "python_repl",

@@ -3,7 +3,7 @@ import logging
 
 import requests
 
-from agents.prompt_engine import PromptAssembler, get_system_prompts_root
+from agents.prompt_engine import get_default_assembler, get_system_prompts_root
 from .quintuple_extractor import config as runtime_config
 
 config = runtime_config
@@ -12,7 +12,7 @@ API_URL = f"{config.api.base_url.rstrip('/')}/chat/completions"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-_PROMPT_ASSEMBLER = PromptAssembler(prompts_root=str(get_system_prompts_root()))
+_PROMPT_ASSEMBLER = get_default_assembler()
 _KEYWORD_PROMPT_BLOCK = "memory/quintuple_rag_keyword_prompt.md"
 _KEYWORD_PROMPT_OLLAMA_BLOCK = "memory/quintuple_rag_keyword_prompt_ollama.md"
 

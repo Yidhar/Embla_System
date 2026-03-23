@@ -21,6 +21,7 @@ from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optiona
 from agents.router_engine import RouterDecision
 from agents.prompt_engine import (
     PromptAssembler,
+    get_default_assembler,
     get_immutable_prompt_protected_prefixes,
     get_system_prompts_root,
 )
@@ -42,7 +43,7 @@ from system.git_worktree_sandbox import apply_workspace_path_overrides
 from system.sandbox_context import SandboxContext
 
 logger = logging.getLogger(__name__)
-_PIPELINE_PROMPT_ASSEMBLER = PromptAssembler(prompts_root=str(get_system_prompts_root()))
+_PIPELINE_PROMPT_ASSEMBLER = get_default_assembler()
 _CANONICAL_PROMPTS_ROOT = str(get_system_prompts_root())
 
 

@@ -10,6 +10,7 @@ Goal:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
@@ -115,6 +116,44 @@ _SAFE_PY_MODULES = [
 ]
 _TOOL_RESULT_NONE_MARKERS = {"", "(none)", "none", "null", "nil", "n/a", "undefined"}
 _TOOL_RESULT_TAG_LINE_RE = re.compile(r"^\[([A-Za-z0-9_]+)\](?:\s*(.*))?$")
+_TOOL_NAME_ALIASES = {
+    "read": "read_file",
+    "readfile": "read_file",
+    "write": "write_file",
+    "writefile": "write_file",
+    "os_bash": "run_cmd",
+    "pwd": "get_cwd",
+    "cwd": "get_cwd",
+    "cmd": "run_cmd",
+    "command": "run_cmd",
+    "search": "search_keyword",
+    "grep": "search_keyword",
+    "doc_search": "query_docs",
+    "docs_query": "query_docs",
+    "ls": "list_files",
+    "gitstatus": "git_status",
+    "gitdiff": "git_diff",
+    "gitlog": "git_log",
+    "gitshow": "git_show",
+    "gitblame": "git_blame",
+    "gitgrep": "git_grep",
+    "changed_files": "git_changed_files",
+    "restore_file": "git_checkout_file",
+    "checkout_file": "git_checkout_file",
+    "py": "python_repl",
+    "python": "python_repl",
+    "python_exec": "python_repl",
+    "artifact": "artifact_reader",
+    "read_artifact": "artifact_reader",
+    "file_ast_chunk": "file_ast_chunk_read",
+    "readchunkbyrange": "file_ast_chunk_read",
+    "sleep_watch": "sleep_and_watch",
+    "watch_log": "sleep_and_watch",
+    "txn_apply": "workspace_txn_apply",
+    "scaffold_apply": "workspace_txn_apply",
+    "killswitch": "killswitch_plan",
+    "repl": "python_repl",
+}
 
 
 def _preview_text(text: str, limit: int = _DEFAULT_PREVIEW_CHARS) -> str:
@@ -590,45 +629,7 @@ class NativeToolExecutor:
         if not tool_name:
             return self._error(call, "native工具缺少 tool_name")
 
-        aliases = {
-            "read": "read_file",
-            "readfile": "read_file",
-            "write": "write_file",
-            "writefile": "write_file",
-            "os_bash": "run_cmd",
-            "pwd": "get_cwd",
-            "cwd": "get_cwd",
-            "cmd": "run_cmd",
-            "command": "run_cmd",
-            "search": "search_keyword",
-            "grep": "search_keyword",
-            "doc_search": "query_docs",
-            "docs_query": "query_docs",
-            "ls": "list_files",
-            "gitstatus": "git_status",
-            "gitdiff": "git_diff",
-            "gitlog": "git_log",
-            "gitshow": "git_show",
-            "gitblame": "git_blame",
-            "gitgrep": "git_grep",
-            "changed_files": "git_changed_files",
-            "restore_file": "git_checkout_file",
-            "checkout_file": "git_checkout_file",
-            "py": "python_repl",
-            "python": "python_repl",
-            "python_exec": "python_repl",
-            "artifact": "artifact_reader",
-            "read_artifact": "artifact_reader",
-            "file_ast_chunk": "file_ast_chunk_read",
-            "readchunkbyrange": "file_ast_chunk_read",
-            "sleep_watch": "sleep_and_watch",
-            "watch_log": "sleep_and_watch",
-            "txn_apply": "workspace_txn_apply",
-            "scaffold_apply": "workspace_txn_apply",
-            "killswitch": "killswitch_plan",
-            "repl": "python_repl",
-        }
-        tool_name = aliases.get(tool_name, tool_name)
+        tool_name = _TOOL_NAME_ALIASES.get(tool_name, tool_name)
         effective_call, context, backend = self._build_effective_call(tool_name, call, session_id)
 
         decision = self.policy_firewall.validate_native_call(tool_name, effective_call)
@@ -886,6 +887,29 @@ class NativeToolExecutor:
         max_file_size = _safe_int(call.get("max_file_size_kb"), 512, 64, 2048) * 1024
 
         base = self.executor._resolve_safe_path(search_path, kind="search_path")
+
+        return await asyncio.to_thread(
+            self._search_keyword_sync,
+            keyword=keyword,
+            base=base,
+            include_glob=include_glob,
+            case_sensitive=case_sensitive,
+            use_regex=use_regex,
+            max_results=max_results,
+            max_file_size=max_file_size,
+        )
+
+    def _search_keyword_sync(
+        self,
+        *,
+        keyword: str,
+        base: Path,
+        include_glob: str,
+        case_sensitive: bool,
+        use_regex: bool,
+        max_results: int,
+        max_file_size: int,
+    ) -> str:
         matches: List[str] = []
 
         ignore_dirs = {".git", ".venv", "__pycache__", "node_modules", "dist", "release", "logs"}

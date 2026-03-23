@@ -327,16 +327,18 @@ META_TOOL_NAMES = frozenset(d["name"] for d in _META_TOOL_DEFINITIONS)
 
 def get_meta_tool_definitions(role: str = "", registry: Optional[ToolRegistry] = None) -> List[Dict[str, Any]]:
     """Return meta-tool schemas. Filters activate_domain enum by role access."""
-    defs = deepcopy(_META_TOOL_DEFINITIONS)
+    defs = list(_META_TOOL_DEFINITIONS)
     if role and registry:
         allowed = ROLE_DOMAIN_ACCESS.get(role.strip().lower(), registry.domain_names)
-        for defn in defs:
+        for i, defn in enumerate(defs):
             if defn["name"] == "activate_domain":
-                defn["parameters"]["properties"]["domain"]["enum"] = allowed
+                defs[i] = deepcopy(defn)  # only deepcopy the entry that gets mutated
+                defs[i]["parameters"]["properties"]["domain"]["enum"] = allowed
     elif registry:
-        for defn in defs:
+        for i, defn in enumerate(defs):
             if defn["name"] == "activate_domain":
-                defn["parameters"]["properties"]["domain"]["enum"] = registry.domain_names
+                defs[i] = deepcopy(defn)
+                defs[i]["parameters"]["properties"]["domain"]["enum"] = registry.domain_names
     return defs
 
 

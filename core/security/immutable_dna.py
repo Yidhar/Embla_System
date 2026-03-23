@@ -7,10 +7,11 @@ import hashlib
 import json
 import os
 import threading
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 try:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -103,6 +104,8 @@ class ImmutableDNALoader:
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self.audit_file.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._verify_cache: Tuple[float, DNAVerificationResult, Dict[str, Any]] | None = None
+        self._verify_cache_ttl: float = 30.0
         self._encryption_key = self._resolve_encryption_key(
             raw_key=encryption_key,
             key_env=encryption_key_env,
@@ -194,8 +197,16 @@ class ImmutableDNALoader:
         return result
 
     def inject(self) -> Dict[str, Any]:
+        # Use cached verification result if fresh (< 30s old)
+        cached = self._verify_cache
+        if cached is not None:
+            cache_ts, cached_result, cached_payload = cached
+            if cached_result.ok and (time.monotonic() - cache_ts) < self._verify_cache_ttl:
+                return cached_payload
+
         verify_result = self.verify()
         if not verify_result.ok:
+            self._verify_cache = None
             raise PermissionError(
                 "Immutable DNA verification failed: "
                 f"{verify_result.reason}, mismatch={verify_result.mismatch_files}, missing={verify_result.missing_files}"
@@ -222,6 +233,8 @@ class ImmutableDNALoader:
                 "order_count": len(manifest.injection_order),
             },
         )
+        # Cache the successful result
+        self._verify_cache = (time.monotonic(), verify_result, payload)
         return payload
 
     def approved_update_manifest(self, *, approval_ticket: str) -> DNAManifest:

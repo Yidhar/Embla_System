@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel
 
-from agents.prompt_engine import PromptAssembler, get_system_prompts_root
+from agents.prompt_engine import get_default_assembler, get_system_prompts_root
 from system.config import config, get_specialized_api_override
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ _LAST_EXTRACTION_RUNTIME_STATUS: Dict[str, Any] = {
     "last_upstream_timeout": {},
 }
 
-_PROMPT_ASSEMBLER = PromptAssembler(prompts_root=str(get_system_prompts_root()))
+_PROMPT_ASSEMBLER = get_default_assembler()
 _STRUCTURED_SYSTEM_PROMPT_BLOCK = "memory/quintuple_extractor_structured_system.md"
 _STRUCTURED_USER_PROMPT_BLOCK = "memory/quintuple_extractor_structured_user.md"
 _JSON_FALLBACK_PROMPT_BLOCK = "memory/quintuple_extractor_json_fallback.md"

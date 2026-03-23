@@ -6,7 +6,6 @@ use to interact with the project workspace, filesystem, and git.
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any, Dict, List, Optional, Sequence
 
 _NATIVE_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
@@ -314,8 +313,8 @@ def is_native_tool(name: str) -> bool:
 def get_native_tool_definitions(tool_names: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
     """Return full schemas for the requested native tools (or all if None)."""
     if tool_names is None:
-        return deepcopy(_NATIVE_TOOL_DEFINITIONS)
-    return [deepcopy(_NATIVE_TOOL_DEF_BY_NAME[n]) for n in tool_names if n in _NATIVE_TOOL_DEF_BY_NAME]
+        return list(_NATIVE_TOOL_DEFINITIONS)
+    return [_NATIVE_TOOL_DEF_BY_NAME[n] for n in tool_names if n in _NATIVE_TOOL_DEF_BY_NAME]
 
 
 __all__ = [

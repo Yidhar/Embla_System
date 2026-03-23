@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
-from agents.prompt_engine import PromptAssembler, PromptBlockNotFoundError, get_system_prompts_root
+from agents.prompt_engine import PromptBlockNotFoundError, get_default_assembler, get_system_prompts_root
 from agents.router_arbiter_guard import RouterArbiterGuard
 from agents.llm_gateway import LLMGateway
 from core.event_bus import EventStore
@@ -31,7 +31,7 @@ from apiserver.routes_ops import (
 )
 
 logger = logging.getLogger(__name__)
-_ROUTE_PROMPT_ASSEMBLER = PromptAssembler(prompts_root=str(get_system_prompts_root()))
+_ROUTE_PROMPT_ASSEMBLER = get_default_assembler()
 _CHAT_RUNTIME_CONTEXT: Dict[str, Any] = {
     "message_manager": None,
     "message_manager_getter": None,

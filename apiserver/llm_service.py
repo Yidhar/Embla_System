@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import sys
-from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -688,7 +687,7 @@ class LLMService:
         if tool_type == "function" and isinstance(function_payload, dict):
             return {
                 "type": "function",
-                "function": deepcopy(function_payload),
+                "function": dict(function_payload),
             }
 
         function_name = str(tool.get("name") or "").strip()
@@ -697,7 +696,7 @@ class LLMService:
             function_schema: Dict[str, Any] = {
                 "name": function_name,
                 "description": str(tool.get("description") or "").strip(),
-                "parameters": deepcopy(parameters),
+                "parameters": dict(parameters),
             }
             return {
                 "type": "function",

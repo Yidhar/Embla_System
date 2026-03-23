@@ -21,6 +21,7 @@ from agents.prompt_engine import (
     PromptAssembler,
     PromptBlockNotFoundError,
     get_available_mcp_tools_summary,
+    get_default_assembler,
     get_system_prompts_root,
 )
 
@@ -88,7 +89,7 @@ def _deep_merge_dict(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str,
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
             merged[key] = _deep_merge_dict(merged[key], value)
             continue
-        merged[key] = copy.deepcopy(value)
+        merged[key] = value
     return merged
 
 
@@ -245,7 +246,7 @@ def _refresh_embla_system_config() -> Dict[str, Any]:
 def get_embla_system_config() -> Dict[str, Any]:
     if not isinstance(_embla_system_config, dict) or not _embla_system_config:
         _refresh_embla_system_config()
-    return copy.deepcopy(_embla_system_config)
+    return _embla_system_config
 
 
 def _normalize_embla_prompt_name(name: Any, *, prompts_dir: Optional[Path] = None) -> str:
@@ -329,7 +330,7 @@ def save_embla_system_config(payload: Dict[str, Any], config_path: str | Path | 
     path.write_text(text, encoding="utf-8")
     global _embla_system_config
     _embla_system_config = dict(normalized)
-    return copy.deepcopy(_embla_system_config)
+    return _embla_system_config
 
 
 # 配置变更监听器
@@ -1579,7 +1580,7 @@ def build_system_prompt(
     """
     parts: List[str] = []
     prompts_dir = _resolve_prompts_dir()
-    assembler = PromptAssembler(prompts_root=str(prompts_dir))
+    assembler = get_default_assembler()
     for prompt_name in ("shell_persona", "conversation_style_prompt", "shell_readonly_general"):
         try:
             resolved = resolve_prompt_registry_entry(prompt_name=prompt_name, prompts_dir=prompts_dir)
@@ -1667,7 +1668,7 @@ def build_system_prompt_for_route_semantic(
     normalized_route_semantic = str(route_semantic or "core_execution").strip().lower()
     try:
         prompts_dir = _resolve_prompts_dir()
-        assembler = PromptAssembler(prompts_root=str(prompts_dir))
+        assembler = get_default_assembler()
         if normalized_route_semantic in {"shell_readonly", "shell_clarify"}:
             shell_parts: List[str] = []
             for prompt_name in ("shell_persona", "conversation_style_prompt"):

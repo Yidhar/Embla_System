@@ -259,10 +259,26 @@ class PromptAssembler:
         return self._cache[key]
 
 
+_DEFAULT_ASSEMBLER: Optional[PromptAssembler] = None
+
+
+def get_default_assembler() -> PromptAssembler:
+    """Return a module-level cached PromptAssembler using the canonical prompts root.
+
+    Avoids recreating assembler instances per call, preserving the ``_cache`` dict
+    across invocations for better performance.
+    """
+    global _DEFAULT_ASSEMBLER
+    if _DEFAULT_ASSEMBLER is None:
+        _DEFAULT_ASSEMBLER = PromptAssembler(prompts_root=str(get_system_prompts_root()))
+    return _DEFAULT_ASSEMBLER
+
+
 __all__ = [
     "DNAIntegrityError",
     "PromptAssembler",
     "PromptBlockNotFoundError",
+    "get_default_assembler",
     "get_immutable_prompt_protected_prefixes",
     "get_available_mcp_tools_summary",
     "get_system_prompts_root",

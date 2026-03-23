@@ -6,7 +6,6 @@ optimistic-lock editing primitives.
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any, Dict, List, Optional, Sequence
 
 from agents.memory.l1_memory import L1MemoryConflictError, L1MemoryManager
@@ -224,7 +223,7 @@ def get_memory_tool_definitions(tool_names: Optional[Sequence[str]] = None) -> L
         if name in seen or name not in _MEMORY_TOOL_DEF_BY_NAME:
             continue
         seen.add(name)
-        definitions.append(deepcopy(_MEMORY_TOOL_DEF_BY_NAME[name]))
+        definitions.append(_MEMORY_TOOL_DEF_BY_NAME[name])
     return definitions
 
 
