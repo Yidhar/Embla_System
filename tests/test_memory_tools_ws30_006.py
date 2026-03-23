@@ -312,6 +312,24 @@ def test_infer_memory_tool_profile_ignores_non_memory_markdown_audit_tasks() -> 
     assert profile == ""
 
 
+def test_infer_memory_tool_profile_prefers_new_doc_for_memory_write_tasks() -> None:
+    profile = infer_memory_tool_profile(
+        "请新建 memory/domain/api_shell_flow_smoke_20260316.md，写入一张新的 domain knowledge 记忆卡，并补充 tags",
+        files=["memory/domain/api_shell_flow_smoke_20260316.md"],
+        role="dev",
+    )
+    assert profile == "new_doc"
+
+
+def test_infer_memory_tool_profile_prefers_new_doc_when_refactor_and_write_signals_overlap() -> None:
+    profile = infer_memory_tool_profile(
+        "在 memory/domain/api_shell_flow_smoke_20260316_c.md 创建一张 domain knowledge 卡，整理并写入用户提供的内容，补充合适的 tags",
+        files=["memory/domain/api_shell_flow_smoke_20260316_c.md"],
+        role="dev",
+    )
+    assert profile == "new_doc"
+
+
 def test_runtime_tool_definitions_only_inject_selected_memory_schemas() -> None:
     defs = _build_runtime_tool_definitions(["memory_read", "memory_patch"])
     assert [item["name"] for item in defs] == ["memory_read", "memory_patch"]

@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import agents.shell_tools as shell_tools_module
 from agents.shell_tools import (
     get_shell_tool_definitions,
     handle_shell_tool,
 )
+from core.event_bus.event_store import EventStore
 
 
 # ── Tool Definition Tests ──────────────────────────────────────
@@ -150,25 +152,121 @@ class TestSystemStatus:
             project_root=tmp_path,
         )
         assert result["status"] == "success"
-        assert "Posture" in result["result"]
+        assert "Runtime Posture" in result["result"]
 
-    def test_reads_posture_file(self, tmp_path: Path) -> None:
-        runtime_dir = tmp_path / "scratch" / "runtime"
-        runtime_dir.mkdir(parents=True)
-        posture_file = runtime_dir / "event_bus_runtime_posture_ws28_029.json"
-        posture_file.write_text(json.dumps({
-            "events_total": 42,
-            "errors_total": 3,
-            "latest_event_type": "tool_result",
-            "updated_at": "2026-03-03T12:00:00Z",
-        }), encoding="utf-8")
+    def test_reads_posture_from_canonical_sqlite(self, tmp_path: Path) -> None:
+        """Seed the canonical SQLite event DB and verify shell_tools reads from it."""
+        event_store = EventStore(file_path=tmp_path / "logs" / "autonomous" / "events.jsonl")
+        for _ in range(42):
+            event_store.emit("tool_result", {"k": "v"}, source="unit.test", severity="info")
+        for _ in range(3):
+            event_store.emit("tool_error", {"k": "v"}, source="unit.test", severity="error")
 
         result = handle_shell_tool(
             "get_system_status", {}, project_root=tmp_path
         )
         assert result["status"] == "success"
-        assert "42" in result["result"]
-        assert "3" in result["result"]
+        assert "total=45" in result["result"]
+        assert "errors=3" in result["result"]
+
+    def test_runtime_posture_section_uses_richer_ops_summary(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(
+            shell_tools_module,
+            "_load_runtime_posture_payload",
+            lambda *, project_root: {
+                "generated_at": "2026-03-23T10:00:00Z",
+                "severity": "warning",
+                "reason_code": "WATCHDOG_DAEMON_WARNING",
+                "reason_text": "Watchdog daemon requires attention.",
+                "data": {
+                    "summary": {
+                        "overall_status": "warning",
+                        "control_plane_mode": "single_control_plane",
+                        "control_plane_mode_status": "ok",
+                        "runtime_lease": {
+                            "status": "ok",
+                            "state": "healthy",
+                            "owner_id": "core",
+                            "value": 18.5,
+                        },
+                        "brainstem_control_plane_status": "ok",
+                        "watchdog_daemon_status": "warning",
+                        "process_guard_status": "ok",
+                        "killswitch_guard_status": "ok",
+                        "budget_guard_status": "ok",
+                        "immutable_dna_status": "warning",
+                        "audit_ledger_status": "ok",
+                        "os_sandbox_runtime_status": "ok",
+                        "boxlite_runtime_status": "warning",
+                        "execution_bridge_governance_status": "ok",
+                        "agentic_loop_completion_status": "ok",
+                        "core_child_spawn_deferred_status": "unknown",
+                        "vision_multimodal_status": "ok",
+                        "route_quality": {
+                            "status": "warning",
+                            "dispatch_to_core_rate": 0.25,
+                        },
+                    }
+                },
+            },
+        )
+
+        result = handle_shell_tool("get_system_status", {}, project_root=tmp_path)
+
+        assert result["status"] == "success"
+        assert "总体状态: warning" in result["result"]
+        assert "控制面: single_control_plane (ok)" in result["result"]
+        assert "租约: ok / state=healthy / owner=core / remaining=18.5s" in result["result"]
+        assert "守护链: brainstem=ok, watchdog=warning, process_guard=ok" in result["result"]
+        assert "执行链: os_sandbox=ok, boxlite=warning" in result["result"]
+        assert "Shell→Core 升级率: 0.250" in result["result"]
+
+    def test_reads_topic_event_posture_from_canonical_db(self, tmp_path: Path) -> None:
+        event_store = EventStore(file_path=tmp_path / "logs" / "autonomous" / "events.jsonl")
+        event_store.emit(
+            "TaskApproved",
+            {"workflow_id": "wf-001", "task_id": "task-001"},
+            source="unit.test",
+            severity="info",
+        )
+        event_store.emit(
+            "ReleaseGateRejected",
+            {
+                "workflow_id": "wf-001",
+                "task_id": "task-001",
+                "reason_code": "WATCHDOG_FUSE_PAUSE_DISPATCH_AND_ESCALATE",
+            },
+            source="unit.test",
+            severity="critical",
+        )
+
+        result = handle_shell_tool("get_system_status", {}, project_root=tmp_path)
+
+        assert result["status"] == "success"
+        assert "total=2" in result["result"]
+        assert "errors=1" in result["result"]
+        assert "latest=ReleaseGateRejected" in result["result"]
+
+    def test_reads_canonical_db_with_mixed_severities(self, tmp_path: Path) -> None:
+        """Verify severity aggregation from the canonical SQLite event DB."""
+        event_store = EventStore(file_path=tmp_path / "logs" / "autonomous" / "events.jsonl")
+        for _ in range(9):
+            event_store.emit("HeartbeatOk", {"k": "v"}, source="unit.test", severity="info")
+        for _ in range(2):
+            event_store.emit("CriticalFailure", {"k": "v"}, source="unit.test", severity="critical")
+        for _ in range(3):
+            event_store.emit("SlowResponse", {"k": "v"}, source="unit.test", severity="warning")
+        # Last event emitted — should appear as latest
+        event_store.emit(
+            "WatchdogThresholdExceeded", {"k": "v"}, source="unit.test", severity="warning"
+        )
+
+        result = handle_shell_tool("get_system_status", {}, project_root=tmp_path)
+
+        assert result["status"] == "success"
+        assert "total=15" in result["result"]
+        assert "errors=2" in result["result"]
+        assert "latest=WatchdogThresholdExceeded" in result["result"]
 
     def test_reads_killswitch_state(self, tmp_path: Path) -> None:
         runtime_dir = tmp_path / "scratch" / "runtime"

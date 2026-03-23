@@ -165,15 +165,41 @@ const zhCNMessages = {
         emptyDescription: "当前会话没有活跃子任务 heartbeat，可能仍停留在 Shell 只读链路，或子任务已经结束。",
         noMessage: "暂无附加说明"
       },
+      jobWatch: {
+        eyebrow: "Job Watch",
+        title: "当前会话触发的 Core 任务观测窗",
+        description: "这里只观看当前会话触发的 Core job / run context，不订阅 Core 的全局自治事件流。",
+        activeJob: "当前观测 Job",
+        noJob: "暂无可观测 Job",
+        workerStatus: "Worker 状态",
+        queueDepth: "队列深度 {count}",
+        pendingUpdates: "待读更新 {count}",
+        runContext: "运行上下文",
+        noRunContext: "暂无上下文",
+        lastUpdate: "最后更新",
+        update: "Job 更新",
+        emptyTitle: "暂无可观测任务更新",
+        emptyDescription: "当前会话还没有触发需要观看的 Core job，或该 job 尚未产生异步状态。",
+        streamLive: "监看中",
+        streamConnecting: "连接中",
+        streamReconnecting: "重连中",
+        streamError: "连接异常",
+        streamIdle: "未监看",
+        snapshotError: "读取任务观测快照失败"
+      },
       routeSnapshot: {
         eyebrow: "Route Snapshot",
         title: "最近路由状态",
         description: "这里保留选中会话的 session state 与最近 route snapshot，方便判断当前是否已经 handoff 到 Core。",
         shellSession: "Shell Session",
         coreExecutionSession: "Core Execution Session",
+        coreRunContext: "运行上下文",
         recentRouteEvents: "Recent Route Events",
         noHandoff: "尚未 handoff",
-        routeEvent: "RouteEvent"
+        routeEvent: "RouteEvent",
+        pendingCoreUpdates: "待处理 Core 更新 {count}",
+        emptyTitle: "暂无路由事件",
+        emptyDescription: "当前会话还没有可展示的路由事件。"
       }
     },
     settings: {
@@ -697,15 +723,41 @@ const enUSMessages: typeof zhCNMessages = {
         emptyDescription: "This session has no active child-task heartbeat. It may still be on a Shell readonly path or the child task may already be complete.",
         noMessage: "No additional detail"
       },
+      jobWatch: {
+        eyebrow: "Job Watch",
+        title: "Core job watch for the selected session",
+        description: "This watches only the Core job / run context triggered by the selected session, not the global autonomous Core event stream.",
+        activeJob: "Watched job",
+        noJob: "No watched job",
+        workerStatus: "Worker status",
+        queueDepth: "Queue depth {count}",
+        pendingUpdates: "Pending updates {count}",
+        runContext: "Run context",
+        noRunContext: "No run context",
+        lastUpdate: "Last update",
+        update: "Job update",
+        emptyTitle: "No watched job updates",
+        emptyDescription: "This session has not triggered a watchable Core job yet, or that job has not emitted async state.",
+        streamLive: "Watching",
+        streamConnecting: "Connecting",
+        streamReconnecting: "Reconnecting",
+        streamError: "Stream error",
+        streamIdle: "Not watching",
+        snapshotError: "Failed to load watched job snapshot"
+      },
       routeSnapshot: {
         eyebrow: "Route Snapshot",
         title: "Recent route state",
         description: "The selected session state and recent route snapshot are kept together so you can tell whether handoff to Core has happened.",
         shellSession: "Shell Session",
         coreExecutionSession: "Core Execution Session",
+        coreRunContext: "Run Context",
         recentRouteEvents: "Recent Route Events",
         noHandoff: "No handoff yet",
-        routeEvent: "RouteEvent"
+        routeEvent: "RouteEvent",
+        pendingCoreUpdates: "Pending Core updates {count}",
+        emptyTitle: "No route events",
+        emptyDescription: "There are no route events to display for this session yet."
       }
     },
     settings: {

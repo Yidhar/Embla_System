@@ -13,7 +13,7 @@ import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +141,76 @@ class AgentMailbox:
             )
             for r in rows
         ]
+
+    def read_filtered(
+        self,
+        agent_id: str,
+        *,
+        since_seq: int = 0,
+        limit: int = 100,
+        from_id: Optional[str] = None,
+        message_types: Optional[Sequence[str]] = None,
+        newest_first: bool = False,
+    ) -> List[MailboxMessage]:
+        """Read filtered messages from an agent inbox."""
+        clauses = ["to_id = ?", "seq > ?"]
+        params: List[Any] = [agent_id, max(0, int(since_seq or 0))]
+        if str(from_id or "").strip():
+            clauses.append("from_id = ?")
+            params.append(str(from_id or "").strip())
+        normalized_types = [str(item or "").strip() for item in list(message_types or []) if str(item or "").strip()]
+        if normalized_types:
+            placeholders = ",".join(["?"] * len(normalized_types))
+            clauses.append(f"message_type IN ({placeholders})")
+            params.extend(normalized_types)
+        order = "DESC" if newest_first else "ASC"
+        params.append(max(1, int(limit or 100)))
+        sql = (
+            "SELECT seq, from_id, to_id, content, message_type, metadata, created_at "
+            f"FROM agent_messages WHERE {' AND '.join(clauses)} "
+            f"ORDER BY seq {order} LIMIT ?"
+        )
+        with self._lock:
+            rows = self._db.execute(sql, tuple(params)).fetchall()
+        messages = [
+            MailboxMessage(
+                seq=r[0],
+                from_id=r[1],
+                to_id=r[2],
+                content=r[3],
+                message_type=r[4],
+                metadata=json.loads(r[5]) if r[5] else None,
+                created_at=r[6],
+            )
+            for r in rows
+        ]
+        if newest_first:
+            messages.reverse()
+        return messages
+
+    def count_filtered(
+        self,
+        agent_id: str,
+        *,
+        since_seq: int = 0,
+        from_id: Optional[str] = None,
+        message_types: Optional[Sequence[str]] = None,
+    ) -> int:
+        """Count filtered unread messages from an agent inbox."""
+        clauses = ["to_id = ?", "seq > ?"]
+        params: List[Any] = [agent_id, max(0, int(since_seq or 0))]
+        if str(from_id or "").strip():
+            clauses.append("from_id = ?")
+            params.append(str(from_id or "").strip())
+        normalized_types = [str(item or "").strip() for item in list(message_types or []) if str(item or "").strip()]
+        if normalized_types:
+            placeholders = ",".join(["?"] * len(normalized_types))
+            clauses.append(f"message_type IN ({placeholders})")
+            params.extend(normalized_types)
+        sql = f"SELECT COUNT(*) FROM agent_messages WHERE {' AND '.join(clauses)}"
+        with self._lock:
+            row = self._db.execute(sql, tuple(params)).fetchone()
+        return int(row[0] or 0) if row else 0
 
     def read_latest(self, agent_id: str) -> Optional[MailboxMessage]:
         """Read the most recent message in an agent's inbox."""

@@ -35,8 +35,16 @@ def run_ws28_chat_route_session_state_observability_ws28_011(
 ) -> Dict[str, Any]:
     root = repo_root.resolve()
     shell_session_id = api_server.message_manager.create_session(temporary=True)
-    core_execution_session_id = ""
+    core_execution_session_id = f"{shell_session_id}__core"
     try:
+        # Seed the session state with a core mapping (as CoreDispatchJobManager.submit_job would).
+        session = api_server.message_manager.get_session(shell_session_id)
+        if isinstance(session, dict):
+            state = session.setdefault(api_server._CHAT_ROUTE_STATE_KEY, {})
+            state["latest_core_job_session_id"] = core_execution_session_id
+            state["core_execution_session_id"] = core_execution_session_id
+            state["run_context_id"] = core_execution_session_id
+
         route_meta = api_server._apply_shell_core_session_state(
             {
                 "route_semantic": "core_execution",
@@ -52,7 +60,7 @@ def run_ws28_chat_route_session_state_observability_ws28_011(
             },
             shell_session_id=shell_session_id,
         )
-        core_execution_session_id = str(route_meta.get("core_execution_session_id") or "")
+        core_execution_session_id = str(route_meta.get("core_execution_session_id") or core_execution_session_id)
         api_server._emit_chat_route_prompt_event(route_meta, session_id=shell_session_id)
 
         snapshot = api_server._build_chat_route_session_state_payload(shell_session_id, limit=20)

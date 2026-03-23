@@ -61,7 +61,7 @@ summer_memory/
     "enabled": true,
     "auto_extract": true,
     "context_length": 5,
-    "extraction_timeout": 12,
+    "extraction_timeout": 20,
     "extraction_retries": 2,
     "neo4j_uri": "neo4j://127.0.0.1:7687",
     "neo4j_user": "neo4j",
@@ -76,8 +76,11 @@ summer_memory/
 - `grag.enabled`：总开关
 - `grag.auto_extract`：写入轮次后是否自动触发抽取
 - `grag.context_length`：用于问答关键词提取的最近上下文条数
-- `grag.extraction_timeout`：单轮抽取的总超时预算
+- `api.specialized.quintuple_extraction.*`：五元组提取专用 API 地址 / Key / 模型；留空时回退到主 `api.*`
+- `grag.extraction_timeout`：单次上游模型请求超时预算
+- `grag.base_timeout`：整次提取流程的总完成预算（含重试 / 回退）
 - `grag.extraction_retries`：抽取失败后的重试次数
+- `memory_stats.extraction_runtime.last_upstream_timeout`：最近一次上游 API 超时告警
 
 ## 数据流
 

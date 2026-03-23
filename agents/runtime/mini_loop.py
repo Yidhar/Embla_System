@@ -42,7 +42,8 @@ class MiniLoopConfig:
     These are soft hints that the child can use for self-regulation.
     """
 
-    max_rounds: int = 500         # soft hint, not enforced
+    max_rounds: int = 500         # soft hint for model/self-regulation
+    hard_max_rounds: Optional[int] = None  # None => fallback to max_rounds; <=0 => unbounded
     poll_parent_every_n: int = 5  # check parent messages every N rounds
     model_name: str = ""          # override model; empty = use default
     include_child_tools: bool = True  # disable for parent/core loops
@@ -209,7 +210,22 @@ async def run_mini_loop(
 
         all_tool_defs.extend(get_child_tool_definitions())
 
-    for round_num in range(1, cfg.max_rounds + 1):
+    hard_limit: Optional[int]
+    if cfg.hard_max_rounds is None:
+        hard_limit = max(1, int(cfg.max_rounds))
+    else:
+        try:
+            parsed_hard_limit = int(cfg.hard_max_rounds)
+        except Exception:
+            parsed_hard_limit = max(1, int(cfg.max_rounds))
+        hard_limit = None if parsed_hard_limit <= 0 else max(1, parsed_hard_limit)
+
+    round_num = 0
+    while True:
+        round_num += 1
+        if hard_limit is not None and round_num > hard_limit:
+            state.stop_reason = "max_rounds_reached"
+            break
         state.round_num = round_num
 
         # ── Check interrupt ────────────────────────────────────

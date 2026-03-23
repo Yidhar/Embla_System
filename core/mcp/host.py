@@ -130,10 +130,11 @@ class NativeMCPHost:
             return {"status": "success", "result": text}
 
 
-# Backward-compatible exports (type stubs only)
+# Deprecated: mcpserver/ was removed in abed2b53. Retained as no-op for import compat.
 MCPManager = type("MCPManager", (), {})
 
 
+# Deprecated: mcpserver/ was removed in abed2b53. Retained as no-op for import compat.
 def get_mcp_manager() -> Any:
     """Deprecated: returns None. Use agents.runtime.mcp_client.get_mcp_pool() instead."""
     return None

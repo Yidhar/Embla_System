@@ -95,7 +95,7 @@ class MCPRegistryFacade:
         )
 
 
-# Backward-compatible placeholders
+# Legacy compat — empty after mcpserver removal.
 MCP_REGISTRY: Dict[str, Any] = {}
 MANIFEST_CACHE: Dict[str, Any] = {}
 
@@ -105,6 +105,7 @@ def auto_register_mcp() -> None:
     pass
 
 
+# Deprecated: mcpserver/ was removed in abed2b53. Retained as no-op for import compat.
 def scan_and_register_mcp_agents(*_args: Any, **_kwargs: Any) -> List[str]:
     """Deprecated no-op. Standard MCP auto-discovers tools via tools/list."""
     return []

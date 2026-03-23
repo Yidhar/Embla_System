@@ -467,7 +467,7 @@ def _handle_poll(
     heartbeat_snapshot = store.get_session_heartbeat_snapshot(agent_id)
     summary["heartbeat_summary"] = dict(heartbeat_snapshot.get("summary") or {})
     summary["task_heartbeats"] = list(heartbeat_snapshot.get("heartbeats") or [])
-    summary["unread_messages_from_child"] = mailbox.count_unread(parent_session_id)
+    summary["unread_messages_total"] = mailbox.count_unread(parent_session_id)
     return summary
 
 

@@ -1,4 +1,10 @@
-"""Default event-bus consumers for runtime posture / incidents / release gate."""
+"""Optional materialized event-bus consumers for runtime posture / incidents / release gate.
+
+These consumers build convenience sidecar files from the canonical `topic_event`
+SQLite store. Current production ops surfaces aggregate directly from the event
+database at request time; these consumers are retained as optional materializers
+for tests or offline tooling, not as the primary read path.
+"""
 
 from __future__ import annotations
 
@@ -204,6 +210,7 @@ def register_default_consumers(
     repo_root: Path,
     include_warning_incidents: bool = True,
 ) -> EventConsumerHooks:
+    """Register optional materialized-view consumers against an EventStore."""
     root = Path(repo_root).resolve()
     posture_state_file = root / "scratch" / "runtime" / "event_bus_runtime_posture_ws28_029.json"
     incident_file = root / "scratch" / "runtime" / "event_bus_incidents_ws28_029.jsonl"
@@ -234,4 +241,3 @@ __all__ = [
     "RuntimePostureConsumer",
     "register_default_consumers",
 ]
-

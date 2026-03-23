@@ -8,6 +8,7 @@ from system.asyncio_offload import offload_blocking
 
 from .quintuple_extractor import config as runtime_config
 from .quintuple_extractor import extract_quintuples
+from .quintuple_extractor import get_extraction_runtime_status
 from .quintuple_graph import (
     clear_quintuples_store,
     get_all_quintuples,
@@ -31,9 +32,13 @@ class GRAGMemoryManager:
         self.auto_extract = config.grag.auto_extract
         self.context_length = config.grag.context_length
         self.similarity_threshold = config.grag.similarity_threshold
-        extraction_timeout_raw = getattr(config.grag, "extraction_timeout", 12)
+        extraction_timeout_raw = getattr(config.grag, "extraction_timeout", 20)
+        extraction_completion_timeout_raw = getattr(config.grag, "base_timeout", 40)
         extraction_retries_raw = getattr(config.grag, "extraction_retries", 2)
-        self.extraction_timeout = max(1, int(12 if extraction_timeout_raw is None else extraction_timeout_raw))
+        self.extraction_timeout = max(1, int(20 if extraction_timeout_raw is None else extraction_timeout_raw))
+        self.extraction_completion_timeout = max(
+            1, int(40 if extraction_completion_timeout_raw is None else extraction_completion_timeout_raw)
+        )
         self.extraction_retries = max(0, int(2 if extraction_retries_raw is None else extraction_retries_raw))
         self.recent_context: List[str] = []
         self.extraction_cache = set()
@@ -228,18 +233,26 @@ class GRAGMemoryManager:
         """包装回调方法，处理实例可能被销毁的情况。"""
         instance = self._weak_ref()
         if instance:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
             asyncio.run_coroutine_threadsafe(
                 instance._on_task_completed(task_id, quintuples),
-                loop=asyncio.get_event_loop(),
+                loop=loop,
             )
 
     def _on_task_failed_wrapper(self, task_id: str, error: str):
         """包装失败回调，确保超时/失败任务也能回收 active_tasks。"""
         instance = self._weak_ref()
         if instance:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
             asyncio.run_coroutine_threadsafe(
                 instance._on_task_failed(task_id, error),
-                loop=asyncio.get_event_loop(),
+                loop=loop,
             )
 
     async def _on_task_completed(self, task_id: str, quintuples: List) -> None:
@@ -289,10 +302,14 @@ class GRAGMemoryManager:
                         timeout_seconds=self.extraction_timeout,
                         max_retries=self.extraction_retries,
                     ),
-                    timeout=float(self.extraction_timeout + 2),
+                    timeout=float(self.extraction_completion_timeout + 2),
                 )
             except asyncio.TimeoutError:
-                logger.warning("五元组提取超时(%ss)，跳过本次提取", self.extraction_timeout)
+                logger.warning(
+                    "五元组提取超时(request=%ss,total=%ss)，跳过本次提取",
+                    self.extraction_timeout,
+                    self.extraction_completion_timeout,
+                )
                 return False
 
             if not quintuples:
@@ -364,6 +381,7 @@ class GRAGMemoryManager:
                 "context_length": len(self.recent_context),
                 "cache_size": len(self.extraction_cache),
                 "active_tasks": len(self.active_tasks),
+                "extraction_runtime": get_extraction_runtime_status(),
                 "task_manager": task_stats,
                 "vector_index": get_vector_index_status(),
             }

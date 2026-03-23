@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { ChatOpsConsole } from "@/components/chatops-console";
+import { ChatOpsWorkspace } from "@/components/chatops-workspace";
 import { EmptyState, GlassPanel, MetricCard, MetricGrid, PageHeader } from "@/components/dashboard-ui";
 import { getChatRouteSessionState, getChatSessionDetail, getChatSessions, getShellToolCatalog } from "@/lib/api/ops";
 import { cx, formatNumber, formatTimestamp } from "@/lib/format";
@@ -148,68 +148,14 @@ export default async function ChatOpsPage({ searchParams }: ChatOpsPageProps) {
           )}
         </GlassPanel>
 
-        <ChatOpsConsole
+        <ChatOpsWorkspace
           locale={locale}
           selectedSessionId={sessionId}
           initialMessages={initialMessages}
           initialTools={shellToolCatalog.tools}
+          initialRouteState={routeState}
         />
       </div>
-
-      {!sessionId ? (
-        <GlassPanel eyebrow={t("chatops.waiting.eyebrow")} title={t("chatops.waiting.title")} description={t("chatops.waiting.description")}>
-          <EmptyState title={t("chatops.waiting.emptyTitle")} description={t("chatops.waiting.emptyDescription")} />
-        </GlassPanel>
-      ) : !routeState ? (
-        <GlassPanel eyebrow={t("chatops.lookupMiss.eyebrow")} title={t("chatops.lookupMiss.title")} description={t("chatops.lookupMiss.description")}>
-          <EmptyState title={t("chatops.lookupMiss.emptyTitle")} description={t("chatops.lookupMiss.emptyDescription", { sessionId })} />
-        </GlassPanel>
-      ) : (
-        <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
-          <GlassPanel eyebrow={t("chatops.heartbeat.eyebrow")} title={t("chatops.heartbeat.title")} description={t("chatops.heartbeat.description")}>
-            {routeState.child_heartbeats.length === 0 ? (
-              <EmptyState title={t("chatops.heartbeat.emptyTitle")} description={t("chatops.heartbeat.emptyDescription")} />
-            ) : (
-              <div className="space-y-3">
-                {routeState.child_heartbeats.map((heartbeat) => (
-                  <div key={`${heartbeat.session_id}-${heartbeat.task_id}`} className="rounded-[24px] border border-white/70 bg-white/75 p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <p className="text-sm font-semibold text-slate-900">{heartbeat.task_id}</p>
-                      <span className="text-xs uppercase tracking-[0.18em] text-slate-400">{humanizeEnum(locale, "staleLevel", heartbeat.stale_level ?? "fresh")}</span>
-                    </div>
-                    <p className="mt-2 text-sm text-slate-500">{heartbeat.session_id} · {heartbeat.stage || heartbeat.status || t("common.label.running")}</p>
-                    <p className="mt-2 text-sm leading-6 text-slate-600">{heartbeat.message || t("chatops.heartbeat.noMessage")}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </GlassPanel>
-
-          <GlassPanel eyebrow={t("chatops.routeSnapshot.eyebrow")} title={t("chatops.routeSnapshot.title")} description={t("chatops.routeSnapshot.description")}>
-            <div className="space-y-3">
-              <div className="rounded-[24px] border border-white/70 bg-white/75 p-4">
-                <p className="text-sm font-semibold text-slate-900">{t("chatops.routeSnapshot.shellSession")}</p>
-                <p className="mt-2 break-all text-sm text-slate-500">{routeState.shell_session_id}</p>
-              </div>
-              <div className="rounded-[24px] border border-white/70 bg-white/75 p-4">
-                <p className="text-sm font-semibold text-slate-900">{t("chatops.routeSnapshot.coreExecutionSession")}</p>
-                <p className="mt-2 break-all text-sm text-slate-500">{routeState.core_execution_session_id || t("chatops.routeSnapshot.noHandoff")}</p>
-              </div>
-              <div className="rounded-[24px] border border-white/70 bg-white/75 p-4">
-                <p className="text-sm font-semibold text-slate-900">{t("chatops.routeSnapshot.recentRouteEvents")}</p>
-                <div className="mt-3 space-y-2">
-                  {routeState.recent_route_events.slice(0, 6).map((event, index) => (
-                    <div key={`${String(event.event_type ?? "event")}-${index}`} className="rounded-[18px] border border-white/70 bg-white/80 p-3">
-                      <p className="text-sm font-semibold text-slate-900">{String(event.event_type ?? t("chatops.routeSnapshot.routeEvent"))}</p>
-                      <p className="mt-2 text-sm text-slate-500">{humanizeEnum(locale, "routeSemantic", event.route_semantic ?? event.trigger ?? "unknown")}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </GlassPanel>
-        </div>
-      )}
     </div>
   );
 }

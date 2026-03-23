@@ -513,6 +513,19 @@ class NativeToolExecutor:
     def set_agent_session_store(self, store: Optional[AgentSessionStore]) -> None:
         self._agent_session_store = store
 
+    def _resolve_effective_path(self, call: Dict[str, Any], raw_path: str) -> str:
+        """Resolve *raw_path* against the session workspace root when present."""
+        workspace_root = str(call.get("_session_workspace_root") or "").strip()
+        if not workspace_root:
+            return raw_path
+        candidate = Path(raw_path)
+        if candidate.is_absolute():
+            return raw_path
+        resolved = (Path(workspace_root) / candidate).resolve(strict=False)
+        if self.executor._is_within_root(resolved, Path(workspace_root).resolve(strict=False)):
+            return str(resolved)
+        return raw_path
+
     def _resolve_session_sandbox_context(self, call: Dict[str, Any], session_id: str) -> SandboxContext:
         effective_call = dict(call) if isinstance(call, dict) else {}
         normalized_session_id = str(session_id or effective_call.get("_session_id") or effective_call.get("session_id") or "").strip()
@@ -684,6 +697,7 @@ class NativeToolExecutor:
         path = str(call.get("path") or call.get("file_path") or "").strip()
         if not path:
             raise ValueError("read_file 缺少 path")
+        path = self._resolve_effective_path(call, path)
 
         content = await self.executor.read_file(path)
         mode = str(call.get("mode") or "").strip().lower()
@@ -739,6 +753,7 @@ class NativeToolExecutor:
         path = str(call.get("path") or call.get("file_path") or "").strip()
         if not path:
             raise ValueError("write_file 缺少 path")
+        path = self._resolve_effective_path(call, path)
 
         safe_path = self.executor._resolve_safe_path(path, kind="file")
         requester = (
@@ -863,6 +878,7 @@ class NativeToolExecutor:
             raise ValueError("search_keyword 缺少 keyword/query")
 
         search_path = str(call.get("search_path") or ".").strip()
+        search_path = self._resolve_effective_path(call, search_path)
         include_glob = str(call.get("glob") or "").strip()
         case_sensitive = bool(call.get("case_sensitive", False))
         use_regex = bool(call.get("use_regex", False))
@@ -1210,6 +1226,7 @@ class NativeToolExecutor:
             content = item.get("content")
             if not path or content is None:
                 raise ValueError(f"changes[{idx}] missing path/content")
+            path = self._resolve_effective_path(call, path)
             mode = str(item.get("mode") or "overwrite").strip().lower()
             encoding = str(item.get("encoding") or "utf-8").strip()
             expected_hash = str(

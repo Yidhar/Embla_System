@@ -175,15 +175,80 @@ export interface WorkflowEventData {
 export interface ChatRouteSessionStateData {
   status: string;
   shell_session_id: string;
-  core_execution_session_id: string;
+  run_context_id: string;
+  core_execution_session_id?: string;
+  last_run_context_id?: string;
+  last_core_execution_session_id?: string;
   shell_session_exists: boolean;
-  core_execution_session_exists: boolean;
+  run_context_exists?: boolean;
+  core_execution_session_exists?: boolean;
+  core_runtime_id?: string;
+  active_core_job_id?: string;
+  active_core_job_ids?: string[];
+  current_core_job_id?: string;
+  queued_core_job_ids?: string[];
+  core_worker_status?: string;
+  core_queue_depth?: number;
+  core_pipeline_depth?: number;
+  core_mailbox_cursor_seq?: number;
+  last_core_handoff_message_seq?: number;
+  last_core_completion_message_seq?: number;
+  core_recovery_restart_total?: number;
+  core_job_watch_dedup_skipped_count?: number;
+  core_last_dedup_message_seq?: number;
+  latest_core_job_id?: string;
+  active_core_job?: Record<string, unknown>;
+  latest_core_job?: Record<string, unknown>;
+  recent_core_jobs?: Array<Record<string, unknown>>;
+  recent_core_updates?: ChatCoreAsyncUpdate[];
+  unread_core_updates?: ChatCoreAsyncUpdate[];
+  pending_core_update_count?: number;
+  recent_core_reports?: Array<Record<string, unknown>>;
+  core_job_heartbeat_summary?: HeartbeatSummary;
+  core_job_heartbeats?: TaskHeartbeatRecord[];
   child_heartbeat_summary: HeartbeatSummary;
   child_heartbeat_sessions: TaskHeartbeatSession[];
   child_heartbeats: TaskHeartbeatRecord[];
   state: Record<string, unknown>;
   recent_route_events: Array<Record<string, unknown>>;
 }
+
+export interface ChatCoreAsyncUpdate {
+  seq: number;
+  from_id?: string;
+  to_id?: string;
+  message_type?: string;
+  kind?: string;
+  status?: string;
+  core_job_id?: string;
+  run_context_id?: string;
+  core_runtime_id?: string;
+  core_execution_session_id?: string;
+  pipeline_id?: string;
+  pending_descendant_count?: number;
+  content?: string;
+  created_at?: string;
+  metadata?: Record<string, unknown>;
+  is_terminal?: boolean;
+}
+
+export interface ChatCoreJobWatchData {
+  status: string;
+  shell_session_id: string;
+  run_context_id: string;
+  core_execution_session_id?: string;
+  run_context_exists?: boolean;
+  pending_core_update_count: number;
+  core_outbox_cursor_seq: number;
+  last_core_outbox_seq: number;
+  unread_core_updates: ChatCoreAsyncUpdate[];
+  recent_core_updates: ChatCoreAsyncUpdate[];
+  active_core_job: Record<string, unknown>;
+  latest_core_job: Record<string, unknown>;
+  core_worker_status: string;
+}
+
+export type ChatCoreInboxData = ChatCoreJobWatchData;
 
 export interface ShellToolDefinition {
   name: string;

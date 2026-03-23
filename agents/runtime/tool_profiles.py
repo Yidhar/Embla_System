@@ -122,15 +122,49 @@ def infer_memory_tool_profile(
     if not any(marker in corpus for marker in memory_path_markers) and not any(keyword in corpus for keyword in memory_keywords):
         return ""
 
-    if any(token in corpus for token in ("cleanup", "archive", "归档", "清理", "replace", "替换", "delete", "删除")):
+    cleanup_tokens = ("cleanup", "archive", "归档", "清理", "replace", "替换", "delete", "删除")
+    review_tokens = ("review", "audit", "审查", "审阅", "deprecated", "废弃")
+    refactor_tokens = ("refactor", "重构", "reorganize", "整理")
+    new_doc_tokens = (
+        "new doc",
+        "doc",
+        "readme",
+        "文档",
+        "知识卡",
+        "新增",
+        "新建",
+        "新建文件",
+        "创建",
+        "create",
+        "write",
+        "写入",
+        "append",
+        "link",
+        "记录",
+        "记入",
+        "落盘",
+    )
+    bugfix_tokens = ("bug", "fix", "修复", "patch", "冲突")
+
+    has_cleanup = any(token in corpus for token in cleanup_tokens)
+    has_review = any(token in corpus for token in review_tokens)
+    has_refactor = any(token in corpus for token in refactor_tokens)
+    has_new_doc = any(token in corpus for token in new_doc_tokens)
+    has_bugfix = any(token in corpus for token in bugfix_tokens)
+
+    if has_cleanup:
         return "cleanup"
-    if any(token in corpus for token in ("review", "audit", "审查", "审阅", "deprecated", "废弃")):
-        return "review"
-    if any(token in corpus for token in ("doc", "readme", "new doc", "文档", "知识卡", "新增", "append", "link")):
+
+    if has_new_doc:
         return "new_doc"
-    if any(token in corpus for token in ("refactor", "重构", "reorganize", "整理")):
+
+    if has_review:
+        return "review"
+
+    if has_refactor:
         return "refactor"
-    if any(token in corpus for token in ("bug", "fix", "修复", "patch", "冲突")):
+
+    if has_bugfix:
         return "bugfix"
     return "bugfix" if role_text == "dev" else "review"
 

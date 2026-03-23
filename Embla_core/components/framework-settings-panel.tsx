@@ -23,6 +23,18 @@ type FrameworkSettingsPanelProps = {
 
 type EditorState = {
   emblaProfile: string;
+  quintupleExtractionApiKey: string;
+  quintupleExtractionBaseUrl: string;
+  quintupleExtractionModel: string;
+  quintupleExtractionProvider: string;
+  quintupleExtractionProtocol: string;
+  quintupleExtractionReasoningEffort: string;
+  contextCompressionApiKey: string;
+  contextCompressionBaseUrl: string;
+  contextCompressionModel: string;
+  contextCompressionProvider: string;
+  contextCompressionProtocol: string;
+  contextCompressionReasoningEffort: string;
   heartbeatIntervalSeconds: number;
   maxRoundsDefault: number;
   maxTaskCostUsd: number;
@@ -68,6 +80,7 @@ type Copy = {
   frameworkTitle: string;
   frameworkDescription: string;
   basicSection: string;
+  specializedApiSection: string;
   runtimeSection: string;
   securitySection: string;
   boxliteSection: string;
@@ -98,6 +111,7 @@ function getCopy(locale: AppLocale): Copy {
       frameworkTitle: "Core framework controls",
       frameworkDescription: "Edit the runtime defaults that shape Embla System itself. Advanced and lower-frequency options are tucked into the expandable drawer below.",
       basicSection: "Core defaults",
+      specializedApiSection: "Dedicated LLM APIs",
       runtimeSection: "Runtime & cleanup",
       securitySection: "Security baseline",
       boxliteSection: "BoxLite execution",
@@ -111,6 +125,20 @@ function getCopy(locale: AppLocale): Copy {
       patchPreview: "Patch preview",
       labels: {
         emblaProfile: "Framework profile",
+        quintupleExtractionTarget: "Quintuple extraction",
+        quintupleExtractionApiKey: "Quintuple API key",
+        quintupleExtractionBaseUrl: "Quintuple base URL",
+        quintupleExtractionModel: "Quintuple model",
+        quintupleExtractionProvider: "Quintuple provider",
+        quintupleExtractionProtocol: "Quintuple protocol",
+        quintupleExtractionReasoningEffort: "Quintuple reasoning effort",
+        contextCompressionTarget: "Context compression",
+        contextCompressionApiKey: "Compression API key",
+        contextCompressionBaseUrl: "Compression base URL",
+        contextCompressionModel: "Compression model",
+        contextCompressionProvider: "Compression provider",
+        contextCompressionProtocol: "Compression protocol",
+        contextCompressionReasoningEffort: "Compression reasoning effort",
         defaultExecutionBackend: "Default execution backend",
         selfRepoExecutionBackend: "Self-repo backend",
         heartbeatIntervalSeconds: "Heartbeat interval (s)",
@@ -161,6 +189,7 @@ function getCopy(locale: AppLocale): Copy {
     frameworkTitle: "框架核心设置",
     frameworkDescription: "这里聚焦 Embla System 自身的运行时默认项；低频和高级选项统一收进下方展开栏，避免页面一次暴露过多设置。",
     basicSection: "核心默认项",
+    specializedApiSection: "专用 LLM API",
     runtimeSection: "运行时与清理",
     securitySection: "安全基线",
     boxliteSection: "BoxLite 执行面",
@@ -174,6 +203,20 @@ function getCopy(locale: AppLocale): Copy {
     patchPreview: "补丁预览",
     labels: {
       emblaProfile: "框架 Profile",
+      quintupleExtractionTarget: "五元组提取",
+      quintupleExtractionApiKey: "五元组 API Key",
+      quintupleExtractionBaseUrl: "五元组 Base URL",
+      quintupleExtractionModel: "五元组模型",
+      quintupleExtractionProvider: "五元组 Provider",
+      quintupleExtractionProtocol: "五元组协议",
+      quintupleExtractionReasoningEffort: "五元组推理强度",
+      contextCompressionTarget: "上下文压缩",
+      contextCompressionApiKey: "压缩 API Key",
+      contextCompressionBaseUrl: "压缩 Base URL",
+      contextCompressionModel: "压缩模型",
+      contextCompressionProvider: "压缩 Provider",
+      contextCompressionProtocol: "压缩协议",
+      contextCompressionReasoningEffort: "压缩推理强度",
       defaultExecutionBackend: "默认执行后端",
       selfRepoExecutionBackend: "自维护仓库后端",
       heartbeatIntervalSeconds: "Heartbeat 间隔（秒）",
@@ -266,7 +309,29 @@ function textareaToList(input: string): string[] {
     .filter(Boolean);
 }
 
+function maskSensitivePatch(input: unknown): unknown {
+  if (Array.isArray(input)) {
+    return input.map((item) => maskSensitivePatch(item));
+  }
+  if (input && typeof input === "object") {
+    const source = input as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(source).map(([key, value]) => [
+        key,
+        key === "api_key" && stringValue(value)
+          ? "********"
+          : maskSensitivePatch(value)
+      ])
+    );
+  }
+  return input;
+}
+
 function buildEditorState(config: Record<string, unknown>): EditorState {
+  const api = recordValue(config.api);
+  const specialized = recordValue(api.specialized);
+  const quintupleExtraction = recordValue(specialized.quintuple_extraction);
+  const contextCompression = recordValue(specialized.context_compression);
   const emblaSystem = recordValue(config.embla_system);
   const runtime = recordValue(emblaSystem.runtime);
   const cleanup = recordValue(runtime.child_session_cleanup);
@@ -278,6 +343,18 @@ function buildEditorState(config: Record<string, unknown>): EditorState {
 
   return {
     emblaProfile: stringValue(emblaSystem.profile, "pythonic-secure"),
+    quintupleExtractionApiKey: stringValue(quintupleExtraction.api_key),
+    quintupleExtractionBaseUrl: stringValue(quintupleExtraction.base_url),
+    quintupleExtractionModel: stringValue(quintupleExtraction.model),
+    quintupleExtractionProvider: stringValue(quintupleExtraction.provider),
+    quintupleExtractionProtocol: stringValue(quintupleExtraction.protocol),
+    quintupleExtractionReasoningEffort: stringValue(quintupleExtraction.reasoning_effort || quintupleExtraction.thinking_intensity),
+    contextCompressionApiKey: stringValue(contextCompression.api_key),
+    contextCompressionBaseUrl: stringValue(contextCompression.base_url),
+    contextCompressionModel: stringValue(contextCompression.model),
+    contextCompressionProvider: stringValue(contextCompression.provider),
+    contextCompressionProtocol: stringValue(contextCompression.protocol),
+    contextCompressionReasoningEffort: stringValue(contextCompression.reasoning_effort || contextCompression.thinking_intensity),
     heartbeatIntervalSeconds: numberValue(runtime.heartbeat_interval_seconds, 5),
     maxRoundsDefault: numberValue(runtime.max_rounds_default, 500),
     maxTaskCostUsd: numberValue(runtime.max_task_cost_usd, 5),
@@ -312,6 +389,26 @@ function buildEditorState(config: Record<string, unknown>): EditorState {
 
 function buildPatch(state: EditorState): Record<string, unknown> {
   return {
+    api: {
+      specialized: {
+        quintuple_extraction: {
+          api_key: stringValue(state.quintupleExtractionApiKey),
+          base_url: stringValue(state.quintupleExtractionBaseUrl),
+          model: stringValue(state.quintupleExtractionModel),
+          provider: stringValue(state.quintupleExtractionProvider),
+          protocol: stringValue(state.quintupleExtractionProtocol),
+          reasoning_effort: stringValue(state.quintupleExtractionReasoningEffort)
+        },
+        context_compression: {
+          api_key: stringValue(state.contextCompressionApiKey),
+          base_url: stringValue(state.contextCompressionBaseUrl),
+          model: stringValue(state.contextCompressionModel),
+          provider: stringValue(state.contextCompressionProvider),
+          protocol: stringValue(state.contextCompressionProtocol),
+          reasoning_effort: stringValue(state.contextCompressionReasoningEffort)
+        }
+      }
+    },
     embla_system: {
       profile: stringValue(state.emblaProfile, "pythonic-secure"),
       runtime: {
@@ -424,7 +521,7 @@ export function FrameworkSettingsPanel({ locale, initialConfig, registryPath, pr
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const patchPreview = useMemo(() => JSON.stringify(buildPatch(state), null, 2), [state]);
+  const patchPreview = useMemo(() => JSON.stringify(maskSensitivePatch(buildPatch(state)), null, 2), [state]);
 
   function update<K extends keyof EditorState>(key: K, value: EditorState[K]) {
     setState((current) => ({ ...current, [key]: value }));
@@ -549,6 +646,34 @@ export function FrameworkSettingsPanel({ locale, initialConfig, registryPath, pr
               {copy.advancedTitle}
             </summary>
             <p className="mt-3 text-sm leading-6 text-slate-500">{copy.advancedDescription}</p>
+
+            <div className="mt-4 space-y-3">
+              <p className="eyebrow">{copy.specializedApiSection}</p>
+              <div className="grid gap-4 xl:grid-cols-2">
+                <div className="soft-inset space-y-4 p-4">
+                  <p className="text-sm font-semibold text-slate-900">{copy.labels.quintupleExtractionTarget}</p>
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <TextField label={copy.labels.quintupleExtractionApiKey} value={state.quintupleExtractionApiKey} onChange={(value) => update("quintupleExtractionApiKey", value)} type="password" />
+                    <TextField label={copy.labels.quintupleExtractionBaseUrl} value={state.quintupleExtractionBaseUrl} onChange={(value) => update("quintupleExtractionBaseUrl", value)} />
+                    <TextField label={copy.labels.quintupleExtractionModel} value={state.quintupleExtractionModel} onChange={(value) => update("quintupleExtractionModel", value)} />
+                    <TextField label={copy.labels.quintupleExtractionProvider} value={state.quintupleExtractionProvider} onChange={(value) => update("quintupleExtractionProvider", value)} />
+                    <TextField label={copy.labels.quintupleExtractionProtocol} value={state.quintupleExtractionProtocol} onChange={(value) => update("quintupleExtractionProtocol", value)} />
+                    <TextField label={copy.labels.quintupleExtractionReasoningEffort} value={state.quintupleExtractionReasoningEffort} onChange={(value) => update("quintupleExtractionReasoningEffort", value)} />
+                  </div>
+                </div>
+                <div className="soft-inset space-y-4 p-4">
+                  <p className="text-sm font-semibold text-slate-900">{copy.labels.contextCompressionTarget}</p>
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <TextField label={copy.labels.contextCompressionApiKey} value={state.contextCompressionApiKey} onChange={(value) => update("contextCompressionApiKey", value)} type="password" />
+                    <TextField label={copy.labels.contextCompressionBaseUrl} value={state.contextCompressionBaseUrl} onChange={(value) => update("contextCompressionBaseUrl", value)} />
+                    <TextField label={copy.labels.contextCompressionModel} value={state.contextCompressionModel} onChange={(value) => update("contextCompressionModel", value)} />
+                    <TextField label={copy.labels.contextCompressionProvider} value={state.contextCompressionProvider} onChange={(value) => update("contextCompressionProvider", value)} />
+                    <TextField label={copy.labels.contextCompressionProtocol} value={state.contextCompressionProtocol} onChange={(value) => update("contextCompressionProtocol", value)} />
+                    <TextField label={copy.labels.contextCompressionReasoningEffort} value={state.contextCompressionReasoningEffort} onChange={(value) => update("contextCompressionReasoningEffort", value)} />
+                  </div>
+                </div>
+              </div>
+            </div>
 
             <div className="mt-4 grid gap-4 xl:grid-cols-2">
               <TextareaField label={copy.labels.approvalRequiredScopes} value={state.approvalRequiredScopes} onChange={(value) => update("approvalRequiredScopes", value)} />

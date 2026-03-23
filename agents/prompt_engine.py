@@ -60,7 +60,7 @@ def get_available_mcp_tools_summary() -> str:
     try:
         from core.mcp.registry import auto_register_mcp
 
-        auto_register_mcp()  # no-op with standard MCP
+        auto_register_mcp()  # No-op since mcpserver removal — MCP servers auto-register via stdio client pool.
         from agents.runtime.mcp_client import get_mcp_pool
 
         pool = get_mcp_pool()

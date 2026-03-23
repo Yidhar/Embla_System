@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 
 from apiserver.message_manager import MessageManager
+from apiserver.api_server import _build_shell_l2_round_messages
 from agents.shell_tools import handle_shell_tool
 from summer_memory.memory_manager import GRAGMemoryManager
 from system.config import AI_NAME
@@ -86,6 +87,25 @@ def test_add_shell_round_memory_extracts_from_complete_round_messages() -> None:
     assert "工具[call-1]: {\"status\":\"success\"}" in captured["text"]
     assert "好的，我会保持简洁。" in captured["text"]
     assert manager.recent_context == [f"用户: 记住我喜欢简洁回答\n{AI_NAME}: 好的，我会保持简洁。"]
+
+
+def test_build_shell_l2_round_messages_keeps_only_latest_round_without_system() -> None:
+    round_messages = _build_shell_l2_round_messages(
+        [
+            {"role": "system", "content": "# Shell Persona DNA — Embla"},
+            {"role": "user", "content": "旧问题"},
+            {"role": "assistant", "content": "旧回答"},
+            {"role": "user", "content": "新问题"},
+            {"role": "assistant", "content": "我先查。", "tool_calls": [{"id": "call-1", "function": {"name": "memory_search", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call-1", "content": "{\"status\":\"success\"}"},
+        ],
+        "新的最终回答",
+    )
+
+    assert [item["role"] for item in round_messages] == ["user", "assistant", "tool", "assistant"]
+    assert round_messages[0]["content"] == "新问题"
+    assert round_messages[-1]["content"] == "新的最终回答"
+    assert all(str(item.get("role") or "") != "system" for item in round_messages)
 
 
 def test_save_conversation_and_logs_only_triggers_shell_l2_when_enabled(monkeypatch) -> None:

@@ -688,6 +688,208 @@ class TestPipeline:
         assert end_event["reason"] == "completed"
         assert end_event.get("execution_mode") == "fast_track"
 
+    def test_pipeline_fast_track_task_description_preserves_literal_shell_context(self, monkeypatch, store, mailbox):
+        from agents import pipeline as pipeline_module
+        from agents.pipeline import run_multi_agent_pipeline
+
+        captured: dict[str, str] = {}
+
+        async def _mock_run_mini_loop(**kwargs):
+            captured["initial_task"] = str(kwargs.get("initial_task") or "")
+            yield {
+                "type": "loop_end",
+                "reason": "content_complete",
+                "state": {"rounds": 1, "total_tool_calls": 0, "tool_errors": 0},
+            }
+
+        async def _unused_child_llm(messages, tools, model):
+            del messages, tools, model
+            raise AssertionError("run_mini_loop is patched in this test")
+
+        async def _unused_tool_executor(tool_name, arguments, child_session_id):
+            del tool_name, arguments, child_session_id
+            raise AssertionError("run_mini_loop is patched in this test")
+
+        monkeypatch.setattr(pipeline_module, "run_mini_loop", _mock_run_mini_loop)
+
+        self._run(
+            self._collect_events(
+                run_multi_agent_pipeline(
+                    message="请在 scratch/api_smoke/fast_track_contract.txt 写入指定三行内容。",
+                    session_id="fast-track-contract-test",
+                    risk_level="write_repo",
+                    route_decision=RouterDecision(
+                        decision_id="route_fast_track_contract_001",
+                        created_at="2026-03-16T00:00:00+00:00",
+                        task_id="chat_fast_track_contract",
+                        trace_id="trace_fast_track_contract",
+                        session_id="fast-track-contract-test__core",
+                        task_type="development",
+                        selected_role="developer",
+                        selected_model_tier="primary",
+                        tool_profile=["read_file", "write_file"],
+                        prompt_profile="core_exec_general",
+                        injection_mode="minimal",
+                        delegation_intent="core_execution",
+                        complexity_hint="trivial",
+                        core_route="fast_track",
+                        fast_track_candidate=True,
+                        risk_level="write_repo",
+                        budget_remaining=None,
+                        reasoning=["forced_for_test"],
+                        replay_fingerprint="fast_track_contract_fp",
+                        workflow_entry_state="planned",
+                        controlled_execution_plan={
+                            "entry_state": "planned",
+                            "states": ["planned", "delegating", "executing", "verifying", "completed", "failed"],
+                        },
+                    ).to_dict(),
+                    dispatch_payload={
+                        "dispatched": True,
+                        "goal": "请在 scratch/api_smoke/fast_track_contract.txt 写入指定三行内容。",
+                        "intent_type": "development",
+                        "target_repo": "external",
+                        "context_summary": (
+                            "Write `scratch/api_smoke/fast_track_contract.txt` with exactly:\n"
+                            "alpha\n"
+                            "bravo\n"
+                            "charlie\n"
+                        ),
+                        "relevant_memories": [],
+                        "priority": "normal",
+                        "requested_tools": ["write_file"],
+                        "target_files": ["scratch/api_smoke/fast_track_contract.txt"],
+                        "estimated_changed_lines": 3,
+                    },
+                    forced_route_semantic="core_execution",
+                    enable_child_execution=True,
+                    child_llm_call=_unused_child_llm,
+                    child_tool_executor=_unused_tool_executor,
+                    store=store,
+                    mailbox=mailbox,
+                )
+            )
+        )
+
+        initial_task = captured["initial_task"]
+        assert "scratch/api_smoke/fast_track_contract.txt" in initial_task
+        assert "alpha" in initial_task
+        assert "bravo" in initial_task
+        assert "charlie" in initial_task
+        assert "do not ask for them again" in initial_task.lower()
+
+    def test_pipeline_fast_track_write_auto_completes_without_explicit_report(self, store, mailbox):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        rounds = {"count": 0}
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, tools, model
+            rounds["count"] += 1
+            if rounds["count"] == 1:
+                return {
+                    "content": "我先写入目标文件。",
+                    "tool_calls": [
+                        {
+                            "id": "write_1",
+                            "name": "write_file",
+                            "arguments": {
+                                "path": "scratch/api_smoke/fast_track_write_autocomplete.txt",
+                                "content": "alpha\nbravo\ncharlie\n",
+                            },
+                        }
+                    ],
+                }
+            return {
+                "content": "已创建 `scratch/api_smoke/fast_track_write_autocomplete.txt`，内容验证无误。",
+                "tool_calls": [],
+            }
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "success",
+                "result": "ok",
+            }
+
+        events = self._run(
+            self._collect_events(
+                run_multi_agent_pipeline(
+                    message="请创建 scratch/api_smoke/fast_track_write_autocomplete.txt，写入三行 alpha/bravo/charlie。",
+                    session_id="fast-track-write-autocomplete",
+                    risk_level="write_repo",
+                    route_decision=RouterDecision(
+                        decision_id="route_fast_track_write_autocomplete_001",
+                        created_at="2026-03-16T00:00:00+00:00",
+                        task_id="chat_fast_track_write_autocomplete",
+                        trace_id="trace_fast_track_write_autocomplete",
+                        session_id="fast-track-write-autocomplete__core",
+                        task_type="development",
+                        selected_role="developer",
+                        selected_model_tier="primary",
+                        tool_profile=["read_file", "write_file"],
+                        prompt_profile="core_exec_general",
+                        injection_mode="minimal",
+                        delegation_intent="core_execution",
+                        complexity_hint="trivial",
+                        core_route="fast_track",
+                        fast_track_candidate=True,
+                        risk_level="write_repo",
+                        budget_remaining=None,
+                        reasoning=["forced_for_test"],
+                        replay_fingerprint="fast_track_write_autocomplete_fp",
+                        workflow_entry_state="planned",
+                        controlled_execution_plan={
+                            "entry_state": "planned",
+                            "states": ["planned", "delegating", "executing", "verifying", "completed", "failed"],
+                        },
+                    ).to_dict(),
+                    dispatch_payload={
+                        "dispatched": True,
+                        "goal": "请创建 scratch/api_smoke/fast_track_write_autocomplete.txt，写入三行 alpha/bravo/charlie。",
+                        "intent_type": "development",
+                        "target_repo": "external",
+                        "context_summary": (
+                            "Create `scratch/api_smoke/fast_track_write_autocomplete.txt` with exactly:\n"
+                            "alpha\n"
+                            "bravo\n"
+                            "charlie\n"
+                        ),
+                        "relevant_memories": [],
+                        "priority": "normal",
+                        "requested_tools": ["write_file"],
+                        "target_files": ["scratch/api_smoke/fast_track_write_autocomplete.txt"],
+                        "estimated_changed_lines": 3,
+                    },
+                    forced_route_semantic="core_execution",
+                    enable_child_execution=True,
+                    child_llm_call=_mock_child_llm,
+                    child_tool_executor=_mock_tool_executor,
+                    store=store,
+                    mailbox=mailbox,
+                )
+            )
+        )
+
+        auto_event = next(e for e in events if e["type"] == "fast_track_auto_complete")
+        assert auto_event["reason"] == "write_execution_parent_finalize_without_explicit_report"
+
+        stage_event = next(e for e in events if e["type"] == "tool_stage")
+        assert stage_event["reason"] == "submitted_completion"
+        assert stage_event["details"]["task_completed"] is True
+
+        receipt_event = next(e for e in events if e["type"] == "execution_receipt")
+        assert receipt_event.get("stop_reason") == "submitted_completion"
+        assert receipt_event.get("agent_state", {}).get("task_completed") is True
+        assert "scratch/api_smoke/fast_track_write_autocomplete.txt" in str(
+            receipt_event.get("agent_state", {}).get("final_answer") or ""
+        )
+
+        end_event = next(e for e in events if e["type"] == "pipeline_end")
+        assert end_event["reason"] == "completed"
+
     def test_pipeline_fast_track_analysis_auto_completes_content_only_result(self, store, mailbox):
         from agents.pipeline import run_multi_agent_pipeline
 
@@ -2345,6 +2547,65 @@ class TestPipeline:
         core_loop_state = agent_state.get("core_loop", {}) if isinstance(agent_state.get("core_loop"), dict) else {}
         assert len(core_loop_state.get("spawned_child_ids") or []) >= 1
 
+    def test_pipeline_core_loop_is_not_hard_capped_at_six_rounds(self, store, mailbox, task_board_engine):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        core_tool_round = {"value": 0}
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, model
+            tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+            if "poll_child_status" in tool_names:
+                idx = int(core_tool_round["value"])
+                core_tool_round["value"] = idx + 1
+                if idx < 7:
+                    return {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": f"core_poll_{idx+1}",
+                                "name": "poll_child_status",
+                                "arguments": {"agent_id": f"missing-child-{idx+1}"},
+                            }
+                        ],
+                    }
+                return {"content": "", "tool_calls": []}
+
+            return _mock_child_completion_response(tools)
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(
+            self._collect_events(
+                run_multi_agent_pipeline(
+                    message="Audit orchestrator resilience",
+                    session_id="core-loop-beyond-six",
+                    core_execution_session_id="core-loop-beyond-six__core",
+                    risk_level="write_repo",
+                    enable_child_execution=True,
+                    child_llm_call=_mock_child_llm,
+                    child_tool_executor=_mock_tool_executor,
+                    child_max_rounds=12,
+                    store=store,
+                    mailbox=mailbox,
+                    task_board_engine=task_board_engine,
+                )
+            )
+        )
+
+        receipt = next(item for item in events if item.get("type") == "execution_receipt")
+        agent_state = receipt.get("agent_state", {})
+        assert int(agent_state.get("core_loop_tool_calls") or 0) >= 7
+        core_loop_state = agent_state.get("core_loop", {}) if isinstance(agent_state.get("core_loop"), dict) else {}
+        policy = core_loop_state.get("policy", {}) if isinstance(core_loop_state.get("policy"), dict) else {}
+        assert int(policy.get("hard_max_rounds") or 0) == 0
+
     def test_pipeline_core_loop_resume_runs_child_loop_in_band(self, store, mailbox, task_board_engine):
         from agents.pipeline import run_multi_agent_pipeline
 
@@ -2491,3 +2752,84 @@ class TestPipeline:
         core_loop_state = agent_state.get("core_loop", {}) if isinstance(agent_state.get("core_loop"), dict) else {}
         deferred_ids = core_loop_state.get("deferred_child_ids") or []
         assert deferred_agent_id in deferred_ids
+
+    def test_pipeline_core_loop_runs_multiple_cycles_until_quiescent_with_pending_descendant(
+        self,
+        store,
+        mailbox,
+        task_board_engine,
+    ):
+        from agents.pipeline import run_multi_agent_pipeline
+
+        core_tool_round = {"value": 0}
+
+        async def _mock_child_llm(messages, tools, model):
+            del messages, model
+            tool_names = {str(item.get("name") or "").strip() for item in tools if isinstance(item, dict)}
+            if "poll_child_status" in tool_names:
+                idx = int(core_tool_round["value"])
+                core_tool_round["value"] = idx + 1
+                if idx == 0:
+                    return {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "core_spawn_review_cycle_1",
+                                "name": "spawn_child_agent",
+                                "arguments": {
+                                    "role": "review",
+                                    "task_description": "hold review for later orchestration",
+                                },
+                            }
+                        ],
+                    }
+                return {"content": "", "tool_calls": []}
+
+            return _mock_child_completion_response(tools)
+
+        async def _mock_tool_executor(tool_name, arguments, child_session_id):
+            return {
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "session_id": child_session_id,
+                "status": "ok",
+            }
+
+        events = self._run(
+            self._collect_events(
+                run_multi_agent_pipeline(
+                    message="Keep orchestrating until quiescent",
+                    session_id="core-loop-quiescent",
+                    core_execution_session_id="core-loop-quiescent__core",
+                    risk_level="write_repo",
+                    enable_child_execution=True,
+                    child_llm_call=_mock_child_llm,
+                    child_tool_executor=_mock_tool_executor,
+                    store=store,
+                    mailbox=mailbox,
+                    task_board_engine=task_board_engine,
+                )
+            )
+        )
+
+        cycle_start_events = [item for item in events if item.get("type") == "core_loop_cycle_start"]
+        cycle_end_events = [item for item in events if item.get("type") == "core_loop_cycle_end"]
+        assert len(cycle_start_events) >= 3
+        assert [int(item.get("cycle") or 0) for item in cycle_start_events[:3]] == [1, 2, 3]
+        assert len(cycle_end_events) >= 3
+        assert any(bool((item.get("summary") or {}).get("progress_made")) for item in cycle_end_events)
+
+        receipt = next(item for item in events if item.get("type") == "execution_receipt")
+        agent_state = receipt.get("agent_state", {})
+        assert str(receipt.get("stop_reason") or "") == "pending_descendant_work"
+        pending_descendants = agent_state.get("pending_descendants") or []
+        assert any(str(item.get("role") or "") == "review" for item in pending_descendants if isinstance(item, dict))
+
+        core_loop_state = agent_state.get("core_loop", {}) if isinstance(agent_state.get("core_loop"), dict) else {}
+        assert int(core_loop_state.get("cycle_count") or 0) >= 3
+        assert int(core_loop_state.get("quiescent_cycles") or 0) >= 2
+        assert str(core_loop_state.get("stop_reason") or "") == "quiescent_no_progress"
+        assert int(core_loop_state.get("pending_descendant_count") or 0) >= 1
+
+        end_event = next(item for item in events if item.get("type") == "pipeline_end")
+        assert str(end_event.get("reason") or "") == "delegated_waiting_child_completion"

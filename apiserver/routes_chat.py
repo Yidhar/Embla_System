@@ -40,12 +40,19 @@ _CHAT_RUNTIME_CONTEXT: Dict[str, Any] = {
     "route_arbiter_guard_getter": None,
     "agent_session_store": None,
     "agent_session_store_getter": None,
+    "agent_mailbox": None,
+    "agent_mailbox_getter": None,
     "event_store": None,
     "event_store_getter": None,
     "event_store_factory": None,
     "quality_guard_summary_getter": None,
     "event_rows_reader": None,
+    "core_job_manager": None,
+    "core_job_manager_getter": None,
 }
+_DEFAULT_CORE_RUNTIME_ID = "core-main"
+_CORE_ASYNC_MESSAGE_TYPES = ("status", "report")
+_CORE_ASYNC_TERMINAL_STATUSES = {"completed", "failed", "blocked", "cancelled", "canceled"}
 
 
 def _bind_chat_runtime_context(
@@ -57,11 +64,15 @@ def _bind_chat_runtime_context(
     route_arbiter_guard_getter: Any = None,
     agent_session_store: Any = None,
     agent_session_store_getter: Any = None,
+    agent_mailbox: Any = None,
+    agent_mailbox_getter: Any = None,
     event_store: Any = None,
     event_store_getter: Any = None,
     event_store_factory: Any = None,
     quality_guard_summary_getter: Any = None,
     event_rows_reader: Any = None,
+    core_job_manager: Any = None,
+    core_job_manager_getter: Any = None,
 ) -> None:
     """Bind runtime dependencies to reduce cross-module import coupling."""
     if message_manager is not None:
@@ -78,6 +89,10 @@ def _bind_chat_runtime_context(
         _CHAT_RUNTIME_CONTEXT["agent_session_store"] = agent_session_store
     if agent_session_store_getter is not None:
         _CHAT_RUNTIME_CONTEXT["agent_session_store_getter"] = agent_session_store_getter
+    if agent_mailbox is not None:
+        _CHAT_RUNTIME_CONTEXT["agent_mailbox"] = agent_mailbox
+    if agent_mailbox_getter is not None:
+        _CHAT_RUNTIME_CONTEXT["agent_mailbox_getter"] = agent_mailbox_getter
     if event_store is not None:
         _CHAT_RUNTIME_CONTEXT["event_store"] = event_store
     if event_store_getter is not None:
@@ -88,6 +103,10 @@ def _bind_chat_runtime_context(
         _CHAT_RUNTIME_CONTEXT["quality_guard_summary_getter"] = quality_guard_summary_getter
     if event_rows_reader is not None:
         _CHAT_RUNTIME_CONTEXT["event_rows_reader"] = event_rows_reader
+    if core_job_manager is not None:
+        _CHAT_RUNTIME_CONTEXT["core_job_manager"] = core_job_manager
+    if core_job_manager_getter is not None:
+        _CHAT_RUNTIME_CONTEXT["core_job_manager_getter"] = core_job_manager_getter
 
 
 # ── Lazy cross-module accessors (avoid circular import) ──────
@@ -137,6 +156,30 @@ def _get_agent_session_store() -> Any:
         except Exception:
             return None
     return _CHAT_RUNTIME_CONTEXT.get("agent_session_store")
+
+
+def _get_agent_mailbox() -> Any:
+    getter = _CHAT_RUNTIME_CONTEXT.get("agent_mailbox_getter")
+    if callable(getter):
+        try:
+            injected = getter()
+            if injected is not None:
+                return injected
+        except Exception:
+            return None
+    return _CHAT_RUNTIME_CONTEXT.get("agent_mailbox")
+
+
+def _get_core_job_manager() -> Any:
+    getter = _CHAT_RUNTIME_CONTEXT.get("core_job_manager_getter")
+    if callable(getter):
+        try:
+            injected = getter()
+            if injected is not None:
+                return injected
+        except Exception:
+            return None
+    return _CHAT_RUNTIME_CONTEXT.get("core_job_manager")
 
 
 def _empty_descendant_heartbeat_snapshot(root_session_id: str) -> Dict[str, Any]:
@@ -196,6 +239,7 @@ __all__ = [
     "_format_sse_payload_chunk_json",
     "_get_chat_route_event_store",
     "_get_chat_route_quality_guard_summary",
+    "_register_core_job_submission",
     "_merge_model_override",
     "_merge_route_quality_reason_codes",
     "_normalize_chat_text",
@@ -278,22 +322,158 @@ def _apply_route_semantic_fields(route_meta: Dict[str, Any]) -> Dict[str, Any]:
     if core_execution_route:
         route_meta["core_execution_route"] = core_execution_route
     route_meta["shell_session_id"] = str(route_meta.get("shell_session_id") or "")
-    route_meta["core_execution_session_id"] = str(route_meta.get("core_execution_session_id") or "")
+    route_meta["core_runtime_id"] = str(route_meta.get("core_runtime_id") or _DEFAULT_CORE_RUNTIME_ID)
+    route_meta["core_job_id"] = str(route_meta.get("core_job_id") or "")
+    run_context_id = str(
+        route_meta.get("run_context_id")
+        or route_meta.get("core_execution_session_id")
+        or ""
+    ).strip()
+    route_meta["run_context_id"] = run_context_id
+    route_meta["core_execution_session_id"] = run_context_id
+    run_context_created = bool(
+        route_meta.get("run_context_created")
+        if route_meta.get("run_context_created") is not None
+        else route_meta.get("core_execution_session_created")
+    )
+    route_meta["run_context_created"] = run_context_created
+    route_meta["core_execution_session_created"] = run_context_created
     return route_meta
 
 
 def _ensure_chat_route_state(session_id: str) -> Dict[str, Any]:
     session = _get_message_manager().get_session(session_id)
     if not isinstance(session, dict):
-        return {"shell_clarify_turns": 0}
+        return {
+            "shell_clarify_turns": 0,
+            "core_runtime_id": _DEFAULT_CORE_RUNTIME_ID,
+            "active_core_job_id": "",
+            "last_core_job_id": "",
+            "last_completed_core_job_id": "",
+            "last_failed_core_job_id": "",
+            "last_blocked_core_job_id": "",
+            "latest_core_job_session_id": "",
+            "core_worker_status": "idle",
+            "current_core_job_id": "",
+            "queued_core_job_ids": [],
+            "core_queue_depth": 0,
+            "core_pipeline_depth": 0,
+            "core_mailbox_cursor_seq": 0,
+            "last_core_handoff_message_seq": 0,
+            "last_core_completion_message_seq": 0,
+            "core_recovery_restart_total": 0,
+            "core_job_watch_dedup_skipped_count": 0,
+            "core_last_dedup_message_seq": 0,
+            "core_outbox_cursor_seq": 0,
+            "last_core_outbox_seq": 0,
+            "pending_core_update_count": 0,
+            "last_core_job_watch_update_at": "",
+        }
     state = session.get(_CHAT_ROUTE_STATE_KEY)
     if not isinstance(state, dict):
-        state = {"shell_clarify_turns": 0}
+        state = {
+            "shell_clarify_turns": 0,
+            "core_runtime_id": _DEFAULT_CORE_RUNTIME_ID,
+            "active_core_job_id": "",
+            "last_core_job_id": "",
+            "last_completed_core_job_id": "",
+            "last_failed_core_job_id": "",
+            "last_blocked_core_job_id": "",
+            "latest_core_job_session_id": "",
+            "core_worker_status": "idle",
+            "current_core_job_id": "",
+            "queued_core_job_ids": [],
+            "core_queue_depth": 0,
+            "core_pipeline_depth": 0,
+            "core_mailbox_cursor_seq": 0,
+            "last_core_handoff_message_seq": 0,
+            "last_core_completion_message_seq": 0,
+            "core_recovery_restart_total": 0,
+            "core_job_watch_dedup_skipped_count": 0,
+            "core_last_dedup_message_seq": 0,
+            "core_outbox_cursor_seq": 0,
+            "last_core_outbox_seq": 0,
+            "pending_core_update_count": 0,
+            "last_core_job_watch_update_at": "",
+        }
         session[_CHAT_ROUTE_STATE_KEY] = state
     try:
         state["shell_clarify_turns"] = max(0, int(state.get("shell_clarify_turns", 0)))
     except Exception:
         state["shell_clarify_turns"] = 0
+    state["core_runtime_id"] = str(state.get("core_runtime_id") or _DEFAULT_CORE_RUNTIME_ID).strip() or _DEFAULT_CORE_RUNTIME_ID
+    state["active_core_job_id"] = str(state.get("active_core_job_id") or "").strip()
+    state["last_core_job_id"] = str(state.get("last_core_job_id") or "").strip()
+    state["last_completed_core_job_id"] = str(state.get("last_completed_core_job_id") or "").strip()
+    state["last_failed_core_job_id"] = str(state.get("last_failed_core_job_id") or "").strip()
+    state["last_blocked_core_job_id"] = str(state.get("last_blocked_core_job_id") or "").strip()
+    state["core_worker_status"] = str(state.get("core_worker_status") or "idle").strip() or "idle"
+    state["current_core_job_id"] = str(state.get("current_core_job_id") or "").strip()
+    queued_core_job_ids = state.get("queued_core_job_ids")
+    if not isinstance(queued_core_job_ids, list):
+        queued_core_job_ids = []
+    state["queued_core_job_ids"] = [str(item or "").strip() for item in queued_core_job_ids if str(item or "").strip()]
+    try:
+        state["core_queue_depth"] = max(0, int(state.get("core_queue_depth") or 0))
+    except Exception:
+        state["core_queue_depth"] = 0
+    try:
+        state["core_pipeline_depth"] = max(0, int(state.get("core_pipeline_depth") or 0))
+    except Exception:
+        state["core_pipeline_depth"] = 0
+    try:
+        state["core_mailbox_cursor_seq"] = max(0, int(state.get("core_mailbox_cursor_seq") or 0))
+    except Exception:
+        state["core_mailbox_cursor_seq"] = 0
+    try:
+        state["last_core_handoff_message_seq"] = max(0, int(state.get("last_core_handoff_message_seq") or 0))
+    except Exception:
+        state["last_core_handoff_message_seq"] = 0
+    try:
+        state["last_core_completion_message_seq"] = max(0, int(state.get("last_core_completion_message_seq") or 0))
+    except Exception:
+        state["last_core_completion_message_seq"] = 0
+    try:
+        state["core_recovery_restart_total"] = max(0, int(state.get("core_recovery_restart_total") or 0))
+    except Exception:
+        state["core_recovery_restart_total"] = 0
+    try:
+        state["core_job_watch_dedup_skipped_count"] = max(
+            0,
+            int(state.get("core_job_watch_dedup_skipped_count") or 0),
+        )
+    except Exception:
+        state["core_job_watch_dedup_skipped_count"] = 0
+    state.pop("core_inbox_dedup_skipped_count", None)
+    try:
+        state["core_last_dedup_message_seq"] = max(0, int(state.get("core_last_dedup_message_seq") or 0))
+    except Exception:
+        state["core_last_dedup_message_seq"] = 0
+    try:
+        state["core_outbox_cursor_seq"] = max(0, int(state.get("core_outbox_cursor_seq") or 0))
+    except Exception:
+        state["core_outbox_cursor_seq"] = 0
+    try:
+        state["last_core_outbox_seq"] = max(0, int(state.get("last_core_outbox_seq") or 0))
+    except Exception:
+        state["last_core_outbox_seq"] = 0
+    try:
+        state["pending_core_update_count"] = max(0, int(state.get("pending_core_update_count") or 0))
+    except Exception:
+        state["pending_core_update_count"] = 0
+    state["last_core_job_watch_update_at"] = str(
+        state.get("last_core_job_watch_update_at") or ""
+    ).strip()
+    state.pop("last_core_async_update_at", None)
+    latest_core_job_session_id = str(
+        state.get("latest_core_job_session_id")
+        or state.get("run_context_id")
+        or state.get("core_execution_session_id")
+        or ""
+    ).strip()
+    state["latest_core_job_session_id"] = latest_core_job_session_id
+    state["run_context_id"] = latest_core_job_session_id
+    state["core_execution_session_id"] = latest_core_job_session_id
 
     core_execution_session_id = str(state.get("core_execution_session_id") or "").strip()
     fallback_route_semantic = "core_execution" if core_execution_session_id else "shell_readonly"
@@ -316,9 +496,12 @@ def _ensure_chat_route_state(session_id: str) -> Dict[str, Any]:
         state.get("last_risk_level")
         or ("write_repo" if state["last_route_semantic"] == "core_execution" else "read_only")
     ).strip()
-    state["last_core_execution_session_id"] = str(
-        state.get("last_core_execution_session_id") or core_execution_session_id
+    state["last_run_context_id"] = str(
+        state.get("last_run_context_id")
+        or state.get("last_core_execution_session_id")
+        or core_execution_session_id
     ).strip()
+    state["last_core_execution_session_id"] = str(state.get("last_run_context_id") or "").strip()
     return state
 
 
@@ -418,8 +601,59 @@ def _persist_chat_route_snapshot_state(state: Dict[str, Any], route_meta: Dict[s
     state["last_handoff_tool"] = str(route_meta.get("handoff_tool") or "").strip()
     state["last_core_execution_route"] = str(route_meta.get("core_execution_route") or "").strip()
     state["last_risk_level"] = str(route_meta.get("risk_level") or state.get("last_risk_level") or "").strip()
-    if str(state.get("core_execution_session_id") or "").strip():
-        state["last_core_execution_session_id"] = str(state.get("core_execution_session_id") or "").strip()
+    if str(route_meta.get("core_runtime_id") or "").strip():
+        state["core_runtime_id"] = str(route_meta.get("core_runtime_id") or "").strip()
+    latest_session_id = str(
+        route_meta.get("run_context_id")
+        or route_meta.get("core_execution_session_id")
+        or state.get("run_context_id")
+        or state.get("latest_core_job_session_id")
+        or state.get("core_execution_session_id")
+        or ""
+    ).strip()
+    if latest_session_id:
+        state["latest_core_job_session_id"] = latest_session_id
+        state["run_context_id"] = latest_session_id
+        state["core_execution_session_id"] = latest_session_id
+        state["last_run_context_id"] = latest_session_id
+        state["last_core_execution_session_id"] = latest_session_id
+
+
+def _register_core_job_submission(
+    shell_session_id: str,
+    *,
+    core_runtime_id: str,
+    core_job_id: str,
+    core_execution_session_id: str,
+    core_execution_session_created: bool = True,
+    route_meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    state = _ensure_chat_route_state(shell_session_id)
+    state["core_runtime_id"] = str(core_runtime_id or _DEFAULT_CORE_RUNTIME_ID).strip() or _DEFAULT_CORE_RUNTIME_ID
+    state["active_core_job_id"] = str(core_job_id or "").strip()
+    state["last_core_job_id"] = str(core_job_id or "").strip()
+    state["latest_core_job_session_id"] = str(core_execution_session_id or "").strip()
+    state["run_context_id"] = str(core_execution_session_id or "").strip()
+    state["core_execution_session_id"] = str(core_execution_session_id or "").strip()
+    state["last_run_context_id"] = str(core_execution_session_id or "").strip()
+    state["last_core_execution_session_id"] = str(core_execution_session_id or "").strip()
+    state["last_core_escalation_at_ms"] = int(time.time() * 1000)
+    state["last_route_semantic"] = "core_execution"
+    state["last_active_agent"] = "core"
+    state["last_dispatch_to_core"] = True
+    state["last_handoff_tool"] = "dispatch_to_core"
+    state["pending_core_update_count"] = max(0, int(state.get("pending_core_update_count") or 0))
+    if isinstance(route_meta, dict):
+        state["last_core_execution_route"] = str(route_meta.get("core_execution_route") or "").strip()
+        state["last_risk_level"] = str(route_meta.get("risk_level") or state.get("last_risk_level") or "").strip()
+        route_meta["core_runtime_id"] = str(state.get("core_runtime_id") or _DEFAULT_CORE_RUNTIME_ID)
+        route_meta["core_job_id"] = str(core_job_id or "")
+        route_meta["run_context_id"] = str(core_execution_session_id or "")
+        route_meta["core_execution_session_id"] = str(core_execution_session_id or "")
+        route_meta["run_context_created"] = bool(core_execution_session_created)
+        route_meta["core_execution_session_created"] = bool(core_execution_session_created)
+        return _apply_route_semantic_fields(route_meta)
+    return dict(state)
 
 
 def _apply_shell_core_session_state(route_meta: Dict[str, Any], *, shell_session_id: str) -> Dict[str, Any]:
@@ -427,37 +661,193 @@ def _apply_shell_core_session_state(route_meta: Dict[str, Any], *, shell_session
     route_semantic = _normalize_route_semantic(route_meta.get("route_semantic"))
     route_meta["route_semantic"] = route_semantic
     route_meta["shell_session_id"] = str(shell_session_id or "")
-    route_meta["core_execution_session_id"] = str(state.get("core_execution_session_id") or "")
+    route_meta["core_runtime_id"] = str(state.get("core_runtime_id") or _DEFAULT_CORE_RUNTIME_ID)
+    route_meta["core_job_id"] = str(state.get("active_core_job_id") or "")
+    route_meta["run_context_id"] = str(
+        state.get("latest_core_job_session_id")
+        or state.get("run_context_id")
+        or state.get("core_execution_session_id")
+        or ""
+    )
+    route_meta["core_execution_session_id"] = str(route_meta.get("run_context_id") or "")
+    route_meta["run_context_created"] = False
     route_meta["core_execution_session_created"] = False
 
     if route_semantic != "core_execution":
-        existing_core_execution_session_id = str(state.get("core_execution_session_id") or "").strip()
+        existing_core_execution_session_id = str(
+            state.get("latest_core_job_session_id")
+            or state.get("run_context_id")
+            or state.get("core_execution_session_id")
+            or ""
+        ).strip()
         if existing_core_execution_session_id:
+            state["last_run_context_id"] = existing_core_execution_session_id
             state["last_core_execution_session_id"] = existing_core_execution_session_id
         applied = _apply_route_semantic_fields(route_meta)
         _persist_chat_route_snapshot_state(state, applied)
         return applied
 
-    core_execution_session_id = str(state.get("core_execution_session_id") or "").strip()
-    core_execution_session_created = False
-    if not core_execution_session_id:
-        core_execution_session_id = f"{str(shell_session_id or '')}__core"
-    if not _get_message_manager().get_session(core_execution_session_id):
-        shell_session = _get_message_manager().get_session(shell_session_id) or {}
-        temporary = bool(shell_session.get("temporary", False))
-        _get_message_manager().create_session(session_id=core_execution_session_id, temporary=temporary)
-        core_execution_session_created = True
-
-    state["core_execution_session_id"] = core_execution_session_id
     state["last_core_escalation_at_ms"] = int(time.time() * 1000)
-    state["last_core_execution_session_id"] = core_execution_session_id
-
-    route_meta["core_execution_session_id"] = core_execution_session_id
-    route_meta["core_execution_session_created"] = core_execution_session_created
     applied = _apply_route_semantic_fields(route_meta)
     _persist_chat_route_snapshot_state(state, applied)
     return applied
 
+
+def _format_core_async_update(row: Any) -> Dict[str, Any]:
+    metadata = dict(getattr(row, "metadata", {}) or {})
+    status = str(metadata.get("status") or metadata.get("core_job_status") or "").strip().lower()
+    job_id = str(metadata.get("core_job_id") or metadata.get("job_id") or "").strip()
+    kind = str(metadata.get("kind") or ("core_job_report" if str(getattr(row, "message_type", "") or "") == "report" else "core_job_status")).strip()
+    pending_descendant_count = max(0, int(metadata.get("pending_descendant_count") or 0))
+    run_context_id = str(
+        metadata.get("run_context_id")
+        or metadata.get("core_execution_session_id")
+        or ""
+    ).strip()
+    return {
+        "seq": int(getattr(row, "seq", 0) or 0),
+        "from_id": str(getattr(row, "from_id", "") or ""),
+        "to_id": str(getattr(row, "to_id", "") or ""),
+        "message_type": str(getattr(row, "message_type", "") or ""),
+        "kind": kind,
+        "status": status,
+        "core_job_id": job_id,
+        "run_context_id": run_context_id,
+        "core_runtime_id": str(metadata.get("core_runtime_id") or ""),
+        "core_execution_session_id": run_context_id,
+        "pipeline_id": str(metadata.get("pipeline_id") or ""),
+        "pending_descendant_count": pending_descendant_count,
+        "content": str(getattr(row, "content", "") or ""),
+        "created_at": str(getattr(row, "created_at", "") or ""),
+        "metadata": metadata,
+        "is_terminal": bool(
+            str(getattr(row, "message_type", "") or "") == "report"
+            or status in _CORE_ASYNC_TERMINAL_STATUSES
+        ),
+    }
+
+
+def _build_core_job_watch_updates_digest(
+    *,
+    unread_updates: List[Dict[str, Any]],
+    active_core_job: Optional[Dict[str, Any]] = None,
+    core_worker_status: str = "",
+) -> str:
+    lines: List[str] = []
+    for item in unread_updates[:3]:
+        status = str(item.get("status") or item.get("message_type") or "update").strip()
+        job_id = str(item.get("core_job_id") or "").strip()
+        content = str(item.get("content") or "").strip()
+        if content:
+            lines.append(f"- {status} {job_id}: {content}")
+    if not lines and isinstance(active_core_job, dict) and active_core_job:
+        job_id = str(active_core_job.get("job_id") or "").strip()
+        status = str(active_core_job.get("status") or core_worker_status or "running").strip()
+        goal = str(active_core_job.get("goal") or "").strip()
+        if job_id:
+            lines.append(f"- {status} {job_id}: {goal}")
+    if not lines:
+        return ""
+    return "## Core 任务观测状态\n" + "\n".join(lines[:3])
+
+
+def _collect_chat_core_job_watch_payload(
+    session_id: str,
+    *,
+    core_execution_session_id: str = "",
+    limit: int = 20,
+    ack: bool = False,
+) -> Dict[str, Any]:
+    shell_session_id = str(session_id or "").strip()
+    state = _ensure_chat_route_state(shell_session_id)
+    resolved_core_execution_session_id = str(
+        core_execution_session_id
+        or state.get("latest_core_job_session_id")
+        or state.get("run_context_id")
+        or state.get("core_execution_session_id")
+        or ""
+    ).strip()
+    payload = {
+        "shell_session_id": shell_session_id,
+        "run_context_id": resolved_core_execution_session_id,
+        "core_execution_session_id": resolved_core_execution_session_id,
+        "run_context_exists": bool(
+            resolved_core_execution_session_id
+            and _get_message_manager().get_session(resolved_core_execution_session_id)
+        ),
+        "core_outbox_cursor_seq": int(state.get("core_outbox_cursor_seq") or 0),
+        "last_core_outbox_seq": int(state.get("last_core_outbox_seq") or 0),
+        "pending_core_update_count": int(state.get("pending_core_update_count") or 0),
+        "unread_core_updates": [],
+        "recent_core_updates": [],
+        "has_unread_terminal_update": False,
+        "unread_digest": "",
+    }
+    if not shell_session_id or not resolved_core_execution_session_id:
+        return payload
+
+    agent_mailbox = _get_agent_mailbox()
+    if agent_mailbox is None:
+        return payload
+    if not callable(getattr(agent_mailbox, "read_filtered", None)) or not callable(getattr(agent_mailbox, "count_filtered", None)):
+        return payload
+
+    cursor_seq = max(0, int(state.get("core_outbox_cursor_seq") or 0))
+    recent_rows = agent_mailbox.read_filtered(
+        shell_session_id,
+        since_seq=0,
+        limit=max(5, int(limit)),
+        from_id=resolved_core_execution_session_id,
+        message_types=_CORE_ASYNC_MESSAGE_TYPES,
+        newest_first=True,
+    )
+    unread_rows = agent_mailbox.read_filtered(
+        shell_session_id,
+        since_seq=cursor_seq,
+        limit=max(5, int(limit)),
+        from_id=resolved_core_execution_session_id,
+        message_types=_CORE_ASYNC_MESSAGE_TYPES,
+        newest_first=False,
+    )
+    unread_count = agent_mailbox.count_filtered(
+        shell_session_id,
+        since_seq=cursor_seq,
+        from_id=resolved_core_execution_session_id,
+        message_types=_CORE_ASYNC_MESSAGE_TYPES,
+    )
+
+    recent_updates = [_format_core_async_update(row) for row in recent_rows]
+    unread_updates = [_format_core_async_update(row) for row in unread_rows]
+    last_outbox_seq = max(
+        int(state.get("last_core_outbox_seq") or 0),
+        max([int(item.get("seq") or 0) for item in recent_updates], default=0),
+    )
+    new_cursor_seq = max(cursor_seq, max([int(item.get("seq") or 0) for item in unread_updates], default=cursor_seq))
+
+    state["last_core_outbox_seq"] = last_outbox_seq
+    state["pending_core_update_count"] = max(0, int(unread_count))
+    if recent_updates:
+        state["last_core_job_watch_update_at"] = str(recent_updates[-1].get("created_at") or "").strip()
+    if ack and unread_updates:
+        state["core_outbox_cursor_seq"] = new_cursor_seq
+        state["pending_core_update_count"] = agent_mailbox.count_filtered(
+            shell_session_id,
+            since_seq=new_cursor_seq,
+            from_id=resolved_core_execution_session_id,
+            message_types=_CORE_ASYNC_MESSAGE_TYPES,
+        )
+
+    payload.update(
+        {
+            "core_outbox_cursor_seq": int(state.get("core_outbox_cursor_seq") or 0),
+            "last_core_outbox_seq": int(state.get("last_core_outbox_seq") or 0),
+            "pending_core_update_count": int(state.get("pending_core_update_count") or 0),
+            "unread_core_updates": unread_updates,
+            "recent_core_updates": recent_updates,
+            "has_unread_terminal_update": any(bool(item.get("is_terminal")) for item in unread_updates),
+        }
+    )
+    return payload
 
 def _build_route_model_override(route_semantic: str) -> Optional[Dict[str, str]]:
     """Build route-scoped LLM override for shell/core execution routes."""
@@ -541,6 +931,14 @@ def _build_chat_route_prompt_hints(route_meta: Dict[str, Any]) -> str:
             },
         )
     ]
+    core_async_status_digest = str(route_meta.get("_core_async_status_digest") or "").strip()
+    if core_async_status_digest:
+        lines.append(
+            _render_chat_route_prompt_block(
+                "agents/shell/blocks/shell_core_async_status.md",
+                variables={"core_async_status_digest": core_async_status_digest},
+            )
+        )
     if bool(route_meta.get("route_quality_guard_applied")):
         lines.append(
             _render_chat_route_prompt_block(
@@ -727,8 +1125,20 @@ def _build_chat_route_prompt_event_payload(route_meta: Dict[str, Any]) -> Dict[s
         "router_arbiter_hitl": bool(route_meta.get("router_arbiter_hitl")),
         "router_arbiter_escalated": bool(route_meta.get("router_arbiter_escalated")),
         "shell_session_id": str(route_meta.get("shell_session_id") or ""),
-        "core_execution_session_id": str(route_meta.get("core_execution_session_id") or ""),
-        "core_execution_session_created": bool(route_meta.get("core_execution_session_created")),
+        "core_runtime_id": str(route_meta.get("core_runtime_id") or _DEFAULT_CORE_RUNTIME_ID),
+        "core_job_id": str(route_meta.get("core_job_id") or ""),
+        "run_context_id": str(route_meta.get("run_context_id") or route_meta.get("core_execution_session_id") or ""),
+        "core_execution_session_id": str(route_meta.get("run_context_id") or route_meta.get("core_execution_session_id") or ""),
+        "run_context_created": bool(
+            route_meta.get("run_context_created")
+            if route_meta.get("run_context_created") is not None
+            else route_meta.get("core_execution_session_created")
+        ),
+        "core_execution_session_created": bool(
+            route_meta.get("run_context_created")
+            if route_meta.get("run_context_created") is not None
+            else route_meta.get("core_execution_session_created")
+        ),
     }
 
 
@@ -782,7 +1192,8 @@ def _emit_chat_route_guard_event(route_meta: Dict[str, Any], *, session_id: str)
         ),
         "route_quality_guard_evaluated_at": str(route_meta.get("route_quality_guard_evaluated_at") or ""),
         "shell_session_id": str(route_meta.get("shell_session_id") or ""),
-        "core_execution_session_id": str(route_meta.get("core_execution_session_id") or ""),
+        "run_context_id": str(route_meta.get("run_context_id") or route_meta.get("core_execution_session_id") or ""),
+        "core_execution_session_id": str(route_meta.get("run_context_id") or route_meta.get("core_execution_session_id") or ""),
     }
     store.emit(event_type, payload, source="apiserver.chat_stream")
 
@@ -831,7 +1242,8 @@ def _emit_chat_route_arbiter_event(route_meta: Dict[str, Any], *, session_id: st
         "router_arbiter_hitl": bool(route_meta.get("router_arbiter_hitl")),
         "router_arbiter_escalated": bool(route_meta.get("router_arbiter_escalated")),
         "shell_session_id": str(route_meta.get("shell_session_id") or ""),
-        "core_execution_session_id": str(route_meta.get("core_execution_session_id") or ""),
+        "run_context_id": str(route_meta.get("run_context_id") or route_meta.get("core_execution_session_id") or ""),
+        "core_execution_session_id": str(route_meta.get("run_context_id") or route_meta.get("core_execution_session_id") or ""),
     }
     store.emit(event_type, payload, source="apiserver.chat_stream")
 
@@ -867,6 +1279,7 @@ def _emit_agentic_loop_completion_event(
     payload = {
         "session_id": str(session_id or ""),
         "shell_session_id": str(route_meta.get("shell_session_id") or ""),
+        "run_context_id": str(core_execution_session_id or ""),
         "core_execution_session_id": str(core_execution_session_id or ""),
         "trace_id": str(decision.get("trace_id") or ""),
         "workflow_id": str(decision.get("task_id") or ""),
@@ -902,6 +1315,7 @@ def _emit_core_child_spawn_deferred_event(
     payload = {
         "session_id": str(session_id or ""),
         "shell_session_id": str(route_meta.get("shell_session_id") or ""),
+        "run_context_id": str(core_execution_session_id or ""),
         "core_execution_session_id": str(core_execution_session_id or ""),
         "trace_id": str(decision.get("trace_id") or ""),
         "workflow_id": str(decision.get("task_id") or ""),
@@ -989,8 +1403,11 @@ def _collect_chat_route_session_state_events(*, session_ids: List[str], limit: i
             continue
 
         shell_session_id = str(payload.get("shell_session_id") or payload.get("session_id") or "").strip()
-        core_execution_session_id = str(payload.get("core_execution_session_id") or "").strip()
-        event_session_ids = {sid for sid in (shell_session_id, core_execution_session_id) if sid}
+        core_runtime_id = str(payload.get("core_runtime_id") or _DEFAULT_CORE_RUNTIME_ID).strip() or _DEFAULT_CORE_RUNTIME_ID
+        core_job_id = str(payload.get("core_job_id") or "").strip()
+        run_context_id = str(payload.get("run_context_id") or payload.get("core_execution_session_id") or "").strip()
+        core_execution_session_id = str(payload.get("core_execution_session_id") or run_context_id).strip()
+        event_session_ids = {sid for sid in (shell_session_id, run_context_id, core_execution_session_id) if sid}
         if not (event_session_ids & ids):
             continue
 
@@ -1021,6 +1438,9 @@ def _collect_chat_route_session_state_events(*, session_ids: List[str], limit: i
                 "prompt_profile": str(payload.get("prompt_profile") or ""),
                 "injection_mode": str(payload.get("injection_mode") or ""),
                 "shell_session_id": shell_session_id,
+                "core_runtime_id": core_runtime_id,
+                "core_job_id": core_job_id,
+                "run_context_id": run_context_id,
                 "core_execution_session_id": core_execution_session_id,
                 "shell_clarify_budget_escalated": bool(payload.get("shell_clarify_budget_escalated")),
                 "shell_clarify_budget_reason": str(payload.get("shell_clarify_budget_reason") or ""),
@@ -1057,6 +1477,11 @@ def _collect_chat_route_session_state_events(*, session_ids: List[str], limit: i
                 "router_arbiter_freeze": bool(payload.get("router_arbiter_freeze")),
                 "router_arbiter_hitl": bool(payload.get("router_arbiter_hitl")),
                 "router_arbiter_escalated": bool(payload.get("router_arbiter_escalated")),
+                "run_context_created": bool(
+                    payload.get("run_context_created")
+                    if payload.get("run_context_created") is not None
+                    else payload.get("core_execution_session_created")
+                ),
                 "core_execution_session_created": bool(payload.get("core_execution_session_created")),
                 "source": str(row.get("source") or ""),
             }
@@ -1068,7 +1493,18 @@ def _collect_chat_route_session_state_events(*, session_ids: List[str], limit: i
 
 
 def _build_chat_route_session_state_snapshot_event(shell_session_id: str, state: Dict[str, Any]) -> Dict[str, Any]:
-    core_execution_session_id = str(state.get("core_execution_session_id") or "").strip()
+    core_execution_session_id = str(
+        state.get("run_context_id")
+        or state.get("core_execution_session_id")
+        or ""
+    ).strip()
+    last_run_context_id = str(
+        state.get("last_run_context_id")
+        or state.get("last_core_execution_session_id")
+        or core_execution_session_id
+    ).strip()
+    core_runtime_id = str(state.get("core_runtime_id") or _DEFAULT_CORE_RUNTIME_ID).strip() or _DEFAULT_CORE_RUNTIME_ID
+    core_job_id = str(state.get("active_core_job_id") or state.get("last_core_job_id") or "").strip()
     route_semantic = _normalize_route_semantic(state.get("last_route_semantic"))
     route_meta = _apply_route_semantic_fields(
         {
@@ -1078,6 +1514,9 @@ def _build_chat_route_session_state_snapshot_event(shell_session_id: str, state:
             "handoff_tool": str(state.get("last_handoff_tool") or "").strip(),
             "core_execution_route": str(state.get("last_core_execution_route") or "").strip(),
             "shell_session_id": shell_session_id,
+            "core_runtime_id": core_runtime_id,
+            "core_job_id": core_job_id,
+            "run_context_id": core_execution_session_id,
             "core_execution_session_id": core_execution_session_id,
         }
     )
@@ -1091,7 +1530,12 @@ def _build_chat_route_session_state_snapshot_event(shell_session_id: str, state:
         "event_type": "RouteSessionStateSnapshot",
         "session_id": shell_session_id,
         "shell_session_id": shell_session_id,
+        "core_runtime_id": core_runtime_id,
+        "core_job_id": core_job_id,
+        "run_context_id": core_execution_session_id,
         "core_execution_session_id": core_execution_session_id,
+        "last_run_context_id": last_run_context_id,
+        "last_core_execution_session_id": last_run_context_id,
         "trigger": route_meta["route_semantic"],
         "route_semantic": route_meta["route_semantic"],
         "entry_agent": "shell",
@@ -1132,6 +1576,7 @@ def _build_chat_route_session_state_snapshot_event(shell_session_id: str, state:
         "router_arbiter_freeze": False,
         "router_arbiter_hitl": False,
         "router_arbiter_escalated": False,
+        "run_context_created": False,
         "core_execution_session_created": False,
         "source": "session_state_snapshot",
     }
@@ -1144,8 +1589,150 @@ def _build_chat_route_session_state_payload(session_id: str, *, limit: int = 20)
 
     shell_session_id = str(session_id or "")
     state = _ensure_chat_route_state(session_id)
-    core_execution_session_id = str(state.get("core_execution_session_id") or "").strip()
-    last_core_execution_session_id = str(state.get("last_core_execution_session_id") or shell_session_id)
+    core_job_manager = _get_core_job_manager()
+    shell_job_snapshot = (
+        core_job_manager.get_shell_snapshot(shell_session_id, limit=max(1, int(limit)))
+        if core_job_manager is not None and callable(getattr(core_job_manager, "get_shell_snapshot", None))
+        else {}
+    )
+    active_core_job = dict(shell_job_snapshot.get("active_job") or {}) if isinstance(shell_job_snapshot, dict) else {}
+    latest_core_job = dict(shell_job_snapshot.get("latest_job") or {}) if isinstance(shell_job_snapshot, dict) else {}
+    recent_core_jobs = list(shell_job_snapshot.get("jobs") or []) if isinstance(shell_job_snapshot, dict) else []
+    active_core_job_ids = list(shell_job_snapshot.get("active_job_ids") or []) if isinstance(shell_job_snapshot, dict) else []
+    current_core_job_id = str(
+        (shell_job_snapshot.get("current_job_id") if isinstance(shell_job_snapshot, dict) else "")
+        or active_core_job.get("job_id")
+        or state.get("current_core_job_id")
+        or ""
+    ).strip()
+    queued_core_job_ids = list(shell_job_snapshot.get("queued_job_ids") or []) if isinstance(shell_job_snapshot, dict) else []
+    core_worker_status = str(
+        (shell_job_snapshot.get("worker_status") if isinstance(shell_job_snapshot, dict) else "")
+        or state.get("core_worker_status")
+        or ("running" if active_core_job_ids else "idle")
+    ).strip() or ("running" if active_core_job_ids else "idle")
+    try:
+        core_queue_depth = max(
+            0,
+            int(
+                (shell_job_snapshot.get("queue_depth") if isinstance(shell_job_snapshot, dict) else "")
+                or state.get("core_queue_depth")
+                or len(queued_core_job_ids)
+            ),
+        )
+    except Exception:
+        core_queue_depth = len(queued_core_job_ids)
+    try:
+        core_pipeline_depth = max(
+            0,
+            int(
+                (shell_job_snapshot.get("pipeline_depth") if isinstance(shell_job_snapshot, dict) else "")
+                or state.get("core_pipeline_depth")
+                or len(active_core_job_ids)
+            ),
+        )
+    except Exception:
+        core_pipeline_depth = len(active_core_job_ids)
+    try:
+        core_mailbox_cursor_seq = max(
+            0,
+            int(
+                (shell_job_snapshot.get("mailbox_cursor_seq") if isinstance(shell_job_snapshot, dict) else "")
+                or state.get("core_mailbox_cursor_seq")
+                or 0
+            ),
+        )
+    except Exception:
+        core_mailbox_cursor_seq = 0
+    try:
+        last_core_handoff_message_seq = max(
+            0,
+            int(
+                (shell_job_snapshot.get("latest_handoff_message_seq") if isinstance(shell_job_snapshot, dict) else "")
+                or state.get("last_core_handoff_message_seq")
+                or 0
+            ),
+        )
+    except Exception:
+        last_core_handoff_message_seq = 0
+    try:
+        last_core_completion_message_seq = max(
+            0,
+            int(
+                (shell_job_snapshot.get("latest_completion_message_seq") if isinstance(shell_job_snapshot, dict) else "")
+                or state.get("last_core_completion_message_seq")
+                or 0
+            ),
+        )
+    except Exception:
+        last_core_completion_message_seq = 0
+    try:
+        core_recovery_restart_total = max(
+            0,
+            int(
+                (shell_job_snapshot.get("recovery_restart_total") if isinstance(shell_job_snapshot, dict) else "")
+                or state.get("core_recovery_restart_total")
+                or 0
+            ),
+        )
+    except Exception:
+        core_recovery_restart_total = 0
+    try:
+        core_job_watch_dedup_skipped_count = max(
+            0,
+            int(
+                (shell_job_snapshot.get("inbox_dedup_skipped_count") if isinstance(shell_job_snapshot, dict) else "")
+                or state.get("core_job_watch_dedup_skipped_count")
+                or 0
+            ),
+        )
+    except Exception:
+        core_job_watch_dedup_skipped_count = 0
+    try:
+        core_last_dedup_message_seq = max(
+            0,
+            int(
+                (shell_job_snapshot.get("last_dedup_message_seq") if isinstance(shell_job_snapshot, dict) else "")
+                or state.get("core_last_dedup_message_seq")
+                or 0
+            ),
+        )
+    except Exception:
+        core_last_dedup_message_seq = 0
+
+    core_runtime_id = str(
+        (shell_job_snapshot.get("core_runtime_id") if isinstance(shell_job_snapshot, dict) else "")
+        or state.get("core_runtime_id")
+        or _DEFAULT_CORE_RUNTIME_ID
+    ).strip() or _DEFAULT_CORE_RUNTIME_ID
+    active_core_job_id = str(
+        active_core_job.get("job_id")
+        or (shell_job_snapshot.get("active_job_id") if isinstance(shell_job_snapshot, dict) else "")
+        or state.get("active_core_job_id")
+        or ""
+    ).strip()
+    latest_core_job_id = str(
+        latest_core_job.get("job_id")
+        or (shell_job_snapshot.get("latest_job_id") if isinstance(shell_job_snapshot, dict) else "")
+        or state.get("last_core_job_id")
+        or ""
+    ).strip()
+    core_execution_session_id = str(
+        active_core_job.get("run_context_id")
+        or active_core_job.get("core_execution_session_id")
+        or latest_core_job.get("run_context_id")
+        or latest_core_job.get("core_execution_session_id")
+        or state.get("latest_core_job_session_id")
+        or state.get("run_context_id")
+        or state.get("core_execution_session_id")
+        or ""
+    ).strip()
+    last_run_context_id = str(
+        state.get("last_run_context_id")
+        or state.get("last_core_execution_session_id")
+        or core_execution_session_id
+        or shell_session_id
+    ).strip()
     session_ids = [shell_session_id]
     if core_execution_session_id:
         session_ids.append(core_execution_session_id)
@@ -1153,10 +1740,25 @@ def _build_chat_route_session_state_payload(session_id: str, *, limit: int = 20)
     if not route_events:
         route_events = [_build_chat_route_session_state_snapshot_event(shell_session_id, state)]
 
+    core_job_heartbeat_summary: Dict[str, Any] = {}
+    core_job_heartbeats: List[Dict[str, Any]] = []
+    recent_core_reports: List[Dict[str, Any]] = []
+    recent_core_updates: List[Dict[str, Any]] = []
+    unread_core_updates: List[Dict[str, Any]] = []
+    pending_core_update_count = int(state.get("pending_core_update_count") or 0)
+    core_outbox_cursor_seq = int(state.get("core_outbox_cursor_seq") or 0)
+    last_core_outbox_seq = int(state.get("last_core_outbox_seq") or 0)
     heartbeat_snapshot = _empty_descendant_heartbeat_snapshot(core_execution_session_id)
     if core_execution_session_id:
         agent_session_store = _get_agent_session_store()
         if agent_session_store is not None:
+            try:
+                root_snapshot = agent_session_store.get_session_heartbeat_snapshot(core_execution_session_id)
+                if isinstance(root_snapshot, dict):
+                    core_job_heartbeat_summary = dict(root_snapshot.get("summary") or {})
+                    core_job_heartbeats = list(root_snapshot.get("heartbeats") or [])
+            except Exception as exc:
+                logger.debug("构建 chat route core job heartbeat snapshot 失败: %s", exc)
             try:
                 snapshot = agent_session_store.get_descendant_heartbeat_snapshot(core_execution_session_id)
                 if isinstance(snapshot, dict):
@@ -1168,22 +1770,135 @@ def _build_chat_route_session_state_payload(session_id: str, *, limit: int = 20)
                     }
             except Exception as exc:
                 logger.debug("构建 chat route child heartbeat snapshot 失败: %s", exc)
+    try:
+        core_job_watch_payload = _collect_chat_core_job_watch_payload(
+            shell_session_id,
+            core_execution_session_id=core_execution_session_id,
+            limit=max(1, int(limit)),
+            ack=False,
+        )
+        recent_core_updates = list(core_job_watch_payload.get("recent_core_updates") or [])
+        unread_core_updates = list(core_job_watch_payload.get("unread_core_updates") or [])
+        pending_core_update_count = int(core_job_watch_payload.get("pending_core_update_count") or 0)
+        core_outbox_cursor_seq = int(core_job_watch_payload.get("core_outbox_cursor_seq") or 0)
+        last_core_outbox_seq = int(core_job_watch_payload.get("last_core_outbox_seq") or 0)
+        recent_core_reports = [
+            dict(item)
+            for item in recent_core_updates
+            if str(item.get("message_type") or "") == "report"
+        ]
+    except Exception as exc:
+        logger.debug("构建 chat route core job watch 失败: %s", exc)
+
+    last_completed_core_job_id = str(state.get("last_completed_core_job_id") or "").strip()
+    last_failed_core_job_id = str(state.get("last_failed_core_job_id") or "").strip()
+    last_blocked_core_job_id = str(state.get("last_blocked_core_job_id") or "").strip()
+    for job in recent_core_jobs:
+        job_id = str(job.get("job_id") or "").strip()
+        job_status = str(job.get("status") or "").strip()
+        if not job_id:
+            continue
+        if not last_completed_core_job_id and job_status == "completed":
+            last_completed_core_job_id = job_id
+        if not last_failed_core_job_id and job_status == "failed":
+            last_failed_core_job_id = job_id
+        if not last_blocked_core_job_id and job_status == "blocked":
+            last_blocked_core_job_id = job_id
+
+    state["core_runtime_id"] = core_runtime_id
+    state["active_core_job_id"] = active_core_job_id
+    state["last_core_job_id"] = latest_core_job_id
+    state["last_completed_core_job_id"] = last_completed_core_job_id
+    state["last_failed_core_job_id"] = last_failed_core_job_id
+    state["last_blocked_core_job_id"] = last_blocked_core_job_id
+    state["core_worker_status"] = core_worker_status
+    state["current_core_job_id"] = current_core_job_id
+    state["queued_core_job_ids"] = [str(item or "").strip() for item in queued_core_job_ids if str(item or "").strip()]
+    state["core_queue_depth"] = core_queue_depth
+    state["core_pipeline_depth"] = core_pipeline_depth
+    state["core_mailbox_cursor_seq"] = core_mailbox_cursor_seq
+    state["last_core_handoff_message_seq"] = last_core_handoff_message_seq
+    state["last_core_completion_message_seq"] = last_core_completion_message_seq
+    state["core_recovery_restart_total"] = core_recovery_restart_total
+    state["core_job_watch_dedup_skipped_count"] = core_job_watch_dedup_skipped_count
+    state["core_last_dedup_message_seq"] = core_last_dedup_message_seq
+    state["core_outbox_cursor_seq"] = core_outbox_cursor_seq
+    state["last_core_outbox_seq"] = last_core_outbox_seq
+    state["pending_core_update_count"] = pending_core_update_count
+    if core_execution_session_id:
+        state["latest_core_job_session_id"] = core_execution_session_id
+        state["run_context_id"] = core_execution_session_id
+        state["core_execution_session_id"] = core_execution_session_id
+        state["last_run_context_id"] = core_execution_session_id
+        state["last_core_execution_session_id"] = core_execution_session_id
 
     return {
         "status": "success",
         "shell_session_id": shell_session_id,
+        "core_runtime_id": core_runtime_id,
+        "active_core_job_id": active_core_job_id,
+        "active_core_job_ids": active_core_job_ids,
+        "current_core_job_id": current_core_job_id,
+        "queued_core_job_ids": list(state.get("queued_core_job_ids") or []),
+        "core_worker_status": core_worker_status,
+        "core_queue_depth": core_queue_depth,
+        "core_pipeline_depth": core_pipeline_depth,
+        "core_mailbox_cursor_seq": core_mailbox_cursor_seq,
+        "last_core_handoff_message_seq": last_core_handoff_message_seq,
+        "last_core_completion_message_seq": last_core_completion_message_seq,
+        "core_recovery_restart_total": core_recovery_restart_total,
+        "core_job_watch_dedup_skipped_count": core_job_watch_dedup_skipped_count,
+        "core_last_dedup_message_seq": core_last_dedup_message_seq,
+        "latest_core_job_id": latest_core_job_id,
+        "active_core_job": active_core_job,
+        "latest_core_job": latest_core_job,
+        "recent_core_jobs": recent_core_jobs,
+        "recent_core_updates": recent_core_updates,
+        "unread_core_updates": unread_core_updates,
+        "pending_core_update_count": pending_core_update_count,
+        "recent_core_reports": recent_core_reports,
+        "run_context_id": core_execution_session_id,
         "core_execution_session_id": core_execution_session_id,
+        "last_run_context_id": last_run_context_id,
+        "last_core_execution_session_id": last_run_context_id,
+        "run_context_exists": bool(
+            core_execution_session_id and _get_message_manager().get_session(core_execution_session_id)
+        ),
         "shell_session_exists": True,
         "core_execution_session_exists": bool(
             core_execution_session_id and _get_message_manager().get_session(core_execution_session_id)
         ),
+        "core_job_heartbeat_summary": core_job_heartbeat_summary,
+        "core_job_heartbeats": core_job_heartbeats,
         "child_heartbeat_summary": dict(heartbeat_snapshot.get("summary") or {}),
         "child_heartbeat_sessions": list(heartbeat_snapshot.get("sessions") or []),
         "child_heartbeats": list(heartbeat_snapshot.get("heartbeats") or []),
         "state": {
             "shell_clarify_turns": int(state.get("shell_clarify_turns") or 0),
             "shell_clarify_limit": _CHAT_ROUTE_SHELL_CLARIFY_LIMIT,
-            "last_core_execution_session_id": last_core_execution_session_id,
+            "core_runtime_id": core_runtime_id,
+            "active_core_job_id": active_core_job_id,
+            "last_core_job_id": latest_core_job_id,
+            "last_completed_core_job_id": last_completed_core_job_id,
+            "last_failed_core_job_id": last_failed_core_job_id,
+            "last_blocked_core_job_id": last_blocked_core_job_id,
+            "core_worker_status": core_worker_status,
+            "current_core_job_id": current_core_job_id,
+            "queued_core_job_ids": list(state.get("queued_core_job_ids") or []),
+            "core_queue_depth": core_queue_depth,
+            "core_pipeline_depth": core_pipeline_depth,
+            "core_mailbox_cursor_seq": core_mailbox_cursor_seq,
+            "last_core_handoff_message_seq": last_core_handoff_message_seq,
+            "last_core_completion_message_seq": last_core_completion_message_seq,
+            "core_recovery_restart_total": core_recovery_restart_total,
+            "core_job_watch_dedup_skipped_count": core_job_watch_dedup_skipped_count,
+            "core_last_dedup_message_seq": core_last_dedup_message_seq,
+            "core_outbox_cursor_seq": core_outbox_cursor_seq,
+            "last_core_outbox_seq": last_core_outbox_seq,
+            "pending_core_update_count": pending_core_update_count,
+            "run_context_id": core_execution_session_id,
+            "last_run_context_id": last_run_context_id,
+            "last_core_execution_session_id": last_run_context_id,
             "last_core_escalation_at_ms": int(state.get("last_core_escalation_at_ms") or 0),
             "last_route_semantic": str(state.get("last_route_semantic") or ""),
             "last_active_agent": str(state.get("last_active_agent") or ""),

@@ -126,7 +126,6 @@ def test_llm_service_injects_immutable_dna_runtime_prompt(monkeypatch) -> None:
     finally:
         _cleanup_case_root(case_root)
 
-
 def test_llm_service_blocks_chat_when_immutable_dna_verification_fails(monkeypatch) -> None:
     case_root = _make_case_root("test_llm_service_immutable_dna_runtime_injection")
     try:

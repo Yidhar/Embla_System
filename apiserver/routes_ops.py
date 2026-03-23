@@ -1273,12 +1273,16 @@ def _ops_build_response(
     return payload
 
 
-def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, Any]:
+def _ops_build_runtime_posture_payload(
+    events_limit: int = 5000,
+    *,
+    repo_root: Optional[Path] = None,
+) -> Dict[str, Any]:
     try:
         from scripts.export_slo_snapshot import build_snapshot
 
-        repo_root = _ops_repo_root()
-        snapshot = build_snapshot(repo_root=repo_root, events_limit=max(1, int(events_limit)))
+        resolved_repo_root = Path(repo_root).resolve() if repo_root is not None else _ops_repo_root()
+        snapshot = build_snapshot(repo_root=resolved_repo_root, events_limit=max(1, int(events_limit)))
     except Exception as exc:
         logger.error(f"构建 runtime posture 聚合失败: {exc}")
         raise
@@ -1290,7 +1294,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     events_file_raw = str(sources.get("events_file") or "").strip()
     events_file = Path(events_file_raw) if events_file_raw else Path("__missing_events_file__.jsonl")
     if events_file_raw and not events_file.is_absolute():
-        events_file = _ops_repo_root() / events_file
+        events_file = resolved_repo_root / events_file
     legacy_namespace = _ops_collect_archived_legacy_namespace(
         _ops_read_event_rows(events_file, limit=max(200, int(events_limit)))
     )
@@ -1319,7 +1323,7 @@ def _ops_build_runtime_posture_payload(events_limit: int = 5000) -> Dict[str, An
     )
     vision_multimodal_status = _ops_status_to_severity(str(vision_multimodal.get("status") or "unknown"))
 
-    repo_root = _ops_repo_root()
+    repo_root = resolved_repo_root
     brainstem_control_plane = _ops_build_brainstem_control_plane_summary(repo_root)
     brainstem_status = _ops_status_to_severity(str(brainstem_control_plane.get("status") or "unknown"))
     control_plane_mode = _ops_resolve_control_plane_mode_summary()

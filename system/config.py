@@ -112,6 +112,12 @@ def _embla_system_default_payload() -> Dict[str, Any]:
             "heartbeat_interval_seconds": 5,
             "max_rounds_default": 500,
             "max_task_cost_usd": 5.0,
+            "core_loop": {
+                "soft_max_rounds": 12,
+                "hard_max_rounds": 0,
+                "poll_parent_every_n": 3,
+                "quiescent_cycles_before_stop": 2,
+            },
             "child_session_cleanup": {
                 "mode": "retain",
                 "ttl_seconds": 86400,
@@ -562,6 +568,19 @@ class APIRoutingConfig(BaseModel):
     )
 
 
+class APISpecializedTargetsConfig(BaseModel):
+    """专用能力 LLM 覆盖配置（留空回退到 api.*）。"""
+
+    quintuple_extraction: APIRouteTargetConfig = Field(
+        default_factory=APIRouteTargetConfig,
+        description="五元组提取专用 LLM API 覆盖配置",
+    )
+    context_compression: Optional[APIRouteTargetConfig] = Field(
+        default=None,
+        description="Reserved — no production consumer yet. See quintuple_extraction for the active pattern.",
+    )
+
+
 class APIShellLoopConfig(BaseModel):
     """Shell 只读工具循环的停止条件配置。"""
 
@@ -604,6 +623,10 @@ class APIConfig(BaseModel):
     routing: APIRoutingConfig = Field(
         default_factory=APIRoutingConfig,
         description="按路由（shell/core）覆盖 LLM API 地址与模型",
+    )
+    specialized: APISpecializedTargetsConfig = Field(
+        default_factory=APISpecializedTargetsConfig,
+        description="按能力（五元组提取/上下文压缩）覆盖 LLM API 地址与模型",
     )
     shell_loop: APIShellLoopConfig = Field(
         default_factory=APIShellLoopConfig,
@@ -648,9 +671,11 @@ class GRAGConfig(BaseModel):
     vector_query_top_k: int = Field(default=8, ge=1, le=200, description="向量检索Top-K")
     vector_similarity_function: str = Field(default="cosine", description="向量相似度函数（cosine/euclidean）")
     vector_upsert_on_write: bool = Field(default=True, description="写入五元组时是否同步更新实体向量")
-    extraction_timeout: int = Field(default=12, ge=1, le=60, description="知识提取超时时间（秒）")
+    extraction_timeout: int = Field(default=20, ge=1, le=60, description="知识提取单次上游请求超时（秒）")
     extraction_retries: int = Field(default=2, ge=0, le=5, description="知识提取重试次数")
-    base_timeout: int = Field(default=15, ge=5, le=120, description="基础操作超时时间（秒）")
+    extraction_model: str = Field(default="", description="知识提取专用模型（留空回退到 api.model）")
+    extraction_temperature: float = Field(default=1.0, ge=0.0, le=2.0, description="知识提取专用采样温度")
+    base_timeout: int = Field(default=40, ge=5, le=120, description="知识提取总完成超时（含重试，秒）")
 
 
 class HandoffConfig(BaseModel):
@@ -880,7 +905,7 @@ class SandboxConfig(BaseModel):
 
 
 class BrowserConfig(BaseModel):
-    """浏览器配置"""
+    """Legacy GUI config — retained for config.json backward compatibility. No API-server consumer."""
 
     playwright_headless: bool = Field(default=False, description="Playwright浏览器是否无头模式")
     edge_lnk_path: str = Field(
@@ -912,7 +937,7 @@ class FilterConfig(BaseModel):
 
 
 class DifficultyConfig(BaseModel):
-    """问题难度判断配置"""
+    """Legacy GUI config — retained for config.json backward compatibility. No API-server consumer."""
 
     enabled: bool = Field(default=False, description="是否启用难度判断")
     use_small_model: bool = Field(default=False, description="使用小模型进行难度判断")
@@ -928,7 +953,7 @@ class DifficultyConfig(BaseModel):
 
 
 class ScoringConfig(BaseModel):
-    """黑白名单打分系统配置"""
+    """Legacy GUI config — retained for config.json backward compatibility. No API-server consumer."""
 
     enabled: bool = Field(default=False, description="是否启用打分系统")
     score_range: List[int] = Field(default=[1, 5], description="评分范围")
@@ -982,7 +1007,7 @@ class EmbeddingConfig(BaseModel):
 
 
 class MQTTConfig(BaseModel):
-    """MQTT配置"""
+    """Legacy GUI config — retained for config.json backward compatibility. No API-server consumer."""
 
     enabled: bool = Field(default=False, description="是否启用MQTT功能")
     broker: str = Field(default="localhost", description="MQTT代理服务器地址")
@@ -996,7 +1021,7 @@ class MQTTConfig(BaseModel):
 
 
 class UIConfig(BaseModel):
-    """用户界面配置"""
+    """Legacy GUI config — retained for config.json backward compatibility. No API-server consumer."""
 
     user_name: str = Field(default="用户", description="默认用户名")
     bg_alpha: float = Field(default=0.5, ge=0.0, le=1.0, description="聊天背景透明度")
@@ -1008,11 +1033,11 @@ class UIConfig(BaseModel):
 
 
 class FloatingConfig(BaseModel):
-    """悬浮球模式配置"""
+    """Legacy GUI config — retained for config.json backward compatibility. No API-server consumer."""
     enabled: bool = Field(default=False, description="是否启用悬浮球模式")
 
 class EmblaPortalConfig(BaseModel):
-    """Embla 门户账户配置。"""
+    """Legacy GUI config — retained for config.json backward compatibility. No API-server consumer."""
 
     portal_url: str = Field(default="", description="Embla 门户地址")
     username: str = Field(default="", description="Embla 门户用户名")
@@ -1035,7 +1060,7 @@ class EmblaPortalConfig(BaseModel):
 
 
 class OnlineSearchConfig(BaseModel):
-    """在线搜索配置"""
+    """Legacy GUI config — retained for config.json backward compatibility. No API-server consumer."""
 
     searxng_url: str = Field(default="http://localhost:8080", description="SearXNG实例URL")
     engines: List[str] = Field(default=["google"], description="默认搜索引擎列表")
@@ -1886,6 +1911,45 @@ def hot_reload_config() -> EmblaSystemConfig:
 def get_config() -> EmblaSystemConfig:
     """获取当前配置"""
     return config
+
+
+def get_specialized_api_override(target_name: str) -> Optional[Dict[str, str]]:
+    """Resolve specialized API override by canonical target name.
+
+    Reads from ``config.api.specialized.<target_name>`` and returns a flat
+    dict of non-empty fields.  Returns ``None`` when the target is absent or
+    all fields are empty.  Shared by LLMService and summer_memory extractors.
+    """
+    normalized_target = str(target_name or "").strip()
+    if not normalized_target:
+        return None
+
+    cfg = get_config()
+    api_cfg = getattr(cfg, "api", None)
+    specialized_cfg = getattr(api_cfg, "specialized", None) if api_cfg is not None else None
+    target_cfg = getattr(specialized_cfg, normalized_target, None) if specialized_cfg is not None else None
+    if target_cfg is None:
+        return None
+
+    override: Dict[str, str] = {}
+    for source_key, target_field in (
+        ("api_key", "api_key"),
+        ("base_url", "base_url"),
+        ("model", "model"),
+        ("provider", "provider"),
+        ("protocol", "protocol"),
+    ):
+        value = str(getattr(target_cfg, source_key, "") or "").strip()
+        if value:
+            override[target_field] = value
+
+    reasoning_effort = str(
+        getattr(target_cfg, "reasoning_effort", "") or getattr(target_cfg, "thinking_intensity", "") or ""
+    ).strip()
+    if reasoning_effort:
+        override["reasoning_effort"] = reasoning_effort
+
+    return override or None
 
 
 # 初始化时打印配置信息

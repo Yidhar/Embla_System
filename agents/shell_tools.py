@@ -5,7 +5,7 @@ Canonical Shell tools:
   2. memory_list      — list L1 memory files by scope
   3. memory_grep      — grep L1 memory files by keyword/regex
   4. memory_search    — unified L1 index + episodic archive + Shell L2 quintuple search
-  5. get_system_status — brainstem posture + agent stats + git status
+  5. get_system_status — runtime posture + agent stats + git status
   6. list_tasks       — active tasks from TaskBoardEngine
   7. search_web       — extensible stub (requires external API config)
 
@@ -21,6 +21,8 @@ import logging
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from core.event_bus.runtime_views import build_topic_event_posture_summary
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +140,7 @@ TOOL_DEF_MEMORY_GREP: Dict[str, Any] = {
 TOOL_DEF_SYSTEM_STATUS: Dict[str, Any] = {
     "name": "get_system_status",
     "description": (
-        "Get the current system status including brainstem posture, "
+        "Get the current system status including runtime posture, "
         "agent session statistics, and git repository status."
     ),
     "parameters": {
@@ -382,25 +384,132 @@ def _handle_memory_grep(
 
 # ── 4. get_system_status ──────────────────────────────────────
 
+_SYSTEM_STATUS_RUNTIME_POSTURE_EVENTS_LIMIT = 200
+
+
+def _status_label(value: Any) -> str:
+    text = str(value or "").strip()
+    return text or "unknown"
+
+
+def _format_seconds(value: Any) -> str:
+    if isinstance(value, bool):
+        return "N/A"
+    if isinstance(value, (int, float)):
+        return f"{float(value):.1f}s"
+    return "N/A"
+
+
+def _load_runtime_posture_payload(*, project_root: Path) -> Dict[str, Any]:
+    try:
+        from apiserver.routes_ops import _ops_build_runtime_posture_payload
+
+        payload = _ops_build_runtime_posture_payload(
+            events_limit=_SYSTEM_STATUS_RUNTIME_POSTURE_EVENTS_LIMIT,
+            repo_root=project_root,
+        )
+        return payload if isinstance(payload, dict) else {}
+    except Exception as exc:
+        logger.debug("get_system_status runtime posture load failed: %s", exc, exc_info=True)
+        return {}
+
+
+def _build_runtime_posture_lines(*, project_root: Path) -> List[str]:
+    payload = _load_runtime_posture_payload(project_root=project_root)
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    route_quality = summary.get("route_quality") if isinstance(summary.get("route_quality"), dict) else {}
+    runtime_lease = summary.get("runtime_lease") if isinstance(summary.get("runtime_lease"), dict) else {}
+    lock_status = summary.get("lock_status") if isinstance(summary.get("lock_status"), dict) else {}
+
+    event_posture = build_topic_event_posture_summary(project_root)
+
+    lines: List[str] = []
+    if payload:
+        lines.append("## Runtime Posture")
+        overall_status = _status_label(summary.get("overall_status") or payload.get("severity"))
+        lines.append(f"- 总体状态: {overall_status}")
+        reason_code = str(payload.get("reason_code") or "").strip()
+        reason_text = str(payload.get("reason_text") or "").strip()
+        if reason_code or reason_text:
+            if reason_code and reason_text:
+                lines.append(f"- 原因: {reason_code} — {reason_text}")
+            else:
+                lines.append(f"- 原因: {reason_code or reason_text}")
+        generated_at = str(payload.get("generated_at") or "").strip()
+        if generated_at:
+            lines.append(f"- 生成时间: {generated_at}")
+
+        control_plane_mode = str(summary.get("control_plane_mode") or "").strip() or "unknown"
+        control_plane_status = _status_label(summary.get("control_plane_mode_status"))
+        lines.append(f"- 控制面: {control_plane_mode} ({control_plane_status})")
+
+        lease_status = _status_label(runtime_lease.get("status"))
+        lease_state = str(runtime_lease.get("state") or lock_status.get("state") or "").strip() or "unknown"
+        lease_owner = str(runtime_lease.get("owner_id") or lock_status.get("owner_id") or "").strip() or "N/A"
+        lease_remaining = _format_seconds(runtime_lease.get("value"))
+        lines.append(
+            f"- 租约: {lease_status} / state={lease_state} / owner={lease_owner} / remaining={lease_remaining}"
+        )
+
+        lines.append(
+            "- 守护链: "
+            f"brainstem={_status_label(summary.get('brainstem_control_plane_status'))}, "
+            f"watchdog={_status_label(summary.get('watchdog_daemon_status'))}, "
+            f"process_guard={_status_label(summary.get('process_guard_status'))}"
+        )
+        lines.append(
+            "- 安全链: "
+            f"killswitch={_status_label(summary.get('killswitch_guard_status'))}, "
+            f"budget={_status_label(summary.get('budget_guard_status'))}, "
+            f"immutable_dna={_status_label(summary.get('immutable_dna_status'))}, "
+            f"audit={_status_label(summary.get('audit_ledger_status'))}"
+        )
+        lines.append(
+            "- 执行链: "
+            f"os_sandbox={_status_label(summary.get('os_sandbox_runtime_status'))}, "
+            f"boxlite={_status_label(summary.get('boxlite_runtime_status'))}"
+        )
+        lines.append(
+            "- 编排质量: "
+            f"route_quality={_status_label(route_quality.get('status'))}, "
+            f"execution_bridge={_status_label(summary.get('execution_bridge_governance_status'))}, "
+            f"agentic_loop={_status_label(summary.get('agentic_loop_completion_status'))}, "
+            f"core_spawn={_status_label(summary.get('core_child_spawn_deferred_status'))}, "
+            f"vision={_status_label(summary.get('vision_multimodal_status'))}"
+        )
+        dispatch_to_core_rate = route_quality.get("dispatch_to_core_rate")
+        if isinstance(dispatch_to_core_rate, (int, float)):
+            lines.append(f"- Shell→Core 升级率: {float(dispatch_to_core_rate):.3f}")
+
+    if str(event_posture.get("status") or "") == "ok":
+        if not lines:
+            lines.append("## Runtime Posture")
+        lines.append(
+            "- 事件面: "
+            f"total={int(event_posture.get('total_events') or 0)}, "
+            f"warnings={int(event_posture.get('warning_events') or 0)}, "
+            f"errors={int(event_posture.get('error_events') or 0)}, "
+            f"latest={event_posture.get('last_event_type') or 'N/A'}, "
+            f"updated_at={event_posture.get('last_event_timestamp') or event_posture.get('generated_at') or 'N/A'}"
+        )
+        return lines
+
+    if not lines:
+        reason_text = str(event_posture.get("reason_text") or "").strip()
+        if reason_text:
+            return [f"## Runtime Posture: 未初始化（{reason_text}）"]
+        return ["## Runtime Posture: 未初始化（事件数据库不存在）"]
+
+    return lines
+
 
 def _handle_get_system_status(*, project_root: Path) -> str:
     """Collect system status from multiple sources."""
     sections: List[str] = []
 
-    # A. Brainstem posture
-    posture_file = project_root / "scratch" / "runtime" / "event_bus_runtime_posture_ws28_029.json"
-    if posture_file.exists():
-        try:
-            posture_data = json.loads(posture_file.read_text(encoding="utf-8"))
-            sections.append("## 脑干 Posture 状态")
-            sections.append(f"- 事件总数: {posture_data.get('events_total', 'N/A')}")
-            sections.append(f"- 错误数: {posture_data.get('errors_total', 'N/A')}")
-            sections.append(f"- 最近事件: {posture_data.get('latest_event_type', 'N/A')}")
-            sections.append(f"- 更新时间: {posture_data.get('updated_at', 'N/A')}")
-        except Exception as exc:
-            sections.append(f"## 脑干 Posture: 读取失败 ({exc})")
-    else:
-        sections.append("## 脑干 Posture: 未初始化（posture 文件不存在）")
+    # A. Runtime posture
+    sections.extend(_build_runtime_posture_lines(project_root=project_root))
 
     # B. Killswitch state
     ks_file = project_root / "scratch" / "runtime" / "killswitch_guard_state_ws28_028.json"

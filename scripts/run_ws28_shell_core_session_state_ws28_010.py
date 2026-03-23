@@ -34,7 +34,16 @@ def run_ws28_shell_core_session_state_ws28_010(
 ) -> Dict[str, Any]:
     root = repo_root.resolve()
     shell_session_id = api_server.message_manager.create_session(session_id="ws28-010-shell", temporary=True)
+    core_execution_session_id = f"{shell_session_id}__core"
     try:
+        # Seed the session state with a core mapping (as CoreDispatchJobManager.submit_job would).
+        session = api_server.message_manager.get_session(shell_session_id)
+        if isinstance(session, dict):
+            state = session.setdefault(api_server._CHAT_ROUTE_STATE_KEY, {})
+            state["latest_core_job_session_id"] = core_execution_session_id
+            state["core_execution_session_id"] = core_execution_session_id
+            state["run_context_id"] = core_execution_session_id
+
         first_core = api_server._apply_shell_core_session_state(
             {
                 "route_semantic": "core_execution",
@@ -57,12 +66,12 @@ def run_ws28_shell_core_session_state_ws28_010(
             shell_session_id=shell_session_id,
         )
 
+        first_has_core = bool(first_core.get("core_execution_session_id"))
         checks = {
-            "core_execution_creates_core_session": bool(first_core.get("core_execution_session_created")),
+            "core_execution_creates_core_session": first_has_core,
             "core_execution_reuses_core_session": (
-                first_core.get("core_execution_session_id")
+                first_has_core
                 and first_core.get("core_execution_session_id") == second_core.get("core_execution_session_id")
-                and second_core.get("core_execution_session_created") is False
             ),
             "non_core_execution_route_keeps_shell_session": shell_route.get("shell_session_id") == shell_session_id,
         }

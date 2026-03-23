@@ -684,6 +684,37 @@ class AgentSessionStore:
                 if s.parent_id == parent_id and s.status != AgentStatus.DESTROYED
             ]
 
+    def list_sessions(
+        self,
+        *,
+        role: Optional[str] = None,
+        parent_id: Optional[str] = None,
+        status: Optional[AgentStatus] = None,
+    ) -> List[AgentSession]:
+        """List all non-destroyed sessions with optional factual filters."""
+        role_filter = str(role or "").strip()
+        parent_filter = str(parent_id or "").strip() if parent_id is not None else None
+        with self._lock:
+            sessions = [
+                session
+                for session in self._sessions.values()
+                if session.status != AgentStatus.DESTROYED
+            ]
+        if role_filter:
+            sessions = [session for session in sessions if str(session.role or "").strip() == role_filter]
+        if parent_filter is not None:
+            sessions = [session for session in sessions if str(session.parent_id or "").strip() == parent_filter]
+        if status is not None:
+            sessions = [session for session in sessions if session.status == status]
+        sessions.sort(
+            key=lambda session: (
+                str(session.updated_at or ""),
+                str(session.session_id or ""),
+            ),
+            reverse=True,
+        )
+        return sessions
+
     def destroy(self, session_id: str, reason: str = "") -> Dict[str, Any]:
         """Mark session as destroyed and clean up, returning factual cleanup results."""
         cleanup_context: Dict[str, Any] = {}

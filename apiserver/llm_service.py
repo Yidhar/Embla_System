@@ -29,6 +29,7 @@ from system.config import (
     get_config,
     get_immutable_agent_identity_prompts,
     get_immutable_dna_runtime_prompts,
+    get_specialized_api_override as _get_specialized_api_override,
     resolve_prompt_file_reference,
 )
 from core.security import DNAFileSpec, ImmutableDNALoader
@@ -552,6 +553,21 @@ class LLMService:
             params["extra_headers"] = extra_headers
 
         return params
+
+    @staticmethod
+    def get_specialized_api_override(target_name: str) -> Optional[Dict[str, str]]:
+        """Resolve specialized API override by canonical target name.
+
+        Delegates to the shared ``system.config.get_specialized_api_override``
+        and remaps ``base_url`` -> ``api_base`` for litellm compatibility.
+        """
+        raw = _get_specialized_api_override(target_name)
+        if raw is None:
+            return None
+        # litellm expects 'api_base' rather than 'base_url'
+        if "base_url" in raw:
+            raw["api_base"] = raw.pop("base_url")
+        return raw
 
     async def get_response(self, prompt: str, temperature: float = 0.7) -> str:
         response = await self.get_response_with_reasoning(prompt, temperature)

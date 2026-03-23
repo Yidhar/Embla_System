@@ -16,6 +16,7 @@ def test_task_manager_uses_grag_extraction_timeout_and_retries(monkeypatch) -> N
             grag=SimpleNamespace(
                 enabled=True,
                 extraction_timeout=7,
+                base_timeout=41,
                 extraction_retries=4,
             )
         ),
@@ -24,6 +25,7 @@ def test_task_manager_uses_grag_extraction_timeout_and_retries(monkeypatch) -> N
     manager = task_mod.QuintupleTaskManager()
 
     assert manager.task_timeout == 7
+    assert manager.completion_timeout == 41
     assert manager.extraction_retries == 4
     assert manager.enabled is True
 
@@ -36,6 +38,7 @@ def test_task_manager_timeout_returns_error_instead_of_raising(monkeypatch) -> N
             grag=SimpleNamespace(
                 enabled=True,
                 extraction_timeout=1,
+                base_timeout=1,
                 extraction_retries=0,
             )
         ),
@@ -55,6 +58,7 @@ def test_task_manager_timeout_returns_error_instead_of_raising(monkeypatch) -> N
     async def _run() -> tuple[list | None, str | None, task_mod.QuintupleTaskManager]:
         manager = task_mod.QuintupleTaskManager(max_workers=1, max_queue_size=8)
         manager.task_timeout = 0.05
+        manager.completion_timeout = 0.05
         await manager.start()
         try:
             task_id = await manager.add_task("演示文本")
@@ -66,10 +70,52 @@ def test_task_manager_timeout_returns_error_instead_of_raising(monkeypatch) -> N
     result, error, manager = asyncio.run(_run())
 
     assert result is None
-    assert error == "任务执行超时(0.05s)"
+    assert error == "任务执行超时(request=0.05s,total=0.05s)"
     assert observed["timeout_seconds"] == 0.05
     assert observed["max_retries"] == 0
     assert manager.failed_tasks == 1
+
+
+def test_task_manager_timeout_uses_local_heuristic_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(
+        task_mod,
+        "config",
+        SimpleNamespace(
+            grag=SimpleNamespace(
+                enabled=True,
+                extraction_timeout=1,
+                base_timeout=1,
+                extraction_retries=0,
+            )
+        ),
+    )
+
+    async def _slow_extract(text: str, *, timeout_seconds: int | None = None, max_retries: int | None = None):
+        del text, timeout_seconds, max_retries
+        await asyncio.sleep(0.2)
+        return []
+
+    monkeypatch.setattr("summer_memory.quintuple_extractor.extract_quintuples_async", _slow_extract)
+
+    async def _run() -> tuple[list | None, str | None, task_mod.QuintupleTaskManager]:
+        manager = task_mod.QuintupleTaskManager(max_workers=1, max_queue_size=8)
+        manager.task_timeout = 0.05
+        manager.completion_timeout = 0.05
+        await manager.start()
+        try:
+            task_id = await manager.add_task("用户: 读取 README.md 并关注五元组提取")
+            result, error = await manager.get_task_result(task_id, timeout=1.0)
+            return result, error, manager
+        finally:
+            await manager.shutdown()
+
+    result, error, manager = asyncio.run(_run())
+
+    assert error is None
+    assert result is not None
+    assert ("用户", "person", "关注", "五元组提取", "topic") in result
+    assert ("会话", "session", "引用", "README.md", "artifact") in result
+    assert manager.completed_tasks == 1
 
 
 def test_grag_memory_manager_registers_failed_task_callback(monkeypatch) -> None:
@@ -137,3 +183,41 @@ def test_grag_memory_fallback_passes_timeout_budget_to_sync_extractor(monkeypatc
 
     assert ok is True
     assert observed == {"timeout_seconds": 9, "max_retries": 1}
+
+
+def test_grag_memory_stats_include_extraction_runtime(monkeypatch) -> None:
+    dummy_task_manager = SimpleNamespace(
+        on_task_completed=None,
+        on_task_failed=None,
+        get_stats=lambda: {"enabled": True, "total_tasks": 0},
+    )
+    monkeypatch.setattr(memory_mod, "task_manager", dummy_task_manager)
+    monkeypatch.setattr(memory_mod, "start_auto_cleanup", lambda: None)
+    monkeypatch.setattr(graph_mod, "get_graph", lambda: None)
+    monkeypatch.setattr(graph_mod, "GRAG_ENABLED", False, raising=False)
+    monkeypatch.setattr(memory_mod, "get_all_quintuples", lambda: set())
+    monkeypatch.setattr(memory_mod, "get_vector_index_status", lambda: {"ready": True})
+    monkeypatch.setattr(
+        memory_mod,
+        "get_extraction_runtime_status",
+        lambda: {"last_upstream_timeout": {"reason_code": "upstream_api_timeout"}},
+    )
+    monkeypatch.setattr(
+        memory_mod,
+        "config",
+        SimpleNamespace(
+            grag=SimpleNamespace(
+                enabled=True,
+                auto_extract=True,
+                context_length=5,
+                similarity_threshold=0.6,
+                extraction_timeout=9,
+                extraction_retries=1,
+            )
+        ),
+    )
+
+    manager = memory_mod.GRAGMemoryManager()
+    stats = manager.get_memory_stats()
+
+    assert stats["extraction_runtime"]["last_upstream_timeout"]["reason_code"] == "upstream_api_timeout"

@@ -13,12 +13,12 @@ from typing import Any, Dict, List, Optional
 # ── Backward-compatible stubs for removed mcpserver.plugin_worker ──
 
 class PluginWorkerSpec:
-    """Stub — previously from mcpserver.plugin_worker."""
+    """Legacy stub — retained for import compat after mcpserver removal."""
     pass
 
 
 class PluginWorkerProxy:
-    """Stub — previously from mcpserver.plugin_worker."""
+    """Legacy stub — retained for import compat after mcpserver removal."""
     pass
 
 

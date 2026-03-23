@@ -98,7 +98,7 @@ class ImmutableDNALoader:
             DNAFileSpec(path="agentic_tool_prompt.md"),
         ]
         self.dna_files = list(dna_files or default_files)
-        self.manifest_path = manifest_path or (self.root_dir / "immutable_dna_manifest.json")
+        self.manifest_path = manifest_path or (self.root_dir / "immutable_dna_manifest.spec")
         self.audit_file = audit_file or (self.root_dir / "immutable_dna_audit.jsonl")
         self.root_dir.mkdir(parents=True, exist_ok=True)
         self.audit_file.parent.mkdir(parents=True, exist_ok=True)

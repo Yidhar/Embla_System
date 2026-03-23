@@ -34,6 +34,7 @@ from agents.contract_runtime import (
     trim_contract_text as trim_brain_contract_text,
 )
 from agents.pipeline import run_multi_agent_pipeline
+from apiserver.core_job_manager import CoreDispatchJobManager, DEFAULT_CORE_RUNTIME_ID
 from agents.prompt_engine import get_system_prompts_root
 from agents.shell_agent import ShellAgent
 from agents.runtime.agent_session import AgentSessionStore
@@ -79,6 +80,7 @@ _PIPELINE_RUNTIME_LOCK = threading.Lock()
 _PIPELINE_SESSION_STORE: Optional[AgentSessionStore] = None
 _PIPELINE_MAILBOX: Optional[AgentMailbox] = None
 _PIPELINE_TASK_BOARD: Optional[TaskBoardEngine] = None
+_CORE_JOB_MANAGER: Optional[CoreDispatchJobManager] = None
 
 
 def _get_pipeline_runtime_handles() -> tuple[AgentSessionStore, AgentMailbox, TaskBoardEngine]:
@@ -104,6 +106,39 @@ def _get_pipeline_runtime_handles() -> tuple[AgentSessionStore, AgentMailbox, Ta
     return _PIPELINE_SESSION_STORE, _PIPELINE_MAILBOX, _PIPELINE_TASK_BOARD
 
 
+def _get_core_job_manager() -> CoreDispatchJobManager:
+    global _CORE_JOB_MANAGER
+    if _CORE_JOB_MANAGER is not None:
+        _configure_core_job_manager_runtime(_CORE_JOB_MANAGER)
+        return _CORE_JOB_MANAGER
+    with _PIPELINE_RUNTIME_LOCK:
+        if _CORE_JOB_MANAGER is None:
+            _CORE_JOB_MANAGER = CoreDispatchJobManager()
+    _configure_core_job_manager_runtime(_CORE_JOB_MANAGER)
+    return _CORE_JOB_MANAGER
+
+
+def _configure_core_job_manager_runtime(manager: Optional[CoreDispatchJobManager]) -> None:
+    if manager is None:
+        return
+    session_store, agent_mailbox, task_board_engine = _get_pipeline_runtime_handles()
+    child_session_cleanup_policy = _resolve_pipeline_child_session_cleanup_policy()
+    child_max_rounds = _resolve_pipeline_child_max_rounds(stream=True)
+    manager.configure_runtime_defaults(
+        store=session_store,
+        mailbox=agent_mailbox,
+        task_board_engine=task_board_engine,
+        runner=run_multi_agent_pipeline,
+        child_llm_call=_default_pipeline_child_llm_call,
+        child_tool_executor=_default_pipeline_child_tool_executor,
+        enable_child_execution=True,
+        child_max_rounds=child_max_rounds,
+        child_session_cleanup_mode=str(child_session_cleanup_policy.get("mode") or "retain"),
+        child_session_cleanup_ttl_seconds=int(child_session_cleanup_policy.get("ttl_seconds") or 0),
+        heartbeat_interval_seconds=_PIPELINE_STREAM_HEARTBEAT_INTERVAL_SECONDS,
+    )
+
+
 def _resolve_pipeline_child_session_cleanup_policy() -> Dict[str, Any]:
     policy = {"mode": "retain", "ttl_seconds": 86400}
     try:
@@ -122,6 +157,29 @@ def _resolve_pipeline_child_session_cleanup_policy() -> Dict[str, Any]:
             ttl_seconds = int(policy["ttl_seconds"])
         policy["ttl_seconds"] = max(0, ttl_seconds)
     return policy
+
+
+def _resolve_pipeline_child_max_rounds(*, stream: bool = True) -> int:
+    configured_value: Any = None
+    try:
+        agentic_loop_cfg = getattr(get_config(), "agentic_loop", None)
+        if agentic_loop_cfg is not None:
+            attr_name = "max_rounds_stream" if stream else "max_rounds_non_stream"
+            configured_value = getattr(agentic_loop_cfg, attr_name, None)
+    except Exception:
+        configured_value = None
+    if configured_value in (None, ""):
+        try:
+            embla_cfg = get_embla_system_config()
+        except Exception:
+            embla_cfg = {}
+        runtime_cfg = embla_cfg.get("runtime") if isinstance(embla_cfg, dict) else {}
+        if isinstance(runtime_cfg, dict):
+            configured_value = runtime_cfg.get("max_rounds_default", configured_value)
+    try:
+        return max(1, int(configured_value or 12))
+    except (TypeError, ValueError):
+        return 12
 
 # 导入配置系统
 try:
@@ -164,9 +222,17 @@ def _build_shell_l2_round_messages(
 ) -> List[Dict[str, Any]]:
     prepared: List[Dict[str, Any]] = []
     for item in base_messages or []:
-        if isinstance(item, dict):
-            prepared.append(dict(item))
-    normalized_response = str(assistant_response or "")
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if role == "system":
+            continue
+        prepared.append(dict(item))
+    for idx in range(len(prepared) - 1, -1, -1):
+        if str(prepared[idx].get("role") or "").strip().lower() == "user":
+            prepared = prepared[idx:]
+            break
+    normalized_response = str(assistant_response or "").strip()
     if normalized_response:
         if not prepared or str(prepared[-1].get("role") or "") != "assistant" or str(prepared[-1].get("content") or "") != normalized_response:
             prepared.append({"role": "assistant", "content": normalized_response})
@@ -273,6 +339,8 @@ _bind_route_exports(
         "_read_chat_route_event_rows",
         "_collect_chat_route_session_state_events",
         "_build_chat_route_session_state_payload",
+        "_collect_chat_core_job_watch_payload",
+        "_build_core_job_watch_updates_digest",
         "_CHAT_ROUTE_STATE_KEY",
         "_emit_chat_route_prompt_event",
         "_emit_chat_route_guard_event",
@@ -286,6 +354,7 @@ _bind_route_exports(
         "_emit_core_child_spawn_deferred_event",
         "_extract_agentic_execution_receipt_text",
         "_format_sse_payload_chunk_json",
+        "_register_core_job_submission",
     ],
 )
 
@@ -300,6 +369,7 @@ if hasattr(_routes_chat, "_bind_chat_runtime_context"):
             else getattr(_routes_chat, "_CHAT_ROUTE_ARBITER_GUARD", None)
         ),
         agent_session_store_getter=lambda: _get_pipeline_runtime_handles()[0],
+        agent_mailbox_getter=lambda: _get_pipeline_runtime_handles()[1],
         event_store_getter=lambda: (
             globals().get("_CHAT_ROUTE_EVENT_STORE")
             if globals().get("_CHAT_ROUTE_EVENT_STORE") is not None
@@ -323,6 +393,7 @@ if hasattr(_routes_chat, "_bind_chat_runtime_context"):
             )
             else _routes_chat._read_chat_route_event_rows(limit=limit)
         ),
+        core_job_manager_getter=_get_core_job_manager,
     )
 if hasattr(_routes_brainstem, "_bind_brainstem_runtime_context"):
     _routes_brainstem._bind_brainstem_runtime_context(
@@ -714,6 +785,47 @@ async def _collect_pipeline_child_llm_turn(
     )
 
 
+async def _default_pipeline_child_llm_call(
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    model_name: str,
+) -> Dict[str, Any]:
+    del model_name
+    api_cfg = get_config().api
+    timeout_seconds = max(
+        5.0,
+        float(getattr(api_cfg, "request_timeout", 120) or 120) + 15.0,
+    )
+    return await _collect_pipeline_child_llm_turn(
+        llm_service=get_llm_service(),
+        messages=messages,
+        temperature=float(getattr(api_cfg, "temperature", 0.7)),
+        model_override=_build_route_model_override("core_execution"),
+        tools=tools,
+        tool_choice="auto",
+        timeout_seconds=timeout_seconds,
+    )
+
+
+async def _default_pipeline_child_tool_executor(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    child_session_id: str,
+) -> Dict[str, Any]:
+    session_store, _, _ = _get_pipeline_runtime_handles()
+    native_tool_executor = get_native_tool_executor()
+    call_payload = dict(arguments) if isinstance(arguments, dict) else {}
+    call_payload["tool_name"] = str(tool_name or "")
+    call_payload["_session_id"] = child_session_id
+    call_payload["session_id"] = child_session_id
+    raw_result = await native_tool_executor.execute(call_payload, session_id=child_session_id)
+    return _enrich_child_tool_result_metadata(
+        raw_result,
+        child_session_id=child_session_id,
+        session_store=session_store,
+    )
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -753,6 +865,7 @@ def _build_pipeline_stream_heartbeat_event(
         "type": "pipeline_heartbeat",
         "pipeline_id": str(pipeline_id or ""),
         "shell_session_id": str(shell_session_id or ""),
+        "run_context_id": str(core_execution_session_id or ""),
         "core_execution_session_id": str(core_execution_session_id or ""),
         "generated_at": _utc_now_iso(),
         "elapsed_seconds": round(max(0.0, time.monotonic() - float(started_monotonic or time.monotonic())), 3),
@@ -965,6 +1078,7 @@ async def lifespan(app: FastAPI):
         app.state.brainstem_bootstrap = brainstem_bootstrap
         if bool(brainstem_bootstrap.get("enabled")) and not bool(brainstem_bootstrap.get("passed", True)):
             print("[WARN] Brainstem 控制面自动托管未通过，运行态势可能显示 unknown/missing")
+        app.state.core_job_manager = _get_core_job_manager()
         print("[SUCCESS] API服务器初始化完成")
         yield
     except Exception as e:
@@ -973,6 +1087,10 @@ async def lifespan(app: FastAPI):
         raise
     finally:
         print("[INFO] 正在清理资源...")
+        try:
+            await _get_core_job_manager().shutdown()
+        except Exception as exc:
+            logger.warning("Core dispatch job manager 关闭失败: %s", exc)
         app.state.immutable_dna_monitor_shutdown = _bootstrap_immutable_dna_monitor_shutdown()
         app.state.brainstem_shutdown = _bootstrap_brainstem_control_plane_shutdown()
         try:
@@ -1080,35 +1198,7 @@ async def inject_api_contract_headers(request: Request, call_next):
 # ============ 内部服务代理 ============
 
 
-# [已禁用] MCP Server 已从 main.py 启动流程中移除，此代理函数不再有效，调用必定 503
-# async def _call_mcpserver(
-#     method: str,
-#     path: str,
-#     params: Optional[Dict[str, Any]] = None,
-#     timeout_seconds: float = 10.0,
-# ) -> Any:
-#     """调用 MCP Server 内部接口"""
-#     import httpx
-#     from system.config import get_server_port
-#
-#     port = get_server_port("mcp_server")
-#     url = f"http://127.0.0.1:{port}{path}"
-#     try:
-#         async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
-#             resp = await client.request(method, url, params=params)
-#     except Exception as e:
-#         raise HTTPException(status_code=503, detail=f"MCP Server 不可达: {e}")
-#     if resp.status_code >= 400:
-#         detail = resp.text
-#         try:
-#             detail = resp.json()
-#         except Exception:
-#             pass
-#         raise HTTPException(status_code=resp.status_code, detail=detail)
-#     try:
-#         return resp.json()
-#     except Exception:
-#         return resp.text
+# MCP proxy helper (_call_mcpserver) removed — superseded by native MCPClientPool (abed2b53).
 
 
 # ============ Skill Storage ============
@@ -1856,7 +1946,9 @@ async def chat_stream(request: ChatRequest):
                 "shell_readonly_hit": True,
                 "router_decision": {},
                 "shell_session_id": session_id,
+                "run_context_id": "",
                 "core_execution_session_id": "",
+                "run_context_created": False,
                 "routing_mode": "dispatch_to_core_only",
                 "core_execution_route": "",
                 "_shell_available_tool_names": route_tool_names,
@@ -1865,7 +1957,42 @@ async def chat_stream(request: ChatRequest):
             route_meta = _apply_shell_core_session_state(route_meta, shell_session_id=session_id)
             route_decision: Dict[str, Any] = {}
             route_semantic = str(route_meta.get("route_semantic") or "shell_readonly")
-            core_execution_session_id = str(route_meta.get("core_execution_session_id") or "")
+            core_execution_session_id = str(
+                route_meta.get("run_context_id")
+                or route_meta.get("core_execution_session_id")
+                or ""
+            )
+            shell_core_snapshot: Dict[str, Any] = {}
+            core_job_watch_payload: Dict[str, Any] = {}
+            active_core_job_snapshot: Dict[str, Any] = {}
+            if core_execution_session_id:
+                try:
+                    shell_core_snapshot = _get_core_job_manager().get_shell_snapshot(session_id, limit=5)
+                    if isinstance(shell_core_snapshot, dict):
+                        active_core_job_snapshot = dict(shell_core_snapshot.get("active_job") or {})
+                except Exception as exc:
+                    logger.debug("Shell turn preflight core snapshot failed: %s", exc)
+                try:
+                    core_job_watch_payload = _collect_chat_core_job_watch_payload(
+                        session_id,
+                        core_execution_session_id=core_execution_session_id,
+                        limit=5,
+                        ack=True,
+                    )
+                except Exception as exc:
+                    logger.debug("Shell turn preflight core job watch failed: %s", exc)
+                core_async_status_digest = _build_core_job_watch_updates_digest(
+                    unread_updates=list(core_job_watch_payload.get("unread_core_updates") or []),
+                    active_core_job=active_core_job_snapshot,
+                    core_worker_status=str(
+                        (shell_core_snapshot.get("worker_status") if isinstance(shell_core_snapshot, dict) else "")
+                        or ""
+                    ),
+                ).strip()
+                if core_async_status_digest:
+                    route_meta["_core_async_status_digest"] = core_async_status_digest
+                route_meta["_core_async_update_count"] = int(core_job_watch_payload.get("pending_core_update_count") or 0)
+                route_meta["_core_async_updates"] = list(core_job_watch_payload.get("unread_core_updates") or [])
 
             precomposed_memory_lines: List[str] = []
             try:
@@ -1905,8 +2032,12 @@ async def chat_stream(request: ChatRequest):
                     "injection_mode": "",
                     "delegation_intent": "shell_dispatch_only",
                     "shell_session_id": str(route_meta.get("shell_session_id") or ""),
-                    "core_execution_session_id": str(route_meta.get("core_execution_session_id") or ""),
-                    "core_execution_session_created": False,
+                    "core_runtime_id": str(route_meta.get("core_runtime_id") or DEFAULT_CORE_RUNTIME_ID),
+                    "core_job_id": str(route_meta.get("core_job_id") or ""),
+                    "run_context_id": str(route_meta.get("run_context_id") or route_meta.get("core_execution_session_id") or ""),
+                    "core_execution_session_id": str(route_meta.get("run_context_id") or route_meta.get("core_execution_session_id") or ""),
+                    "run_context_created": bool(route_meta.get("run_context_created")),
+                    "core_execution_session_created": bool(route_meta.get("run_context_created")),
                     "routing_mode": "dispatch_to_core_only",
                     "selected_slice_count": int(route_meta.get("_slice_selected_count") or 0),
                     "dropped_slice_count": int(route_meta.get("_slice_dropped_count") or 0),
@@ -1922,6 +2053,30 @@ async def chat_stream(request: ChatRequest):
                 route_semantic,
                 "dispatch_to_core_only",
             )
+            if core_job_watch_payload:
+                unread_core_updates = list(core_job_watch_payload.get("unread_core_updates") or [])
+                if unread_core_updates or active_core_job_snapshot:
+                    yield _format_stream_payload_chunk(
+                        {
+                            "type": "core_async_state",
+                            "shell_session_id": session_id,
+                            "run_context_id": str(
+                                core_job_watch_payload.get("run_context_id")
+                                or core_execution_session_id
+                            ),
+                            "core_execution_session_id": str(
+                                core_job_watch_payload.get("run_context_id")
+                                or core_execution_session_id
+                            ),
+                            "active_core_job": dict(active_core_job_snapshot or {}),
+                            "pending_core_update_count": int(core_job_watch_payload.get("pending_core_update_count") or 0),
+                            "last_core_outbox_seq": int(core_job_watch_payload.get("last_core_outbox_seq") or 0),
+                            "core_outbox_cursor_seq": int(core_job_watch_payload.get("core_outbox_cursor_seq") or 0),
+                            "updates": unread_core_updates,
+                            "source": "shell_turn_preflight",
+                        },
+                        protocol=stream_protocol,
+                    )
 
             # ====== RAG 记忆召回 ======
 
@@ -1932,46 +2087,8 @@ async def chat_stream(request: ChatRequest):
             receipt_fallback_text = ""
             session_store, agent_mailbox, task_board_engine = _get_pipeline_runtime_handles()
             child_session_cleanup_policy = _resolve_pipeline_child_session_cleanup_policy()
-            child_loop_llm_service = get_llm_service()
-            child_loop_model_override = _build_route_model_override("core_execution")
-            native_tool_executor = get_native_tool_executor()
-
-            async def _pipeline_child_llm_call(
-                messages: List[Dict[str, Any]],
-                tools: List[Dict[str, Any]],
-                model_name: str,
-            ) -> Dict[str, Any]:
-                del model_name  # model tier is already encoded in route-level override
-                api_cfg = get_config().api
-                timeout_seconds = max(
-                    5.0,
-                    float(getattr(api_cfg, "request_timeout", 120) or 120) + 15.0,
-                )
-                return await _collect_pipeline_child_llm_turn(
-                    llm_service=child_loop_llm_service,
-                    messages=messages,
-                    temperature=float(getattr(api_cfg, "temperature", 0.7)),
-                    model_override=child_loop_model_override,
-                    tools=tools,
-                    tool_choice="auto",
-                    timeout_seconds=timeout_seconds,
-                )
-
-            async def _pipeline_child_tool_executor(
-                tool_name: str,
-                arguments: Dict[str, Any],
-                child_session_id: str,
-            ) -> Dict[str, Any]:
-                call_payload = dict(arguments) if isinstance(arguments, dict) else {}
-                call_payload["tool_name"] = str(tool_name or "")
-                call_payload["_session_id"] = child_session_id
-                call_payload["session_id"] = child_session_id
-                raw_result = await native_tool_executor.execute(call_payload, session_id=child_session_id)
-                return _enrich_child_tool_result_metadata(
-                    raw_result,
-                    child_session_id=child_session_id,
-                    session_store=session_store,
-                )
+            _pipeline_child_llm_call = _default_pipeline_child_llm_call
+            _pipeline_child_tool_executor = _default_pipeline_child_tool_executor
 
             # ── Shell loop first: the model decides whether to dispatch_to_core ──
             shell_prompt = str(route_meta.get("_shell_prompt_value") or "")
@@ -2288,8 +2405,42 @@ async def chat_stream(request: ChatRequest):
                 route_meta["handoff_source"] = handoff_source
                 route_meta["core_execution_route"] = str(route_decision.get("core_route") or "")
                 route_meta = _apply_shell_core_session_state(route_meta, shell_session_id=session_id)
-                core_execution_session_id = str(route_meta.get("core_execution_session_id") or "")
-                core_execution_session_created = bool(route_meta.get("core_execution_session_created"))
+                core_runtime_id = str(route_meta.get("core_runtime_id") or DEFAULT_CORE_RUNTIME_ID)
+                child_max_rounds = _resolve_pipeline_child_max_rounds(stream=True)
+                job_snapshot = _get_core_job_manager().submit_job(
+                    shell_session_id=session_id,
+                    goal=dispatched_goal,
+                    risk_level=str(route_meta.get("risk_level") or "write_repo"),
+                    handoff_source=handoff_source,
+                    route_decision=route_decision,
+                    dispatch_payload=dispatch_payload,
+                    core_runtime_id=core_runtime_id,
+                    store=session_store,
+                    message_manager=message_manager,
+                    pipeline_runner=run_multi_agent_pipeline,
+                    child_llm_call=_pipeline_child_llm_call,
+                    child_tool_executor=_pipeline_child_tool_executor,
+                    enable_child_execution=True,
+                    child_max_rounds=child_max_rounds,
+                    child_session_cleanup_mode=str(child_session_cleanup_policy.get("mode") or "retain"),
+                    child_session_cleanup_ttl_seconds=int(child_session_cleanup_policy.get("ttl_seconds") or 0),
+                    mailbox=agent_mailbox,
+                    task_board_engine=task_board_engine,
+                    heartbeat_interval_seconds=_PIPELINE_STREAM_HEARTBEAT_INTERVAL_SECONDS,
+                )
+                core_execution_session_id = str(job_snapshot.get("core_execution_session_id") or "")
+                core_runtime_id = str(job_snapshot.get("core_runtime_id") or core_runtime_id or DEFAULT_CORE_RUNTIME_ID)
+                core_job_id = str(job_snapshot.get("job_id") or "").strip()
+                route_meta = _register_core_job_submission(
+                    session_id,
+                    core_runtime_id=core_runtime_id,
+                    core_job_id=core_job_id,
+                    core_execution_session_id=core_execution_session_id,
+                    core_execution_session_created=bool(job_snapshot.get("core_execution_session_created")),
+                    route_meta=route_meta,
+                )
+                core_execution_session_created = bool(job_snapshot.get("core_execution_session_created"))
+                await asyncio.sleep(0)
 
                 # Emit a second prompt-route composition snapshot after handoff so
                 # route_session_state can observe the finalized shell->core session state.
@@ -2311,86 +2462,73 @@ async def chat_stream(request: ChatRequest):
                         "injection_mode": route_decision.get("injection_mode", ""),
                         "delegation_intent": route_decision.get("delegation_intent", ""),
                         "shell_session_id": str(route_meta.get("shell_session_id") or session_id),
-                        "core_execution_session_id": str(
-                            route_meta.get("core_execution_session_id") or core_execution_session_id
+                        "core_runtime_id": core_runtime_id,
+                        "core_job_id": core_job_id,
+                        "run_context_id": str(
+                            route_meta.get("run_context_id")
+                            or route_meta.get("core_execution_session_id")
+                            or core_execution_session_id
                         ),
+                        "core_execution_session_id": str(
+                            route_meta.get("run_context_id")
+                            or route_meta.get("core_execution_session_id")
+                            or core_execution_session_id
+                        ),
+                        "run_context_created": core_execution_session_created,
                         "core_execution_session_created": core_execution_session_created,
                         "routing_mode": "dispatch_to_core_tool",
                         "handoff_source": handoff_source,
                     },
                     protocol=stream_protocol,
                 )
-
-                pipeline_started_monotonic = time.monotonic()
-                last_pipeline_event_type = "pipeline_start"
-                last_pipeline_id = ""
-                pipeline_stream = run_multi_agent_pipeline(
-                    message=dispatched_goal,
-                    session_id=core_execution_session_id,
-                    risk_level=str(route_meta.get("risk_level") or "write_repo"),
-                    route_decision=route_decision,
-                    dispatch_payload=dispatch_payload,
-                    forced_route_semantic=route_semantic,
-                    core_execution_session_id=core_execution_session_id,
-                    child_llm_call=_pipeline_child_llm_call,
-                    child_tool_executor=_pipeline_child_tool_executor,
-                    enable_child_execution=True,
-                    child_session_cleanup_mode=str(child_session_cleanup_policy.get("mode") or "retain"),
-                    child_session_cleanup_ttl_seconds=int(child_session_cleanup_policy.get("ttl_seconds") or 0),
-                    store=session_store,
-                    mailbox=agent_mailbox,
-                    task_board_engine=task_board_engine,
+                yield _format_stream_payload_chunk(
+                    {
+                        "type": "core_job_accepted",
+                        "shell_session_id": session_id,
+                        "core_runtime_id": core_runtime_id,
+                        "core_job_id": core_job_id,
+                        "run_context_id": core_execution_session_id,
+                        "core_execution_session_id": core_execution_session_id,
+                        "run_context_created": bool(core_execution_session_created),
+                        "core_execution_session_created": bool(core_execution_session_created),
+                        "status": str(job_snapshot.get("status") or "accepted"),
+                        "handoff_message_seq": int(job_snapshot.get("handoff_message_seq") or 0),
+                        "handoff_duplicate_count": int(job_snapshot.get("handoff_duplicate_count") or 0),
+                        "recovery_restart_count": int(job_snapshot.get("recovery_restart_count") or 0),
+                        "queue_position": int(job_snapshot.get("queue_position") or 0),
+                        "queue_depth": int(job_snapshot.get("queue_depth") or 0),
+                        "pipeline_depth": int(job_snapshot.get("pipeline_depth") or 0),
+                        "worker_status": str(job_snapshot.get("worker_status") or ""),
+                        "recovery_restart_total": int(job_snapshot.get("recovery_restart_total") or 0),
+                        "inbox_dedup_skipped_count": int(job_snapshot.get("inbox_dedup_skipped_count") or 0),
+                        "routing_mode": "dispatch_to_core_tool",
+                        "handoff_source": handoff_source,
+                        "goal": dispatched_goal,
+                        "risk_level": str(route_meta.get("risk_level") or "write_repo"),
+                        "route_summary": dict(job_snapshot.get("route_summary") or {}),
+                        "polling": {
+                            "route_session_state_path": f"/v1/chat/route_session_state/{session_id}",
+                            "core_job_path": f"/v1/chat/core_jobs/{core_job_id}",
+                            "core_job_watch_path": f"/v1/chat/core_job_watch/{session_id}",
+                            "core_job_watch_stream_path": f"/v1/chat/core_job_watch/stream/{session_id}",
+                        },
+                    },
+                    protocol=stream_protocol,
                 )
-
-                async for event in _stream_async_generator_with_keepalive(
-                    pipeline_stream,
-                    heartbeat_interval_seconds=_PIPELINE_STREAM_HEARTBEAT_INTERVAL_SECONDS,
-                    heartbeat_builder=lambda: _build_pipeline_stream_heartbeat_event(
-                        pipeline_id=last_pipeline_id,
-                        shell_session_id=session_id,
-                        core_execution_session_id=core_execution_session_id,
-                        started_monotonic=pipeline_started_monotonic,
-                        last_event_type=last_pipeline_event_type,
-                        agent_session_store=session_store,
-                    ),
-                ):
-                    if not isinstance(event, dict):
-                        continue
-                    chunk_type = str(event.get("type", "content"))
-                    chunk_text = str(event.get("text", ""))
-                    if chunk_type != "pipeline_heartbeat":
-                        last_pipeline_event_type = chunk_type
-                    pipeline_id_text = str(event.get("pipeline_id") or "").strip()
-                    if pipeline_id_text:
-                        last_pipeline_id = pipeline_id_text
-
-                    if chunk_type == "content":
-                        current_round_text += chunk_text
-                        complete_response_parts.append(chunk_text)
-                    elif chunk_type == "reasoning":
-                        pass
-                    elif chunk_type == "tool_stage":
-                        _emit_agentic_loop_completion_event(
-                            session_id=session_id,
-                            core_execution_session_id=core_execution_session_id,
-                            route_meta=route_meta,
-                            chunk_data=event,
-                        )
-                    elif chunk_type == "child_spawn_deferred":
-                        _emit_core_child_spawn_deferred_event(
-                            session_id=session_id,
-                            core_execution_session_id=core_execution_session_id,
-                            route_meta=route_meta,
-                            chunk_data=event,
-                        )
-                    elif chunk_type == "execution_receipt":
-                        receipt_text = _extract_agentic_execution_receipt_text(event)
-                        if receipt_text:
-                            receipt_fallback_text = receipt_text
-                    elif chunk_type == "round_end":
-                        current_round_text = ""
-
-                    yield _format_stream_payload_chunk(event, protocol=stream_protocol)
+                accepted_text = (
+                    f"已将任务提交给 Core（job_id={core_job_id}）。"
+                    "当前 Shell 会话保持可用；可继续对话，并轮询会话状态或 core job 状态。"
+                )
+                current_round_text += accepted_text
+                complete_response_parts.append(accepted_text)
+                yield _format_stream_payload_chunk(
+                    {
+                        "type": "content",
+                        "text": accepted_text,
+                        "source": "core_job_accept_ack",
+                    },
+                    protocol=stream_protocol,
+                )
 
             # ====== 流式处理完成 ======
 
@@ -2491,18 +2629,7 @@ async def get_memory_stats():
         raise HTTPException(status_code=500, detail=f"获取记忆统计失败: {str(e)}")
 
 
-# ============ MCP Server 代理 ============
-# [已禁用] MCP Server 已从 main.py 启动流程中移除，旧代理端点调用 _call_mcpserver 必定 503
-# @app.get("/mcp/status")
-# async def get_mcp_status_proxy():
-#     """代理 MCP Server 状态查询"""
-#     return await _call_mcpserver("GET", "/status")
-#
-# @app.get("/mcp/tasks")
-# async def get_mcp_tasks_proxy(status: Optional[str] = None):
-#     """代理 MCP 任务列表"""
-#     params = {"status": status} if status else None
-#     return await _call_mcpserver("GET", "/tasks", params=params)
+# MCP proxy routes (/mcp/status, /mcp/tasks) removed — superseded by native MCPClientPool (abed2b53).
 
 
 def _build_mcp_runtime_snapshot(
@@ -2852,6 +2979,218 @@ async def get_chat_route_session_state(session_id: str, limit: int = 20):
 @app.get("/v1/chat/route_session_state/{session_id}")
 async def get_chat_route_session_state_v1(session_id: str, limit: int = 20):
     return await get_chat_route_session_state(session_id=session_id, limit=limit)
+
+
+@app.get("/v1/chat/core_jobs/{job_id}")
+async def get_chat_core_job(job_id: str):
+    snapshot = _get_core_job_manager().get_job_snapshot(job_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail=f"core job 不存在: {job_id}")
+    return {"status": "success", "job": snapshot}
+
+
+@app.get("/v1/chat/core_jobs")
+async def list_chat_core_jobs(session_id: str, limit: int = 10):
+    return {
+        "status": "success",
+        "shell_session_id": str(session_id or ""),
+        "jobs": _get_core_job_manager().list_shell_jobs(session_id, limit=max(1, int(limit))),
+    }
+
+
+def _build_chat_core_job_watch_payload(session_id: str, *, limit: int = 20, ack: bool = False) -> Dict[str, Any]:
+    session = message_manager.get_session(session_id)
+    if not isinstance(session, dict):
+        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
+    shell_snapshot = _get_core_job_manager().get_shell_snapshot(session_id, limit=max(1, int(limit)))
+    payload = _collect_chat_core_job_watch_payload(
+        session_id,
+        core_execution_session_id=str(
+            shell_snapshot.get("latest_job", {}).get("run_context_id")
+            or shell_snapshot.get("latest_job", {}).get("core_execution_session_id")
+            or ""
+        ),
+        limit=max(1, int(limit)),
+        ack=bool(ack),
+    )
+    resolved_run_context_id = str(payload.get("run_context_id") or payload.get("core_execution_session_id") or "")
+    active_core_job = dict(shell_snapshot.get("active_job") or {})
+    latest_core_job = dict(shell_snapshot.get("latest_job") or {})
+    if resolved_run_context_id and not str(active_core_job.get("core_execution_session_id") or "").strip():
+        active_core_job["core_execution_session_id"] = resolved_run_context_id
+    if resolved_run_context_id and not str(latest_core_job.get("core_execution_session_id") or "").strip():
+        latest_core_job["core_execution_session_id"] = resolved_run_context_id
+    if resolved_run_context_id and not str(active_core_job.get("run_context_id") or "").strip():
+        active_core_job["run_context_id"] = resolved_run_context_id
+    if resolved_run_context_id and not str(latest_core_job.get("run_context_id") or "").strip():
+        latest_core_job["run_context_id"] = resolved_run_context_id
+    return {
+        "status": "success",
+        "shell_session_id": str(session_id or ""),
+        "watch_scope": "session_triggered_core_jobs",
+        "core_execution_session_id": resolved_run_context_id,
+        "run_context_id": resolved_run_context_id,
+        "run_context_exists": bool(
+            resolved_run_context_id and message_manager.get_session(resolved_run_context_id)
+        ),
+        "pending_core_update_count": int(payload.get("pending_core_update_count") or 0),
+        "core_outbox_cursor_seq": int(payload.get("core_outbox_cursor_seq") or 0),
+        "last_core_outbox_seq": int(payload.get("last_core_outbox_seq") or 0),
+        "unread_core_updates": list(payload.get("unread_core_updates") or []),
+        "recent_core_updates": list(payload.get("recent_core_updates") or []),
+        "watched_core_job": active_core_job,
+        "latest_watched_core_job": latest_core_job,
+        "active_core_job": active_core_job,
+        "latest_core_job": latest_core_job,
+        "core_worker_status": str(shell_snapshot.get("worker_status") or ""),
+    }
+
+
+@app.get("/v1/chat/core_job_watch/{session_id}")
+async def get_chat_core_job_watch(session_id: str, limit: int = 20, ack: bool = False):
+    return _build_chat_core_job_watch_payload(session_id, limit=limit, ack=ack)
+
+
+async def _stream_chat_core_job_watch_impl(
+    session_id: str,
+    request: Request,
+    *,
+    limit: int = 20,
+    heartbeat_seconds: float = 2.0,
+    source: str = "core_job_watch_stream",
+):
+    session = message_manager.get_session(session_id)
+    if not isinstance(session, dict):
+        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
+
+    async def _event_stream():
+        last_fingerprint = ""
+        poll_interval = max(0.5, float(heartbeat_seconds or 2.0))
+        while True:
+            if await request.is_disconnected():
+                break
+            shell_snapshot = _get_core_job_manager().get_shell_snapshot(session_id, limit=max(1, int(limit)))
+            active_core_job = dict(shell_snapshot.get("active_job") or {})
+            latest_core_job = dict(shell_snapshot.get("latest_job") or {})
+            inbox_payload = _collect_chat_core_job_watch_payload(
+                session_id,
+                core_execution_session_id=str(
+                    active_core_job.get("run_context_id")
+                    or active_core_job.get("core_execution_session_id")
+                    or latest_core_job.get("run_context_id")
+                    or latest_core_job.get("core_execution_session_id")
+                    or ""
+                ),
+                limit=max(1, int(limit)),
+                ack=False,
+            )
+            unread_updates = list(inbox_payload.get("unread_core_updates") or [])
+            fingerprint_payload = {
+                "active_core_job_id": str(active_core_job.get("job_id") or ""),
+                "active_core_job_status": str(active_core_job.get("status") or ""),
+                "latest_core_job_id": str(latest_core_job.get("job_id") or ""),
+                "latest_core_job_status": str(latest_core_job.get("status") or ""),
+                "pending_core_update_count": int(inbox_payload.get("pending_core_update_count") or 0),
+                "last_core_outbox_seq": int(inbox_payload.get("last_core_outbox_seq") or 0),
+                "core_worker_status": str(shell_snapshot.get("worker_status") or ""),
+            }
+            fingerprint = json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True)
+            if unread_updates:
+                acked_payload = _collect_chat_core_job_watch_payload(
+                    session_id,
+                    core_execution_session_id=str(
+                        inbox_payload.get("run_context_id")
+                        or inbox_payload.get("core_execution_session_id")
+                        or ""
+                    ),
+                    limit=max(1, int(limit)),
+                    ack=True,
+                )
+                yield _format_stream_payload_chunk(
+                        {
+                            "type": "core_async_update",
+                            "shell_session_id": session_id,
+                            "run_context_id": str(
+                                inbox_payload.get("run_context_id")
+                                or inbox_payload.get("core_execution_session_id")
+                                or ""
+                            ),
+                            "core_execution_session_id": str(
+                                inbox_payload.get("run_context_id")
+                                or inbox_payload.get("core_execution_session_id")
+                                or ""
+                            ),
+                            "updates": unread_updates,
+                            "pending_core_update_count": int(acked_payload.get("pending_core_update_count") or 0),
+                            "core_outbox_cursor_seq": int(acked_payload.get("core_outbox_cursor_seq") or 0),
+                            "last_core_outbox_seq": int(acked_payload.get("last_core_outbox_seq") or 0),
+                            "watched_core_job": active_core_job,
+                        "latest_watched_core_job": latest_core_job,
+                        "active_core_job": active_core_job,
+                        "latest_core_job": latest_core_job,
+                        "source": source,
+                    },
+                    protocol=STREAM_PROTOCOL_JSON_V1,
+                )
+                last_fingerprint = fingerprint
+            elif (
+                fingerprint != last_fingerprint
+                and (
+                    str(active_core_job.get("job_id") or "").strip()
+                    or str(latest_core_job.get("job_id") or "").strip()
+                    or int(inbox_payload.get("last_core_outbox_seq") or 0) > 0
+                )
+            ):
+                yield _format_stream_payload_chunk(
+                        {
+                            "type": "core_async_state",
+                            "shell_session_id": session_id,
+                            "run_context_id": str(
+                                inbox_payload.get("run_context_id")
+                                or inbox_payload.get("core_execution_session_id")
+                                or ""
+                            ),
+                            "core_execution_session_id": str(
+                                inbox_payload.get("run_context_id")
+                                or inbox_payload.get("core_execution_session_id")
+                                or ""
+                            ),
+                            "active_core_job": active_core_job,
+                            "latest_core_job": latest_core_job,
+                            "pending_core_update_count": int(inbox_payload.get("pending_core_update_count") or 0),
+                            "core_outbox_cursor_seq": int(inbox_payload.get("core_outbox_cursor_seq") or 0),
+                            "last_core_outbox_seq": int(inbox_payload.get("last_core_outbox_seq") or 0),
+                            "watched_core_job": active_core_job,
+                        "latest_watched_core_job": latest_core_job,
+                        "core_worker_status": str(shell_snapshot.get("worker_status") or ""),
+                        "source": source,
+                    },
+                    protocol=STREAM_PROTOCOL_JSON_V1,
+                )
+                last_fingerprint = fingerprint
+            else:
+                yield _format_stream_payload_chunk(
+                    {
+                        "type": "heartbeat",
+                        "shell_session_id": session_id,
+                        "source": source,
+                    },
+                    protocol=STREAM_PROTOCOL_JSON_V1,
+                )
+            await asyncio.sleep(poll_interval)
+
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+
+
+@app.get("/v1/chat/core_job_watch/stream/{session_id}")
+async def stream_chat_core_job_watch(session_id: str, request: Request, limit: int = 20, heartbeat_seconds: float = 2.0):
+    return await _stream_chat_core_job_watch_impl(
+        session_id,
+        request,
+        limit=limit,
+        heartbeat_seconds=heartbeat_seconds,
+        source="core_job_watch_stream",
+    )
 
 
 @app.delete("/sessions/{session_id}")

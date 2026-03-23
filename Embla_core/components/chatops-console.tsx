@@ -14,6 +14,8 @@ type ChatOpsConsoleProps = {
   selectedSessionId?: string;
   initialMessages?: ChatSessionMessage[];
   initialTools?: ShellToolDefinition[];
+  onSessionIdChange?: (sessionId: string) => void;
+  onStreamEvent?: (payload: StreamEventPayload) => void;
 };
 
 type StreamEventPayload = Record<string, unknown>;
@@ -95,7 +97,9 @@ export function ChatOpsConsole({
   locale,
   selectedSessionId = "",
   initialMessages = [],
-  initialTools = []
+  initialTools = [],
+  onSessionIdChange,
+  onStreamEvent
 }: ChatOpsConsoleProps) {
   const t = createTranslator(locale);
   const router = useRouter();
@@ -184,9 +188,11 @@ export function ChatOpsConsole({
 
       const handlePayload = (payload: StreamEventPayload) => {
         const eventType = String(payload.type ?? "").trim();
+        onStreamEvent?.(payload);
         if (eventType === "session_meta") {
           effectiveSessionId = String(payload.session_id ?? effectiveSessionId ?? "").trim();
           setSessionId(effectiveSessionId);
+          onSessionIdChange?.(effectiveSessionId);
           return;
         }
         if (eventType === "available_tools") {
@@ -201,6 +207,39 @@ export function ChatOpsConsole({
           const text = getEventText(payload);
           if (text) {
             setReasoning((current) => `${current}${text}`);
+          }
+          return;
+        }
+        if (eventType === "tool_calls") {
+          const calls = Array.isArray(payload.tool_calls) ? payload.tool_calls : [];
+          for (const call of calls) {
+            const tc = call as Record<string, unknown>;
+            const toolName = String(tc.name ?? tc.function ?? "tool").trim();
+            const rawArgs = typeof tc.arguments === "string" ? tc.arguments : JSON.stringify(tc.arguments ?? {});
+            const truncatedArgs = rawArgs.length > 120 ? `${rawArgs.slice(0, 120)}…` : rawArgs;
+            setMessages((current) => [
+              ...current,
+              { role: "system", content: `[tool_call] ${toolName}(${truncatedArgs})` }
+            ]);
+          }
+          return;
+        }
+        if (eventType === "tool_result") {
+          const raw = typeof payload.content === "string" ? payload.content : getEventText(payload);
+          const truncated = raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
+          setMessages((current) => [
+            ...current,
+            { role: "system", content: `[tool_result] ${truncated}` }
+          ]);
+          return;
+        }
+        if (eventType === "warning") {
+          const text = getEventText(payload);
+          if (text) {
+            setMessages((current) => [
+              ...current,
+              { role: "system", content: `⚠ ${text}` }
+            ]);
           }
           return;
         }
@@ -223,6 +262,7 @@ export function ChatOpsConsole({
 
       if (effectiveSessionId) {
         router.replace(`/chatops?session_id=${encodeURIComponent(effectiveSessionId)}`);
+        onSessionIdChange?.(effectiveSessionId);
       }
       router.refresh();
     } catch (submitError) {
@@ -248,6 +288,7 @@ export function ChatOpsConsole({
     setAvailableTools(initialTools);
     setReasoning("");
     setError(null);
+    onSessionIdChange?.("");
     router.replace("/chatops");
   }
 

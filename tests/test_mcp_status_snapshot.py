@@ -31,10 +31,10 @@ def test_build_mcp_task_snapshot_supports_status_filter() -> None:
     all_tasks = _build_mcp_task_snapshot(snapshot=snapshot)
     assert all_tasks["total"] == 2
 
-    registered = _build_mcp_task_snapshot("registered", snapshot=snapshot)
+    online = _build_mcp_task_snapshot("online", snapshot=snapshot)
     configured = _build_mcp_task_snapshot("configured", snapshot=snapshot)
 
-    assert registered["total"] == 1
-    assert registered["tasks"][0]["source"] == "builtin"
+    assert online["total"] == 1
+    assert online["tasks"][0]["source"] == "official"
     assert configured["total"] == 1
-    assert configured["tasks"][0]["source"] == "mcporter"
+    assert configured["tasks"][0]["source"] == "official"
