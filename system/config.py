@@ -58,12 +58,15 @@ _EMBLA_SYSTEM_DEFAULT_SECURITY: Dict[str, Any] = {
     "audit_ledger_file": "scratch/runtime/audit_ledger.jsonl",
     "audit_signing_key_env": "EMBLA_AUDIT_SIGNING_KEY",
     "immutable_dna_runtime_prompts": [
-        "conversation_style_prompt",
-        "agentic_tool_prompt",
+        "core_values",
+        "evolution_drive",
     ],
     "immutable_agent_identity_prompts": [
         "shell_persona",
-        "core_values",
+    ],
+    "evolvable_runtime_prompts": [
+        "conversation_style_prompt",
+        "agentic_tool_prompt",
     ],
 }
 _embla_system_config: Dict[str, Any] = {}

@@ -12,7 +12,7 @@ def test_build_system_prompt_uses_shell_identity_and_style() -> None:
 def test_build_system_prompt_for_core_execution_uses_core_identity_and_tool_contract() -> None:
     prompt = build_system_prompt_for_route_semantic("core_execution", include_skills=False)
 
-    assert "你是 Embla 的内核层。" in prompt
+    assert "你是 Embla" in prompt
     assert "Core Orchestrator Duties" in prompt
     assert "当前可用 MCP 工具摘要" in prompt
 

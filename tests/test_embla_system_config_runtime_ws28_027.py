@@ -20,12 +20,11 @@ def test_load_embla_system_config_falls_back_to_defaults_when_missing(tmp_path) 
     assert payload["security"]["audit_ledger_file"] == "scratch/runtime/audit_ledger.jsonl"
     assert "policy" in payload["security"]["approval_required_scopes"]
     assert payload["security"]["immutable_dna_runtime_prompts"] == [
-        "conversation_style_prompt",
-        "agentic_tool_prompt",
+        "core_values",
+        "evolution_drive",
     ]
     assert payload["security"]["immutable_agent_identity_prompts"] == [
         "shell_persona",
-        "core_values",
     ]
 
 

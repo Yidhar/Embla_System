@@ -60,12 +60,15 @@ class LLMService:
     DNA_MANIFEST_PATH_ENV = "EMBLA_IMMUTABLE_DNA_MANIFEST_PATH"
     DNA_AUDIT_PATH_ENV = "EMBLA_IMMUTABLE_DNA_AUDIT_PATH"
     DNA_RUNTIME_REQUIRED_FILES_DEFAULT = (
-        "conversation_style_prompt",
-        "agentic_tool_prompt",
+        "core_values",
+        "evolution_drive",
     )
     DNA_IDENTITY_REQUIRED_FILES_DEFAULT = (
         "shell_persona",
+    )
+    DNA_RUNTIME_REQUIRED_FILES_DEFAULT_UPDATED = (
         "core_values",
+        "evolution_drive",
     )
 
     OPENAI_HINTS = {"openai", "openai_compatible"}
@@ -248,6 +251,39 @@ class LLMService:
             default_items=list(self.DNA_IDENTITY_REQUIRED_FILES_DEFAULT),
         )
 
+    def _load_evolvable_runtime_prompts(self) -> str:
+        """Load evolvable (non-DNA) runtime prompts that the agent can modify."""
+        try:
+            from system.config import get_embla_system_config
+            cfg = get_embla_system_config()
+            security = cfg.get("security", {}) if isinstance(cfg, dict) else {}
+            prompt_names = security.get("evolvable_runtime_prompts", [
+                "conversation_style_prompt",
+                "agentic_tool_prompt",
+            ])
+            if not isinstance(prompt_names, list) or not prompt_names:
+                return ""
+            prompts_root = self._resolve_immutable_dna_prompts_root()
+            parts: list[str] = []
+            for name in prompt_names:
+                normalized = str(name).strip().replace("\\", "/")
+                if not normalized:
+                    continue
+                candidates = [
+                    prompts_root / f"core/dna/{normalized}.md",
+                    prompts_root / f"core/{normalized}.md",
+                    prompts_root / f"{normalized}.md",
+                ]
+                for candidate in candidates:
+                    if candidate.is_file():
+                        text = candidate.read_text(encoding="utf-8").strip()
+                        if text:
+                            parts.append(text)
+                        break
+            return "\n\n".join(parts)
+        except Exception:
+            return ""
+
     def _resolve_immutable_dna_prompts_root(self) -> Path:
         prompts_root_raw = os.environ.get(
             self.DNA_PROMPTS_ROOT_ENV,
@@ -275,11 +311,16 @@ class LLMService:
         if not dna_text:
             raise PermissionError("immutable DNA runtime injection payload is empty")
 
+        # Append evolvable runtime prompts (not SHA-verified, agent can modify)
+        evolvable_text = self._load_evolvable_runtime_prompts()
+
         system_prompt = (
             f"{self.DNA_RUNTIME_HEADER}\n"
             f"dna_hash={dna_hash}\n"
             f"{dna_text}"
         )
+        if evolvable_text:
+            system_prompt += f"\n\n{evolvable_text}"
         sanitized_messages: List[Dict[str, Any]] = []
         for item in messages:
             if not isinstance(item, dict):
