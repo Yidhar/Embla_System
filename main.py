@@ -635,6 +635,7 @@ class EmblaRuntime:
         self._brainstem_supervisor: object | None = None
         self._process_guard: object | None = None
         self._process_guard_thread: threading.Thread | None = None
+        self._sdlc_orchestrator: object | None = None
 
     def run_diagnostic(self) -> int | None:
         return _run_diagnostic(self.options)
@@ -690,12 +691,50 @@ class EmblaRuntime:
         except Exception as exc:
             logger.warning("ProcessGuardDaemon 初始化失败: %s", exc)
 
+    def _init_sdlc_orchestrator(self) -> None:
+        """Initialise the SDLC orchestrator if autonomous_runtime.yaml enables it."""
+        try:
+            import yaml
+
+            from core.sdlc.orchestrator import SDLCOrchestrator
+
+            config_path = Path("config/autonomous_runtime.yaml")
+            sdlc_enabled = False
+            if config_path.exists():
+                try:
+                    cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+                    autonomous = cfg.get("autonomous") or {}
+                    sdlc_enabled = bool(autonomous.get("sdlc", {}).get("enabled", False))
+                except Exception:
+                    pass
+
+            project_root = Path(__file__).resolve().parent
+            event_emitter = None
+            try:
+                from core.event_bus.event_store import EventStore
+
+                event_emitter = EventStore(file_path=Path("logs/autonomous/events.jsonl"))
+            except Exception:
+                pass
+
+            orchestrator = SDLCOrchestrator(
+                project_root=project_root,
+                event_emitter=event_emitter,
+                enabled=sdlc_enabled,
+            )
+            orchestrator.start()
+            self._sdlc_orchestrator = orchestrator
+            logger.info("SDLC 编排器初始化完成 (enabled=%s)", sdlc_enabled)
+        except Exception as exc:
+            logger.warning("SDLC 编排器初始化失败: %s", exc)
+
     def initialize_services(self) -> None:
         _init_boxlite_runtime()
         self.services.boxlite_reconciler = _start_boxlite_runtime_reconciler(self._should_stop_supervision)
         _init_memory()
         _init_mcp()
         self._init_supervisor()
+        self._init_sdlc_orchestrator()
         self.services.api_server = _start_api_server(runtime_config=self.runtime_config)
         self.services.api_started = bool(self.services.api_server and self.services.api_server.startup_complete)
         if self.services.api_server and self.services.api_server.startup_failed:
@@ -763,6 +802,14 @@ class EmblaRuntime:
             self._process_guard = None
 
         self._brainstem_supervisor = None
+
+        # Cleanup SDLC orchestrator
+        if self._sdlc_orchestrator is not None:
+            try:
+                self._sdlc_orchestrator.shutdown()
+            except Exception as exc:
+                logger.warning("SDLC 编排器关闭异常: %s", exc)
+            self._sdlc_orchestrator = None
 
         cleanup_report = close_runtime_network_clients_sync()
         litellm_error = str(((cleanup_report.get("litellm") or {}).get("error")) or "").strip()
