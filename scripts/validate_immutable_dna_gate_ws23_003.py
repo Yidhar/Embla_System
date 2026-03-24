@@ -15,10 +15,9 @@ from core.security.immutable_dna import DNAFileSpec, ImmutableDNALoader
 
 
 REQUIRED_PROMPT_FILES_DEFAULT: tuple[str, ...] = (
-    "conversation_style_prompt",
-    "agentic_tool_prompt",
+    "dna/core_values",
+    "dna/evolution_drive",
     "shell_persona",
-    "core_values",
 )
 
 

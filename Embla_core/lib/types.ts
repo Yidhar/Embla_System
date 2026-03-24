@@ -389,3 +389,46 @@ export interface EvidenceData {
   }>;
   recent_reports?: Array<Record<string, unknown>>;
 }
+
+export interface ChronosJob {
+  id: string;
+  name?: string;
+  next_run?: string;
+  interval_seconds?: number;
+  status?: string;
+  last_run?: string;
+}
+
+export interface ChronosJobsData {
+  scheduler_running: boolean;
+  job_count: number;
+  jobs: ChronosJob[];
+}
+
+export interface DnaPromptEntry {
+  path: string;
+  immutable: boolean;
+  size_bytes?: number;
+  sha256?: string;
+}
+
+export interface DnaIntegrityData {
+  verification_status: string;
+  file_count: number;
+  manifest_hash: string;
+  prompts: DnaPromptEntry[];
+}
+
+export interface MemoryLayerStats {
+  scope: string;
+  total?: number;
+  indexed?: number;
+  details?: Record<string, unknown>;
+}
+
+export interface MemoryOverviewData {
+  l1: MemoryLayerStats;
+  l2: MemoryLayerStats;
+  l3: MemoryLayerStats;
+  grag_quintuples: number;
+}

@@ -3916,6 +3916,184 @@ async def get_ops_evidence_index(max_reports: int = 100):
         raise HTTPException(status_code=500, detail=f"获取 evidence index 失败: {str(exc)}")
 
 
+# ── Dashboard panel endpoints ────────────────────────────────
+
+
+@router.get("/v1/ops/chronos/jobs")
+async def get_ops_chronos_jobs():
+    """Return scheduled Chronos jobs and scheduler status."""
+    try:
+        from core.scheduler.chronos import get_default_scheduler
+        scheduler = get_default_scheduler()
+        jobs = scheduler.list_jobs() if scheduler.is_running else []
+        return {"status": "success", "severity": "ok", "running": scheduler.is_running, "jobs": jobs, "total": len(jobs)}
+    except Exception as exc:
+        return {"status": "success", "severity": "unknown", "running": False, "jobs": [], "total": 0, "error": str(exc)}
+
+
+@router.get("/v1/ops/release/gates")
+async def get_ops_release_gates():
+    """Evaluate release gates and return their status."""
+    try:
+        from core.release.gate_runner import GateRunner
+        runner = GateRunner(project_root=_ops_repo_root())
+        gates = {}
+        for gate_name in runner.list_gates():
+            # Only evaluate lightweight gates, skip deploy (too expensive)
+            if gate_name in ("read_only",):
+                evaluation = runner.evaluate_gate(gate_name)
+                gates[gate_name] = evaluation.to_dict()
+            else:
+                gates[gate_name] = {"gate_name": gate_name, "passed": None, "reason": "not_evaluated", "checks": []}
+        return {"status": "success", "severity": "ok", "gates": gates, "total": len(gates)}
+    except Exception as exc:
+        return {"status": "success", "severity": "unknown", "gates": {}, "error": str(exc)}
+
+
+@router.get("/v1/ops/agents/hierarchy")
+async def get_ops_agents_hierarchy():
+    """Return agent session hierarchy and role distribution."""
+    try:
+        from agents.runtime.agent_session import AgentSessionStore
+        store = AgentSessionStore()
+        sessions = []
+        for s in store.list_all():
+            sessions.append({
+                "session_id": s.session_id,
+                "role": s.role,
+                "status": s.status.value if hasattr(s.status, 'value') else str(s.status),
+                "parent_id": s.parent_id or "",
+                "task_description": str(s.task_description or "")[:100],
+                "created_at": str(getattr(s, 'created_at', '')),
+            })
+        store.close()
+        roles = {}
+        for s in sessions:
+            roles[s["role"]] = roles.get(s["role"], 0) + 1
+        return {
+            "status": "success", "severity": "ok",
+            "sessions": sessions, "total": len(sessions), "role_distribution": roles,
+        }
+    except Exception as exc:
+        return {"status": "success", "severity": "unknown", "sessions": [], "total": 0, "error": str(exc)}
+
+
+@router.get("/v1/ops/supervisor/health")
+async def get_ops_supervisor_health():
+    """Aggregate supervisor subsystem health: brainstem, process guard, watchdog, killswitch."""
+    repo_root = _ops_repo_root()
+    brainstem = _ops_build_brainstem_control_plane_summary(repo_root)
+    process_guard = _ops_build_process_guard_summary(repo_root)
+    watchdog = _ops_build_watchdog_daemon_summary(repo_root)
+    killswitch = _ops_build_killswitch_guard_summary(repo_root)
+    services = [brainstem, process_guard, watchdog, killswitch]
+    healthy_count = sum(1 for s in services if str(s.get("severity", "")) == "ok")
+    severity = "ok" if healthy_count == len(services) else ("warning" if healthy_count > 0 else "critical")
+    return {
+        "status": "success", "severity": severity,
+        "brainstem": brainstem, "process_guard": process_guard,
+        "watchdog": watchdog, "killswitch": killswitch,
+        "healthy_count": healthy_count, "total_services": len(services),
+    }
+
+
+@router.get("/v1/ops/security/dna-integrity")
+async def get_ops_dna_integrity():
+    """Return DNA prompt integrity verification and DNA prompt listing."""
+    immutable_dna = _ops_build_immutable_dna_summary()
+    try:
+        from agents.evolution.self_tools import list_my_prompts
+        dna_prompts = list_my_prompts(scope="dna")
+    except Exception:
+        dna_prompts = []
+    return {
+        "status": "success",
+        "severity": str(immutable_dna.get("severity", "unknown")),
+        "immutable_dna": immutable_dna,
+        "dna_prompts": dna_prompts,
+        "dna_count": len(dna_prompts),
+    }
+
+
+@router.get("/v1/ops/memory/overview")
+async def get_ops_memory_overview():
+    """Aggregate memory tier overview: L1 scopes, L2 hierarchical, L3 vector, GRAG quintuples."""
+    repo_root = _ops_repo_root()
+    memory_root = repo_root / "memory"
+    # L1 counts
+    l1 = {"working": 0, "episodic": 0, "domain": 0}
+    for scope in l1:
+        scope_dir = memory_root / scope
+        if scope_dir.exists():
+            l1[scope] = sum(1 for f in scope_dir.rglob("*.md") if f.is_file())
+    # L2 hierarchical index
+    l2_indexed = 0
+    hier_dir = memory_root / "hierarchical"
+    if hier_dir.exists():
+        l2_indexed = sum(1 for f in hier_dir.glob("*_index.json"))
+    # L3 vector
+    l3_count = 0
+    try:
+        from agents.memory.vector_store import L3VectorStore
+        vs = L3VectorStore(db_path=hier_dir / "vectors" / "l3_code_index.db")
+        l3_count = vs.count()
+        vs.close()
+    except Exception:
+        pass
+    # GRAG quintuples
+    grag_count = 0
+    try:
+        from summer_memory.quintuple_graph import load_quintuples
+        grag_count = len(load_quintuples())
+    except Exception:
+        pass
+    return {
+        "status": "success", "severity": "ok",
+        "l1": l1, "l1_total": sum(l1.values()),
+        "l2_indexed_files": l2_indexed,
+        "l3_vector_chunks": l3_count,
+        "grag_quintuples": grag_count,
+    }
+
+
+@router.get("/v1/ops/evolution/status")
+async def get_ops_evolution_status():
+    """Return self-evolution trigger status and writable prompt count."""
+    try:
+        import yaml
+        config_path = _ops_repo_root() / "config" / "autonomous_runtime.yaml"
+        config = {}
+        if config_path.exists():
+            config = (yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}).get("autonomous", {}).get(
+                "self_evolution", {}
+            )
+        enabled = bool(config.get("enabled", False))
+        from agents.evolution.evolution_trigger import EvolutionTrigger
+        trigger = EvolutionTrigger(
+            episodic_dir=_ops_repo_root() / "memory" / "episodic",
+            trigger_threshold=int(config.get("trigger_threshold", 3)),
+            max_per_day=int(config.get("max_evolutions_per_day", 5)),
+        )
+        decision = trigger.evaluate()
+        from agents.evolution.self_tools import list_my_prompts
+        writable_prompts = list_my_prompts(scope="writable")
+        return {
+            "status": "success", "severity": "ok" if not decision.should_evolve else "info",
+            "enabled": enabled, "config": config,
+            "should_evolve": decision.should_evolve, "reason": decision.reason,
+            "signals": [
+                {
+                    "trigger_type": s.trigger_type, "task_type": s.task_type,
+                    "failure_count": s.failure_count, "confidence": s.confidence,
+                }
+                for s in decision.signals
+            ],
+            "writable_prompts": len(writable_prompts),
+        }
+    except Exception as exc:
+        return {"status": "success", "severity": "unknown", "enabled": False, "error": str(exc)}
+
+
 # ── Backward-compat delegation (recursion-safe) ──────────────
 # Tests/scripts may `from apiserver import routes_ops as api_server`,
 # then access api_server.app, api_server.time, etc.

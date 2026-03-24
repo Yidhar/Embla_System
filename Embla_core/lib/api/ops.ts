@@ -10,12 +10,15 @@ import {
   ChatSessionDetail,
   ChatSessionMessage,
   ChatSessionSummary,
+  ChronosJobsData,
+  DnaIntegrityData,
   EvidenceData,
   HeartbeatSummary,
   IncidentsData,
   McpFabricData,
   McpService,
   McpTask,
+  MemoryOverviewData,
   ToolInventory,
   MemoryGraphData,
   MemoryGraphEdge,
@@ -990,4 +993,130 @@ export async function postSkillImport(body: { name: string; content: string }) {
     method: "POST",
     body: JSON.stringify(body)
   });
+}
+
+export async function getChronosJobs(): Promise<ChronosJobsData> {
+  try {
+    return await fetchJson<ChronosJobsData>("/v1/ops/chronos/jobs");
+  } catch {
+    return { scheduler_running: false, job_count: 0, jobs: [] };
+  }
+}
+
+export async function getDnaIntegrity(): Promise<DnaIntegrityData> {
+  try {
+    return await fetchJson<DnaIntegrityData>("/v1/ops/security/dna-integrity");
+  } catch {
+    return { verification_status: "unknown", file_count: 0, manifest_hash: "", prompts: [] };
+  }
+}
+
+export async function getMemoryOverview(): Promise<MemoryOverviewData> {
+  try {
+    return await fetchJson<MemoryOverviewData>("/v1/ops/memory/overview");
+  } catch {
+    return {
+      l1: { scope: "session", total: 0 },
+      l2: { scope: "indexed", indexed: 0 },
+      l3: { scope: "vector", total: 0 },
+      grag_quintuples: 0
+    };
+  }
+}
+
+export interface EvolutionFailureSignal {
+  task_type: string;
+  failure_count: number;
+  confidence: number;
+}
+
+export interface EvolutionStatusData {
+  enabled: boolean;
+  should_evolve: boolean;
+  failure_signals: EvolutionFailureSignal[];
+  config: {
+    trigger_threshold?: number;
+    max_per_day?: number;
+    allowed_scopes?: string[];
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
+const mockEvolutionStatus: OpsEnvelope<EvolutionStatusData> = {
+  status: "ok",
+  generated_at: new Date().toISOString(),
+  severity: "ok",
+  data: {
+    enabled: true,
+    should_evolve: false,
+    failure_signals: [],
+    config: {
+      trigger_threshold: 3,
+      max_per_day: 5,
+      allowed_scopes: ["prompt", "tool_profile", "threshold"]
+    }
+  },
+  source_reports: [],
+  source_endpoints: ["/v1/ops/evolution/status"]
+};
+
+export async function getEvolutionStatus(): Promise<OpsEnvelope<EvolutionStatusData>> {
+  try {
+    const data = await fetchJson<OpsEnvelope<EvolutionStatusData>>("/v1/ops/evolution/status");
+    return envelopeWithMeta(data, { mode: "live" });
+  } catch {
+    return envelopeWithMeta(mockEvolutionStatus, { mode: "mock", note: "evolution mock fallback" });
+  }
+}
+export async function getReleaseGates(): Promise<OpsEnvelope<any>> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data = await fetchJson<OpsEnvelope<any>>("/v1/ops/release/gates");
+    return envelopeWithMeta(data, { mode: "live" });
+  } catch {
+    return {
+      status: "mock",
+      generated_at: new Date().toISOString(),
+      severity: "unknown",
+      source_reports: [],
+      source_endpoints: ["/v1/ops/release/gates"],
+      meta: { mode: "mock", note: "release gates mock fallback" },
+      data: {},
+    } as OpsEnvelope<any>;
+  }
+}
+
+export async function getAgentHierarchy(): Promise<OpsEnvelope<any>> {
+  try {
+    const data = await fetchJson<OpsEnvelope<any>>("/v1/ops/agents/hierarchy");
+    return envelopeWithMeta(data, { mode: "live" });
+  } catch {
+    return {
+      status: "mock",
+      generated_at: new Date().toISOString(),
+      severity: "unknown",
+      source_reports: [],
+      source_endpoints: ["/v1/ops/agents/hierarchy"],
+      meta: { mode: "mock", note: "agent hierarchy mock fallback" },
+      data: {},
+    } as OpsEnvelope<any>;
+  }
+}
+
+export async function getSupervisorHealth(): Promise<OpsEnvelope<any>> {
+  try {
+    const data = await fetchJson<OpsEnvelope<any>>("/v1/ops/supervisor/health");
+    return envelopeWithMeta(data, { mode: "live" });
+  } catch {
+    return {
+      status: "mock",
+      generated_at: new Date().toISOString(),
+      severity: "unknown",
+      source_reports: [],
+      source_endpoints: ["/v1/ops/supervisor/health"],
+      meta: { mode: "mock", note: "supervisor health mock fallback" },
+      data: {},
+    } as OpsEnvelope<any>;
+  }
 }

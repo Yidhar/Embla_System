@@ -64,6 +64,13 @@ const zhCNMessages = {
         evidence: { label: "Evidence", description: "次级验收与证据" },
         chatops: { label: "ChatOps", description: "外层沟通与会话观测" },
         agentConfig: { label: "Agent Config", description: "子代理类型与提示词配置" },
+        chronos: { label: "Chronos", description: "定时任务调度器" },
+        dnaIntegrity: { label: "DNA Integrity", description: "提示词 DNA 完整性校验" },
+        memoryOverview: { label: "Memory Overview", description: "多层记忆概览" },
+        evolutionMonitor: { label: "Evolution Monitor", description: "自演化状态与失败信号" },
+        releaseGates: { label: "Release Gates", description: "发布门禁与检查项" },
+        agentHierarchy: { label: "Agent Hierarchy", description: "多级代理会话与角色" },
+        supervisorHealth: { label: "Supervisor Health", description: "监管服务健康状态" },
         settings: { label: "Settings", description: "系统与运行时配置总览" }
       }
     },
@@ -500,6 +507,115 @@ const zhCNMessages = {
         description: "列出当前证据报告的路径、gate 等级和状态。"
       }
     },
+    chronos: {
+      header: {
+        eyebrow: "Scheduler",
+        title: "Chronos 定时任务",
+        description: "查看定时调度器的运行状态和任务列表，确认后台周期性作业是否按预期执行。"
+      },
+      metrics: {
+        schedulerStatus: { title: "调度器状态", description: "当前 Chronos 调度器是否正在运行。" },
+        jobCount: { title: "任务数量", description: "当前已注册的定时任务总数。" }
+      },
+      jobList: {
+        eyebrow: "Job Registry",
+        title: "任务列表",
+        description: "所有已注册的定时任务及其下次执行时间。",
+        id: "任务 ID",
+        nextRun: "下次执行",
+        emptyTitle: "暂无定时任务",
+        emptyDescription: "当前没有已注册的定时任务。"
+      }
+    },
+    dnaIntegrity: {
+      header: {
+        eyebrow: "Security Gate",
+        title: "DNA 完整性校验",
+        description: "验证不可变提示词的 SHA-256 完整性，确保 DNA 文件未被篡改。"
+      },
+      metrics: {
+        verificationStatus: { title: "校验状态", description: "当前 DNA 完整性校验结果。" },
+        fileCount: { title: "DNA 文件数", description: "参与完整性校验的 DNA 文件总数。" },
+        manifestHash: { title: "Manifest 哈希", description: "当前 DNA manifest 的 SHA-256 摘要。" }
+      },
+      promptList: {
+        eyebrow: "DNA Prompts",
+        title: "提示词清单",
+        description: "每个受保护的 DNA 提示词文件及其不可变标记与文件大小。",
+        path: "路径",
+        immutable: "不可变",
+        size: "大小",
+        emptyTitle: "暂无 DNA 提示词",
+        emptyDescription: "当前没有受保护的 DNA 提示词文件。"
+      }
+    },
+    memoryOverview: {
+      header: {
+        eyebrow: "Memory Layers",
+        title: "多层记忆概览",
+        description: "分层查看 L1 会话记忆、L2 索引记忆与 L3 向量存储的统计信息，帮助判断各层记忆健康度。"
+      },
+      metrics: {
+        l1Total: { title: "L1 会话总量", description: "L1 短期会话记忆中的条目总数。" },
+        l2Indexed: { title: "L2 已索引", description: "L2 中已完成索引的记忆条目数。" },
+        l3Vectors: { title: "L3 向量数", description: "L3 向量存储中的向量总数。" },
+        gragQuintuples: { title: "GRAG 五元组", description: "GRAG 知识图谱中已写入的五元组总量。" }
+      },
+      layers: {
+        l1: {
+          eyebrow: "L1",
+          title: "会话记忆",
+          description: "短期会话级别的上下文记忆，作用域为当前会话。",
+          scope: "作用域",
+          total: "总条目"
+        },
+        l2: {
+          eyebrow: "L2",
+          title: "索引记忆",
+          description: "经过结构化索引的中期记忆，支持跨会话检索。",
+          scope: "作用域",
+          indexed: "已索引"
+        },
+        l3: {
+          eyebrow: "L3",
+          title: "向量存储",
+          description: "向量化的长期记忆，服务于语义召回。",
+          scope: "作用域",
+          total: "向量数"
+        }
+      }
+    },
+    evolutionMonitor: {
+      header: {
+        eyebrow: "Evolution Monitor",
+        title: "自演化监控",
+        description: "监控自演化引擎的启用状态、演化决策和失败信号，帮助判断系统是否需要触发自适应调整。"
+      },
+      metrics: {
+        enabled: { title: "演化引擎", description: "自演化引擎是否已启用。", valueOn: "已启用", valueOff: "已禁用" },
+        shouldEvolve: { title: "演化决策", description: "当前是否满足触发演化的条件。", valueYes: "需要演化", valueNo: "无需演化" },
+        signalCount: { title: "失败信号数", description: "当前累积的失败信号总数。" },
+        triggerThreshold: { title: "触发阈值", description: "失败次数达到此阈值后触发演化。" }
+      },
+      signals: {
+        eyebrow: "Failure Signals",
+        title: "失败信号列表",
+        description: "每个信号代表一种任务类型的失败累计，包含失败次数和置信度。",
+        failureCount: "{count} 次失败",
+        confidence: "置信度",
+        emptyTitle: "暂无失败信号",
+        emptyDescription: "当前没有累积的失败信号，系统运行正常。"
+      },
+      config: {
+        eyebrow: "Evolution Config",
+        title: "演化配置",
+        description: "当前自演化引擎的核心配置参数，包括触发阈值、每日上限和允许的调整范围。",
+        triggerThreshold: "触发阈值",
+        maxPerDay: "每日上限",
+        allowedScopes: "允许的调整范围",
+        noScopes: "暂无配置的调整范围"
+      }
+    },
     memorySearch: {
       eyebrow: "Memory Search",
       title: "记忆检索",
@@ -622,6 +738,13 @@ const enUSMessages: typeof zhCNMessages = {
         evidence: { label: "Evidence", description: "Secondary acceptance evidence" },
         chatops: { label: "ChatOps", description: "Outer communication channel" },
         agentConfig: { label: "Agent Config", description: "Child agent prompt and profile registry" },
+        chronos: { label: "Chronos", description: "Scheduled job scheduler" },
+        dnaIntegrity: { label: "DNA Integrity", description: "Prompt DNA integrity verification" },
+        memoryOverview: { label: "Memory Overview", description: "Multi-layer memory overview" },
+        evolutionMonitor: { label: "Evolution Monitor", description: "Self-evolution status and failure signals" },
+        releaseGates: { label: "Release Gates", description: "Release gate checks and status" },
+        agentHierarchy: { label: "Agent Hierarchy", description: "Multi-level agent sessions and roles" },
+        supervisorHealth: { label: "Supervisor Health", description: "Supervisor service health status" },
         settings: { label: "Settings", description: "System and runtime configuration overview" }
       }
     },
@@ -1056,6 +1179,115 @@ const enUSMessages: typeof zhCNMessages = {
         eyebrow: "Report Index",
         title: "Report index",
         description: "Lists current evidence report paths, gate levels, and statuses."
+      }
+    },
+    chronos: {
+      header: {
+        eyebrow: "Scheduler",
+        title: "Chronos scheduled jobs",
+        description: "View the Chronos scheduler status and job registry to confirm background periodic jobs are executing as expected."
+      },
+      metrics: {
+        schedulerStatus: { title: "Scheduler Status", description: "Whether the Chronos scheduler is currently running." },
+        jobCount: { title: "Job Count", description: "Total number of registered scheduled jobs." }
+      },
+      jobList: {
+        eyebrow: "Job Registry",
+        title: "Job list",
+        description: "All registered scheduled jobs and their next execution times.",
+        id: "Job ID",
+        nextRun: "Next Run",
+        emptyTitle: "No scheduled jobs",
+        emptyDescription: "There are no registered scheduled jobs right now."
+      }
+    },
+    dnaIntegrity: {
+      header: {
+        eyebrow: "Security Gate",
+        title: "DNA integrity verification",
+        description: "Verifies SHA-256 integrity of immutable prompts to ensure DNA files have not been tampered with."
+      },
+      metrics: {
+        verificationStatus: { title: "Verification Status", description: "Current DNA integrity verification result." },
+        fileCount: { title: "DNA File Count", description: "Total number of DNA files included in integrity verification." },
+        manifestHash: { title: "Manifest Hash", description: "SHA-256 digest of the current DNA manifest." }
+      },
+      promptList: {
+        eyebrow: "DNA Prompts",
+        title: "Prompt inventory",
+        description: "Each protected DNA prompt file with its immutability badge and file size.",
+        path: "Path",
+        immutable: "Immutable",
+        size: "Size",
+        emptyTitle: "No DNA prompts",
+        emptyDescription: "There are no protected DNA prompt files right now."
+      }
+    },
+    memoryOverview: {
+      header: {
+        eyebrow: "Memory Layers",
+        title: "Multi-layer memory overview",
+        description: "View L1 session memory, L2 indexed memory, and L3 vector store statistics to judge the health of each memory layer."
+      },
+      metrics: {
+        l1Total: { title: "L1 Session Total", description: "Total entries in L1 short-term session memory." },
+        l2Indexed: { title: "L2 Indexed", description: "Number of memory entries that have been indexed in L2." },
+        l3Vectors: { title: "L3 Vectors", description: "Total vectors in the L3 vector store." },
+        gragQuintuples: { title: "GRAG Quintuples", description: "Total quintuples written into the GRAG knowledge graph." }
+      },
+      layers: {
+        l1: {
+          eyebrow: "L1",
+          title: "Session memory",
+          description: "Short-term session-scoped context memory.",
+          scope: "Scope",
+          total: "Total entries"
+        },
+        l2: {
+          eyebrow: "L2",
+          title: "Indexed memory",
+          description: "Structured indexed mid-term memory supporting cross-session retrieval.",
+          scope: "Scope",
+          indexed: "Indexed"
+        },
+        l3: {
+          eyebrow: "L3",
+          title: "Vector store",
+          description: "Vectorized long-term memory serving semantic recall.",
+          scope: "Scope",
+          total: "Vectors"
+        }
+      }
+    },
+    evolutionMonitor: {
+      header: {
+        eyebrow: "Evolution Monitor",
+        title: "Evolution monitor",
+        description: "Track the self-evolution engine's enabled state, evolve decisions, and failure signals to determine whether the system needs adaptive adjustments."
+      },
+      metrics: {
+        enabled: { title: "Evolution Engine", description: "Whether the self-evolution engine is enabled.", valueOn: "Enabled", valueOff: "Disabled" },
+        shouldEvolve: { title: "Evolve Decision", description: "Whether current conditions satisfy the evolution trigger.", valueYes: "Should evolve", valueNo: "No evolution needed" },
+        signalCount: { title: "Signal Count", description: "Total accumulated failure signals." },
+        triggerThreshold: { title: "Trigger Threshold", description: "Evolution triggers after this many failures." }
+      },
+      signals: {
+        eyebrow: "Failure Signals",
+        title: "Failure signal list",
+        description: "Each signal represents accumulated failures for a task type, including failure count and confidence.",
+        failureCount: "{count} failures",
+        confidence: "Confidence",
+        emptyTitle: "No failure signals",
+        emptyDescription: "There are no accumulated failure signals right now. The system is running normally."
+      },
+      config: {
+        eyebrow: "Evolution Config",
+        title: "Evolution configuration",
+        description: "Core configuration parameters of the self-evolution engine, including trigger threshold, daily cap, and allowed adjustment scopes.",
+        triggerThreshold: "Trigger threshold",
+        maxPerDay: "Max per day",
+        allowedScopes: "Allowed scopes",
+        noScopes: "No configured scopes"
       }
     },
     memorySearch: {

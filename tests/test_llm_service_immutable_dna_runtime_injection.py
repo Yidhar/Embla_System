@@ -30,10 +30,9 @@ _DNA_ENV_KEYS = (
 )
 
 _PROMPT_TEXT_BY_NAME = {
-    "conversation_style_prompt": "STYLE_PROMPT",
-    "agentic_tool_prompt": "AGENTIC_PROMPT",
     "shell_persona": "SHELL_PERSONA_PROMPT",
-    "core_values": "CORE_VALUES_PROMPT",
+    "dna/core_values": "CORE_VALUES_PROMPT",
+    "dna/evolution_drive": "EVOLUTION_DRIVE_PROMPT",
 }
 
 
@@ -121,7 +120,7 @@ def test_llm_service_injects_immutable_dna_runtime_prompt(monkeypatch) -> None:
         assert prepared
         assert prepared[0]["role"] == "system"
         assert str(prepared[0]["content"]).startswith(llm_service_module.LLMService.DNA_RUNTIME_HEADER)
-        assert "STYLE_PROMPT" in str(prepared[0]["content"])
+        assert "CORE_VALUES_PROMPT" in str(prepared[0]["content"])
         assert prepared[1]["role"] == "user"
     finally:
         _cleanup_case_root(case_root)
@@ -137,7 +136,7 @@ def test_llm_service_blocks_chat_when_immutable_dna_verification_fails(monkeypat
         _bootstrap_manifest(prompts_root, manifest_path, audit_path)
 
         # Tamper after manifest bootstrap; runtime injection must fail closed.
-        _prompt_path(prompts_root, "agentic_tool_prompt").write_text("AGENTIC_PROMPT_TAMPERED", encoding="utf-8")
+        _prompt_path(prompts_root, "dna/evolution_drive").write_text("EVOLUTION_DRIVE_PROMPT_TAMPERED", encoding="utf-8")
 
         monkeypatch.setenv(llm_service_module.LLMService.DNA_RUNTIME_ENABLED_ENV, "1")
         monkeypatch.setenv(llm_service_module.LLMService.DNA_PROMPTS_ROOT_ENV, str(prompts_root))
@@ -210,7 +209,7 @@ def test_llm_service_immutable_dna_preflight_reports_failure_on_mismatch(monkeyp
         audit_path = case_root / "immutable_dna_runtime_injection_audit.jsonl"
         _write_required_prompts(prompts_root)
         _bootstrap_manifest(prompts_root, manifest_path, audit_path)
-        _prompt_path(prompts_root, "agentic_tool_prompt").write_text("AGENTIC_PROMPT_TAMPERED", encoding="utf-8")
+        _prompt_path(prompts_root, "dna/evolution_drive").write_text("EVOLUTION_DRIVE_PROMPT_TAMPERED", encoding="utf-8")
 
         monkeypatch.setenv(llm_service_module.LLMService.DNA_RUNTIME_ENABLED_ENV, "1")
         monkeypatch.setenv(llm_service_module.LLMService.DNA_PROMPTS_ROOT_ENV, str(prompts_root))
@@ -226,7 +225,7 @@ def test_llm_service_immutable_dna_preflight_reports_failure_on_mismatch(monkeyp
         verify = report.get("verify")
         assert isinstance(verify, dict)
         assert verify.get("ok") is False
-        assert _prompt_relative_path(prompts_root, "agentic_tool_prompt") in list(verify.get("mismatch_files") or [])
+        assert _prompt_relative_path(prompts_root, "dna/evolution_drive") in list(verify.get("mismatch_files") or [])
     finally:
         _cleanup_case_root(case_root)
 
@@ -240,7 +239,7 @@ def test_llm_service_immutable_dna_preflight_reports_identity_failure_on_mismatc
         audit_path = case_root / "immutable_dna_runtime_injection_audit.jsonl"
         _write_required_prompts(prompts_root)
         _bootstrap_manifest(prompts_root, manifest_path, audit_path)
-        _prompt_path(prompts_root, "core_values").write_text("CORE_VALUES_PROMPT_TAMPERED", encoding="utf-8")
+        _prompt_path(prompts_root, "shell_persona").write_text("SHELL_PERSONA_PROMPT_TAMPERED", encoding="utf-8")
 
         monkeypatch.setenv(llm_service_module.LLMService.DNA_RUNTIME_ENABLED_ENV, "1")
         monkeypatch.setenv(llm_service_module.LLMService.DNA_PROMPTS_ROOT_ENV, str(prompts_root))
@@ -256,6 +255,6 @@ def test_llm_service_immutable_dna_preflight_reports_identity_failure_on_mismatc
         assert report["identity_passed"] is False
         identity_verify = report.get("identity_verify")
         assert isinstance(identity_verify, dict)
-        assert _prompt_relative_path(prompts_root, "core_values") in list(identity_verify.get("mismatch_files") or [])
+        assert _prompt_relative_path(prompts_root, "shell_persona") in list(identity_verify.get("mismatch_files") or [])
     finally:
         _cleanup_case_root(case_root)

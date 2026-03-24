@@ -19,12 +19,9 @@ def _cleanup_case_root(root: Path) -> None:
 
 
 _PROMPT_TEXT_BY_NAME = {
-    "conversation_style_prompt": "style-v1\n",
-    "conversation_analyzer_prompt": "analyzer-v1\n",
-    "tool_dispatch_prompt": "dispatch-v1\n",
-    "agentic_tool_prompt": "tool-v1\n",
     "shell_persona": "shell-v1\n",
-    "core_values": "core-v1\n",
+    "dna/core_values": "core-v1\n",
+    "dna/evolution_drive": "evolution-v1\n",
 }
 
 
@@ -94,7 +91,7 @@ def test_immutable_dna_gate_detects_prompt_tamper_after_manifest_bootstrap() -> 
             output_file=case_root / "bootstrap.json",
             bootstrap_if_missing=True,
         )
-        _prompt_path(prompts_root, "agentic_tool_prompt").write_text("tool-v2-tampered\n", encoding="utf-8")
+        _prompt_path(prompts_root, "dna/evolution_drive").write_text("evolution-v2-tampered\n", encoding="utf-8")
 
         report = run_immutable_dna_gate(
             prompts_root=prompts_root,
@@ -105,7 +102,7 @@ def test_immutable_dna_gate_detects_prompt_tamper_after_manifest_bootstrap() -> 
         )
         assert report["passed"] is False
         assert report["reason"] == "dna_hash_mismatch"
-        assert _prompt_relative_path(prompts_root, "agentic_tool_prompt") in report["verify"]["mismatch_files"]
+        assert _prompt_relative_path(prompts_root, "dna/evolution_drive") in report["verify"]["mismatch_files"]
     finally:
         _cleanup_case_root(case_root)
 

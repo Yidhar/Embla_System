@@ -1146,6 +1146,7 @@ _DEFAULT_PROMPT_REGISTRY_SPEC: Dict[str, Any] = {
     "entries": [
         {"prompt_name": "shell_persona", "path": "dna/shell_persona.md", "aliases": []},
         {"prompt_name": "core_values", "path": "dna/core_values.md", "aliases": []},
+        {"prompt_name": "evolution_drive", "path": "dna/evolution_drive.md", "aliases": []},
         {"prompt_name": "conversation_style_prompt", "path": "core/dna/conversation_style_prompt.md", "aliases": ["conversation_composition_prompt"]},
         {"prompt_name": "conversation_analyzer_prompt", "path": "core/routing/conversation_analyzer_prompt.md", "aliases": []},
         {"prompt_name": "tool_dispatch_prompt", "path": "core/routing/tool_dispatch_prompt.md", "aliases": []},

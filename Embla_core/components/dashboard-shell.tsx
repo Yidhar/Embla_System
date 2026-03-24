@@ -7,10 +7,17 @@ import {
   AlertTriangle,
   Blocks,
   Bot,
+  Brain,
   Cable,
+  Clock,
+  Dna,
   FileText,
+  Fingerprint,
   GitBranch,
+  HeartPulse,
+  Network,
   Settings2,
+  Shield,
   SlidersHorizontal,
   Workflow
 } from "lucide-react";
@@ -28,6 +35,13 @@ const navItems = [
   { href: "/evidence", key: "evidence", icon: FileText },
   { href: "/chatops", key: "chatops", icon: Blocks },
   { href: "/agent-config", key: "agentConfig", icon: SlidersHorizontal },
+  { href: "/release-gates", key: "releaseGates", icon: Shield },
+  { href: "/agent-hierarchy", key: "agentHierarchy", icon: Network },
+  { href: "/supervisor-health", key: "supervisorHealth", icon: HeartPulse },
+  { href: "/chronos", key: "chronos", icon: Clock },
+  { href: "/dna-integrity", key: "dnaIntegrity", icon: Fingerprint },
+  { href: "/memory-overview", key: "memoryOverview", icon: Brain },
+  { href: "/evolution-monitor", key: "evolutionMonitor", icon: Dna },
   { href: "/settings", key: "settings", icon: Settings2 },
 ] as const;
 

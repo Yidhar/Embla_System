@@ -20,12 +20,9 @@ def _cleanup_case_root(root: Path) -> None:
 
 
 _PROMPT_TEXT_BY_NAME = {
-    "conversation_style_prompt": "style-v1\n",
-    "conversation_analyzer_prompt": "analyzer-v1\n",
-    "tool_dispatch_prompt": "dispatch-v1\n",
-    "agentic_tool_prompt": "tool-v1\n",
     "shell_persona": "shell-v1\n",
-    "core_values": "core-v1\n",
+    "dna/core_values": "core-v1\n",
+    "dna/evolution_drive": "evolution-v1\n",
 }
 
 
@@ -62,7 +59,7 @@ def test_update_immutable_dna_manifest_success_and_verify_passes() -> None:
         )
         assert report["passed"] is True
         assert report["reason"] == "ok"
-        assert report["manifest_file_count"] == 4
+        assert report["manifest_file_count"] == 3
         assert report["change_reason"] == "sync dna after controlled prompt update"
         assert report["gate_report"]["passed"] is True
         payload = json.loads((prompts_root / "immutable_dna_manifest.spec").read_text(encoding="utf-8"))
