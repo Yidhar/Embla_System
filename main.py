@@ -731,6 +731,151 @@ class EmblaRuntime:
         output.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
         logger.info(f"Daily Checkpoint 已生成: {output}")
 
+    def _register_scheduled_jobs(self) -> None:
+        """Register all Chronos scheduled jobs per doc/12 §6 spec."""
+        scheduler = self._chronos_scheduler
+        if not scheduler:
+            return
+
+        jobs = [
+            # doc/12:612 — 健康检查 每5分钟
+            ("health_check", "*/5 * * * *", self._run_health_check),
+            # doc/12:610 — 巡检 每6小时
+            ("patrol", "0 */6 * * *", self._run_patrol),
+            # doc/12:611 — 备份(daily checkpoint) 每天3点
+            ("daily_checkpoint", "0 3 * * *", self._run_daily_checkpoint),
+            # 自进化评估 每小时
+            ("evolution_eval", "0 * * * *", self._run_evolution_eval),
+            # agent 自唤醒 每30分钟检查待处理任务
+            ("agent_wakeup", "*/30 * * * *", self._run_agent_wakeup),
+        ]
+        for job_id, cron_expr, func in jobs:
+            try:
+                scheduler.add_cron_job(job_id=job_id, func=func, cron_expr=cron_expr)
+                logger.info(f"定时任务已注册: {job_id} ({cron_expr})")
+            except Exception as exc:
+                logger.warning(f"定时任务注册失败 {job_id}: {exc}")
+
+    def _run_health_check(self) -> None:
+        """5-minute health check — verify core services are alive."""
+        import json
+        from datetime import datetime, timezone
+        status = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "type": "health_check",
+            "api_server": "running" if self.services.api_server and not self.services.api_server.startup_failed else "down",
+            "supervisor": "running" if self._brainstem_supervisor else "stopped",
+            "chronos": "running" if self._chronos_scheduler and self._chronos_scheduler.is_running else "stopped",
+        }
+        output = Path("scratch/runtime/health_check_latest.json")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Emit event for dashboard
+        try:
+            from core.event_bus.event_store import EventStore
+            store = EventStore(file_path=Path("logs/autonomous/events.jsonl"))
+            severity = "info" if status["api_server"] == "running" else "critical"
+            store.emit("HealthCheckCompleted", status, source="chronos.health_check", severity=severity)
+        except Exception:
+            pass
+
+    def _run_patrol(self) -> None:
+        """6-hour patrol — comprehensive system inspection."""
+        import json
+        from datetime import datetime, timezone
+        report = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "type": "patrol",
+            "checks": {},
+        }
+        # Check DNA integrity
+        try:
+            from core.security.immutable_dna import ImmutableDNALoader
+            loader = ImmutableDNALoader(
+                root_dir=Path("system/prompts"),
+                manifest_path=Path("system/prompts/immutable_dna_manifest.spec"),
+            )
+            result = loader.verify()
+            report["checks"]["dna_integrity"] = {"ok": result.ok, "reason": result.reason}
+        except Exception as exc:
+            report["checks"]["dna_integrity"] = {"ok": False, "reason": str(exc)}
+        # Check audit ledger
+        try:
+            ledger_path = Path("scratch/runtime/audit_ledger.jsonl")
+            report["checks"]["audit_ledger"] = {"exists": ledger_path.exists(), "size_bytes": ledger_path.stat().st_size if ledger_path.exists() else 0}
+        except Exception:
+            report["checks"]["audit_ledger"] = {"exists": False}
+        # Check event bus
+        try:
+            from core.event_bus.event_store import EventStore
+            store = EventStore(file_path=Path("logs/autonomous/events.jsonl"))
+            topics = store.list_topics(limit=50)
+            report["checks"]["event_bus"] = {"topic_count": len(topics), "status": "ok"}
+        except Exception as exc:
+            report["checks"]["event_bus"] = {"status": "error", "error": str(exc)}
+
+        output = Path("scratch/runtime") / f"patrol_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.json"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"巡检完成: {output}")
+
+    def _run_evolution_eval(self) -> None:
+        """Hourly evolution evaluation — check for failure patterns and trigger self-improvement."""
+        try:
+            from agents.evolution.evolution_trigger import EvolutionTrigger
+            from core.event_bus.event_store import EventStore
+            store = EventStore(file_path=Path("logs/autonomous/events.jsonl"))
+            trigger = EvolutionTrigger(
+                episodic_dir=Path("memory/episodic"),
+                trigger_threshold=3,
+                max_per_day=5,
+                event_emitter=store,
+            )
+            decision = trigger.evaluate()
+            if decision.should_evolve:
+                logger.info(f"进化触发: {decision.reason}")
+                store.emit("EvolutionEvalTriggered", {
+                    "reason": decision.reason,
+                    "signal_count": len(decision.signals),
+                    "top_task_type": decision.signals[0].task_type if decision.signals else "",
+                }, source="chronos.evolution_eval", severity="info")
+            else:
+                logger.debug(f"进化评估: {decision.reason}")
+        except Exception as exc:
+            logger.debug(f"进化评估失败: {exc}")
+
+    def _run_agent_wakeup(self) -> None:
+        """30-minute agent wakeup — check for pending tasks and wake agent if needed."""
+        try:
+            from agents.runtime.agent_session import AgentSessionStore, AgentStatus
+            store = AgentSessionStore()
+            # Check for sessions in WAITING status that might need attention
+            waiting_sessions = []
+            for session in store.list_all():
+                if session.status == AgentStatus.WAITING:
+                    metadata = session.metadata or {}
+                    pending_jobs = metadata.get("core_job_recovery_state", {}).get("pending_job_ids", [])
+                    if pending_jobs:
+                        waiting_sessions.append({
+                            "session_id": session.session_id,
+                            "role": session.role,
+                            "pending_jobs": len(pending_jobs),
+                        })
+            if waiting_sessions:
+                logger.info(f"Agent 唤醒检查: {len(waiting_sessions)} 个会话有待处理任务")
+                try:
+                    from core.event_bus.event_store import EventStore
+                    evt_store = EventStore(file_path=Path("logs/autonomous/events.jsonl"))
+                    evt_store.emit("AgentWakeupSignal", {
+                        "waiting_count": len(waiting_sessions),
+                        "sessions": waiting_sessions[:5],
+                    }, source="chronos.agent_wakeup", severity="info")
+                except Exception:
+                    pass
+            store.close()
+        except Exception as exc:
+            logger.debug(f"Agent 唤醒检查失败: {exc}")
+
     def _init_sdlc_orchestrator(self) -> None:
         """Initialise the SDLC orchestrator if autonomous_runtime.yaml enables it."""
         try:
@@ -775,16 +920,7 @@ class EmblaRuntime:
         _init_mcp()
         self._init_supervisor()
         self._init_chronos_scheduler()
-        if self._chronos_scheduler:
-            try:
-                self._chronos_scheduler.add_cron_job(
-                    job_id="daily_checkpoint",
-                    func=self._run_daily_checkpoint,
-                    cron_expr="0 3 * * *",  # daily at 3am
-                )
-                logger.info("Daily Checkpoint 已注册 (cron: 0 3 * * *)")
-            except Exception as exc:
-                logger.warning(f"Daily Checkpoint 注册失败: {exc}")
+        self._register_scheduled_jobs()
         self._init_sdlc_orchestrator()
         self.services.api_server = _start_api_server(runtime_config=self.runtime_config)
         self.services.api_started = bool(self.services.api_server and self.services.api_server.startup_complete)
