@@ -507,6 +507,33 @@ const zhCNMessages = {
         description: "列出当前证据报告的路径、gate 等级和状态。"
       }
     },
+    releaseGates: {
+      header: { eyebrow: "Release Pipeline", title: "发布门状态", description: "查看 4 个发布门禁的通过状态和检查项结果。" },
+      metrics: {
+        totalGates: { title: "总门数", description: "策略定义的发布门总数。" },
+        passedGates: { title: "已通过", description: "检查项全部通过的门数。" },
+        failedGates: { title: "未通过", description: "存在检查项未通过的门数。" },
+        pendingGates: { title: "待评估", description: "尚未执行评估的门数。" }
+      },
+      gates: { read_only: "只读门", write_repo: "写入门", deploy: "部署门", secrets: "密钥门" },
+      labels: { passed: "通过", failed: "未通过", checks: "检查项", noChecks: "无检查项" }
+    },
+    agentHierarchy: {
+      header: { eyebrow: "Agent Pipeline", title: "代理层级活视图", description: "查看多级代理会话树和角色分布。" },
+      metrics: {
+        totalSessions: { title: "会话总数", description: "当前所有 Agent 会话数。" },
+        roleDistribution: { title: "角色分布", description: "各角色的会话数量。" }
+      },
+      labels: { sessionId: "会话 ID", parent: "父节点", noParent: "无父节点", noTask: "无任务描述", noSessions: "暂无活跃会话", noSessionsDescription: "当前没有 Agent 会话。" }
+    },
+    supervisorHealth: {
+      header: { eyebrow: "Supervision Layer", title: "监督者健康", description: "查看脑干监管、进程守卫、看门狗和熔断器的健康状态。" },
+      metrics: {
+        healthyServices: { title: "健康服务", description: "状态为正常的服务数。" },
+        totalServices: { title: "服务总数", description: "监管的服务总数。" }
+      },
+      labels: { status: "状态", severity: "严重性", noData: "暂无数据", noDataDescription: "无法获取监管服务状态。" }
+    },
     chronos: {
       header: {
         eyebrow: "Scheduler",
@@ -1180,6 +1207,33 @@ const enUSMessages: typeof zhCNMessages = {
         title: "Report index",
         description: "Lists current evidence report paths, gate levels, and statuses."
       }
+    },
+    releaseGates: {
+      header: { eyebrow: "Release Pipeline", title: "Release Gate Status", description: "View the pass/fail status and check items for all 4 release gates." },
+      metrics: {
+        totalGates: { title: "Total Gates", description: "Total release gates defined in policy." },
+        passedGates: { title: "Passed", description: "Gates with all checks passed." },
+        failedGates: { title: "Failed", description: "Gates with one or more failed checks." },
+        pendingGates: { title: "Pending", description: "Gates not yet evaluated." }
+      },
+      gates: { read_only: "Read Only", write_repo: "Write Repo", deploy: "Deploy", secrets: "Secrets" },
+      labels: { passed: "Passed", failed: "Failed", checks: "Checks", noChecks: "No checks" }
+    },
+    agentHierarchy: {
+      header: { eyebrow: "Agent Pipeline", title: "Agent Hierarchy", description: "View multi-level agent session tree and role distribution." },
+      metrics: {
+        totalSessions: { title: "Total Sessions", description: "Current number of all agent sessions." },
+        roleDistribution: { title: "Role Distribution", description: "Session count per agent role." }
+      },
+      labels: { sessionId: "Session ID", parent: "Parent", noParent: "No parent", noTask: "No task description", noSessions: "No active sessions", noSessionsDescription: "No agent sessions currently exist." }
+    },
+    supervisorHealth: {
+      header: { eyebrow: "Supervision Layer", title: "Supervisor Health", description: "View health status of brainstem supervisor, process guard, watchdog, and killswitch." },
+      metrics: {
+        healthyServices: { title: "Healthy Services", description: "Number of services in healthy state." },
+        totalServices: { title: "Total Services", description: "Total number of supervised services." }
+      },
+      labels: { status: "Status", severity: "Severity", noData: "No data", noDataDescription: "Unable to retrieve supervisor service status." }
     },
     chronos: {
       header: {
