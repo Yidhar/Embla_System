@@ -22,3 +22,14 @@ autonomous:
     workflow_critical_event_window_hours: 336
     prompt_prefix_cache_min_samples: 20
     prompt_tail_churn_min_samples: 5
+  self_evolution:
+    enabled: false
+    auto_approve: false
+    trigger_threshold: 3
+    max_evolutions_per_day: 5
+    allowed_scopes:
+      - roles
+      - skills
+      - styles
+      - rules
+    cooldown_minutes: 30
