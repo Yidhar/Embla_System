@@ -632,6 +632,9 @@ class EmblaRuntime:
         self.stop_event = threading.Event()
         self.services = RuntimeServices()
         self._exit_code = 0
+        self._brainstem_supervisor: object | None = None
+        self._process_guard: object | None = None
+        self._process_guard_thread: threading.Thread | None = None
 
     def run_diagnostic(self) -> int | None:
         return _run_diagnostic(self.options)
@@ -639,11 +642,60 @@ class EmblaRuntime:
     def run_startup_gate(self) -> bool:
         return _run_startup_gate(self.options)
 
+    def _init_supervisor(self) -> None:
+        """Initialise BrainstemSupervisor and ProcessGuardDaemon."""
+        try:
+            from core.supervisor.brainstem_supervisor import BrainstemServiceSpec, BrainstemSupervisor
+
+            state_file = Path("scratch/runtime/brainstem_supervisor_state.json")
+            supervisor = BrainstemSupervisor(state_file=state_file)
+
+            api_cfg = self.runtime_config.api_server
+            supervisor.register_service(
+                BrainstemServiceSpec(
+                    service_name="api_server",
+                    command=[sys.executable, "-m", "uvicorn", "apiserver.api_server:app",
+                             "--host", str(api_cfg.host), "--port", str(api_cfg.port)],
+                    working_dir=str(Path(__file__).resolve().parent),
+                    restart_policy="on-failure",
+                    max_restarts=3,
+                )
+            )
+            self._brainstem_supervisor = supervisor
+            logger.info("BrainstemSupervisor 已初始化 (state=%s)", state_file)
+        except Exception as exc:
+            logger.warning("BrainstemSupervisor 初始化失败: %s", exc)
+
+        try:
+            from core.supervisor.process_guard import ProcessGuardDaemon
+
+            guard = ProcessGuardDaemon()
+            guard_state_file = Path("scratch/runtime/process_guard_state.json")
+
+            def _run_guard() -> None:
+                try:
+                    guard.run_daemon(
+                        state_file=guard_state_file,
+                        interval_seconds=10.0,
+                        max_ticks=1_000_000_000,
+                    )
+                except Exception as exc:
+                    logger.warning("ProcessGuardDaemon 异常退出: %s", exc)
+
+            thread = threading.Thread(target=_run_guard, name="process-guard", daemon=True)
+            thread.start()
+            self._process_guard = guard
+            self._process_guard_thread = thread
+            logger.info("ProcessGuardDaemon 已启动 (state=%s)", guard_state_file)
+        except Exception as exc:
+            logger.warning("ProcessGuardDaemon 初始化失败: %s", exc)
+
     def initialize_services(self) -> None:
         _init_boxlite_runtime()
         self.services.boxlite_reconciler = _start_boxlite_runtime_reconciler(self._should_stop_supervision)
         _init_memory()
         _init_mcp()
+        self._init_supervisor()
         self.services.api_server = _start_api_server(runtime_config=self.runtime_config)
         self.services.api_started = bool(self.services.api_server and self.services.api_server.startup_complete)
         if self.services.api_server and self.services.api_server.startup_failed:
@@ -701,6 +753,16 @@ class EmblaRuntime:
                     logger.warning("API 服务器线程已退出，但端口仍未确认释放: %s:%d", handle.host, handle.port)
             self.services.api_server = None
             self.services.api_started = False
+
+        # Cleanup BrainstemSupervisor and ProcessGuardDaemon
+        if self._process_guard_thread is not None:
+            self._process_guard_thread.join(timeout=2.0)
+            if self._process_guard_thread.is_alive():
+                logger.warning("ProcessGuardDaemon 线程未在 2s 内退出")
+            self._process_guard_thread = None
+            self._process_guard = None
+
+        self._brainstem_supervisor = None
 
         cleanup_report = close_runtime_network_clients_sync()
         litellm_error = str(((cleanup_report.get("litellm") or {}).get("error")) or "").strip()

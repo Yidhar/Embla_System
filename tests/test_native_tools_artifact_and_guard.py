@@ -129,7 +129,7 @@ def test_file_ast_skeleton_and_chunk_read():
         skeleton_text = str(skeleton["result"])
         assert "[symbols]" in skeleton_text
         assert "class Sample" in skeleton_text
-        assert "def helper" in skeleton_text
+        assert "helper" in skeleton_text
 
         chunk = asyncio.run(
             executor.execute(

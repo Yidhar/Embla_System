@@ -10,6 +10,7 @@ Goal:
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import json
@@ -1129,6 +1130,89 @@ class NativeToolExecutor:
             re.compile(r"^\s*from\s+.+\s+import\s+.+"),
             re.compile(r"^\s*using\s+.+;"),
         ]
+
+        imports: List[str] = []
+        for idx, line in enumerate(lines, 1):
+            if len(imports) < 200 and any(p.search(line) for p in import_patterns):
+                imports.append(f"{idx:4}: {line.strip()}")
+
+        symbols: List[str] = []
+
+        # --- Python files: use real ast.parse for accurate symbol extraction ---
+        if ext == ".py":
+            symbols = self._extract_py_symbols_ast(text, max_symbols)
+
+        # --- Non-Python files: regex-based symbol extraction ---
+        if not symbols and ext != ".py":
+            symbols = self._extract_symbols_regex(ext, lines, max_symbols)
+        elif not symbols and ext == ".py":
+            # ast.parse failed or returned nothing; fall back to regex
+            symbols = self._extract_symbols_regex(ext, lines, max_symbols)
+
+        sections = [
+            f"[path] {path}",
+            f"[language] {ext or '(unknown)'}",
+            f"[total_lines] {len(lines)}",
+            f"[total_chars] {len(text)}",
+        ]
+        if len(lines) > 5000:
+            sections.append("[note] Monolith file detected; this is skeleton-only output.")
+        sections.extend(["[imports]"])
+        sections.append("\n".join(imports) if imports else "(none)")
+        sections.extend(["[symbols]"])
+        sections.append("\n".join(symbols) if symbols else "(none)")
+        return "\n".join(sections)
+
+    @staticmethod
+    def _extract_py_symbols_ast(source: str, max_symbols: int) -> List[str]:
+        """Extract symbols from Python source using real ast.parse + ast.walk.
+
+        Returns a list of formatted symbol strings, or an empty list on
+        parse failure so the caller can fall back to regex.
+        """
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            return []
+
+        symbols: List[str] = []
+
+        def _walk_class(cls_node: ast.ClassDef, prefix: str) -> None:
+            """Recursively walk class body for methods and nested classes."""
+            for node in cls_node.body:
+                if len(symbols) >= max_symbols:
+                    return
+                if isinstance(node, ast.FunctionDef):
+                    end = getattr(node, "end_lineno", node.lineno)
+                    symbols.append(f"{node.lineno:4}: function {prefix}.{node.name} [L{node.lineno}-{end}]")
+                elif isinstance(node, ast.AsyncFunctionDef):
+                    end = getattr(node, "end_lineno", node.lineno)
+                    symbols.append(f"{node.lineno:4}: async_function {prefix}.{node.name} [L{node.lineno}-{end}]")
+                elif isinstance(node, ast.ClassDef):
+                    end = getattr(node, "end_lineno", node.lineno)
+                    nested_name = f"{prefix}.{node.name}"
+                    symbols.append(f"{node.lineno:4}: class {nested_name} [L{node.lineno}-{end}]")
+                    _walk_class(node, nested_name)
+
+        for node in ast.iter_child_nodes(tree):
+            if len(symbols) >= max_symbols:
+                break
+            if isinstance(node, ast.FunctionDef):
+                end = getattr(node, "end_lineno", node.lineno)
+                symbols.append(f"{node.lineno:4}: function {node.name} [L{node.lineno}-{end}]")
+            elif isinstance(node, ast.AsyncFunctionDef):
+                end = getattr(node, "end_lineno", node.lineno)
+                symbols.append(f"{node.lineno:4}: async_function {node.name} [L{node.lineno}-{end}]")
+            elif isinstance(node, ast.ClassDef):
+                end = getattr(node, "end_lineno", node.lineno)
+                symbols.append(f"{node.lineno:4}: class {node.name} [L{node.lineno}-{end}]")
+                _walk_class(node, node.name)
+
+        return symbols
+
+    @staticmethod
+    def _extract_symbols_regex(ext: str, lines: List[str], max_symbols: int) -> List[str]:
+        """Regex-based symbol extraction for non-Python files (or as fallback)."""
         symbol_patterns: List[re.Pattern[str]] = []
         if ext in {".py"}:
             symbol_patterns = [re.compile(r"^\s*(class|def)\s+([A-Za-z_][A-Za-z0-9_]*)")]
@@ -1149,14 +1233,10 @@ class NativeToolExecutor:
         else:
             symbol_patterns = [re.compile(r"^\s*(class|def|function)\s+([A-Za-z_][A-Za-z0-9_]*)")]
 
-        imports: List[str] = []
         symbols: List[str] = []
         for idx, line in enumerate(lines, 1):
-            if len(imports) < 200 and any(p.search(line) for p in import_patterns):
-                imports.append(f"{idx:4}: {line.strip()}")
-
             if len(symbols) >= max_symbols:
-                continue
+                break
             for pattern in symbol_patterns:
                 m = pattern.search(line)
                 if not m:
@@ -1169,20 +1249,7 @@ class NativeToolExecutor:
                     name = m.group(1)
                 symbols.append(f"{idx:4}: {kind} {name}")
                 break
-
-        sections = [
-            f"[path] {path}",
-            f"[language] {ext or '(unknown)'}",
-            f"[total_lines] {len(lines)}",
-            f"[total_chars] {len(text)}",
-        ]
-        if len(lines) > 5000:
-            sections.append("[note] Monolith file detected; this is skeleton-only output.")
-        sections.extend(["[imports]"])
-        sections.append("\n".join(imports) if imports else "(none)")
-        sections.extend(["[symbols]"])
-        sections.append("\n".join(symbols) if symbols else "(none)")
-        return "\n".join(sections)
+        return symbols
 
     async def _file_ast_chunk_read(self, call: Dict[str, Any]) -> str:
         path = str(call.get("path") or call.get("file_path") or "").strip()
