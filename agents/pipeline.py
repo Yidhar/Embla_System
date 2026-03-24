@@ -53,6 +53,7 @@ ChildToolExecutorFn = Callable[[str, Dict[str, Any], str], Awaitable[Dict[str, A
 _CORE_PARENT_TOOL_ALLOWLIST = {
     "spawn_child_agent",
     "poll_child_status",
+    "send_message_to_child",
     "resume_child_agent",
     "destroy_child_agent",
 }

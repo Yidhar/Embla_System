@@ -77,12 +77,16 @@ class EventStore:
         *,
         timeout_ms: int = 5_000,
         max_retries: int = 1,
+        priority: int = 0,
+        max_concurrency: int = 0,
     ) -> TopicSubscription:
         return self.topic_bus.subscribe(
             pattern,
             handler,
             timeout_ms=timeout_ms,
             max_retries=max_retries,
+            priority=priority,
+            max_concurrency=max_concurrency,
         )
 
     def unsubscribe(self, subscription: TopicSubscription | str) -> None:

@@ -1899,13 +1899,37 @@ def reload_config() -> EmblaSystemConfig:
     return config
 
 
+def _diff_top_level_keys(old: EmblaSystemConfig, new: EmblaSystemConfig) -> list[str]:
+    """比较两个配置对象，返回值有变化的顶层字段名列表。"""
+    changed: list[str] = []
+    all_keys = set(type(old).model_fields.keys()) | set(type(new).model_fields.keys())
+    for key in sorted(all_keys):
+        if key == "window":
+            continue  # 非序列化字段，跳过比较
+        try:
+            old_val = getattr(old, key, None)
+            new_val = getattr(new, key, None)
+            if old_val != new_val:
+                changed.append(key)
+        except Exception:
+            changed.append(key)
+    return changed
+
+
 def hot_reload_config() -> EmblaSystemConfig:
     """热更新配置 - 重新加载配置并通知所有模块"""
     global config
     old_config = config
     config = load_config()
     notify_config_changed()
-    logger.info("config hot reloaded: %s -> %s", old_config.system.version, config.system.version)
+
+    # 记录变更的顶层字段
+    changed_keys = _diff_top_level_keys(old_config, config)
+    if changed_keys:
+        logger.info("config hot reloaded — changed keys: %s", ", ".join(changed_keys))
+    else:
+        logger.info("config hot reloaded — no top-level key changes detected")
+
     return config
 
 

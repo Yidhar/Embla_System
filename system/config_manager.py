@@ -49,10 +49,11 @@ class ConfigManager:
         # 模块管理
         self._modules_to_reload: List[str] = []
         self._reload_callbacks: List[Callable] = []
-        
+
         # 配置监视器
         self._config_watcher_thread: Optional[threading.Thread] = None
         self._stop_watching = False
+        self._stop_event = threading.Event()
         
         # 注册配置变更监听器
         add_config_listener(self._on_config_changed)
@@ -135,6 +136,7 @@ class ConfigManager:
             config_file = str(Path(__file__).parent.parent / "config.json")
         
         self._stop_watching = False
+        self._stop_event.clear()
         self._config_watcher_thread = threading.Thread(
             target=self._watch_config_file,
             args=(config_file,),
@@ -146,14 +148,34 @@ class ConfigManager:
     def stop_config_watcher(self):
         """停止配置文件监视器"""
         self._stop_watching = True
+        self._stop_event.set()
         if self._config_watcher_thread:
-            self._config_watcher_thread.join(timeout=1)
+            self._config_watcher_thread.join(timeout=2)
         logger.info("config watcher stopped")
     
     def _watch_config_file(self, config_file: str):
-        """监视配置文件变化"""
+        """监视配置文件变化（优先 watchfiles 事件驱动，不可用时回退轮询）"""
+        try:
+            import watchfiles
+            self._watch_config_file_watchfiles(config_file, watchfiles)
+        except ImportError:
+            self._watch_config_file_polling(config_file)
+
+    def _watch_config_file_watchfiles(self, config_file: str, watchfiles):
+        """使用 watchfiles 事件驱动监视配置文件"""
+        logger.info("配置监控: watchfiles 事件驱动")
+        for changes in watchfiles.watch(config_file, stop_event=self._stop_event):
+            if self._stop_watching:
+                break
+            logger.info("config file change detected: %s (changes: %s)", config_file, changes)
+            time.sleep(0.1)  # 等待文件写入完成
+            hot_reload_config()
+
+    def _watch_config_file_polling(self, config_file: str):
+        """使用轮询模式监视配置文件（fallback）"""
+        logger.info("配置监控: 轮询模式 (fallback)")
         last_modified = 0
-        
+
         while not self._stop_watching:
             try:
                 if os.path.exists(config_file):
@@ -161,13 +183,13 @@ class ConfigManager:
                     if current_modified > last_modified:
                         last_modified = current_modified
                         logger.info("config file change detected: %s", config_file)
-                        
+
                         # 等待文件写入完成
                         time.sleep(0.1)
-                        
+
                         # 重新加载配置
                         hot_reload_config()
-                
+
                 time.sleep(1)  # 每秒检查一次
             except Exception:
                 logger.exception("config watcher loop failed")

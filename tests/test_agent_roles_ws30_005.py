@@ -2481,6 +2481,17 @@ class TestPipeline:
                         "content": "",
                         "tool_calls": [
                             {
+                                "id": "core_send_msg_1",
+                                "name": "send_message_to_child",
+                                "arguments": {"agent_id": "missing-child", "content": "status update"},
+                            }
+                        ],
+                    }
+                if idx == 4:
+                    return {
+                        "content": "",
+                        "tool_calls": [
+                            {
                                 "id": "core_destroy_1",
                                 "name": "destroy_child_agent",
                                 "arguments": {"agent_id": "missing-child", "reason": "cleanup"},
@@ -2531,16 +2542,18 @@ class TestPipeline:
         ]
         assert "spawn_child_agent" in invoked_tools
         assert "poll_child_status" in invoked_tools
+        assert "send_message_to_child" in invoked_tools
         assert "resume_child_agent" in invoked_tools
         assert "destroy_child_agent" in invoked_tools
 
         receipt = next(item for item in events if item.get("type") == "execution_receipt")
         agent_state = receipt.get("agent_state", {})
-        assert int(agent_state.get("core_loop_tool_calls") or 0) >= 4
+        assert int(agent_state.get("core_loop_tool_calls") or 0) >= 5
         used_tools = set(agent_state.get("core_loop_tools_used") or [])
         assert {
             "spawn_child_agent",
             "poll_child_status",
+            "send_message_to_child",
             "resume_child_agent",
             "destroy_child_agent",
         }.issubset(used_tools)

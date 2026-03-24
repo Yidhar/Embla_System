@@ -66,6 +66,8 @@ class TopicSubscription:
     pattern: str
     timeout_ms: int = 5_000
     max_retries: int = 1
+    priority: int = 0
+    max_concurrency: int = 0  # 0 = unlimited
 
 
 @dataclass(frozen=True)
@@ -97,7 +99,7 @@ class TopicEventBus:
         if self.mirror_file_path is not None:
             self.mirror_file_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._subscribers: Dict[str, tuple[TopicSubscription, EventHandler]] = {}
+        self._subscribers: Dict[str, tuple[TopicSubscription, EventHandler, Optional[asyncio.Semaphore]]] = {}
         self._init_schema()
 
     def _connect(self) -> sqlite3.Connection:
@@ -128,6 +130,7 @@ class TopicEventBus:
             subscription_pattern TEXT NOT NULL,
             error TEXT NOT NULL,
             retry_count INTEGER NOT NULL DEFAULT 0,
+            next_retry_at TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
@@ -153,6 +156,7 @@ class TopicEventBus:
             with self._connect() as conn:
                 conn.executescript(schema)
                 self._migrate_topic_event_partition_column(conn)
+                self._migrate_dead_letter_next_retry_column(conn)
                 conn.commit()
 
     @staticmethod
@@ -178,6 +182,12 @@ class TopicEventBus:
             "CREATE INDEX IF NOT EXISTS idx_topic_event_partition_topic_seq ON topic_event(partition_ym, topic, seq)"
         )
 
+    def _migrate_dead_letter_next_retry_column(self, conn: sqlite3.Connection) -> None:
+        columns = conn.execute("PRAGMA table_info(dead_letter_event)").fetchall()
+        column_names = {str(row["name"]) for row in columns}
+        if "next_retry_at" not in column_names:
+            conn.execute("ALTER TABLE dead_letter_event ADD COLUMN next_retry_at TEXT NOT NULL DEFAULT ''")
+
     def subscribe(
         self,
         pattern: str,
@@ -185,16 +195,22 @@ class TopicEventBus:
         *,
         timeout_ms: int = 5_000,
         max_retries: int = 1,
+        priority: int = 0,
+        max_concurrency: int = 0,
     ) -> TopicSubscription:
         normalized_pattern = _normalize_topic_token(pattern) or "*"
+        concurrency = max(0, int(max_concurrency))
         subscription = TopicSubscription(
             subscription_id=f"sub_{uuid.uuid4().hex[:16]}",
             pattern=normalized_pattern,
             timeout_ms=max(100, int(timeout_ms)),
             max_retries=max(1, int(max_retries)),
+            priority=int(priority),
+            max_concurrency=concurrency,
         )
+        semaphore = asyncio.Semaphore(concurrency) if concurrency > 0 else None
         with self._lock:
-            self._subscribers[subscription.subscription_id] = (subscription, handler)
+            self._subscribers[subscription.subscription_id] = (subscription, handler, semaphore)
         return subscription
 
     def unsubscribe(self, subscription: TopicSubscription | str) -> None:
@@ -298,24 +314,29 @@ class TopicEventBus:
         topic = str(envelope.get("topic") or "")
         with self._lock:
             subscribers = list(self._subscribers.values())
-        for subscription, handler in subscribers:
+        # Sort by priority descending so higher-priority subscribers run first
+        subscribers.sort(key=lambda entry: entry[0].priority, reverse=True)
+        for subscription, handler, semaphore in subscribers:
             if not fnmatch.fnmatchcase(topic, subscription.pattern):
                 continue
-            self._deliver_to_handler(subscription, handler, envelope)
+            self._deliver_to_handler(subscription, handler, envelope, semaphore=semaphore)
 
     def _deliver_to_handler(
         self,
         subscription: TopicSubscription,
         handler: EventHandler,
         envelope: Dict[str, Any],
+        *,
+        semaphore: Optional[asyncio.Semaphore] = None,
     ) -> bool:
         for _attempt in range(subscription.max_retries):
             try:
                 result = handler(dict(envelope))
                 if asyncio.iscoroutine(result):
-                    self._await_handler_result(
+                    self._await_handler_result_with_semaphore(
                         result,
                         timeout_ms=subscription.timeout_ms,
+                        semaphore=semaphore,
                     )
                 return True
             except Exception as exc:
@@ -340,6 +361,28 @@ class TopicEventBus:
         # Fire-and-forget in running-loop context; completion/failure will surface in task exception logs.
         task.add_done_callback(lambda _task: None)
 
+    @staticmethod
+    def _await_handler_result_with_semaphore(
+        coro: Any, *, timeout_ms: int, semaphore: Optional[asyncio.Semaphore] = None
+    ) -> None:
+        timeout_seconds = max(0.1, float(timeout_ms) / 1000.0)
+
+        async def _gated() -> None:
+            if semaphore is not None:
+                async with semaphore:
+                    await asyncio.wait_for(coro, timeout=timeout_seconds)
+            else:
+                await asyncio.wait_for(coro, timeout=timeout_seconds)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(_gated())
+            return
+
+        task = loop.create_task(_gated())
+        task.add_done_callback(lambda _task: None)
+
     def _record_dead_letter(
         self,
         *,
@@ -354,8 +397,8 @@ class TopicEventBus:
                 conn.execute(
                     """
                     INSERT INTO dead_letter_event
-                    (event_id, topic, subscription_pattern, error, retry_count, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, 0, ?, ?)
+                    (event_id, topic, subscription_pattern, error, retry_count, next_retry_at, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, 0, '', ?, ?)
                     """,
                     (event_id, topic, subscription_pattern, str(error), now, now),
                 )
@@ -473,7 +516,8 @@ class TopicEventBus:
             topic = str(envelope.get("topic") or "")
             with self._lock:
                 subscribers = list(self._subscribers.values())
-            for subscription, handler in subscribers:
+            subscribers.sort(key=lambda entry: entry[0].priority, reverse=True)
+            for subscription, handler, semaphore in subscribers:
                 if not fnmatch.fnmatchcase(topic, subscription.pattern):
                     continue
                 dedupe_key = str(envelope.get("idempotency_key") or envelope.get("event_id") or f"seq:{seq}")
@@ -484,7 +528,7 @@ class TopicEventBus:
                 ):
                     deduped_count += 1
                     continue
-                delivered = self._deliver_to_handler(subscription, handler, envelope)
+                delivered = self._deliver_to_handler(subscription, handler, envelope, semaphore=semaphore)
                 if delivered:
                     self._mark_replay_deduped(
                         anchor_id=normalized_anchor,
@@ -715,7 +759,8 @@ class TopicEventBus:
             with self._connect() as conn:
                 rows = conn.execute(
                     """
-                    SELECT dlq_id, event_id, topic, subscription_pattern, error, retry_count, created_at, updated_at
+                    SELECT dlq_id, event_id, topic, subscription_pattern, error,
+                           retry_count, next_retry_at, created_at, updated_at
                     FROM dead_letter_event
                     ORDER BY dlq_id DESC
                     LIMIT ?
@@ -730,6 +775,7 @@ class TopicEventBus:
                 "subscription_pattern": str(row["subscription_pattern"] or ""),
                 "error": str(row["error"] or ""),
                 "retry_count": int(row["retry_count"] or 0),
+                "next_retry_at": str(row["next_retry_at"] or ""),
                 "created_at": str(row["created_at"] or ""),
                 "updated_at": str(row["updated_at"] or ""),
             }
@@ -774,7 +820,7 @@ class TopicEventBus:
 
     def iter_subscriptions(self) -> Iterable[TopicSubscription]:
         with self._lock:
-            subscriptions = [item[0] for item in self._subscribers.values()]
+            subscriptions = [entry[0] for entry in self._subscribers.values()]
         return subscriptions
 
 
