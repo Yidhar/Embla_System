@@ -184,14 +184,18 @@ class GateRunner:
 
     def _check_perf_smoke(self) -> GateCheckResult:
         """Performance smoke: EventStore emit latency + posture aggregation latency."""
+        import shutil
+        import tempfile
         import time
 
+        tmp_dir = None
         try:
             from core.event_bus.event_store import EventStore
             from core.event_bus.runtime_views import build_runtime_posture_summary
 
-            # Measure: emit 50 events
-            store = EventStore(file_path=self._project_root / "scratch" / "runtime" / "perf_smoke_events.jsonl")
+            # Use temp directory to avoid polluting production runtime dir
+            tmp_dir = tempfile.mkdtemp(prefix="perf_smoke_")
+            store = EventStore(file_path=Path(tmp_dir) / "perf_smoke_events.jsonl")
             start = time.monotonic()
             for i in range(50):
                 store.emit(f"PerfSmokeEvent_{i}", {"index": i}, source="gate_runner.perf_smoke")
@@ -209,6 +213,9 @@ class GateRunner:
             return GateCheckResult(check_name="perf_smoke", passed=passed, output=output)
         except Exception as exc:
             return GateCheckResult(check_name="perf_smoke", passed=False, error=str(exc))
+        finally:
+            if tmp_dir:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def _check_canary_plan(self) -> GateCheckResult:
         """Verify canary evaluation engine is operational with synthetic data."""

@@ -236,21 +236,25 @@ class HierarchicalIndex:
 
     def _get_vector_store(self) -> Optional[L3VectorStore]:
         """Lazily initialise and return the L3 vector store."""
-        if self._vector_store is None:
+        if self._vector_store is not None:
+            return self._vector_store
+        if getattr(self, "_vector_store_unavailable", False):
+            return None  # skip repeated init attempts after first failure
+        try:
+            from agents.memory.vector_store import L3VectorStore as _L3VS
+
+            db_path = self._root / "vectors" / "l3_code_index.db"
             try:
-                from agents.memory.vector_store import L3VectorStore as _L3VS
+                from system.config import get_config
 
-                db_path = self._root / "vectors" / "l3_code_index.db"
-                try:
-                    from system.config import get_config
-
-                    cfg = get_config()
-                    dim = int(getattr(getattr(cfg, "embedding", None), "dimensions", 1024) or 1024)
-                except Exception:
-                    dim = 1024
-                self._vector_store = _L3VS(db_path=db_path, dimensions=dim)
-            except Exception as exc:
-                logger.debug("Could not initialise L3 vector store: %s", exc)
+                cfg = get_config()
+                dim = int(getattr(getattr(cfg, "embedding", None), "dimensions", 1024) or 1024)
+            except Exception:
+                dim = 1024
+            self._vector_store = _L3VS(db_path=db_path, dimensions=dim)
+        except Exception as exc:
+            self._vector_store_unavailable = True
+            logger.debug("Could not initialise L3 vector store: %s", exc)
         return self._vector_store
 
     def _index_chunks_to_vector_store(
@@ -259,33 +263,40 @@ class HierarchicalIndex:
         chunks: List[CodeChunk],
         file_path: str,
     ) -> None:
-        """Embed and upsert code chunks into the vector store."""
-        try:
-            from summer_memory.embedding_openai_compat import embed_texts_openai_compat
+        """Embed and upsert code chunks into the vector store (runs in background thread)."""
+        import threading
 
-            texts = [c.content[:8000] for c in chunks]
-            if not texts:
-                return
-            embeddings, meta = embed_texts_openai_compat(texts)
-            if not meta.get("ok") or embeddings is None or len(embeddings) != len(chunks):
-                return
-            store.delete_by_file(file_path)
-            for chunk, emb in zip(chunks, embeddings):
-                if emb is None:
-                    continue
-                store.upsert(
-                    chunk_id=chunk.chunk_id,
-                    file_path=file_path,
-                    chunk_type=chunk.chunk_type,
-                    name=chunk.name,
-                    start_line=chunk.start_line,
-                    end_line=chunk.end_line,
-                    content=chunk.content,
-                    embedding=np.array(emb, dtype=np.float32),
-                    token_estimate=chunk.token_estimate,
-                )
-        except Exception as exc:
-            logger.debug("Vector indexing failed for %s: %s", file_path, exc)
+        def _do_index() -> None:
+            try:
+                from summer_memory.embedding_openai_compat import embed_texts_openai_compat
+
+                texts = [c.content[:8000] for c in chunks]
+                if not texts:
+                    return
+                embeddings, meta = embed_texts_openai_compat(texts)
+                if not meta.get("ok") or embeddings is None or len(embeddings) != len(chunks):
+                    logger.warning("Embedding API returned incomplete results for %s", file_path)
+                    return
+                store.delete_by_file(file_path)
+                for chunk, emb in zip(chunks, embeddings):
+                    if emb is None:
+                        continue
+                    store.upsert(
+                        chunk_id=chunk.chunk_id,
+                        file_path=file_path,
+                        chunk_type=chunk.chunk_type,
+                        name=chunk.name,
+                        start_line=chunk.start_line,
+                        end_line=chunk.end_line,
+                        content=chunk.content,
+                        embedding=np.array(emb, dtype=np.float32),
+                        token_estimate=chunk.token_estimate,
+                    )
+            except Exception as exc:
+                logger.warning("Vector indexing failed for %s: %s", file_path, exc)
+
+        thread = threading.Thread(target=_do_index, daemon=True, name=f"l3-index-{file_path[-30:]}")
+        thread.start()
 
     def is_indexed(self, file_path: str) -> bool:
         """Check if a file is already indexed."""

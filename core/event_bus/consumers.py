@@ -134,6 +134,8 @@ class IncidentConsumer:
         "ReleaseRollbackFailed",
     }
 
+    _MAX_FILE_SIZE_BYTES: int = 10 * 1024 * 1024  # 10 MB rotation threshold
+
     def __init__(self, *, incident_file: Path, include_warning: bool = True) -> None:
         self.incident_file = Path(incident_file)
         self.include_warning = bool(include_warning)
@@ -166,6 +168,16 @@ class IncidentConsumer:
             "task_id": str(data.get("task_id") or ""),
         }
         with self._lock:
+            # Rotate if file exceeds size threshold
+            if self.incident_file.exists():
+                try:
+                    if self.incident_file.stat().st_size > self._MAX_FILE_SIZE_BYTES:
+                        rotated = self.incident_file.with_suffix(".jsonl.1")
+                        if rotated.exists():
+                            rotated.unlink()
+                        self.incident_file.rename(rotated)
+                except OSError:
+                    pass
             _append_jsonl(self.incident_file, row)
         return {"ok": True, "recorded": True}
 
