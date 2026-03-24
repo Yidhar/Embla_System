@@ -18,9 +18,14 @@ import json
 import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+import numpy as np
 
 from agents.memory.ast_chunker import CodeChunk, chunk_file
+
+if TYPE_CHECKING:
+    from agents.memory.vector_store import L3VectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +66,7 @@ class HierarchicalIndex:
     def __init__(self, index_root: Optional[str] = None) -> None:
         self._root = Path(index_root) if index_root else _DEFAULT_INDEX_ROOT
         self._cache: Dict[str, Dict[str, Any]] = {}
+        self._vector_store: Optional[L3VectorStore] = None
 
     @property
     def root(self) -> Path:
@@ -111,6 +117,11 @@ class HierarchicalIndex:
         # Persist index + chunks
         self._save_index(file_path, entry, chunks)
 
+        # Index into vector store for semantic search
+        store = self._get_vector_store()
+        if store and chunks:
+            self._index_chunks_to_vector_store(store, chunks, file_path)
+
         return entry
 
     def get_summary(self, file_path: str) -> str:
@@ -145,10 +156,50 @@ class HierarchicalIndex:
         return ""
 
     def search(self, query: str, *, top_k: int = 5) -> List[Dict[str, Any]]:
-        """Search indexed files for matching sections.
+        """Hybrid search: combines vector similarity with keyword matching.
 
-        Simple keyword search across section names and summaries.
+        Vector results are preferred; keyword results fill remaining slots.
+        Deduplicates by chunk_id.
         """
+        # Keyword search (always available)
+        keyword_results = self._keyword_search(query, top_k=top_k)
+
+        # Vector search (when store + embedding API are available)
+        vector_results: List[Dict[str, Any]] = []
+        store = self._get_vector_store()
+        if store:
+            try:
+                from summer_memory.embedding_openai_compat import embed_texts_openai_compat
+
+                embeddings, meta = embed_texts_openai_compat([query])
+                if meta.get("ok") and embeddings and embeddings[0] is not None:
+                    query_vec = np.array(embeddings[0], dtype=np.float32)
+                    matches = store.search(query_vec, top_k=top_k)
+                    for m in matches:
+                        vector_results.append({
+                            "file_path": m.metadata.get("file_path", ""),
+                            "match_type": "vector",
+                            "chunk_id": m.chunk_id,
+                            "name": m.metadata.get("name", ""),
+                            "start_line": m.metadata.get("start_line", 0),
+                            "end_line": m.metadata.get("end_line", 0),
+                            "score": m.score,
+                        })
+            except Exception as exc:
+                logger.debug("Vector search failed: %s", exc)
+
+        # Merge: dedupe by chunk_id, prefer vector results first
+        seen: set[str] = set()
+        merged: List[Dict[str, Any]] = []
+        for r in vector_results + keyword_results:
+            key = r.get("chunk_id") or f"{r.get('file_path')}:{r.get('start_line')}"
+            if key not in seen:
+                seen.add(key)
+                merged.append(r)
+        return merged[:top_k]
+
+    def _keyword_search(self, query: str, *, top_k: int = 5) -> List[Dict[str, Any]]:
+        """Keyword search across section names and summaries."""
         query_lower = query.lower()
         results: List[Dict[str, Any]] = []
 
@@ -182,6 +233,59 @@ class HierarchicalIndex:
                     })
 
         return results[:top_k]
+
+    def _get_vector_store(self) -> Optional[L3VectorStore]:
+        """Lazily initialise and return the L3 vector store."""
+        if self._vector_store is None:
+            try:
+                from agents.memory.vector_store import L3VectorStore as _L3VS
+
+                db_path = self._root / "vectors" / "l3_code_index.db"
+                try:
+                    from system.config import get_config
+
+                    cfg = get_config()
+                    dim = int(getattr(getattr(cfg, "embedding", None), "dimensions", 1024) or 1024)
+                except Exception:
+                    dim = 1024
+                self._vector_store = _L3VS(db_path=db_path, dimensions=dim)
+            except Exception as exc:
+                logger.debug("Could not initialise L3 vector store: %s", exc)
+        return self._vector_store
+
+    def _index_chunks_to_vector_store(
+        self,
+        store: L3VectorStore,
+        chunks: List[CodeChunk],
+        file_path: str,
+    ) -> None:
+        """Embed and upsert code chunks into the vector store."""
+        try:
+            from summer_memory.embedding_openai_compat import embed_texts_openai_compat
+
+            texts = [c.content[:8000] for c in chunks]
+            if not texts:
+                return
+            embeddings, meta = embed_texts_openai_compat(texts)
+            if not meta.get("ok") or embeddings is None or len(embeddings) != len(chunks):
+                return
+            store.delete_by_file(file_path)
+            for chunk, emb in zip(chunks, embeddings):
+                if emb is None:
+                    continue
+                store.upsert(
+                    chunk_id=chunk.chunk_id,
+                    file_path=file_path,
+                    chunk_type=chunk.chunk_type,
+                    name=chunk.name,
+                    start_line=chunk.start_line,
+                    end_line=chunk.end_line,
+                    content=chunk.content,
+                    embedding=np.array(emb, dtype=np.float32),
+                    token_estimate=chunk.token_estimate,
+                )
+        except Exception as exc:
+            logger.debug("Vector indexing failed for %s: %s", file_path, exc)
 
     def is_indexed(self, file_path: str) -> bool:
         """Check if a file is already indexed."""

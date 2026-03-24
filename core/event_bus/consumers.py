@@ -234,10 +234,29 @@ def register_default_consumers(
     )
 
 
+def register_incident_consumer(
+    *,
+    event_store: EventStore,
+    repo_root: Path,
+    include_warning: bool = True,
+) -> TopicSubscription:
+    """Register only the IncidentConsumer for production use.
+
+    IncidentConsumer is append-only JSONL with no read-modify-write overhead,
+    safe for high-throughput event streams. RuntimePostureConsumer and
+    ReleaseGateConsumer are retained for tests/offline tooling only.
+    """
+    root = Path(repo_root).resolve()
+    incident_file = root / "scratch" / "runtime" / "event_bus_incidents_ws28_029.jsonl"
+    consumer = IncidentConsumer(incident_file=incident_file, include_warning=include_warning)
+    return event_store.subscribe("*", consumer.handle, timeout_ms=3_000, max_retries=1)
+
+
 __all__ = [
     "EventConsumerHooks",
     "IncidentConsumer",
     "ReleaseGateConsumer",
     "RuntimePostureConsumer",
     "register_default_consumers",
+    "register_incident_consumer",
 ]

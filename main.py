@@ -547,6 +547,15 @@ def _run_watchdog(stop_requested: Callable[[], bool]) -> None:
         )
         logger.info("看门狗已启动 (state=%s, warn_only=%s)", _watchdog_state_file, warn_only)
 
+        # Register production-safe IncidentConsumer (append-only JSONL)
+        try:
+            from core.event_bus.consumers import register_incident_consumer
+
+            register_incident_consumer(event_store=event_store, repo_root=Path(__file__).resolve().parent)
+            logger.info("IncidentConsumer 已注册到事件总线")
+        except Exception as exc:
+            logger.warning(f"IncidentConsumer 注册失败（降级为无事件消费）: {exc}")
+
         # Start DLQ auto-retry daemon alongside the watchdog
         _start_dlq_auto_retry(event_store)
 

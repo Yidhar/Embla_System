@@ -146,13 +146,87 @@ class GateRunner:
         self,
         *,
         policy_path: Path | None = None,
+        project_root: Path | None = None,
         event_emitter: Optional[EventEmitter] = None,
         check_runners: Optional[Dict[str, Callable[[], GateCheckResult]]] = None,
     ) -> None:
+        self._project_root = Path(project_root) if project_root else Path(".")
         self.policy_path = Path(policy_path or _DEFAULT_POLICY_PATH)
+        self._policy_path = self.policy_path  # alias used by deploy checks
         self.event_emitter = event_emitter
         self._check_runners = dict(check_runners or _CHECK_RUNNERS)
+        # Register deploy gate check runners (bound to this instance)
+        self._check_runners.setdefault("integration_test", self._check_integration_test)
+        self._check_runners.setdefault("perf_smoke", self._check_perf_smoke)
+        self._check_runners.setdefault("canary_plan", self._check_canary_plan)
         self._policy: Dict[str, Any] = self._load_policy()
+
+    # ------------------------------------------------------------------
+    # Deploy gate check runners
+    # ------------------------------------------------------------------
+
+    def _check_integration_test(self) -> GateCheckResult:
+        """Run integration smoke test via self_check_smoke.py."""
+        try:
+            result = subprocess.run(
+                [sys.executable, str(self._project_root / "scripts" / "self_check_smoke.py")],
+                cwd=str(self._project_root),
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            passed = result.returncode == 0
+            output = (result.stdout or "")[-500:]
+            error = (result.stderr or "")[-300:] if not passed else ""
+            return GateCheckResult(check_name="integration_test", passed=passed, output=output, error=error)
+        except Exception as exc:
+            return GateCheckResult(check_name="integration_test", passed=False, error=str(exc))
+
+    def _check_perf_smoke(self) -> GateCheckResult:
+        """Performance smoke: EventStore emit latency + posture aggregation latency."""
+        import time
+
+        try:
+            from core.event_bus.event_store import EventStore
+            from core.event_bus.runtime_views import build_runtime_posture_summary
+
+            # Measure: emit 50 events
+            store = EventStore(file_path=self._project_root / "scratch" / "runtime" / "perf_smoke_events.jsonl")
+            start = time.monotonic()
+            for i in range(50):
+                store.emit(f"PerfSmokeEvent_{i}", {"index": i}, source="gate_runner.perf_smoke")
+            emit_ms = (time.monotonic() - start) * 1000
+
+            # Measure: aggregation query
+            start = time.monotonic()
+            build_runtime_posture_summary(repo_root=self._project_root, events_limit=200)
+            agg_ms = (time.monotonic() - start) * 1000
+
+            emit_ok = emit_ms < 5000  # 50 events in under 5s
+            agg_ok = agg_ms < 2000  # aggregation under 2s
+            passed = emit_ok and agg_ok
+            output = f"emit_50_events={emit_ms:.0f}ms (limit=5000ms), aggregation={agg_ms:.0f}ms (limit=2000ms)"
+            return GateCheckResult(check_name="perf_smoke", passed=passed, output=output)
+        except Exception as exc:
+            return GateCheckResult(check_name="perf_smoke", passed=False, error=str(exc))
+
+    def _check_canary_plan(self) -> GateCheckResult:
+        """Verify canary evaluation engine is operational with synthetic data."""
+        try:
+            from agents.release.controller import ReleaseController
+
+            controller = ReleaseController(
+                repo_dir=str(self._project_root),
+                policy_path=str(self._policy_path),
+            )
+            result = controller.evaluate_canary()
+            outcome = result.outcome
+            # Synthetic windows should always promote
+            passed = outcome in ("promote", "observing")
+            output = f"canary_outcome={outcome}, streak={result.stats.get('healthy_streak', 0)}"
+            return GateCheckResult(check_name="canary_plan", passed=passed, output=output)
+        except Exception as exc:
+            return GateCheckResult(check_name="canary_plan", passed=False, error=str(exc))
 
     def _load_policy(self) -> Dict[str, Any]:
         if not self.policy_path.exists():
