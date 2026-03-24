@@ -25,6 +25,8 @@ from agents.prompt_engine import (
     get_immutable_prompt_protected_prefixes,
     get_system_prompts_root,
 )
+from agents.memory.l1_memory import get_default_l1_manager
+from agents.memory.l1_to_l2_sync import register_l1_to_l2_hooks
 from agents.memory.memory_tools import get_memory_tool_definitions, handle_memory_tool, is_memory_tool
 from agents.runtime.agent_session import AgentSessionStore, AgentStatus
 from agents.runtime.mailbox import AgentMailbox
@@ -45,6 +47,10 @@ from system.sandbox_context import SandboxContext
 logger = logging.getLogger(__name__)
 _PIPELINE_PROMPT_ASSEMBLER = get_default_assembler()
 _CANONICAL_PROMPTS_ROOT = str(get_system_prompts_root())
+
+# ── L1 Memory singleton + L2 sync hook wiring ───────────────
+_l1_mgr = get_default_l1_manager()
+register_l1_to_l2_hooks(_l1_mgr)
 
 
 ChildLLMCallFn = Callable[[List[Dict[str, Any]], List[Dict[str, Any]], str], Awaitable[Dict[str, Any]]]

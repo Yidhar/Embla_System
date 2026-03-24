@@ -9,11 +9,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -96,6 +99,8 @@ class AuditLedger:
         self.ledger_file.parent.mkdir(parents=True, exist_ok=True)
         env_signing_key = os.getenv(signing_key_env, "")
         self._signing_key = str(signing_key or env_signing_key or "").strip()
+        if not self._signing_key:
+            logger.warning("审计签名密钥未设置，审计记录不含 HMAC 签名")
         self._lock = threading.Lock()
 
     def append_record(

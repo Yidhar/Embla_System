@@ -7,6 +7,7 @@ from .brainstem_supervisor import (
     SupervisorAction,
 )
 from .process_guard import ProcessGuardDaemon
+from .watchdog_actuator import WatchdogActuator
 from .watchdog_daemon import WatchdogAction, WatchdogDaemon, WatchdogSnapshot, WatchdogThresholds
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "BrainstemSupervisor",
     "SupervisorAction",
     "WatchdogAction",
+    "WatchdogActuator",
     "WatchdogDaemon",
     "WatchdogSnapshot",
     "WatchdogThresholds",

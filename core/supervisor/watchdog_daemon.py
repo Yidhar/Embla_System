@@ -77,12 +77,14 @@ class WatchdogDaemon:
         event_emitter: Optional[EventEmitter] = None,
         warn_only: bool = True,
         loop_cost_guard: Optional[LoopCostGuard] = None,
+        actuator_callback: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> None:
         self.thresholds = thresholds or WatchdogThresholds()
         self.metrics_provider = metrics_provider or self._default_metrics_provider
         self.event_emitter = event_emitter
         self.warn_only = bool(warn_only)
         self.loop_cost_guard = loop_cost_guard
+        self._actuator_callback = actuator_callback
         self._last_io = psutil.disk_io_counters()
         self._last_ts = time.time()
         self._last_observation: Dict[str, Any] = {}
@@ -164,6 +166,14 @@ class WatchdogDaemon:
                 "warn_only": self.warn_only,
             },
         )
+
+        # Invoke the actuator callback for non-alert_only actions
+        if action.action != "alert_only" and self._actuator_callback is not None:
+            try:
+                self._actuator_callback(action.to_dict())
+            except Exception:
+                pass
+
         return action
 
     def get_last_observation(self) -> Dict[str, Any]:

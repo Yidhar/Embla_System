@@ -982,4 +982,21 @@ class L1MemoryManager:
         return []
 
 
-__all__ = ["L1MemoryConflictError", "L1MemoryManager"]
+_DEFAULT_L1_MANAGER: Optional[L1MemoryManager] = None
+
+
+def get_default_l1_manager() -> L1MemoryManager:
+    """Return (or create) the process-wide singleton L1MemoryManager."""
+    global _DEFAULT_L1_MANAGER
+    if _DEFAULT_L1_MANAGER is None:
+        _DEFAULT_L1_MANAGER = L1MemoryManager()
+        # Auto-create episodic directory
+        episodic_dir = _DEFAULT_L1_MANAGER._episodic_dir
+        episodic_dir.mkdir(parents=True, exist_ok=True)
+        index_file = episodic_dir / "_index.md"
+        if not index_file.exists():
+            index_file.write_text("<!-- L1 episodic index — auto-generated -->\n", encoding="utf-8")
+    return _DEFAULT_L1_MANAGER
+
+
+__all__ = ["L1MemoryConflictError", "L1MemoryManager", "get_default_l1_manager"]

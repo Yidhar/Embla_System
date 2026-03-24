@@ -115,6 +115,34 @@ _SAFE_PY_MODULES = [
     "csv",
 ]
 _TOOL_RESULT_NONE_MARKERS = {"", "(none)", "none", "null", "nil", "n/a", "undefined"}
+
+# ── Approval-gate scope mapping ─────────────────────────────────
+_APPROVAL_REQUIRED_SCOPES: set[str] = {"core", "policy", "prompt_dna", "tools_registry"}
+
+_SCOPE_PATH_PREFIXES: list[tuple[str, str]] = [
+    ("system/prompts/dna/", "prompt_dna"),
+    ("system/prompts/core/dna/", "prompt_dna"),
+    ("system/prompts/immutable_dna_manifest.spec", "prompt_dna"),
+    ("system/prompts/specs/", "policy"),
+    ("policy/", "policy"),
+    ("workspace/tools_registry/", "tools_registry"),
+    ("core/", "core"),
+    ("system/", "core"),
+]
+
+
+def _infer_tool_scope(tool_name: str, call: Dict[str, Any]) -> str:
+    """Map a tool call to a governance scope based on tool name and target path."""
+    path_raw = str(call.get("path") or call.get("file_path") or call.get("target") or "").strip()
+    if path_raw:
+        normalized = path_raw.replace("\\", "/").lstrip("/")
+        for prefix, scope in _SCOPE_PATH_PREFIXES:
+            if normalized.startswith(prefix):
+                return scope
+    # Tool-name heuristics for non-path tools
+    if tool_name in ("killswitch_plan",):
+        return "security"  # security tools bypass ApprovalGate
+    return "general"
 _TOOL_RESULT_TAG_LINE_RE = re.compile(r"^\[([A-Za-z0-9_]+)\](?:\s*(.*))?$")
 _TOOL_NAME_ALIASES = {
     "read": "read_file",
@@ -636,6 +664,33 @@ class NativeToolExecutor:
         if not decision.allowed:
             audit_suffix = f" (audit_id={decision.audit_id})" if decision.audit_id else ""
             return self._error(effective_call, f"安全限制: {decision.reason}{audit_suffix}", tool_name=tool_name)
+
+        # ── KillSwitch guard ────────────────────────────────────
+        if self.killswitch_controller.is_engaged():
+            return self._error(effective_call, "系统已熔断，所有工具执行已暂停", tool_name=tool_name)
+
+        # ── Approval gate for high-risk scopes (write operations only) ──
+        _READ_ONLY_TOOLS = {
+            "read_file", "search_keyword", "get_cwd", "list_files",
+            "git_status", "git_diff", "git_log", "git_show", "git_blame",
+            "git_grep", "git_changed_files", "artifact_reader",
+            "file_ast_skeleton", "file_ast_chunk_read", "query_docs",
+        }
+        scope = _infer_tool_scope(tool_name, effective_call)
+        if scope in _APPROVAL_REQUIRED_SCOPES and tool_name not in _READ_ONLY_TOOLS:
+            from core.security.approval_gate import ApprovalGate, ApprovalRequest
+
+            gate = ApprovalGate()
+            approval_decision = gate.evaluate(
+                ApprovalRequest(
+                    scope=scope,
+                    risk_level="high",
+                    requested_by=str(effective_call.get("_requested_by") or "agent").strip(),
+                    approval_ticket=str(effective_call.get("_approval_ticket") or "").strip(),
+                )
+            )
+            if not approval_decision.approved:
+                return self._error(effective_call, f"需要人工审批: {approval_decision.reason_text}", tool_name=tool_name)
 
         fallback_reason = ""
         execution_backend_name = getattr(backend, "name", "native")

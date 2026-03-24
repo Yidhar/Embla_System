@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence
 
-from agents.memory.l1_memory import L1MemoryConflictError, L1MemoryManager
+from agents.memory.l1_memory import L1MemoryConflictError, L1MemoryManager, get_default_l1_manager
 from agents.runtime.tool_profiles import MEMORY_TOOL_NAMES, normalize_memory_tool_name
 
 _MEMORY_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
@@ -239,7 +239,7 @@ def handle_memory_tool(
     if normalized_name not in MEMORY_TOOL_NAMES:
         return {"status": "error", "error": f"unknown_memory_tool:{tool_name}", "tool_name": normalized_name}
 
-    mgr = manager or L1MemoryManager(memory_root=memory_root)
+    mgr = manager or get_default_l1_manager()
     args = arguments if isinstance(arguments, dict) else {}
     try:
         if normalized_name == "memory_read":

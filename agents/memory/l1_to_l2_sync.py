@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from agents.memory.episodic_memory import EpisodicRecord
+from agents.memory.l1_memory import L1MemoryManager
 from agents.memory.semantic_graph import SemanticGraphStore, get_semantic_graph
 
 logger = logging.getLogger(__name__)
@@ -150,9 +151,22 @@ def sync_all_experiences(
     return {"total": total, "synced": synced, "errors": errors}
 
 
+def register_l1_to_l2_hooks(manager: L1MemoryManager) -> None:
+    """Register the L1->L2 sync as a post-write hook on the given manager."""
+
+    def _on_write(episodic_dir: Path, tags: list) -> None:
+        try:
+            sync_all_experiences(episodic_dir, session_id="l1_auto_sync", graph=None)
+        except Exception:
+            pass  # L2 sync failure should not block L1 write
+
+    manager.register_post_write_hook(_on_write)
+
+
 __all__ = [
     "extract_entities_from_experience_md",
     "extract_entities_from_experience_md_for_topology",
+    "register_l1_to_l2_hooks",
     "sync_all_experiences",
     "sync_all_experiences_to_tool_result_topology",
     "sync_experience_to_graph",

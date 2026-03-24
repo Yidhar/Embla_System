@@ -527,14 +527,29 @@ def _run_idle_wait_loop(stop_requested: Callable[[], bool]) -> None:
 def _run_watchdog(stop_requested: Callable[[], bool]) -> None:
     """Run the watchdog backend in the main thread."""
     try:
+        from core.event_bus.event_store import EventStore
+        from core.supervisor.watchdog_actuator import WatchdogActuator
         from core.supervisor.watchdog_daemon import WatchdogDaemon, WatchdogThresholds
+        from system.config import get_embla_system_config
 
         _watchdog_state_file.parent.mkdir(parents=True, exist_ok=True)
+
+        event_store = EventStore(file_path=Path("logs/autonomous/events.jsonl"))
+
+        warn_only = bool(get_embla_system_config().get("runtime", {}).get("watchdog_warn_only", True))
+
+        actuator = WatchdogActuator(event_emitter=event_store)
         daemon = WatchdogDaemon(
             thresholds=WatchdogThresholds(),
-            warn_only=True,
+            event_emitter=event_store,
+            warn_only=warn_only,
+            actuator_callback=actuator.handle_action,
         )
-        logger.info("看门狗已启动 (state=%s)", _watchdog_state_file)
+        logger.info("看门狗已启动 (state=%s, warn_only=%s)", _watchdog_state_file, warn_only)
+
+        # Start DLQ auto-retry daemon alongside the watchdog
+        _start_dlq_auto_retry(event_store)
+
         daemon.run_daemon(
             state_file=_watchdog_state_file,
             interval_seconds=10.0,
@@ -546,6 +561,40 @@ def _run_watchdog(stop_requested: Callable[[], bool]) -> None:
     except Exception as exc:
         logger.error("看门狗异常: %s，进入简单等待循环", exc)
         _run_idle_wait_loop(stop_requested)
+
+
+def _start_dlq_auto_retry(event_store: object) -> None:
+    """Start the DLQ auto-retry daemon using the event store's topic bus."""
+    try:
+        import asyncio
+
+        from core.event_bus.dlq_auto_retry import DLQAutoRetryDaemon
+
+        topic_bus = getattr(event_store, "topic_bus", None)
+        if topic_bus is None:
+            logger.debug("DLQ auto-retry: event_store has no topic_bus, skipping")
+            return
+
+        dlq_daemon = DLQAutoRetryDaemon(topic_bus)
+
+        def _run_dlq_loop() -> None:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(dlq_daemon.start())
+                loop.run_forever()
+            except Exception:
+                logger.debug("DLQ auto-retry loop exited")
+            finally:
+                loop.close()
+
+        dlq_thread = threading.Thread(target=_run_dlq_loop, name="dlq-auto-retry", daemon=True)
+        dlq_thread.start()
+        logger.info("DLQ 自动重试守护进程已启动")
+    except ImportError:
+        logger.debug("DLQAutoRetryDaemon not available, skipping")
+    except Exception as exc:
+        logger.warning("DLQ auto-retry daemon failed to start: %s", exc)
 
 
 # ---------------------------------------------------------------------------

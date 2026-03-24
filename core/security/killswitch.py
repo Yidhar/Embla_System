@@ -36,6 +36,9 @@ class KillSwitchState:
     requested_by: str
     oob_allowlist: List[str]
     commands_count: int
+    engaged_at: str = ""
+    engaged_reason: str = ""
+    engaged_source: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -82,6 +85,35 @@ class KillSwitchController:
             )
         )
         return plan
+
+    def engage(self, *, reason: str = "", source: str = "system") -> Dict[str, Any]:
+        """Activate the kill switch — blocks all further native tool execution."""
+        engaged_at = _utc_iso()
+        safe_reason = str(reason or "").strip()
+        safe_source = str(source or "system").strip() or "system"
+        state = KillSwitchState(
+            generated_at=engaged_at,
+            status="ok",
+            reason_code="KILLSWITCH_ENGAGED",
+            reason_text=safe_reason or "KillSwitch engaged",
+            mode="engaged",
+            execution_state="engaged",
+            active=True,
+            approval_ticket="",
+            requested_by=safe_source,
+            oob_allowlist=[],
+            commands_count=0,
+            engaged_at=engaged_at,
+            engaged_reason=safe_reason,
+            engaged_source=safe_source,
+        )
+        self._write_state(state)
+        return state.to_dict()
+
+    def is_engaged(self) -> bool:
+        """Return True when the kill switch is currently active."""
+        state = self.read_state()
+        return bool(state.get("active")) and state.get("execution_state") == "engaged"
 
     def release(self, *, requested_by: str = "runtime", approval_ticket: str = "") -> Dict[str, Any]:
         state = KillSwitchState(
