@@ -59,6 +59,7 @@ dependencies = [
     "mss>=10.1.0",
     "python-multipart>=0.0.22",
     "mcp>=1.26.0",
+    "beautifulsoup4",
 ]
 
 

@@ -182,6 +182,10 @@ _TOOL_NAME_ALIASES = {
     "scaffold_apply": "workspace_txn_apply",
     "killswitch": "killswitch_plan",
     "repl": "python_repl",
+    "scrape": "web_scraper",
+    "fetch_url": "web_scraper",
+    "web_search": "search_engine",
+    "online_search": "search_engine",
 }
 
 
@@ -1999,6 +2003,77 @@ class NativeToolExecutor:
             f"[stderr]\n{stderr_preview if stderr_preview else '(empty)'}"
         )
 
+    async def _web_scraper(self, call: Dict[str, Any]) -> str:
+        """Fetch a URL and extract readable text content."""
+        url = str(call.get("url") or "").strip()
+        if not url:
+            raise ValueError("web_scraper 缺少 url")
+        max_chars = _safe_int(call.get("max_chars"), 8000, 500, 50000)
+
+        import httpx
+        from bs4 import BeautifulSoup
+
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            response = await client.get(url, headers={"User-Agent": "Embla-System/5.0"})
+            response.raise_for_status()
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            tag.decompose()
+        text = soup.get_text(separator="\n", strip=True)
+        title = soup.title.string.strip() if soup.title and soup.title.string else ""
+
+        preview = text[:max_chars]
+        return "\n".join([
+            f"[url] {url}",
+            f"[title] {title}",
+            f"[chars] {len(text)} (showing {len(preview)})",
+            "[content]",
+            preview,
+        ])
+
+    async def _search_engine(self, call: Dict[str, Any]) -> str:
+        """Search the web using self-hosted SearxNG, or fall back to local search."""
+        query = str(call.get("query") or "").strip()
+        if not query:
+            raise ValueError("search_engine 缺少 query")
+        max_results = _safe_int(call.get("max_results"), 5, 1, 20)
+
+        # Try SearxNG first
+        from system.config import get_config
+
+        cfg = get_config()
+        searxng_url = str(getattr(getattr(cfg, "online_search", None), "searxng_url", "") or "").strip()
+        if searxng_url:
+            import httpx
+
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get(
+                        f"{searxng_url}/search",
+                        params={"q": query, "format": "json", "categories": "general", "language": "auto"},
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    results = data.get("results", [])[:max_results]
+                    lines = [f"[query] {query}", f"[engine] SearxNG ({searxng_url})", f"[results] {len(results)}"]
+                    for i, r in enumerate(results, 1):
+                        lines.append(f"\n--- Result {i} ---")
+                        lines.append(f"Title: {r.get('title', '')}")
+                        lines.append(f"URL: {r.get('url', '')}")
+                        lines.append(f"Snippet: {r.get('content', '')[:300]}")
+                    return "\n".join(lines)
+            except Exception:
+                pass  # Fall through to local search
+
+        # Fallback: local project keyword search
+        return await self._search_keyword({
+            **call,
+            "keyword": query,
+            "search_path": ".",
+            "max_results": max_results,
+        })
+
     async def _execute_native_tool(self, tool_name: str, call: Dict[str, Any]) -> str:
         if tool_name == "read_file":
             return await self._read_file(call)
@@ -2044,6 +2119,10 @@ class NativeToolExecutor:
             return await self._sleep_and_watch(call)
         if tool_name == "killswitch_plan":
             return await self._killswitch_plan(call)
+        if tool_name == "web_scraper":
+            return await self._web_scraper(call)
+        if tool_name == "search_engine":
+            return await self._search_engine(call)
         raise ValueError(f"不支持的native工具: {tool_name}")
 
     @staticmethod
