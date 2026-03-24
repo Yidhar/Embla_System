@@ -636,6 +636,7 @@ class EmblaRuntime:
         self._process_guard: object | None = None
         self._process_guard_thread: threading.Thread | None = None
         self._sdlc_orchestrator: object | None = None
+        self._chronos_scheduler: object | None = None
 
     def run_diagnostic(self) -> int | None:
         return _run_diagnostic(self.options)
@@ -691,6 +692,36 @@ class EmblaRuntime:
         except Exception as exc:
             logger.warning("ProcessGuardDaemon 初始化失败: %s", exc)
 
+    def _init_chronos_scheduler(self) -> None:
+        try:
+            from core.scheduler.chronos import get_default_scheduler
+            scheduler = get_default_scheduler()
+            scheduler.start()
+            self._chronos_scheduler = scheduler
+            logger.info("Chronos 调度引擎已启动")
+        except Exception as exc:
+            logger.warning(f"Chronos 调度引擎启动失败（降级为无调度）: {exc}")
+            self._chronos_scheduler = None
+
+    def _run_daily_checkpoint(self) -> None:
+        """Generate a daily runtime summary snapshot."""
+        import json
+        from datetime import datetime, timezone
+        summary = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "type": "daily_checkpoint",
+            "services": {
+                "api_server": "running" if self.services.api_server else "stopped",
+                "supervisor": "running" if self._brainstem_supervisor else "stopped",
+                "chronos": "running" if self._chronos_scheduler else "stopped",
+                "sdlc": "running" if self._sdlc_orchestrator and self._sdlc_orchestrator.enabled else "stopped",
+            },
+        }
+        output = Path("scratch/runtime") / f"daily_checkpoint_{datetime.now(timezone.utc).strftime('%Y%m%d')}.json"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(f"Daily Checkpoint 已生成: {output}")
+
     def _init_sdlc_orchestrator(self) -> None:
         """Initialise the SDLC orchestrator if autonomous_runtime.yaml enables it."""
         try:
@@ -734,6 +765,17 @@ class EmblaRuntime:
         _init_memory()
         _init_mcp()
         self._init_supervisor()
+        self._init_chronos_scheduler()
+        if self._chronos_scheduler:
+            try:
+                self._chronos_scheduler.add_cron_job(
+                    job_id="daily_checkpoint",
+                    func=self._run_daily_checkpoint,
+                    cron_expr="0 3 * * *",  # daily at 3am
+                )
+                logger.info("Daily Checkpoint 已注册 (cron: 0 3 * * *)")
+            except Exception as exc:
+                logger.warning(f"Daily Checkpoint 注册失败: {exc}")
         self._init_sdlc_orchestrator()
         self.services.api_server = _start_api_server(runtime_config=self.runtime_config)
         self.services.api_started = bool(self.services.api_server and self.services.api_server.startup_complete)
@@ -802,6 +844,14 @@ class EmblaRuntime:
             self._process_guard = None
 
         self._brainstem_supervisor = None
+
+        # Cleanup Chronos scheduler
+        if self._chronos_scheduler:
+            try:
+                self._chronos_scheduler.shutdown()
+            except Exception as exc:
+                logger.warning("Chronos 调度引擎关闭异常: %s", exc)
+            self._chronos_scheduler = None
 
         # Cleanup SDLC orchestrator
         if self._sdlc_orchestrator is not None:
