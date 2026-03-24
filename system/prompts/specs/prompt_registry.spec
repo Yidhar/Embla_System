@@ -12,6 +12,11 @@
       "aliases": []
     },
     {
+      "prompt_name": "evolution_drive",
+      "path": "dna/evolution_drive.md",
+      "aliases": []
+    },
+    {
       "prompt_name": "conversation_style_prompt",
       "path": "core/dna/conversation_style_prompt.md",
       "aliases": ["conversation_composition_prompt"]

@@ -60,8 +60,8 @@ class LLMService:
     DNA_MANIFEST_PATH_ENV = "EMBLA_IMMUTABLE_DNA_MANIFEST_PATH"
     DNA_AUDIT_PATH_ENV = "EMBLA_IMMUTABLE_DNA_AUDIT_PATH"
     DNA_RUNTIME_REQUIRED_FILES_DEFAULT = (
-        "core_values",
-        "evolution_drive",
+        "dna/core_values",
+        "dna/evolution_drive",
     )
     DNA_IDENTITY_REQUIRED_FILES_DEFAULT = (
         "shell_persona",
