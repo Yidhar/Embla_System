@@ -1,0 +1,14 @@
+# Embla System — Dynamic Tool Registry Manifest
+# Managed by workspace/tools_registry/ watcher subsystem
+# See doc/00-omni-operator-architecture.md:152 for design spec
+
+schema_version: "ws33-001-v1"
+generated_at: ""
+
+builtins: []
+  # Auto-populated by tool discovery on startup
+  # Each entry: { name, version, source_path, schema_hash }
+
+plugins: []
+  # User-registered plugins via /mcp/import or manual placement
+  # Each entry: { name, version, source_path, schema_hash, approval_ticket }

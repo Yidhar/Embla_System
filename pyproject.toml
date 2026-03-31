@@ -1,12 +1,21 @@
 [project]
-name = "nagaagent"
+
+name = "embla-system"
+
 version = "5.0.0"
-description = "NagaAgent 5.0 - 智能对话助手，支持多MCP服务、流式语音交互、GRAG知识图谱记忆系统、RESTful API接口、控制台托盘功能"
+
+description = "Embla System 5.0 - 智能运行与对话平台，支持多MCP服务、Shell L2 图谱记忆与 RESTful API 接口"
+
 authors = [
+
     {name = "柏斯阔落", email = "1781393885@qq.com"},
+
 ]
+
 readme = "README.md"
+
 requires-python = ">=3.11,<3.12"
+
 dependencies = [
     # ---------- 核心 / 配置 ----------
     "charset-normalizer>=3.4.0",
@@ -20,6 +29,7 @@ dependencies = [
     "uvicorn>=0.34.0",
     "sse-starlette>=2.3.0",
     "httpx[socks]>=0.28.0",
+    "httpcore",
     "websockets>=15.0",
     # ---------- LLM / 对话 ----------
     "openai>=2.8.0",
@@ -40,32 +50,82 @@ dependencies = [
     "cryptography>=46.0.0",
     "setproctitle>=1.3.5",
     "watchfiles>=1.0.0",
-    # ---------- 语音 / 音频 ----------
-    "edge-tts>=7.0.0",
-    "sounddevice>=0.5.0",
-    # ---------- 知识图谱 GRAG / 兼容层 ----------
+    "boxlite",
+    # ---------- Web 服务 / 兼容层 ----------
     "Flask>=3.1.0",
     "gevent>=25.0.0",
     "py2neo>=2021.2.3",
     "neo4j>=5.0.0",
     "chromadb>=0.5.0",
     "mss>=10.1.0",
+    "python-multipart>=0.0.22",
+    "mcp>=1.26.0",
+    "beautifulsoup4",
 ]
+
+
 
 [build-system]
+
 requires = ["hatchling"]
+
 build-backend = "hatchling.build"
 
+
+
 [tool.hatch.build.targets.wheel]
-include = ["apiserver", "agentserver", "summer_memory", "thinking", "ui", "voice"]
+
+include = [
+    "agents",
+    "apiserver",
+    "core",
+    "mcpserver",
+    "summer_memory",
+    "system",
+]
+
+
 
 [tool.ruff]
+
 line-length = 120
 
+
+
 [dependency-groups]
+
 build = [
+
     "pyinstaller>=6.18.0",
+
 ]
+
 test = [
+
+    "pytest>=8.0.0",
+
     "google-genai>=1.63.0",
+
 ]
+
+[tool.pytest.ini_options]
+# Only run project-owned unit tests by default.
+addopts = "-q -p no:cacheprovider"
+testpaths = [
+  "tests",
+]
+python_files = ["test_*.py", "*_test.py"]
+
+# Avoid collecting tests from build artifacts or third-party vendored trees.
+norecursedirs = [
+  ".git",
+  ".venv",
+  "__pycache__",
+  ".pytest_cache",
+  "tests/archived",
+  "build",
+  "dist",
+  "node_modules",
+]
+
+# Exclude integration / manual scripts that are not pytest-ready.

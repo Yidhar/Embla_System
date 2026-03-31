@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-NagaAgent API服务器
-提供RESTful API接口访问NagaAgent功能
+Embla System API 服务器
+提供 RESTful API 接口访问 Embla System 功能
 """
 
 import asyncio
@@ -10,21 +10,13 @@ import sys
 import traceback
 import os
 import logging
+import re
 import time
 import threading
-import subprocess
-from contextlib import asynccontextmanager
-from typing import Dict, List, Optional, AsyncGenerator, Any, Tuple
-from urllib.request import Request as UrlRequest, urlopen
-from urllib.error import URLError
-
-# 在导入其他模块前先设置HTTP库日志级别
-logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore.connection").setLevel(logging.WARNING)
-
-# 创建logger实例
-logger = logging.getLogger(__name__)
+import uuid
+from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, AsyncGenerator, Any, Callable, Mapping, Set, Tuple
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,44 +24,1067 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import shutil
 from pathlib import Path
+from system.coding_intent import contains_direct_coding_signal, has_recent_coding_context, is_coding_followup
+from system.asyncio_offload import offload_blocking
+from core.supervisor.watchdog_daemon import WatchdogDaemon
+from core.event_bus import EventStore
+from agents.router_engine import RouterRequest, TaskRouterEngine
+from agents.router_arbiter_guard import RouterArbiterGuard
+from agents.contract_runtime import (
+    trim_contract_text as trim_brain_contract_text,
+)
+from agents.pipeline import run_multi_agent_pipeline
+from apiserver.core_job_manager import CoreDispatchJobManager, DEFAULT_CORE_RUNTIME_ID
+from agents.prompt_engine import get_system_prompts_root
+from agents.shell_agent import ShellAgent
+from agents.runtime.agent_session import AgentSessionStore
+from agents.runtime.mailbox import AgentMailbox
+from agents.runtime.task_board import TaskBoardEngine
+from system.runtime_cleanup import close_runtime_network_clients
+from agents.llm_gateway import (
+    GatewayRouteRequest,
+    LLMGateway,
+    PromptEnvelopeInput,
+    PromptSlice,
+)
 
 # 添加项目根目录到Python路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# 流式文本处理模块（仅用于TTS）
-from .message_manager import message_manager  # 导入统一的消息管理器
+from .message_manager import message_manager  # noqa: E402 - keep script-mode compatibility path setup
 
-from .llm_service import get_llm_service  # 导入LLM服务
-from . import naga_auth  # NagaCAS 认证模块
+from .llm_service import get_llm_service, llm_app  # noqa: E402 - mounted below
+from .native_tools import get_native_tool_executor  # noqa: E402
+
+# ── Module delegation for extracted routes ─────
+import apiserver.routes_ops as _routes_ops  # noqa: E402
+import apiserver.routes_chat as _routes_chat  # noqa: E402
+import apiserver.routes_brainstem as _routes_brainstem  # noqa: E402
+_CHAT_LLM_GATEWAY = getattr(_routes_chat, "_CHAT_LLM_GATEWAY", None)
+
+def __getattr__(name: str):  # noqa: N807
+    """Delegate attribute lookup to extracted route modules."""
+    for _mod in (_routes_ops, _routes_chat, _routes_brainstem):
+        try:
+            return getattr(_mod, name)
+        except AttributeError:
+            continue
+    raise AttributeError(f"module 'apiserver.api_server' has no attribute {name!r}")
+
 
 # 记录哪些会话曾发送过图片，后续消息继续走 VLM 直到新会话
 _vlm_sessions: set = set()
 
+# Multi-agent runtime persistence handles (shared across requests).
+_PIPELINE_RUNTIME_LOCK = threading.Lock()
+_PIPELINE_SESSION_STORE: Optional[AgentSessionStore] = None
+_PIPELINE_MAILBOX: Optional[AgentMailbox] = None
+_PIPELINE_TASK_BOARD: Optional[TaskBoardEngine] = None
+_CORE_JOB_MANAGER: Optional[CoreDispatchJobManager] = None
+
+
+def _get_pipeline_runtime_handles() -> tuple[AgentSessionStore, AgentMailbox, TaskBoardEngine]:
+    global _PIPELINE_SESSION_STORE, _PIPELINE_MAILBOX, _PIPELINE_TASK_BOARD
+    if _PIPELINE_SESSION_STORE is not None and _PIPELINE_MAILBOX is not None and _PIPELINE_TASK_BOARD is not None:
+        get_native_tool_executor().set_agent_session_store(_PIPELINE_SESSION_STORE)
+        return _PIPELINE_SESSION_STORE, _PIPELINE_MAILBOX, _PIPELINE_TASK_BOARD
+
+    with _PIPELINE_RUNTIME_LOCK:
+        if _PIPELINE_SESSION_STORE is None:
+            runtime_dir = Path("scratch/runtime")
+            runtime_dir.mkdir(parents=True, exist_ok=True)
+            _PIPELINE_SESSION_STORE = AgentSessionStore(
+                db_path=runtime_dir / "agent_sessions.db",
+                event_store=EventStore(file_path=Path("logs/autonomous/events.jsonl")),
+            )
+            _PIPELINE_MAILBOX = AgentMailbox(db_path=runtime_dir / "agent_mailbox.db")
+            _PIPELINE_TASK_BOARD = TaskBoardEngine(
+                boards_dir=Path("memory/working/boards"),
+                db_path=runtime_dir / "task_boards.db",
+            )
+    get_native_tool_executor().set_agent_session_store(_PIPELINE_SESSION_STORE)
+    return _PIPELINE_SESSION_STORE, _PIPELINE_MAILBOX, _PIPELINE_TASK_BOARD
+
+
+def _get_core_job_manager() -> CoreDispatchJobManager:
+    global _CORE_JOB_MANAGER
+    if _CORE_JOB_MANAGER is not None:
+        _configure_core_job_manager_runtime(_CORE_JOB_MANAGER)
+        return _CORE_JOB_MANAGER
+    with _PIPELINE_RUNTIME_LOCK:
+        if _CORE_JOB_MANAGER is None:
+            _CORE_JOB_MANAGER = CoreDispatchJobManager()
+    _configure_core_job_manager_runtime(_CORE_JOB_MANAGER)
+    return _CORE_JOB_MANAGER
+
+
+def _configure_core_job_manager_runtime(manager: Optional[CoreDispatchJobManager]) -> None:
+    if manager is None:
+        return
+    session_store, agent_mailbox, task_board_engine = _get_pipeline_runtime_handles()
+    child_session_cleanup_policy = _resolve_pipeline_child_session_cleanup_policy()
+    child_max_rounds = _resolve_pipeline_child_max_rounds(stream=True)
+    manager.configure_runtime_defaults(
+        store=session_store,
+        mailbox=agent_mailbox,
+        task_board_engine=task_board_engine,
+        runner=run_multi_agent_pipeline,
+        child_llm_call=_default_pipeline_child_llm_call,
+        child_tool_executor=_default_pipeline_child_tool_executor,
+        enable_child_execution=True,
+        child_max_rounds=child_max_rounds,
+        child_session_cleanup_mode=str(child_session_cleanup_policy.get("mode") or "ttl"),
+        child_session_cleanup_ttl_seconds=int(child_session_cleanup_policy.get("ttl_seconds") or 0),
+        heartbeat_interval_seconds=_PIPELINE_STREAM_HEARTBEAT_INTERVAL_SECONDS,
+    )
+
+
+def _resolve_pipeline_child_session_cleanup_policy() -> Dict[str, Any]:
+    policy = {"mode": "retain", "ttl_seconds": 86400}
+    try:
+        embla_cfg = get_embla_system_config()
+    except Exception:
+        embla_cfg = {}
+    runtime_cfg = embla_cfg.get("runtime") if isinstance(embla_cfg, dict) else {}
+    cleanup_cfg = runtime_cfg.get("child_session_cleanup") if isinstance(runtime_cfg, dict) else {}
+    if isinstance(cleanup_cfg, dict):
+        mode = str(cleanup_cfg.get("mode") or "").strip()
+        if mode:
+            policy["mode"] = mode
+        try:
+            ttl_seconds = int(cleanup_cfg.get("ttl_seconds", policy["ttl_seconds"]))
+        except (TypeError, ValueError):
+            ttl_seconds = int(policy["ttl_seconds"])
+        policy["ttl_seconds"] = max(0, ttl_seconds)
+    return policy
+
+
+def _resolve_pipeline_child_max_rounds(*, stream: bool = True) -> int:
+    configured_value: Any = None
+    try:
+        agentic_loop_cfg = getattr(get_config(), "agentic_loop", None)
+        if agentic_loop_cfg is not None:
+            attr_name = "max_rounds_stream" if stream else "max_rounds_non_stream"
+            configured_value = getattr(agentic_loop_cfg, attr_name, None)
+    except Exception:
+        configured_value = None
+    if configured_value in (None, ""):
+        try:
+            embla_cfg = get_embla_system_config()
+        except Exception:
+            embla_cfg = {}
+        runtime_cfg = embla_cfg.get("runtime") if isinstance(embla_cfg, dict) else {}
+        if isinstance(runtime_cfg, dict):
+            configured_value = runtime_cfg.get("max_rounds_default", configured_value)
+    try:
+        return max(1, int(configured_value or 12))
+    except (TypeError, ValueError):
+        return 12
+
 # 导入配置系统
 try:
-    from system.config import get_config, AI_NAME  # 使用新的配置系统
-    from system.config import get_prompt, build_system_prompt  # 导入提示词仓库
+    from system.config import (
+        get_config,
+        get_embla_system_config,
+        save_embla_system_config,
+        build_system_prompt,
+    )  # 使用新的配置系统
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
 except ImportError:
     import sys
     import os
 
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from system.config import get_config  # 使用新的配置系统
+    from system.config import get_config, get_embla_system_config, save_embla_system_config  # 使用新的配置系统
     from system.config import build_system_prompt  # 导入提示词仓库
     from system.config_manager import get_config_snapshot, update_config  # 导入配置管理
-from apiserver.response_util import extract_message  # 导入消息提取工具
+from apiserver.response_util import extract_message  # noqa: E402 - imported after fallback config setup
+
+# 在导入其他模块后设置HTTP库日志级别
+logging.getLogger("httpcore.http11").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore.connection").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
 
 # 对话核心功能已集成到apiserver
 
 
 # 统一保存对话与日志函数 - 已整合到message_manager
-def _save_conversation_and_logs(session_id: str, user_message: str, assistant_response: str):
+def _build_shell_l2_round_messages(
+    base_messages: List[Dict[str, Any]],
+    assistant_response: str,
+) -> List[Dict[str, Any]]:
+    prepared: List[Dict[str, Any]] = []
+    for item in base_messages or []:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if role == "system":
+            continue
+        prepared.append(dict(item))
+    for idx in range(len(prepared) - 1, -1, -1):
+        if str(prepared[idx].get("role") or "").strip().lower() == "user":
+            prepared = prepared[idx:]
+            break
+    normalized_response = str(assistant_response or "").strip()
+    if normalized_response:
+        if not prepared or str(prepared[-1].get("role") or "") != "assistant" or str(prepared[-1].get("content") or "") != normalized_response:
+            prepared.append({"role": "assistant", "content": normalized_response})
+    return prepared
+
+
+def _save_conversation_and_logs(
+    session_id: str,
+    user_message: str,
+    assistant_response: str,
+    *,
+    enable_shell_l2_extraction: bool = True,
+    shell_round_messages: Optional[List[Dict[str, Any]]] = None,
+):
     """统一保存对话历史与日志 - 委托给message_manager"""
-    message_manager.save_conversation_and_logs(session_id, user_message, assistant_response)
+    message_manager.save_conversation_and_logs(
+        session_id,
+        user_message,
+        assistant_response,
+        enable_shell_l2_extraction=enable_shell_l2_extraction,
+        shell_round_messages=shell_round_messages,
+    )
 
 
-# 回调工厂类已移除 - 功能已整合到streaming_tool_extractor
+def _format_memory_quintuple_line(item: Any) -> str:
+    if isinstance(item, (list, tuple)) and len(item) >= 5:
+        return f"- {item[0]}({item[1]}) —[{item[2]}]→ {item[3]}({item[4]})"
+    if isinstance(item, dict):
+        return (
+            f"- {item.get('subject', '')}({item.get('subject_type', '')}) "
+            f"—[{item.get('predicate', '')}]→ {item.get('object', '')}({item.get('object_type', '')})"
+        )
+    return ""
+
+
+async def _recall_memory_lines(question: str, *, limit: int = 5) -> List[str]:
+    """统一记忆召回入口：优先远程客户端，回退本地 GRAG。"""
+    lines: List[str] = []
+
+    # 1) 远程入口（若未来重新启用）
+    try:
+        from summer_memory.memory_client import get_remote_memory_client
+
+        remote_mem = get_remote_memory_client()
+        if remote_mem is not None:
+            mem_result = await remote_mem.query_memory(question=question, limit=limit)
+            quints = mem_result.get("quintuples") if isinstance(mem_result, dict) else None
+            if isinstance(quints, list):
+                for item in quints:
+                    line = _format_memory_quintuple_line(item)
+                    if line:
+                        lines.append(line)
+            if lines:
+                return lines
+            answer = str(mem_result.get("answer") or "").strip() if isinstance(mem_result, dict) else ""
+            if answer:
+                return [f"- {answer}"]
+    except Exception as exc:
+        logger.debug(f"[RAG] 远程记忆召回失败（回退本地）: {exc}")
+
+    # 2) 本地 GRAG 回退（当前主路径）
+    try:
+        from summer_memory.memory_manager import memory_manager
+
+        if memory_manager and memory_manager.enabled:
+            quintuples = await memory_manager.get_relevant_memories(question, limit=limit)
+            for item in quintuples:
+                line = _format_memory_quintuple_line(item)
+                if line:
+                    lines.append(line)
+    except Exception as exc:
+        logger.debug(f"[RAG] 本地记忆召回失败: {exc}")
+    return lines
+
+
+def _bind_route_exports(module: Any, names: List[str]) -> None:
+    namespace = globals()
+    for export_name in names:
+        namespace[export_name] = getattr(module, export_name)
+
+
+_bind_route_exports(
+    _routes_brainstem,
+    [
+        "_bootstrap_global_mutex_lease_state",
+        "_bootstrap_budget_guard_state",
+        "_bootstrap_immutable_dna_preflight",
+        "_bootstrap_immutable_dna_monitor_startup",
+        "_bootstrap_brainstem_control_plane_startup",
+        "_bootstrap_immutable_dna_monitor_shutdown",
+        "_bootstrap_brainstem_control_plane_shutdown",
+    ],
+)
+
+_bind_route_exports(
+    _routes_chat,
+    [
+        # NOTE: prior pre-route helpers (_resolve/_apply_* route chain)
+        # are intentionally not eagerly bound into api_server globals.
+        # Runtime chat_stream is dispatch_to_core_only and should not couple to
+        # pre-route decision helpers.
+        "_apply_shell_core_session_state",
+        "_get_chat_route_quality_guard_summary",
+        "_read_chat_route_event_rows",
+        "_collect_chat_route_session_state_events",
+        "_build_chat_route_session_state_payload",
+        "_collect_chat_core_job_watch_payload",
+        "_build_core_job_watch_updates_digest",
+        "_CHAT_ROUTE_STATE_KEY",
+        "_emit_chat_route_prompt_event",
+        "_emit_chat_route_guard_event",
+        "_emit_chat_route_arbiter_event",
+        "_sanitize_route_quality_reason_codes",
+        "_sanitize_router_arbiter_reason_codes",
+        "_build_chat_route_prompt_hints",
+        "_build_route_model_override",
+        "_merge_model_override",
+        "_emit_agentic_loop_completion_event",
+        "_emit_core_child_spawn_deferred_event",
+        "_extract_agentic_execution_receipt_text",
+        "_format_sse_payload_chunk_json",
+        "_register_core_job_submission",
+    ],
+)
+
+if hasattr(_routes_chat, "_bind_chat_runtime_context"):
+    _routes_chat._bind_chat_runtime_context(
+        message_manager=message_manager,
+        message_manager_getter=lambda: message_manager,
+        config_getter=lambda: get_config(),
+        route_arbiter_guard_getter=lambda: (
+            globals().get("_CHAT_ROUTE_ARBITER_GUARD")
+            if globals().get("_CHAT_ROUTE_ARBITER_GUARD") is not None
+            else getattr(_routes_chat, "_CHAT_ROUTE_ARBITER_GUARD", None)
+        ),
+        agent_session_store_getter=lambda: _get_pipeline_runtime_handles()[0],
+        agent_mailbox_getter=lambda: _get_pipeline_runtime_handles()[1],
+        event_store_getter=lambda: (
+            globals().get("_CHAT_ROUTE_EVENT_STORE")
+            if globals().get("_CHAT_ROUTE_EVENT_STORE") is not None
+            else getattr(_routes_chat, "_CHAT_ROUTE_EVENT_STORE", None)
+        ),
+        event_store_factory=lambda file_path: EventStore(file_path=file_path),
+        quality_guard_summary_getter=lambda force_refresh=False: (
+            globals()["_get_chat_route_quality_guard_summary"](force_refresh=force_refresh)
+            if (
+                callable(globals().get("_get_chat_route_quality_guard_summary"))
+                and globals().get("_get_chat_route_quality_guard_summary")
+                is not _routes_chat._get_chat_route_quality_guard_summary
+            )
+            else _routes_chat._get_chat_route_quality_guard_summary(force_refresh=force_refresh)
+        ),
+        event_rows_reader=lambda limit=2000: (
+            globals()["_read_chat_route_event_rows"](limit=limit)
+            if (
+                callable(globals().get("_read_chat_route_event_rows"))
+                and globals().get("_read_chat_route_event_rows") is not _routes_chat._read_chat_route_event_rows
+            )
+            else _routes_chat._read_chat_route_event_rows(limit=limit)
+        ),
+        core_job_manager_getter=_get_core_job_manager,
+    )
+if hasattr(_routes_brainstem, "_bind_brainstem_runtime_context"):
+    _routes_brainstem._bind_brainstem_runtime_context(
+        app_getter=lambda: globals().get("app"),
+        llm_service_getter=get_llm_service,
+        event_store_class_getter=lambda: EventStore,
+    )
+
+
+
+STREAM_PROTOCOL_JSON_V1 = "sse_json_v1"
+_PIPELINE_STREAM_HEARTBEAT_INTERVAL_SECONDS = 15.0
+
+
+def _resolve_stream_protocol(raw_value: Optional[str]) -> str:
+    value = str(raw_value or "").strip().lower()
+    if not value:
+        return STREAM_PROTOCOL_JSON_V1
+    if value == STREAM_PROTOCOL_JSON_V1:
+        return STREAM_PROTOCOL_JSON_V1
+    raise ValueError("unsupported_stream_protocol")
+
+
+def _build_stream_response_headers(*, protocol: str) -> Dict[str, str]:
+    return {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Content-Type": "text/event-stream",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "*",
+        "X-Accel-Buffering": "no",  # 禁用nginx缓冲
+        "X-Embla-Stream-Protocol": protocol,
+    }
+
+
+def _format_stream_payload_chunk(payload: Dict[str, Any], *, protocol: str) -> str:
+    _ = protocol
+    return _format_sse_payload_chunk_json(payload)
+
+
+def _enrich_child_tool_result_metadata(
+    result_payload: Any,
+    *,
+    child_session_id: str,
+    session_store: Optional[AgentSessionStore],
+) -> Any:
+    if not isinstance(result_payload, dict):
+        return result_payload
+
+    enriched = dict(result_payload)
+    tool_call = enriched.get("tool_call") if isinstance(enriched.get("tool_call"), dict) else {}
+    metadata: Dict[str, Any] = {}
+    if session_store is not None:
+        try:
+            session = session_store.get(str(child_session_id or "").strip())
+        except Exception:
+            session = None
+        raw_metadata = getattr(session, "metadata", None) if session is not None else None
+        if isinstance(raw_metadata, dict):
+            metadata = raw_metadata
+
+    execution_backend = str(
+        enriched.get("execution_backend")
+        or tool_call.get("_execution_backend")
+        or metadata.get("execution_backend")
+        or ""
+    ).strip()
+    if execution_backend:
+        enriched["execution_backend"] = execution_backend
+
+    fallback_reason = str(
+        enriched.get("box_fallback_reason")
+        or metadata.get("box_fallback_reason")
+        or ""
+    ).strip()
+    if fallback_reason:
+        enriched["box_fallback_reason"] = fallback_reason
+
+    execution_root = str(
+        enriched.get("execution_root")
+        or tool_call.get("_execution_root")
+        or metadata.get("execution_root")
+        or ""
+    ).strip()
+    if execution_root:
+        enriched["execution_root"] = execution_root
+
+    return enriched
+
+
+def _build_gateway_route_request_from_route_meta(route_meta: Dict[str, Any]) -> GatewayRouteRequest:
+    decision = route_meta.get("router_decision") if isinstance(route_meta.get("router_decision"), dict) else {}
+    return GatewayRouteRequest(
+        task_type=str(decision.get("task_type") or ""),
+        severity=str(route_meta.get("risk_level") or ""),
+        route_semantic=str(route_meta.get("route_semantic") or "core_execution"),
+        prompt_profile=str(decision.get("prompt_profile") or ""),
+        injection_mode=str(decision.get("injection_mode") or ""),
+        delegation_intent=str(decision.get("delegation_intent") or ""),
+        trace_id=str(decision.get("trace_id") or ""),
+    )
+
+
+def _apply_gateway_compose_to_route_meta(
+    route_meta: Dict[str, Any],
+    compose_decision: Any,
+    *,
+    prompt_slices: Optional[List[PromptSlice]] = None,
+) -> None:
+    if compose_decision is None:
+        return
+    try:
+        selected_slices = list(getattr(compose_decision, "selected_slices", []) or [])
+        dropped_slices = list(getattr(compose_decision, "dropped_slices", []) or [])
+        route_meta["_slice_selected"] = selected_slices
+        route_meta["_slice_dropped"] = dropped_slices
+        route_meta["_slice_selected_count"] = len(selected_slices)
+        route_meta["_slice_dropped_count"] = len(dropped_slices)
+        route_meta["_slice_prefix_hash"] = str(getattr(compose_decision, "prefix_hash", "") or "")
+        route_meta["_slice_tail_hash"] = str(getattr(compose_decision, "tail_hash", "") or "")
+        route_meta["_slice_dropped_conflict_count"] = len(dropped_slices)
+        route_meta["_slice_token_budget_before"] = int(getattr(compose_decision, "token_budget_before", 0) or 0)
+        route_meta["_slice_token_budget_after"] = int(getattr(compose_decision, "token_budget_after", 0) or 0)
+        route_meta["_slice_recovery_hit"] = False
+        if isinstance(prompt_slices, list) and prompt_slices:
+            layer_by_uid = {str(item.slice_uid): str(item.layer or "") for item in prompt_slices}
+            selected_layers: List[str] = []
+            selected_layer_counts: Dict[str, int] = {}
+            for slice_uid in selected_slices:
+                layer = layer_by_uid.get(str(slice_uid), "").strip()
+                if layer and layer not in selected_layers:
+                    selected_layers.append(layer)
+                if layer:
+                    selected_layer_counts[layer] = selected_layer_counts.get(layer, 0) + 1
+                if layer.upper().startswith("L4"):
+                    route_meta["_slice_recovery_hit"] = True
+            route_meta["_slice_selected_layers"] = selected_layers
+            route_meta["_slice_selected_layer_counts"] = selected_layer_counts
+    except Exception:
+        return
+
+
+def _compose_system_prompt_from_gateway_plan(plan: Any) -> str:
+    envelope = getattr(plan, "prompt_envelope", None)
+    if envelope is None:
+        return ""
+
+    block1_text = str(getattr(envelope, "block1_text", "") or "").strip()
+    block2_text = str(getattr(envelope, "block2_text", "") or "").strip()
+    parts: List[str] = []
+    if block1_text:
+        parts.append(block1_text)
+    if block2_text:
+        parts.append(block2_text)
+
+    block3_messages = getattr(envelope, "block3_messages", None)
+    if isinstance(block3_messages, list) and block3_messages:
+        lines: List[str] = []
+        for row in block3_messages:
+            if not isinstance(row, dict):
+                continue
+            role = str(row.get("role") or "user").strip()
+            content = str(row.get("content") or "").strip()
+            if content:
+                lines.append(f"[{role}] {content}")
+        if lines:
+            parts.append("## 动态上下文\n" + "\n".join(lines))
+
+    return "\n\n".join(part for part in parts if str(part).strip()).strip()
+
+
+def _build_shell_system_prompt_with_gateway(
+    *,
+    route_meta: Dict[str, Any],
+    base_system_prompt: str,
+    memory_lines: Optional[List[str]] = None,
+) -> str:
+    route_hints = _build_chat_route_prompt_hints(route_meta)
+    fallback_parts: List[str] = [str(base_system_prompt or "").strip()]
+    if memory_lines:
+        fallback_parts.append("## 相关记忆\n" + "\n".join(str(line or "") for line in memory_lines if str(line or "").strip()))
+    if route_hints:
+        fallback_parts.append(route_hints)
+    fallback_prompt = "\n\n".join(part for part in fallback_parts if str(part).strip()).strip()
+
+    if _CHAT_LLM_GATEWAY is None:
+        return fallback_prompt
+
+    prompt_slices: List[PromptSlice] = [
+        PromptSlice(
+            slice_uid="shell_base",
+            layer="L0_DNA",
+            text=str(base_system_prompt or ""),
+            owner="system",
+            cache_segment="prefix_static",
+            priority=10,
+        ),
+        PromptSlice(
+            slice_uid="shell_route_contract",
+            layer="L2_ROLE",
+            text=str(route_hints or ""),
+            owner="router",
+            cache_segment="prefix_session",
+            priority=20,
+        ),
+    ]
+
+    if memory_lines:
+        prompt_slices.append(
+            PromptSlice(
+                slice_uid="shell_memory_recall",
+                layer="L1_5_EPISODIC_MEMORY",
+                text="## 相关记忆\n" + "\n".join(
+                    str(line or "") for line in memory_lines if str(line or "").strip()
+                ),
+                owner="memory",
+                cache_segment="prefix_session",
+                priority=15,
+            )
+        )
+
+    gateway_request = _build_gateway_route_request_from_route_meta(route_meta)
+    gateway_input = PromptEnvelopeInput(
+        static_header="",
+        long_term_summary="",
+        dynamic_messages=[],
+        prompt_slices=prompt_slices,
+    )
+    try:
+        plan = _CHAT_LLM_GATEWAY.build_plan(request=gateway_request, prompt_input=gateway_input)
+        _apply_gateway_compose_to_route_meta(
+            route_meta,
+            getattr(plan, "compose_decision", None),
+            prompt_slices=prompt_slices,
+        )
+        cache_outcome = getattr(plan, "cache_outcome", None)
+        if cache_outcome is not None:
+            block1_hit = bool(getattr(cache_outcome, "block1_hit", False))
+            block2_hit = bool(getattr(cache_outcome, "block2_hit", False))
+            tail_hash = str(route_meta.get("_slice_tail_hash") or "")
+            route_meta["_slice_prefix_cache_hit"] = bool(block1_hit and (block2_hit or not tail_hash))
+            route_meta["_slice_block1_cache_hit"] = block1_hit
+            route_meta["_slice_block2_cache_hit"] = block2_hit
+        route_decision = getattr(plan, "route", None)
+        if route_decision is not None:
+            route_meta["_slice_model_tier"] = str(getattr(route_decision, "model_tier", "") or "")
+            route_meta["_slice_model_id"] = str(getattr(route_decision, "model_id", "") or "")
+        composed_prompt = _compose_system_prompt_from_gateway_plan(plan)
+        return composed_prompt or fallback_prompt
+    except Exception as exc:
+        logger.debug("[prompt_gateway] shell prompt compose fallback: %s", exc)
+        return fallback_prompt
+
+
+def _normalize_shell_text_fallback_tool_calls(
+    payload: Any,
+    *,
+    allowed_tool_names: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    allowed = {
+        str(item).strip()
+        for item in (allowed_tool_names or [])
+        if str(item).strip()
+    }
+    if isinstance(payload, dict):
+        rows = [payload]
+    elif isinstance(payload, list):
+        rows = [item for item in payload if isinstance(item, dict)]
+    else:
+        return []
+
+    calls: List[Dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        tool_name = str(row.get("name") or row.get("tool_name") or "").strip()
+        if isinstance(row.get("function"), dict):
+            tool_name = tool_name or str(row["function"].get("name") or "").strip()
+        if not tool_name:
+            continue
+        if allowed and tool_name not in allowed:
+            continue
+
+        arguments = row.get("arguments")
+        if arguments is None and isinstance(row.get("function"), dict):
+            arguments = row["function"].get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except Exception:
+                continue
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            continue
+
+        calls.append(
+            {
+                "id": str(row.get("id") or f"shell_text_fallback_{idx}"),
+                "name": tool_name,
+                "arguments": dict(arguments),
+                "_fallback_source": "content_json",
+            }
+        )
+    return calls
+
+
+def _extract_shell_text_fallback_tool_calls(
+    text: str,
+    *,
+    allowed_tool_names: Optional[List[str]] = None,
+) -> tuple[List[Dict[str, Any]], Optional[tuple[int, int]]]:
+    raw = str(text or "")
+    if not raw:
+        return [], None
+
+    decoder = json.JSONDecoder()
+    for idx, char in enumerate(raw):
+        if char not in "{[":
+            continue
+        try:
+            payload, end_offset = decoder.raw_decode(raw[idx:])
+        except Exception:
+            continue
+        calls = _normalize_shell_text_fallback_tool_calls(
+            payload,
+            allowed_tool_names=allowed_tool_names,
+        )
+        if calls:
+            return calls, (idx, idx + end_offset)
+    return [], None
+
+
+def _strip_shell_text_fallback_segment(text: str, span: Optional[tuple[int, int]]) -> str:
+    raw = str(text or "")
+    if not span:
+        return raw
+    start, end = span
+    start = max(0, int(start))
+    end = max(start, int(end))
+    return (raw[:start] + raw[end:]).strip()
+
+
+async def _collect_pipeline_child_llm_turn(
+    *,
+    llm_service: Any,
+    messages: List[Dict[str, Any]],
+    temperature: float,
+    model_override: Optional[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    tool_choice: Optional[Any],
+    timeout_seconds: float,
+) -> Dict[str, Any]:
+    async def _consume_stream() -> Dict[str, Any]:
+        content_parts: List[str] = []
+        collected_tool_calls: List[Dict[str, Any]] = []
+        stream_source = llm_service.stream_chat_with_context(
+            messages,
+            temperature,
+            model_override=model_override,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+        async for chunk in stream_source:
+            if not isinstance(chunk, str) or not chunk.startswith("data: "):
+                continue
+            data_str = chunk[6:].strip()
+            if not data_str or data_str == "[DONE]":
+                continue
+            try:
+                payload = json.loads(data_str)
+            except Exception:
+                continue
+            payload_type = str(payload.get("type", ""))
+            payload_text = payload.get("text")
+            if payload_type == "content":
+                content_parts.append(str(payload_text or ""))
+            elif payload_type == "tool_calls" and isinstance(payload_text, list):
+                collected_tool_calls = [dict(item) for item in payload_text if isinstance(item, dict)]
+        return {
+            "content": "".join(content_parts),
+            "tool_calls": collected_tool_calls,
+        }
+
+    def _run_sync() -> Dict[str, Any]:
+        return asyncio.run(_consume_stream())
+
+    return await offload_blocking(
+        _run_sync,
+        timeout=max(5.0, float(timeout_seconds or 0.0)),
+    )
+
+
+async def _default_pipeline_child_llm_call(
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    model_name: str,
+) -> Dict[str, Any]:
+    del model_name
+    api_cfg = get_config().api
+    timeout_seconds = max(
+        5.0,
+        float(getattr(api_cfg, "request_timeout", 120) or 120) + 15.0,
+    )
+    return await _collect_pipeline_child_llm_turn(
+        llm_service=get_llm_service(),
+        messages=messages,
+        temperature=float(getattr(api_cfg, "temperature", 0.7)),
+        model_override=_build_route_model_override("core_execution"),
+        tools=tools,
+        tool_choice="auto",
+        timeout_seconds=timeout_seconds,
+    )
+
+
+async def _default_pipeline_child_tool_executor(
+    tool_name: str,
+    arguments: Dict[str, Any],
+    child_session_id: str,
+) -> Dict[str, Any]:
+    session_store, _, _ = _get_pipeline_runtime_handles()
+    native_tool_executor = get_native_tool_executor()
+    call_payload = dict(arguments) if isinstance(arguments, dict) else {}
+    call_payload["tool_name"] = str(tool_name or "")
+    call_payload["_session_id"] = child_session_id
+    call_payload["session_id"] = child_session_id
+    raw_result = await native_tool_executor.execute(call_payload, session_id=child_session_id)
+    return _enrich_child_tool_result_metadata(
+        raw_result,
+        child_session_id=child_session_id,
+        session_store=session_store,
+    )
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _build_pipeline_stream_heartbeat_event(
+    *,
+    pipeline_id: str,
+    shell_session_id: str,
+    core_execution_session_id: str,
+    started_monotonic: float,
+    last_event_type: str,
+    agent_session_store: Optional[AgentSessionStore],
+) -> Dict[str, Any]:
+    heartbeat_snapshot: Dict[str, Any] = {
+        "root_session_id": str(core_execution_session_id or ""),
+        "summary": {},
+        "sessions": [],
+        "heartbeats": [],
+    }
+    if core_execution_session_id and agent_session_store is not None:
+        try:
+            snapshot = agent_session_store.get_descendant_heartbeat_snapshot(core_execution_session_id)
+            if isinstance(snapshot, dict):
+                heartbeat_snapshot = {
+                    "root_session_id": str(snapshot.get("root_session_id") or core_execution_session_id),
+                    "summary": dict(snapshot.get("summary") or {}),
+                    "sessions": list(snapshot.get("sessions") or []),
+                    "heartbeats": list(snapshot.get("heartbeats") or []),
+                }
+        except Exception as exc:
+            logger.debug("构建 pipeline stream heartbeat snapshot 失败: %s", exc)
+    summary = dict(heartbeat_snapshot.get("summary") or {})
+    child_sessions = list(heartbeat_snapshot.get("sessions") or [])
+    child_heartbeats = list(heartbeat_snapshot.get("heartbeats") or [])
+
+    return {
+        "type": "pipeline_heartbeat",
+        "pipeline_id": str(pipeline_id or ""),
+        "shell_session_id": str(shell_session_id or ""),
+        "run_context_id": str(core_execution_session_id or ""),
+        "core_execution_session_id": str(core_execution_session_id or ""),
+        "generated_at": _utc_now_iso(),
+        "elapsed_seconds": round(max(0.0, time.monotonic() - float(started_monotonic or time.monotonic())), 3),
+        "last_event_type": str(last_event_type or ""),
+        "child_heartbeat_summary": summary,
+        "child_session_count": int(summary.get("session_count") or len(child_sessions)),
+        "child_heartbeat_count": int(summary.get("task_count") or len(child_heartbeats)),
+    }
+
+
+async def _stream_async_generator_with_keepalive(
+    source: AsyncGenerator[Dict[str, Any], None],
+    *,
+    heartbeat_interval_seconds: float,
+    heartbeat_builder: Callable[[], Dict[str, Any]],
+) -> AsyncGenerator[Dict[str, Any], None]:
+    queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+    consumer_ack = asyncio.Event()
+
+    async def _put_with_backpressure(kind: str, payload: Any) -> None:
+        consumer_ack.clear()
+        await queue.put((kind, payload))
+        await consumer_ack.wait()
+
+    async def _produce() -> None:
+        try:
+            async for item in source:
+                await _put_with_backpressure("event", item)
+        except Exception as exc:
+            await _put_with_backpressure("error", exc)
+        finally:
+            await _put_with_backpressure("done", None)
+
+    producer = asyncio.create_task(_produce())
+    try:
+        while True:
+            try:
+                kind, payload = await asyncio.wait_for(
+                    queue.get(),
+                    timeout=max(1.0, float(heartbeat_interval_seconds or 0.0)),
+                )
+            except asyncio.TimeoutError:
+                heartbeat_event = heartbeat_builder()
+                if isinstance(heartbeat_event, dict) and heartbeat_event:
+                    yield heartbeat_event
+                continue
+
+            consumer_ack.set()
+
+            if kind == "event":
+                if isinstance(payload, dict):
+                    yield payload
+                continue
+            if kind == "error":
+                raise payload
+            break
+    finally:
+        producer.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await producer
+
+
+def _select_shell_tool_choice(message: str, tool_names: List[str]) -> Any:
+    raw = str(message or "")
+    normalized = raw.lower()
+    matched: List[str] = []
+    for tool_name in tool_names:
+        text = str(tool_name or "").strip()
+        if text and text.lower() in normalized:
+            matched.append(text)
+    if len(matched) != 1:
+        return "auto"
+
+    tool_name = matched[0]
+    escaped_tool_name = re.escape(tool_name)
+    explicit_positive_patterns = (
+        rf"(?:调用|使用|运行|执行)\s+`?{escaped_tool_name}`?",
+        rf"(?:call|use|run)\s+`?{escaped_tool_name}`?",
+    )
+    negated_patterns = (
+        rf"(?:不要|别|禁止|不用|无需)\s*(?:调用|使用|运行|执行)?\s*`?{escaped_tool_name}`?",
+        rf"(?:do\s+not|don't|not)\s+(?:call|use|run)\s+`?{escaped_tool_name}`?",
+    )
+    if any(re.search(pattern, raw, flags=re.IGNORECASE) for pattern in negated_patterns):
+        return "auto"
+    if any(re.search(pattern, raw, flags=re.IGNORECASE) for pattern in explicit_positive_patterns):
+        return {
+            "type": "function",
+            "function": {
+                "name": tool_name,
+            },
+        }
+    return "auto"
+
+
+_SHELL_FACT_VOLATILE_KEYS = {
+    "call_id",
+    "created_at",
+    "duration_ms",
+    "elapsed_ms",
+    "generated_at",
+    "latency_ms",
+    "request_id",
+    "session_id",
+    "task_id",
+    "timestamp",
+    "tool_call_id",
+    "trace_id",
+    "updated_at",
+}
+
+
+def _normalize_shell_fact_payload(payload: Any, *, depth: int = 0) -> Any:
+    if depth >= 6:
+        return str(payload)
+    if isinstance(payload, Mapping):
+        normalized: Dict[str, Any] = {}
+        sorted_items = sorted(
+            ((str(key or ""), value) for key, value in payload.items()),
+            key=lambda item: item[0],
+        )
+        for key, value in sorted_items:
+            if key.lower() in _SHELL_FACT_VOLATILE_KEYS:
+                continue
+            normalized[key] = _normalize_shell_fact_payload(value, depth=depth + 1)
+        return normalized
+    if isinstance(payload, list):
+        return [_normalize_shell_fact_payload(item, depth=depth + 1) for item in payload]
+    if isinstance(payload, tuple):
+        return [_normalize_shell_fact_payload(item, depth=depth + 1) for item in payload]
+    if isinstance(payload, set):
+        return sorted(_normalize_shell_fact_payload(item, depth=depth + 1) for item in payload)
+    if isinstance(payload, str):
+        return payload.strip()
+    if payload is None or isinstance(payload, (int, float, bool)):
+        return payload
+    return str(payload)
+
+
+def _serialize_shell_fact_payload(payload: Any) -> str:
+    normalized = _normalize_shell_fact_payload(payload)
+    try:
+        serialized = json.dumps(normalized, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        serialized = str(normalized)
+    return serialized[:4000]
+
+
+def _build_shell_tool_call_signature(tool_name: str, tool_args: Any) -> str:
+    return f"{str(tool_name or '').strip()}::{_serialize_shell_fact_payload(tool_args if isinstance(tool_args, Mapping) else {'value': tool_args})}"
+
+
+def _extract_shell_round_fact_fingerprints(tool_name: str, tool_result: Any) -> Set[str]:
+    normalized_tool_name = str(tool_name or "").strip()
+    if not normalized_tool_name or normalized_tool_name == "dispatch_to_core":
+        return set()
+    return {f"{normalized_tool_name}::{_serialize_shell_fact_payload(tool_result)}"}
+
+
+def _should_force_core_dispatch_after_shell_budget(
+    *,
+    user_message: str,
+    shell_messages: List[Dict[str, Any]],
+) -> bool:
+    normalized_message = str(user_message or "").strip()
+    if not normalized_message:
+        return False
+    if contains_direct_coding_signal(normalized_message):
+        return True
+    if is_coding_followup(normalized_message) and has_recent_coding_context(shell_messages):
+        return True
+    return False
+
+
+def _persist_shell_context_to_pipeline_store(
+    session_id: str,
+    shell_messages: List[Dict[str, Any]],
+) -> None:
+    """Extract Shell tool results from conversation and write to pipeline context store.
+
+    This is the WRITE side of the pull-model context sharing. Downstream pipeline
+    stages (Expert/Dev) read from the store by session_id when building prompts.
+    """
+    try:
+        from agents.runtime.pipeline_context import get_pipeline_context_store
+
+        # Build tool_call_id → tool_name index from assistant messages
+        call_id_to_name: Dict[str, str] = {}
+        for msg in shell_messages:
+            if msg.get("role") == "assistant":
+                for tc in msg.get("tool_calls") or []:
+                    cid = str(tc.get("id") or "").strip()
+                    if cid:
+                        call_id_to_name[cid] = str(tc.get("name") or tc.get("function", {}).get("name") or "")
+
+        entries: List[Dict[str, Any]] = []
+        for msg in shell_messages:
+            if msg.get("role") != "tool":
+                continue
+            call_id = str(msg.get("tool_call_id") or "").strip()
+            tool_name = call_id_to_name.get(call_id, "")
+            if not tool_name or tool_name == "dispatch_to_core":
+                continue
+            raw_content = msg.get("content", "{}")
+            try:
+                parsed = json.loads(raw_content) if isinstance(raw_content, str) else raw_content
+            except (json.JSONDecodeError, TypeError):
+                parsed = {"raw": str(raw_content)}
+            entries.append({
+                "source_role": "shell",
+                "entry_type": "tool_result",
+                "tool_name": tool_name,
+                "content": parsed,
+            })
+
+        if entries:
+            store = get_pipeline_context_store()
+            store.clear(session_id)  # Replace stale context from prior dispatches
+            written = store.write_batch(session_id=session_id, entries=entries)
+            logger.debug("[PipelineContext] Wrote %d Shell tool entries for session %s", written, session_id)
+    except Exception:
+        logger.debug("Failed to persist Shell context to pipeline store", exc_info=True)
+
+
+# 历史流式文本切分器已移除，流式处理统一由 chat_stream 主循环管理
 
 
 @asynccontextmanager
@@ -77,20 +1092,83 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     try:
         print("[INFO] 正在初始化API服务器...")
+        mutex_bootstrap = _bootstrap_global_mutex_lease_state()
+        app.state.global_mutex_bootstrap = mutex_bootstrap
+        if not bool(mutex_bootstrap.get("passed", False)):
+            print("[WARN] Global mutex 启动初始化未通过，锁状态可能显示 missing/unknown")
+        budget_guard_bootstrap = _bootstrap_budget_guard_state()
+        app.state.budget_guard_bootstrap = budget_guard_bootstrap
+        if not bool(budget_guard_bootstrap.get("passed", False)):
+            print("[WARN] Budget guard 启动初始化未通过，预算状态可能显示 missing/unknown")
+        immutable_dna_preflight = _bootstrap_immutable_dna_preflight()
+        app.state.immutable_dna_preflight = immutable_dna_preflight
+        immutable_dna_required = bool(immutable_dna_preflight.get("required", True))
+        immutable_dna_enabled = bool(immutable_dna_preflight.get("enabled", True))
+        immutable_dna_passed = bool(immutable_dna_preflight.get("passed", False))
+        if immutable_dna_required and immutable_dna_enabled and not immutable_dna_passed:
+            raise RuntimeError(
+                "Immutable DNA startup preflight failed: "
+                f"{str(immutable_dna_preflight.get('reason') or 'unknown')}"
+            )
+        immutable_dna_monitor_bootstrap = _bootstrap_immutable_dna_monitor_startup()
+        app.state.immutable_dna_monitor_bootstrap = immutable_dna_monitor_bootstrap
+        if bool(immutable_dna_monitor_bootstrap.get("enabled")) and not bool(immutable_dna_monitor_bootstrap.get("passed", True)):
+            logger.warning(
+                "Immutable DNA monitor 启动未通过，篡改告警可能不可用: %s",
+                str(immutable_dna_monitor_bootstrap.get("reason") or "unknown"),
+            )
         # 对话核心功能已集成到apiserver
+        brainstem_bootstrap = _bootstrap_brainstem_control_plane_startup()
+        app.state.brainstem_bootstrap = brainstem_bootstrap
+        if bool(brainstem_bootstrap.get("enabled")) and not bool(brainstem_bootstrap.get("passed", True)):
+            print("[WARN] Brainstem 控制面自动托管未通过，运行态势可能显示 unknown/missing")
+        app.state.core_job_manager = _get_core_job_manager()
+        # Start SerialActionQueue worker for high-risk write serialization
+        try:
+            from core.event_bus.serial_queue import get_serial_action_queue
+            _serial_queue = get_serial_action_queue()
+            await _serial_queue.start_worker()
+            app.state.serial_action_queue = _serial_queue
+            logger.info("SerialActionQueue worker 已启动")
+        except Exception as saq_exc:
+            logger.warning("SerialActionQueue 启动失败（降级为直接执行）: %s", saq_exc)
         print("[SUCCESS] API服务器初始化完成")
         yield
     except Exception as e:
         print(f"[ERROR] API服务器初始化失败: {e}")
         traceback.print_exc()
-        sys.exit(1)
+        raise
     finally:
         print("[INFO] 正在清理资源...")
-        # MCP服务现在由mcpserver独立管理，无需清理
+        try:
+            await _get_core_job_manager().shutdown()
+        except Exception as exc:
+            logger.warning("Core dispatch job manager 关闭失败: %s", exc)
+        # Shut down serial action queue
+        try:
+            _saq = getattr(app.state, "serial_action_queue", None)
+            if _saq is not None:
+                await _saq.stop_worker()
+        except Exception:
+            pass
+        app.state.immutable_dna_monitor_shutdown = _bootstrap_immutable_dna_monitor_shutdown()
+        app.state.brainstem_shutdown = _bootstrap_brainstem_control_plane_shutdown()
+        try:
+            app.state.runtime_client_shutdown = await close_runtime_network_clients()
+        except Exception as exc:
+            app.state.runtime_client_shutdown = {
+                "litellm": {"attempted": True, "closed": False, "error": str(exc)},
+                "mcp_pool": {"attempted": True, "closed": False, "error": str(exc)},
+            }
+            logger.warning("运行时网络客户端关闭失败: %s", exc)
 
 
 # 创建FastAPI应用
-app = FastAPI(title="NagaAgent API", description="智能对话助手API服务", version="5.0.0", lifespan=lifespan)
+app = FastAPI(title="Embla System API", description="Embla System 智能运行与对话 API 服务", version="5.0.0", lifespan=lifespan)
+if hasattr(_routes_ops, "_bind_ops_app_context"):
+    _routes_ops._bind_ops_app_context(app)
+if hasattr(_routes_brainstem, "_bind_brainstem_runtime_context"):
+    _routes_brainstem._bind_brainstem_runtime_context(app=app)
 
 # 配置CORS
 app.add_middleware(
@@ -101,16 +1179,78 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+API_DEFAULT_VERSION = "v1"
+API_CONTRACT_VERSION = "2026-02-24"
+API_COMPATIBILITY_WINDOW_DAYS = 180
+API_SUPPORTED_VERSIONS = [API_DEFAULT_VERSION]
+_UNVERSIONED_ROUTE_DEPRECATIONS: Dict[str, Dict[str, str]] = {
+    "/health": {
+        "sunset": "2026-08-24",
+        "replacement": "/v1/health",
+    },
+    "/system/info": {
+        "sunset": "2026-08-24",
+        "replacement": "/v1/system/info",
+    },
+    "/chat": {
+        "sunset": "2026-08-24",
+        "replacement": "/v1/chat",
+    },
+    "/chat/stream": {
+        "sunset": "2026-08-24",
+        "replacement": "/v1/chat/stream",
+    },
+}
+
+
+def _resolve_api_deprecation_policy(path: str) -> Optional[Dict[str, str]]:
+    return _UNVERSIONED_ROUTE_DEPRECATIONS.get(str(path or ""))
+
+
+def _build_api_contract_snapshot() -> Dict[str, Any]:
+    return {
+        "api_version": API_DEFAULT_VERSION,
+        "contract_version": API_CONTRACT_VERSION,
+        "supported_versions": list(API_SUPPORTED_VERSIONS),
+        "compatibility_window_days": API_COMPATIBILITY_WINDOW_DAYS,
+        "deprecations": {
+            route: {
+                "sunset": meta["sunset"],
+                "replacement": meta["replacement"],
+            }
+            for route, meta in _UNVERSIONED_ROUTE_DEPRECATIONS.items()
+        },
+    }
+
+
+def _build_shell_tools_catalog(*, session_id: str = "", scope: str = "entry") -> Dict[str, Any]:
+    shell_agent = ShellAgent()
+    tool_defs = [dict(item) for item in shell_agent.get_tool_definitions() if isinstance(item, dict)]
+    tool_names = [str(item.get("name") or "").strip() for item in tool_defs if str(item.get("name") or "").strip()]
+    return {
+        "agent": "shell",
+        "scope": str(scope or "entry"),
+        "session_id": str(session_id or "").strip(),
+        "count": len(tool_names),
+        "tool_names": tool_names,
+        "tools": tool_defs,
+    }
+
 
 @app.middleware("http")
-async def sync_auth_token(request: Request, call_next):
-    """每次请求自动同步前端 token 到后端认证状态，避免 token 刷新后后端仍持有旧 token"""
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        if token and token != naga_auth.get_access_token():
-            naga_auth.restore_token(token)
+async def inject_api_contract_headers(request: Request, call_next):
     response = await call_next(request)
+    snapshot = _build_api_contract_snapshot()
+    response.headers.setdefault("X-Embla-System-Api-Version", str(snapshot["api_version"]))
+    response.headers.setdefault("X-Embla-System-Contract-Version", str(snapshot["contract_version"]))
+
+    deprecation = _resolve_api_deprecation_policy(request.url.path)
+    if isinstance(deprecation, dict):
+        response.headers["Deprecation"] = "true"
+        response.headers["Sunset"] = str(deprecation.get("sunset") or "")
+        replacement = str(deprecation.get("replacement") or "").strip()
+        if replacement:
+            response.headers["Link"] = f"<{replacement}>; rel=\"successor-version\""
     return response
 
 
@@ -118,301 +1258,78 @@ async def sync_auth_token(request: Request, call_next):
 # ============ 内部服务代理 ============
 
 
-async def _call_agentserver(
-    method: str,
-    path: str,
-    params: Optional[Dict[str, Any]] = None,
-    json_body: Optional[Dict[str, Any]] = None,
-    timeout_seconds: float = 15.0,
-) -> Any:
-    """调用 agentserver 内部接口（用于透传 OpenClaw 状态查询等能力）"""
-    import httpx
-    from system.config import get_server_port
-
-    port = get_server_port("agent_server")
-    url = f"http://127.0.0.1:{port}{path}"
-    try:
-        async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
-            resp = await client.request(method, url, params=params, json=json_body)
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"agentserver 不可达: {e}")
-    if resp.status_code >= 400:
-        detail = resp.text
-        try:
-            detail = resp.json()
-        except Exception:
-            pass
-        raise HTTPException(status_code=resp.status_code, detail=detail)
-    try:
-        return resp.json()
-    except Exception:
-        return resp.text
+# MCP proxy helper (_call_mcpserver) removed — superseded by native MCPClientPool (abed2b53).
 
 
-# [已禁用] MCP Server 已从 main.py 启动流程中移除，此代理函数不再有效，调用必定 503
-# async def _call_mcpserver(
-#     method: str,
-#     path: str,
-#     params: Optional[Dict[str, Any]] = None,
-#     timeout_seconds: float = 10.0,
-# ) -> Any:
-#     """调用 MCP Server 内部接口"""
-#     import httpx
-#     from system.config import get_server_port
-#
-#     port = get_server_port("mcp_server")
-#     url = f"http://127.0.0.1:{port}{path}"
-#     try:
-#         async with httpx.AsyncClient(timeout=timeout_seconds, trust_env=False) as client:
-#             resp = await client.request(method, url, params=params)
-#     except Exception as e:
-#         raise HTTPException(status_code=503, detail=f"MCP Server 不可达: {e}")
-#     if resp.status_code >= 400:
-#         detail = resp.text
-#         try:
-#             detail = resp.json()
-#         except Exception:
-#             pass
-#         raise HTTPException(status_code=resp.status_code, detail=detail)
-#     try:
-#         return resp.json()
-#     except Exception:
-#         return resp.text
+# ============ Skill Storage ============
 
-
-# ============ OpenClaw Skill Market ============
-
-OPENCLAW_STATE_DIR = Path.home() / ".openclaw"
-OPENCLAW_SKILLS_DIR = OPENCLAW_STATE_DIR / "skills"
-OPENCLAW_CONFIG_PATH = OPENCLAW_STATE_DIR / "openclaw.json"
 SKILLS_TEMPLATE_DIR = Path(__file__).resolve().parent / "skills_templates"
-MCPORTER_DIR = Path.home() / ".mcporter"
-MCPORTER_CONFIG_PATH = MCPORTER_DIR / "config.json"
-
-MARKET_ITEMS: List[Dict[str, Any]] = [
-    {
-        "id": "agent-browser",
-        "title": "Agent Browser",
-        "description": "Browser automation skill (install SKILL.md only, demo mode).",
-        "skill_name": "agent-browser",
-        "enabled": True,
-        "install": {
-            "type": "remote_skill",
-            "url": "https://raw.githubusercontent.com/vercel-labs/agent-browser/refs/heads/main/skills/agent-browser/SKILL.md",
-        },
-    },
-    {
-        "id": "office-docs",
-        "title": "Office Docs (docx + xlsx)",
-        "description": "Extract docx/xlsx content with local scripts (no extra deps).",
-        "skill_name": "office-docs",
-        "enabled": True,
-        "install": {
-            "type": "template_dir",
-            "template": "office-docs",
-        },
-    },
-    {
-        "id": "brainstorming",
-        "title": "Brainstorming",
-        "description": "Guided ideation and design exploration skill.",
-        "skill_name": "brainstorming",
-        "enabled": True,
-        "install": {
-            "type": "remote_skill",
-            "url": "https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/skills/brainstorming/SKILL.md",
-        },
-    },
-    {
-        "id": "context7",
-        "title": "Context7 Docs",
-        "description": "Query library/API docs via mcporter + context7 MCP (stdio).",
-        "skill_name": "context7",
-        "enabled": True,
-        "install": {
-            "type": "template_dir",
-            "template": "context7",
-        },
-    },
-    {
-        "id": "search",
-        "title": "Search (Firecrawl MCP)",
-        "description": "Search MCP integration via mcporter + firecrawl-mcp.",
-        "skill_name": "search",
-        "enabled": True,
-        "install": {
-            "type": "template_dir",
-            "template": "search",
-        },
-    },
-]
+LOCAL_SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
+LOCAL_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _run_command(command: List[str], timeout: int = 30) -> Tuple[int, str, str]:
-    import locale
-    enc = locale.getpreferredencoding() or "utf-8"
-    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, shell=(sys.platform == "win32"), encoding=enc, errors="replace")
-    return result.returncode, (result.stdout or "").strip(), (result.stderr or "").strip()
-
-
-def _get_openclaw_version() -> Optional[str]:
-    if shutil.which("openclaw") is None:
-        return None
+def _is_path_within_root(path: Path, root: Path) -> bool:
     try:
-        code, stdout, stderr = _run_command(["openclaw", "--version"], timeout=15)
-    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired):
-        return None
-    if code == 0:
-        return stdout or stderr
-    return None
+        root_s = os.path.normcase(os.path.abspath(str(root)))
+        path_s = os.path.normcase(os.path.abspath(str(path)))
+        return os.path.commonpath([root_s, path_s]) == root_s
+    except Exception:
+        return False
 
 
-def _get_openclaw_skills_data() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    if shutil.which("openclaw") is None:
-        return None, "openclaw_not_found"
-    try:
-        code, stdout, stderr = _run_command(["openclaw", "skills", "list", "--json"], timeout=30)
-    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as exc:
-        return None, f"openclaw_skills_list_failed: {exc}"
-    if code != 0:
-        return None, stderr or stdout or "openclaw_skills_list_failed"
-    try:
-        return json.loads(stdout), None
-    except json.JSONDecodeError as exc:
-        return None, f"openclaw_skills_list_invalid_json: {exc}"
+def _resolve_child_path_within_root(root: Path, child: str, *, field_label: str) -> Path:
+    root_resolved = root.resolve(strict=False)
+    candidate = (root_resolved / child).resolve(strict=False)
+    if not _is_path_within_root(candidate, root_resolved):
+        raise HTTPException(status_code=400, detail=f"{field_label} 非法，路径越界")
+    return candidate
 
 
-def _download_text(url: str, timeout: int = 20) -> str:
-    try:
-        request = UrlRequest(url, headers={"User-Agent": "NagaAgent/market-installer"})
-        with urlopen(request, timeout=timeout) as response:
-            return response.read().decode("utf-8")
-    except URLError as exc:
-        raise RuntimeError(f"下载失败: {exc}")
+def _normalize_skill_name(skill_name: str) -> str:
+    normalized = str(skill_name or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="技能名称不能为空")
+    if len(normalized) > 128:
+        raise HTTPException(status_code=400, detail="技能名称过长")
+    if not all(ch.isalnum() or ch in {"_", "-"} for ch in normalized):
+        raise HTTPException(status_code=400, detail="技能名称仅允许字母、数字、下划线、中划线")
+    return normalized
+
+
+def _normalize_uploaded_filename(filename: Optional[str]) -> str:
+    raw = str(filename or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="文件名不能为空")
+
+    # 浏览器可能携带 fakepath，统一只保留基名，避免目录逃逸。
+    normalized = raw.replace("\\", "/")
+    safe_name = Path(normalized).name.strip()
+    if not safe_name or safe_name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="文件名不合法")
+    if "\x00" in safe_name:
+        raise HTTPException(status_code=400, detail="文件名包含非法字符")
+    if len(safe_name) > 255:
+        raise HTTPException(status_code=400, detail="文件名过长")
+    return safe_name
 
 
 def _write_skill_file(skill_name: str, content: str) -> Path:
-    skill_dir = OPENCLAW_SKILLS_DIR / skill_name
+    safe_skill_name = _normalize_skill_name(skill_name)
+    skill_dir = _resolve_child_path_within_root(LOCAL_SKILLS_DIR, safe_skill_name, field_label="技能名称")
     skill_dir.mkdir(parents=True, exist_ok=True)
     skill_path = skill_dir / "SKILL.md"
     skill_path.write_text(content, encoding="utf-8")
     return skill_path
 
-
-def _copy_template_dir(template_name: str, skill_name: str) -> None:
-    template_dir = SKILLS_TEMPLATE_DIR / template_name
-    if not template_dir.exists():
-        raise FileNotFoundError(f"模板不存在: {template_dir}")
-    skill_dir = OPENCLAW_SKILLS_DIR / skill_name
-    for path in template_dir.rglob("*"):
-        if path.is_dir():
-            continue
-        relative = path.relative_to(template_dir)
-        target_path = skill_dir / relative
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, target_path)
-
-
-def _update_mcporter_firecrawl_config(api_key: Optional[str]) -> Path:
-    MCPORTER_DIR.mkdir(parents=True, exist_ok=True)
-    mcporter_config: Dict[str, Any] = {}
-    if MCPORTER_CONFIG_PATH.exists():
-        try:
-            mcporter_config = json.loads(MCPORTER_CONFIG_PATH.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            mcporter_config = {}
-    servers = mcporter_config.get("mcpServers")
-    if not isinstance(servers, dict):
-        servers = {}
-    server_entry = servers.get("firecrawl-mcp")
-    if not isinstance(server_entry, dict):
-        server_entry = {}
-    env = server_entry.get("env")
-    if not isinstance(env, dict):
-        env = {}
-    if api_key:
-        env["FIRECRAWL_API_KEY"] = api_key
-    elif "FIRECRAWL_API_KEY" not in env:
-        env["FIRECRAWL_API_KEY"] = "YOUR_FIRECRAWL_API_KEY"
-    server_entry.update({"command": "npx", "args": ["-y", "firecrawl-mcp"], "env": env})
-    servers["firecrawl-mcp"] = server_entry
-    mcporter_config["mcpServers"] = servers
-    MCPORTER_CONFIG_PATH.write_text(json.dumps(mcporter_config, ensure_ascii=True, indent=2), encoding="utf-8")
-    return MCPORTER_CONFIG_PATH
-
-
-def _install_agent_browser() -> None:
-    if shutil.which("npm") is None:
-        raise RuntimeError("未找到 npm，无法安装 agent-browser")
-    code, stdout, stderr = _run_command(["npm", "install", "-g", "agent-browser", "--force"], timeout=3000)
-    if code != 0:
-        raise RuntimeError(stderr or stdout or "npm install -g agent-browser --force 失败")
-    if shutil.which("agent-browser") is None:
-        raise RuntimeError("agent-browser 未安装成功或未在 PATH 中")
-    code, stdout, stderr = _run_command(["agent-browser", "install"], timeout=3000)
-    if code != 0:
-        raise RuntimeError(stderr or stdout or "agent-browser install 失败")
-
-
-def _build_market_item(
-    item: Dict[str, Any],
-    skills_data: Optional[Dict[str, Any]],
-    openclaw_found: bool,
-) -> Dict[str, Any]:
-    skill_name_value = item.get("skill_name") or item.get("id") or "unknown"
-    skill_name = str(skill_name_value)
-    skill_entry = None
-    if skills_data and isinstance(skills_data.get("skills"), list):
-        for entry in skills_data.get("skills", []):
-            if entry.get("name") == skill_name:
-                skill_entry = entry
-                break
-    skill_path = OPENCLAW_SKILLS_DIR / skill_name / "SKILL.md"
-    installed_by_file = skill_path.exists()
-    installed = installed_by_file or bool(skill_entry)
-    return {
-        "id": item.get("id"),
-        "title": item.get("title"),
-        "description": item.get("description"),
-        "skill_name": skill_name,
-        "enabled": item.get("enabled", True),
-        "installed": installed,
-        "eligible": skill_entry.get("eligible") if skill_entry else None,
-        "disabled": skill_entry.get("disabled") if skill_entry else None,
-        "missing": skill_entry.get("missing") if skill_entry else None,
-        "skill_path": str(skill_path),
-        "openclaw_visible": bool(skill_entry) if openclaw_found else False,
-        "install_type": item.get("install", {}).get("type"),
-    }
-
-
-def _get_market_items_status() -> Dict[str, Any]:
-    openclaw_found = shutil.which("openclaw") is not None
-    openclaw_version = _get_openclaw_version()
-    skills_data, skills_error = _get_openclaw_skills_data()
-    items = [_build_market_item(item, skills_data, openclaw_found) for item in MARKET_ITEMS]
-    return {
-        "openclaw": {
-            "found": openclaw_found,
-            "version": openclaw_version,
-            "skills_dir": str(OPENCLAW_SKILLS_DIR),
-            "config_path": str(OPENCLAW_CONFIG_PATH),
-            "skills_error": skills_error,
-        },
-        "items": items,
-    }
-
-
-# 请求模型
 class ChatRequest(BaseModel):
     message: str
     stream: bool = False
     session_id: Optional[str] = None
-    disable_tts: bool = False  # V17: 支持禁用服务器端TTS
-    return_audio: bool = False  # V19: 支持返回音频URL供客户端播放
+    skip_intent_analysis: bool = False  # 新增：跳过意图分析
     skill: Optional[str] = None  # 用户主动选择的技能名称，注入完整指令到系统提示词
     images: Optional[List[str]] = None  # 截屏图片 base64 数据列表（data:image/png;base64,...）
     temporary: bool = False  # 临时会话标记，临时会话不持久化到磁盘
+    stream_protocol: Optional[str] = None  # 仅允许空值（默认）或 sse_json_v1
 
 
 class ChatResponse(BaseModel):
@@ -444,152 +1361,15 @@ class DocumentProcessRequest(BaseModel):
     action: str = "read"  # read, analyze, summarize
     session_id: Optional[str] = None
 
-
-# ============ NagaCAS 认证端点 ============
-
-
-@app.post("/auth/login")
-async def auth_login(body: dict):
-    """NagaCAS 登录"""
-    username = body.get("username", "")
-    password = body.get("password", "")
-    captcha_id = body.get("captcha_id", "")
-    captcha_answer = body.get("captcha_answer", "")
-    if not username or not password:
-        raise HTTPException(status_code=400, detail="用户名和密码不能为空")
-    try:
-        result = await naga_auth.login(username, password, captcha_id, captcha_answer)
-        return result
-    except Exception as e:
-        import httpx
-        status = 401
-        detail = str(e)
-        if isinstance(e, httpx.HTTPStatusError):
-            status = e.response.status_code
-            try:
-                err_data = e.response.json()
-                detail = err_data.get("message", e.response.text)
-            except Exception:
-                detail = e.response.text
-        logger.error(f"登录失败 [{status}]: {detail}")
-        raise HTTPException(status_code=status, detail=detail)
-
-
-@app.get("/auth/me")
-async def auth_me(request: Request):
-    """获取当前用户信息（优先使用服务端 token，其次从请求头恢复）"""
-    token = naga_auth.get_access_token()
-    if not token:
-        # 尝试从 Authorization 头恢复会话
-        auth_header = request.headers.get("authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-    if not token:
-        raise HTTPException(status_code=401, detail="未登录")
-    user = await naga_auth.get_me(token)
-    if not user:
-        raise HTTPException(status_code=401, detail="token 已失效")
-    # 恢复服务端认证状态
-    naga_auth.restore_token(token)
-    return {"user": user, "memory_url": naga_auth.NAGA_MEMORY_URL}
-
-
-@app.post("/auth/logout")
-async def auth_logout():
-    """登出"""
-    naga_auth.logout()
-    return {"success": True}
-
-
-@app.post("/auth/register")
-async def auth_register(body: dict):
-    """NagaBusiness 注册"""
-    username = body.get("username", "")
-    email = body.get("email", "")
-    password = body.get("password", "")
-    verification_code = body.get("verification_code", "")
-    if not username or not email or not password or not verification_code:
-        raise HTTPException(status_code=400, detail="用户名、邮箱、密码和验证码不能为空")
-    try:
-        result = await naga_auth.register(username, email, password, verification_code)
-        return {"success": True, **result}
-    except Exception as e:
-        import httpx
-        status = 500
-        detail = f"注册失败: {str(e)}"
-        if isinstance(e, httpx.HTTPStatusError):
-            status = e.response.status_code
-            try:
-                err_data = e.response.json()
-                detail = err_data.get("message", e.response.text)
-            except Exception:
-                detail = e.response.text
-        logger.error(f"注册失败 [{status}]: {detail}")
-        raise HTTPException(status_code=status, detail=detail)
-
-
-@app.get("/auth/captcha")
-async def auth_captcha():
-    """获取验证码（数学计算题）"""
-    try:
-        result = await naga_auth.get_captcha()
-        return result
-    except Exception as e:
-        logger.error(f"获取验证码失败: {e}")
-        raise HTTPException(status_code=500, detail=f"获取验证码失败: {str(e)}")
-
-
-@app.post("/auth/send-verification")
-async def auth_send_verification(body: dict):
-    """发送邮箱验证码"""
-    email = body.get("email", "")
-    username = body.get("username", "")
-    captcha_id = body.get("captcha_id", "")
-    captcha_answer = body.get("captcha_answer", "")
-    if not email or not username:
-        raise HTTPException(status_code=400, detail="邮箱和用户名不能为空")
-    try:
-        result = await naga_auth.send_verification(email, username, captcha_id, captcha_answer)
-        return {"success": True, "message": "验证码已发送"}
-    except Exception as e:
-        import httpx
-        status = 500
-        detail = str(e)
-        if isinstance(e, httpx.HTTPStatusError):
-            status = e.response.status_code
-            try:
-                err_data = e.response.json()
-                detail = err_data.get("message", e.response.text)
-            except Exception:
-                detail = e.response.text
-        logger.error(f"发送验证码失败 [{status}]: {detail}")
-        raise HTTPException(status_code=status, detail=detail)
-
-
-@app.post("/auth/refresh")
-async def auth_refresh(request: Request):
-    """刷新 token（后端管理 refresh_token，兼容接受 body 中的 refresh_token 用于迁移/非浏览器客户端）"""
-    rt_override = None
-    try:
-        body = await request.json()
-        rt_override = body.get("refresh_token") if isinstance(body, dict) else None
-    except Exception:
-        pass
-    try:
-        result = await naga_auth.refresh(rt_override)
-        return result
-    except Exception as e:
-        logger.error(f"刷新 token 失败: {e}")
-        raise HTTPException(status_code=401, detail=f"刷新失败: {str(e)}")
-
-
 # API路由
 @app.get("/", response_model=Dict[str, str])
 async def root():
     """API根路径"""
+    system_version = str(getattr(get_config().system, "version", "5.0.0"))
     return {
-        "name": "NagaAgent API",
-        "version": "5.0.0",
+        "name": "Embla System API",
+        "version": system_version,
+        "api_version": API_DEFAULT_VERSION,
         "status": "running",
         "docs": "/docs",
     }
@@ -601,49 +1381,51 @@ async def health_check():
     return {"status": "healthy", "agent_ready": True, "timestamp": str(asyncio.get_event_loop().time())}
 
 
-# ============ OpenClaw 任务状态查询（对外暴露在 API Server） ============
+@app.get("/v1/health")
+async def health_check_v1():
+    return await health_check()
 
 
-@app.get("/openclaw/tasks")
-async def api_openclaw_list_tasks():
-    """列出本地缓存的 OpenClaw 任务（来自 agentserver）"""
-    return await _call_agentserver("GET", "/openclaw/tasks")
+@app.get("/system/api-contract")
+async def get_api_contract():
+    """返回当前 API 契约版本、兼容窗口与弃用策略。"""
+    return {"status": "success", **_build_api_contract_snapshot()}
 
 
-@app.get("/openclaw/tasks/{task_id}")
-async def api_openclaw_get_task(
-    task_id: str,
-    include_history: bool = False,
-    history_limit: int = 50,
-    include_tools: bool = False,
-):
-    """获取 OpenClaw 任务状态（支持查看中间过程）
+@app.get("/v1/system/api-contract")
+async def get_api_contract_v1():
+    return await get_api_contract()
 
-    - `task_id`: 建议直接使用调度器的 task_id/request_id（agentserver /openclaw/send 支持透传）
-    - `include_history=true`: 附带 OpenClaw sessions_history（可用于查看更细粒度过程）
-    - `include_tools=true`: history 中尽量包含 tool 相关内容（取决于 OpenClaw 返回）
-    """
-    return await _call_agentserver(
-        "GET",
-        f"/openclaw/tasks/{task_id}/detail",
-        params={
-            "include_history": str(include_history).lower(),
-            "history_limit": history_limit,
-            "include_tools": str(include_tools).lower(),
-        },
-    )
 
+# ============ Utility APIs ============
 
 @app.get("/system/info", response_model=SystemInfoResponse)
 async def get_system_info():
     """获取系统信息"""
+    system_version = str(getattr(get_config().system, "version", "5.0.0"))
 
     return SystemInfoResponse(
-        version="5.0.0",
+        version=system_version,
         status="running",
         available_services=[],  # MCP服务现在由mcpserver独立管理
         api_key_configured=bool(get_config().api.api_key and get_config().api.api_key != "sk-placeholder-key-not-set"),
     )
+
+
+@app.get("/v1/system/info", response_model=SystemInfoResponse)
+async def get_system_info_v1():
+    return await get_system_info()
+
+
+@app.get("/shell/tools")
+async def get_shell_tools():
+    payload = _build_shell_tools_catalog()
+    return {"status": "success", **payload}
+
+
+@app.get("/v1/shell/tools")
+async def get_shell_tools_v1():
+    return await get_shell_tools()
 
 
 @app.get("/system/config")
@@ -651,6 +1433,9 @@ async def get_system_config():
     """获取完整系统配置"""
     try:
         config_data = get_config_snapshot()
+        embla_system = get_embla_system_config()
+        if isinstance(config_data, dict):
+            config_data["embla_system"] = _strip_embla_runtime_meta(embla_system if isinstance(embla_system, dict) else {})
         return {"status": "success", "config": config_data}
     except Exception as e:
         logger.error(f"获取系统配置失败: {e}")
@@ -662,11 +1447,42 @@ async def get_system_config():
 async def update_system_config(payload: Dict[str, Any]):
     """更新系统配置"""
     try:
-        success = update_config(payload)
-        if success:
-            return {"status": "success", "message": "配置更新成功"}
-        else:
-            raise HTTPException(status_code=500, detail="配置更新失败")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="配置补丁必须是对象")
+
+        config_patch = dict(payload)
+        embla_patch = config_patch.pop("embla_system", None)
+
+        config_updated = False
+        embla_updated = False
+
+        if config_patch:
+            config_updated = bool(update_config(config_patch))
+            if not config_updated:
+                raise HTTPException(status_code=500, detail="config.json 更新失败")
+
+        if embla_patch is not None:
+            if not isinstance(embla_patch, dict):
+                raise HTTPException(status_code=400, detail="embla_system 必须是对象")
+            current_embla = get_embla_system_config()
+            merged_embla = _deep_merge_config_patch(
+                _strip_embla_runtime_meta(current_embla if isinstance(current_embla, dict) else {}),
+                embla_patch,
+            )
+            save_embla_system_config(merged_embla)
+            embla_updated = True
+
+        if not config_patch and embla_patch is None:
+            raise HTTPException(status_code=400, detail="配置补丁为空")
+
+        return {
+            "status": "success",
+            "message": "配置更新成功",
+            "updated": {
+                "config_json": config_updated,
+                "embla_system_yaml": embla_updated,
+            },
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -694,10 +1510,30 @@ async def update_system_prompt(payload: Dict[str, Any]):
         content = payload.get("content")
         if not content:
             raise HTTPException(status_code=400, detail="缺少content参数")
-        from system.config import save_prompt
+        from system.config import evaluate_prompt_acl, write_prompt_template
 
-        save_prompt("conversation_style_prompt", content)
-        return {"status": "success", "message": "提示词更新成功"}
+        approval_ticket = str(payload.get("approval_ticket") or "").strip()
+        change_reason = str(payload.get("change_reason") or "").strip()
+        acl_decision = evaluate_prompt_acl(
+            prompt_name="conversation_style_prompt",
+            approval_ticket=approval_ticket,
+            change_reason=change_reason,
+        )
+        if bool(acl_decision.get("blocked")):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": acl_decision.get("reason_code"),
+                    "message": acl_decision.get("reason"),
+                    "acl": acl_decision,
+                },
+            )
+        write_prompt_template("conversation_style_prompt", content)
+        return {
+            "status": "success",
+            "message": "提示词更新成功",
+            "acl": acl_decision,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -706,72 +1542,326 @@ async def update_system_prompt(payload: Dict[str, Any]):
         raise HTTPException(status_code=500, detail=f"更新系统提示词失败: {str(e)}")
 
 
-@app.get("/openclaw/market/items")
-def list_openclaw_market_items():
-    """获取OpenClaw技能市场条目（同步端点，由 FastAPI 在线程池中执行）"""
-    try:
-        status = _get_market_items_status()
-        return {"status": "success", **status}
-    except Exception as e:
-        logger.error(f"获取技能市场失败: {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"获取技能市场失败: {str(e)}")
+def _normalize_prompt_template_name(name: str) -> str:
+    normalized = str(name or "").strip()
+    if normalized.lower().endswith(".md"):
+        normalized = normalized[:-3]
+    if not normalized:
+        raise HTTPException(status_code=400, detail="提示词名称不能为空")
+    if len(normalized) > 128:
+        raise HTTPException(status_code=400, detail="提示词名称过长")
+    if not all(ch.isalnum() or ch == "_" for ch in normalized):
+        raise HTTPException(status_code=400, detail="提示词名称仅允许字母、数字、下划线")
+    return normalized
 
 
-@app.post("/openclaw/market/items/{item_id}/install")
-def install_openclaw_market_item(item_id: str, payload: Optional[Dict[str, Any]] = None):
-    """安装指定OpenClaw技能市场条目（同步端点，由 FastAPI 在线程池中执行）"""
-    item = next((entry for entry in MARKET_ITEMS if entry.get("id") == item_id), None)
-    if not item:
-        raise HTTPException(status_code=404, detail="条目不存在")
-    if not item.get("enabled", True):
-        raise HTTPException(status_code=400, detail="条目暂不可安装")
+def _normalize_agent_profile_name(name: str) -> str:
+    normalized = str(name or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="agent_type 不能为空")
+    if len(normalized) > 64:
+        raise HTTPException(status_code=400, detail="agent_type 过长")
+    if not all(ch.isalnum() or ch in {"_", "-"} for ch in normalized):
+        raise HTTPException(status_code=400, detail="agent_type 仅允许字母、数字、下划线、连字符")
+    return normalized
 
-    install_spec = item.get("install", {})
-    install_type = install_spec.get("type")
-    skill_name_value = item.get("skill_name") or item.get("id")
-    if not skill_name_value:
-        raise HTTPException(status_code=500, detail="技能名称缺失")
-    skill_name = str(skill_name_value)
 
-    try:
-        if item_id == "agent-browser":
-            _install_agent_browser()
-        if item_id == "search":
-            api_key = None
-            if payload and isinstance(payload, dict):
-                api_key = payload.get("api_key") or payload.get("FIRECRAWL_API_KEY")
-            _update_mcporter_firecrawl_config(api_key)
-        if install_type == "remote_skill":
-            url = install_spec.get("url")
-            if not url:
-                raise HTTPException(status_code=500, detail="缺少安装URL")
-            content = _download_text(url)
-            _write_skill_file(skill_name, content)
-        elif install_type == "template_dir":
-            template_name = install_spec.get("template")
-            if not template_name:
-                raise HTTPException(status_code=500, detail="缺少模板名称")
-            _copy_template_dir(template_name, skill_name)
-        elif install_type == "none":
-            raise HTTPException(status_code=400, detail="该条目不支持安装")
+def _deep_merge_config_patch(base: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = dict(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_config_patch(merged[key], value)
         else:
-            raise HTTPException(status_code=400, detail="未知安装方式")
+            merged[key] = value
+    return merged
+
+
+def _strip_embla_runtime_meta(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in payload.items() if k not in {"config_source", "config_loaded"}}
+
+
+def _build_prompt_template_meta(path: Path) -> Dict[str, Any]:
+    from datetime import datetime, timezone
+
+    stat = path.stat()
+    return {
+        "name": path.stem,
+        "filename": path.name,
+        "size_bytes": int(stat.st_size),
+        "updated_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+    }
+
+
+def _list_prompt_template_metas() -> List[Dict[str, Any]]:
+    from system.config import get_prompt_assets_root, load_prompt_registry_spec
+
+    prompts_dir = get_prompt_assets_root()
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+
+    seen_paths: set[str] = set()
+    seen_names: set[str] = set()
+    items: List[Dict[str, Any]] = []
+
+    registry = load_prompt_registry_spec(prompts_dir=prompts_dir)
+    entries_map = registry.get("entries_map", {})
+    if isinstance(entries_map, dict):
+        for prompt_name in sorted(entries_map.keys(), key=lambda s: str(s).lower()):
+            row = entries_map.get(prompt_name)
+            if not isinstance(row, dict):
+                continue
+            relative_path = str(row.get("path") or "").strip().replace("\\", "/")
+            if not relative_path:
+                continue
+            item = (prompts_dir / relative_path).resolve()
+            if not item.exists() or not item.is_file():
+                continue
+            key = str(item).replace("\\", "/")
+            if key in seen_paths:
+                continue
+            meta = _build_prompt_template_meta(item)
+            meta["name"] = str(prompt_name)
+            meta["relative_path"] = relative_path
+            meta["source"] = "registry"
+            items.append(meta)
+            seen_paths.add(key)
+            seen_names.add(str(prompt_name))
+
+    for pattern in ("**/*.md", "**/*.spec"):
+        for item in sorted(prompts_dir.rglob(pattern), key=lambda p: str(p).lower()):
+            if not item.is_file():
+                continue
+            key = str(item.resolve()).replace("\\", "/")
+            if key in seen_paths:
+                continue
+            stem = item.stem
+            if stem in seen_names:
+                continue
+            meta = _build_prompt_template_meta(item)
+            meta["relative_path"] = str(item.relative_to(prompts_dir)).replace("\\", "/")
+            meta["source"] = "scan"
+            items.append(meta)
+            seen_paths.add(key)
+            seen_names.add(stem)
+
+    items.sort(key=lambda row: str(row.get("relative_path") or row.get("filename") or "").lower())
+    return items
+
+
+@app.get("/system/prompts")
+async def list_system_prompts():
+    try:
+        return {"status": "success", "prompts": _list_prompt_template_metas()}
+    except Exception as e:
+        logger.error(f"读取提示词列表失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"读取提示词列表失败: {str(e)}")
+
+
+@app.get("/v1/system/prompts")
+async def list_system_prompts_v1():
+    return await list_system_prompts()
+
+
+@app.get("/system/prompts/{name}")
+async def get_system_prompt_template(name: str):
+    try:
+        from system.config import read_prompt_template, resolve_prompt_template_path
+
+        normalized = _normalize_prompt_template_name(name)
+        prompt_file = resolve_prompt_template_path(normalized)
+        if not prompt_file.exists():
+            raise HTTPException(status_code=404, detail=f"提示词不存在: {normalized}")
+        content = read_prompt_template(normalized)
+        if content is None:
+            raise HTTPException(status_code=404, detail=f"提示词不存在: {normalized}")
+        return {
+            "status": "success",
+            "name": normalized,
+            "content": content,
+            "meta": _build_prompt_template_meta(prompt_file),
+        }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"安装技能失败({item_id}): {e}")
+        logger.error(f"读取提示词失败: {e}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"安装失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"读取提示词失败: {str(e)}")
 
-    status = _get_market_items_status()
-    installed_item = next((entry for entry in status.get("items", []) if entry.get("id") == item_id), None)
-    return {
-        "status": "success",
-        "message": "安装完成",
-        "item": installed_item,
-        "openclaw": status.get("openclaw"),
-    }
+
+@app.get("/v1/system/prompts/{name}")
+async def get_system_prompt_template_v1(name: str):
+    return await get_system_prompt_template(name)
+
+
+@app.post("/system/prompts/{name}")
+async def update_system_prompt_template(name: str, payload: Dict[str, Any]):
+    try:
+        from system.config import evaluate_prompt_acl, write_prompt_template
+
+        normalized = _normalize_prompt_template_name(name)
+        content = payload.get("content")
+        if not isinstance(content, str):
+            raise HTTPException(status_code=400, detail="缺少content参数或类型错误")
+        approval_ticket = str(payload.get("approval_ticket") or "").strip()
+        change_reason = str(payload.get("change_reason") or "").strip()
+        acl_decision = evaluate_prompt_acl(
+            prompt_name=normalized,
+            approval_ticket=approval_ticket,
+            change_reason=change_reason,
+        )
+        if bool(acl_decision.get("blocked")):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": acl_decision.get("reason_code"),
+                    "message": acl_decision.get("reason"),
+                    "acl": acl_decision,
+                },
+            )
+        write_prompt_template(normalized, content)
+        return {
+            "status": "success",
+            "message": "提示词更新成功",
+            "name": normalized,
+            "acl": acl_decision,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新提示词失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"更新提示词失败: {str(e)}")
+
+
+@app.post("/v1/system/prompts/{name}")
+async def update_system_prompt_template_v1(name: str, payload: Dict[str, Any]):
+    return await update_system_prompt_template(name, payload)
+
+
+@app.get("/system/agent-profiles")
+async def list_system_agent_profiles():
+    try:
+        from agents.runtime.tool_profiles import TOOL_PROFILE_PRESETS
+        from system.agent_profile_registry import load_agent_profile_registry
+
+        registry = load_agent_profile_registry()
+        profiles = list(registry.get("profiles") or [])
+        enabled_profiles = [item for item in profiles if isinstance(item, dict) and bool(item.get("enabled", True))]
+        default_profiles = [item for item in profiles if isinstance(item, dict) and bool(item.get("default_for_role"))]
+        return {
+            "status": "success",
+            "schema_version": str(registry.get("schema_version") or ""),
+            "registry_path": str(registry.get("registry_path") or ""),
+            "exists_on_disk": bool(registry.get("exists_on_disk")),
+            "allowed_roles": list(registry.get("allowed_roles") or []),
+            "summary": {
+                "total_profiles": len(profiles),
+                "enabled_profiles": len(enabled_profiles),
+                "default_profiles": len(default_profiles),
+            },
+            "profiles": profiles,
+            "tool_profile_presets": dict(TOOL_PROFILE_PRESETS),
+            "prompt_templates": _list_prompt_template_metas(),
+        }
+    except Exception as e:
+        logger.error(f"读取 agent profile 列表失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"读取 agent profile 列表失败: {str(e)}")
+
+
+@app.get("/v1/system/agent-profiles")
+async def list_system_agent_profiles_v1():
+    return await list_system_agent_profiles()
+
+
+@app.get("/system/agent-profiles/{agent_type}")
+async def get_system_agent_profile(agent_type: str):
+    try:
+        from system.agent_profile_registry import build_prompt_block_previews, get_agent_profile
+
+        normalized = _normalize_agent_profile_name(agent_type)
+        profile = get_agent_profile(normalized)
+        if not isinstance(profile, dict):
+            raise HTTPException(status_code=404, detail=f"agent profile 不存在: {normalized}")
+        return {
+            "status": "success",
+            "profile": profile,
+            "prompt_block_previews": build_prompt_block_previews(
+                list(profile.get("prompt_blocks") or []),
+                prompts_root=str(profile.get("prompts_root") or get_system_prompts_root()),
+            ),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"读取 agent profile 失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"读取 agent profile 失败: {str(e)}")
+
+
+@app.get("/v1/system/agent-profiles/{agent_type}")
+async def get_system_agent_profile_v1(agent_type: str):
+    return await get_system_agent_profile(agent_type)
+
+
+@app.post("/system/agent-profiles/{agent_type}")
+async def upsert_system_agent_profile(agent_type: str, payload: Dict[str, Any]):
+    try:
+        from system.agent_profile_registry import upsert_agent_profile
+
+        normalized = _normalize_agent_profile_name(agent_type)
+        body = dict(payload or {}) if isinstance(payload, dict) else {}
+        body["agent_type"] = normalized
+        saved = upsert_agent_profile(body)
+        return {
+            "status": "success",
+            "message": "agent profile 更新成功",
+            "profile": saved,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新 agent profile 失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"更新 agent profile 失败: {str(e)}")
+
+
+@app.post("/v1/system/agent-profiles/{agent_type}")
+async def upsert_system_agent_profile_v1(agent_type: str, payload: Dict[str, Any]):
+    return await upsert_system_agent_profile(agent_type, payload)
+
+
+@app.delete("/system/agent-profiles/{agent_type}")
+async def delete_system_agent_profile(agent_type: str):
+    try:
+        from system.agent_profile_registry import delete_agent_profile
+
+        normalized = _normalize_agent_profile_name(agent_type)
+        deleted = delete_agent_profile(normalized)
+        return {
+            "status": "success",
+            "message": "agent profile 删除成功",
+            "profile": deleted,
+        }
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"agent profile 不存在: {agent_type}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除 agent profile 失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"删除 agent profile 失败: {str(e)}")
+
+
+@app.delete("/v1/system/agent-profiles/{agent_type}")
+async def delete_system_agent_profile_v1(agent_type: str):
+    return await delete_system_agent_profile(agent_type)
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -789,27 +1879,12 @@ async def chat(request: ChatRequest):
         # 构建系统提示词（包含技能元数据）
         system_prompt = build_system_prompt(include_skills=True, skill_name=request.skill)
 
-        # RAG 记忆召回
+        # RAG 记忆召回（远程优先 + 本地 GRAG 回退）
         try:
-            from summer_memory.memory_client import get_remote_memory_client
-
-            remote_mem = get_remote_memory_client()
-            if remote_mem:
-                mem_result = await remote_mem.query_memory(question=request.message, limit=5)
-                if mem_result.get("success") and mem_result.get("quintuples"):
-                    quints = mem_result["quintuples"]
-                    mem_lines = []
-                    for q in quints:
-                        if isinstance(q, (list, tuple)) and len(q) >= 5:
-                            mem_lines.append(f"- {q[0]}({q[1]}) —[{q[2]}]→ {q[3]}({q[4]})")
-                        elif isinstance(q, dict):
-                            mem_lines.append(f"- {q.get('subject','')}({q.get('subject_type','')}) —[{q.get('predicate','')}]→ {q.get('object','')}({q.get('object_type','')})")
-                    if mem_lines:
-                        system_prompt += "\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆，请参考这些信息回答：\n" + "\n".join(mem_lines)
-                        logger.info(f"[RAG] 召回 {len(mem_lines)} 条记忆注入上下文")
-                elif mem_result.get("success") and mem_result.get("answer"):
-                    system_prompt += f"\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆：\n{mem_result['answer']}"
-                    logger.info(f"[RAG] 召回记忆（answer 模式）注入上下文")
+            mem_lines = await _recall_memory_lines(request.message, limit=5)
+            if mem_lines:
+                system_prompt += "\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆，请参考这些信息回答：\n" + "\n".join(mem_lines)
+                logger.info(f"[RAG] 召回 {len(mem_lines)} 条记忆注入上下文")
         except Exception as e:
             logger.debug(f"[RAG] 记忆召回失败（不影响对话）: {e}")
 
@@ -826,11 +1901,28 @@ async def chat(request: ChatRequest):
 
         # 使用整合后的LLM服务（支持 reasoning_content）
         llm_service = get_llm_service()
-        llm_response = await llm_service.chat_with_context_and_reasoning(messages, get_config().api.temperature)
+        shell_model_override = _build_route_model_override("shell_readonly")
+        if shell_model_override:
+            llm_response = await llm_service.chat_with_context_and_reasoning_with_overrides(
+                messages,
+                get_config().api.temperature,
+                model_override=str(shell_model_override.get("model") or "").strip() or None,
+                api_key_override=str(shell_model_override.get("api_key") or "").strip() or None,
+                api_base_override=str(shell_model_override.get("api_base") or "").strip() or None,
+                provider_hint=str(shell_model_override.get("provider") or "").strip() or None,
+                reasoning_effort_override=str(shell_model_override.get("reasoning_effort") or "").strip() or None,
+            )
+        else:
+            llm_response = await llm_service.chat_with_context_and_reasoning(messages, get_config().api.temperature)
 
         # 处理完成
         # 统一保存对话历史与日志
-        _save_conversation_and_logs(session_id, user_message, llm_response.content)
+        _save_conversation_and_logs(
+            session_id,
+            user_message,
+            llm_response.content,
+            shell_round_messages=_build_shell_l2_round_messages(messages, llm_response.content),
+        )
 
         return ChatResponse(
             response=extract_message(llm_response.content) if llm_response.content else llm_response.content,
@@ -844,6 +1936,11 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
 
 
+@app.post("/v1/chat", response_model=ChatResponse)
+async def chat_v1(request: ChatRequest):
+    return await chat(request)
+
+
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
     """流式对话接口 - 使用 agentic tool loop 实现多轮工具调用"""
@@ -853,325 +1950,716 @@ async def chat_stream(request: ChatRequest):
 
     # 用户消息保持干净，技能上下文完全由 system prompt 承载
     user_message = request.message
+    try:
+        stream_protocol = _resolve_stream_protocol(request.stream_protocol)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "unsupported_stream_protocol",
+                "message": "Unsupported stream_protocol. Use empty/default or stream_protocol=sse_json_v1.",
+                "supported": [STREAM_PROTOCOL_JSON_V1],
+            },
+        )
 
     async def generate_response() -> AsyncGenerator[str, None]:
-        complete_text = ""  # 用于累积最终轮的完整文本（供 return_audio 模式使用）
+        complete_response_parts: List[str] = []
         try:
             # 获取或创建会话ID
             session_id = message_manager.create_session(request.session_id, temporary=request.temporary)
+            shell_agent = ShellAgent()
 
             # 发送会话ID信息
-            yield f"data: session_id: {session_id}\n\n"
-
-            # 构建系统提示词（含工具调用指令 + 用户选择的技能）
-            system_prompt = build_system_prompt(include_skills=True, include_tool_instructions=True, skill_name=request.skill)
-
-            # ====== RAG 记忆召回：在发送 LLM 前检索相关记忆 ======
-            try:
-                from summer_memory.memory_client import get_remote_memory_client
-
-                remote_mem = get_remote_memory_client()
-                if remote_mem:
-                    mem_result = await remote_mem.query_memory(question=request.message, limit=5)
-                    if mem_result.get("success") and mem_result.get("quintuples"):
-                        quints = mem_result["quintuples"]
-                        mem_lines = []
-                        for q in quints:
-                            if isinstance(q, (list, tuple)) and len(q) >= 5:
-                                mem_lines.append(f"- {q[0]}({q[1]}) —[{q[2]}]→ {q[3]}({q[4]})")
-                            elif isinstance(q, dict):
-                                mem_lines.append(f"- {q.get('subject','')}({q.get('subject_type','')}) —[{q.get('predicate','')}]→ {q.get('object','')}({q.get('object_type','')})")
-                        if mem_lines:
-                            memory_context = "\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆，请参考这些信息回答：\n" + "\n".join(mem_lines)
-                            system_prompt += memory_context
-                            logger.info(f"[RAG] 召回 {len(mem_lines)} 条记忆注入上下文")
-                    elif mem_result.get("success") and mem_result.get("answer"):
-                        memory_context = f"\n\n## 相关记忆\n\n以下是从知识图谱中检索到的与用户问题相关的记忆：\n{mem_result['answer']}"
-                        system_prompt += memory_context
-                        logger.info(f"[RAG] 召回记忆（answer 模式）注入上下文")
-            except Exception as e:
-                logger.debug(f"[RAG] 记忆召回失败（不影响对话）: {e}")
-
-            # 附加知识收尾指令，引导 LLM 回到用户问题
-            system_prompt += "\n\n【读完这些附加知识后，回复上一个user prompt，并不要回复这条系统附加的system prompt。以下是回复内容：】"
-
-            # 用户消息直接传 LLM，技能上下文完全由 system prompt 承载
-            effective_message = request.message
-
-            # ====== 启动压缩：将上一个会话的历史 + 更早的压缩记录合并压缩，注入 system prompt ======
-            try:
-                from .context_compressor import compress_for_startup, build_compact_block
-                prev_session_id = message_manager._get_previous_session_id(session_id)
-                previous_compact = message_manager.get_session_compact(prev_session_id) if prev_session_id else ""
-                prev_messages = message_manager._get_previous_session_messages(session_id)
-                if prev_messages or previous_compact:
-                    summary = await compress_for_startup(prev_messages, previous_compact=previous_compact)
-                    if summary:
-                        system_prompt += build_compact_block(summary)
-                        message_manager.set_session_compact(session_id, summary)
-                        logger.info(f"[启动压缩] 已将上一会话摘要注入 system prompt ({len(summary)} 字)")
-            except Exception as e:
-                logger.debug(f"[启动压缩] 跳过: {e}")
-
-            # 使用消息管理器构建完整的对话消息
-            messages = message_manager.build_conversation_messages(
-                session_id=session_id, system_prompt=system_prompt, current_message=effective_message
+            yield _format_stream_payload_chunk(
+                {"type": "session_meta", "session_id": session_id},
+                protocol=stream_protocol,
+            )
+            shell_tools_catalog = _build_shell_tools_catalog(session_id=session_id, scope="entry")
+            route_tool_names = [
+                str(item).strip()
+                for item in (shell_tools_catalog.get("tool_names") or [])
+                if str(item).strip()
+            ]
+            shell_tool_defs = [
+                dict(item)
+                for item in (shell_tools_catalog.get("tools") or [])
+                if isinstance(item, dict)
+            ]
+            yield _format_stream_payload_chunk(
+                {
+                    "type": "available_tools",
+                    **shell_tools_catalog,
+                },
+                protocol=stream_protocol,
             )
 
-            # 如果携带截屏图片，将最后一条用户消息改为多模态格式（OpenAI vision 兼容）
+            # Dispatch-to-core only mode:
+            # - Shell LLM always starts first and decides whether to call dispatch_to_core.
+            # - API server only runs Core pipeline when dispatch_to_core tool is actually called.
+            route_meta: Dict[str, Any] = {
+                "route_semantic": "shell_readonly",
+                "risk_level": "read_only",
+                "shell_readonly_hit": True,
+                "router_decision": {},
+                "shell_session_id": session_id,
+                "run_context_id": "",
+                "core_execution_session_id": "",
+                "run_context_created": False,
+                "routing_mode": "dispatch_to_core_only",
+                "core_execution_route": "",
+                "_shell_available_tool_names": route_tool_names,
+                "_shell_available_tool_count": len(route_tool_names),
+            }
+            route_meta = _apply_shell_core_session_state(route_meta, shell_session_id=session_id)
+            route_decision: Dict[str, Any] = {}
+            route_semantic = str(route_meta.get("route_semantic") or "shell_readonly")
+            core_execution_session_id = str(
+                route_meta.get("run_context_id")
+                or route_meta.get("core_execution_session_id")
+                or ""
+            )
+            shell_core_snapshot: Dict[str, Any] = {}
+            core_job_watch_payload: Dict[str, Any] = {}
+            active_core_job_snapshot: Dict[str, Any] = {}
+            if core_execution_session_id:
+                try:
+                    shell_core_snapshot = _get_core_job_manager().get_shell_snapshot(session_id, limit=5)
+                    if isinstance(shell_core_snapshot, dict):
+                        active_core_job_snapshot = dict(shell_core_snapshot.get("active_job") or {})
+                except Exception as exc:
+                    logger.debug("Shell turn preflight core snapshot failed: %s", exc)
+                try:
+                    core_job_watch_payload = _collect_chat_core_job_watch_payload(
+                        session_id,
+                        core_execution_session_id=core_execution_session_id,
+                        limit=5,
+                        ack=True,
+                    )
+                except Exception as exc:
+                    logger.debug("Shell turn preflight core job watch failed: %s", exc)
+                core_async_status_digest = _build_core_job_watch_updates_digest(
+                    unread_updates=list(core_job_watch_payload.get("unread_core_updates") or []),
+                    active_core_job=active_core_job_snapshot,
+                    core_worker_status=str(
+                        (shell_core_snapshot.get("worker_status") if isinstance(shell_core_snapshot, dict) else "")
+                        or ""
+                    ),
+                ).strip()
+                if core_async_status_digest:
+                    route_meta["_core_async_status_digest"] = core_async_status_digest
+                route_meta["_core_async_update_count"] = int(core_job_watch_payload.get("pending_core_update_count") or 0)
+                route_meta["_core_async_updates"] = list(core_job_watch_payload.get("unread_core_updates") or [])
+
+            precomposed_memory_lines: List[str] = []
+            try:
+                precomposed_memory_lines = await _recall_memory_lines(request.message, limit=5)
+            except Exception:
+                precomposed_memory_lines = []
+
+            shell_base_prompt = ""
+            try:
+                shell_base_prompt = str(shell_agent.build_system_prompt() or "")
+            except Exception as _shell_prompt_exc:
+                logger.debug("[prompt_gateway] shell base prompt build fallback: %s", _shell_prompt_exc)
+            precomposed_shell_prompt = _build_shell_system_prompt_with_gateway(
+                route_meta=route_meta,
+                base_system_prompt=shell_base_prompt,
+                memory_lines=precomposed_memory_lines,
+            )
+            route_meta["_shell_memory_lines"] = list(precomposed_memory_lines)
+            route_meta["_shell_prompt_composed"] = bool(precomposed_shell_prompt.strip())
+            if precomposed_shell_prompt.strip():
+                route_meta["_shell_prompt_value"] = precomposed_shell_prompt
+
+            _emit_chat_route_prompt_event(route_meta, session_id=session_id)
+            yield _format_stream_payload_chunk(
+                {
+                    "type": "route_decision",
+                    "trigger": route_semantic,
+                    "route_semantic": str(route_meta.get("route_semantic") or "shell_readonly"),
+                    "entry_agent": str(route_meta.get("entry_agent") or "shell"),
+                    "active_agent": str(route_meta.get("active_agent") or "shell"),
+                    "dispatch_to_core": bool(route_meta.get("dispatch_to_core")),
+                    "handoff_tool": str(route_meta.get("handoff_tool") or ""),
+                    "core_execution_route": str(route_meta.get("core_execution_route") or ""),
+                    "risk_level": route_meta.get("risk_level"),
+                    "shell_readonly_hit": bool(route_meta.get("shell_readonly_hit")),
+                    "prompt_profile": "",
+                    "injection_mode": "",
+                    "delegation_intent": "shell_dispatch_only",
+                    "shell_session_id": str(route_meta.get("shell_session_id") or ""),
+                    "core_runtime_id": str(route_meta.get("core_runtime_id") or DEFAULT_CORE_RUNTIME_ID),
+                    "core_job_id": str(route_meta.get("core_job_id") or ""),
+                    "run_context_id": str(route_meta.get("run_context_id") or route_meta.get("core_execution_session_id") or ""),
+                    "core_execution_session_id": str(route_meta.get("run_context_id") or route_meta.get("core_execution_session_id") or ""),
+                    "run_context_created": bool(route_meta.get("run_context_created")),
+                    "core_execution_session_created": bool(route_meta.get("run_context_created")),
+                    "routing_mode": "dispatch_to_core_only",
+                    "selected_slice_count": int(route_meta.get("_slice_selected_count") or 0),
+                    "dropped_slice_count": int(route_meta.get("_slice_dropped_count") or 0),
+                    "prefix_hash": str(route_meta.get("_slice_prefix_hash") or ""),
+                    "tail_hash": str(route_meta.get("_slice_tail_hash") or ""),
+                },
+                protocol=stream_protocol,
+            )
+            logger.info(
+                "[API Server] chat route decided shell_session=%s core_execution_session=%s route_semantic=%s mode=%s",
+                session_id,
+                core_execution_session_id,
+                route_semantic,
+                "dispatch_to_core_only",
+            )
+            if core_job_watch_payload:
+                unread_core_updates = list(core_job_watch_payload.get("unread_core_updates") or [])
+                if unread_core_updates or active_core_job_snapshot:
+                    yield _format_stream_payload_chunk(
+                        {
+                            "type": "core_async_state",
+                            "shell_session_id": session_id,
+                            "run_context_id": str(
+                                core_job_watch_payload.get("run_context_id")
+                                or core_execution_session_id
+                            ),
+                            "core_execution_session_id": str(
+                                core_job_watch_payload.get("run_context_id")
+                                or core_execution_session_id
+                            ),
+                            "active_core_job": dict(active_core_job_snapshot or {}),
+                            "pending_core_update_count": int(core_job_watch_payload.get("pending_core_update_count") or 0),
+                            "last_core_outbox_seq": int(core_job_watch_payload.get("last_core_outbox_seq") or 0),
+                            "core_outbox_cursor_seq": int(core_job_watch_payload.get("core_outbox_cursor_seq") or 0),
+                            "updates": unread_core_updates,
+                            "source": "shell_turn_preflight",
+                        },
+                        protocol=stream_protocol,
+                    )
+
+            # ====== RAG 记忆召回 ======
+
+            # 用户消息
+            effective_message = request.message
+
+            current_round_text = ""
+            receipt_fallback_text = ""
+            session_store, agent_mailbox, task_board_engine = _get_pipeline_runtime_handles()
+            child_session_cleanup_policy = _resolve_pipeline_child_session_cleanup_policy()
+            _pipeline_child_llm_call = _default_pipeline_child_llm_call
+            _pipeline_child_tool_executor = _default_pipeline_child_tool_executor
+
+            # ── Shell loop first: the model decides whether to dispatch_to_core ──
+            shell_prompt = str(route_meta.get("_shell_prompt_value") or "")
+            if not shell_prompt:
+                shell_prompt = _build_shell_system_prompt_with_gateway(
+                    route_meta=route_meta,
+                    base_system_prompt=shell_base_prompt,
+                    memory_lines=precomposed_memory_lines,
+                )
+            shell_messages = message_manager.build_conversation_messages(
+                session_id=session_id,
+                system_prompt=shell_prompt,
+                current_message=effective_message,
+            )
             if request.images:
-                last_msg = messages[-1]
+                last_msg = shell_messages[-1]
                 content_parts = [{"type": "text", "text": last_msg["content"]}]
                 for img_data in request.images:
                     content_parts.append({"type": "image_url", "image_url": {"url": img_data}})
-                messages[-1] = {
-                    "role": "user",
-                    "content": content_parts,
-                }
-
-            # 初始化语音集成（根据voice_mode和return_audio决定）
-            voice_integration = None
-
-            should_enable_tts = (
-                get_config().system.voice_enabled
-                and not request.return_audio  # return_audio时不启用实时TTS
-                and get_config().voice_realtime.voice_mode != "hybrid"
-                and not request.disable_tts
-            )
-
-            if should_enable_tts:
-                try:
-                    from voice.output.voice_integration import get_voice_integration
-
-                    voice_integration = get_voice_integration()
-                    logger.info(
-                        f"[API Server] 实时语音集成已启用 (return_audio={request.return_audio}, voice_mode={get_config().voice_realtime.voice_mode})"
-                    )
-                except Exception as e:
-                    print(f"语音集成初始化失败: {e}")
-            else:
-                if request.return_audio:
-                    logger.info("[API Server] return_audio模式，将在最后生成完整音频")
-                elif get_config().voice_realtime.voice_mode == "hybrid" and not request.return_audio:
-                    logger.info("[API Server] 混合模式下且未请求音频，不处理TTS")
-                elif request.disable_tts:
-                    logger.info("[API Server] 客户端禁用了TTS (disable_tts=True)")
-
-            # 初始化流式文本切割器（仅用于TTS处理）
-            tool_extractor = None
-            try:
-                from .streaming_tool_extractor import StreamingToolCallExtractor
-
-                tool_extractor = StreamingToolCallExtractor()
-                if voice_integration and not request.return_audio:
-                    tool_extractor.set_callbacks(
-                        on_text_chunk=None,
-                        voice_integration=voice_integration,
-                    )
-            except Exception as e:
-                print(f"流式文本切割器初始化失败: {e}")
-
-            # ====== Agentic Tool Loop ======
-            from .agentic_tool_loop import run_agentic_loop
-
-            # 如果本次携带图片，标记此会话为 VLM 会话
-            if request.images:
+                shell_messages[-1] = {"role": "user", "content": content_parts}
                 _vlm_sessions.add(session_id)
 
-            # 如果当前会话曾发送过图片，持续使用视觉模型
-            model_override = None
+            shell_model_override = _build_route_model_override("shell_readonly")
             use_vlm = session_id in _vlm_sessions
             cc = get_config().computer_control
-            if use_vlm and cc.enabled and (cc.api_key or naga_auth.is_authenticated()):
-                model_override = {
-                    "model": cc.model,
-                    "api_base": cc.model_url,
-                    "api_key": cc.api_key,
+            if use_vlm and cc.enabled and cc.api_key:
+                shell_model_override = _merge_model_override(
+                    shell_model_override,
+                    {"model": cc.model, "api_base": cc.model_url, "api_key": cc.api_key},
+                )
+
+            llm_service = get_llm_service()
+            shell_loop_cfg = getattr(get_config().api, "shell_loop", None)
+            shell_max_rounds = max(1, int(getattr(shell_loop_cfg, "max_rounds", 12) or 12))
+            repeated_tool_pattern_rounds = max(
+                2,
+                int(getattr(shell_loop_cfg, "repeated_tool_pattern_rounds", 3) or 3),
+            )
+            no_new_fact_rounds_limit = max(
+                1,
+                int(getattr(shell_loop_cfg, "no_new_fact_rounds", 3) or 3),
+            )
+            shell_round = 0
+            dispatch_payload: Dict[str, Any] = {}
+            handoff_source = "dispatch_to_core"
+            shell_tool_choice_hint = _select_shell_tool_choice(request.message, route_tool_names)
+            last_tool_pattern: Tuple[str, ...] = tuple()
+            repeated_tool_pattern_streak = 0
+            seen_fact_fingerprints: Set[str] = set()
+            no_new_fact_streak = 0
+            shell_stop_reason = ""
+            shell_stop_details: Dict[str, Any] = {}
+            while shell_round < shell_max_rounds:
+                pending_tool_calls: List[Dict[str, Any]] = []
+                assistant_content_parts: List[str] = []
+                assistant_context_content = ""
+                round_shell_tool_choice = shell_tool_choice_hint if shell_round == 0 else "auto"
+                stream_source = llm_service.stream_chat_with_context(
+                    shell_messages,
+                    get_config().api.temperature,
+                    model_override=shell_model_override,
+                    tools=shell_tool_defs,
+                    tool_choice=round_shell_tool_choice,
+                )
+                async for chunk in stream_source:
+                    if chunk.startswith("data: "):
+                        try:
+                            data_str = chunk[6:].strip()
+                            if data_str and data_str != "[DONE]":
+                                chunk_data = json.loads(data_str)
+                                ct = str(chunk_data.get("type", "content"))
+                                ct_text = chunk_data.get("text", "")
+                                if ct == "content":
+                                    text_piece = str(ct_text or "")
+                                    assistant_content_parts.append(text_piece)
+                                    current_round_text += text_piece
+                                    complete_response_parts.append(text_piece)
+                                elif ct == "tool_calls" and isinstance(ct_text, list):
+                                    pending_tool_calls = [dict(item) for item in ct_text if isinstance(item, dict)]
+                                yield _format_stream_payload_chunk(chunk_data, protocol=stream_protocol)
+                                continue
+                        except Exception as e:
+                            logger.error(f"[API Server] Shell stream parse error: {e}")
+                    yield chunk
+
+                if not pending_tool_calls:
+                    assistant_round_text = "".join(assistant_content_parts)
+                    fallback_tool_calls, fallback_span = _extract_shell_text_fallback_tool_calls(
+                        assistant_round_text,
+                        allowed_tool_names=route_tool_names,
+                    )
+                    if fallback_tool_calls:
+                        pending_tool_calls = fallback_tool_calls
+                        assistant_context_content = _strip_shell_text_fallback_segment(
+                            assistant_round_text,
+                            fallback_span,
+                        )
+                        yield _format_stream_payload_chunk(
+                            {
+                                "type": "tool_calls",
+                                "text": pending_tool_calls,
+                                "source": "content_json_fallback",
+                            },
+                            protocol=stream_protocol,
+                        )
+
+                if not pending_tool_calls:
+                    break
+
+                assistant_msg: Dict[str, Any] = {
+                    "role": "assistant",
+                    "content": assistant_context_content or "".join(assistant_content_parts),
                 }
-                logger.info(f"[API Server] VLM 会话，使用视觉模型: {cc.model}")
+                assistant_tool_calls: List[Dict[str, Any]] = []
+                for idx, call in enumerate(pending_tool_calls):
+                    call_id = str(call.get("id") or f"shell_call_{shell_round}_{idx}")
+                    tool_name = str(call.get("name") or "")
+                    tool_args = call.get("arguments")
+                    if not isinstance(tool_args, dict):
+                        tool_args = {}
+                    assistant_tool_calls.append(
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": tool_name,
+                                "arguments": json.dumps(tool_args, ensure_ascii=False),
+                            },
+                        }
+                    )
+                assistant_msg["tool_calls"] = assistant_tool_calls
+                shell_messages.append(assistant_msg)
 
-            complete_reasoning = ""
-            # 记录每轮的content，用于在每轮结束时完成TTS处理
-            current_round_text = ""
-            is_tool_event = False  # 标记当前是否在处理工具事件（不送TTS）
-            was_compressed = False  # 运行时是否执行过上下文压缩（用于保存 info 标记）
+                should_break_shell_loop = False
+                round_tool_pattern: List[str] = []
+                round_fact_fingerprints: Set[str] = set()
+                for idx, call in enumerate(pending_tool_calls):
+                    call_id = str(call.get("id") or f"shell_call_{shell_round}_{idx}")
+                    tool_name = str(call.get("name") or "")
+                    tool_args = call.get("arguments")
+                    if not isinstance(tool_args, dict):
+                        tool_args = {}
+                    round_tool_pattern.append(_build_shell_tool_call_signature(tool_name, tool_args))
+                    tool_result = shell_agent.execute_tool(
+                        tool_name,
+                        tool_args,
+                        session_id=session_id,
+                    )
+                    round_fact_fingerprints.update(_extract_shell_round_fact_fingerprints(tool_name, tool_result))
+                    shell_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "content": json.dumps(tool_result, ensure_ascii=False, default=str),
+                        }
+                    )
+                    yield _format_stream_payload_chunk(
+                        {
+                            "type": "tool_result",
+                            "tool_name": tool_name,
+                            "tool_call_id": call_id,
+                            "result": tool_result,
+                        },
+                        protocol=stream_protocol,
+                    )
+                    if (
+                        tool_name == "dispatch_to_core"
+                        and isinstance(tool_result, dict)
+                        and bool(tool_result.get("dispatched"))
+                        and isinstance(tool_result.get("router_decision"), dict)
+                    ):
+                        dispatch_payload = dict(tool_result)
+                        should_break_shell_loop = True
+                        break
 
-            async for chunk in run_agentic_loop(messages, session_id, model_override=model_override):
-                if chunk.startswith("data: "):
-                    try:
-                        import json as json_module
+                current_tool_pattern = tuple(round_tool_pattern)
+                if current_tool_pattern:
+                    if current_tool_pattern == last_tool_pattern:
+                        repeated_tool_pattern_streak += 1
+                    else:
+                        repeated_tool_pattern_streak = 1
+                        last_tool_pattern = current_tool_pattern
+                else:
+                    repeated_tool_pattern_streak = 0
 
-                        data_str = chunk[6:].strip()
-                        if data_str and data_str != "[DONE]":
-                            chunk_data = json_module.loads(data_str)
-                            chunk_type = chunk_data.get("type", "content")
-                            chunk_text = chunk_data.get("text", "")
+                new_fact_fingerprints = round_fact_fingerprints - seen_fact_fingerprints
+                if round_fact_fingerprints:
+                    if new_fact_fingerprints:
+                        seen_fact_fingerprints.update(round_fact_fingerprints)
+                        no_new_fact_streak = 0
+                    else:
+                        no_new_fact_streak += 1
 
-                            if chunk_type == "content":
-                                # 累积本轮内容（TTS + 保存）
-                                current_round_text += chunk_text
-                                if request.return_audio:
-                                    complete_text += chunk_text
-                                # TTS：每轮的正常content都发送（不含工具内容）
-                                if tool_extractor and not is_tool_event:
-                                    asyncio.create_task(tool_extractor.process_text_chunk(chunk_text))
-                            elif chunk_type == "reasoning":
-                                complete_reasoning += chunk_text
-                            elif chunk_type == "round_end":
-                                # 每轮结束时，完成TTS处理并重置
-                                has_more = chunk_data.get("has_more", False)
-                                if has_more and tool_extractor and not request.return_audio:
-                                    # 中间轮结束，flush TTS缓冲
-                                    try:
-                                        await tool_extractor.finish_processing()
-                                    except Exception as e:
-                                        logger.debug(f"中间轮TTS flush失败: {e}")
-                                    if voice_integration:
-                                        try:
-                                            threading.Thread(
-                                                target=voice_integration.finish_processing,
-                                                daemon=True,
-                                            ).start()
-                                        except Exception:
-                                            pass
-                                    # 重新初始化 tool_extractor 给下一轮使用
-                                    try:
-                                        tool_extractor = StreamingToolCallExtractor()
-                                        if voice_integration and not request.return_audio:
-                                            tool_extractor.set_callbacks(
-                                                on_text_chunk=None,
-                                                voice_integration=voice_integration,
-                                            )
-                                    except Exception:
-                                        pass
-                                current_round_text = ""
-                            elif chunk_type == "tool_calls":
-                                is_tool_event = True
-                            elif chunk_type == "tool_results":
-                                is_tool_event = True
-                            elif chunk_type == "round_start":
-                                # 新一轮开始，重置工具事件标记
-                                is_tool_event = False
-                            elif chunk_type == "compress_info":
-                                # 运行时压缩完成，标记后续需要保存 info 消息
-                                was_compressed = True
+                if not should_break_shell_loop:
+                    stagnation_reasons: List[str] = []
+                    if current_tool_pattern and repeated_tool_pattern_streak >= repeated_tool_pattern_rounds:
+                        stagnation_reasons.append("repeated_tool_pattern")
+                    if round_fact_fingerprints and no_new_fact_streak >= no_new_fact_rounds_limit:
+                        stagnation_reasons.append("no_new_facts")
+                    if stagnation_reasons:
+                        shell_stop_reason = "shell_tool_loop_stalled"
+                        shell_stop_details = {
+                            "reasons": list(stagnation_reasons),
+                            "repeated_tool_pattern_streak": repeated_tool_pattern_streak,
+                            "repeated_tool_pattern_rounds": repeated_tool_pattern_rounds,
+                            "no_new_fact_streak": no_new_fact_streak,
+                            "no_new_fact_rounds": no_new_fact_rounds_limit,
+                            "round": shell_round + 1,
+                        }
+                        yield _format_stream_payload_chunk(
+                            {
+                                "type": "warning",
+                                "text": shell_stop_reason,
+                                **shell_stop_details,
+                            },
+                            protocol=stream_protocol,
+                        )
+                        should_break_shell_loop = True
 
-                            # 透传所有 chunk 给前端（content/reasoning/tool events）
-                            yield chunk
-                            continue
-                    except Exception as e:
-                        logger.error(f"[API Server] 流式数据解析错误: {e}")
+                shell_round += 1
+                if should_break_shell_loop:
+                    break
 
-                yield chunk
+            if not dispatch_payload and not shell_stop_reason and shell_round >= shell_max_rounds:
+                shell_stop_reason = shell_stop_reason or "shell_tool_loop_max_rounds_reached"
+                shell_stop_details = shell_stop_details or {"max_rounds": shell_max_rounds}
+                yield _format_stream_payload_chunk(
+                    {
+                        "type": "warning",
+                        "text": "shell_tool_loop_max_rounds_reached",
+                        "max_rounds": shell_max_rounds,
+                    },
+                    protocol=stream_protocol,
+                )
+
+            if shell_stop_reason and not dispatch_payload and _should_force_core_dispatch_after_shell_budget(
+                user_message=effective_message,
+                shell_messages=shell_messages,
+            ):
+                dispatch_payload = shell_agent.dispatch_to_core(
+                    {
+                        "goal": effective_message,
+                        "intent_type": "development",
+                        "target_repo": "external",
+                        "context_summary": (
+                            "Shell readonly tool loop stopped before dispatch. "
+                            "Escalating to Core because the user request carries direct coding/execution signals."
+                        ),
+                        "relevant_memories": list(precomposed_memory_lines),
+                        "priority": "normal",
+                    },
+                    session_id=session_id,
+                    risk_level="write_repo",
+                )
+                if bool(dispatch_payload.get("dispatched")):
+                    handoff_source = (
+                        "shell_budget_fallback"
+                        if shell_stop_reason == "shell_tool_loop_max_rounds_reached"
+                        else "shell_progress_fallback"
+                    )
+                    yield _format_stream_payload_chunk(
+                        {
+                            "type": "warning",
+                            "text": (
+                                "shell_budget_force_dispatch_to_core"
+                                if shell_stop_reason == "shell_tool_loop_max_rounds_reached"
+                                else "shell_progress_force_dispatch_to_core"
+                            ),
+                            "reason": (
+                                "direct_coding_signal_after_readonly_budget"
+                                if shell_stop_reason == "shell_tool_loop_max_rounds_reached"
+                                else "direct_coding_signal_after_shell_progress_stall"
+                            ),
+                            "stop_details": dict(shell_stop_details),
+                            "max_rounds": shell_max_rounds,
+                        },
+                        protocol=stream_protocol,
+                    )
+
+            if shell_stop_reason and not dispatch_payload:
+                stream_source = llm_service.stream_chat_with_context(
+                    shell_messages,
+                    get_config().api.temperature,
+                    model_override=shell_model_override,
+                    tools=None,
+                    tool_choice=None,
+                )
+                async for chunk in stream_source:
+                    if chunk.startswith("data: "):
+                        try:
+                            data_str = chunk[6:].strip()
+                            if data_str and data_str != "[DONE]":
+                                chunk_data = json.loads(data_str)
+                                if str(chunk_data.get("type", "content")) == "content":
+                                    text_piece = str(chunk_data.get("text", "") or "")
+                                    current_round_text += text_piece
+                                    complete_response_parts.append(text_piece)
+                                yield _format_stream_payload_chunk(chunk_data, protocol=stream_protocol)
+                                continue
+                        except Exception as e:
+                            logger.error(f"[API Server] Shell synthesis stream parse error: {e}")
+                    yield chunk
+
+            # ── Core handoff only happens when Shell explicitly dispatches. ──
+            if dispatch_payload:
+                # Tag dispatch with Shell session for downstream context lookup
+                dispatch_payload["shell_session_id"] = session_id
+
+                # Write Shell tool results to pipeline context store (pull model).
+                # Downstream agents (Expert/Dev) read from this store by session_id.
+                _persist_shell_context_to_pipeline_store(session_id, shell_messages)
+
+                route_decision = dict(dispatch_payload.get("router_decision") or {})
+                dispatched_goal = str(dispatch_payload.get("goal") or "").strip() or effective_message
+                route_semantic = "core_execution"
+                route_meta["route_semantic"] = route_semantic
+                route_meta["risk_level"] = str(route_decision.get("risk_level") or "write_repo")
+                route_meta["shell_readonly_hit"] = False
+                route_meta["router_decision"] = dict(route_decision)
+                route_meta["routing_mode"] = "dispatch_to_core_tool"
+                route_meta["handoff_source"] = handoff_source
+                route_meta["core_execution_route"] = str(route_decision.get("core_route") or "")
+                route_meta = _apply_shell_core_session_state(route_meta, shell_session_id=session_id)
+                core_runtime_id = str(route_meta.get("core_runtime_id") or DEFAULT_CORE_RUNTIME_ID)
+                child_max_rounds = _resolve_pipeline_child_max_rounds(stream=True)
+                job_snapshot = _get_core_job_manager().submit_job(
+                    shell_session_id=session_id,
+                    goal=dispatched_goal,
+                    risk_level=str(route_meta.get("risk_level") or "write_repo"),
+                    handoff_source=handoff_source,
+                    route_decision=route_decision,
+                    dispatch_payload=dispatch_payload,
+                    core_runtime_id=core_runtime_id,
+                    store=session_store,
+                    message_manager=message_manager,
+                    pipeline_runner=run_multi_agent_pipeline,
+                    child_llm_call=_pipeline_child_llm_call,
+                    child_tool_executor=_pipeline_child_tool_executor,
+                    enable_child_execution=True,
+                    child_max_rounds=child_max_rounds,
+                    child_session_cleanup_mode=str(child_session_cleanup_policy.get("mode") or "ttl"),
+                    child_session_cleanup_ttl_seconds=int(child_session_cleanup_policy.get("ttl_seconds") or 0),
+                    mailbox=agent_mailbox,
+                    task_board_engine=task_board_engine,
+                    heartbeat_interval_seconds=_PIPELINE_STREAM_HEARTBEAT_INTERVAL_SECONDS,
+                )
+                core_execution_session_id = str(job_snapshot.get("core_execution_session_id") or "")
+                core_runtime_id = str(job_snapshot.get("core_runtime_id") or core_runtime_id or DEFAULT_CORE_RUNTIME_ID)
+                core_job_id = str(job_snapshot.get("job_id") or "").strip()
+                route_meta = _register_core_job_submission(
+                    session_id,
+                    core_runtime_id=core_runtime_id,
+                    core_job_id=core_job_id,
+                    core_execution_session_id=core_execution_session_id,
+                    core_execution_session_created=bool(job_snapshot.get("core_execution_session_created")),
+                    route_meta=route_meta,
+                )
+                core_execution_session_created = bool(job_snapshot.get("core_execution_session_created"))
+                await asyncio.sleep(0)
+
+                # Emit a second prompt-route composition snapshot after handoff so
+                # route_session_state can observe the finalized shell->core session state.
+                _emit_chat_route_prompt_event(route_meta, session_id=session_id)
+
+                yield _format_stream_payload_chunk(
+                    {
+                        "type": "route_decision",
+                        "trigger": route_semantic,
+                        "route_semantic": str(route_meta.get("route_semantic") or "core_execution"),
+                        "entry_agent": str(route_meta.get("entry_agent") or "shell"),
+                        "active_agent": str(route_meta.get("active_agent") or "core"),
+                        "dispatch_to_core": bool(route_meta.get("dispatch_to_core")),
+                        "handoff_tool": str(route_meta.get("handoff_tool") or "dispatch_to_core"),
+                        "core_execution_route": str(route_meta.get("core_execution_route") or route_decision.get("core_route") or ""),
+                        "risk_level": route_meta.get("risk_level"),
+                        "shell_readonly_hit": False,
+                        "prompt_profile": route_decision.get("prompt_profile", ""),
+                        "injection_mode": route_decision.get("injection_mode", ""),
+                        "delegation_intent": route_decision.get("delegation_intent", ""),
+                        "shell_session_id": str(route_meta.get("shell_session_id") or session_id),
+                        "core_runtime_id": core_runtime_id,
+                        "core_job_id": core_job_id,
+                        "run_context_id": str(
+                            route_meta.get("run_context_id")
+                            or route_meta.get("core_execution_session_id")
+                            or core_execution_session_id
+                        ),
+                        "core_execution_session_id": str(
+                            route_meta.get("run_context_id")
+                            or route_meta.get("core_execution_session_id")
+                            or core_execution_session_id
+                        ),
+                        "run_context_created": core_execution_session_created,
+                        "core_execution_session_created": core_execution_session_created,
+                        "routing_mode": "dispatch_to_core_tool",
+                        "handoff_source": handoff_source,
+                    },
+                    protocol=stream_protocol,
+                )
+                yield _format_stream_payload_chunk(
+                    {
+                        "type": "core_job_accepted",
+                        "shell_session_id": session_id,
+                        "core_runtime_id": core_runtime_id,
+                        "core_job_id": core_job_id,
+                        "run_context_id": core_execution_session_id,
+                        "core_execution_session_id": core_execution_session_id,
+                        "run_context_created": bool(core_execution_session_created),
+                        "core_execution_session_created": bool(core_execution_session_created),
+                        "status": str(job_snapshot.get("status") or "accepted"),
+                        "handoff_message_seq": int(job_snapshot.get("handoff_message_seq") or 0),
+                        "handoff_duplicate_count": int(job_snapshot.get("handoff_duplicate_count") or 0),
+                        "recovery_restart_count": int(job_snapshot.get("recovery_restart_count") or 0),
+                        "queue_position": int(job_snapshot.get("queue_position") or 0),
+                        "queue_depth": int(job_snapshot.get("queue_depth") or 0),
+                        "pipeline_depth": int(job_snapshot.get("pipeline_depth") or 0),
+                        "worker_status": str(job_snapshot.get("worker_status") or ""),
+                        "recovery_restart_total": int(job_snapshot.get("recovery_restart_total") or 0),
+                        "inbox_dedup_skipped_count": int(job_snapshot.get("inbox_dedup_skipped_count") or 0),
+                        "routing_mode": "dispatch_to_core_tool",
+                        "handoff_source": handoff_source,
+                        "goal": dispatched_goal,
+                        "risk_level": str(route_meta.get("risk_level") or "write_repo"),
+                        "route_summary": dict(job_snapshot.get("route_summary") or {}),
+                        "polling": {
+                            "route_session_state_path": f"/v1/chat/route_session_state/{session_id}",
+                            "core_job_path": f"/v1/chat/core_jobs/{core_job_id}",
+                            "core_job_watch_path": f"/v1/chat/core_job_watch/{session_id}",
+                            "core_job_watch_stream_path": f"/v1/chat/core_job_watch/stream/{session_id}",
+                        },
+                    },
+                    protocol=stream_protocol,
+                )
+                accepted_text = (
+                    f"已将任务提交给 Core（job_id={core_job_id}）。"
+                    "当前 Shell 会话保持可用；可继续对话，并轮询会话状态或 core job 状态。"
+                )
+                current_round_text += accepted_text
+                complete_response_parts.append(accepted_text)
+                yield _format_stream_payload_chunk(
+                    {
+                        "type": "content",
+                        "text": accepted_text,
+                        "source": "core_job_accept_ack",
+                    },
+                    protocol=stream_protocol,
+                )
 
             # ====== 流式处理完成 ======
 
-            # V19: 如果请求返回音频，在这里生成并返回音频URL
-            if request.return_audio and complete_text:
-                try:
-                    logger.info(f"[API Server V19] 生成音频，文本长度: {len(complete_text)}")
-
-                    from voice.tts_wrapper import generate_speech_safe
-
-                    tts_voice = get_config().voice_realtime.tts_voice or "zh-CN-XiaoyiNeural"
-                    audio_file = generate_speech_safe(
-                        text=complete_text, voice=tts_voice, response_format="mp3", speed=1.0
-                    )
-
-                    try:
-                        from voice.output.voice_integration import get_voice_integration
-
-                        voice_integration = get_voice_integration()
-                        voice_integration.receive_audio_url(audio_file)
-                        logger.info(f"[API Server V19] 音频已直接播放: {audio_file}")
-                    except Exception as e:
-                        logger.error(f"[API Server V19] 音频播放失败: {e}")
-                        yield f"data: audio_url: {audio_file}\n\n"
-
-                except Exception as e:
-                    logger.error(f"[API Server V19] 音频生成失败: {e}")
-                    traceback.print_exc()
-
-            # 完成流式文本切割器处理（最终轮）
-            if tool_extractor and not request.return_audio:
-                try:
-                    await tool_extractor.finish_processing()
-                except Exception as e:
-                    print(f"流式文本切割器完成处理错误: {e}")
-
-            # 完成语音处理（最终轮）
-            if voice_integration and not request.return_audio:
-                try:
-                    threading.Thread(
-                        target=voice_integration.finish_processing,
-                        daemon=True,
-                    ).start()
-                except Exception as e:
-                    print(f"语音集成完成处理错误: {e}")
-
             # 获取完整文本用于保存
-            complete_response = ""
-            if tool_extractor:
-                try:
-                    complete_response = tool_extractor.get_complete_text()
-                except Exception as e:
-                    print(f"获取完整响应文本失败: {e}")
-            elif request.return_audio:
-                complete_response = complete_text
+            complete_response = "".join(complete_response_parts)
 
-            # fallback: 如果 tool_extractor 没有累积到文本，使用最后一轮的 current_round_text
+            # fallback: 如果没有累积到文本，使用最后一轮的 current_round_text
             if not complete_response and current_round_text:
                 complete_response = current_round_text
 
-            # 统一保存对话历史与日志
-            _save_conversation_and_logs(session_id, user_message, complete_response)
+            # core_execution fallback: some models finish via SubmitResult_Tool without emitting plain content tokens.
+            if route_semantic == "core_execution" and not complete_response and receipt_fallback_text:
+                complete_response = receipt_fallback_text
+                yield _format_stream_payload_chunk(
+                    {
+                        "type": "content",
+                        "text": receipt_fallback_text,
+                        "source": "execution_receipt_fallback",
+                    },
+                    protocol=stream_protocol,
+                )
 
-            # 运行时压缩成功时，在会话末尾追加 info 标记
-            # 该标记持久化到磁盘，下次启动用于判断上一个会话是否已被压缩
-            if was_compressed:
-                message_manager.add_message(session_id, "info", "【已压缩上下文】")
+            # 统一保存对话历史与日志
+            shell_l2_eligible = not bool(route_meta.get("dispatch_to_core")) and not bool(dispatch_payload)
+            _save_conversation_and_logs(
+                session_id,
+                user_message,
+                complete_response,
+                enable_shell_l2_extraction=shell_l2_eligible,
+                shell_round_messages=(
+                    _build_shell_l2_round_messages(shell_messages, complete_response)
+                    if shell_l2_eligible
+                    else None
+                ),
+            )
+
+            # Agentic loop 模式下跳过后台意图分析（工具调用已在loop中处理）
+            # 仅在非 agentic 模式或明确需要时触发后台分析
+            if not request.skip_intent_analysis:
+                # 预留后台分析入口（当前流式主链不在此处分发额外UI动作）
+                pass
 
             # [DONE] 信号已由 llm_service.stream_chat_with_context 发送，无需重复
 
         except Exception as e:
             print(f"流式对话处理错误: {e}")
             traceback.print_exc()
-            yield f"data: error:{str(e)}\n\n"
+            yield _format_stream_payload_chunk(
+                {"type": "error", "text": str(e)},
+                protocol=stream_protocol,
+            )
 
     return StreamingResponse(
         generate_response(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Content-Type": "text/event-stream",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "*",
-            "X-Accel-Buffering": "no",  # 禁用nginx缓冲
-        },
+        headers=_build_stream_response_headers(protocol=stream_protocol),
     )
+
+
+@app.post("/v1/chat/stream")
+async def chat_stream_v1(request: ChatRequest):
+    return await chat_stream(request)
 
 
 @app.api_route("/tools/search", methods=["GET", "POST"])
 async def proxy_search(request: Request):
-    """Brave Search 兼容代理 → NagaModel /v1/tools/search"""
-    if not naga_auth.is_authenticated():
-        raise HTTPException(status_code=401, detail="未登录 NagaModel")
-
-    if request.method == "GET":
-        params = dict(request.query_params)
-    else:
-        params = await request.json()
-
-    import httpx
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            naga_auth.NAGA_MODEL_URL + "/tools/search",
-            json=params,
-            headers={"Authorization": f"Bearer {naga_auth.get_access_token()}"},
-            timeout=30,
-        )
-    return resp.json()
+    """Remote proxy disabled in local-only mode."""
+    raise HTTPException(status_code=410, detail="Remote tool search proxy is disabled in local-only mode")
 
 
 @app.get("/memory/stats")
@@ -1179,7 +2667,7 @@ async def get_memory_stats():
     """获取记忆统计信息"""
 
     try:
-        # 优先使用远程 NagaMemory 服务
+        # 优先使用远程记忆服务
         from summer_memory.memory_client import get_remote_memory_client
 
         remote = get_remote_memory_client()
@@ -1204,105 +2692,138 @@ async def get_memory_stats():
         raise HTTPException(status_code=500, detail=f"获取记忆统计失败: {str(e)}")
 
 
-# ============ MCP Server 代理 ============
-# [已禁用] MCP Server 已从 main.py 启动流程中移除，旧代理端点调用 _call_mcpserver 必定 503
-# @app.get("/mcp/status")
-# async def get_mcp_status_proxy():
-#     """代理 MCP Server 状态查询"""
-#     return await _call_mcpserver("GET", "/status")
-#
-# @app.get("/mcp/tasks")
-# async def get_mcp_tasks_proxy(status: Optional[str] = None):
-#     """代理 MCP 任务列表"""
-#     params = {"status": status} if status else None
-#     return await _call_mcpserver("GET", "/tasks", params=params)
+# MCP proxy routes (/mcp/status, /mcp/tasks) removed — superseded by native MCPClientPool (abed2b53).
 
 
-@app.get("/mcp/status")
-async def get_mcp_status_offline():
-    """MCP Server 未启动时返回离线状态，避免前端 503"""
+def _build_mcp_runtime_snapshot(
+    *,
+    registry_status: Optional[Dict[str, Any]] = None,
+    external_services: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """构建官方 MCP 运行时状态快照（供 /mcp/status 与 /mcp/tasks 复用）。"""
     from datetime import datetime
 
+    configured_names: List[str] = []
+    if external_services is None:
+        try:
+            from agents.runtime.mcp_client import load_mcp_config
+
+            configured_names = [
+                str(cfg.name).strip()
+                for cfg in load_mcp_config()
+                if bool(getattr(cfg, "enabled", True)) and str(getattr(cfg, "name", "") or "").strip()
+            ]
+        except Exception as exc:
+            logger.warning(f"读取官方 MCP 配置失败: {exc}")
+            configured_names = []
+    else:
+        configured_names = [str(item).strip() for item in (external_services or []) if str(item).strip()]
+
+    if registry_status is None:
+        try:
+            from agents.runtime.mcp_client import get_mcp_pool
+
+            pool = get_mcp_pool()
+            if pool:
+                tools = pool.get_all_tools()
+                service_names = sorted({str(getattr(tool, "server_name", "") or "").strip() for tool in tools if str(getattr(tool, "server_name", "") or "").strip()})
+                tool_names = sorted({str(getattr(tool, "name", "") or "").strip() for tool in tools if str(getattr(tool, "name", "") or "").strip()})
+                registry_status = {
+                    "registered_services": len(service_names),
+                    "registered_tool_count": len(tool_names),
+                    "cached_manifests": 0,
+                    "service_names": service_names,
+                    "tool_names": tool_names,
+                }
+            else:
+                registry_status = {"registered_services": 0, "registered_tool_count": 0, "service_names": [], "tool_names": []}
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.warning(f"构建 MCP registry 状态失败: {exc}")
+            registry_status = {"registered_services": 0, "registered_tool_count": 0, "service_names": [], "tool_names": []}
+
+    connected_names = [str(x) for x in (registry_status.get("service_names") or []) if str(x).strip()]
+    configured_only = [name for name in configured_names if name not in connected_names]
+    service_total = len(set(configured_names) | set(connected_names))
+    connected_count = len(connected_names)
+
     return {
-        "server": "offline",
+        "server": "online" if connected_count > 0 else "offline",
         "timestamp": datetime.now().isoformat(),
-        "tasks": {"total": 0, "active": 0, "completed": 0, "failed": 0},
+        "tasks": {
+            "total": service_total,
+            "active": connected_count,
+            "completed": connected_count,
+            "failed": max(service_total - connected_count, 0),
+        },
+        "registry": {
+            "registered_services": int(registry_status.get("registered_services") or 0),
+            "registered_tool_count": int(registry_status.get("registered_tool_count") or 0),
+            "cached_manifests": int(registry_status.get("cached_manifests") or 0),
+            "service_names": connected_names,
+            "tool_names": [str(x) for x in (registry_status.get("tool_names") or []) if str(x).strip()],
+            "external_service_names": configured_only,
+        },
+        "scheduler": {
+            "source": "official_mcp_registry_snapshot",
+            "tracked_tasks": service_total,
+        },
     }
 
 
-@app.get("/mcp/tasks")
-async def get_mcp_tasks_offline(status: Optional[str] = None):
-    """MCP Server 未启动时返回空任务列表，避免前端 503"""
-    return {"tasks": [], "total": 0}
+def _build_mcp_task_snapshot(
+    status: Optional[str] = None,
+    *,
+    snapshot: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if snapshot is None:
+        snapshot = _build_mcp_runtime_snapshot()
+    registry = snapshot.get("registry", {}) if isinstance(snapshot, dict) else {}
+
+    tasks: List[Dict[str, Any]] = []
+    for name in registry.get("service_names", []) or []:
+        tasks.append(
+            {
+                "task_id": f"official:{name}",
+                "service_name": str(name),
+                "status": "online",
+                "source": "official",
+            }
+        )
+    for name in registry.get("external_service_names", []) or []:
+        tasks.append(
+            {
+                "task_id": f"official:{name}",
+                "service_name": str(name),
+                "status": "configured",
+                "source": "official",
+            }
+        )
+
+    normalized_filter = str(status or "").strip().lower()
+    if normalized_filter:
+        tasks = [item for item in tasks if str(item.get("status", "")).lower() == normalized_filter]
+
+    return {"tasks": tasks, "total": len(tasks)}
 
 
-# ============ MCP 服务列表 & 导入 ============
+# ── Ops routes (extracted to routes_ops.py) ───────────────────
+from apiserver.routes_ops import router as _ops_router
+app.include_router(_ops_router)
 
-
-def _load_mcporter_config() -> Dict[str, Any]:
-    """读取 ~/.mcporter/config.json，不存在或格式错误时返回空 dict"""
-    if not MCPORTER_CONFIG_PATH.exists():
-        return {}
-    try:
-        return json.loads(MCPORTER_CONFIG_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _check_agent_available(manifest: Dict[str, Any]) -> bool:
-    """检查内置 agent 模块是否可导入"""
-    entry = manifest.get("entryPoint", {})
-    module_path = entry.get("module", "")
-    if not module_path:
-        return False
-    try:
-        __import__(module_path)
-        return True
-    except Exception as e:
-        logger.warning(f"MCP 模块导入失败 {module_path}: {e}")
-        return False
-
-
-@app.get("/mcp/services")
-def get_mcp_services():
-    """列出所有 MCP 服务并检查可用性（同步端点，由 FastAPI 在线程池中执行）"""
-    services: List[Dict[str, Any]] = []
-
-    # 1. 内置 agent（扫描 mcpserver 下所有 agent-manifest.json，与 mcp_registry 一致）
-    mcpserver_dir = Path(__file__).resolve().parent.parent / "mcpserver"
-    if not mcpserver_dir.exists():
-        logger.warning(f"MCP 目录不存在: {mcpserver_dir}")
-    for manifest_path in sorted(mcpserver_dir.glob("**/agent-manifest.json")):
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if manifest.get("agentType") != "mcp":
-            continue
-        available = _check_agent_available(manifest)
-        services.append({
-            "name": manifest.get("name", manifest_path.parent.name),
-            "display_name": manifest.get("displayName", manifest.get("name", "")),
-            "description": manifest.get("description", ""),
-            "source": "builtin",
-            "available": available,
-        })
-
-    # 2. mcporter 外部配置（~/.mcporter/config.json 中的 mcpServers）
-    mcporter_config = _load_mcporter_config()
-    for name, cfg in mcporter_config.get("mcpServers", {}).items():
-        cmd = cfg.get("command", "")
-        available = shutil.which(cmd) is not None if cmd else False
-        services.append({
-            "name": name,
-            "display_name": name,
-            "description": f"{cmd} {' '.join(cfg.get('args', []))}" if cmd else "",
-            "source": "mcporter",
-            "available": available,
-        })
-
-    return {"status": "success", "services": services}
-
+# Re-export shared utilities for module-level callers
+from apiserver._shared import (
+    env_flag as _env_flag,
+    env_float as _env_float,
+    ops_utc_iso_now as _ops_utc_iso_now,
+    ops_repo_root as _ops_repo_root,
+    ops_unix_path as _ops_unix_path,
+    ops_status_to_severity as _ops_status_to_severity,
+    ops_max_status as _ops_max_status,
+    ops_safe_int as _ops_safe_int,
+    ops_read_json_file as _ops_read_json_file,
+    ops_parse_iso_datetime as _ops_parse_iso_datetime,
+)
+from apiserver._shared import OPS_STATUS_RANK as _OPS_STATUS_RANK
 
 class McpImportRequest(BaseModel):
     name: str
@@ -1311,16 +2832,46 @@ class McpImportRequest(BaseModel):
 
 @app.post("/mcp/import")
 async def import_mcp_config(request: McpImportRequest):
-    """将 MCP JSON 配置写入 ~/.mcporter/config.json"""
-    MCPORTER_DIR.mkdir(parents=True, exist_ok=True)
-    mcporter_config = _load_mcporter_config()
-    servers = mcporter_config.setdefault("mcpServers", {})
-    servers[request.name] = request.config
-    mcporter_config["mcpServers"] = servers
-    MCPORTER_CONFIG_PATH.write_text(
-        json.dumps(mcporter_config, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    return {"status": "success", "message": f"已添加 MCP 服务: {request.name}"}
+    """将官方 MCP stdio 配置写入项目根目录的 mcp_servers.json，并热重载运行时。"""
+    from agents.runtime import mcp_client
+
+    server_name = str(request.name or "").strip()
+    if not server_name:
+        raise HTTPException(status_code=400, detail="MCP 服务名称不能为空")
+
+    config = dict(request.config or {})
+    command = str(config.get("command") or "").strip()
+    if not command:
+        raise HTTPException(status_code=400, detail="当前官方 MCP 安装控件仅支持 stdio command/args/env 配置")
+
+    config_path = mcp_client.upsert_mcp_server_config(server_name, config)
+    reload_summary: Dict[str, Any]
+    reload_error = ""
+    try:
+        reload_summary = await mcp_client.reload_global_mcp_pool()
+    except Exception as exc:
+        reload_summary = {
+            "config_path": str(mcp_client.get_mcp_config_path()),
+            "configured_servers": 0,
+            "connected_servers": 0,
+            "results": {},
+        }
+        reload_error = str(exc)
+
+    connected = bool((reload_summary.get("results") or {}).get(server_name))
+    if connected:
+        message = f"已写入官方 MCP 配置并连接服务: {server_name}"
+    elif reload_error:
+        message = f"已写入官方 MCP 配置: {server_name}；但热重载失败：{reload_error}"
+    else:
+        message = f"已写入官方 MCP 配置: {server_name}；当前尚未成功连接，请检查命令与依赖"
+
+    return {
+        "status": "success",
+        "message": message,
+        "config_path": str(config_path),
+        "reload": reload_summary,
+    }
 
 
 class SkillImportRequest(BaseModel):
@@ -1331,8 +2882,9 @@ class SkillImportRequest(BaseModel):
 @app.post("/skills/import")
 async def import_custom_skill(request: SkillImportRequest):
     """创建自定义技能 SKILL.md"""
+    safe_skill_name = _normalize_skill_name(request.name)
     skill_content = f"""---
-name: {request.name}
+name: {safe_skill_name}
 description: 用户自定义技能
 version: 1.0.0
 author: User
@@ -1343,7 +2895,7 @@ enabled: true
 
 {request.content}
 """
-    skill_path = _write_skill_file(request.name, skill_content)
+    skill_path = _write_skill_file(safe_skill_name, skill_content)
     return {"status": "success", "message": f"技能已创建: {skill_path}"}
 
 
@@ -1351,14 +2903,14 @@ enabled: true
 async def get_quintuples():
     """获取所有五元组 (用于知识图谱可视化)"""
     try:
-        # 优先使用远程 NagaMemory 服务
+        # 优先使用远程记忆服务
         from summer_memory.memory_client import get_remote_memory_client
 
         remote = get_remote_memory_client()
         if remote is not None:
             result = await remote.get_quintuples(limit=500)
             quintuples_raw = result.get("quintuples") or result.get("results") or result.get("data") or []
-            # 兼容 NagaMemory 返回格式：可能是 dict 列表或 tuple 列表
+            # 远程记忆服务可能返回 dict 列表或 tuple 列表
             quintuples = []
             for q in quintuples_raw:
                 if isinstance(q, dict):
@@ -1404,7 +2956,7 @@ async def search_quintuples(keywords: str = ""):
         if not keyword_list:
             raise HTTPException(status_code=400, detail="请提供搜索关键词")
 
-        # 优先使用远程 NagaMemory 服务
+        # 优先使用远程记忆服务
         from summer_memory.memory_client import get_remote_memory_client
 
         remote = get_remote_memory_client()
@@ -1474,6 +3026,236 @@ async def get_session_detail(session_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/chat/route_session_state/{session_id}")
+async def get_chat_route_session_state(session_id: str, limit: int = 20):
+    """获取 Shell/Core 路由会话状态与最近路由事件。"""
+    try:
+        return _build_chat_route_session_state_payload(session_id, limit=limit)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取路由会话状态失败: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/v1/chat/route_session_state/{session_id}")
+async def get_chat_route_session_state_v1(session_id: str, limit: int = 20):
+    return await get_chat_route_session_state(session_id=session_id, limit=limit)
+
+
+@app.get("/v1/chat/core_jobs/{job_id}")
+async def get_chat_core_job(job_id: str):
+    snapshot = _get_core_job_manager().get_job_snapshot(job_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail=f"core job 不存在: {job_id}")
+    return {"status": "success", "job": snapshot}
+
+
+@app.get("/v1/chat/core_jobs")
+async def list_chat_core_jobs(session_id: str, limit: int = 10):
+    return {
+        "status": "success",
+        "shell_session_id": str(session_id or ""),
+        "jobs": _get_core_job_manager().list_shell_jobs(session_id, limit=max(1, int(limit))),
+    }
+
+
+def _build_chat_core_job_watch_payload(session_id: str, *, limit: int = 20, ack: bool = False) -> Dict[str, Any]:
+    session = message_manager.get_session(session_id)
+    if not isinstance(session, dict):
+        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
+    shell_snapshot = _get_core_job_manager().get_shell_snapshot(session_id, limit=max(1, int(limit)))
+    payload = _collect_chat_core_job_watch_payload(
+        session_id,
+        core_execution_session_id=str(
+            shell_snapshot.get("latest_job", {}).get("run_context_id")
+            or shell_snapshot.get("latest_job", {}).get("core_execution_session_id")
+            or ""
+        ),
+        limit=max(1, int(limit)),
+        ack=bool(ack),
+    )
+    resolved_run_context_id = str(payload.get("run_context_id") or payload.get("core_execution_session_id") or "")
+    active_core_job = dict(shell_snapshot.get("active_job") or {})
+    latest_core_job = dict(shell_snapshot.get("latest_job") or {})
+    if resolved_run_context_id and not str(active_core_job.get("core_execution_session_id") or "").strip():
+        active_core_job["core_execution_session_id"] = resolved_run_context_id
+    if resolved_run_context_id and not str(latest_core_job.get("core_execution_session_id") or "").strip():
+        latest_core_job["core_execution_session_id"] = resolved_run_context_id
+    if resolved_run_context_id and not str(active_core_job.get("run_context_id") or "").strip():
+        active_core_job["run_context_id"] = resolved_run_context_id
+    if resolved_run_context_id and not str(latest_core_job.get("run_context_id") or "").strip():
+        latest_core_job["run_context_id"] = resolved_run_context_id
+    return {
+        "status": "success",
+        "shell_session_id": str(session_id or ""),
+        "watch_scope": "session_triggered_core_jobs",
+        "core_execution_session_id": resolved_run_context_id,
+        "run_context_id": resolved_run_context_id,
+        "run_context_exists": bool(
+            resolved_run_context_id and message_manager.get_session(resolved_run_context_id)
+        ),
+        "pending_core_update_count": int(payload.get("pending_core_update_count") or 0),
+        "core_outbox_cursor_seq": int(payload.get("core_outbox_cursor_seq") or 0),
+        "last_core_outbox_seq": int(payload.get("last_core_outbox_seq") or 0),
+        "unread_core_updates": list(payload.get("unread_core_updates") or []),
+        "recent_core_updates": list(payload.get("recent_core_updates") or []),
+        "watched_core_job": active_core_job,
+        "latest_watched_core_job": latest_core_job,
+        "active_core_job": active_core_job,
+        "latest_core_job": latest_core_job,
+        "core_worker_status": str(shell_snapshot.get("worker_status") or ""),
+    }
+
+
+@app.get("/v1/chat/core_job_watch/{session_id}")
+async def get_chat_core_job_watch(session_id: str, limit: int = 20, ack: bool = False):
+    return _build_chat_core_job_watch_payload(session_id, limit=limit, ack=ack)
+
+
+async def _stream_chat_core_job_watch_impl(
+    session_id: str,
+    request: Request,
+    *,
+    limit: int = 20,
+    heartbeat_seconds: float = 2.0,
+    source: str = "core_job_watch_stream",
+):
+    session = message_manager.get_session(session_id)
+    if not isinstance(session, dict):
+        raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
+
+    async def _event_stream():
+        last_fingerprint = ""
+        poll_interval = max(0.5, float(heartbeat_seconds or 2.0))
+        while True:
+            if await request.is_disconnected():
+                break
+            shell_snapshot = _get_core_job_manager().get_shell_snapshot(session_id, limit=max(1, int(limit)))
+            active_core_job = dict(shell_snapshot.get("active_job") or {})
+            latest_core_job = dict(shell_snapshot.get("latest_job") or {})
+            inbox_payload = _collect_chat_core_job_watch_payload(
+                session_id,
+                core_execution_session_id=str(
+                    active_core_job.get("run_context_id")
+                    or active_core_job.get("core_execution_session_id")
+                    or latest_core_job.get("run_context_id")
+                    or latest_core_job.get("core_execution_session_id")
+                    or ""
+                ),
+                limit=max(1, int(limit)),
+                ack=False,
+            )
+            unread_updates = list(inbox_payload.get("unread_core_updates") or [])
+            fingerprint_payload = {
+                "active_core_job_id": str(active_core_job.get("job_id") or ""),
+                "active_core_job_status": str(active_core_job.get("status") or ""),
+                "latest_core_job_id": str(latest_core_job.get("job_id") or ""),
+                "latest_core_job_status": str(latest_core_job.get("status") or ""),
+                "pending_core_update_count": int(inbox_payload.get("pending_core_update_count") or 0),
+                "last_core_outbox_seq": int(inbox_payload.get("last_core_outbox_seq") or 0),
+                "core_worker_status": str(shell_snapshot.get("worker_status") or ""),
+            }
+            fingerprint = json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True)
+            if unread_updates:
+                acked_payload = _collect_chat_core_job_watch_payload(
+                    session_id,
+                    core_execution_session_id=str(
+                        inbox_payload.get("run_context_id")
+                        or inbox_payload.get("core_execution_session_id")
+                        or ""
+                    ),
+                    limit=max(1, int(limit)),
+                    ack=True,
+                )
+                yield _format_stream_payload_chunk(
+                        {
+                            "type": "core_async_update",
+                            "shell_session_id": session_id,
+                            "run_context_id": str(
+                                inbox_payload.get("run_context_id")
+                                or inbox_payload.get("core_execution_session_id")
+                                or ""
+                            ),
+                            "core_execution_session_id": str(
+                                inbox_payload.get("run_context_id")
+                                or inbox_payload.get("core_execution_session_id")
+                                or ""
+                            ),
+                            "updates": unread_updates,
+                            "pending_core_update_count": int(acked_payload.get("pending_core_update_count") or 0),
+                            "core_outbox_cursor_seq": int(acked_payload.get("core_outbox_cursor_seq") or 0),
+                            "last_core_outbox_seq": int(acked_payload.get("last_core_outbox_seq") or 0),
+                            "watched_core_job": active_core_job,
+                        "latest_watched_core_job": latest_core_job,
+                        "active_core_job": active_core_job,
+                        "latest_core_job": latest_core_job,
+                        "source": source,
+                    },
+                    protocol=STREAM_PROTOCOL_JSON_V1,
+                )
+                last_fingerprint = fingerprint
+            elif (
+                fingerprint != last_fingerprint
+                and (
+                    str(active_core_job.get("job_id") or "").strip()
+                    or str(latest_core_job.get("job_id") or "").strip()
+                    or int(inbox_payload.get("last_core_outbox_seq") or 0) > 0
+                )
+            ):
+                yield _format_stream_payload_chunk(
+                        {
+                            "type": "core_async_state",
+                            "shell_session_id": session_id,
+                            "run_context_id": str(
+                                inbox_payload.get("run_context_id")
+                                or inbox_payload.get("core_execution_session_id")
+                                or ""
+                            ),
+                            "core_execution_session_id": str(
+                                inbox_payload.get("run_context_id")
+                                or inbox_payload.get("core_execution_session_id")
+                                or ""
+                            ),
+                            "active_core_job": active_core_job,
+                            "latest_core_job": latest_core_job,
+                            "pending_core_update_count": int(inbox_payload.get("pending_core_update_count") or 0),
+                            "core_outbox_cursor_seq": int(inbox_payload.get("core_outbox_cursor_seq") or 0),
+                            "last_core_outbox_seq": int(inbox_payload.get("last_core_outbox_seq") or 0),
+                            "watched_core_job": active_core_job,
+                        "latest_watched_core_job": latest_core_job,
+                        "core_worker_status": str(shell_snapshot.get("worker_status") or ""),
+                        "source": source,
+                    },
+                    protocol=STREAM_PROTOCOL_JSON_V1,
+                )
+                last_fingerprint = fingerprint
+            else:
+                yield _format_stream_payload_chunk(
+                    {
+                        "type": "heartbeat",
+                        "shell_session_id": session_id,
+                        "source": source,
+                    },
+                    protocol=STREAM_PROTOCOL_JSON_V1,
+                )
+            await asyncio.sleep(poll_interval)
+
+    return StreamingResponse(_event_stream(), media_type="text/event-stream")
+
+
+@app.get("/v1/chat/core_job_watch/stream/{session_id}")
+async def stream_chat_core_job_watch(session_id: str, request: Request, limit: int = 20, heartbeat_seconds: float = 2.0):
+    return await _stream_chat_core_job_watch_impl(
+        session_id,
+        request,
+        limit=limit,
+        heartbeat_seconds=heartbeat_seconds,
+        source="core_job_watch_stream",
+    )
+
+
 @app.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     """删除指定会话 - 委托给message_manager"""
@@ -1505,12 +3287,12 @@ async def upload_document(file: UploadFile = File(...), description: str = Form(
     """上传文档接口"""
     try:
         # 确保上传目录存在
-        upload_dir = Path("uploaded_documents")
-        upload_dir.mkdir(exist_ok=True)
+        upload_dir = (_ops_repo_root() / "uploaded_documents").resolve(strict=False)
+        upload_dir.mkdir(parents=True, exist_ok=True)
 
-        # 使用原始文件名
-        filename = file.filename
-        file_path = upload_dir / filename
+        # 统一保留安全文件名，拒绝空名与非法名。
+        filename = _normalize_uploaded_filename(file.filename)
+        file_path = _resolve_child_path_within_root(upload_dir, filename, field_label="文件名")
 
         # 保存文件
         with open(file_path, "wb") as buffer:
@@ -1526,6 +3308,8 @@ async def upload_document(file: UploadFile = File(...), description: str = Form(
             file_type=file_path.suffix,
             upload_time=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"文件上传失败: {e}")
         raise HTTPException(status_code=500, detail=f"上传失败: {str(e)}")
@@ -1557,7 +3341,8 @@ async def upload_parse(file: UploadFile = File(...)):
             lines = _docx_mod.extract_docx_text(tmp_path)
             content = "\n".join(lines)
         elif suffix == ".xlsx":
-            import importlib.util, zipfile as _zf
+            import importlib.util
+            import zipfile as _zf
             _xlsx_spec = importlib.util.spec_from_file_location(
                 "xlsx_extract", Path(__file__).parent / "skills_templates" / "office-docs" / "tools" / "xlsx_extract.py"
             )
@@ -1597,29 +3382,9 @@ async def upload_parse(file: UploadFile = File(...)):
 
 @app.get("/update/latest")
 async def proxy_update_check(platform: str = "windows"):
-    """代理更新检查请求，避免前端直接暴露服务器地址"""
-    import httpx
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                f"{naga_auth.BUSINESS_URL}/api/app/NagaAgent/latest",
-                params={"platform": platform},
-            )
-            if resp.status_code == 404:
-                return {"has_update": False}
-            resp.raise_for_status()
-            data = resp.json()
-            # 将相对下载路径拼成完整URL
-            if data.get("download_url"):
-                data["download_url"] = f"{naga_auth.BUSINESS_URL}{data['download_url']}"
-            return data
-    except Exception as e:
-        logger.warning(f"更新检查失败: {e}")
-        return {"has_update": False}
+    """Update check is disabled in local-only mode."""
+    return {"has_update": False, "local_mode": True}
 
-
-# 挂载LLM服务路由以支持 /llm/chat
-from .llm_service import llm_app
 
 app.mount("/llm", llm_app)
 
@@ -1652,33 +3417,10 @@ async def load_log_context(days: int = 3, max_messages: int = None):
 # Web前端工具状态轮询存储
 _tool_status_store: Dict[str, Dict] = {"current": {"message": "", "visible": False}}
 
-# Web前端 AgentServer 回复存储（轮询获取）
-_clawdbot_replies: list = []
-
-# Web前端 Live2D 动作队列（轮询获取）
-_live2d_actions: list = []
-
-
 @app.get("/tool_status")
 async def get_tool_status():
     """获取当前工具调用状态（供Web前端轮询）"""
     return _tool_status_store.get("current", {"message": "", "visible": False})
-
-
-@app.get("/clawdbot/replies")
-async def get_clawdbot_replies():
-    """获取并清空 AgentServer 待显示回复（供Web前端轮询）"""
-    replies = list(_clawdbot_replies)
-    _clawdbot_replies.clear()
-    return {"replies": replies}
-
-
-@app.get("/live2d/actions")
-async def get_live2d_actions():
-    """获取并清空 Live2D 动作队列（供Web前端轮询）"""
-    actions = list(_live2d_actions)
-    _live2d_actions.clear()
-    return {"actions": actions}
 
 
 @app.post("/tool_notification")
@@ -1792,9 +3534,7 @@ async def tool_result_callback(payload: Dict[str, Any]):
         message_manager.save_conversation_log(original_user_message, response_text, dev_mode=False)
         logger.info("[工具回调] 对话日志已保存")
 
-        # 通过UI通知接口将AI回复发送给UI
-        logger.info("[工具回调] 开始发送AI回复到UI...")
-        await _notify_ui_refresh(session_id, response_text)
+        # 工具结果后回复已写入会话历史，前端应通过标准会话读取链路更新。
         _hide_tool_status_in_ui()
 
         logger.info("[工具回调] 工具结果处理完成，回复已发送到UI")
@@ -1827,10 +3567,9 @@ async def tool_result(payload: Dict[str, Any]):
 
         logger.info(f"工具执行结果: {result}")
 
-        # 如果是工具完成后的AI回复，存储到ClawdBot回复队列供前端轮询
+        # AgentServer 轮询队列已退役：仅记录结果，不再排队推送旧前端通道。
         if notification_type == "tool_completed_with_ai_response" and ai_response:
-            _clawdbot_replies.append(ai_response)
-            logger.info(f"[UI] AI回复已存储到队列，长度: {len(ai_response)}")
+            logger.info(f"[UI] 收到 tool_completed_with_ai_response（retired queue path），长度: {len(ai_response)}")
 
         return {"success": True, "message": "工具结果已接收", "result": result, "session_id": session_id}
 
@@ -1875,7 +3614,6 @@ async def ui_notification(payload: Dict[str, Any]):
     try:
         session_id = payload.get("session_id")
         action = payload.get("action", "")
-        ai_response = payload.get("ai_response", "")
         status_text = payload.get("status_text", "")
         auto_hide_ms_raw = payload.get("auto_hide_ms", 0)
 
@@ -1888,26 +3626,6 @@ async def ui_notification(payload: Dict[str, Any]):
             raise HTTPException(400, "缺少session_id")
 
         logger.info(f"UI通知: {action}, 会话: {session_id}")
-
-        # 处理显示工具AI回复的动作
-        if action == "show_tool_ai_response" and ai_response:
-            _clawdbot_replies.append(ai_response)
-            logger.info(f"[UI通知] 工具AI回复已存储到队列，长度: {len(ai_response)}")
-            return {"success": True, "message": "AI回复已存储"}
-
-        # 处理显示 AgentServer 回复的动作
-        if action == "show_clawdbot_response" and ai_response:
-            _clawdbot_replies.append(ai_response)
-            logger.info(f"[UI通知] AgentServer 回复已存储到队列，长度: {len(ai_response)}")
-            return {"success": True, "message": "AgentServer 回复已存储"}
-
-        # 处理 Live2D 动作
-        if action == "live2d_action":
-            action_name = payload.get("action_name", "")
-            if action_name:
-                _live2d_actions.append(action_name)
-                logger.info(f"[UI通知] Live2D 动作已入队: {action_name}")
-                return {"success": True, "message": f"Live2D 动作 {action_name} 已入队"}
 
         if action == "show_tool_status" and status_text:
             _emit_tool_status_to_ui(status_text, auto_hide_ms)
@@ -1938,9 +3656,8 @@ async def _trigger_chat_stream_no_intent(session_id: str, response_text: str):
             "message": response_text,  # 直接使用AI回复内容，不加标记
             "stream": True,
             "session_id": session_id,
-            "disable_tts": False,
-            "return_audio": False,
-
+            "skip_intent_analysis": True,  # 关键：跳过意图分析
+            "stream_protocol": "sse_json_v1",
         }
 
         # 调用现有的流式对话接口
@@ -1951,7 +3668,7 @@ async def _trigger_chat_stream_no_intent(session_id: str, response_text: str):
         async with httpx.AsyncClient() as client:
             async with client.stream("POST", api_url, json=chat_request) as response:
                 if response.status_code == 200:
-                    # 处理流式响应，包括TTS切割
+                    # 处理流式响应
                     async for chunk in response.aiter_text():
                         if chunk.strip():
                             # 这里可以进一步处理流式响应
@@ -1965,33 +3682,6 @@ async def _trigger_chat_stream_no_intent(session_id: str, response_text: str):
 
     except Exception as e:
         logger.error(f"[UI发送] 触发聊天流式响应失败: {e}")
-
-
-async def _notify_ui_refresh(session_id: str, response_text: str):
-    """通知UI刷新会话历史"""
-    try:
-        import httpx
-
-        # 通过UI通知接口直接显示AI回复
-        ui_notification_payload = {
-            "session_id": session_id,
-            "action": "show_tool_ai_response",
-            "ai_response": response_text,
-        }
-
-        from system.config import get_server_port
-
-        api_url = f"http://localhost:{get_server_port('api_server')}/ui_notification"
-
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.post(api_url, json=ui_notification_payload)
-            if response.status_code == 200:
-                logger.info(f"[UI通知] AI回复显示通知发送成功: {session_id}")
-            else:
-                logger.error(f"[UI通知] AI回复显示通知失败: {response.status_code}")
-
-    except Exception as e:
-        logger.error(f"[UI通知] 通知UI刷新失败: {e}")
 
 
 def _emit_tool_status_to_ui(status_text: str, auto_hide_ms: int = 0) -> None:
@@ -2014,9 +3704,7 @@ async def _send_ai_response_directly(session_id: str, response_text: str):
             "message": f"[工具结果] {response_text}",  # 添加标记让UI知道这是工具结果
             "stream": False,
             "session_id": session_id,
-            "disable_tts": False,
-            "return_audio": False,
-
+            "skip_intent_analysis": True,
         }
 
         from system.config import get_server_port

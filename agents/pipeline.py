@@ -1,0 +1,5909 @@
+"""Multi-Agent Pipeline — unified entry point for ALL requests.
+
+Orchestrates: ShellAgent → (direct reply | CoreAgent → Expert(s) → Dev(s) → Review)
+Yields events compatible with the existing event stream.
+
+ShellAgent IS the shell-side LLM — it handles simple queries directly and only
+calls dispatch_to_core for execution tasks.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+import time
+import uuid
+from datetime import datetime, timezone
+from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
+
+from agents.router_engine import RouterDecision
+from agents.prompt_engine import (
+    PromptAssembler,
+    get_default_assembler,
+    get_immutable_prompt_protected_prefixes,
+    get_system_prompts_root,
+)
+from agents.memory.l1_memory import get_default_l1_manager
+from agents.memory.l1_to_l2_sync import register_l1_to_l2_hooks
+from agents.memory.memory_tools import get_memory_tool_definitions, handle_memory_tool, is_memory_tool
+from agents.runtime.agent_session import AgentSessionStore, AgentStatus
+from agents.runtime.mailbox import AgentMailbox
+from agents.runtime.task_board import TaskBoardEngine, TaskItem, TaskStatus
+
+from agents.shell_agent import ShellAgent
+from agents.core_agent import CoreAgent
+from agents.expert_agent import ExpertAgent, ExpertAgentConfig
+from agents.dev_agent import DevAgent, DevAgentConfig
+from agents.review_agent import ReviewAgent, ReviewAgentConfig
+from agents.runtime.mini_loop import MiniLoopConfig, run_mini_loop
+from agents.runtime.child_tools import handle_child_tool_call
+from agents.runtime.parent_tools import get_parent_tool_definitions, handle_parent_tool_call
+from system.config import get_embla_system_config
+from system.git_worktree_sandbox import apply_workspace_path_overrides
+from system.sandbox_context import SandboxContext
+
+logger = logging.getLogger(__name__)
+_PIPELINE_PROMPT_ASSEMBLER = get_default_assembler()
+_CANONICAL_PROMPTS_ROOT = str(get_system_prompts_root())
+
+# ── L1 Memory singleton + Tool-Result Topology sync hook ────
+_l1_mgr = get_default_l1_manager()
+register_l1_to_l2_hooks(_l1_mgr)
+
+
+# ── Experience recording — perception layer for evolution ────
+def _record_dev_experience(result: Dict[str, Any], *, goal: str = "") -> None:
+    """Write a Dev task outcome to L1 episodic memory for evolution consumption."""
+    try:
+        status = str(result.get("status") or "").strip().lower()
+        task_id = str(result.get("task_id") or "").strip()
+        agent_id = str(result.get("agent_id") or "").strip()
+        completion_report = str(result.get("completion_report") or "").strip()
+        changed_files = list(result.get("changed_files") or [])
+        metadata = dict(result.get("metadata") or {})
+        stop_reason = str(metadata.get("loop_stop_reason") or "").strip()
+        blocked_reason = str(metadata.get("blocked_reason") or "").strip()
+
+        # Determine outcome
+        if status == "waiting" and not blocked_reason:
+            outcome = "success"
+        elif blocked_reason or stop_reason in ("llm_error", "max_rounds_reached"):
+            outcome = "failure"
+        else:
+            outcome = "partial"
+
+        # Build problem/solution from available data
+        if outcome == "failure":
+            problem = blocked_reason or stop_reason or "Dev agent did not complete task"
+            solution = ""
+        else:
+            problem = goal[:300] if goal else task_id
+            solution = completion_report[:500] if completion_report else ""
+
+        # Infer tags from stop_reason and goal
+        tags = []
+        if "llm_error" in stop_reason or "timeout" in stop_reason.lower():
+            tags.append("upstream_error")
+        if "max_rounds" in stop_reason:
+            tags.append("max_rounds")
+        if blocked_reason:
+            tags.append("blocked")
+        # Infer domain from goal keywords
+        goal_lower = (goal or "").lower()
+        for keyword, tag in [("frontend", "frontend"), ("backend", "backend"), ("test", "testing"),
+                             ("api", "api"), ("config", "config"), ("deploy", "ops"), ("docker", "ops")]:
+            if keyword in goal_lower:
+                tags.append(tag)
+                break
+        if not tags:
+            tags.append("backend")
+
+        slug = f"dev_{task_id}_{agent_id[-8:]}" if agent_id else f"dev_{task_id}"
+        _l1_mgr.write_experience(
+            name=slug,
+            task_id=task_id,
+            title=f"Dev task {task_id}: {outcome}",
+            outcome=outcome,
+            problem=problem,
+            solution=solution,
+            files=changed_files[:20],
+            tags=tags,
+        )
+    except Exception:
+        logger.debug("Failed to record dev experience", exc_info=True)
+
+
+def _record_pipeline_experience(
+    *,
+    pipeline_id: str,
+    task_completed: bool,
+    stop_reason: str,
+    goal: str = "",
+    expert_count: int = 0,
+    review_results: Optional[List[Dict[str, Any]]] = None,
+    blocked_reasons: Optional[List[str]] = None,
+    changed_files: Optional[List[str]] = None,
+) -> None:
+    """Write a pipeline-level outcome summary to L1 episodic memory."""
+    try:
+        outcome = "success" if task_completed else "failure"
+        problem = ""
+        solution = ""
+
+        if not task_completed:
+            reasons = [r for r in (blocked_reasons or []) if r]
+            problem = f"Pipeline stopped: {stop_reason}. " + ("; ".join(reasons[:3]) if reasons else "")
+        else:
+            review_verdicts = [str(r.get("review_result", {}).get("verdict", "")) for r in (review_results or [])]
+            solution = f"Completed with {expert_count} expert(s). Reviews: {', '.join(review_verdicts) or 'none'}"
+
+        tags = []
+        if "timeout" in stop_reason.lower() or "llm_error" in stop_reason.lower():
+            tags.append("upstream_error")
+        if "review_rejected" in stop_reason:
+            tags.append("review_rejected")
+        if "pending_descendant" in stop_reason:
+            tags.append("incomplete")
+        if "blocked" in stop_reason:
+            tags.append("blocked")
+        goal_lower = (goal or "").lower()
+        for keyword, tag in [("frontend", "frontend"), ("backend", "backend"), ("test", "testing"),
+                             ("api", "api"), ("config", "config")]:
+            if keyword in goal_lower:
+                tags.append(tag)
+                break
+        if not tags:
+            tags.append("backend")
+
+        _l1_mgr.write_experience(
+            name=f"pipeline_{pipeline_id[-12:]}",
+            task_id=pipeline_id,
+            title=f"Pipeline {pipeline_id}: {outcome}",
+            outcome=outcome,
+            problem=problem[:500],
+            solution=solution[:500],
+            files=list(changed_files or [])[:20],
+            tags=tags,
+        )
+        # ── Synchronous friction check: detect patterns in real-time ──
+        if not task_completed:
+            _check_inline_friction(tags=tags, pipeline_id=pipeline_id)
+    except Exception:
+        logger.debug("Failed to record pipeline experience", exc_info=True)
+
+
+def _check_inline_friction(*, tags: List[str], pipeline_id: str) -> None:
+    """Lightweight synchronous pattern check after failure recording.
+
+    Instead of waiting for the hourly Chronos evolution_eval, this runs a
+    fast scan of recent episodic memory. If a failure cluster reaches the
+    trigger threshold, it writes a friction report that the evolution system
+    can pick up immediately.
+    """
+    try:
+        from pathlib import Path as _Path
+        from agents.evolution.pattern_detector import PatternDetector
+
+        episodic_dir = _Path("memory/episodic")
+        if not episodic_dir.exists():
+            return
+
+        detector = PatternDetector(episodic_dir=episodic_dir, trigger_threshold=3)
+        signals = detector.check_recent(limit=20)
+
+        if not signals:
+            return
+
+        # Found pattern(s) — write friction report for immediate pickup
+        from agents.evolution.metacognition import report_framework_friction
+
+        for signal in signals:
+            report_framework_friction(
+                friction_type="prompt_gap",
+                description=(
+                    f"Repeated failure pattern detected during pipeline {pipeline_id}: "
+                    f"{signal.task_type} ({signal.failure_count} failures). "
+                    f"Suggested targets: {', '.join(signal.suggested_targets) or 'none'}"
+                ),
+                affected_component=signal.suggested_targets[0] if signal.suggested_targets else "",
+                severity="high" if signal.failure_count >= 5 else "medium",
+                suggested_fix=f"Review and improve prompt: {', '.join(signal.suggested_targets)}",
+            )
+        logger.info(
+            "[Pipeline] Inline friction check found %d pattern(s) for pipeline %s",
+            len(signals),
+            pipeline_id,
+        )
+    except Exception:
+        logger.debug("Inline friction check failed", exc_info=True)
+
+
+ChildLLMCallFn = Callable[[List[Dict[str, Any]], List[Dict[str, Any]], str], Awaitable[Dict[str, Any]]]
+ChildToolExecutorFn = Callable[[str, Dict[str, Any], str], Awaitable[Dict[str, Any]]]
+
+_CORE_PARENT_TOOL_ALLOWLIST = {
+    "spawn_child_agent",
+    "poll_child_status",
+    "send_message_to_child",
+    "resume_child_agent",
+    "destroy_child_agent",
+}
+
+_CORE_SPAWN_ROLE_ALLOWLIST = {"dev", "expert", "review"}
+_FAST_TRACK_BLOCKED_TOOLS = {
+    "run_command",
+    "exec_shell",
+    "run_cmd",
+    "os_bash",
+    "python_repl",
+    "write_config",
+    "delete_file",
+    "workspace_txn_apply",
+    "git_checkout_file",
+}
+_FAST_TRACK_PROTECTED_PREFIXES = ("core/security/", *get_immutable_prompt_protected_prefixes())
+_FAST_TRACK_PROTECTED_EXACT = {
+    ".env",
+    "config.json",
+}
+_MAX_REVIEW_REMEDIATION_CYCLES = 3
+_MAX_REVIEW_REJECT_RESPAWNS = 1
+_MAX_HEARTBEAT_BLOCKED_RESPAWNS = 3
+_MAX_CHILD_LOOP_MAX_ROUNDS_RESUMES = 1
+_MAX_CHILD_LOOP_MAX_ROUNDS_RESPAWNS = 1
+_HEARTBEAT_MONITOR_POLL_SECONDS = 0.05
+_TASK_ID_PATTERN = re.compile(r"\b(t-\d+)\b", flags=re.IGNORECASE)
+
+
+def _trim_text(value: Any, *, limit: int = 220) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)] + "..."
+
+
+def _extract_report_text(report: Dict[str, Any]) -> str:
+    rows = report.get("reports")
+    if isinstance(rows, list):
+        for item in reversed(rows):
+            if isinstance(item, str) and item.strip():
+                return _trim_text(item)
+            if isinstance(item, dict):
+                try:
+                    return _trim_text(json.dumps(item, ensure_ascii=False))
+                except Exception:
+                    continue
+    return ""
+
+
+def _reports_have_text_payload(reports: List[Dict[str, Any]]) -> bool:
+    for report in reports:
+        if _extract_report_text(report):
+            return True
+    return False
+
+
+def _normalize_changed_files(raw_files: Any) -> List[str]:
+    if not isinstance(raw_files, list):
+        return []
+    return sorted({str(item).strip() for item in raw_files if str(item).strip()})
+
+
+def _build_execution_runtime_summary(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
+    agent_rows: List[Dict[str, Any]] = []
+    for report in reports:
+        metadata = report.get("metadata") if isinstance(report.get("metadata"), dict) else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        agent_id = str(report.get("session_id") or report.get("agent_id") or "").strip()
+        execution_backend = str(metadata.get("execution_backend") or report.get("execution_backend") or "").strip()
+        execution_backend_requested = str(
+            metadata.get("execution_backend_requested") or report.get("execution_backend_requested") or execution_backend
+        ).strip()
+        sandbox_policy = str(metadata.get("sandbox_policy") or report.get("sandbox_policy") or "").strip()
+        network_policy = str(metadata.get("network_policy") or report.get("network_policy") or "").strip()
+        resource_profile = str(metadata.get("resource_profile") or report.get("resource_profile") or "").strip()
+        execution_root = str(metadata.get("execution_root") or report.get("execution_root") or "").strip()
+        workspace_mode = str(metadata.get("workspace_mode") or report.get("workspace_mode") or "").strip()
+        workspace_root = str(metadata.get("workspace_root") or report.get("workspace_root") or "").strip()
+        if not any(
+            [
+                execution_backend,
+                execution_backend_requested,
+                sandbox_policy,
+                network_policy,
+                resource_profile,
+                execution_root,
+                workspace_mode,
+                workspace_root,
+            ]
+        ):
+            continue
+        agent_rows.append(
+            {
+                "agent_id": agent_id,
+                "execution_backend": execution_backend,
+                "execution_backend_requested": execution_backend_requested,
+                "execution_root": execution_root,
+                "sandbox_policy": sandbox_policy,
+                "network_policy": network_policy,
+                "resource_profile": resource_profile,
+                "workspace_mode": workspace_mode,
+                "workspace_root": workspace_root,
+            }
+        )
+
+    if not agent_rows:
+        return {}
+
+    def _unique_values(key: str) -> List[str]:
+        values = [str(row.get(key) or "").strip() for row in agent_rows]
+        return sorted({value for value in values if value})
+
+    summary: Dict[str, Any] = {
+        "agent_count": len(agent_rows),
+        "backends": _unique_values("execution_backend"),
+        "requested_backends": _unique_values("execution_backend_requested"),
+        "sandbox_policies": _unique_values("sandbox_policy"),
+        "network_policies": _unique_values("network_policy"),
+        "resource_profiles": _unique_values("resource_profile"),
+        "workspace_modes": _unique_values("workspace_mode"),
+        "agents": agent_rows[:8],
+    }
+    if len(summary["backends"]) == 1:
+        summary["execution_backend"] = summary["backends"][0]
+    if len(summary["requested_backends"]) == 1:
+        summary["execution_backend_requested"] = summary["requested_backends"][0]
+    if len(summary["sandbox_policies"]) == 1:
+        summary["sandbox_policy"] = summary["sandbox_policies"][0]
+    if len(summary["network_policies"]) == 1:
+        summary["network_policy"] = summary["network_policies"][0]
+    if len(summary["resource_profiles"]) == 1:
+        summary["resource_profile"] = summary["resource_profiles"][0]
+    return summary
+
+
+def _lookup_shell_session_id_from_chain(store: "AgentSessionStore", expert_id: str) -> str:
+    """Walk the session chain expert → core to find shell_session_id in metadata."""
+    try:
+        expert_session = store.get(str(expert_id or "").strip()) if expert_id else None
+        if expert_session is None:
+            return ""
+        core_id = str(expert_session.parent_id or "").strip()
+        if not core_id:
+            return ""
+        core_session = store.get(core_id)
+        if core_session is None or not isinstance(core_session.metadata, dict):
+            return ""
+        return str(core_session.metadata.get("shell_session_id") or "").strip()
+    except Exception:
+        return ""
+
+
+def _build_upstream_context_section(shell_session_id: str) -> str:
+    """Read upstream Shell tool results from pipeline context store (pull model).
+
+    Returns a formatted text section, or empty string if nothing found.
+    """
+    if not shell_session_id:
+        return ""
+    try:
+        from agents.runtime.pipeline_context import get_pipeline_context_store
+
+        entries = get_pipeline_context_store().read(shell_session_id, entry_type="tool_result")
+        if not entries:
+            return ""
+        lines = ["[Upstream Shell Findings]"]
+        for entry in entries:
+            tool_name = entry.get("tool_name", "unknown")
+            content = entry.get("content", {})
+            if isinstance(content, dict):
+                serialized = json.dumps(content, ensure_ascii=False, default=str)
+            else:
+                serialized = str(content)
+            # Truncate overly large results to prevent prompt bloat
+            if len(serialized) > 2000:
+                serialized = serialized[:2000] + "...(truncated)"
+            lines.append(f"[{tool_name}] {serialized}")
+        lines.append("以上为 Shell 层在派发前收集的工具结果，可直接作为上下文使用，无需重新调用。")
+        return "\n".join(lines)
+    except Exception:
+        logger.debug("Failed to read upstream context from pipeline store", exc_info=True)
+        return ""
+
+
+def _normalize_dispatch_string_list(raw_items: Any) -> List[str]:
+    if not isinstance(raw_items, list):
+        return []
+    normalized: List[str] = []
+    for item in raw_items:
+        text = str(item or "").strip()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
+def _build_fast_track_task_description(dispatch: Dict[str, Any], fallback_message: str) -> str:
+    goal = str(dispatch.get("goal") or fallback_message or "").strip()
+    context_summary = str(dispatch.get("context_summary") or "").strip()
+    target_files = _normalize_dispatch_string_list(dispatch.get("target_files"))
+    requested_tools = _normalize_dispatch_string_list(dispatch.get("requested_tools"))
+    relevant_memories = _normalize_dispatch_string_list(dispatch.get("relevant_memories"))
+    try:
+        estimated_changed_lines = max(0, int(dispatch.get("estimated_changed_lines") or 0))
+    except Exception:
+        estimated_changed_lines = 0
+
+    sections: List[str] = []
+    if goal:
+        sections.append(goal)
+    if context_summary and context_summary != goal:
+        sections.append("Shell context (verbatim):\n" + context_summary)
+    if target_files:
+        sections.append("Target files:\n" + "\n".join(f"- `{path}`" for path in target_files))
+    if requested_tools:
+        sections.append("Requested tools:\n" + "\n".join(f"- `{tool}`" for tool in requested_tools))
+    if estimated_changed_lines > 0:
+        sections.append(f"Estimated changed lines: {estimated_changed_lines}")
+    if relevant_memories:
+        sections.append("Relevant memories:\n" + "\n".join(f"- {item}" for item in relevant_memories))
+
+    serialized_dispatch = {
+        "goal": goal,
+        "context_summary": context_summary,
+        "target_files": target_files,
+        "requested_tools": requested_tools,
+        "estimated_changed_lines": estimated_changed_lines,
+    }
+    sections.append(
+        "Fast-track dispatch payload:\n"
+        + json.dumps(serialized_dispatch, ensure_ascii=False, indent=2, sort_keys=True)
+    )
+    sections.append(
+        "Execution requirements:\n"
+        "- Treat Goal and Shell context as authoritative input.\n"
+        "- If exact file content or literal lines are already present, do not ask for them again; write them exactly.\n"
+        "- Use the allowed tools, then report completion with changed file paths and a short verification summary."
+    )
+    return "\n\n".join(section for section in sections if section).strip()
+
+
+def _safe_non_negative_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except Exception:
+        return 0
+
+
+def _prepare_child_tool_arguments(
+    *,
+    store: AgentSessionStore,
+    child_session_id: str,
+    tool_name: str,
+    arguments: Dict[str, Any],
+) -> Dict[str, Any]:
+    session = store.get(child_session_id)
+    if session is None:
+        return dict(arguments) if isinstance(arguments, dict) else {}
+    context = SandboxContext.from_metadata(session.metadata, session_id=child_session_id)
+    workspace_root = str(context.workspace_host_root or "").strip()
+    if not workspace_root:
+        return dict(arguments) if isinstance(arguments, dict) else {}
+    prepared = apply_workspace_path_overrides(tool_name, arguments, workspace_root)
+    prepared.setdefault("_execution_backend", str(context.execution_backend or "native"))
+    prepared.setdefault("_execution_root", str(context.execution_root or workspace_root))
+    return prepared
+
+
+def _collect_expert_dev_artifacts(store: AgentSessionStore, expert_id: str) -> List[Dict[str, Any]]:
+    artifacts: List[Dict[str, Any]] = []
+    for child in store.list_children(expert_id):
+        if str(child.role or "").strip().lower() != "dev":
+            continue
+        if bool(child.metadata.get("heartbeat_superseded")) or bool(child.metadata.get("superseded")):
+            continue
+        verification_report = child.metadata.get("verification_report")
+        if not isinstance(verification_report, dict):
+            verification_report = {}
+        changed_files = _normalize_changed_files(
+            verification_report.get("changed_files") if verification_report else child.metadata.get("changed_files")
+        )
+        artifacts.append(
+            {
+                "agent_id": child.session_id,
+                "status": str(child.status.value),
+                "completion_report": str(child.metadata.get("completion_report") or "").strip(),
+                "verification_report": dict(verification_report),
+                "changed_files": changed_files,
+                "task_updates": dict(child.metadata.get("task_updates") or {}),
+            }
+        )
+    return artifacts
+
+
+def _build_aggregate_test_results(dev_artifacts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "passed": sum(
+            int((((artifact.get("verification_report") or {}).get("tests") or {}).get("passed", 0)) or 0)
+            for artifact in dev_artifacts
+        ),
+        "failed": sum(
+            int((((artifact.get("verification_report") or {}).get("tests") or {}).get("failed", 0)) or 0)
+            for artifact in dev_artifacts
+        ),
+        "errors": sum(
+            int((((artifact.get("verification_report") or {}).get("tests") or {}).get("errors", 0)) or 0)
+            for artifact in dev_artifacts
+        ),
+        "details": "aggregated_from_dev_verification_reports",
+    }
+
+
+def _build_review_rework_instruction(
+    *,
+    original_task: str,
+    review_payload: Dict[str, Any],
+    review_cycle: int,
+) -> str:
+    issues = [str(item).strip() for item in list(review_payload.get("issues") or []) if str(item).strip()]
+    suggestions = [str(item).strip() for item in list(review_payload.get("suggestions") or []) if str(item).strip()]
+    summary = str(review_payload.get("summary") or "").strip()
+    parts = [
+        f"Review cycle {max(1, int(review_cycle))} requested changes.",
+        "Please address the reviewer feedback, rerun your self-verification, and report completed again with an updated verification_report.",
+    ]
+    if original_task:
+        parts.append(f"Original task:\n{original_task}")
+    if summary:
+        parts.append(f"Review summary:\n{summary}")
+    if issues:
+        parts.append("Issues to fix:\n" + "\n".join(f"- {item}" for item in issues))
+    if suggestions:
+        parts.append("Reviewer suggestions:\n" + "\n".join(f"- {item}" for item in suggestions))
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def _collect_child_tool_usage(messages: List[Dict[str, Any]]) -> List[str]:
+    counts: Dict[str, int] = {}
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        for raw_call in list(message.get("tool_calls") or []):
+            if not isinstance(raw_call, dict):
+                continue
+            function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
+            name = str(function.get("name") or raw_call.get("name") or "").strip()
+            if not name:
+                continue
+            counts[name] = int(counts.get(name) or 0) + 1
+    ordered = sorted(counts.items(), key=lambda item: (-int(item[1] or 0), str(item[0])))
+    rendered: List[str] = []
+    for name, count in ordered[:6]:
+        rendered.append(f"{name}({count})" if int(count or 0) > 1 else str(name))
+    return rendered
+
+
+def _collect_child_tool_errors(messages: List[Dict[str, Any]]) -> List[str]:
+    tool_name_by_call_id: Dict[str, str] = {}
+    errors: List[str] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").strip().lower() == "assistant":
+            for raw_call in list(message.get("tool_calls") or []):
+                if not isinstance(raw_call, dict):
+                    continue
+                function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
+                call_id = str(raw_call.get("id") or "").strip()
+                name = str(function.get("name") or raw_call.get("name") or "").strip()
+                if call_id and name:
+                    tool_name_by_call_id[call_id] = name
+            continue
+        if str(message.get("role") or "").strip().lower() != "tool":
+            continue
+        raw_payload = str(message.get("content") or "").strip()
+        if not raw_payload:
+            continue
+        try:
+            payload = json.loads(raw_payload)
+        except Exception:
+            continue
+        error_text = str(payload.get("error") or "").strip() if isinstance(payload, dict) else ""
+        if not error_text:
+            continue
+        tool_name = str(tool_name_by_call_id.get(str(message.get("tool_call_id") or "").strip()) or "tool").strip()
+        errors.append(f"{tool_name}: {_trim_text(error_text, limit=140)}")
+    deduped: List[str] = []
+    for item in errors:
+        if item not in deduped:
+            deduped.append(item)
+    return deduped[:4]
+
+
+def _build_child_loop_intermediate_findings(
+    *,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    expert_id: str,
+    child_session_id: str,
+) -> str:
+    session = store.get(child_session_id)
+    if session is None:
+        return ""
+
+    metadata = dict(session.metadata or {})
+    messages = list(session.messages or [])
+    sections: List[str] = []
+
+    assigned_task = _trim_text(session.task_description or "", limit=260)
+    if assigned_task:
+        sections.append(f"Assigned task:\n{assigned_task}")
+
+    task_updates = metadata.get("task_updates") if isinstance(metadata.get("task_updates"), dict) else {}
+    if task_updates:
+        lines: List[str] = []
+        for idx, (raw_task_id, raw_update) in enumerate(task_updates.items()):
+            if idx >= 4:
+                break
+            update = raw_update if isinstance(raw_update, dict) else {}
+            task_id = str(raw_task_id or "").strip() or "task"
+            status = str(update.get("status") or "").strip() or "unknown"
+            summary = _trim_text(update.get("summary") or "", limit=140)
+            files_changed = _normalize_changed_files(update.get("files_changed"))
+            line = f"- {task_id}: {status}"
+            if summary:
+                line += f" — {summary}"
+            if files_changed:
+                line += f" (files: {', '.join(files_changed[:4])})"
+            lines.append(line)
+        if lines:
+            sections.append("Task updates:\n" + "\n".join(lines))
+
+    changed_files = _normalize_changed_files(metadata.get("changed_files"))
+    if changed_files:
+        sections.append("Changed files so far:\n" + "\n".join(f"- {path}" for path in changed_files[:8]))
+
+    tool_usage = _collect_child_tool_usage(messages)
+    if tool_usage:
+        sections.append("Tools used so far:\n- " + ", ".join(tool_usage))
+
+    tool_errors = _collect_child_tool_errors(messages)
+    if tool_errors:
+        sections.append("Recent tool errors:\n" + "\n".join(f"- {item}" for item in tool_errors))
+
+    assistant_notes = [
+        _trim_text(item.get("content") or "", limit=180)
+        for item in messages
+        if isinstance(item, dict)
+        and str(item.get("role") or "").strip().lower() == "assistant"
+        and str(item.get("content") or "").strip()
+    ]
+    if assistant_notes:
+        sections.append("Latest assistant notes:\n" + "\n".join(f"- {item}" for item in assistant_notes[-2:]))
+
+    heartbeat_snapshot = store.get_session_heartbeat_snapshot(child_session_id)
+    heartbeats = list(heartbeat_snapshot.get("heartbeats") or [])
+    if heartbeats:
+        lines = []
+        for heartbeat in heartbeats[:3]:
+            task_id = str(heartbeat.get("task_id") or "").strip() or "task"
+            status = str(heartbeat.get("status") or "").strip() or "running"
+            stage = str(heartbeat.get("stage") or "").strip()
+            message = _trim_text(heartbeat.get("message") or "", limit=120)
+            line = f"- {task_id}: {status}"
+            if stage:
+                line += f" @ {stage}"
+            if message:
+                line += f" — {message}"
+            lines.append(line)
+        if lines:
+            sections.append("Recent heartbeats:\n" + "\n".join(lines))
+
+    expert_messages = mailbox.read(expert_id, since_seq=0, limit=200)
+    child_reports = [
+        _trim_text(item.content, limit=180)
+        for item in expert_messages
+        if str(item.from_id or "").strip() == child_session_id
+        and str(item.message_type or "").strip().lower() == "report"
+        and str(item.content or "").strip()
+    ]
+    if child_reports:
+        sections.append("Reports already sent to parent:\n" + "\n".join(f"- {item}" for item in child_reports[-2:]))
+
+    return _trim_text("\n\n".join(part for part in sections if part).strip(), limit=1600)
+
+
+def _build_child_loop_resume_instruction(
+    *,
+    task_id: str,
+    findings: str,
+    resume_attempt: int,
+) -> str:
+    parts = [
+        f"Task {task_id or 'task'} stopped because the dev mini-loop hit max rounds before you submitted a completed report.",
+        f"This is automatic recovery resume attempt {max(1, int(resume_attempt))}. Continue from the current session and workspace state; do not restart from scratch.",
+        "Finish the remaining delta, run self-verification, and call report_to_parent(type=\"completed\") with an updated verification_report once done.",
+        "If the current approach is stuck, simplify it and prioritize a correct, minimal completion path.",
+    ]
+    if findings:
+        parts.append(f"Compressed intermediate findings:\n{findings}")
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def _build_child_loop_respawn_feedback(
+    *,
+    task_id: str,
+    replaced_agent_id: str,
+    findings: str,
+    respawn_attempt: int,
+) -> str:
+    parts = [
+        f"Automatic recovery: previous Dev session {replaced_agent_id or 'unknown'} for task {task_id or 'task'} hit the mini-loop max-rounds limit before completion.",
+        f"This is fresh-dev retry attempt {max(1, int(respawn_attempt))}. Continue the same task using any useful partial progress already produced.",
+        "Review the current workspace state before editing further. Do not redo solved work; focus on the missing delta, self-verify, then report completed.",
+    ]
+    if findings:
+        parts.append(f"Compressed intermediate findings:\n{findings}")
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def _inject_system_instruction(store: AgentSessionStore, session_id: str, content: str) -> None:
+    text = str(content or "").strip()
+    if not text:
+        return
+    session = store.get(session_id)
+    if session is None:
+        return
+    messages = list(session.messages or [])
+    messages.append({"role": "system", "content": f"[Parent resume instruction] {text}"})
+    store.save_messages(session_id, messages)
+
+
+def _is_review_reject_recoverable(review_payload: Dict[str, Any]) -> bool:
+    verdict = str(review_payload.get("verdict") or "").strip().lower()
+    if verdict != "reject":
+        return False
+    corpus_parts = [
+        str(review_payload.get("summary") or ""),
+        *(str(item) for item in list(review_payload.get("issues") or [])),
+        *(str(item) for item in list(review_payload.get("suggestions") or [])),
+    ]
+    corpus = " ".join(part.strip().lower() for part in corpus_parts if str(part).strip())
+    unrecoverable_markers = (
+        "review agent did not emit a valid review_result",
+        "no valid review_result",
+        "malformed review_result",
+        "missing review_result",
+        "insufficient context to review",
+        "no dev agents were available",
+    )
+    return not any(marker in corpus for marker in unrecoverable_markers)
+
+
+def _select_reject_respawn_task_ids(tasks: List[Any], changed_files: List[str]) -> List[str]:
+    normalized_changed_files = {str(path).strip() for path in changed_files if str(path).strip()}
+    if not normalized_changed_files:
+        return [str(getattr(task, "task_id", "") or "").strip() for task in tasks if str(getattr(task, "task_id", "") or "").strip()]
+    selected: List[str] = []
+    for task in tasks:
+        task_id = str(getattr(task, "task_id", "") or "").strip()
+        task_files = {str(path).strip() for path in list(getattr(task, "files", []) or []) if str(path).strip()}
+        if task_id and (not task_files or task_files & normalized_changed_files):
+            selected.append(task_id)
+    return selected or [str(getattr(task, "task_id", "") or "").strip() for task in tasks if str(getattr(task, "task_id", "") or "").strip()]
+
+
+_HEARTBEAT_LEVEL_RANK = {"none": -1, "fresh": 0, "warning": 1, "critical": 2, "blocked": 3}
+
+
+def _heartbeat_level_rank(level: Any) -> int:
+    return int(_HEARTBEAT_LEVEL_RANK.get(str(level or "none").strip().lower(), -1))
+
+
+def _new_heartbeat_escalation_summary(*, expert_id: str, expert_type: str) -> Dict[str, Any]:
+    return {
+        "expert_id": str(expert_id or ""),
+        "expert_type": str(expert_type or "expert"),
+        "observed_session_count": 0,
+        "observed_task_count": 0,
+        "warning_count": 0,
+        "critical_count": 0,
+        "blocked_count": 0,
+        "respawn_count": 0,
+        "loop_resume_count": 0,
+        "loop_respawn_count": 0,
+        "expert_blocked_count": 0,
+        "expert_blocked_reasons": [],
+        "actions": [],
+    }
+
+
+def _merge_heartbeat_escalation_summaries(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    merged = {
+        "expert_count": 0,
+        "observed_session_count": 0,
+        "observed_task_count": 0,
+        "warning_count": 0,
+        "critical_count": 0,
+        "blocked_count": 0,
+        "respawn_count": 0,
+        "loop_resume_count": 0,
+        "loop_respawn_count": 0,
+        "expert_blocked_count": 0,
+        "expert_blocked_reasons": [],
+        "experts": [],
+        "actions": [],
+    }
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        merged["expert_count"] += 1
+        merged["observed_session_count"] += max(0, int(item.get("observed_session_count") or 0))
+        merged["observed_task_count"] += max(0, int(item.get("observed_task_count") or 0))
+        merged["warning_count"] += max(0, int(item.get("warning_count") or 0))
+        merged["critical_count"] += max(0, int(item.get("critical_count") or 0))
+        merged["blocked_count"] += max(0, int(item.get("blocked_count") or 0))
+        merged["respawn_count"] += max(0, int(item.get("respawn_count") or 0))
+        merged["loop_resume_count"] += max(0, int(item.get("loop_resume_count") or 0))
+        merged["loop_respawn_count"] += max(0, int(item.get("loop_respawn_count") or 0))
+        merged["expert_blocked_count"] += max(0, int(item.get("expert_blocked_count") or 0))
+        merged["expert_blocked_reasons"].extend(
+            str(reason).strip() for reason in list(item.get("expert_blocked_reasons") or []) if str(reason).strip()
+        )
+        merged["experts"].append(
+            {
+                "expert_id": str(item.get("expert_id") or ""),
+                "expert_type": str(item.get("expert_type") or "expert"),
+                "observed_session_count": max(0, int(item.get("observed_session_count") or 0)),
+                "observed_task_count": max(0, int(item.get("observed_task_count") or 0)),
+                "warning_count": max(0, int(item.get("warning_count") or 0)),
+                "critical_count": max(0, int(item.get("critical_count") or 0)),
+                "blocked_count": max(0, int(item.get("blocked_count") or 0)),
+                "respawn_count": max(0, int(item.get("respawn_count") or 0)),
+                "loop_resume_count": max(0, int(item.get("loop_resume_count") or 0)),
+                "loop_respawn_count": max(0, int(item.get("loop_respawn_count") or 0)),
+                "expert_blocked_count": max(0, int(item.get("expert_blocked_count") or 0)),
+                "expert_blocked_reasons": list(item.get("expert_blocked_reasons") or []),
+            }
+        )
+        merged["actions"].extend(list(item.get("actions") or []))
+    merged["actions"] = list(merged["actions"][:20])
+    deduped_reasons: List[str] = []
+    for reason in merged["expert_blocked_reasons"]:
+        if reason not in deduped_reasons:
+            deduped_reasons.append(reason)
+    merged["expert_blocked_reasons"] = deduped_reasons[:20]
+    return merged
+
+
+def _build_heartbeat_attention_instruction(*, heartbeat: Dict[str, Any], severity: str) -> str:
+    task_id = str(heartbeat.get("task_id") or "").strip() or "task"
+    stage = str(heartbeat.get("stage") or "").strip()
+    message = str(heartbeat.get("message") or "").strip()
+    stale_level = str(heartbeat.get("stale_level") or severity).strip().lower()
+    if severity == "critical":
+        lead = f"Task {task_id} heartbeat is critically stale ({stale_level})."
+    else:
+        lead = f"Task {task_id} heartbeat is stale ({stale_level})."
+    parts = [
+        lead,
+        "Publish a fresh task heartbeat immediately or report blocked/completed with current facts.",
+    ]
+    if stage:
+        parts.append(f"Last stage: {stage}")
+    if message:
+        parts.append(f"Last message: {message}")
+    return "\n".join(parts)
+
+
+def _build_heartbeat_respawn_feedback(*, heartbeat: Dict[str, Any]) -> str:
+    task_id = str(heartbeat.get("task_id") or "").strip() or "task"
+    stage = str(heartbeat.get("stage") or "").strip()
+    message = str(heartbeat.get("message") or "").strip()
+    parts = [
+        "Heartbeat escalation: the previous dev session stopped emitting fresh task heartbeats and was replaced.",
+        f"Continue task {task_id} from the latest visible workspace state.",
+        "Before reporting completed, rerun self-verification and publish task heartbeats if the task becomes long-running again.",
+    ]
+    if stage:
+        parts.append(f"Previous stage: {stage}")
+    if message:
+        parts.append(f"Previous heartbeat message: {message}")
+    return "\n".join(parts)
+
+
+def _build_review_reject_respawn_instruction(
+    *,
+    original_task: str,
+    review_payload: Dict[str, Any],
+    review_cycle: int,
+) -> str:
+    issues = [str(item).strip() for item in list(review_payload.get("issues") or []) if str(item).strip()]
+    suggestions = [str(item).strip() for item in list(review_payload.get("suggestions") or []) if str(item).strip()]
+    summary = str(review_payload.get("summary") or "").strip()
+    parts = [
+        f"Review cycle {max(1, int(review_cycle))} rejected the current implementation.",
+        "Start a fresh remediation pass. Re-evaluate the approach, do not blindly preserve the previous solution, and complete full self-verification before reporting completed.",
+    ]
+    if original_task:
+        parts.append(f"Original task:\n{original_task}")
+    if summary:
+        parts.append(f"Review rejection summary:\n{summary}")
+    if issues:
+        parts.append("Blocking issues:\n" + "\n".join(f"- {item}" for item in issues))
+    if suggestions:
+        parts.append("Reviewer suggestions:\n" + "\n".join(f"- {item}" for item in suggestions))
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def _build_waiting_descendant_dev_resume_instruction(
+    *,
+    task_id: str,
+    reason: str,
+) -> str:
+    parts = [
+        f"Task {task_id or 'task'} is still pending because the Core pipeline stopped while descendants were unsettled.",
+        "Continue from the current session and workspace state. Do not restart from scratch.",
+        "Complete the remaining implementation delta, rerun self-verification, and call report_to_parent(type=\"completed\") with an updated verification_report.",
+    ]
+    reason_text = str(reason or "").strip()
+    if reason_text:
+        parts.append(f"Pending reason: {reason_text}")
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def _build_waiting_descendant_review_resume_instruction(
+    *,
+    review_cycle: int,
+    reason: str,
+) -> str:
+    parts = [
+        f"Review cycle {max(1, int(review_cycle))} is still pending because the Core pipeline stopped while descendants were unsettled.",
+        "Continue the existing independent review from the current session context.",
+        "Produce a valid structured review_result and call report_to_parent(type=\"completed\") when the review is done.",
+    ]
+    reason_text = str(reason or "").strip()
+    if reason_text:
+        parts.append(f"Pending reason: {reason_text}")
+    return "\n\n".join(part for part in parts if part).strip()
+
+
+def _infer_child_task_id(*, session: Any, fallback: str = "") -> str:
+    metadata = getattr(session, "metadata", {}) if session is not None else {}
+    metadata_dict = metadata if isinstance(metadata, dict) else {}
+    task_updates = metadata_dict.get("task_updates") if isinstance(metadata_dict.get("task_updates"), dict) else {}
+    for raw_task_id in task_updates.keys():
+        task_id = str(raw_task_id or "").strip()
+        if task_id:
+            return task_id
+    for candidate in (
+        str(metadata_dict.get("task_id") or "").strip(),
+        str(getattr(session, "task_description", "") or "").strip(),
+        str(fallback or "").strip(),
+    ):
+        if not candidate:
+            continue
+        match = _TASK_ID_PATTERN.search(candidate)
+        if match:
+            return str(match.group(1) or "").strip() or candidate
+        if candidate:
+            return candidate
+    return str(getattr(session, "session_id", "") or "").strip() or "task"
+
+
+def _normalize_fast_track_tool_name(raw: str) -> str:
+    text = str(raw or "").strip().lower()
+    aliases = {
+        "os_bash": "run_cmd",
+        "command": "run_cmd",
+        "cmd": "run_cmd",
+        "search": "search_keyword",
+        "grep": "search_keyword",
+        "file_ast": "file_ast_skeleton",
+    }
+    return aliases.get(text, text)
+
+
+def _normalize_fast_track_path(raw_path: str) -> str:
+    return str(raw_path or "").strip().replace("\\", "/").lstrip("./").lower()
+
+
+def _is_fast_track_protected_path(raw_path: str) -> bool:
+    normalized = _normalize_fast_track_path(raw_path)
+    if not normalized:
+        return False
+    if normalized in _FAST_TRACK_PROTECTED_EXACT:
+        return True
+    return any(normalized.startswith(prefix) for prefix in _FAST_TRACK_PROTECTED_PREFIXES)
+
+
+def _extract_tool_path(arguments: Dict[str, Any]) -> str:
+    if not isinstance(arguments, dict):
+        return ""
+    for key in ("path", "file_path", "target_path"):
+        value = arguments.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _collect_workspace_submission_summaries(reports: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    submissions: List[Dict[str, Any]] = []
+    for report in reports:
+        metadata = report.get("metadata") if isinstance(report.get("metadata"), dict) else {}
+        workspace_root = str(metadata.get("workspace_root") or "").strip()
+        workspace_mode = str(metadata.get("workspace_mode") or "").strip().lower()
+        sandbox_type = str(metadata.get("workspace_sandbox_type") or "").strip().lower()
+        submission_state = str(metadata.get("workspace_submission_state") or "sandboxed").strip().lower() or "sandboxed"
+        if not workspace_root or (workspace_mode != "worktree" and sandbox_type != "git_worktree"):
+            continue
+
+        change_id = str(metadata.get("workspace_change_id") or "").strip()
+        changed_files = list(metadata.get("workspace_submission_changed_files") or [])
+        audit_report_path = str(metadata.get("workspace_audit_report_path") or "").strip()
+        audit_diff_path = str(metadata.get("workspace_audit_diff_path") or "").strip()
+        has_submission_artifacts = bool(change_id or changed_files or audit_report_path or audit_diff_path)
+        promote_pending = submission_state not in {"promoted", "teardown_complete"} and (
+            submission_state != "sandboxed" or has_submission_artifacts
+        )
+
+        submissions.append(
+            {
+                "agent_id": str(report.get("session_id") or report.get("agent_id") or "").strip(),
+                "workspace_root": workspace_root,
+                "workspace_origin_root": str(metadata.get("workspace_origin_root") or "").strip(),
+                "change_id": change_id,
+                "state": submission_state,
+                "changed_files": changed_files,
+                "audit_report_path": audit_report_path,
+                "audit_diff_path": audit_diff_path,
+                "promote_pending": promote_pending,
+            }
+        )
+    return submissions
+
+
+def _collect_pipeline_root_sessions(
+    *,
+    store: AgentSessionStore,
+    core_execution_session_id: str,
+    pipeline_id: str = "",
+) -> List[Any]:
+    normalized_pipeline_id = str(pipeline_id or "").strip()
+    roots = store.list_children(core_execution_session_id)
+    if not normalized_pipeline_id:
+        return list(roots)
+    filtered: List[Any] = []
+    for child in roots:
+        metadata = getattr(child, "metadata", {})
+        metadata_dict = metadata if isinstance(metadata, dict) else {}
+        if str(metadata_dict.get("pipeline_id") or "").strip() != normalized_pipeline_id:
+            continue
+        filtered.append(child)
+    return filtered
+
+
+def _build_core_descendant_progress_signature(snapshot: List[Dict[str, Any]]) -> str:
+    normalized: List[Dict[str, Any]] = []
+    for child in list(snapshot or []):
+        if not isinstance(child, dict):
+            continue
+        metadata = child.get("metadata") if isinstance(child.get("metadata"), dict) else {}
+        normalized.append(
+            {
+                "agent_id": str(child.get("agent_id") or "").strip(),
+                "parent_id": str(child.get("parent_id") or "").strip(),
+                "role": str(child.get("role") or "").strip(),
+                "status": str(child.get("status") or "").strip(),
+                "updated_at": str(child.get("updated_at") or "").strip(),
+                "message_count": max(0, int(child.get("message_count") or 0)),
+                "blocked_reason": str(metadata.get("blocked_reason") or "").strip(),
+                "has_completion_report": bool(str(metadata.get("completion_report") or "").strip()),
+                "has_review_result": isinstance(metadata.get("review_result"), dict),
+            }
+        )
+    normalized.sort(
+        key=lambda item: (
+            str(item.get("agent_id") or ""),
+            str(item.get("updated_at") or ""),
+        )
+    )
+    return json.dumps(normalized, ensure_ascii=False, sort_keys=True)
+
+
+def _build_core_report_progress_signature(reports: List[Dict[str, Any]]) -> str:
+    normalized: List[Dict[str, Any]] = []
+    for report in list(reports or []):
+        if not isinstance(report, dict):
+            continue
+        rows = report.get("reports") if isinstance(report.get("reports"), list) else []
+        last_report = ""
+        if rows:
+            tail = rows[-1]
+            if isinstance(tail, str):
+                last_report = _trim_text(tail, limit=160)
+            else:
+                try:
+                    last_report = _trim_text(json.dumps(tail, ensure_ascii=False, default=str), limit=160)
+                except Exception:
+                    last_report = _trim_text(str(tail), limit=160)
+        metadata = report.get("metadata") if isinstance(report.get("metadata"), dict) else {}
+        normalized.append(
+            {
+                "agent_id": str(report.get("session_id") or report.get("agent_id") or "").strip(),
+                "status": str(report.get("status") or "").strip(),
+                "report_count": len(rows),
+                "last_report": last_report,
+                "blocked_reason": str(metadata.get("blocked_reason") or "").strip(),
+            }
+        )
+    normalized.sort(key=lambda item: str(item.get("agent_id") or ""))
+    return json.dumps(normalized, ensure_ascii=False, sort_keys=True)
+
+
+def _session_has_terminal_core_output(
+    *,
+    session: Any,
+    report_counts: Dict[str, int],
+) -> bool:
+    metadata = getattr(session, "metadata", {})
+    metadata_dict = metadata if isinstance(metadata, dict) else {}
+    if bool(metadata_dict.get("heartbeat_superseded")) or bool(metadata_dict.get("superseded")):
+        return True
+    blocked_reason = str(
+        metadata_dict.get("blocked_reason")
+        or metadata_dict.get("heartbeat_blocked_reason")
+        or ""
+    ).strip()
+    role = str(getattr(session, "role", "") or "").strip().lower()
+    session_id = str(getattr(session, "session_id", "") or "").strip()
+    if role == "expert":
+        return bool(report_counts.get(session_id, 0)) or bool(blocked_reason)
+    if role == "review":
+        return (
+            isinstance(metadata_dict.get("review_result"), dict)
+            or bool(str(metadata_dict.get("completion_report") or "").strip())
+            or bool(blocked_reason)
+        )
+    return (
+        bool(str(metadata_dict.get("completion_report") or "").strip())
+        or isinstance(metadata_dict.get("verification_report"), dict)
+        or bool(blocked_reason)
+    )
+
+
+def _collect_core_pending_descendants(
+    *,
+    store: AgentSessionStore,
+    core_execution_session_id: str,
+    pipeline_id: str,
+    reports: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    root_children = _collect_pipeline_root_sessions(
+        store=store,
+        core_execution_session_id=core_execution_session_id,
+        pipeline_id=pipeline_id,
+    )
+    root_ids = [str(getattr(item, "session_id", "") or "").strip() for item in root_children]
+    descendant_ids = _collect_descendant_session_ids(
+        store=store,
+        root_session_ids=[item for item in root_ids if item],
+    )
+    report_counts: Dict[str, int] = {}
+    for report in list(reports or []):
+        if not isinstance(report, dict):
+            continue
+        agent_id = str(report.get("session_id") or report.get("agent_id") or "").strip()
+        rows = report.get("reports") if isinstance(report.get("reports"), list) else []
+        if agent_id:
+            report_counts[agent_id] = len(rows)
+
+    pending: List[Dict[str, Any]] = []
+    for session_id in descendant_ids:
+        session = store.get(session_id)
+        if session is None:
+            continue
+        if session.status == AgentStatus.RUNNING:
+            pending.append(
+                {
+                    "agent_id": session.session_id,
+                    "parent_id": str(session.parent_id or ""),
+                    "role": str(session.role or ""),
+                    "status": str(session.status.value),
+                    "reason": "running",
+                }
+            )
+            continue
+        if session.status != AgentStatus.WAITING:
+            continue
+        if _session_has_terminal_core_output(session=session, report_counts=report_counts):
+            continue
+        metadata = session.metadata if isinstance(session.metadata, dict) else {}
+        pending.append(
+            {
+                "agent_id": session.session_id,
+                "parent_id": str(session.parent_id or ""),
+                "role": str(session.role or ""),
+                "status": str(session.status.value),
+                "reason": str(metadata.get("blocked_reason") or "waiting_without_terminal_output").strip()
+                or "waiting_without_terminal_output",
+            }
+        )
+    return pending
+
+
+def _evaluate_core_pipeline_state(
+    *,
+    reports: List[Dict[str, Any]],
+    review_results: List[Dict[str, Any]],
+    review_expected_count: int,
+    heartbeat_summary: Dict[str, Any],
+    pending_descendants: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    blocked_expert_reasons = [
+        str((report.get("metadata") or {}).get("blocked_reason") or "").strip()
+        for report in reports
+        if isinstance(report.get("metadata"), dict) and str((report.get("metadata") or {}).get("blocked_reason") or "").strip()
+    ]
+    for reason in list(heartbeat_summary.get("expert_blocked_reasons") or []):
+        reason_text = str(reason or "").strip()
+        if reason_text and reason_text not in blocked_expert_reasons:
+            blocked_expert_reasons.append(reason_text)
+
+    report_statuses = [str(report.get("status") or "").strip().lower() for report in reports]
+    reports_submitted = bool(report_statuses) and all(status == "waiting" for status in report_statuses)
+    review_gate_passed = True
+    review_stop_reason = ""
+    if review_expected_count > 0:
+        if len(review_results) < review_expected_count:
+            review_gate_passed = False
+            review_stop_reason = "review_missing"
+        else:
+            normalized_review_verdicts = [str(item.get("verdict") or "").strip().lower() for item in review_results]
+            if not all(verdict == "approve" for verdict in normalized_review_verdicts):
+                review_gate_passed = False
+                if any(verdict == "reject" for verdict in normalized_review_verdicts):
+                    review_stop_reason = "review_rejected"
+                elif any(verdict == "request_changes" for verdict in normalized_review_verdicts):
+                    review_stop_reason = "review_requested_changes"
+                else:
+                    review_stop_reason = "review_failed"
+
+    experts_blocked = bool(blocked_expert_reasons)
+    heartbeat_blocked_reasons = [
+        reason for reason in blocked_expert_reasons if str(reason or "").strip().startswith("task_heartbeat_")
+    ]
+    workspace_submissions = _collect_workspace_submission_summaries(reports)
+    pending_workspace_submission = any(
+        bool(item.get("promote_pending")) for item in workspace_submissions
+    )
+    pending_descendant_ids = [
+        str(item.get("agent_id") or "").strip()
+        for item in pending_descendants
+        if str(item.get("agent_id") or "").strip()
+    ]
+    task_completed = (
+        reports_submitted
+        and review_gate_passed
+        and not experts_blocked
+        and not pending_descendant_ids
+    )
+
+    if task_completed and pending_workspace_submission:
+        stop_reason = "awaiting_workspace_promotion"
+    elif task_completed:
+        stop_reason = "submitted_completion"
+    elif heartbeat_blocked_reasons:
+        stop_reason = heartbeat_blocked_reasons[0]
+    elif pending_descendant_ids:
+        stop_reason = "pending_descendant_work"
+    elif not reports_submitted:
+        stop_reason = "completion_not_submitted"
+    else:
+        stop_reason = review_stop_reason or (blocked_expert_reasons[0] if blocked_expert_reasons else "review_not_passed")
+
+    return {
+        "task_completed": bool(task_completed),
+        "stop_reason": stop_reason,
+        "reports_submitted": bool(reports_submitted),
+        "review_gate_passed": bool(review_gate_passed),
+        "review_stop_reason": review_stop_reason,
+        "experts_blocked": bool(experts_blocked),
+        "blocked_expert_reasons": blocked_expert_reasons,
+        "heartbeat_blocked_reasons": heartbeat_blocked_reasons,
+        "pending_workspace_submission": bool(pending_workspace_submission),
+        "workspace_submissions": workspace_submissions,
+        "pending_descendants": list(pending_descendants),
+        "pending_descendant_ids": pending_descendant_ids,
+    }
+
+
+def _build_fast_track_execution_receipt(
+    *,
+    pipeline_id: str,
+    goal: str,
+    reports: List[Dict[str, Any]],
+    task_completed: bool,
+    stop_reason: str,
+    fast_track_agent_id: str,
+    complexity_hint: str,
+    guard_blocked_count: int,
+    touched_files: List[str],
+) -> Dict[str, Any]:
+    summary_lines: List[str] = []
+    deliverables: List[str] = []
+    execution_runtime = _build_execution_runtime_summary(reports)
+    workspace_submissions = _collect_workspace_submission_summaries(reports)
+    workspace_submission_required = bool(touched_files) and any(
+        bool(item.get("promote_pending")) for item in workspace_submissions
+    )
+    for report in reports:
+        status = str(report.get("status") or "unknown").strip()
+        agent_id = str(report.get("session_id") or report.get("agent_id") or "").strip() or "fast_track_dev"
+        report_text = _extract_report_text(report)
+        if report_text:
+            summary_lines.append(f"- [{status}] {agent_id}: {report_text}")
+            deliverables.append(report_text)
+        else:
+            summary_lines.append(f"- [{status}] {agent_id}: report_received")
+
+    if not summary_lines:
+        summary_lines.append("- [info] no fast-track report payload was produced")
+
+    if task_completed and workspace_submission_required:
+        header = "Core fast-track execution completed in sandbox and is awaiting workspace promotion approval."
+    elif task_completed:
+        header = "Core fast-track execution completed."
+    else:
+        header = "Core fast-track execution did not reach completed state."
+
+    final_answer = "\n".join(
+        [
+            header,
+            f"Goal: {str(goal or '').strip()}",
+            f"Fast-track agent: {fast_track_agent_id or 'unknown'}",
+            f"Complexity hint: {complexity_hint}",
+            f"Guard blocked calls: {int(guard_blocked_count)}",
+            f"Touched files: {', '.join(touched_files) if touched_files else '(none)'}",
+            *summary_lines[:8],
+        ]
+    ).strip()
+
+    agent_state: Dict[str, Any] = {
+        "task_completed": bool(task_completed),
+        "final_answer": final_answer,
+        "completion_summary": final_answer,
+        "deliverables": deliverables[:12],
+        "execution_mode": "fast_track",
+        "fast_track_agent_id": str(fast_track_agent_id or ""),
+        "goal_id": "",
+        "review_count": 0,
+        "review_verdicts": [],
+        "guard_blocked_count": int(guard_blocked_count),
+        "touched_files": list(touched_files),
+        "workspace_submission_required": bool(workspace_submission_required),
+        "workspace_submissions": workspace_submissions[:8],
+    }
+    if execution_runtime:
+        agent_state["execution_runtime"] = execution_runtime
+        for key in (
+            "execution_backend",
+            "execution_backend_requested",
+            "sandbox_policy",
+            "network_policy",
+            "resource_profile",
+        ):
+            value = str(execution_runtime.get(key) or "").strip()
+            if value:
+                agent_state[key] = value
+
+    return {
+        "type": "execution_receipt",
+        "pipeline_id": pipeline_id,
+        "stop_reason": str(stop_reason or ""),
+        "agent_state": agent_state,
+    }
+
+
+def _build_fast_track_readonly_auto_verification_report(summary: str) -> Dict[str, Any]:
+    trimmed_summary = _trim_text(summary, limit=1200) or "read-only analysis completed"
+    return {
+        "tests": {
+            "passed": 0,
+            "failed": 0,
+            "errors": 0,
+            "attempts": 0,
+            "summary": "read-only analysis; no test execution required",
+        },
+        "lint": {
+            "status": "skipped",
+            "errors": 0,
+            "summary": "read-only analysis; no lint execution required",
+        },
+        "diff_review": {
+            "complete": True,
+            "summary": trimmed_summary,
+            "missing_items": [],
+        },
+        "changed_files": [],
+        "risks": [],
+    }
+
+
+def _build_fast_track_write_auto_verification_report(summary: str, *, changed_files: List[str]) -> Dict[str, Any]:
+    trimmed_summary = _trim_text(summary, limit=1200) or "fast-track write execution completed"
+    normalized_changed_files = _normalize_changed_files(changed_files)
+    risks: List[str] = []
+    if normalized_changed_files:
+        risks.append("Fast-track auto-finalize completed without explicit child verification; tests/lint were not run.")
+    return {
+        "tests": {
+            "passed": 0,
+            "failed": 0,
+            "errors": 0,
+            "attempts": 0,
+            "summary": "fast-track auto-finalize; no automated tests were run",
+        },
+        "lint": {
+            "status": "skipped",
+            "errors": 0,
+            "summary": "fast-track auto-finalize; no lint execution was run",
+        },
+        "diff_review": {
+            "complete": True,
+            "summary": trimmed_summary,
+            "missing_items": [],
+        },
+        "changed_files": normalized_changed_files,
+        "risks": risks,
+    }
+
+
+def _should_auto_complete_fast_track_analysis(
+    *,
+    dispatch: Dict[str, Any],
+    fast_track_status: str,
+    loop_end_reason: str,
+    last_content: str,
+    touched_files: set[str],
+    guard_blocked_details: List[Dict[str, Any]],
+) -> bool:
+    if str(fast_track_status or "").strip().lower() == AgentStatus.WAITING.value:
+        return False
+    if str(dispatch.get("intent_type") or "").strip().lower() != "analysis":
+        return False
+    if str(loop_end_reason or "").strip().lower() != "no_tool_calls":
+        return False
+    if not str(last_content or "").strip():
+        return False
+    if bool(touched_files):
+        return False
+    if bool(guard_blocked_details):
+        return False
+    return True
+
+
+def _should_auto_complete_fast_track_write(
+    *,
+    dispatch: Dict[str, Any],
+    fast_track_status: str,
+    loop_end_reason: str,
+    last_content: str,
+    successful_touched_files: set[str],
+    guard_blocked_details: List[Dict[str, Any]],
+) -> bool:
+    if str(fast_track_status or "").strip().lower() == AgentStatus.WAITING.value:
+        return False
+    if str(dispatch.get("intent_type") or "").strip().lower() == "analysis":
+        return False
+    if str(loop_end_reason or "").strip().lower() != "no_tool_calls":
+        return False
+    if not successful_touched_files:
+        return False
+    if bool(guard_blocked_details):
+        return False
+    return bool(str(last_content or "").strip())
+
+
+def _should_force_finalize_fast_track_analysis(
+    *,
+    dispatch: Dict[str, Any],
+    fast_track_status: str,
+    last_content: str,
+    touched_files: set[str],
+    guard_blocked_details: List[Dict[str, Any]],
+    reports: List[Dict[str, Any]],
+) -> bool:
+    if str(fast_track_status or "").strip().lower() == AgentStatus.WAITING.value:
+        return False
+    if str(dispatch.get("intent_type") or "").strip().lower() != "analysis":
+        return False
+    if not str(last_content or "").strip():
+        return False
+    if bool(touched_files):
+        return False
+    if bool(guard_blocked_details):
+        return False
+    if _reports_have_text_payload(reports):
+        return False
+    return True
+
+
+def _normalize_child_session_cleanup_mode(mode: str) -> str:
+    normalized = str(mode or "").strip().lower()
+    aliases = {
+        "": "retain",
+        "off": "retain",
+        "none": "retain",
+        "disabled": "retain",
+        "keep": "retain",
+        "destroy_on_end": "destroy",
+        "destroyed": "destroy",
+        "immediate_destroy": "destroy",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in {"retain", "destroy", "ttl"}:
+        return "retain"
+    return normalized
+
+
+def _parse_iso_to_timestamp(raw: str) -> Optional[float]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return float(dt.timestamp())
+
+
+def _session_age_seconds(session: Any, *, now_ts: float) -> Optional[float]:
+    updated_at = str(getattr(session, "updated_at", "") or getattr(session, "created_at", "") or "")
+    ts = _parse_iso_to_timestamp(updated_at)
+    if ts is None:
+        return None
+    return max(0.0, float(now_ts - ts))
+
+
+def _collect_descendant_session_ids(
+    *,
+    store: AgentSessionStore,
+    root_session_ids: List[str],
+) -> List[str]:
+    queue: List[str] = [str(item or "").strip() for item in root_session_ids if str(item or "").strip()]
+    collected: List[str] = []
+    visited: set[str] = set()
+    while queue:
+        session_id = queue.pop(0)
+        if not session_id or session_id in visited:
+            continue
+        visited.add(session_id)
+        collected.append(session_id)
+        for child in store.list_children(session_id):
+            child_id = str(getattr(child, "session_id", "") or "").strip()
+            if child_id and child_id not in visited:
+                queue.append(child_id)
+    return collected
+
+
+def _teardown_fast_track_worktree(
+    *,
+    store: AgentSessionStore,
+    session_id: str,
+    reason: str = "fast_track_complete",
+) -> Dict[str, Any]:
+    """Teardown a fast-track agent's worktree if it owns one.
+
+    Called in the fast-track finally block to prevent worktree leaks.
+    Safe to call even if no worktree exists (returns a no-op summary).
+    """
+    summary: Dict[str, Any] = {"attempted": False, "success": False, "reason": reason}
+    try:
+        session = store.get(session_id) if session_id else None
+        if session is None:
+            return summary
+        meta = session.metadata if isinstance(session.metadata, dict) else {}
+        ws_mode = str(meta.get("workspace_mode") or "").strip()
+        ws_root = str(meta.get("workspace_root") or "").strip()
+        ws_owner = str(meta.get("workspace_owner_session_id") or "").strip()
+        if ws_mode != "worktree" or not ws_root or ws_owner != session_id:
+            return summary
+
+        from system.git_worktree_sandbox import cleanup_git_worktree_sandbox
+        from pathlib import Path as _Path
+
+        summary["attempted"] = True
+        success, error = cleanup_git_worktree_sandbox(worktree_root=_Path(ws_root))
+        summary["success"] = success
+        if error:
+            summary["error"] = error
+
+        # Update session metadata to reflect teardown
+        store.update_metadata(session_id, {
+            "workspace_submission_state": "teardown_complete",
+            "workspace_cleanup_on_destroy": False,
+        })
+        logger.info(
+            "[Pipeline] Fast-track worktree teardown: session=%s success=%s reason=%s",
+            session_id, success, reason,
+        )
+    except Exception as exc:
+        summary["error"] = str(exc)
+        logger.debug("Fast-track worktree teardown failed: %s", exc, exc_info=True)
+    return summary
+
+
+def _apply_child_session_cleanup(
+    *,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    core_execution_session_id: str,
+    pipeline_id: str,
+    mode: str,
+    ttl_seconds: int,
+) -> Dict[str, Any]:
+    normalized_mode = _normalize_child_session_cleanup_mode(mode)
+    normalized_ttl = max(0, int(ttl_seconds))
+    summary: Dict[str, Any] = {
+        "mode": normalized_mode,
+        "requested_mode": str(mode or ""),
+        "ttl_seconds": normalized_ttl,
+        "core_execution_session_id": str(core_execution_session_id or ""),
+        "pipeline_id": str(pipeline_id or ""),
+        "root_candidates": 0,
+        "destroyed_count": 0,
+        "purged_message_count": 0,
+        "destroyed_session_ids": [],
+    }
+    if normalized_mode == "retain":
+        return summary
+
+    roots = store.list_children(core_execution_session_id)
+    now_ts = time.time()
+    root_ids: List[str] = []
+    for child in roots:
+        child_id = str(getattr(child, "session_id", "") or "").strip()
+        if not child_id:
+            continue
+        metadata = getattr(child, "metadata", {})
+        metadata_dict = metadata if isinstance(metadata, dict) else {}
+        child_pipeline_id = str(metadata_dict.get("pipeline_id") or "").strip()
+        if not child_pipeline_id:
+            continue
+
+        if normalized_mode == "destroy":
+            if child_pipeline_id == str(pipeline_id or "").strip():
+                root_ids.append(child_id)
+            continue
+
+        # ttl mode: clean aged pipeline-scoped roots (current and historical runs).
+        age_seconds = _session_age_seconds(child, now_ts=now_ts)
+        if age_seconds is None:
+            continue
+        if age_seconds >= float(normalized_ttl):
+            root_ids.append(child_id)
+
+    root_ids = sorted(set(root_ids))
+    summary["root_candidates"] = len(root_ids)
+    if not root_ids:
+        return summary
+
+    destroy_ids = _collect_descendant_session_ids(store=store, root_session_ids=root_ids)
+    destroyed_ids: List[str] = []
+    for session_id in destroy_ids:
+        try:
+            store.destroy(session_id, reason=f"pipeline_cleanup:{normalized_mode}:{pipeline_id}")
+            destroyed_ids.append(session_id)
+        except Exception:
+            logger.debug("Failed to destroy child session during cleanup: %s", session_id, exc_info=True)
+
+    purged_message_count = 0
+    if destroyed_ids:
+        try:
+            purged_message_count = mailbox.purge_agent_messages(destroyed_ids)
+        except Exception:
+            logger.debug("Failed to purge mailbox messages during cleanup", exc_info=True)
+
+    summary["destroyed_count"] = len(destroyed_ids)
+    summary["purged_message_count"] = int(purged_message_count)
+    summary["destroyed_session_ids"] = destroyed_ids[:20]
+    return summary
+
+
+def _build_runtime_tool_definitions(tool_names: List[str]) -> List[Dict[str, Any]]:
+    """Build lightweight tool schemas from allowed tool names.
+
+    The full contract schema is enforced at execution time by the tool
+    executor and downstream policy firewalls. Here we expose only minimal
+    JSON-schema envelopes so the model can legally emit structured tool calls.
+    """
+    definitions: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_name in tool_names:
+        tool_name = str(raw_name or "").strip()
+        if not tool_name or tool_name in seen:
+            continue
+        seen.add(tool_name)
+        if is_memory_tool(tool_name):
+            definitions.extend(get_memory_tool_definitions([tool_name]))
+            continue
+        definitions.append(
+            {
+                "name": tool_name,
+                "description": f"Execute runtime tool `{tool_name}`.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                },
+            }
+        )
+    return definitions
+
+
+def _ensure_core_runtime_session(
+    *,
+    store: AgentSessionStore,
+    core_execution_session_id: str,
+    goal: str,
+    pipeline_id: str,
+) -> None:
+    existing = store.get(core_execution_session_id)
+    if existing is None:
+        metadata = {"pipeline_id": str(pipeline_id or "").strip()}
+        store.create(
+            session_id=core_execution_session_id,
+            role="core",
+            parent_id="",
+            task_description=str(goal or "").strip(),
+            metadata=metadata,
+        )
+        return
+    if existing.status != AgentStatus.RUNNING:
+        try:
+            store.update_status(core_execution_session_id, AgentStatus.RUNNING)
+        except Exception:
+            logger.debug("Failed to set core runtime session running: %s", core_execution_session_id, exc_info=True)
+    try:
+        store.update_metadata(core_execution_session_id, {"pipeline_id": str(pipeline_id or "").strip()})
+    except Exception:
+        logger.debug("Failed to update core runtime session metadata: %s", core_execution_session_id, exc_info=True)
+
+
+def _build_core_parent_tool_definitions() -> List[Dict[str, Any]]:
+    allowed = set(_CORE_PARENT_TOOL_ALLOWLIST)
+    definitions: List[Dict[str, Any]] = []
+    for item in get_parent_tool_definitions():
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if name in allowed:
+            definitions.append(dict(item))
+    return definitions
+
+
+def _collect_core_descendant_status_snapshot(
+    *,
+    store: AgentSessionStore,
+    core_execution_session_id: str,
+    pipeline_id: str = "",
+) -> List[Dict[str, Any]]:
+    root_children = _collect_pipeline_root_sessions(
+        store=store,
+        core_execution_session_id=core_execution_session_id,
+        pipeline_id=pipeline_id,
+    )
+    root_ids = [str(getattr(item, "session_id", "") or "").strip() for item in root_children]
+    descendant_ids = _collect_descendant_session_ids(
+        store=store,
+        root_session_ids=[item for item in root_ids if item],
+    )
+    snapshot: List[Dict[str, Any]] = []
+    for session_id in descendant_ids:
+        session = store.get(session_id)
+        if session is None:
+            continue
+        row = session.to_status_summary()
+        row["parent_id"] = str(session.parent_id or "")
+        snapshot.append(row)
+    return snapshot
+
+
+def _resolve_core_loop_policy(*, child_max_rounds: int) -> Dict[str, Any]:
+    runtime_cfg: Dict[str, Any] = {}
+    try:
+        embla_cfg = get_embla_system_config()
+        runtime_cfg = embla_cfg.get("runtime") if isinstance(embla_cfg, dict) else {}
+        runtime_cfg = runtime_cfg if isinstance(runtime_cfg, dict) else {}
+    except Exception:
+        runtime_cfg = {}
+    raw_core_loop = runtime_cfg.get("core_loop") if isinstance(runtime_cfg.get("core_loop"), dict) else {}
+    try:
+        soft_max_rounds = max(1, int(raw_core_loop.get("soft_max_rounds", child_max_rounds)))
+    except Exception:
+        soft_max_rounds = max(1, int(child_max_rounds))
+    try:
+        hard_max_rounds = int(raw_core_loop.get("hard_max_rounds", 0))
+    except Exception:
+        hard_max_rounds = 0
+    try:
+        poll_parent_every_n = max(1, int(raw_core_loop.get("poll_parent_every_n", 3)))
+    except Exception:
+        poll_parent_every_n = 3
+    try:
+        quiescent_cycles_before_stop = max(1, int(raw_core_loop.get("quiescent_cycles_before_stop", 2)))
+    except Exception:
+        quiescent_cycles_before_stop = 2
+    return {
+        "soft_max_rounds": soft_max_rounds,
+        "hard_max_rounds": max(0, hard_max_rounds),
+        "poll_parent_every_n": poll_parent_every_n,
+        "quiescent_cycles_before_stop": quiescent_cycles_before_stop,
+    }
+
+
+def _build_core_loop_initial_task(
+    *,
+    message: str,
+    core_execution_session_id: str,
+    pipeline_id: str,
+    children_snapshot: List[Dict[str, Any]],
+) -> str:
+    roster_lines: List[str] = []
+    for child in children_snapshot[:36]:
+        child_id = str(child.get("agent_id") or "").strip()
+        role = str(child.get("role") or "").strip()
+        status = str(child.get("status") or "").strip()
+        parent_id = str(child.get("parent_id") or "").strip()
+        task_desc = _trim_text(child.get("task_description") or "", limit=120)
+        parent_text = f" | parent={parent_id}" if parent_id else ""
+        roster_lines.append(f"- {child_id} | role={role} | status={status}{parent_text} | task={task_desc}")
+
+    if not roster_lines:
+        roster_lines.append("- no_active_children")
+
+    return _PIPELINE_PROMPT_ASSEMBLER.render_block(
+        "agents/core_exec/blocks/core_lifecycle_orchestrator.md",
+        variables={
+            "pipeline_id": str(pipeline_id or "").strip(),
+            "core_execution_session_id": str(core_execution_session_id or "").strip(),
+            "goal": str(message or "").strip(),
+            "children_roster": "\n".join(roster_lines),
+        },
+    ).strip()
+
+
+def _new_scheduler_metrics(layer: str) -> Dict[str, Any]:
+    return {
+        "layer": str(layer or "").strip() or "unknown",
+        "parallel_limit": 0,
+        "peak_parallelism": 0,
+    }
+
+
+def _normalize_scheduler_metrics(metrics: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(metrics, dict):
+        return None
+    layer = str(metrics.get("layer") or "").strip() or "unknown"
+    try:
+        parallel_limit = max(0, int(metrics.get("parallel_limit") or 0))
+    except Exception:
+        parallel_limit = 0
+    try:
+        peak_parallelism = max(0, int(metrics.get("peak_parallelism") or 0))
+    except Exception:
+        peak_parallelism = 0
+    normalized: Dict[str, Any] = {
+        "layer": layer,
+        "parallel_limit": parallel_limit,
+        "peak_parallelism": peak_parallelism,
+    }
+    raw_layers = metrics.get("layers")
+    if isinstance(raw_layers, dict):
+        normalized_layers: Dict[str, Dict[str, Any]] = {}
+        for raw_name, raw_metrics in raw_layers.items():
+            normalized_leaf = _normalize_scheduler_metrics(raw_metrics)
+            if not isinstance(normalized_leaf, dict):
+                continue
+            layer_name = str(raw_name or normalized_leaf.get("layer") or "").strip() or str(normalized_leaf.get("layer") or "unknown")
+            normalized_layers[layer_name] = {
+                "layer": str(normalized_leaf.get("layer") or layer_name),
+                "parallel_limit": max(0, int(normalized_leaf.get("parallel_limit") or 0)),
+                "peak_parallelism": max(0, int(normalized_leaf.get("peak_parallelism") or 0)),
+            }
+        if normalized_layers:
+            normalized["layers"] = normalized_layers
+    return normalized
+
+
+def _note_scheduler_batch_capacity(metrics: Optional[Dict[str, Any]], parallel_width: int) -> None:
+    if not isinstance(metrics, dict):
+        return
+    active_runs = max(0, int(metrics.get("_active_runs") or 0))
+    target_width = max(0, int(parallel_width))
+    metrics["parallel_limit"] = max(max(0, int(metrics.get("parallel_limit") or 0)), active_runs + target_width)
+
+
+def _mark_scheduler_run_start(metrics: Optional[Dict[str, Any]]) -> None:
+    if not isinstance(metrics, dict):
+        return
+    active_runs = max(0, int(metrics.get("_active_runs") or 0)) + 1
+    metrics["_active_runs"] = active_runs
+    metrics["parallel_limit"] = max(max(0, int(metrics.get("parallel_limit") or 0)), active_runs)
+    metrics["peak_parallelism"] = max(max(0, int(metrics.get("peak_parallelism") or 0)), active_runs)
+
+
+def _mark_scheduler_run_end(metrics: Optional[Dict[str, Any]]) -> None:
+    if not isinstance(metrics, dict):
+        return
+    metrics["_active_runs"] = max(0, int(metrics.get("_active_runs") or 0) - 1)
+
+
+def _build_core_execution_receipt(
+    *,
+    pipeline_id: str,
+    decomposition: Dict[str, Any],
+    expert_results: List[Dict[str, Any]],
+    reports: List[Dict[str, Any]],
+    review_results: List[Dict[str, Any]],
+    task_completed: bool,
+    stop_reason: str,
+    scheduler_metrics: Optional[Dict[str, Any]] = None,
+    heartbeat_summary: Optional[Dict[str, Any]] = None,
+    blocked_expert_reasons: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    deliverables: List[str] = []
+    summary_lines: List[str] = []
+    execution_runtime = _build_execution_runtime_summary(reports)
+    workspace_submissions = _collect_workspace_submission_summaries(reports)
+    workspace_submission_required = any(bool(item.get("promote_pending")) for item in workspace_submissions)
+    for report in reports:
+        agent_id = str(report.get("session_id") or report.get("agent_id") or "").strip()
+        status = str(report.get("status") or "unknown").strip()
+        report_text = _extract_report_text(report)
+        if report_text:
+            deliverables.append(report_text)
+            summary_lines.append(f"- [{status}] {agent_id or 'expert'}: {report_text}")
+        else:
+            summary_lines.append(f"- [{status}] {agent_id or 'expert'}: report_received")
+
+    if not summary_lines:
+        summary_lines.append("- [info] no expert report payload was produced")
+
+    review_lines: List[str] = []
+    review_verdicts: List[str] = []
+    for review in review_results:
+        verdict = str(review.get("verdict") or "unknown").strip().lower()
+        review_verdicts.append(verdict)
+        expert_type = str(review.get("expert_type") or "expert").strip()
+        summary = _trim_text(review.get("summary") or "")
+        issues = review.get("issues") if isinstance(review.get("issues"), list) else []
+        review_lines.append(
+            f"- [{verdict}] review/{expert_type}: "
+            f"{summary or 'no_summary'} (issues={len(issues)})"
+        )
+
+    if not review_lines:
+        review_lines.append("- [info] review stage was not executed")
+
+    normalized_blocked_reasons = [str(item).strip() for item in list(blocked_expert_reasons or []) if str(item).strip()]
+    if task_completed and workspace_submission_required:
+        header = "Core execution pipeline completed in sandbox and is awaiting workspace promotion approval."
+    elif task_completed:
+        header = "Core execution pipeline completed."
+    elif normalized_blocked_reasons or "blocked" in str(stop_reason or "").strip().lower():
+        header = "Core execution pipeline is blocked and requires orchestration recovery."
+    else:
+        header = "Core execution pipeline delegated tasks and is waiting for child completion."
+
+    final_answer = "\n".join(
+        [
+            header,
+            f"Goal: {str(decomposition.get('original_goal') or '').strip()}",
+            f"Experts spawned: {len(expert_results)}",
+            f"Review checks: {len(review_results)}",
+            *summary_lines[:8],
+            *review_lines[:8],
+        ]
+    ).strip()
+
+    combined_deliverables = (deliverables + review_lines)[:12]
+
+    agent_state = {
+        "task_completed": bool(task_completed),
+        "final_answer": final_answer,
+        "completion_summary": final_answer,
+        "deliverables": combined_deliverables,
+        "expert_count": len(expert_results),
+        "review_count": len(review_results),
+        "review_verdicts": review_verdicts,
+        "goal_id": str(decomposition.get("goal_id") or ""),
+        "workspace_submission_required": bool(workspace_submission_required),
+        "workspace_submissions": workspace_submissions[:8],
+    }
+    if execution_runtime:
+        agent_state["execution_runtime"] = execution_runtime
+        for key in (
+            "execution_backend",
+            "execution_backend_requested",
+            "sandbox_policy",
+            "network_policy",
+            "resource_profile",
+        ):
+            value = str(execution_runtime.get(key) or "").strip()
+            if value:
+                agent_state[key] = value
+    normalized_scheduler_metrics = _normalize_scheduler_metrics(scheduler_metrics)
+    if isinstance(normalized_scheduler_metrics, dict):
+        agent_state["scheduler"] = normalized_scheduler_metrics
+    if isinstance(heartbeat_summary, dict):
+        agent_state["heartbeat_summary"] = dict(heartbeat_summary)
+    if normalized_blocked_reasons:
+        agent_state["blocked_expert_reasons"] = list(normalized_blocked_reasons[:20])
+        agent_state["experts_blocked"] = True
+    else:
+        agent_state["experts_blocked"] = False
+
+    return {
+        "type": "execution_receipt",
+        "pipeline_id": pipeline_id,
+        "stop_reason": str(stop_reason or ""),
+        "agent_state": agent_state,
+    }
+
+
+def _collect_dev_loop_result(*, store: AgentSessionStore, session_id: str, task_id: str) -> Dict[str, Any]:
+    final_session = store.get(session_id)
+    final_status = str(final_session.status.value) if final_session is not None else "missing"
+    completion_report = ""
+    verification_report: Dict[str, Any] = {}
+    changed_files: List[str] = []
+    metadata: Dict[str, Any] = {}
+    if final_session is not None:
+        metadata = dict(final_session.metadata or {})
+        completion_report = str(final_session.metadata.get("completion_report") or "").strip()
+        raw_verification_report = final_session.metadata.get("verification_report")
+        if isinstance(raw_verification_report, dict):
+            verification_report = dict(raw_verification_report)
+        changed_files = _normalize_changed_files(
+            verification_report.get("changed_files") if verification_report else final_session.metadata.get("changed_files")
+        )
+    return {
+        "agent_id": str(session_id or "").strip(),
+        "task_id": str(task_id or "").strip(),
+        "status": final_status,
+        "completion_report": completion_report,
+        "verification_report": verification_report,
+        "changed_files": changed_files,
+        "metadata": metadata,
+    }
+
+
+def _collect_review_loop_result(*, store: AgentSessionStore, session_id: str) -> Dict[str, Any]:
+    final_session = store.get(session_id)
+    final_status = str(final_session.status.value) if final_session is not None else "missing"
+    completion_report = ""
+    review_result: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = {}
+    if final_session is not None:
+        metadata = dict(final_session.metadata or {})
+        completion_report = str(metadata.get("completion_report") or "").strip()
+        raw_review_result = metadata.get("review_result")
+        if isinstance(raw_review_result, dict):
+            review_result = dict(raw_review_result)
+    if not isinstance(review_result, dict) or not review_result:
+        review_result = {
+            "verdict": "reject",
+            "requirement_alignment": [],
+            "code_quality": {"status": "failed", "summary": "Review agent did not emit a valid review_result."},
+            "regression_risk": {"level": "high", "summary": "No valid review_result was produced."},
+            "test_coverage": {"status": "unknown", "summary": "No valid review_result was produced.", "missing_cases": []},
+            "issues": ["Review agent completed without a valid review_result payload."],
+            "suggestions": ["Rerun the independent review with a valid structured completion payload."],
+            "summary": completion_report or "Review agent failed to produce a valid structured review result.",
+        }
+    return {
+        "agent_id": str(session_id or "").strip(),
+        "status": final_status,
+        "completion_report": completion_report,
+        "review_result": review_result,
+        "metadata": metadata,
+    }
+
+
+def _update_dev_task_board(
+    *,
+    task_board_engine: Optional[TaskBoardEngine],
+    board_id: str,
+    task_id: str,
+    result: Dict[str, Any],
+    log_context: str,
+) -> None:
+    if task_board_engine is None or not str(board_id or "").strip() or not str(task_id or "").strip():
+        return
+    final_status = str(result.get("status") or "").strip()
+    completion_report = str(result.get("completion_report") or "").strip()
+    changed_files = _normalize_changed_files(result.get("changed_files"))
+    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    if bool(metadata.get("heartbeat_superseded")):
+        return
+    blocked_reason = str(metadata.get("blocked_reason") or metadata.get("heartbeat_blocked_reason") or "").strip()
+    try:
+        if final_status == AgentStatus.WAITING.value and blocked_reason:
+            task_board_engine.update_task(
+                board_id,
+                task_id,
+                status=TaskStatus.BLOCKED,
+                summary=blocked_reason,
+            )
+        elif final_status == AgentStatus.WAITING.value:
+            task_board_engine.update_task(
+                board_id,
+                task_id,
+                status=TaskStatus.DONE,
+                summary=completion_report or "child loop completed",
+                files_changed=changed_files if changed_files else None,
+            )
+        elif final_status == AgentStatus.RUNNING.value:
+            task_board_engine.update_task(
+                board_id,
+                task_id,
+                status=TaskStatus.IN_PROGRESS,
+            )
+    except Exception:
+        logger.debug(
+            "Failed to update task board after %s (board=%s task=%s)",
+            log_context,
+            board_id,
+            task_id,
+            exc_info=True,
+        )
+
+
+async def _run_review_mini_loop(
+    *,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    child_llm_call: ChildLLMCallFn,
+    child_tool_executor: ChildToolExecutorFn,
+    child_max_rounds: int,
+    emit: Callable[[Dict[str, Any]], Awaitable[None]],
+    pipeline_id: str,
+    expert_id: str,
+    expert_type: str,
+    task_board_engine: Optional[TaskBoardEngine],
+    board_id: str,
+    session_id: str,
+    review_cycle: int,
+    start_event_type: str,
+    loop_event_type: str,
+    end_event_type: str,
+    extra_event_fields: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    normalized_session_id = str(session_id or "").strip()
+    event_fields = {
+        "pipeline_id": pipeline_id,
+        "expert_id": expert_id,
+        "expert_type": expert_type,
+        "board_id": board_id,
+        "review_agent_id": normalized_session_id,
+        "review_cycle": max(1, int(review_cycle or 1)),
+    }
+    if isinstance(extra_event_fields, dict):
+        event_fields.update({k: v for k, v in extra_event_fields.items()})
+
+    session = store.get(normalized_session_id)
+    if session is None:
+        result = _collect_review_loop_result(store=store, session_id=normalized_session_id)
+        await emit(
+            {
+                "type": end_event_type,
+                **event_fields,
+                "status": str(result.get("status") or "missing"),
+                "completion_report": str(result.get("completion_report") or ""),
+                "result": dict(result.get("review_result") or {}),
+            }
+        )
+        return result
+
+    review_tool_subset = list(session.tool_subset or [])
+    review_prompt_blocks = list(session.prompt_blocks or [])
+    raw_hints = session.metadata.get("memory_hints") if isinstance(session.metadata, dict) else None
+    review_memory_hints = [str(item).strip() for item in list(raw_hints or []) if str(item).strip()]
+    review_runtime = ReviewAgent(
+        config=ReviewAgentConfig(
+            prompt_blocks=review_prompt_blocks,
+            memory_hints=review_memory_hints,
+            prompts_root=_CANONICAL_PROMPTS_ROOT,
+        ),
+        task_board_engine=task_board_engine,
+    )
+    review_runtime_tool_defs = _build_runtime_tool_definitions(review_tool_subset)
+    review_allowed_tools = {str(item).strip() for item in review_tool_subset if str(item).strip()}
+    review_initial_task = str(session.task_description or "").strip() or "Review the completed work and produce a structured review_result."
+    review_loop_config = MiniLoopConfig(
+        max_rounds=max(1, min(int(child_max_rounds), 6)),
+        poll_parent_every_n=3,
+    )
+
+    async def _execute_review_tool(
+        tool_name: str,
+        arguments: Dict[str, Any],
+        *,
+        _review_session_id: str = normalized_session_id,
+    ) -> Dict[str, Any]:
+        normalized_tool = str(tool_name or "").strip()
+        if normalized_tool not in review_allowed_tools:
+            return {
+                "error": f"tool_not_allowed:{normalized_tool}",
+                "status": "blocked",
+                "tool_name": normalized_tool,
+            }
+        safe_arguments = arguments if isinstance(arguments, dict) else {}
+        if is_memory_tool(normalized_tool):
+            return handle_memory_tool(normalized_tool, safe_arguments)
+        prepared_arguments = _prepare_child_tool_arguments(
+            store=store,
+            child_session_id=_review_session_id,
+            tool_name=normalized_tool,
+            arguments=safe_arguments,
+        )
+        return await child_tool_executor(normalized_tool, prepared_arguments, _review_session_id)
+
+    await emit({"type": start_event_type, **event_fields, "tool_subset": review_tool_subset})
+    async for mini_event in run_mini_loop(
+        session_id=normalized_session_id,
+        store=store,
+        mailbox=mailbox,
+        llm_call=child_llm_call,
+        tool_executor=_execute_review_tool,
+        tool_definitions=review_runtime_tool_defs,
+        system_prompt=review_runtime.build_system_prompt(),
+        initial_task=review_initial_task,
+        config=review_loop_config,
+    ):
+        await emit({"type": loop_event_type, **event_fields, "event": mini_event})
+
+    result = _collect_review_loop_result(store=store, session_id=normalized_session_id)
+    await emit(
+        {
+            "type": end_event_type,
+            **event_fields,
+            "status": str(result.get("status") or ""),
+            "completion_report": str(result.get("completion_report") or ""),
+            "result": dict(result.get("review_result") or {}),
+        }
+    )
+    return result
+
+
+async def _refresh_expert_report_to_core(
+    *,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    task_board_engine: Optional[TaskBoardEngine],
+    core_execution_session_id: str,
+    expert_id: str,
+) -> bool:
+    normalized_expert_id = str(expert_id or "").strip()
+    if not normalized_expert_id:
+        return False
+    expert_session = store.get(normalized_expert_id)
+    if expert_session is None:
+        return False
+    expert = ExpertAgent(
+        config=ExpertAgentConfig(
+            expert_type=str(expert_session.role or "expert").strip() or "expert",
+            prompt_blocks=list(expert_session.prompt_blocks or []),
+            tool_subset=list(expert_session.tool_subset or []),
+        ),
+        session_id=normalized_expert_id,
+        store=store,
+        mailbox=mailbox,
+        task_board_engine=task_board_engine,
+    )
+    expert_board_id = str((expert_session.metadata or {}).get("board_id") or "").strip()
+    if expert_board_id:
+        expert._board_id = expert_board_id
+    refreshed_report = expert.aggregate_results()
+    mailbox.send(
+        normalized_expert_id,
+        str(core_execution_session_id or "").strip(),
+        refreshed_report,
+        message_type="report",
+    )
+    return True
+
+
+def _restore_expert_tasks_from_board(
+    *,
+    task_board_engine: Optional[TaskBoardEngine],
+    board_id: str,
+) -> List[TaskItem]:
+    if task_board_engine is None or not str(board_id or "").strip():
+        return []
+    board = task_board_engine.get_board(str(board_id or "").strip())
+    if board is None:
+        return []
+    restored: List[TaskItem] = []
+    for task in list(board.tasks or []):
+        if isinstance(task, TaskItem):
+            restored.append(TaskItem(**task.to_dict()))
+        elif isinstance(task, dict):
+            restored.append(TaskItem(**dict(task)))
+    return restored
+
+
+def _select_active_review_session(
+    *,
+    store: AgentSessionStore,
+    expert_id: str,
+) -> Optional[Any]:
+    candidates: List[tuple[int, str, Any]] = []
+    for child in list(store.list_children(str(expert_id or "").strip()) or []):
+        if str(getattr(child, "role", "") or "").strip().lower() != "review":
+            continue
+        metadata = getattr(child, "metadata", {}) if child is not None else {}
+        metadata_dict = metadata if isinstance(metadata, dict) else {}
+        if bool(metadata_dict.get("superseded")) or bool(metadata_dict.get("heartbeat_superseded")):
+            continue
+        has_terminal_output = bool(
+            isinstance(metadata_dict.get("review_result"), dict)
+            or str(metadata_dict.get("completion_report") or "").strip()
+            or str(metadata_dict.get("blocked_reason") or "").strip()
+        )
+        if has_terminal_output:
+            continue
+        review_cycle = max(0, int(metadata_dict.get("review_cycle") or 0))
+        updated_at = str(getattr(child, "updated_at", "") or "")
+        candidates.append((review_cycle, updated_at, child))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (int(item[0]), str(item[1])), reverse=True)
+    return candidates[0][2]
+
+
+def _mark_session_superseded(
+    *,
+    store: AgentSessionStore,
+    session_id: str,
+    reason: str,
+    replacement_agent_ids: Optional[List[str]] = None,
+) -> None:
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id:
+        return
+    try:
+        store.update_metadata(
+            normalized_session_id,
+            {
+                "superseded": True,
+                "superseded_reason": str(reason or "").strip(),
+                "superseded_by_agent_ids": list(replacement_agent_ids or []),
+            },
+        )
+    except Exception:
+        logger.debug("Failed to mark session superseded: %s", normalized_session_id, exc_info=True)
+
+
+def _build_dev_loop_job_payload(
+    *,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    child_llm_call: ChildLLMCallFn,
+    child_tool_executor: ChildToolExecutorFn,
+    child_max_rounds: int,
+    emit: Callable[[Dict[str, Any]], Awaitable[None]],
+    pipeline_id: str,
+    expert_id: str,
+    expert_type: str,
+    task_board_engine: Optional[TaskBoardEngine],
+    board_id: str,
+    session_id: str,
+    task_id: str,
+    fallback_tool_subset: List[str],
+    fallback_prompt_blocks: List[str],
+    fallback_task_description: str,
+    start_event_type: str,
+    loop_event_type: str,
+    end_event_type: str,
+    board_log_context: str,
+    extra_event_fields: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return {
+        "store": store,
+        "mailbox": mailbox,
+        "child_llm_call": child_llm_call,
+        "child_tool_executor": child_tool_executor,
+        "child_max_rounds": child_max_rounds,
+        "emit": emit,
+        "pipeline_id": pipeline_id,
+        "expert_id": expert_id,
+        "expert_type": expert_type,
+        "task_board_engine": task_board_engine,
+        "board_id": board_id,
+        "session_id": session_id,
+        "task_id": task_id,
+        "fallback_tool_subset": list(fallback_tool_subset or []),
+        "fallback_prompt_blocks": list(fallback_prompt_blocks or []),
+        "fallback_task_description": str(fallback_task_description or ""),
+        "start_event_type": start_event_type,
+        "loop_event_type": loop_event_type,
+        "end_event_type": end_event_type,
+        "board_log_context": board_log_context,
+        "extra_event_fields": dict(extra_event_fields or {}),
+    }
+
+
+async def _execute_expert_review_cycle(
+    *,
+    expert: ExpertAgent,
+    original_task_text: str,
+    pipeline_id: str,
+    expert_id: str,
+    expert_type: str,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    task_board_engine: Optional[TaskBoardEngine],
+    child_execution_enabled: bool,
+    child_llm_call: Optional[ChildLLMCallFn],
+    child_tool_executor: Optional[ChildToolExecutorFn],
+    child_max_rounds: int,
+    emit: Callable[[Dict[str, Any]], Awaitable[None]],
+    review_cycle: int,
+    changed_files: List[str],
+    dev_artifacts: List[Dict[str, Any]],
+    aggregate_test_results: Dict[str, Any],
+    review_start_event_type: str,
+    review_loop_event_type: str,
+    review_end_event_type: str,
+    review_extra_event_fields: Optional[Dict[str, Any]] = None,
+    existing_review_agent_id: str = "",
+) -> Dict[str, Any]:
+    review_payload: Optional[Dict[str, Any]] = None
+    review_agent_id = str(existing_review_agent_id or "").strip()
+    if not review_agent_id:
+        spawned_review = expert.spawn_review(
+            original_task=original_task_text,
+            changed_files=changed_files,
+            verification_reports=dev_artifacts,
+            cycle=review_cycle,
+        )
+        review_agent_id = str(spawned_review.get("agent_id") or "").strip()
+        await emit(
+            {
+                "type": "review_spawned",
+                "pipeline_id": pipeline_id,
+                "expert_id": str(expert_id),
+                "expert_type": expert_type,
+                "board_id": expert.board_id,
+                "review_agent_id": review_agent_id,
+                "review_cycle": review_cycle,
+                **dict(review_extra_event_fields or {}),
+            }
+        )
+
+    if child_execution_enabled and child_llm_call is not None and child_tool_executor is not None and review_agent_id:
+        review_result_payload = await _run_review_mini_loop(
+            store=store,
+            mailbox=mailbox,
+            child_llm_call=child_llm_call,
+            child_tool_executor=child_tool_executor,
+            child_max_rounds=child_max_rounds,
+            emit=emit,
+            pipeline_id=pipeline_id,
+            expert_id=str(expert_id),
+            expert_type=expert_type,
+            task_board_engine=task_board_engine,
+            board_id=expert.board_id,
+            session_id=review_agent_id,
+            review_cycle=review_cycle,
+            start_event_type=review_start_event_type,
+            loop_event_type=review_loop_event_type,
+            end_event_type=review_end_event_type,
+            extra_event_fields=review_extra_event_fields,
+        )
+        review_payload = dict(review_result_payload.get("review_result") or {})
+    else:
+        review_runtime = ReviewAgent(task_board_engine=task_board_engine)
+        review_result = review_runtime.run_full_review(
+            board_id=expert.board_id,
+            actual_changed_files=changed_files,
+            test_results=aggregate_test_results,
+        )
+        review_payload = review_result.to_dict()
+        if review_agent_id:
+            summary_text = str(review_payload.get("summary") or "").strip()
+            if not summary_text:
+                summary_text = _trim_text(json.dumps(review_payload, ensure_ascii=False), limit=600)
+            mailbox.send(
+                review_agent_id,
+                str(expert_id),
+                summary_text,
+                message_type="report",
+            )
+            try:
+                store.update_status(review_agent_id, AgentStatus.WAITING)
+            except Exception:
+                logger.debug("Failed to set review status waiting: %s", review_agent_id, exc_info=True)
+
+    if isinstance(review_payload, dict):
+        review_payload.update(
+            {
+                "expert_id": str(expert_id),
+                "expert_type": expert_type,
+                "board_id": expert.board_id,
+                "review_agent_id": review_agent_id,
+                "review_cycle": review_cycle,
+            }
+        )
+        await emit(
+            {
+                "type": "review_result",
+                "pipeline_id": pipeline_id,
+                "expert_id": str(expert_id),
+                "expert_type": expert_type,
+                "board_id": expert.board_id,
+                "review_agent_id": review_agent_id,
+                "review_cycle": review_cycle,
+                "result": review_payload,
+                **dict(review_extra_event_fields or {}),
+            }
+        )
+    return {
+        "review_payload": dict(review_payload or {}),
+        "review_agent_id": review_agent_id,
+    }
+
+
+async def _run_expert_review_lifecycle(
+    *,
+    expert: ExpertAgent,
+    tasks: List[TaskItem],
+    assignment_prompt_blocks: List[str],
+    assignment_tool_subset: List[str],
+    scope: str,
+    original_task_text: str,
+    pipeline_id: str,
+    expert_id: str,
+    expert_type: str,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    task_board_engine: Optional[TaskBoardEngine],
+    child_execution_enabled: bool,
+    child_llm_call: Optional[ChildLLMCallFn],
+    child_tool_executor: Optional[ChildToolExecutorFn],
+    child_max_rounds: int,
+    emit: Callable[[Dict[str, Any]], Awaitable[None]],
+    dev_task_map: Dict[str, str],
+    dev_scheduler_metrics: Optional[Dict[str, Any]] = None,
+    initial_review_payload: Optional[Dict[str, Any]] = None,
+    initial_review_agent_id: str = "",
+    initial_review_cycle: int = 1,
+    initial_reject_respawn_count: int = 0,
+    review_start_event_type: str = "review_loop_start",
+    review_loop_event_type: str = "review_loop_event",
+    review_end_event_type: str = "review_loop_end",
+    review_extra_event_fields: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    review_results_local: List[Dict[str, Any]] = []
+    review_expected_count = 0
+    final_review_payload: Optional[Dict[str, Any]] = None
+    expert_blocked_reason = ""
+    if task_board_engine is None or not str(expert.board_id or "").strip():
+        return {
+            "final_review_payload": None,
+            "review_results": review_results_local,
+            "review_expected_count": review_expected_count,
+            "expert_blocked_reason": expert_blocked_reason,
+            "reject_respawn_count": max(0, int(initial_reject_respawn_count or 0)),
+        }
+
+    review_expected_count += 1
+    review_cycle_limit = _MAX_REVIEW_REMEDIATION_CYCLES if child_execution_enabled else 1
+    reject_respawn_budget = _MAX_REVIEW_REJECT_RESPAWNS if child_execution_enabled else 0
+    review_cycle = max(1, int(initial_review_cycle or 1))
+    reject_respawn_count = max(0, int(initial_reject_respawn_count or 0))
+    review_payload = dict(initial_review_payload or {}) if isinstance(initial_review_payload, dict) else None
+    review_agent_id = str(initial_review_agent_id or "").strip()
+
+    try:
+        store.update_metadata(
+            str(expert_id),
+            {
+                "original_task": str(original_task_text or ""),
+                "review_cycle_limit": int(review_cycle_limit),
+                "review_reject_respawn_budget": int(reject_respawn_budget),
+                "review_reject_respawn_count": int(reject_respawn_count),
+            },
+        )
+    except Exception:
+        logger.debug("Failed to persist expert review runtime metadata: %s", expert_id, exc_info=True)
+
+    while review_cycle <= review_cycle_limit:
+        dev_artifacts = _collect_expert_dev_artifacts(store, str(expert_id))
+        changed_files = sorted(
+            {
+                path
+                for artifact in dev_artifacts
+                for path in list(artifact.get("changed_files") or [])
+                if str(path).strip()
+            }
+        )
+        aggregate_test_results = _build_aggregate_test_results(dev_artifacts)
+
+        if not isinstance(review_payload, dict):
+            review_cycle_result = await _execute_expert_review_cycle(
+                expert=expert,
+                original_task_text=original_task_text,
+                pipeline_id=pipeline_id,
+                expert_id=expert_id,
+                expert_type=expert_type,
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+                child_execution_enabled=child_execution_enabled,
+                child_llm_call=child_llm_call,
+                child_tool_executor=child_tool_executor,
+                child_max_rounds=child_max_rounds,
+                emit=emit,
+                review_cycle=review_cycle,
+                changed_files=changed_files,
+                dev_artifacts=dev_artifacts,
+                aggregate_test_results=aggregate_test_results,
+                review_start_event_type=review_start_event_type,
+                review_loop_event_type=review_loop_event_type,
+                review_end_event_type=review_end_event_type,
+                review_extra_event_fields=review_extra_event_fields,
+                existing_review_agent_id=review_agent_id,
+            )
+            review_payload = dict(review_cycle_result.get("review_payload") or {})
+            review_agent_id = str(review_cycle_result.get("review_agent_id") or "").strip()
+
+        verdict = str((review_payload or {}).get("verdict") or "").strip().lower()
+        try:
+            store.update_metadata(
+                str(expert_id),
+                {
+                    "review_cycle": int(review_cycle),
+                    "latest_review_agent_id": str(review_agent_id or ""),
+                    "latest_review_verdict": str(verdict or ""),
+                    "review_reject_respawn_count": int(reject_respawn_count),
+                },
+            )
+        except Exception:
+            logger.debug("Failed to update expert review progress metadata: %s", expert_id, exc_info=True)
+
+        if verdict == "approve":
+            final_review_payload = dict(review_payload or {})
+            break
+
+        if verdict == "reject":
+            recoverable_reject = _is_review_reject_recoverable(review_payload or {})
+            can_respawn = bool(
+                recoverable_reject
+                and reject_respawn_count < reject_respawn_budget
+                and child_execution_enabled
+            )
+            if not can_respawn:
+                expert_blocked_reason = (
+                    "review_rejected_unrecoverable"
+                    if not recoverable_reject
+                    else "review_rejected_respawn_exhausted"
+                )
+                final_review_payload = dict(review_payload or {})
+                await emit(
+                    {
+                        "type": "expert_blocked",
+                        "pipeline_id": pipeline_id,
+                        "expert_id": str(expert_id),
+                        "expert_type": expert_type,
+                        "board_id": expert.board_id,
+                        "reason": expert_blocked_reason,
+                        "review_cycle": review_cycle,
+                        "review_agent_id": review_agent_id,
+                        "result": final_review_payload,
+                        **dict(review_extra_event_fields or {}),
+                    }
+                )
+                break
+
+            respawn_task_ids = _select_reject_respawn_task_ids(tasks, changed_files)
+            if not respawn_task_ids:
+                expert_blocked_reason = "review_rejected_no_respawn_tasks"
+                final_review_payload = dict(review_payload or {})
+                await emit(
+                    {
+                        "type": "expert_blocked",
+                        "pipeline_id": pipeline_id,
+                        "expert_id": str(expert_id),
+                        "expert_type": expert_type,
+                        "board_id": expert.board_id,
+                        "reason": expert_blocked_reason,
+                        "review_cycle": review_cycle,
+                        "review_agent_id": review_agent_id,
+                        "result": final_review_payload,
+                        **dict(review_extra_event_fields or {}),
+                    }
+                )
+                break
+
+            reject_respawn_count += 1
+            respawn_instruction = _build_review_reject_respawn_instruction(
+                original_task=original_task_text,
+                review_payload=review_payload or {},
+                review_cycle=review_cycle,
+            )
+            respawned_devs = expert.spawn_retry_devs(
+                tasks,
+                task_ids=respawn_task_ids,
+                review_feedback=respawn_instruction,
+                prompt_blocks=list(assignment_prompt_blocks or []),
+            )
+            if not respawned_devs:
+                expert_blocked_reason = "review_rejected_respawn_failed"
+                final_review_payload = dict(review_payload or {})
+                await emit(
+                    {
+                        "type": "expert_blocked",
+                        "pipeline_id": pipeline_id,
+                        "expert_id": str(expert_id),
+                        "expert_type": expert_type,
+                        "board_id": expert.board_id,
+                        "reason": expert_blocked_reason,
+                        "review_cycle": review_cycle,
+                        "review_agent_id": review_agent_id,
+                        "result": final_review_payload,
+                        **dict(review_extra_event_fields or {}),
+                    }
+                )
+                break
+
+            for spawned_dev in respawned_devs:
+                spawned_dev_id = str(spawned_dev.get("agent_id") or "").strip()
+                spawned_task_id = str(spawned_dev.get("task_id") or "").strip()
+                if spawned_dev_id:
+                    dev_task_map[spawned_dev_id] = spawned_task_id
+            await emit(
+                {
+                    "type": "review_reject_respawn",
+                    "pipeline_id": pipeline_id,
+                    "expert_id": str(expert_id),
+                    "expert_type": expert_type,
+                    "board_id": expert.board_id,
+                    "review_cycle": review_cycle,
+                    "review_agent_id": review_agent_id,
+                    "task_ids": list(respawn_task_ids),
+                    "respawn_dev_count": len(respawned_devs),
+                    "reject_respawn_count": reject_respawn_count,
+                    **dict(review_extra_event_fields or {}),
+                }
+            )
+
+            reject_respawn_failed = False
+            reject_respawn_jobs: List[Dict[str, Any]] = []
+            if child_llm_call is None or child_tool_executor is None:
+                expert_blocked_reason = "review_rejected_respawn_failed"
+                final_review_payload = dict(review_payload or {})
+                break
+            for spawned_dev in respawned_devs:
+                spawned_dev_id = str(spawned_dev.get("agent_id") or "").strip()
+                spawned_task_id = str(spawned_dev.get("task_id") or "").strip()
+                if not spawned_dev_id:
+                    reject_respawn_failed = True
+                    continue
+                if store.get(spawned_dev_id) is None:
+                    reject_respawn_failed = True
+                    continue
+                reject_respawn_jobs.append(
+                    _build_dev_loop_job_payload(
+                        store=store,
+                        mailbox=mailbox,
+                        child_llm_call=child_llm_call,
+                        child_tool_executor=child_tool_executor,
+                        child_max_rounds=child_max_rounds,
+                        emit=emit,
+                        pipeline_id=pipeline_id,
+                        expert_id=str(expert_id),
+                        expert_type=expert_type,
+                        task_board_engine=task_board_engine,
+                        board_id=expert.board_id,
+                        session_id=spawned_dev_id,
+                        task_id=spawned_task_id,
+                        fallback_tool_subset=list(assignment_tool_subset or []),
+                        fallback_prompt_blocks=list(assignment_prompt_blocks or []),
+                        fallback_task_description=str(scope or ""),
+                        start_event_type="dev_loop_start",
+                        loop_event_type="dev_loop_event",
+                        end_event_type="dev_loop_end",
+                        board_log_context="reject respawn dev loop",
+                        extra_event_fields={
+                            "review_cycle": review_cycle,
+                            "recovery_mode": "reject_respawn",
+                            **dict(review_extra_event_fields or {}),
+                        },
+                    )
+                )
+
+            reject_respawn_results = await _run_dev_batch(
+                jobs=reject_respawn_jobs,
+                scheduler_metrics=dev_scheduler_metrics,
+            )
+            reject_respawn_failed = reject_respawn_failed or any(
+                str(item.get("status") or "") != AgentStatus.WAITING.value
+                for item in reject_respawn_results
+            )
+
+            refreshed_progress = expert.check_progress()
+            if reject_respawn_failed or not bool(refreshed_progress.get("all_devs_done")):
+                expert_blocked_reason = "review_rejected_respawn_incomplete"
+                final_review_payload = dict(review_payload or {})
+                await emit(
+                    {
+                        "type": "expert_blocked",
+                        "pipeline_id": pipeline_id,
+                        "expert_id": str(expert_id),
+                        "expert_type": expert_type,
+                        "board_id": expert.board_id,
+                        "reason": expert_blocked_reason,
+                        "review_cycle": review_cycle,
+                        "review_agent_id": review_agent_id,
+                        "result": final_review_payload,
+                        **dict(review_extra_event_fields or {}),
+                    }
+                )
+                break
+
+            _mark_session_superseded(
+                store=store,
+                session_id=review_agent_id,
+                reason="review_rejected_superseded",
+            )
+            review_cycle += 1
+            review_payload = None
+            review_agent_id = ""
+            continue
+
+        if verdict != "request_changes":
+            final_review_payload = dict(review_payload or {})
+            break
+
+        if review_cycle >= review_cycle_limit:
+            issues = list((review_payload or {}).get("issues") or [])
+            issues.append("Review requested changes but the remediation cycle limit was reached.")
+            review_payload = dict(review_payload or {})
+            review_payload["issues"] = issues
+            summary_text = str(review_payload.get("summary") or "").strip()
+            review_payload["summary"] = (
+                f"{summary_text} | remediation limit reached"
+                if summary_text
+                else "Review requested changes but the remediation cycle limit was reached."
+            )
+            final_review_payload = dict(review_payload or {})
+            break
+
+        resumable_devs = [
+            child
+            for child in store.list_children(str(expert_id))
+            if str(child.role or "").strip().lower() == "dev" and child.status == AgentStatus.WAITING
+        ]
+        if not resumable_devs:
+            review_payload = dict(review_payload or {})
+            issues = list(review_payload.get("issues") or [])
+            issues.append("Review requested changes but no waiting dev agents were available for remediation.")
+            review_payload["issues"] = issues
+            final_review_payload = dict(review_payload or {})
+            break
+
+        review_instruction = _build_review_rework_instruction(
+            original_task=original_task_text,
+            review_payload=review_payload or {},
+            review_cycle=review_cycle,
+        )
+        await emit(
+            {
+                "type": "review_rework_requested",
+                "pipeline_id": pipeline_id,
+                "expert_id": str(expert_id),
+                "expert_type": expert_type,
+                "board_id": expert.board_id,
+                "review_agent_id": review_agent_id,
+                "review_cycle": review_cycle,
+                "dev_count": len(resumable_devs),
+                "issues": list((review_payload or {}).get("issues") or []),
+                **dict(review_extra_event_fields or {}),
+            }
+        )
+
+        remediation_failed = False
+        resumed_jobs: List[Dict[str, Any]] = []
+        if child_llm_call is None or child_tool_executor is None:
+            final_review_payload = dict(review_payload or {})
+            break
+        for resumed_dev in resumable_devs:
+            resumed_dev_id = str(resumed_dev.session_id or "").strip()
+            resumed_task_id = str(dev_task_map.get(resumed_dev_id) or "").strip()
+            if not resumed_task_id:
+                resumed_task_id = _infer_child_task_id(session=resumed_dev, fallback=resumed_dev_id)
+                if resumed_task_id:
+                    dev_task_map[resumed_dev_id] = resumed_task_id
+            if not resumed_dev_id:
+                remediation_failed = True
+                continue
+            resume_result = handle_parent_tool_call(
+                "resume_child_agent",
+                {"agent_id": resumed_dev_id, "instruction": review_instruction},
+                parent_session_id=str(expert_id),
+                store=store,
+                mailbox=mailbox,
+            )
+            if resume_result.get("error"):
+                remediation_failed = True
+                await emit(
+                    {
+                        "type": "dev_review_resume_end",
+                        "pipeline_id": pipeline_id,
+                        "expert_id": str(expert_id),
+                        "expert_type": expert_type,
+                        "agent_id": resumed_dev_id,
+                        "task_id": resumed_task_id,
+                        "review_cycle": review_cycle,
+                        "status": "resume_failed",
+                        "error": str(resume_result.get("error") or ""),
+                        **dict(review_extra_event_fields or {}),
+                    }
+                )
+                continue
+
+            _inject_system_instruction(store, resumed_dev_id, review_instruction)
+            resumed_dev_session = store.get(resumed_dev_id)
+            if resumed_dev_session is None or resumed_dev_session.status != AgentStatus.RUNNING:
+                remediation_failed = True
+                await emit(
+                    {
+                        "type": "dev_review_resume_end",
+                        "pipeline_id": pipeline_id,
+                        "expert_id": str(expert_id),
+                        "expert_type": expert_type,
+                        "agent_id": resumed_dev_id,
+                        "task_id": resumed_task_id,
+                        "review_cycle": review_cycle,
+                        "status": "not_running",
+                        **dict(review_extra_event_fields or {}),
+                    }
+                )
+                continue
+
+            resumed_jobs.append(
+                _build_dev_loop_job_payload(
+                    store=store,
+                    mailbox=mailbox,
+                    child_llm_call=child_llm_call,
+                    child_tool_executor=child_tool_executor,
+                    child_max_rounds=child_max_rounds,
+                    emit=emit,
+                    pipeline_id=pipeline_id,
+                    expert_id=str(expert_id),
+                    expert_type=expert_type,
+                    task_board_engine=task_board_engine,
+                    board_id=expert.board_id,
+                    session_id=resumed_dev_id,
+                    task_id=resumed_task_id,
+                    fallback_tool_subset=list(assignment_tool_subset or []),
+                    fallback_prompt_blocks=list(assignment_prompt_blocks or []),
+                    fallback_task_description=str(scope or ""),
+                    start_event_type="dev_review_resume_start",
+                    loop_event_type="dev_review_resume_event",
+                    end_event_type="dev_review_resume_end",
+                    board_log_context="dev review resume loop",
+                    extra_event_fields={"review_cycle": review_cycle, **dict(review_extra_event_fields or {})},
+                )
+            )
+
+        resumed_results = await _run_dev_batch(
+            jobs=resumed_jobs,
+            scheduler_metrics=dev_scheduler_metrics,
+        )
+        remediation_failed = remediation_failed or any(
+            str(item.get("status") or "") != AgentStatus.WAITING.value
+            for item in resumed_results
+        )
+
+        refreshed_progress = expert.check_progress()
+        if remediation_failed or not bool(refreshed_progress.get("all_devs_done")):
+            review_payload = dict(review_payload or {})
+            issues = list(review_payload.get("issues") or [])
+            issues.append("One or more dev agents did not complete the requested review remediation.")
+            review_payload["issues"] = issues
+            final_review_payload = dict(review_payload or {})
+            break
+
+        _mark_session_superseded(
+            store=store,
+            session_id=review_agent_id,
+            reason="review_requested_changes_superseded",
+        )
+        review_cycle += 1
+        review_payload = None
+        review_agent_id = ""
+
+    if final_review_payload is None and isinstance(review_payload, dict):
+        final_review_payload = dict(review_payload)
+    if isinstance(final_review_payload, dict):
+        review_results_local.append(final_review_payload)
+    try:
+        metadata_updates = {
+            "review_cycle": int(max(1, review_cycle)),
+            "review_reject_respawn_count": int(reject_respawn_count),
+        }
+        if isinstance(final_review_payload, dict):
+            metadata_updates["final_review_verdict"] = str(final_review_payload.get("verdict") or "").strip().lower()
+        if expert_blocked_reason:
+            metadata_updates["blocked_reason"] = str(expert_blocked_reason or "")
+        store.update_metadata(str(expert_id), metadata_updates)
+    except Exception:
+        logger.debug("Failed to persist final expert review lifecycle metadata: %s", expert_id, exc_info=True)
+
+    return {
+        "final_review_payload": dict(final_review_payload or {}) if isinstance(final_review_payload, dict) else None,
+        "review_results": review_results_local,
+        "review_expected_count": int(review_expected_count),
+        "expert_blocked_reason": str(expert_blocked_reason or ""),
+        "reject_respawn_count": int(reject_respawn_count),
+    }
+
+
+async def _run_dev_mini_loop(
+    *,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    child_llm_call: ChildLLMCallFn,
+    child_tool_executor: ChildToolExecutorFn,
+    child_max_rounds: int,
+    emit: Callable[[Dict[str, Any]], Awaitable[None]],
+    pipeline_id: str,
+    expert_id: str,
+    expert_type: str,
+    task_board_engine: Optional[TaskBoardEngine],
+    board_id: str,
+    session_id: str,
+    task_id: str,
+    fallback_tool_subset: List[str],
+    fallback_prompt_blocks: List[str],
+    fallback_task_description: str,
+    start_event_type: str,
+    loop_event_type: str,
+    end_event_type: str,
+    board_log_context: str,
+    extra_event_fields: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    normalized_session_id = str(session_id or "").strip()
+    normalized_task_id = str(task_id or "").strip()
+    event_fields = {
+        "pipeline_id": pipeline_id,
+        "expert_id": expert_id,
+        "expert_type": expert_type,
+        "agent_id": normalized_session_id,
+        "task_id": normalized_task_id,
+    }
+    if isinstance(extra_event_fields, dict):
+        event_fields.update({k: v for k, v in extra_event_fields.items()})
+
+    session = store.get(normalized_session_id)
+    if session is None:
+        result = _collect_dev_loop_result(store=store, session_id=normalized_session_id, task_id=normalized_task_id)
+        await emit({
+            "type": end_event_type,
+            **event_fields,
+            "status": str(result.get("status") or "missing"),
+            "completion_report": str(result.get("completion_report") or ""),
+            "verification_report": dict(result.get("verification_report") or {}),
+            "changed_files": list(result.get("changed_files") or []),
+        })
+        return result
+
+    resolved_tool_subset = list(session.tool_subset or fallback_tool_subset or [])
+    resolved_prompt_blocks = list(session.prompt_blocks or fallback_prompt_blocks or [])
+    dev_agent = DevAgent(
+        config=DevAgentConfig(
+            prompt_blocks=resolved_prompt_blocks,
+            tool_subset=resolved_tool_subset,
+            prompts_root=_CANONICAL_PROMPTS_ROOT,
+        ),
+        session_id=normalized_session_id,
+        store=store,
+        mailbox=mailbox,
+    )
+    runtime_tool_defs = _build_runtime_tool_definitions(resolved_tool_subset)
+    dev_initial_task = str(session.task_description or fallback_task_description or "").strip()
+
+    # Pull upstream Shell context via session chain: dev → expert → core → metadata.shell_session_id
+    _dev_shell_session_id = _lookup_shell_session_id_from_chain(store, expert_id)
+    upstream_section = _build_upstream_context_section(_dev_shell_session_id)
+    if upstream_section:
+        dev_initial_task += "\n\n" + upstream_section
+
+    loop_config = MiniLoopConfig(max_rounds=max(1, int(child_max_rounds)), poll_parent_every_n=3)
+
+    async def _execute_dev_tool(
+        tool_name: str,
+        arguments: Dict[str, Any],
+        *,
+        _allowed_tools: List[str] = resolved_tool_subset,
+        _dev_session_id: str = normalized_session_id,
+    ) -> Dict[str, Any]:
+        normalized_tool = str(tool_name or "").strip()
+        if _allowed_tools and normalized_tool not in _allowed_tools:
+            return {
+                "error": f"tool_not_allowed:{normalized_tool}",
+                "status": "blocked",
+                "tool_name": normalized_tool,
+            }
+        safe_arguments = arguments if isinstance(arguments, dict) else {}
+        if is_memory_tool(normalized_tool):
+            return handle_memory_tool(normalized_tool, safe_arguments)
+        prepared_arguments = _prepare_child_tool_arguments(
+            store=store,
+            child_session_id=_dev_session_id,
+            tool_name=normalized_tool,
+            arguments=safe_arguments,
+        )
+        return await child_tool_executor(normalized_tool, prepared_arguments, _dev_session_id)
+
+    await emit({
+        "type": start_event_type,
+        **event_fields,
+        "tool_subset": resolved_tool_subset,
+    })
+    async for mini_event in run_mini_loop(
+        session_id=normalized_session_id,
+        store=store,
+        mailbox=mailbox,
+        llm_call=child_llm_call,
+        tool_executor=_execute_dev_tool,
+        tool_definitions=runtime_tool_defs,
+        system_prompt=dev_agent.build_system_prompt(),
+        initial_task=dev_initial_task,
+        config=loop_config,
+    ):
+        await emit({
+            "type": loop_event_type,
+            **event_fields,
+            "event": mini_event,
+        })
+
+    result = _collect_dev_loop_result(store=store, session_id=normalized_session_id, task_id=normalized_task_id)
+    _update_dev_task_board(
+        task_board_engine=task_board_engine,
+        board_id=board_id,
+        task_id=normalized_task_id,
+        result=result,
+        log_context=board_log_context,
+    )
+    # ── Perception: record dev experience for evolution ──
+    _record_dev_experience(result, goal=dev_initial_task[:300] if dev_initial_task else "")
+    await emit({
+        "type": end_event_type,
+        **event_fields,
+        "status": str(result.get("status") or ""),
+        "completion_report": str(result.get("completion_report") or ""),
+        "verification_report": dict(result.get("verification_report") or {}),
+        "changed_files": list(result.get("changed_files") or []),
+    })
+    return result
+
+
+async def advance_core_waiting_descendants_once(
+    *,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    core_execution_session_id: str,
+    pipeline_id: str,
+    child_llm_call: Optional[ChildLLMCallFn],
+    child_tool_executor: Optional[ChildToolExecutorFn],
+    child_max_rounds: int,
+    task_board_engine: Optional[TaskBoardEngine],
+    emit: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+) -> Dict[str, Any]:
+    async def _emit(payload: Dict[str, Any]) -> None:
+        if emit is not None:
+            await emit(dict(payload))
+
+    core = CoreAgent(
+        store=store,
+        mailbox=mailbox,
+        task_board_engine=task_board_engine,
+    )
+    reports = core.collect_reports(core_execution_session_id, pipeline_id=pipeline_id)
+    pending_descendants = list(
+        _collect_core_pending_descendants(
+            store=store,
+            core_execution_session_id=core_execution_session_id,
+            pipeline_id=pipeline_id,
+            reports=reports,
+        )
+        or []
+    )
+    pending_count_before = len(pending_descendants)
+    summary: Dict[str, Any] = {
+        "progress_made": False,
+        "pending_count_before": pending_count_before,
+        "pending_count_after": pending_count_before,
+        "advanced_dev_ids": [],
+        "advanced_review_ids": [],
+        "refreshed_expert_ids": [],
+        "errors": [],
+    }
+    if not pending_descendants:
+        return summary
+
+    await _emit(
+        {
+            "type": "waiting_descendants_advance_start",
+            "pipeline_id": pipeline_id,
+            "core_execution_session_id": core_execution_session_id,
+            "pending_descendant_count": pending_count_before,
+            "pending_descendant_ids": [
+                str(item.get("agent_id") or "").strip()
+                for item in pending_descendants
+                if str(item.get("agent_id") or "").strip()
+            ],
+        }
+    )
+
+    role_priority = {"dev": 0, "review": 1, "expert": 2}
+    ordered_pending = sorted(
+        pending_descendants,
+        key=lambda item: (
+            int(role_priority.get(str(item.get("role") or "").strip().lower(), 99)),
+            str(item.get("agent_id") or "").strip(),
+        ),
+    )
+
+    for pending in ordered_pending:
+        agent_id = str(pending.get("agent_id") or "").strip()
+        if not agent_id:
+            continue
+        session = store.get(agent_id)
+        if session is None:
+            continue
+        role = str(session.role or pending.get("role") or "").strip().lower()
+        parent_id = str(session.parent_id or pending.get("parent_id") or core_execution_session_id).strip() or str(core_execution_session_id or "")
+        reason = str(pending.get("reason") or "").strip()
+        expert_id = parent_id if role in {"dev", "review"} else agent_id
+        expert_session = store.get(expert_id) if expert_id else None
+        expert_type = str(getattr(expert_session, "role", "") or "expert").strip() or "expert"
+        expert_board_id = str((getattr(expert_session, "metadata", {}) or {}).get("board_id") or "").strip() if expert_session is not None else ""
+        expert_metadata = dict(getattr(expert_session, "metadata", {}) or {}) if expert_session is not None else {}
+        assignment_prompt_blocks = list(getattr(expert_session, "prompt_blocks", []) or []) if expert_session is not None else []
+        assignment_tool_subset = list(getattr(expert_session, "tool_subset", []) or []) if expert_session is not None else []
+        original_task_text = str(
+            expert_metadata.get("original_task")
+            or getattr(expert_session, "task_description", "")
+            or ""
+        ).strip()
+        expert_tasks = _restore_expert_tasks_from_board(
+            task_board_engine=task_board_engine,
+            board_id=expert_board_id,
+        )
+        expert_runtime: Optional[ExpertAgent] = None
+        if expert_session is not None:
+            expert_runtime = ExpertAgent(
+                config=ExpertAgentConfig(
+                    expert_type=expert_type,
+                    prompt_blocks=list(assignment_prompt_blocks),
+                    tool_subset=list(assignment_tool_subset),
+                ),
+                session_id=str(expert_id),
+                store=store,
+                mailbox=mailbox,
+                task_board_engine=task_board_engine,
+            )
+            if expert_board_id:
+                expert_runtime._board_id = expert_board_id
+
+        if role == "expert":
+            report_rows = core.collect_reports(core_execution_session_id, pipeline_id=pipeline_id)
+            has_report = any(str(item.get("session_id") or item.get("agent_id") or "").strip() == agent_id and list(item.get("reports") or []) for item in report_rows)
+            if has_report:
+                continue
+            if (
+                expert_runtime is not None
+                and expert_tasks
+                and not _select_active_review_session(store=store, expert_id=str(agent_id))
+                and bool(expert_runtime.check_progress().get("all_devs_done"))
+            ):
+                review_lifecycle = await _run_expert_review_lifecycle(
+                    expert=expert_runtime,
+                    tasks=expert_tasks,
+                    assignment_prompt_blocks=list(assignment_prompt_blocks),
+                    assignment_tool_subset=list(assignment_tool_subset),
+                    scope=str(getattr(expert_session, "task_description", "") or ""),
+                    original_task_text=original_task_text or str(getattr(expert_session, "task_description", "") or ""),
+                    pipeline_id=pipeline_id,
+                    expert_id=str(agent_id),
+                    expert_type=expert_type,
+                    store=store,
+                    mailbox=mailbox,
+                    task_board_engine=task_board_engine,
+                    child_execution_enabled=bool(child_llm_call is not None and child_tool_executor is not None),
+                    child_llm_call=child_llm_call,
+                    child_tool_executor=child_tool_executor,
+                    child_max_rounds=child_max_rounds,
+                    emit=_emit,
+                    dev_task_map={},
+                    review_start_event_type="review_waiting_descendant_start",
+                    review_loop_event_type="review_waiting_descendant_event",
+                    review_end_event_type="review_waiting_descendant_end",
+                    review_extra_event_fields={"source": "waiting_descendants"},
+                )
+                if isinstance(review_lifecycle.get("final_review_payload"), dict):
+                    summary["progress_made"] = True
+            try:
+                if await _refresh_expert_report_to_core(
+                    store=store,
+                    mailbox=mailbox,
+                    task_board_engine=task_board_engine,
+                    core_execution_session_id=core_execution_session_id,
+                    expert_id=agent_id,
+                ):
+                    summary["progress_made"] = True
+                    summary["refreshed_expert_ids"].append(agent_id)
+                    await _emit(
+                        {
+                            "type": "expert_report_refresh",
+                            "pipeline_id": pipeline_id,
+                            "expert_id": agent_id,
+                            "core_execution_session_id": core_execution_session_id,
+                            "source": "waiting_descendants",
+                        }
+                    )
+            except Exception as exc:
+                summary["errors"].append(f"{agent_id}: {exc}")
+            continue
+
+        if role == "dev":
+            if child_llm_call is None or child_tool_executor is None:
+                continue
+            task_id = _infer_child_task_id(session=session, fallback=agent_id)
+            if session.status == AgentStatus.WAITING:
+                resume_instruction = _build_waiting_descendant_dev_resume_instruction(
+                    task_id=task_id,
+                    reason=reason,
+                )
+                resume_result = handle_parent_tool_call(
+                    "resume_child_agent",
+                    {"agent_id": agent_id, "instruction": resume_instruction},
+                    parent_session_id=parent_id,
+                    store=store,
+                    mailbox=mailbox,
+                )
+                if resume_result.get("error"):
+                    summary["errors"].append(f"{agent_id}: {resume_result.get('error')}")
+                    await _emit(
+                        {
+                            "type": "waiting_descendants_resume_failed",
+                            "pipeline_id": pipeline_id,
+                            "agent_id": agent_id,
+                            "role": role,
+                            "error": str(resume_result.get("error") or ""),
+                        }
+                    )
+                    continue
+                store.update_metadata(
+                    agent_id,
+                    {
+                        "blocked_reason": "",
+                        "loop_stop_reason": "",
+                    },
+                )
+                _inject_system_instruction(store, agent_id, resume_instruction)
+                await _emit(
+                    {
+                        "type": "waiting_descendants_resumed",
+                        "pipeline_id": pipeline_id,
+                        "agent_id": agent_id,
+                        "role": role,
+                        "reason": reason,
+                    }
+                )
+            result = await _run_dev_mini_loop(
+                store=store,
+                mailbox=mailbox,
+                child_llm_call=child_llm_call,
+                child_tool_executor=child_tool_executor,
+                child_max_rounds=child_max_rounds,
+                emit=_emit,
+                pipeline_id=pipeline_id,
+                expert_id=expert_id,
+                expert_type=expert_type,
+                task_board_engine=task_board_engine,
+                board_id=expert_board_id,
+                session_id=agent_id,
+                task_id=task_id,
+                fallback_tool_subset=list(session.tool_subset or []),
+                fallback_prompt_blocks=list(session.prompt_blocks or []),
+                fallback_task_description=str(session.task_description or "").strip(),
+                start_event_type="dev_waiting_descendant_start",
+                loop_event_type="dev_waiting_descendant_event",
+                end_event_type="dev_waiting_descendant_end",
+                board_log_context="waiting descendant dev loop",
+                extra_event_fields={"source": "waiting_descendants"},
+            )
+            summary["progress_made"] = True
+            summary["advanced_dev_ids"].append(agent_id)
+            if (
+                expert_runtime is not None
+                and expert_tasks
+                and not _select_active_review_session(store=store, expert_id=str(expert_id))
+                and bool(expert_runtime.check_progress().get("all_devs_done"))
+            ):
+                review_lifecycle = await _run_expert_review_lifecycle(
+                    expert=expert_runtime,
+                    tasks=expert_tasks,
+                    assignment_prompt_blocks=list(assignment_prompt_blocks),
+                    assignment_tool_subset=list(assignment_tool_subset),
+                    scope=str(getattr(expert_session, "task_description", "") or ""),
+                    original_task_text=original_task_text or str(getattr(expert_session, "task_description", "") or ""),
+                    pipeline_id=pipeline_id,
+                    expert_id=str(expert_id),
+                    expert_type=expert_type,
+                    store=store,
+                    mailbox=mailbox,
+                    task_board_engine=task_board_engine,
+                    child_execution_enabled=True,
+                    child_llm_call=child_llm_call,
+                    child_tool_executor=child_tool_executor,
+                    child_max_rounds=child_max_rounds,
+                    emit=_emit,
+                    dev_task_map={},
+                    review_start_event_type="review_waiting_descendant_start",
+                    review_loop_event_type="review_waiting_descendant_event",
+                    review_end_event_type="review_waiting_descendant_end",
+                    review_extra_event_fields={"source": "waiting_descendants"},
+                )
+                if isinstance(review_lifecycle.get("final_review_payload"), dict):
+                    summary["progress_made"] = True
+            if expert_id:
+                try:
+                    if await _refresh_expert_report_to_core(
+                        store=store,
+                        mailbox=mailbox,
+                        task_board_engine=task_board_engine,
+                        core_execution_session_id=core_execution_session_id,
+                        expert_id=expert_id,
+                    ):
+                        summary["refreshed_expert_ids"].append(expert_id)
+                        await _emit(
+                            {
+                                "type": "expert_report_refresh",
+                                "pipeline_id": pipeline_id,
+                                "expert_id": expert_id,
+                                "core_execution_session_id": core_execution_session_id,
+                                "source": "waiting_descendants",
+                            }
+                        )
+                except Exception as exc:
+                    summary["errors"].append(f"{expert_id}: {exc}")
+            del result
+            continue
+
+        if role == "review":
+            if child_llm_call is None or child_tool_executor is None:
+                continue
+            review_cycle = max(1, int((session.metadata or {}).get("review_cycle") or 1))
+            if session.status == AgentStatus.WAITING:
+                resume_instruction = _build_waiting_descendant_review_resume_instruction(
+                    review_cycle=review_cycle,
+                    reason=reason,
+                )
+                resume_result = handle_parent_tool_call(
+                    "resume_child_agent",
+                    {"agent_id": agent_id, "instruction": resume_instruction},
+                    parent_session_id=parent_id,
+                    store=store,
+                    mailbox=mailbox,
+                )
+                if resume_result.get("error"):
+                    summary["errors"].append(f"{agent_id}: {resume_result.get('error')}")
+                    await _emit(
+                        {
+                            "type": "waiting_descendants_resume_failed",
+                            "pipeline_id": pipeline_id,
+                            "agent_id": agent_id,
+                            "role": role,
+                            "error": str(resume_result.get("error") or ""),
+                        }
+                    )
+                    continue
+                store.update_metadata(
+                    agent_id,
+                    {
+                        "blocked_reason": "",
+                        "loop_stop_reason": "",
+                    },
+                )
+                _inject_system_instruction(store, agent_id, resume_instruction)
+                await _emit(
+                    {
+                        "type": "waiting_descendants_resumed",
+                        "pipeline_id": pipeline_id,
+                        "agent_id": agent_id,
+                        "role": role,
+                        "reason": reason,
+                    }
+                )
+            if task_board_engine is None or not expert_board_id or expert_runtime is None or not expert_tasks:
+                await _run_review_mini_loop(
+                    store=store,
+                    mailbox=mailbox,
+                    child_llm_call=child_llm_call,
+                    child_tool_executor=child_tool_executor,
+                    child_max_rounds=child_max_rounds,
+                    emit=_emit,
+                    pipeline_id=pipeline_id,
+                    expert_id=expert_id,
+                    expert_type=expert_type,
+                    task_board_engine=task_board_engine,
+                    board_id=expert_board_id,
+                    session_id=agent_id,
+                    review_cycle=review_cycle,
+                    start_event_type="review_waiting_descendant_start",
+                    loop_event_type="review_waiting_descendant_event",
+                    end_event_type="review_waiting_descendant_end",
+                    extra_event_fields={"source": "waiting_descendants"},
+                )
+                review_lifecycle = {}
+            else:
+                review_lifecycle = await _run_expert_review_lifecycle(
+                    expert=expert_runtime,
+                    tasks=expert_tasks,
+                    assignment_prompt_blocks=list(assignment_prompt_blocks),
+                    assignment_tool_subset=list(assignment_tool_subset),
+                    scope=str(getattr(expert_session, "task_description", "") or ""),
+                    original_task_text=original_task_text or str(getattr(expert_session, "task_description", "") or ""),
+                    pipeline_id=pipeline_id,
+                    expert_id=str(expert_id),
+                    expert_type=expert_type,
+                    store=store,
+                    mailbox=mailbox,
+                    task_board_engine=task_board_engine,
+                    child_execution_enabled=True,
+                    child_llm_call=child_llm_call,
+                    child_tool_executor=child_tool_executor,
+                    child_max_rounds=child_max_rounds,
+                    emit=_emit,
+                    dev_task_map={},
+                    initial_review_agent_id=str(agent_id),
+                    initial_review_cycle=review_cycle,
+                    review_start_event_type="review_waiting_descendant_start",
+                    review_loop_event_type="review_waiting_descendant_event",
+                    review_end_event_type="review_waiting_descendant_end",
+                    review_extra_event_fields={"source": "waiting_descendants"},
+                )
+            summary["progress_made"] = True
+            summary["advanced_review_ids"].append(agent_id)
+            if isinstance(review_lifecycle.get("final_review_payload"), dict):
+                summary["progress_made"] = True
+            if expert_id:
+                try:
+                    if await _refresh_expert_report_to_core(
+                        store=store,
+                        mailbox=mailbox,
+                        task_board_engine=task_board_engine,
+                        core_execution_session_id=core_execution_session_id,
+                        expert_id=expert_id,
+                    ):
+                        summary["refreshed_expert_ids"].append(expert_id)
+                        await _emit(
+                            {
+                                "type": "expert_report_refresh",
+                                "pipeline_id": pipeline_id,
+                                "expert_id": expert_id,
+                                "core_execution_session_id": core_execution_session_id,
+                                "source": "waiting_descendants",
+                            }
+                        )
+                except Exception as exc:
+                    summary["errors"].append(f"{expert_id}: {exc}")
+
+    refreshed_reports = core.collect_reports(core_execution_session_id, pipeline_id=pipeline_id)
+    pending_after = list(
+        _collect_core_pending_descendants(
+            store=store,
+            core_execution_session_id=core_execution_session_id,
+            pipeline_id=pipeline_id,
+            reports=refreshed_reports,
+        )
+        or []
+    )
+    summary["pending_count_after"] = len(pending_after)
+    summary["refreshed_expert_ids"] = sorted({str(item).strip() for item in summary["refreshed_expert_ids"] if str(item).strip()})
+    await _emit(
+        {
+            "type": "waiting_descendants_advance_end",
+            "pipeline_id": pipeline_id,
+            "core_execution_session_id": core_execution_session_id,
+            "summary": dict(summary),
+        }
+    )
+    return summary
+
+
+async def _run_dev_batch(
+    *,
+    jobs: List[Dict[str, Any]],
+    scheduler_metrics: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    if not jobs:
+        return []
+    _note_scheduler_batch_capacity(scheduler_metrics, len(jobs))
+
+    async def _run_dev_job(job: Dict[str, Any]) -> Dict[str, Any]:
+        _mark_scheduler_run_start(scheduler_metrics)
+        try:
+            return await _run_dev_mini_loop(**job)
+        finally:
+            _mark_scheduler_run_end(scheduler_metrics)
+
+    tasks = [asyncio.create_task(_run_dev_job(job)) for job in jobs]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    final_results: List[Dict[str, Any]] = []
+    failures: List[BaseException] = []
+    for item in results:
+        if isinstance(item, BaseException):
+            failures.append(item)
+            continue
+        if isinstance(item, dict):
+            final_results.append(item)
+    if failures:
+        raise failures[0]
+    return final_results
+
+
+async def _run_dev_jobs_with_heartbeat_supervision(
+    *,
+    jobs: List[Dict[str, Any]],
+    expert: ExpertAgent,
+    tasks: List[Any],
+    assignment: Dict[str, Any],
+    scope: str,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    child_llm_call: ChildLLMCallFn,
+    child_tool_executor: ChildToolExecutorFn,
+    child_max_rounds: int,
+    task_board_engine: Optional[TaskBoardEngine],
+    emit: Callable[[Dict[str, Any]], Awaitable[None]],
+    pipeline_id: str,
+    expert_id: str,
+    expert_type: str,
+    board_id: str,
+    dev_task_map: Optional[Dict[str, str]] = None,
+    scheduler_metrics: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    summary = _new_heartbeat_escalation_summary(expert_id=expert_id, expert_type=expert_type)
+    if not jobs:
+        return {"results": [], "heartbeat_summary": summary, "expert_blocked_reason": ""}
+
+    observed_sessions: set[str] = set()
+    observed_tasks: set[str] = set()
+    last_levels: Dict[tuple[str, str], str] = {}
+    heartbeat_respawn_count_by_task: Dict[str, int] = {}
+    loop_resume_count_by_task: Dict[str, int] = {}
+    loop_respawn_count_by_task: Dict[str, int] = {}
+    expert_blocked_reason = ""
+    final_results: List[Dict[str, Any]] = []
+    failures: List[BaseException] = []
+    running_jobs: Dict[asyncio.Task, Dict[str, Any]] = {}
+    normalized_dev_task_map = dev_task_map if isinstance(dev_task_map, dict) else {}
+
+    async def _run_job(job: Dict[str, Any]) -> Dict[str, Any]:
+        _mark_scheduler_run_start(scheduler_metrics)
+        try:
+            return await _run_dev_mini_loop(**job)
+        finally:
+            _mark_scheduler_run_end(scheduler_metrics)
+
+    def _launch_job(job: Dict[str, Any]) -> None:
+        _note_scheduler_batch_capacity(scheduler_metrics, max(1, len(running_jobs) + 1))
+        task = asyncio.create_task(_run_job(job))
+        running_jobs[task] = job
+
+    async def _emit_action(event_type: str, payload: Dict[str, Any]) -> None:
+        await emit({"type": event_type, "pipeline_id": pipeline_id, "expert_id": expert_id, "expert_type": expert_type, **payload})
+
+    def _mark_dev_task_in_progress(*, task_id: str, assigned_to: str, summary_text: str) -> None:
+        if task_board_engine is None or not board_id or not task_id:
+            return
+        try:
+            task_board_engine.update_task(
+                board_id,
+                task_id,
+                assigned_to=assigned_to,
+                status=TaskStatus.IN_PROGRESS,
+                summary=summary_text,
+            )
+        except Exception:
+            logger.debug(
+                "Failed to mark task in progress during dev recovery (board=%s task=%s assigned_to=%s)",
+                board_id,
+                task_id,
+                assigned_to,
+                exc_info=True,
+            )
+
+    def _build_recovery_job(
+        source_job: Dict[str, Any],
+        *,
+        session_id: str,
+        task_id: str,
+        board_log_context: str,
+        extra_event_fields: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        next_job = dict(source_job)
+        next_job["session_id"] = session_id
+        next_job["task_id"] = task_id
+        next_job["board_log_context"] = board_log_context
+        next_job["extra_event_fields"] = dict(extra_event_fields)
+        return next_job
+
+    def _mark_superseded_child(*, session_id: str, replacement_agent_ids: List[str], reason: str) -> None:
+        if not session_id:
+            return
+        updates = {
+            "superseded": True,
+            "superseded_reason": str(reason or "").strip(),
+            "superseded_by_agent_ids": list(replacement_agent_ids),
+        }
+        try:
+            store.update_metadata(session_id, updates)
+        except Exception:
+            logger.debug("Failed to mark child as superseded: %s", session_id, exc_info=True)
+
+    async def _maybe_recover_child_loop_max_rounds(job: Dict[str, Any], result: Dict[str, Any]) -> bool:
+        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        blocked_reason = str(metadata.get("blocked_reason") or "").strip()
+        if blocked_reason != "child_loop_max_rounds_reached":
+            return False
+
+        session_id = str(job.get("session_id") or result.get("agent_id") or "").strip()
+        task_id = str(job.get("task_id") or result.get("task_id") or "").strip() or session_id or "task"
+        findings = _build_child_loop_intermediate_findings(
+            store=store,
+            mailbox=mailbox,
+            expert_id=expert_id,
+            child_session_id=session_id,
+        )
+        action_base = {
+            "agent_id": session_id,
+            "task_id": task_id,
+            "reason": blocked_reason,
+        }
+
+        current_resume_count = int(loop_resume_count_by_task.get(task_id) or 0)
+        if session_id and current_resume_count < _MAX_CHILD_LOOP_MAX_ROUNDS_RESUMES:
+            resume_attempt = current_resume_count + 1
+            resume_instruction = _build_child_loop_resume_instruction(
+                task_id=task_id,
+                findings=findings,
+                resume_attempt=resume_attempt,
+            )
+            resume_result = handle_parent_tool_call(
+                "resume_child_agent",
+                {"agent_id": session_id, "instruction": resume_instruction},
+                parent_session_id=expert_id,
+                store=store,
+                mailbox=mailbox,
+            )
+            if not resume_result.get("error"):
+                store.update_metadata(
+                    session_id,
+                    {
+                        "blocked_reason": "",
+                        "loop_stop_reason": "",
+                        "superseded": False,
+                        "superseded_reason": "",
+                        "superseded_by_agent_ids": [],
+                        "loop_recovery_mode": "max_rounds_resume",
+                        "loop_recovery_attempt": resume_attempt,
+                    },
+                )
+                _inject_system_instruction(store, session_id, resume_instruction)
+                _mark_dev_task_in_progress(
+                    task_id=task_id,
+                    assigned_to=session_id,
+                    summary_text="resumed_after_max_rounds",
+                )
+                loop_resume_count_by_task[task_id] = resume_attempt
+                summary["loop_resume_count"] = max(0, int(summary.get("loop_resume_count") or 0)) + 1
+                action_record = {
+                    **action_base,
+                    "action": "resume_same_dev_after_max_rounds",
+                    "resume_attempt": resume_attempt,
+                }
+                summary["actions"].append(dict(action_record))
+                await _emit_action(
+                    "dev_loop_max_rounds_resume",
+                    {
+                        **action_base,
+                        "resume_attempt": resume_attempt,
+                        "findings_summary": findings,
+                    },
+                )
+                _launch_job(
+                    _build_recovery_job(
+                        job,
+                        session_id=session_id,
+                        task_id=task_id,
+                        board_log_context="max rounds resume dev loop",
+                        extra_event_fields={
+                            **dict(job.get("extra_event_fields") or {}),
+                            "recovery_mode": "max_rounds_resume",
+                            "resume_attempt": resume_attempt,
+                            "recovered_from": blocked_reason,
+                        },
+                    )
+                )
+                return True
+
+            summary["actions"].append(
+                {
+                    **action_base,
+                    "action": "resume_same_dev_after_max_rounds_failed",
+                    "resume_attempt": resume_attempt,
+                    "error": str(resume_result.get("error") or ""),
+                }
+            )
+
+        current_respawn_count = int(loop_respawn_count_by_task.get(task_id) or 0)
+        if current_respawn_count < _MAX_CHILD_LOOP_MAX_ROUNDS_RESPAWNS:
+            respawn_attempt = current_respawn_count + 1
+            respawn_feedback = _build_child_loop_respawn_feedback(
+                task_id=task_id,
+                replaced_agent_id=session_id,
+                findings=findings,
+                respawn_attempt=respawn_attempt,
+            )
+            retry_children = expert.spawn_retry_devs(
+                tasks,
+                task_ids=[task_id],
+                review_feedback=respawn_feedback,
+                prompt_blocks=list(assignment.get("prompt_blocks", [])),
+                retry_reason="child_loop_max_rounds_respawn",
+            )
+            respawned_child_ids: List[str] = []
+            for retry_child in retry_children:
+                retry_id = str(retry_child.get("agent_id") or "").strip()
+                retry_task_id = str(retry_child.get("task_id") or task_id).strip() or task_id
+                retry_status = str(retry_child.get("status") or "").strip().lower()
+                if not retry_id or retry_status != AgentStatus.RUNNING.value:
+                    continue
+                respawned_child_ids.append(retry_id)
+                if normalized_dev_task_map is not None:
+                    normalized_dev_task_map[retry_id] = retry_task_id
+                _launch_job(
+                    _build_recovery_job(
+                        job,
+                        session_id=retry_id,
+                        task_id=retry_task_id,
+                        board_log_context="max rounds respawn dev loop",
+                        extra_event_fields={
+                            **dict(job.get("extra_event_fields") or {}),
+                            "recovery_mode": "max_rounds_respawn",
+                            "respawn_attempt": respawn_attempt,
+                            "replaced_agent_id": session_id,
+                            "trigger_task_id": task_id,
+                        },
+                    )
+                )
+
+            if respawned_child_ids:
+                loop_respawn_count_by_task[task_id] = respawn_attempt
+                summary["loop_respawn_count"] = max(0, int(summary.get("loop_respawn_count") or 0)) + len(respawned_child_ids)
+                _mark_superseded_child(
+                    session_id=session_id,
+                    replacement_agent_ids=respawned_child_ids,
+                    reason=blocked_reason,
+                )
+                action_record = {
+                    **action_base,
+                    "action": "respawn_dev_after_max_rounds",
+                    "respawn_attempt": respawn_attempt,
+                    "replacement_agent_ids": list(respawned_child_ids),
+                }
+                summary["actions"].append(dict(action_record))
+                await _emit_action(
+                    "dev_loop_max_rounds_respawn",
+                    {
+                        **action_base,
+                        "respawn_attempt": respawn_attempt,
+                        "replacement_agent_ids": list(respawned_child_ids),
+                        "findings_summary": findings,
+                    },
+                )
+                return True
+
+            summary["actions"].append(
+                {
+                    **action_base,
+                    "action": "respawn_dev_after_max_rounds_failed",
+                    "respawn_attempt": respawn_attempt,
+                }
+            )
+
+        return False
+
+    for job in jobs:
+        _launch_job(job)
+
+    while running_jobs:
+        done, _ = await asyncio.wait(
+            list(running_jobs.keys()),
+            timeout=_HEARTBEAT_MONITOR_POLL_SECONDS,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for completed in done:
+            job = running_jobs.pop(completed, None)
+            if job is None:
+                continue
+            try:
+                result = completed.result()
+            except BaseException as exc:
+                failures.append(exc)
+                continue
+            if isinstance(result, dict):
+                if await _maybe_recover_child_loop_max_rounds(job, result):
+                    continue
+                final_results.append(result)
+
+        for task_handle, job in list(running_jobs.items()):
+            del task_handle
+            session_id = str(job.get("session_id") or "").strip()
+            fallback_task_id = str(job.get("task_id") or "").strip()
+            if not session_id:
+                continue
+            session = store.get(session_id)
+            if session is None or session.status != AgentStatus.RUNNING:
+                continue
+            snapshot = store.get_session_heartbeat_snapshot(session_id)
+            heartbeats = list(snapshot.get("heartbeats") or [])
+            if not heartbeats:
+                continue
+            observed_sessions.add(session_id)
+            for heartbeat in heartbeats:
+                heartbeat_task_id = str(fallback_task_id or heartbeat.get("task_id") or "").strip() or "task"
+                observed_tasks.add(f"{session_id}:{heartbeat_task_id}")
+                current_level = str(heartbeat.get("stale_level") or "fresh").strip().lower()
+                key = (session_id, heartbeat_task_id)
+                previous_level = str(last_levels.get(key) or "fresh")
+                if _heartbeat_level_rank(current_level) < _heartbeat_level_rank(previous_level):
+                    last_levels[key] = current_level
+                    continue
+                if current_level == previous_level:
+                    continue
+                last_levels[key] = current_level
+
+                action_record = {
+                    "session_id": session_id,
+                    "task_id": heartbeat_task_id,
+                    "stale_level": current_level,
+                    "sequence": int(heartbeat.get("sequence") or 0),
+                    "stage": str(heartbeat.get("stage") or ""),
+                    "message": str(heartbeat.get("message") or ""),
+                }
+
+                if current_level == "warning":
+                    summary["warning_count"] += 1
+                    instruction = _build_heartbeat_attention_instruction(heartbeat=heartbeat, severity="warning")
+                    mailbox.send(expert_id, session_id, instruction, message_type="system")
+                    action_record["action"] = "notify_child"
+                    summary["actions"].append(dict(action_record))
+                    await _emit_action("task_heartbeat_escalation", dict(action_record))
+                    continue
+
+                if current_level == "critical":
+                    summary["critical_count"] += 1
+                    instruction = _build_heartbeat_attention_instruction(heartbeat=heartbeat, severity="critical")
+                    mailbox.send(expert_id, session_id, instruction, message_type="system")
+                    _inject_system_instruction(store, session_id, instruction)
+                    action_record["action"] = "inject_instruction"
+                    summary["actions"].append(dict(action_record))
+                    await _emit_action("task_heartbeat_escalation", dict(action_record))
+                    continue
+
+                if current_level != "blocked":
+                    continue
+
+                summary["blocked_count"] += 1
+                stale_reason = f"task_heartbeat_blocked:{heartbeat_task_id}"
+                session_updates = {
+                    "heartbeat_last_stale_level": current_level,
+                    "heartbeat_blocked_task_id": heartbeat_task_id,
+                    "heartbeat_last_message": str(heartbeat.get("message") or ""),
+                    "heartbeat_last_stage": str(heartbeat.get("stage") or ""),
+                }
+                current_respawns = int(heartbeat_respawn_count_by_task.get(heartbeat_task_id) or 0)
+                respawned_child_ids: List[str] = []
+                blocked_reason_candidate = ""
+
+                if current_respawns < _MAX_HEARTBEAT_BLOCKED_RESPAWNS:
+                    respawn_feedback = _build_heartbeat_respawn_feedback(heartbeat=heartbeat)
+                    retry_children = expert.spawn_retry_devs(
+                        tasks,
+                        task_ids=[heartbeat_task_id],
+                        review_feedback=respawn_feedback,
+                        prompt_blocks=list(assignment.get("prompt_blocks", [])),
+                        retry_reason="heartbeat_blocked_respawn",
+                    )
+                    for retry_child in retry_children:
+                        retry_id = str(retry_child.get("agent_id") or "").strip()
+                        retry_task_id = str(retry_child.get("task_id") or heartbeat_task_id).strip() or heartbeat_task_id
+                        if not retry_id or str(retry_child.get("status") or "").strip().lower() != AgentStatus.RUNNING.value:
+                            continue
+                        respawned_child_ids.append(retry_id)
+                        if normalized_dev_task_map is not None:
+                            normalized_dev_task_map[retry_id] = retry_task_id
+                        _launch_job(
+                            _build_recovery_job(
+                                job,
+                                session_id=retry_id,
+                                task_id=retry_task_id,
+                                board_log_context="heartbeat respawn dev loop",
+                                extra_event_fields={
+                                    **dict(job.get("extra_event_fields") or {}),
+                                    "recovery_mode": "heartbeat_respawn",
+                                    "replaced_agent_id": session_id,
+                                    "trigger_task_id": heartbeat_task_id,
+                                },
+                            )
+                        )
+                    if respawned_child_ids:
+                        heartbeat_respawn_count_by_task[heartbeat_task_id] = current_respawns + 1
+                        session_updates.update(
+                            {
+                                "heartbeat_superseded": True,
+                                "heartbeat_replaced_by_agent_ids": list(respawned_child_ids),
+                                "heartbeat_blocked_reason": stale_reason,
+                            }
+                        )
+                        summary["respawn_count"] += len(respawned_child_ids)
+                        action_record.update({"action": "respawn_dev", "replacement_agent_ids": list(respawned_child_ids)})
+                        summary["actions"].append(dict(action_record))
+                        await _emit_action("heartbeat_respawn", dict(action_record))
+                    else:
+                        blocked_reason_candidate = "task_heartbeat_blocked_respawn_failed"
+                else:
+                    blocked_reason_candidate = "task_heartbeat_blocked_respawn_exhausted"
+
+                if session.status == AgentStatus.RUNNING:
+                    try:
+                        store.set_interrupt(session_id)
+                    except Exception:
+                        logger.debug("Failed to set interrupt on heartbeat-blocked child: %s", session_id, exc_info=True)
+                    try:
+                        store.update_status(session_id, AgentStatus.WAITING)
+                    except Exception:
+                        logger.debug("Failed to set waiting on heartbeat-blocked child: %s", session_id, exc_info=True)
+
+                if blocked_reason_candidate:
+                    session_updates["blocked_reason"] = blocked_reason_candidate
+                    if not expert_blocked_reason:
+                        expert_blocked_reason = blocked_reason_candidate
+                    if blocked_reason_candidate not in summary["expert_blocked_reasons"]:
+                        summary["expert_blocked_reasons"].append(blocked_reason_candidate)
+                    if not any(item.get("action") == "expert_blocked" and item.get("task_id") == heartbeat_task_id for item in summary["actions"]):
+                        summary["expert_blocked_count"] = 1
+                        blocked_payload = {
+                            "reason": blocked_reason_candidate,
+                            "blocked_child_id": session_id,
+                            "task_id": heartbeat_task_id,
+                            "stale_level": current_level,
+                        }
+                        summary["actions"].append({**action_record, "action": "expert_blocked", "reason": blocked_reason_candidate})
+                        await _emit_action("expert_blocked", blocked_payload)
+
+                store.update_metadata(session_id, session_updates)
+
+        if failures:
+            raise failures[0]
+
+    summary["observed_session_count"] = len(observed_sessions)
+    summary["observed_task_count"] = len(observed_tasks)
+    for result in final_results:
+        if not isinstance(result, dict):
+            continue
+        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        blocked_reason = str(metadata.get("blocked_reason") or "").strip()
+        status_text = str(result.get("status") or "").strip().lower()
+        if not blocked_reason and status_text != AgentStatus.WAITING.value:
+            blocked_reason = "child_loop_incomplete"
+        if not blocked_reason:
+            continue
+        if not expert_blocked_reason:
+            expert_blocked_reason = blocked_reason
+        if blocked_reason not in summary["expert_blocked_reasons"]:
+            summary["expert_blocked_reasons"].append(blocked_reason)
+        summary["expert_blocked_count"] = max(1, int(summary.get("expert_blocked_count") or 0))
+    summary["actions"] = list(summary.get("actions") or [])[:20]
+    return {
+        "results": final_results,
+        "heartbeat_summary": summary,
+        "expert_blocked_reason": str(expert_blocked_reason or ""),
+    }
+
+
+async def _run_single_expert_phase(
+    *,
+    er: Dict[str, Any],
+    decomposition: Dict[str, Any],
+    message: str,
+    pipeline_id: str,
+    resolved_core_execution_session_id: str,
+    child_execution_enabled: bool,
+    child_llm_call: Optional[ChildLLMCallFn],
+    child_tool_executor: Optional[ChildToolExecutorFn],
+    child_max_rounds: int,
+    store: AgentSessionStore,
+    mailbox: AgentMailbox,
+    task_board_engine: Optional[TaskBoardEngine],
+    emit: Callable[[Dict[str, Any]], Awaitable[None]],
+    dev_scheduler_metrics: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    _store = store
+    _mailbox = mailbox
+    review_results_local: List[Dict[str, Any]] = []
+    review_expected_count = 0
+
+    agent_id = er.get("agent_id", "")
+    expert_type = er.get("expert_type", "backend")
+    assignment = next(
+        (a for a in decomposition.get("expert_assignments", []) if a["expert_type"] == expert_type),
+        {},
+    )
+    expert = ExpertAgent(
+        config=ExpertAgentConfig(
+            expert_type=expert_type,
+            prompt_blocks=assignment.get("prompt_blocks", []),
+            tool_subset=assignment.get("tool_subset", []),
+            model_tier=assignment.get("model_tier", "primary"),
+            prompt_profile=assignment.get("prompt_profile", ""),
+        ),
+        session_id=agent_id,
+        store=_store,
+        mailbox=_mailbox,
+        task_board_engine=task_board_engine,
+    )
+    scope = er.get("scope", assignment.get("scope", ""))
+    tasks = expert.plan_tasks(scope)
+    try:
+        _store.update_metadata(
+            str(agent_id),
+            {
+                "pipeline_id": str(pipeline_id or ""),
+                "expert_type": str(expert_type or "expert"),
+                "board_id": str(expert.board_id or ""),
+                "assigned_scope": str(scope or ""),
+            },
+        )
+    except Exception:
+        logger.debug("Failed to persist expert runtime metadata: %s", agent_id, exc_info=True)
+    devs: List[Dict[str, Any]] = []
+    dev_task_map: Dict[str, str] = {}
+    heartbeat_summary = _new_heartbeat_escalation_summary(expert_id=str(agent_id), expert_type=expert_type)
+    expert_blocked_reason = ""
+    if tasks:
+        devs = expert.spawn_devs(tasks)
+        dev_task_map = {
+            str(item.get("agent_id") or "").strip(): str(item.get("task_id") or "").strip()
+            for item in devs
+            if str(item.get("agent_id") or "").strip()
+        }
+        await emit({
+            "type": "expert_progress",
+            "pipeline_id": pipeline_id,
+            "expert_type": expert_type,
+            "agent_id": agent_id,
+            "board_id": expert.board_id,
+            "tasks_planned": len(tasks),
+            "devs_spawned": len(devs),
+        })
+
+    # Run real child mini-loops when runtime callbacks are injected by caller.
+    if child_execution_enabled and devs and child_llm_call is not None and child_tool_executor is not None:
+        dev_jobs: List[Dict[str, Any]] = []
+        for dev in devs:
+            dev_agent_id = str(dev.get("agent_id") or "").strip()
+            task_id = str(dev.get("task_id") or "").strip()
+            if not dev_agent_id:
+                continue
+            if _store.get(dev_agent_id) is None:
+                continue
+            dev_jobs.append(
+                {
+                    "store": _store,
+                    "mailbox": _mailbox,
+                    "child_llm_call": child_llm_call,
+                    "child_tool_executor": child_tool_executor,
+                    "child_max_rounds": child_max_rounds,
+                    "emit": emit,
+                    "pipeline_id": pipeline_id,
+                    "expert_id": str(agent_id),
+                    "expert_type": expert_type,
+                    "task_board_engine": task_board_engine,
+                    "board_id": expert.board_id,
+                    "session_id": dev_agent_id,
+                    "task_id": task_id,
+                    "fallback_tool_subset": list(assignment.get("tool_subset", [])),
+                    "fallback_prompt_blocks": list(assignment.get("prompt_blocks", [])),
+                    "fallback_task_description": str(scope or ""),
+                    "start_event_type": "dev_loop_start",
+                    "loop_event_type": "dev_loop_event",
+                    "end_event_type": "dev_loop_end",
+                    "board_log_context": "dev loop",
+                    "extra_event_fields": {},
+                }
+            )
+        supervision_result = await _run_dev_jobs_with_heartbeat_supervision(
+            jobs=dev_jobs,
+            expert=expert,
+            tasks=tasks,
+            assignment=assignment,
+            scope=str(scope or ""),
+            store=_store,
+            mailbox=_mailbox,
+            child_llm_call=child_llm_call,
+            child_tool_executor=child_tool_executor,
+            child_max_rounds=child_max_rounds,
+            task_board_engine=task_board_engine,
+            emit=emit,
+            pipeline_id=pipeline_id,
+            expert_id=str(agent_id),
+            expert_type=expert_type,
+            board_id=expert.board_id,
+            dev_task_map=dev_task_map,
+            scheduler_metrics=dev_scheduler_metrics,
+        )
+        if isinstance(supervision_result.get("heartbeat_summary"), dict):
+            heartbeat_summary = dict(supervision_result.get("heartbeat_summary") or {})
+        expert_blocked_reason = str(supervision_result.get("expert_blocked_reason") or expert_blocked_reason or "")
+
+    expert_progress = expert.check_progress()
+    expert_completed = bool(expert_progress.get("all_devs_done"))
+    if not tasks:
+        expert_completed = True
+
+    if expert_completed and not expert_blocked_reason:
+        final_review_payload: Optional[Dict[str, Any]] = None
+        if task_board_engine is not None and expert.board_id:
+            original_task_text = str(decomposition.get("original_goal") or message)
+            review_lifecycle = await _run_expert_review_lifecycle(
+                expert=expert,
+                tasks=[task for task in tasks if isinstance(task, TaskItem)],
+                assignment_prompt_blocks=list(assignment.get("prompt_blocks", [])),
+                assignment_tool_subset=list(assignment.get("tool_subset", [])),
+                scope=str(scope or ""),
+                original_task_text=original_task_text,
+                pipeline_id=pipeline_id,
+                expert_id=str(agent_id),
+                expert_type=expert_type,
+                store=_store,
+                mailbox=_mailbox,
+                task_board_engine=task_board_engine,
+                child_execution_enabled=child_execution_enabled,
+                child_llm_call=child_llm_call,
+                child_tool_executor=child_tool_executor,
+                child_max_rounds=child_max_rounds,
+                emit=emit,
+                dev_task_map=dev_task_map,
+                dev_scheduler_metrics=dev_scheduler_metrics,
+            )
+            local_final_review_payload = review_lifecycle.get("final_review_payload")
+            if isinstance(local_final_review_payload, dict):
+                final_review_payload = dict(local_final_review_payload)
+            local_review_results = review_lifecycle.get("review_results")
+            if isinstance(local_review_results, list):
+                review_results_local.extend(
+                    item for item in local_review_results if isinstance(item, dict)
+                )
+            review_expected_count += max(0, int(review_lifecycle.get("review_expected_count") or 0))
+            expert_blocked_reason = str(
+                review_lifecycle.get("expert_blocked_reason") or expert_blocked_reason or ""
+            )
+
+        report_text = expert.aggregate_results()
+        if final_review_payload is not None:
+            review_summary = str(final_review_payload.get("summary") or "").strip()
+            if review_summary:
+                report_text = f"{report_text}\n\n### Review Summary\n{review_summary}"
+        final_verdict = str((final_review_payload or {}).get("verdict") or "").strip().lower()
+        if final_verdict == "reject":
+            blocked_reason_text = expert_blocked_reason or "review_rejected"
+            report_text = f"[BLOCKED] {blocked_reason_text}\n\n{report_text}"
+            try:
+                _store.update_metadata(str(agent_id), {"blocked_reason": blocked_reason_text, "final_review_verdict": final_verdict, "heartbeat_summary": heartbeat_summary})
+            except Exception:
+                logger.debug("Failed to persist blocked metadata for expert: %s", agent_id, exc_info=True)
+        else:
+            try:
+                _store.update_metadata(str(agent_id), {"heartbeat_summary": heartbeat_summary})
+            except Exception:
+                logger.debug("Failed to persist heartbeat summary for expert: %s", agent_id, exc_info=True)
+        _mailbox.send(
+            str(agent_id),
+            resolved_core_execution_session_id,
+            report_text,
+            message_type="report",
+        )
+        try:
+            _store.update_status(str(agent_id), AgentStatus.WAITING)
+        except Exception:
+            logger.debug("Failed to set expert status waiting: %s", agent_id, exc_info=True)
+
+    elif expert_blocked_reason:
+        report_text = f"[BLOCKED] {expert_blocked_reason}\n\n{expert.aggregate_results()}"
+        try:
+            _store.update_metadata(str(agent_id), {"blocked_reason": expert_blocked_reason, "heartbeat_summary": heartbeat_summary})
+        except Exception:
+            logger.debug("Failed to persist heartbeat-blocked metadata for expert: %s", agent_id, exc_info=True)
+        _mailbox.send(
+            str(agent_id),
+            resolved_core_execution_session_id,
+            report_text,
+            message_type="report",
+        )
+        try:
+            _store.update_status(str(agent_id), AgentStatus.WAITING)
+        except Exception:
+            logger.debug("Failed to set heartbeat-blocked expert waiting: %s", agent_id, exc_info=True)
+
+    await emit({
+        "type": "expert_progress",
+        "pipeline_id": pipeline_id,
+        "expert_type": expert_type,
+        "agent_id": agent_id,
+        "board_id": expert.board_id,
+        "all_devs_done": bool(expert_completed),
+        "child_execution_enabled": bool(child_execution_enabled),
+        "expert_blocked_reason": str(expert_blocked_reason or ""),
+        "heartbeat_summary": heartbeat_summary,
+    })
+
+    return {
+        "expert": expert,
+        "review_results": review_results_local,
+        "review_expected_count": int(review_expected_count),
+        "heartbeat_summary": heartbeat_summary,
+        "expert_blocked_reason": str(expert_blocked_reason or ""),
+    }
+
+
+async def run_multi_agent_pipeline(
+    *,
+    message: str,
+    session_id: str = "",
+    risk_level: str = "",
+    route_decision: Optional[Dict[str, Any]] = None,
+    dispatch_payload: Optional[Dict[str, Any]] = None,
+    forced_route_semantic: str = "",
+    core_execution_session_id: str = "",
+    child_llm_call: Optional[ChildLLMCallFn] = None,
+    child_tool_executor: Optional[ChildToolExecutorFn] = None,
+    enable_child_execution: bool = False,
+    child_max_rounds: int = 12,
+    child_session_cleanup_mode: str = "ttl",
+    child_session_cleanup_ttl_seconds: int = 3600,
+    store: Optional[AgentSessionStore] = None,
+    mailbox: Optional[AgentMailbox] = None,
+    task_board_engine: Optional[TaskBoardEngine] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Unified multi-agent execution pipeline.
+
+    ALL requests enter here. ShellAgent decides whether to:
+    1. Respond directly (chat, status queries, file reading)
+    2. Dispatch to Core for execution (code changes, deployments, analysis)
+
+    Event types:
+        - pipeline_start
+        - route_decision
+        - content            (Shell direct reply or Core execution output)
+        - tool_stage         (verify-stage completion signal for observability)
+        - execution_receipt  (stable structured completion payload)
+        - core_decomposition
+        - expert_spawned
+        - expert_progress
+        - dev_loop_start
+        - dev_loop_event
+        - dev_loop_end
+        - dev_review_resume_start
+        - dev_review_resume_event
+        - dev_review_resume_end
+        - expert_report
+        - expert_blocked
+        - review_spawned
+        - review_loop_start
+        - review_loop_event
+        - review_loop_end
+        - review_rework_requested
+        - review_reject_respawn
+        - review_result
+        - pipeline_end
+    """
+    pipeline_id = f"pipe_{uuid.uuid4().hex[:12]}"
+    started_at = time.time()
+
+    _store = store or AgentSessionStore(db_path=":memory:")
+    _mailbox = mailbox or AgentMailbox(db_path=":memory:")
+
+    yield {
+        "type": "pipeline_start",
+        "pipeline_id": pipeline_id,
+        "message": message,
+        "session_id": session_id,
+        "child_execution_enabled": bool(enable_child_execution),
+        "child_session_cleanup_mode": _normalize_child_session_cleanup_mode(child_session_cleanup_mode),
+        "child_session_cleanup_ttl_seconds": max(0, int(child_session_cleanup_ttl_seconds)),
+    }
+    await asyncio.sleep(0)
+
+    # ── Phase 1: Shell routes via TaskRouterEngine ─────────────
+
+    shell = ShellAgent()
+    precomputed_decision = None
+    if isinstance(route_decision, dict):
+        try:
+            precomputed_decision = RouterDecision.model_validate(route_decision)
+        except Exception as exc:
+            logger.warning("Invalid precomputed route_decision; falling back to internal routing: %s", exc)
+
+    if precomputed_decision is not None:
+        decision = precomputed_decision
+        decision_source = "precomputed"
+    else:
+        decision = shell.route(message, session_id=session_id, risk_level=risk_level)
+        decision_source = "pipeline_router"
+
+    normalized_forced_route_semantic = str(forced_route_semantic or "").strip().lower()
+    if normalized_forced_route_semantic == "core_execution":
+        needs_core = True
+    elif normalized_forced_route_semantic in {"shell_readonly", "shell_clarify"}:
+        needs_core = False
+    else:
+        needs_core = shell.should_dispatch(decision)
+
+    yield {
+        "type": "route_decision",
+        "pipeline_id": pipeline_id,
+        "decision_source": decision_source,
+        "needs_core": needs_core,
+        "delegation_intent": decision.delegation_intent,
+        "selected_role": decision.selected_role,
+        "model_tier": decision.selected_model_tier,
+        "prompt_profile": decision.prompt_profile,
+        "tool_profile": list(decision.tool_profile),
+        "complexity_hint": str(getattr(decision, "complexity_hint", "") or ""),
+        "core_route": str(getattr(decision, "core_route", "") or ""),
+        "fast_track_candidate": bool(getattr(decision, "fast_track_candidate", False)),
+    }
+    await asyncio.sleep(0)
+
+    # ── Shell direct reply (no Core dispatch needed) ───────────
+    if not needs_core:
+        # Shell handles directly: yield content event with the user message
+        # for the shell-side LLM to process with Shell's system prompt.
+        # In production, Shell would run its own mini_loop with read-only tools.
+        yield {
+            "type": "shell_direct",
+            "pipeline_id": pipeline_id,
+            "system_prompt": shell.build_system_prompt(),
+            "user_message": message,
+            "delegation_intent": decision.delegation_intent,
+            "model_tier": decision.selected_model_tier,
+        }
+
+        yield {
+            "type": "pipeline_end",
+            "pipeline_id": pipeline_id,
+            "reason": "shell_direct_reply",
+            "duration_ms": int((time.time() - started_at) * 1000),
+        }
+        return
+
+    # ── Phase 2: Core decomposes goal into Expert assignments ──
+
+    intent_type = "analysis"
+    if str(decision.task_type or "").strip().lower() == "ops":
+        intent_type = "ops"
+    elif str(decision.task_type or "").strip().lower() in {"development", "general"}:
+        intent_type = "development"
+
+    dispatch: Dict[str, Any]
+    if precomputed_decision is not None:
+        base_dispatch = dict(dispatch_payload) if isinstance(dispatch_payload, dict) else {}
+        dispatch = {
+            "dispatched": True,
+            "goal": str(base_dispatch.get("goal") or message),
+            "intent_type": str(base_dispatch.get("intent_type") or intent_type),
+            "target_repo": str(base_dispatch.get("target_repo") or "external"),
+            "context_summary": str(base_dispatch.get("context_summary") or ""),
+            "relevant_memories": list(base_dispatch.get("relevant_memories") or []),
+            "priority": str(base_dispatch.get("priority") or "normal"),
+            "router_decision": decision.to_dict(),
+            "delegation_intent": str(base_dispatch.get("delegation_intent") or decision.delegation_intent),
+            "tool_profile": list(base_dispatch.get("tool_profile") or decision.tool_profile),
+            "prompt_profile": str(base_dispatch.get("prompt_profile") or decision.prompt_profile),
+            "model_tier": str(base_dispatch.get("model_tier") or decision.selected_model_tier),
+            "selected_role": str(base_dispatch.get("selected_role") or decision.selected_role),
+            "injection_mode": str(base_dispatch.get("injection_mode") or decision.injection_mode),
+            "complexity_hint": str(
+                base_dispatch.get("complexity_hint") or getattr(decision, "complexity_hint", "") or ""
+            ),
+            "core_route": str(base_dispatch.get("core_route") or getattr(decision, "core_route", "") or ""),
+            "target_files": list(base_dispatch.get("target_files") or []),
+            "estimated_changed_lines": base_dispatch.get("estimated_changed_lines", 0),
+            "requested_tools": list(base_dispatch.get("requested_tools") or []),
+        }
+    else:
+        dispatch = shell.dispatch_to_core(
+            {
+                "goal": message,
+                "intent_type": intent_type,
+                "target_repo": "external",
+            },
+            session_id=session_id,
+            risk_level=risk_level or "write_repo",
+        )
+
+    core = CoreAgent(store=_store, mailbox=_mailbox, task_board_engine=task_board_engine)
+    core_route_plan = core.plan_execution_route(dispatch)
+    dispatch["complexity_hint"] = str(core_route_plan.get("complexity_hint") or "standard")
+    dispatch["core_route"] = str(core_route_plan.get("route") or "standard")
+
+    yield {
+        "type": "core_route_selected",
+        "pipeline_id": pipeline_id,
+        "core_route": str(core_route_plan.get("route") or "standard"),
+        "complexity_hint": str(core_route_plan.get("complexity_hint") or "standard"),
+        "fast_track_eligible": bool(core_route_plan.get("fast_track_eligible")),
+        "reason_codes": list(core_route_plan.get("reason_codes") or []),
+        "max_files": int(core_route_plan.get("max_files") or 1),
+        "max_changed_lines": int(core_route_plan.get("max_changed_lines") or 10),
+    }
+    await asyncio.sleep(0)
+
+    # ── Phase 2A: Fast-Track direct execution ─────────────────
+
+    resolved_core_execution_session_id = str(core_execution_session_id or "").strip() or str(session_id or "").strip()
+    if not resolved_core_execution_session_id:
+        resolved_core_execution_session_id = f"core_{pipeline_id}"
+    _ensure_core_runtime_session(
+        store=_store,
+        core_execution_session_id=resolved_core_execution_session_id,
+        goal=message,
+        pipeline_id=pipeline_id,
+    )
+    # Persist shell_session_id in core session metadata for downstream context lookup
+    _shell_session_id = str(dispatch.get("shell_session_id") or "").strip()
+    if _shell_session_id:
+        try:
+            _store.update_metadata(resolved_core_execution_session_id, {"shell_session_id": _shell_session_id})
+        except Exception:
+            logger.debug("Failed to persist shell_session_id in core session metadata", exc_info=True)
+    runtime_child_execution_enabled = bool(
+        enable_child_execution and child_llm_call is not None and child_tool_executor is not None
+    )
+
+    if str(core_route_plan.get("route") or "") == "fast_track":
+        if not runtime_child_execution_enabled:
+            yield {
+                "type": "fast_track_fallback",
+                "pipeline_id": pipeline_id,
+                "reason": "fast_track_runtime_unavailable",
+                "target_route": "standard",
+            }
+        else:
+            fast_track_tools = list(core_route_plan.get("tool_subset") or [])
+            max_files = max(1, int(core_route_plan.get("max_files") or 1))
+            max_changed_lines = max(1, int(core_route_plan.get("max_changed_lines") or 10))
+            fast_track_task_description = _build_fast_track_task_description(dispatch, message)
+            # Pull upstream Shell context (pull model)
+            upstream_section = _build_upstream_context_section(_shell_session_id)
+            if upstream_section:
+                fast_track_task_description += "\n\n" + upstream_section
+
+            fast_track_spawn_args = {
+                "role": "dev",
+                "task_description": fast_track_task_description,
+                "prompt_blocks": [],
+                "tool_subset": fast_track_tools,
+                "metadata": {
+                    "pipeline_id": str(pipeline_id),
+                    "execution_mode": "fast_track",
+                    "fast_track_dispatch": {
+                        "goal": str(dispatch.get("goal") or message),
+                        "context_summary": str(dispatch.get("context_summary") or ""),
+                        "target_files": _normalize_dispatch_string_list(dispatch.get("target_files")),
+                        "requested_tools": _normalize_dispatch_string_list(dispatch.get("requested_tools")),
+                        "estimated_changed_lines": _safe_non_negative_int(dispatch.get("estimated_changed_lines")),
+                    },
+                },
+            }
+            if str(dispatch.get("target_repo") or "").strip().lower() == "self":
+                fast_track_spawn_args["workspace_mode"] = "worktree"
+            spawn_result = handle_parent_tool_call(
+                "spawn_child_agent",
+                fast_track_spawn_args,
+                parent_session_id=resolved_core_execution_session_id,
+                store=_store,
+                mailbox=_mailbox,
+            )
+            fast_track_agent_id = str(spawn_result.get("agent_id") or "").strip()
+            if not fast_track_agent_id:
+                yield {
+                    "type": "fast_track_fallback",
+                    "pipeline_id": pipeline_id,
+                    "reason": "fast_track_spawn_failed",
+                    "target_route": "standard",
+                    "spawn_result": spawn_result,
+                }
+            else:
+                touched_files: set[str] = set()
+                successful_touched_files: set[str] = set()
+                guard_blocked_details: List[Dict[str, Any]] = []
+                fast_track_last_content = ""
+                fast_track_loop_end_reason = ""
+                _ft_has_pending_promotion = False
+
+                async def _execute_fast_track_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+                    normalized_tool = _normalize_fast_track_tool_name(tool_name)
+                    safe_arguments = dict(arguments) if isinstance(arguments, dict) else {}
+                    if normalized_tool in _FAST_TRACK_BLOCKED_TOOLS:
+                        reason = "blocked_tool"
+                        guard_blocked_details.append({"tool_name": normalized_tool, "reason": reason})
+                        return {
+                            "error": "fast_track_guard_blocked",
+                            "reason": reason,
+                            "tool_name": normalized_tool,
+                        }
+                    if fast_track_tools and normalized_tool not in set(fast_track_tools):
+                        reason = "tool_not_in_fast_track_profile"
+                        guard_blocked_details.append({"tool_name": normalized_tool, "reason": reason})
+                        return {
+                            "error": "fast_track_guard_blocked",
+                            "reason": reason,
+                            "tool_name": normalized_tool,
+                        }
+
+                    candidate_path = _extract_tool_path(safe_arguments)
+                    normalized_path = _normalize_fast_track_path(candidate_path)
+                    mutating_tools = {"write_file", "workspace_txn_apply", "git_checkout_file"}
+                    if normalized_tool in mutating_tools and normalized_path:
+                        if _is_fast_track_protected_path(normalized_path):
+                            reason = "protected_path"
+                            guard_blocked_details.append(
+                                {"tool_name": normalized_tool, "reason": reason, "path": normalized_path}
+                            )
+                            return {
+                                "error": "fast_track_guard_blocked",
+                                "reason": reason,
+                                "tool_name": normalized_tool,
+                                "path": normalized_path,
+                            }
+                        touched_files.add(normalized_path)
+                        if len(touched_files) > max_files:
+                            reason = "multi_file_limit_exceeded"
+                            guard_blocked_details.append({"tool_name": normalized_tool, "reason": reason})
+                            return {
+                                "error": "fast_track_guard_blocked",
+                                "reason": reason,
+                                "tool_name": normalized_tool,
+                                "max_files": max_files,
+                            }
+
+                    if normalized_tool == "write_file":
+                        content = str(safe_arguments.get("content") or "")
+                        changed_lines = len(content.splitlines())
+                        if changed_lines > max_changed_lines:
+                            reason = "line_limit_exceeded"
+                            guard_blocked_details.append(
+                                {
+                                    "tool_name": normalized_tool,
+                                    "reason": reason,
+                                    "changed_lines": changed_lines,
+                                    "max_changed_lines": max_changed_lines,
+                                }
+                            )
+                            return {
+                                "error": "fast_track_guard_blocked",
+                                "reason": reason,
+                                "tool_name": normalized_tool,
+                                "changed_lines": changed_lines,
+                                "max_changed_lines": max_changed_lines,
+                            }
+
+                    prepared_arguments = _prepare_child_tool_arguments(store=_store, child_session_id=fast_track_agent_id, tool_name=normalized_tool, arguments=safe_arguments)
+                    result = await child_tool_executor(normalized_tool, prepared_arguments, fast_track_agent_id)
+                    result_status = str(result.get("status") or "").strip().lower() if isinstance(result, dict) else ""
+                    if normalized_tool in mutating_tools and normalized_path and result_status in {"success", "ok"}:
+                        successful_touched_files.add(normalized_path)
+                    return result
+
+                dev_agent = DevAgent(
+                    config=DevAgentConfig(
+                        prompt_blocks=[],
+                        tool_subset=fast_track_tools,
+                        prompts_root=_CANONICAL_PROMPTS_ROOT,
+                    ),
+                    session_id=fast_track_agent_id,
+                    store=_store,
+                    mailbox=_mailbox,
+                )
+                fast_track_loop_config = MiniLoopConfig(
+                    max_rounds=max(1, min(int(child_max_rounds), 6)),
+                    poll_parent_every_n=3,
+                )
+
+                yield {
+                    "type": "fast_track_start",
+                    "pipeline_id": pipeline_id,
+                    "core_execution_session_id": resolved_core_execution_session_id,
+                    "agent_id": fast_track_agent_id,
+                    "tool_subset": list(fast_track_tools),
+                    "max_files": max_files,
+                    "max_changed_lines": max_changed_lines,
+                }
+
+                async for mini_event in run_mini_loop(
+                    session_id=fast_track_agent_id,
+                    store=_store,
+                    mailbox=_mailbox,
+                    llm_call=child_llm_call,
+                    tool_executor=_execute_fast_track_tool,
+                    tool_definitions=_build_runtime_tool_definitions(fast_track_tools),
+                    system_prompt=dev_agent.build_system_prompt(),
+                    initial_task=fast_track_task_description,
+                    config=fast_track_loop_config,
+                ):
+                    if isinstance(mini_event, dict):
+                        mini_event_type = str(mini_event.get("type") or "")
+                        if mini_event_type == "content":
+                            content_text = str(mini_event.get("text") or "").strip()
+                            if content_text:
+                                fast_track_last_content = content_text
+                        elif mini_event_type == "loop_end":
+                            fast_track_loop_end_reason = str(mini_event.get("reason") or "")
+                    yield {
+                        "type": "fast_track_event",
+                        "pipeline_id": pipeline_id,
+                        "core_execution_session_id": resolved_core_execution_session_id,
+                        "agent_id": fast_track_agent_id,
+                        "event": mini_event,
+                    }
+
+                fast_track_session = _store.get(fast_track_agent_id)
+                fast_track_status = (
+                    str(fast_track_session.status.value) if fast_track_session is not None else "missing"
+                )
+                if _should_auto_complete_fast_track_analysis(
+                    dispatch=dispatch,
+                    fast_track_status=fast_track_status,
+                    loop_end_reason=fast_track_loop_end_reason,
+                    last_content=fast_track_last_content,
+                    touched_files=touched_files,
+                    guard_blocked_details=guard_blocked_details,
+                ):
+                    auto_report_result = handle_child_tool_call(
+                        "report_to_parent",
+                        {
+                            "type": "completed",
+                            "content": fast_track_last_content,
+                            "verification_report": _build_fast_track_readonly_auto_verification_report(
+                                fast_track_last_content
+                            ),
+                        },
+                        child_session_id=fast_track_agent_id,
+                        store=_store,
+                        mailbox=_mailbox,
+                    )
+                    yield {
+                        "type": "fast_track_auto_complete",
+                        "pipeline_id": pipeline_id,
+                        "core_execution_session_id": resolved_core_execution_session_id,
+                        "agent_id": fast_track_agent_id,
+                        "reason": "readonly_analysis_content_without_explicit_completion",
+                        "result": auto_report_result,
+                    }
+                    fast_track_session = _store.get(fast_track_agent_id)
+                    fast_track_status = (
+                        str(fast_track_session.status.value) if fast_track_session is not None else "missing"
+                    )
+                if _should_auto_complete_fast_track_write(
+                    dispatch=dispatch,
+                    fast_track_status=fast_track_status,
+                    loop_end_reason=fast_track_loop_end_reason,
+                    last_content=fast_track_last_content,
+                    successful_touched_files=successful_touched_files,
+                    guard_blocked_details=guard_blocked_details,
+                ):
+                    auto_report_result = handle_child_tool_call(
+                        "report_to_parent",
+                        {
+                            "type": "completed",
+                            "content": fast_track_last_content,
+                            "verification_report": _build_fast_track_write_auto_verification_report(
+                                fast_track_last_content,
+                                changed_files=sorted(successful_touched_files),
+                            ),
+                        },
+                        child_session_id=fast_track_agent_id,
+                        store=_store,
+                        mailbox=_mailbox,
+                    )
+                    yield {
+                        "type": "fast_track_auto_complete",
+                        "pipeline_id": pipeline_id,
+                        "core_execution_session_id": resolved_core_execution_session_id,
+                        "agent_id": fast_track_agent_id,
+                        "reason": "write_execution_parent_finalize_without_explicit_report",
+                        "result": auto_report_result,
+                    }
+                    fast_track_session = _store.get(fast_track_agent_id)
+                    fast_track_status = (
+                        str(fast_track_session.status.value) if fast_track_session is not None else "missing"
+                    )
+                fast_track_completed = fast_track_status == AgentStatus.WAITING.value
+                stop_reason = "submitted_completion" if fast_track_completed else "completion_not_submitted"
+                if guard_blocked_details and not fast_track_completed:
+                    stop_reason = "fast_track_guard_blocked"
+
+                reports = core.collect_reports(resolved_core_execution_session_id, pipeline_id=pipeline_id)
+                if _should_force_finalize_fast_track_analysis(
+                    dispatch=dispatch,
+                    fast_track_status=fast_track_status,
+                    last_content=fast_track_last_content,
+                    touched_files=touched_files,
+                    guard_blocked_details=guard_blocked_details,
+                    reports=reports,
+                ):
+                    auto_report_result = handle_child_tool_call(
+                        "report_to_parent",
+                        {
+                            "type": "completed",
+                            "content": fast_track_last_content,
+                            "verification_report": _build_fast_track_readonly_auto_verification_report(
+                                fast_track_last_content
+                            ),
+                        },
+                        child_session_id=fast_track_agent_id,
+                        store=_store,
+                        mailbox=_mailbox,
+                    )
+                    yield {
+                        "type": "fast_track_auto_complete",
+                        "pipeline_id": pipeline_id,
+                        "core_execution_session_id": resolved_core_execution_session_id,
+                        "agent_id": fast_track_agent_id,
+                        "reason": "readonly_analysis_parent_finalize_without_explicit_report",
+                        "result": auto_report_result,
+                    }
+                    fast_track_session = _store.get(fast_track_agent_id)
+                    fast_track_status = (
+                        str(fast_track_session.status.value) if fast_track_session is not None else "missing"
+                    )
+                    fast_track_completed = fast_track_status == AgentStatus.WAITING.value
+                    stop_reason = "submitted_completion" if fast_track_completed else stop_reason
+                    reports = core.collect_reports(resolved_core_execution_session_id, pipeline_id=pipeline_id)
+                if fast_track_completed:
+                    pending_workspace_submission = bool(touched_files) and any(
+                        bool(item.get("promote_pending")) for item in _collect_workspace_submission_summaries(reports)
+                    )
+                    if pending_workspace_submission:
+                        stop_reason = "awaiting_workspace_promotion"
+                        _ft_has_pending_promotion = True
+                receipt_event = _build_fast_track_execution_receipt(
+                    pipeline_id=pipeline_id,
+                    goal=str(dispatch.get("goal") or message),
+                    reports=reports,
+                    task_completed=fast_track_completed,
+                    stop_reason=stop_reason,
+                    fast_track_agent_id=fast_track_agent_id,
+                    complexity_hint=str(core_route_plan.get("complexity_hint") or "standard"),
+                    guard_blocked_count=len(guard_blocked_details),
+                    touched_files=sorted(touched_files),
+                )
+
+                yield {
+                    "type": "tool_stage",
+                    "pipeline_id": pipeline_id,
+                    "phase": "verify",
+                    "status": "success" if fast_track_completed else "warning",
+                    "reason": stop_reason,
+                    "decision": "stop" if fast_track_completed else "continue",
+                    "round": 1,
+                    "details": {
+                        "task_completed": bool(fast_track_completed),
+                        "submit_result_called": bool(fast_track_completed),
+                        "submit_result_round": 1 if fast_track_completed else 0,
+                        "execution_mode": "fast_track",
+                        "guard_blocked_count": len(guard_blocked_details),
+                    },
+                }
+                yield receipt_event
+                yield {
+                    "type": "content",
+                    "pipeline_id": pipeline_id,
+                    "source": "execution_receipt",
+                    "text": str(receipt_event.get("agent_state", {}).get("final_answer") or ""),
+                }
+                yield {
+                    "type": "fast_track_summary",
+                    "pipeline_id": pipeline_id,
+                    "core_execution_session_id": resolved_core_execution_session_id,
+                    "agent_id": fast_track_agent_id,
+                    "status": fast_track_status,
+                    "guard_blocked_count": len(guard_blocked_details),
+                    "guard_blocked_details": guard_blocked_details[:10],
+                    "touched_files": sorted(touched_files),
+                }
+
+                # ── Perception: record fast-track experience for evolution ──
+                _record_pipeline_experience(
+                    pipeline_id=pipeline_id,
+                    task_completed=fast_track_completed,
+                    stop_reason=stop_reason,
+                    goal=str(dispatch.get("goal") or message or ""),
+                    expert_count=1,
+                    changed_files=sorted(touched_files),
+                )
+
+                # ── Worktree teardown: auto-cleanup unless promote is pending ──
+                if not _ft_has_pending_promotion:
+                    wt_teardown = _teardown_fast_track_worktree(
+                        store=_store,
+                        session_id=fast_track_agent_id,
+                        reason="fast_track_no_promote" if successful_touched_files else "fast_track_readonly",
+                    )
+                else:
+                    wt_teardown = {"attempted": False, "reason": "promote_pending"}
+
+                cleanup_summary = _apply_child_session_cleanup(
+                    store=_store,
+                    mailbox=_mailbox,
+                    core_execution_session_id=resolved_core_execution_session_id,
+                    pipeline_id=pipeline_id,
+                    mode=child_session_cleanup_mode,
+                    ttl_seconds=int(child_session_cleanup_ttl_seconds),
+                )
+                cleanup_summary["worktree_teardown"] = wt_teardown
+                yield {
+                    "type": "pipeline_cleanup",
+                    "pipeline_id": pipeline_id,
+                    "cleanup": cleanup_summary,
+                }
+                yield {
+                    "type": "pipeline_end",
+                    "pipeline_id": pipeline_id,
+                    "reason": "completed" if fast_track_completed else "delegated_waiting_child_completion",
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                    "expert_count": 0,
+                    "core_execution_session_id": resolved_core_execution_session_id,
+                    "child_session_cleanup": cleanup_summary,
+                    "execution_mode": "fast_track",
+                }
+                return
+
+    # ── Phase 2B: Standard route (decompose + experts) ────────
+
+    decomposition = core.decompose_goal(dispatch)
+
+    yield {
+        "type": "core_decomposition",
+        "pipeline_id": pipeline_id,
+        "goal_id": decomposition.get("goal_id"),
+        "expert_count": len(decomposition.get("expert_assignments", [])),
+        "subtask_count": decomposition.get("subtask_count", 0),
+        "model_tier": decomposition.get("model_tier"),
+        "core_route": "standard",
+    }
+    await asyncio.sleep(0)
+
+    # ── Phase 3: Spawn Experts ─────────────────────────────────
+
+    expert_results = core.spawn_experts(
+        decomposition,
+        core_execution_session_id=resolved_core_execution_session_id,
+        pipeline_id=pipeline_id,
+    )
+
+    for er in expert_results:
+        yield {
+            "type": "expert_spawned",
+            "pipeline_id": pipeline_id,
+            "expert_type": er.get("expert_type"),
+            "agent_id": er.get("agent_id"),
+        }
+        await asyncio.sleep(0)
+
+    # ── Phase 4: Expert planning + Dev spawning ────────────────
+
+    expert_instances: List[ExpertAgent] = []
+    review_results: List[Dict[str, Any]] = []
+    review_expected_count = 0
+    expert_heartbeat_summaries: List[Dict[str, Any]] = []
+    expert_scheduler_metrics = _new_scheduler_metrics("expert")
+    dev_scheduler_metrics = _new_scheduler_metrics("dev")
+    child_execution_enabled = bool(
+        enable_child_execution and child_llm_call is not None and child_tool_executor is not None
+    )
+    if expert_results:
+        expert_queue: asyncio.Queue = asyncio.Queue()
+        expert_run_results: Dict[int, Dict[str, Any]] = {}
+        expert_run_errors: List[BaseException] = []
+        expert_parallel_limit = max(
+            1,
+            min(
+                len(expert_results),
+                int(getattr(core, "max_experts", len(expert_results)) or len(expert_results)),
+            ),
+        )
+        expert_scheduler_metrics["parallel_limit"] = int(expert_parallel_limit)
+        expert_semaphore = asyncio.Semaphore(expert_parallel_limit)
+        active_expert_runs = 0
+
+        async def _emit_expert_event(event: Dict[str, Any]) -> None:
+            await expert_queue.put({"kind": "event", "event": dict(event)})
+
+        async def _execute_expert(index: int, expert_result: Dict[str, Any]) -> None:
+            nonlocal active_expert_runs
+            try:
+                async with expert_semaphore:
+                    active_expert_runs += 1
+                    expert_scheduler_metrics["peak_parallelism"] = max(
+                        int(expert_scheduler_metrics.get("peak_parallelism") or 0),
+                        active_expert_runs,
+                    )
+                    try:
+                        result = await _run_single_expert_phase(
+                            er=expert_result,
+                            decomposition=decomposition,
+                            message=message,
+                            pipeline_id=pipeline_id,
+                            resolved_core_execution_session_id=resolved_core_execution_session_id,
+                            child_execution_enabled=child_execution_enabled,
+                            child_llm_call=child_llm_call,
+                            child_tool_executor=child_tool_executor,
+                            child_max_rounds=child_max_rounds,
+                            store=_store,
+                            mailbox=_mailbox,
+                            task_board_engine=task_board_engine,
+                            emit=_emit_expert_event,
+                            dev_scheduler_metrics=dev_scheduler_metrics,
+                        )
+                    finally:
+                        active_expert_runs = max(0, active_expert_runs - 1)
+                await expert_queue.put({"kind": "result", "index": index, "result": result})
+            except Exception as exc:
+                logger.exception(
+                    "Expert phase failed: expert_id=%s",
+                    str(expert_result.get("agent_id") or ""),
+                )
+                await expert_queue.put({"kind": "error", "index": index, "error": exc})
+
+        expert_tasks = [
+            asyncio.create_task(_execute_expert(index, er))
+            for index, er in enumerate(expert_results)
+        ]
+        pending_expert_tasks = len(expert_tasks)
+        while pending_expert_tasks > 0:
+            queue_item = await expert_queue.get()
+            item_kind = str(queue_item.get("kind") or "")
+            if item_kind == "event":
+                event_payload = queue_item.get("event")
+                if isinstance(event_payload, dict):
+                    yield event_payload
+                continue
+            pending_expert_tasks -= 1
+            if item_kind == "result":
+                try:
+                    result_index = int(queue_item.get("index") or 0)
+                except Exception:
+                    result_index = 0
+                result_payload = queue_item.get("result")
+                if isinstance(result_payload, dict):
+                    expert_run_results[result_index] = result_payload
+            elif item_kind == "error":
+                error_obj = queue_item.get("error")
+                if isinstance(error_obj, BaseException):
+                    expert_run_errors.append(error_obj)
+                else:
+                    expert_run_errors.append(RuntimeError(str(error_obj)))
+
+        gather_results = await asyncio.gather(*expert_tasks, return_exceptions=True)
+        for gather_item in gather_results:
+            if isinstance(gather_item, Exception):
+                expert_run_errors.append(gather_item)
+        if expert_run_errors:
+            # Cleanup worktrees from spawned children before propagating exception
+            try:
+                _apply_child_session_cleanup(
+                    store=_store,
+                    mailbox=_mailbox,
+                    core_execution_session_id=resolved_core_execution_session_id,
+                    pipeline_id=pipeline_id,
+                    mode="destroy",
+                    ttl_seconds=0,
+                )
+            except Exception:
+                logger.debug("Emergency cleanup after expert error failed", exc_info=True)
+            raise expert_run_errors[0]
+
+        for expert_index in range(len(expert_results)):
+            expert_result_payload = expert_run_results.get(expert_index)
+            if not isinstance(expert_result_payload, dict):
+                continue
+            expert_obj = expert_result_payload.get("expert")
+            if isinstance(expert_obj, ExpertAgent):
+                expert_instances.append(expert_obj)
+            local_review_results = expert_result_payload.get("review_results")
+            if isinstance(local_review_results, list):
+                review_results.extend(
+                    item for item in local_review_results if isinstance(item, dict)
+                )
+            try:
+                review_expected_count += max(0, int(expert_result_payload.get("review_expected_count") or 0))
+            except Exception:
+                logger.debug(
+                    "Failed to merge review_expected_count for expert index=%s",
+                    expert_index,
+                    exc_info=True,
+                )
+            local_heartbeat_summary = expert_result_payload.get("heartbeat_summary")
+            if isinstance(local_heartbeat_summary, dict):
+                expert_heartbeat_summaries.append(dict(local_heartbeat_summary))
+
+    # ── Phase 5: Core lifecycle loop (LLM-driven parent management) ──
+
+    core_loop_summary: Dict[str, Any] = {}
+    core_loop_tool_call_count = 0
+    core_loop_tool_names: List[str] = []
+    spawned_child_ids: set[str] = set()
+    resumed_child_ids: set[str] = set()
+    destroyed_child_ids: set[str] = set()
+    deferred_child_ids: set[str] = set()
+    resume_exec_dev_count = 0
+    resume_exec_skips: List[Dict[str, Any]] = []
+    core_cycle_summaries: List[Dict[str, Any]] = []
+    core_quiescent_cycles = 0
+    core_loop_enabled = bool(
+        child_execution_enabled and child_llm_call is not None and child_tool_executor is not None
+    )
+    reports = core.collect_reports(resolved_core_execution_session_id, pipeline_id=pipeline_id)
+    pending_descendants = _collect_core_pending_descendants(
+        store=_store,
+        core_execution_session_id=resolved_core_execution_session_id,
+        pipeline_id=pipeline_id,
+        reports=reports,
+    )
+    if core_loop_enabled and child_llm_call is not None:
+        children_snapshot = _collect_core_descendant_status_snapshot(
+            store=_store,
+            core_execution_session_id=resolved_core_execution_session_id,
+            pipeline_id=pipeline_id,
+        )
+        core_tool_defs = _build_core_parent_tool_definitions()
+        core_allowed_tools = {str(item.get("name") or "").strip() for item in core_tool_defs}
+        core_loop_policy = _resolve_core_loop_policy(child_max_rounds=child_max_rounds)
+        core_loop_config = MiniLoopConfig(
+            max_rounds=max(1, int(core_loop_policy.get("soft_max_rounds") or child_max_rounds)),
+            hard_max_rounds=int(core_loop_policy.get("hard_max_rounds") or 0),
+            poll_parent_every_n=max(1, int(core_loop_policy.get("poll_parent_every_n") or 3)),
+            include_child_tools=False,
+        )
+        core_system_prompt = core.build_system_prompt(str(decomposition.get("prompt_profile") or ""))
+
+        async def _core_llm_call(
+            messages: List[Dict[str, Any]],
+            tools: List[Dict[str, Any]],
+            model_name: str,
+        ) -> Dict[str, Any]:
+            raw = await child_llm_call(messages, tools, model_name)
+            payload = raw if isinstance(raw, dict) else {}
+            raw_tool_calls = payload.get("tool_calls")
+            normalized_calls: List[Dict[str, Any]] = []
+            if isinstance(raw_tool_calls, list):
+                for item in raw_tool_calls:
+                    if not isinstance(item, dict):
+                        continue
+                    tool_name = str(item.get("name") or "").strip()
+                    if tool_name in core_allowed_tools:
+                        normalized_calls.append(dict(item))
+            return {
+                "content": str(payload.get("content") or ""),
+                "tool_calls": normalized_calls,
+            }
+
+        async def _core_parent_tool_executor(
+            tool_name: str,
+            arguments: Dict[str, Any],
+        ) -> Dict[str, Any]:
+            normalized_name = str(tool_name or "").strip()
+            if normalized_name not in core_allowed_tools:
+                return {
+                    "error": f"tool_not_allowed:{normalized_name}",
+                    "status": "blocked",
+                    "allowed_tools": sorted(core_allowed_tools),
+                }
+            safe_arguments = dict(arguments) if isinstance(arguments, dict) else {}
+            if normalized_name == "spawn_child_agent":
+                requested_role = str(safe_arguments.get("role") or "").strip().lower()
+                if not requested_role:
+                    safe_arguments["role"] = "dev"
+                    requested_role = "dev"
+                if requested_role not in _CORE_SPAWN_ROLE_ALLOWLIST:
+                    return {
+                        "error": f"unsupported_spawn_role:{requested_role}",
+                        "status": "blocked",
+                        "allowed_roles": sorted(_CORE_SPAWN_ROLE_ALLOWLIST),
+                    }
+                raw_metadata = safe_arguments.get("metadata")
+                metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+                metadata["pipeline_id"] = str(pipeline_id or "").strip()
+                safe_arguments["metadata"] = metadata
+                if str(dispatch.get("target_repo") or "").strip().lower() == "self" and not safe_arguments.get("workspace_mode"):
+                    safe_arguments["workspace_mode"] = "worktree"
+            return handle_parent_tool_call(
+                normalized_name,
+                safe_arguments,
+                parent_session_id=resolved_core_execution_session_id,
+                store=_store,
+                mailbox=_mailbox,
+            )
+
+        yield {
+            "type": "core_loop_start",
+            "pipeline_id": pipeline_id,
+            "core_execution_session_id": resolved_core_execution_session_id,
+            "tool_subset": sorted(core_allowed_tools),
+            "child_count": len(children_snapshot),
+            "policy": dict(core_loop_policy),
+        }
+
+        core_cycle_index = 0
+        while True:
+            core_cycle_index += 1
+            cycle_tool_call_start = core_loop_tool_call_count
+            cycle_resume_exec_start = resume_exec_dev_count
+            cycle_resume_skip_start = len(resume_exec_skips)
+            cycle_spawned_child_ids: set[str] = set()
+            cycle_resumed_child_ids: set[str] = set()
+            cycle_destroyed_child_ids: set[str] = set()
+            cycle_deferred_child_ids: set[str] = set()
+            cycle_children_before = _collect_core_descendant_status_snapshot(
+                store=_store,
+                core_execution_session_id=resolved_core_execution_session_id,
+                pipeline_id=pipeline_id,
+            )
+            cycle_reports_before = core.collect_reports(
+                resolved_core_execution_session_id,
+                pipeline_id=pipeline_id,
+            )
+            cycle_initial_task = _build_core_loop_initial_task(
+                message=message,
+                core_execution_session_id=resolved_core_execution_session_id,
+                pipeline_id=pipeline_id,
+                children_snapshot=cycle_children_before,
+            )
+            core_session = _store.get(resolved_core_execution_session_id)
+            effective_cycle_initial_task = cycle_initial_task
+            if core_session is not None and list(core_session.messages or []):
+                _inject_system_instruction(
+                    _store,
+                    resolved_core_execution_session_id,
+                    cycle_initial_task,
+                )
+                effective_cycle_initial_task = ""
+
+            yield {
+                "type": "core_loop_cycle_start",
+                "pipeline_id": pipeline_id,
+                "core_execution_session_id": resolved_core_execution_session_id,
+                "cycle": core_cycle_index,
+                "child_count": len(cycle_children_before),
+                "report_count": len(cycle_reports_before),
+            }
+
+            cycle_loop_stop_reason = ""
+            cycle_loop_state: Dict[str, Any] = {}
+            async for core_event in run_mini_loop(
+                session_id=resolved_core_execution_session_id,
+                store=_store,
+                mailbox=_mailbox,
+                llm_call=_core_llm_call,
+                tool_executor=_core_parent_tool_executor,
+                tool_definitions=core_tool_defs,
+                system_prompt=core_system_prompt,
+                initial_task=effective_cycle_initial_task,
+                config=core_loop_config,
+            ):
+                if not isinstance(core_event, dict):
+                    continue
+                event_type = str(core_event.get("type") or "")
+                if event_type == "tool_call":
+                    tool_name = str(core_event.get("name") or "").strip()
+                    if tool_name:
+                        core_loop_tool_call_count += 1
+                        core_loop_tool_names.append(tool_name)
+                elif event_type == "tool_result":
+                    tool_name = str(core_event.get("name") or "").strip()
+                    result_payload = core_event.get("result")
+                    if isinstance(result_payload, dict):
+                        child_id = str(result_payload.get("agent_id") or "").strip()
+                        status_text = str(result_payload.get("status") or "").strip().lower()
+                        if tool_name == "spawn_child_agent" and child_id and status_text == "running":
+                            spawned_child_ids.add(child_id)
+                            cycle_spawned_child_ids.add(child_id)
+                        elif tool_name == "resume_child_agent" and child_id and status_text == "running":
+                            resumed_child_ids.add(child_id)
+                            cycle_resumed_child_ids.add(child_id)
+                        elif tool_name == "destroy_child_agent" and child_id and status_text == "destroyed":
+                            destroyed_child_ids.add(child_id)
+                            cycle_destroyed_child_ids.add(child_id)
+                elif event_type == "loop_end":
+                    state_payload = core_event.get("state")
+                    if isinstance(state_payload, dict):
+                        cycle_loop_state = dict(state_payload)
+                        core_loop_summary.update(cycle_loop_state)
+                    cycle_loop_stop_reason = str(core_event.get("reason") or "")
+                yield {
+                    "type": "core_loop_event",
+                    "pipeline_id": pipeline_id,
+                    "core_execution_session_id": resolved_core_execution_session_id,
+                    "cycle": core_cycle_index,
+                    "event": core_event,
+                }
+
+            followup_child_ids = sorted(
+                (cycle_spawned_child_ids | cycle_resumed_child_ids) - cycle_destroyed_child_ids
+            )
+            if (
+                followup_child_ids
+                and child_execution_enabled
+                and child_llm_call is not None
+                and child_tool_executor is not None
+            ):
+                refreshed_expert_ids: set[str] = set()
+                for target_child_id in followup_child_ids:
+                    source = "spawn" if target_child_id in cycle_spawned_child_ids else "resume"
+                    if source == "spawn":
+                        start_event_type = "dev_loop_spawn_start"
+                        event_event_type = "dev_loop_spawn_event"
+                        end_event_type = "dev_loop_spawn_end"
+                        skip_event_type = "dev_loop_spawn_skipped"
+                    else:
+                        start_event_type = "dev_loop_resume_start"
+                        event_event_type = "dev_loop_resume_event"
+                        end_event_type = "dev_loop_resume_end"
+                        skip_event_type = "dev_loop_resume_skipped"
+
+                    resumed_session = _store.get(target_child_id)
+                    if resumed_session is None:
+                        resume_exec_skips.append(
+                            {
+                                "agent_id": target_child_id,
+                                "reason": "missing_or_destroyed",
+                                "source": source,
+                                "cycle": core_cycle_index,
+                            }
+                        )
+                        yield {
+                            "type": skip_event_type,
+                            "pipeline_id": pipeline_id,
+                            "agent_id": target_child_id,
+                            "source": source,
+                            "reason": "missing_or_destroyed",
+                            "cycle": core_cycle_index,
+                        }
+                        continue
+
+                    if resumed_session.status != AgentStatus.RUNNING:
+                        resume_exec_skips.append(
+                            {
+                                "agent_id": target_child_id,
+                                "reason": "not_running",
+                                "source": source,
+                                "cycle": core_cycle_index,
+                            }
+                        )
+                        yield {
+                            "type": skip_event_type,
+                            "pipeline_id": pipeline_id,
+                            "agent_id": target_child_id,
+                            "source": source,
+                            "reason": "not_running",
+                            "status": str(resumed_session.status.value),
+                            "cycle": core_cycle_index,
+                        }
+                        continue
+
+                    session_role = str(resumed_session.role or "").strip().lower()
+                    if session_role != "dev":
+                        if source == "spawn" and session_role in {"expert", "review"}:
+                            try:
+                                _store.update_status(target_child_id, AgentStatus.WAITING)
+                            except Exception:
+                                logger.debug(
+                                    "Failed to defer spawned child session: %s",
+                                    target_child_id,
+                                    exc_info=True,
+                                )
+                            deferred_child_ids.add(target_child_id)
+                            cycle_deferred_child_ids.add(target_child_id)
+                            resume_exec_skips.append(
+                                {
+                                    "agent_id": target_child_id,
+                                    "reason": "spawn_deferred_role",
+                                    "source": source,
+                                    "role": session_role,
+                                    "cycle": core_cycle_index,
+                                }
+                            )
+                            yield {
+                                "type": "child_spawn_deferred",
+                                "pipeline_id": pipeline_id,
+                                "agent_id": target_child_id,
+                                "source": source,
+                                "reason": "spawn_deferred_role",
+                                "role": session_role,
+                                "cycle": core_cycle_index,
+                            }
+                            continue
+                        resume_exec_skips.append(
+                            {
+                                "agent_id": target_child_id,
+                                "reason": "unsupported_role",
+                                "source": source,
+                                "role": str(resumed_session.role or ""),
+                                "cycle": core_cycle_index,
+                            }
+                        )
+                        yield {
+                            "type": skip_event_type,
+                            "pipeline_id": pipeline_id,
+                            "agent_id": target_child_id,
+                            "source": source,
+                            "reason": "unsupported_role",
+                            "role": str(resumed_session.role or ""),
+                            "cycle": core_cycle_index,
+                        }
+                        continue
+
+                    expert_id = str(resumed_session.parent_id or "").strip()
+                    expert_type = "expert"
+                    expert_session = _store.get(expert_id) if expert_id else None
+                    if expert_session is not None:
+                        expert_type = str(expert_session.role or "expert").strip() or "expert"
+
+                    dev_tool_subset = list(resumed_session.tool_subset or [])
+                    dev_prompt_blocks = list(resumed_session.prompt_blocks or [])
+                    dev_initial_task = str(resumed_session.task_description or "").strip()
+                    runtime_tool_defs = _build_runtime_tool_definitions(dev_tool_subset)
+                    loop_config = MiniLoopConfig(
+                        max_rounds=max(1, int(child_max_rounds)),
+                        poll_parent_every_n=3,
+                    )
+                    dev_agent = DevAgent(
+                        config=DevAgentConfig(
+                            prompt_blocks=dev_prompt_blocks,
+                            tool_subset=dev_tool_subset,
+                            prompts_root=_CANONICAL_PROMPTS_ROOT,
+                        ),
+                        session_id=target_child_id,
+                        store=_store,
+                        mailbox=_mailbox,
+                    )
+
+                    async def _execute_resumed_dev_tool(
+                        tool_name: str,
+                        arguments: Dict[str, Any],
+                        *,
+                        _allowed_tools: List[str] = dev_tool_subset,
+                        _dev_session_id: str = target_child_id,
+                    ) -> Dict[str, Any]:
+                        normalized_tool = str(tool_name or "").strip()
+                        if _allowed_tools and normalized_tool not in _allowed_tools:
+                            return {
+                                "error": f"tool_not_allowed:{normalized_tool}",
+                                "status": "blocked",
+                                "tool_name": normalized_tool,
+                            }
+                        safe_arguments = arguments if isinstance(arguments, dict) else {}
+                        if is_memory_tool(normalized_tool):
+                            return handle_memory_tool(normalized_tool, safe_arguments)
+                        prepared_arguments = _prepare_child_tool_arguments(
+                            store=_store,
+                            child_session_id=_dev_session_id,
+                            tool_name=normalized_tool,
+                            arguments=safe_arguments,
+                        )
+                        return await child_tool_executor(
+                            normalized_tool,
+                            prepared_arguments,
+                            _dev_session_id,
+                        )
+
+                    yield {
+                        "type": start_event_type,
+                        "pipeline_id": pipeline_id,
+                        "expert_id": expert_id,
+                        "expert_type": expert_type,
+                        "agent_id": target_child_id,
+                        "source": source,
+                        "tool_subset": dev_tool_subset,
+                        "cycle": core_cycle_index,
+                    }
+
+                    _note_scheduler_batch_capacity(dev_scheduler_metrics, 1)
+                    _mark_scheduler_run_start(dev_scheduler_metrics)
+                    try:
+                        async for resumed_event in run_mini_loop(
+                            session_id=target_child_id,
+                            store=_store,
+                            mailbox=_mailbox,
+                            llm_call=child_llm_call,
+                            tool_executor=_execute_resumed_dev_tool,
+                            tool_definitions=runtime_tool_defs,
+                            system_prompt=dev_agent.build_system_prompt(),
+                            initial_task=dev_initial_task,
+                            config=loop_config,
+                        ):
+                            yield {
+                                "type": event_event_type,
+                                "pipeline_id": pipeline_id,
+                                "expert_id": expert_id,
+                                "expert_type": expert_type,
+                                "agent_id": target_child_id,
+                                "source": source,
+                                "cycle": core_cycle_index,
+                                "event": resumed_event,
+                            }
+                    finally:
+                        _mark_scheduler_run_end(dev_scheduler_metrics)
+
+                    final_resumed_session = _store.get(target_child_id)
+                    final_status = (
+                        str(final_resumed_session.status.value)
+                        if final_resumed_session is not None
+                        else "missing"
+                    )
+                    completion_report = ""
+                    if final_resumed_session is not None:
+                        completion_report = str(
+                            final_resumed_session.metadata.get("completion_report") or ""
+                        ).strip()
+
+                    resume_exec_dev_count += 1
+                    if expert_id and expert_type == "expert":
+                        refreshed_expert_ids.add(expert_id)
+                    yield {
+                        "type": end_event_type,
+                        "pipeline_id": pipeline_id,
+                        "expert_id": expert_id,
+                        "expert_type": expert_type,
+                        "agent_id": target_child_id,
+                        "source": source,
+                        "status": final_status,
+                        "completion_report": completion_report,
+                        "cycle": core_cycle_index,
+                    }
+
+                for expert_id in sorted(refreshed_expert_ids):
+                    expert_session = _store.get(expert_id)
+                    if expert_session is None:
+                        continue
+                    expert = ExpertAgent(
+                        config=ExpertAgentConfig(
+                            expert_type=str(expert_session.role or "expert").strip() or "expert",
+                            prompt_blocks=list(expert_session.prompt_blocks or []),
+                            tool_subset=list(expert_session.tool_subset or []),
+                        ),
+                        session_id=expert_id,
+                        store=_store,
+                        mailbox=_mailbox,
+                        task_board_engine=task_board_engine,
+                    )
+                    refreshed_report = expert.aggregate_results()
+                    _mailbox.send(
+                        expert_id,
+                        resolved_core_execution_session_id,
+                        refreshed_report,
+                        message_type="report",
+                    )
+                    yield {
+                        "type": "expert_report_refresh",
+                        "pipeline_id": pipeline_id,
+                        "expert_id": expert_id,
+                        "core_execution_session_id": resolved_core_execution_session_id,
+                        "cycle": core_cycle_index,
+                    }
+
+            reports = core.collect_reports(resolved_core_execution_session_id, pipeline_id=pipeline_id)
+            pending_descendants = _collect_core_pending_descendants(
+                store=_store,
+                core_execution_session_id=resolved_core_execution_session_id,
+                pipeline_id=pipeline_id,
+                reports=reports,
+            )
+            cycle_children_after = _collect_core_descendant_status_snapshot(
+                store=_store,
+                core_execution_session_id=resolved_core_execution_session_id,
+                pipeline_id=pipeline_id,
+            )
+            cycle_progress_reasons: List[str] = []
+            if core_loop_tool_call_count > cycle_tool_call_start:
+                cycle_progress_reasons.append("tool_calls")
+            if cycle_spawned_child_ids:
+                cycle_progress_reasons.append("children_spawned")
+            if cycle_resumed_child_ids:
+                cycle_progress_reasons.append("children_resumed")
+            if cycle_destroyed_child_ids:
+                cycle_progress_reasons.append("children_destroyed")
+            if cycle_deferred_child_ids:
+                cycle_progress_reasons.append("children_deferred")
+            if resume_exec_dev_count > cycle_resume_exec_start:
+                cycle_progress_reasons.append("dev_followup_executed")
+            if len(resume_exec_skips) > cycle_resume_skip_start:
+                cycle_progress_reasons.append("followup_skipped_or_deferred")
+            if (
+                _build_core_descendant_progress_signature(cycle_children_after)
+                != _build_core_descendant_progress_signature(cycle_children_before)
+            ):
+                cycle_progress_reasons.append("descendant_state_changed")
+            if (
+                _build_core_report_progress_signature(reports)
+                != _build_core_report_progress_signature(cycle_reports_before)
+            ):
+                cycle_progress_reasons.append("reports_changed")
+            cycle_progress_reasons = list(dict.fromkeys(cycle_progress_reasons))
+            cycle_progress_made = bool(cycle_progress_reasons)
+            if cycle_progress_made:
+                core_quiescent_cycles = 0
+            else:
+                core_quiescent_cycles += 1
+
+            cycle_completion_state = _evaluate_core_pipeline_state(
+                reports=reports,
+                review_results=review_results,
+                review_expected_count=review_expected_count,
+                heartbeat_summary=_merge_heartbeat_escalation_summaries(expert_heartbeat_summaries),
+                pending_descendants=pending_descendants,
+            )
+            cycle_summary = {
+                "cycle": core_cycle_index,
+                "loop_stop_reason": cycle_loop_stop_reason or "unknown",
+                "loop_state": dict(cycle_loop_state),
+                "tool_call_delta": max(0, int(core_loop_tool_call_count - cycle_tool_call_start)),
+                "resume_exec_dev_delta": max(0, int(resume_exec_dev_count - cycle_resume_exec_start)),
+                "resume_exec_skip_delta": max(0, len(resume_exec_skips) - cycle_resume_skip_start),
+                "spawned_child_ids": sorted(cycle_spawned_child_ids),
+                "resumed_child_ids": sorted(cycle_resumed_child_ids),
+                "destroyed_child_ids": sorted(cycle_destroyed_child_ids),
+                "deferred_child_ids": sorted(cycle_deferred_child_ids),
+                "progress_made": bool(cycle_progress_made),
+                "progress_reasons": list(cycle_progress_reasons),
+                "pending_descendant_count": len(cycle_completion_state.get("pending_descendants") or []),
+                "pending_descendant_ids": list(cycle_completion_state.get("pending_descendant_ids") or []),
+                "pipeline_stop_reason_hint": str(cycle_completion_state.get("stop_reason") or ""),
+                "task_completed": bool(cycle_completion_state.get("task_completed")),
+                "quiescent_cycles": int(core_quiescent_cycles),
+            }
+            core_cycle_summaries.append(cycle_summary)
+
+            yield {
+                "type": "core_loop_cycle_end",
+                "pipeline_id": pipeline_id,
+                "core_execution_session_id": resolved_core_execution_session_id,
+                "cycle": core_cycle_index,
+                "summary": dict(cycle_summary),
+            }
+
+            if bool(cycle_completion_state.get("task_completed")) or bool(cycle_completion_state.get("experts_blocked")):
+                core_loop_summary["stop_reason"] = str(cycle_completion_state.get("stop_reason") or "")
+                break
+            if core_quiescent_cycles >= max(1, int(core_loop_policy.get("quiescent_cycles_before_stop") or 2)):
+                core_loop_summary["stop_reason"] = "quiescent_no_progress"
+                break
+
+        if _store.get(resolved_core_execution_session_id) is not None:
+            try:
+                _store.update_status(resolved_core_execution_session_id, AgentStatus.WAITING)
+            except Exception:
+                logger.debug(
+                    "Failed to set core runtime session waiting: %s",
+                    resolved_core_execution_session_id,
+                    exc_info=True,
+                )
+
+        if "stop_reason" not in core_loop_summary:
+            core_loop_summary["stop_reason"] = "unknown"
+        core_loop_summary["tool_call_count"] = int(core_loop_tool_call_count)
+        core_loop_summary["tool_names"] = list(core_loop_tool_names)
+        core_loop_summary["spawned_child_ids"] = sorted(spawned_child_ids)
+        core_loop_summary["resumed_child_ids"] = sorted(resumed_child_ids)
+        core_loop_summary["destroyed_child_ids"] = sorted(destroyed_child_ids)
+        core_loop_summary["deferred_child_ids"] = sorted(deferred_child_ids)
+        core_loop_summary["resume_exec_dev_count"] = int(resume_exec_dev_count)
+        core_loop_summary["resume_exec_skip_count"] = len(resume_exec_skips)
+        core_loop_summary["resume_exec_skips"] = list(resume_exec_skips[:20])
+        core_loop_summary["policy"] = dict(core_loop_policy)
+        core_loop_summary["cycle_count"] = max(0, int(core_cycle_index))
+        core_loop_summary["quiescent_cycles"] = max(0, int(core_quiescent_cycles))
+        core_loop_summary["pending_descendant_count"] = len(pending_descendants)
+        core_loop_summary["pending_descendant_ids"] = [
+            str(item.get("agent_id") or "").strip()
+            for item in pending_descendants
+            if str(item.get("agent_id") or "").strip()
+        ]
+        core_loop_summary["cycle_summaries"] = list(core_cycle_summaries[:12])
+        yield {
+            "type": "core_loop_end",
+            "pipeline_id": pipeline_id,
+            "core_execution_session_id": resolved_core_execution_session_id,
+            "summary": dict(core_loop_summary),
+        }
+
+    # ── Phase 6: Collect results ───────────────────────────────
+
+    reports = core.collect_reports(resolved_core_execution_session_id, pipeline_id=pipeline_id)
+    for report in reports:
+        yield {
+            "type": "expert_report",
+            "pipeline_id": pipeline_id,
+            "agent_id": report.get("session_id"),
+            "status": report.get("status"),
+            "reports": report.get("reports", []),
+        }
+
+    heartbeat_summary = _merge_heartbeat_escalation_summaries(expert_heartbeat_summaries)
+    pending_descendants = _collect_core_pending_descendants(
+        store=_store,
+        core_execution_session_id=resolved_core_execution_session_id,
+        pipeline_id=pipeline_id,
+        reports=reports,
+    )
+    effective_pending_descendants = list(pending_descendants) if child_execution_enabled else []
+    completion_state = _evaluate_core_pipeline_state(
+        reports=reports,
+        review_results=review_results,
+        review_expected_count=review_expected_count,
+        heartbeat_summary=heartbeat_summary,
+        pending_descendants=effective_pending_descendants,
+    )
+    blocked_expert_reasons = list(completion_state.get("blocked_expert_reasons") or [])
+    task_completed = bool(completion_state.get("task_completed"))
+    stop_reason = str(completion_state.get("stop_reason") or "")
+    review_gate_passed = bool(completion_state.get("review_gate_passed"))
+    experts_blocked = bool(completion_state.get("experts_blocked"))
+
+    normalized_expert_scheduler = _normalize_scheduler_metrics(expert_scheduler_metrics) or _new_scheduler_metrics("expert")
+    normalized_dev_scheduler = _normalize_scheduler_metrics(dev_scheduler_metrics) or _new_scheduler_metrics("dev")
+    scheduler_summary = dict(normalized_expert_scheduler)
+    scheduler_summary["layers"] = {
+        "expert": dict(normalized_expert_scheduler),
+        "dev": dict(normalized_dev_scheduler),
+    }
+
+    receipt_event = _build_core_execution_receipt(
+        pipeline_id=pipeline_id,
+        decomposition=decomposition,
+        expert_results=expert_results,
+        reports=reports,
+        review_results=review_results,
+        task_completed=task_completed,
+        stop_reason=stop_reason,
+        scheduler_metrics=scheduler_summary,
+        heartbeat_summary=heartbeat_summary,
+        blocked_expert_reasons=blocked_expert_reasons,
+    )
+    if core_loop_summary:
+        state = receipt_event.get("agent_state")
+        if isinstance(state, dict):
+            state["core_loop"] = dict(core_loop_summary)
+            state["core_loop_tool_calls"] = int(core_loop_tool_call_count)
+            state["core_loop_tools_used"] = list(core_loop_tool_names)
+            state["pending_descendants"] = list(effective_pending_descendants[:20])
+
+    # Emit a tool-loop compatible verify-stage signal so posture/incidents
+    # collectors can consume completion semantics from the unified pipeline.
+    yield {
+        "type": "tool_stage",
+        "pipeline_id": pipeline_id,
+        "phase": "verify",
+        "status": "success" if task_completed else ("error" if experts_blocked else "warning"),
+        "reason": stop_reason,
+        "decision": "stop" if task_completed or experts_blocked else "continue",
+        "round": 1,
+        "details": {
+            "task_completed": bool(task_completed),
+            "submit_result_called": bool(task_completed),
+            "submit_result_round": 1 if task_completed else 0,
+            "review_expected_count": int(review_expected_count),
+            "review_count": len(review_results),
+            "review_gate_passed": bool(review_gate_passed),
+            "experts_blocked": bool(experts_blocked),
+            "blocked_expert_reasons": list(blocked_expert_reasons[:10]),
+            "pending_descendant_count": len(effective_pending_descendants),
+        },
+    }
+
+    yield receipt_event
+
+    yield {
+        "type": "content",
+        "pipeline_id": pipeline_id,
+        "source": "execution_receipt",
+        "text": str(receipt_event.get("agent_state", {}).get("final_answer") or ""),
+    }
+
+    cleanup_summary = _apply_child_session_cleanup(
+        store=_store,
+        mailbox=_mailbox,
+        core_execution_session_id=resolved_core_execution_session_id,
+        pipeline_id=pipeline_id,
+        mode=child_session_cleanup_mode,
+        ttl_seconds=int(child_session_cleanup_ttl_seconds),
+    )
+    yield {
+        "type": "pipeline_cleanup",
+        "pipeline_id": pipeline_id,
+        "cleanup": cleanup_summary,
+    }
+
+    # ── Perception: record pipeline-level experience for evolution ──
+    _pipeline_goal = str(dispatch.get("goal") or message or "").strip()
+    _all_changed_files: List[str] = []
+    for _er in expert_results:
+        _all_changed_files.extend(list(_er.get("changed_files") or []))
+    _record_pipeline_experience(
+        pipeline_id=pipeline_id,
+        task_completed=task_completed,
+        stop_reason=stop_reason,
+        goal=_pipeline_goal,
+        expert_count=len(expert_results),
+        review_results=review_results,
+        blocked_reasons=list(blocked_expert_reasons),
+        changed_files=_all_changed_files,
+    )
+
+    # ── Done ───────────────────────────────────────────────────
+
+    yield {
+        "type": "pipeline_end",
+        "pipeline_id": pipeline_id,
+        "reason": "completed" if task_completed else (stop_reason if experts_blocked else "delegated_waiting_child_completion"),
+        "duration_ms": int((time.time() - started_at) * 1000),
+        "expert_count": len(expert_results),
+        "core_execution_session_id": resolved_core_execution_session_id,
+        "child_session_cleanup": cleanup_summary,
+    }
+
+
+# Public API consumed by core_job_manager
+build_core_execution_receipt = _build_core_execution_receipt
+collect_core_pending_descendants = _collect_core_pending_descendants
+evaluate_core_pipeline_state = _evaluate_core_pipeline_state
+merge_heartbeat_escalation_summaries = _merge_heartbeat_escalation_summaries
+
+__all__ = [
+    "run_multi_agent_pipeline",
+    "advance_core_waiting_descendants_once",
+    "build_core_execution_receipt",
+    "collect_core_pending_descendants",
+    "evaluate_core_pipeline_state",
+    "merge_heartbeat_escalation_summaries",
+]

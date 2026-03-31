@@ -1,0 +1,9 @@
+budget:
+  max_context_tokens: 200000
+  max_graph_facts: 20
+  max_evidence_chunks: 12
+  max_history_chunks: 6
+  max_total_io_fetch: 40
+  overflow_policy:
+    summarize_low_rank_first: true
+    allow_silent_overflow: false

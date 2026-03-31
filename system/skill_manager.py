@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Naga Skill Manager
+Embla Skill Manager
 基于 Claude Agent Skills 规范的技能管理器
 
 技能采用分层加载架构：
@@ -77,7 +77,7 @@ class Skill:
 
 class SkillManager:
     """
-    Naga Skill 管理器
+    Embla Skill 管理器
 
     负责：
     - 扫描和加载 skills 目录

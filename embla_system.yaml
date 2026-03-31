@@ -1,0 +1,37 @@
+version: 1
+profile: pythonic-secure
+runtime:
+  heartbeat_interval_seconds: 5
+  max_rounds_default: 500
+  max_task_cost_usd: 5
+  core_loop:
+    soft_max_rounds: 12
+    hard_max_rounds: 0
+    poll_parent_every_n: 3
+    quiescent_cycles_before_stop: 2
+  child_session_cleanup:
+    mode: ttl
+    ttl_seconds: 3600
+security:
+  enforce_dual_lane: true
+  approval_required_scopes:
+  - core
+  - policy
+  - prompt_dna
+  - tools_registry
+  audit_ledger_file: scratch/runtime/audit_ledger.jsonl
+  audit_signing_key_env: EMBLA_AUDIT_SIGNING_KEY
+  immutable_dna_runtime_prompts:
+  - core_values
+  - evolution_drive
+  immutable_agent_identity_prompts:
+  - shell_persona
+  evolvable_runtime_prompts:
+  - conversation_style_prompt
+  - agentic_tool_prompt
+watchers:
+  tools_registry_root: workspace/tools_registry
+  backend: watchdog
+ops:
+  posture_endpoint: /v1/ops/runtime/posture
+  incidents_latest_endpoint: /v1/ops/incidents/latest

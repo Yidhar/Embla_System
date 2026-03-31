@@ -2,23 +2,15 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Dict, List, Optional, Callable, Tuple
+from typing import Dict, List, Optional, Callable, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum
 import hashlib
 import traceback
-import os
-import sys
-
-# 添加项目根目录到路径
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-try:
-    from system.config import config
-except ImportError:
-    logger = logging.getLogger(__name__)
-    logger.warning("无法导入 config 模块，使用默认设置")
+from .quintuple_extractor import config as runtime_config
 
 logger = logging.getLogger(__name__)
+config = runtime_config
 
 
 class TaskStatus(Enum):
@@ -51,19 +43,21 @@ class QuintupleTaskManager:
     """五元组提取任务管理器 - 重构版"""
 
     def __init__(self, max_workers: int = 3, max_queue_size: int = 100):
-        # 从配置文件读取设置或使用默认值
-        try:
-            self.max_workers = max_workers or config.grag.max_workers
-            self.max_queue_size = max_queue_size or config.grag.max_queue_size
-            self.task_timeout = config.grag.task_timeout
-            self.auto_cleanup_hours = config.grag.auto_cleanup_hours
-            self.enabled = True
-        except Exception:
-            self.max_workers = max_workers or 3
-            self.max_queue_size = max_queue_size or 100
-            self.task_timeout = 30
-            self.auto_cleanup_hours = 24
-            self.enabled = True
+        grag_cfg: Any = getattr(config, "grag", None)
+        timeout_raw = getattr(
+            grag_cfg,
+            "task_timeout",
+            getattr(grag_cfg, "extraction_timeout", 20),
+        )
+        completion_timeout_raw = getattr(grag_cfg, "base_timeout", 40)
+        retries_raw = getattr(grag_cfg, "extraction_retries", 2)
+        self.max_workers = max_workers or max(1, int(getattr(grag_cfg, "max_workers", 3) or 3))
+        self.max_queue_size = max_queue_size or max(1, int(getattr(grag_cfg, "max_queue_size", 100) or 100))
+        self.task_timeout = max(1, int(20 if timeout_raw is None else timeout_raw))
+        self.completion_timeout = max(1, int(40 if completion_timeout_raw is None else completion_timeout_raw))
+        self.extraction_retries = max(0, int(2 if retries_raw is None else retries_raw))
+        self.auto_cleanup_hours = max(1, int(getattr(grag_cfg, "auto_cleanup_hours", 24) or 24))
+        self.enabled = bool(getattr(grag_cfg, "enabled", True) if grag_cfg is not None else True)
 
         # 任务存储
         self.tasks: Dict[str, ExtractionTask] = {}
@@ -85,7 +79,14 @@ class QuintupleTaskManager:
         # 自动清理任务
         self.cleanup_task: Optional[asyncio.Task] = None
 
-        logger.info(f"任务管理器初始化完成: workers={self.max_workers}, queue_size={self.max_queue_size}")
+        logger.info(
+            "任务管理器初始化完成: workers=%s, queue_size=%s, request_timeout=%ss, completion_timeout=%ss, retries=%s",
+            self.max_workers,
+            self.max_queue_size,
+            self.task_timeout,
+            self.completion_timeout,
+            self.extraction_retries,
+        )
 
     async def start(self):
         if self.is_running:
@@ -198,7 +199,8 @@ class QuintupleTaskManager:
             text_hash=text_hash,
             status=TaskStatus.PENDING,
             created_at=time.time(),
-            future=asyncio.Future()
+            max_retries=self.extraction_retries,
+            future=asyncio.get_running_loop().create_future(),
         )
 
         # 添加到任务字典
@@ -244,6 +246,8 @@ class QuintupleTaskManager:
             return None, "任务超时"
         except asyncio.CancelledError:
             return None, "任务被取消"
+        except Exception as e:
+            return None, str(e) or "任务失败"
 
     async def _worker_loop(self, worker_id: str):
         """工作协程主循环"""
@@ -285,9 +289,14 @@ class QuintupleTaskManager:
                     logger.info(f"{worker_id} 调用五元组提取API: {task.task_id}")
 
                     # 使用超时控制执行任务
+                    overall_timeout = max(float(self.completion_timeout) * 1.1, float(self.completion_timeout) + 0.01)
                     result = await asyncio.wait_for(
-                        extract_quintuples_async(task.text),
-                        timeout=self.task_timeout
+                        extract_quintuples_async(
+                            task.text,
+                            timeout_seconds=self.task_timeout,
+                            max_retries=task.max_retries,
+                        ),
+                        timeout=overall_timeout,
                     )
                     logger.info(f"{worker_id} 提取到 {len(result)} 个五元组: {task.text}")
 
@@ -299,13 +308,34 @@ class QuintupleTaskManager:
                         self.completed_tasks += 1
 
                 except asyncio.TimeoutError:
-                    error = "任务执行超时"
                     logger.warning(f"{worker_id} 任务超时: {task.task_id}")
-                    async with self.lock:
-                        task.status = TaskStatus.FAILED
-                        task.error = error
-                        task.completed_at = time.time()
-                        self.failed_tasks += 1
+                    try:
+                        from .quintuple_extractor import _extract_quintuples_local
+
+                        heuristic_result = _extract_quintuples_local(task.text)
+                    except Exception:
+                        heuristic_result = []
+
+                    if heuristic_result:
+                        result = heuristic_result
+                        async with self.lock:
+                            task.status = TaskStatus.COMPLETED
+                            task.result = result
+                            task.completed_at = time.time()
+                            self.completed_tasks += 1
+                        logger.warning(
+                            "%s 任务超时后回退到本地启发式提取: %s, quintuples=%s",
+                            worker_id,
+                            task.task_id,
+                            len(heuristic_result),
+                        )
+                    else:
+                        error = f"任务执行超时(request={self.task_timeout}s,total={self.completion_timeout}s)"
+                        async with self.lock:
+                            task.status = TaskStatus.FAILED
+                            task.error = error
+                            task.completed_at = time.time()
+                            self.failed_tasks += 1
 
                 except Exception as e:
                     error = str(e)
@@ -321,8 +351,10 @@ class QuintupleTaskManager:
                 if not task.future.done():
                     if task.status == TaskStatus.COMPLETED:
                         task.future.set_result(result)
+                    elif task.status == TaskStatus.CANCELLED:
+                        task.future.set_exception(asyncio.CancelledError("任务被取消"))
                     else:
-                        task.future.set_exception(Exception(error or "任务失败"))
+                        task.future.set_result(None)
 
                 # 触发回调
                 try:
@@ -463,7 +495,9 @@ class QuintupleTaskManager:
             "max_queue_size": self.max_queue_size,
             "queue_size": self.task_queue.qsize(),
             "queue_usage": f"{self.task_queue.qsize()}/{self.max_queue_size}",
-            "task_timeout": self.task_timeout
+            "task_timeout": self.task_timeout,
+            "completion_timeout": self.completion_timeout,
+            "extraction_retries": self.extraction_retries,
         }
 
 
@@ -482,29 +516,16 @@ async def auto_cleanup_tasks():
 def start_auto_cleanup():
     """启动自动清理任务"""
     try:
-        # 确保在正确的事件循环中运行
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # 如果事件循环已在运行，直接创建任务
-            loop.create_task(auto_cleanup_tasks())
-        else:
-            # 如果事件循环未运行，启动它
-            def run_cleanup():
-                asyncio.run(auto_cleanup_tasks())
+        loop = asyncio.get_running_loop()
+        # 事件循环已在运行，直接创建任务
+        loop.create_task(auto_cleanup_tasks())
+    except RuntimeError:
+        # 没有运行中的事件循环，在新线程中启动
+        def run_cleanup():
+            asyncio.run(auto_cleanup_tasks())
 
-            thread = threading.Thread(target=run_cleanup, daemon=True)
-            thread.start()
-    except RuntimeError as e:
-        if "no current event loop" in str(e):
-            # 创建新的事件循环
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.create_task(auto_cleanup_tasks())
-            # 在新线程中运行事件循环
-            thread = threading.Thread(target=loop.run_forever, daemon=True)
-            thread.start()
-        else:
-            logger.error(f"启动自动清理任务失败: {e}")
+        thread = threading.Thread(target=run_cleanup, daemon=True)
+        thread.start()
     except Exception as e:
         logger.error(f"启动自动清理任务异常: {e}")
 

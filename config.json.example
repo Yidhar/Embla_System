@@ -1,8 +1,8 @@
 {
   "system": {
     "version": "5.0.0",  // 系统版本号
-    "ai_name": "娜迦日达", // AI助手名称
-    "voice_enabled": true, // 是否启用语音功能
+    "config_schema_version": 1, // 配置结构版本号
+    "ai_name": "Embla", // AI助手名称
     "stream_mode": true, // 是否启用流式响应
     "debug": false, // 是否启用调试模式
     "log_level": "INFO", // 日志级别: DEBUG, INFO, WARNING, ERROR
@@ -12,13 +12,61 @@
     "api_key": "your-api-key-here", // LLM API密钥
     "base_url": "https://api.deepseek.com/v1", // API基础URL
     "model": "deepseek-v3.2", // 使用的模型名称
+    "provider": "openai_compatible", // API提供商类型（openai_compatible/google）
+    "protocol": "auto", // API protocol (recommended: auto/openai_chat_completions)
+    "reasoning_effort": "medium", // OpenAI兼容推理强度（low/medium/high/xhigh，主要用于 GPT-5 推理强度）
+    "routing": {
+      "shell": {
+        "api_key": "", // Shell 对话（shell_readonly/shell_clarify）专用 API Key，留空回退到 api.api_key
+        "base_url": "", // Shell 对话专用 API 地址，留空回退到 api.base_url
+        "model": "", // Shell 对话专用模型，留空回退到 api.model
+        "provider": "", // Shell 对话专用 provider，留空回退到 api.provider
+        "protocol": "", // Shell 对话专用协议，留空回退到 api.protocol
+        "reasoning_effort": "" // Shell 对话专用推理强度，留空回退到 api.reasoning_effort
+      },
+      "core": {
+        "api_key": "", // Core 执行（core_execution）专用 API Key，留空回退到 api.api_key
+        "base_url": "", // Core 执行专用 API 地址，留空回退到 api.base_url
+        "model": "", // Core 执行专用模型，留空回退到 api.model
+        "provider": "", // Core 执行专用 provider，留空回退到 api.provider
+        "protocol": "", // Core 执行专用协议，留空回退到 api.protocol
+        "reasoning_effort": "" // Core 执行专用推理强度，留空回退到 api.reasoning_effort
+      }
+    },
+    "specialized": {
+      "quintuple_extraction": {
+        "api_key": "", // 五元组提取专用 API Key，留空回退到 api.api_key
+        "base_url": "", // 五元组提取专用 API 地址，留空回退到 api.base_url
+        "model": "", // 五元组提取专用模型，留空回退到 grag.extraction_model / api.model
+        "provider": "", // 五元组提取专用 provider，留空回退到 api.provider
+        "protocol": "", // 五元组提取专用协议，留空回退到 api.protocol
+        "reasoning_effort": "" // 五元组提取专用推理强度，留空回退到 api.reasoning_effort
+      },
+      "context_compression": {
+        "api_key": "", // 上下文压缩专用 API Key，留空回退到 api.api_key
+        "base_url": "", // 上下文压缩专用 API 地址，留空回退到 api.base_url
+        "model": "", // 上下文压缩专用模型，留空回退到 api.model
+        "provider": "", // 上下文压缩专用 provider，留空回退到 api.provider
+        "protocol": "", // 上下文压缩专用协议，留空回退到 api.protocol
+        "reasoning_effort": "" // 上下文压缩专用推理强度，留空回退到 api.reasoning_effort
+      }
+    },
+    "google_live_api": false, // Deprecated legacy flag; ignored in OpenAI-compatible routing
     "temperature": 0.7, // 生成温度 (0.0-2.0)
     "max_tokens": 8192, // 最大token数
     "max_history_rounds": 10, // 最大历史对话轮数
     "persistent_context": true, // 是否持久化上下文
     "context_load_days": 3, // 上下文加载天数
     "context_parse_logs": true, // 是否解析日志中的上下文
-    "applied_proxy": false // 是否应用代理
+    "applied_proxy": false, // 是否应用代理
+    "request_timeout": 120, // 模型请求超时时间（秒）
+    "extra_headers": {}, // 附加HTTP请求头
+    "extra_body": {}, // 附加请求体参数
+    "shell_loop": {
+      "max_rounds": 12, // Shell 只读工具循环的兜底最大轮次；真正优先靠进展型停止条件收口
+      "repeated_tool_pattern_rounds": 3, // 连续重复相同工具模式达到该轮次后停止
+      "no_new_fact_rounds": 3 // 连续无新增事实达到该轮次后停止
+    }
   },
   "api_server": {
     "enabled": true, // 是否启用API服务器
@@ -26,19 +74,6 @@
     "port": 8000, // 服务器端口
     "auto_start": true, // 是否自动启动
     "docs_enabled": true // 是否启用API文档
-  },
-  "agentserver": {
-    "enabled": true, // 是否启用代理服务器
-    "host": "127.0.0.1", // 代理服务器主机
-    "port": 8001, // 代理服务器端口
-    "auto_start": true // 是否自动启动
-  },
-  "mcpserver": {
-    "enabled": true, // 是否启用MCP服务器
-    "host": "127.0.0.1", // MCP服务器主机
-    "port": 8003, // MCP服务器端口
-    "auto_start": true, // 是否自动启动
-    "agent_discovery": true // 是否启用代理发现
   },
   "grag": {
     "enabled": true, // 是否启用知识图谱
@@ -49,65 +84,178 @@
     "neo4j_user": "neo4j", // Neo4j用户名
     "neo4j_password": "your-neo4j-password", // Neo4j密码
     "neo4j_database": "neo4j", // Neo4j数据库名
-    "extraction_timeout": 12, // 提取超时时间(秒)
+    "vector_index_enabled": true, // 是否启用Neo4j向量检索
+    "vector_index_name": "entity_embedding_index", // 向量索引名
+    "vector_query_top_k": 8, // 向量检索Top-K
+    "vector_similarity_function": "cosine", // 相似度函数（cosine/euclidean）
+    "vector_upsert_on_write": true, // 写入五元组时是否同步更新向量
+    "extraction_timeout": 20, // 提取单次上游请求超时(秒)
     "extraction_retries": 2, // 提取重试次数
-    "base_timeout": 15 // 基础超时时间(秒)
+    "extraction_model": "", // 知识提取专用模型（留空回退到 api.model）
+    "extraction_temperature": 1.0, // 知识提取专用采样温度
+    "base_timeout": 40 // 提取总完成超时(含重试，秒)
   },
   "handoff": {
     "max_loop_stream": 5, // 流式模式最大循环次数
     "max_loop_non_stream": 5, // 非流式模式最大循环次数
     "show_output": false // 是否显示输出
   },
+  "agentic_loop": {
+    "max_rounds_stream": 500, // Agentic流式模式最大循环轮次
+    "max_rounds_non_stream": 500, // Agentic非流式模式最大循环轮次
+    "enable_summary_round": true, // 结束时是否强制执行总结轮
+    "max_consecutive_tool_failures": 2, // 连续工具失败阈值
+    "max_consecutive_validation_failures": 2, // 连续参数校验失败阈值
+    "max_consecutive_no_tool_rounds": 2, // 连续无工具调用阈值（默认允许一次自动纠偏重试）
+    "inject_no_tool_feedback": false, // 无工具调用时是否注入纠偏反馈继续下一轮（默认关闭）
+    "tool_result_preview_chars": 500, // 前端展示的工具结果截断长度
+    "emit_workflow_stage_events": true, // 是否输出 plan/execute/verify/repair 阶段事件
+    "max_parallel_tool_calls": 8, // 单轮最大并行工具调用数
+    "retry_failed_tool_calls": true, // 是否自动重试失败工具
+    "max_tool_retries": 1, // 失败工具最大重试次数
+    "retry_backoff_seconds": 0.8, // 重试退避时间（秒）
+    "watchdog_guard_enabled": true, // 是否启用 agentic loop watchdog 观测/门禁
+    "watchdog_warn_only": true, // watchdog 是否仅告警不阻断
+    "watchdog_sample_per_round": true, // 每轮执行后是否采样资源并评估阈值
+    "watchdog_consecutive_error_limit": 5, // 连续错误工具调用阈值
+    "watchdog_tool_call_limit_per_minute": 10, // 每分钟工具调用阈值
+    "watchdog_task_cost_limit": 5.0, // 单任务成本阈值
+    "watchdog_daily_cost_limit": 50.0, // 日成本阈值
+    "watchdog_loop_window_seconds": 60 // 循环检测时间窗口（秒）
+  },
+  "tool_contract_rollout": {
+    "emit_observability_metadata": true // 是否输出结构化工具契约观测元数据
+  },
+  "sandbox": {
+    "default_execution_backend": "os_sandbox", // 默认执行后端：常规自维护任务默认走宿主 OS 上的 worktree 受控执行
+    "self_repo_execution_backend": "os_sandbox", // 自维护仓库默认走 os_sandbox；高风险任务再显式升级到 BoxLite
+    "os_sandbox": {
+      "runtime_profile": "default", // 默认 os_sandbox execution_profile
+      "enforce_network_guard": true, // network=false 时启用命令级 no-network guard
+      "runtime_profiles": {
+        "default": {
+          "resource_profile": "standard", // 默认资源档位
+          "network_enabled": false, // 默认关闭网络
+          "inject_offline_env": true, // 注入 UV/PIP/Cargo 之类的离线环境变量
+          "default_command_timeout_seconds": 120, // run_cmd 默认超时
+          "max_command_timeout_seconds": 1200, // run_cmd 最大超时
+          "default_python_timeout_seconds": 15, // python_repl 默认超时
+          "max_python_timeout_seconds": 180, // python_repl 最大超时
+          "default_watch_timeout_seconds": 600, // sleep_and_watch 默认超时
+          "max_watch_timeout_seconds": 86400 // sleep_and_watch 最大超时
+        },
+        "networked": {
+          "resource_profile": "standard",
+          "network_enabled": true, // 需要联网的显式 profile
+          "inject_offline_env": false,
+          "default_command_timeout_seconds": 120,
+          "max_command_timeout_seconds": 1200,
+          "default_python_timeout_seconds": 15,
+          "max_python_timeout_seconds": 180,
+          "default_watch_timeout_seconds": 600,
+          "max_watch_timeout_seconds": 86400
+        },
+        "heavy": {
+          "resource_profile": "heavy", // 长测试/大仓库 profile
+          "network_enabled": false,
+          "inject_offline_env": true,
+          "default_command_timeout_seconds": 300,
+          "max_command_timeout_seconds": 1800,
+          "default_python_timeout_seconds": 60,
+          "max_python_timeout_seconds": 600,
+          "default_watch_timeout_seconds": 1800,
+          "max_watch_timeout_seconds": 86400
+        }
+      }
+    },
+    "boxlite": {
+      "enabled": true, // 启用 BoxLite 强隔离执行后端（不再是默认主链）
+      "mode": "required", // 显式选择 BoxLite 时优先要求 ready；不可用时可按策略降级到 os_sandbox/native
+      "provider": "sdk", // 使用本地 Python SDK
+      "base_url": "", // rest provider 时填写
+      "runtime_profile": "default", // 默认 execution_profile 对应的运行时 profile
+      "runtime_profiles": {
+        "default": {
+          "asset_name": "embla_py311_default", // Embla 维护的默认 Python 3.11 runtime 资产
+          "image": "embla/boxlite-runtime:py311", // 优先使用 Embla 运行时镜像
+          "image_candidates": ["embla/boxlite-runtime:py311"], // 仅使用 Embla 自维护运行时镜像
+          "working_dir": "/workspace", // box 内 canonical 工作根
+          "cpus": 2, // 默认 CPU 配额
+          "memory_mib": 1024, // 默认内存配额(MiB)
+          "security_preset": "maximum", // BoxLite 安全预设
+          "network_enabled": false, // 默认不开放网络
+          "python_cmd": "python", // guest helper 解释器
+          "prewarm_command": ["python", "-V"] // 运行时预热命令
+        }
+      },
+      "runtime_state_file": "scratch/runtime/boxlite_runtime_assets.json", // 运行时资产状态文件
+      "install_prefetch_enabled": true, // 首次安装/显式 prepare 时预取默认 runtime profile
+      "local_image_build_enabled": true, // prepare-runtime 失败时允许本地构建 Embla runtime 镜像
+      "local_image_builder": "auto", // auto/docker/podman
+      "local_image_context_dir": "system/boxlite/runtime_image", // 本地构建上下文目录
+      "local_image_dockerfile": "Dockerfile", // runtime 镜像 Dockerfile
+      "auto_reconcile_enabled": true, // 空闲时自动 reconcile 运行时资产
+      "reconcile_interval_seconds": 900, // 空闲 reconcile 间隔
+      "reconcile_stale_after_seconds": 43200, // 超过该时间未成功 ensure 视为 stale
+      "core_ensure_before_spawn_enabled": true, // spawn child 前主动 ensure 所需 runtime profile
+      "image": "embla/boxlite-runtime:py311", // legacy fallback：未命中 profile 时的默认镜像
+      "working_dir": "/workspace", // legacy fallback：box 内 canonical 工作根
+      "cpus": 2, // legacy fallback：默认 CPU 配额
+      "memory_mib": 1024, // legacy fallback：默认内存配额(MiB)
+      "auto_remove": true, // 任务结束后自动清理 box
+      "security_preset": "maximum", // legacy fallback：BoxLite 安全预设
+      "network_enabled": false, // legacy fallback：默认不开放网络
+      "auto_install_sdk": true, // 首次缺少 BoxLite SDK 时自动安装
+      "install_timeout_seconds": 300, // 自动安装超时时间（秒）
+      "sdk_package_spec": "boxlite", // 自动安装使用的 pip 包规格
+      "ensure_timeout_seconds": 45, // 首次建箱/启动 helper 的超时时间（秒）
+      "startup_prewarm_enabled": true, // 进程启动时预热 BoxLite 运行时与镜像
+      "startup_prewarm_timeout_seconds": 45 // 启动预热超时时间（秒）
+    }
+  },
+  "autonomous": {
+    "enabled": false, // 是否启用 System Agent 自治循环
+    "cycle_interval_seconds": 3600, // 自治循环周期（秒）
+    "cli_tools": {
+      "preferred": "claude", // 首选 CLI
+      "fallback_order": ["claude", "gemini"], // 降级顺序
+      "max_retries": 2 // CLI 重试次数
+    },
+    "run_quality_checks": false, // 评估阶段是否运行 lint/test
+    "fixed_timeout_seconds": 3600, // CLI 执行超时（秒）
+    "lease": {
+      "enabled": true, // 是否启用 Single Active lease/fencing
+      "lease_name": "global_orchestrator", // 单活 lease 名称
+      "owner_id": "", // 可选固定 owner_id，留空则自动生成进程 ID
+      "renew_interval_seconds": 2, // lease 续租间隔（秒）
+      "ttl_seconds": 10, // lease 有效期（秒）
+      "standby_poll_interval_seconds": 2 // standby 抢占轮询间隔（秒）
+    },
+    "outbox_dispatch": {
+      "enabled": true, // 是否启用 outbox 异步消费
+      "consumer_name": "release-controller", // inbox 去重 consumer 名称
+      "poll_interval_seconds": 2, // outbox 轮询间隔（秒）
+      "batch_size": 50 // 每批次最大消费条数
+    },
+    "release": {
+      "enabled": true, // 是否启用 canary/rollback 自动化
+      "gate_policy_path": "policy/gate_policy.yaml", // gate 策略文件
+      "max_error_rate": 0.02, // canary 最大允许错误率
+      "max_latency_p95_ms": 1500.0, // canary p95 延迟阈值（ms）
+      "min_kpi_ratio": 0.95, // canary KPI 最低比例
+      "auto_rollback_enabled": true, // 达到回滚条件时自动回滚
+      "rollback_command": "" // 可选回滚命令
+    }
+  },
   "browser": {
     "playwright_headless": false // Playwright是否无头模式
-  },
-  "tts": {
-    "api_key": "", // TTS API密钥
-    "port": 5048, // TTS服务端口
-    "default_voice": "zh-CN-XiaoxiaoNeural", // 默认语音
-    "default_format": "mp3", // 默认音频格式
-    "default_speed": 1.0, // 默认语速
-    "default_language": "zh-CN", // 默认语言
-    "remove_filter": false, // 是否移除过滤器
-    "expand_api": true, // 是否扩展API
-    "require_api_key": false // 是否需要API密钥
-  },
-  "game": {
-    "enabled": false, // 是否启用游戏功能
-    "skip_on_error": true // 出错时是否跳过
-  },
-  "voice_realtime": {
-    "enabled": false, // 是否启用实时语音
-    "provider": "qwen", // 语音提供商
-    "api_key": "your-dashscope-api-key-here", // DashScope API密钥
-    "model": "qwen3-omni-flash-realtime", // 实时语音模型
-    "tts_model": "qwen-tts-realtime", // TTS模型
-    "asr_model": "qwen3-asr-realtime", // ASR模型
-    "voice": "Cherry", // 语音名称
-    "voice_mode": "auto", // 语音模式
-    "tts_voice": "zh-CN-XiaoyiNeural", // TTS语音
-    "input_sample_rate": 16000, // 输入采样率
-    "output_sample_rate": 24000, // 输出采样率
-    "chunk_size_ms": 200, // 音频块大小(毫秒)
-    "vad_threshold": 0.02, // 语音活动检测阈值
-    "echo_suppression": true, // 是否启用回声抑制
-    "min_user_interval": 2.0, // 最小用户间隔(秒)
-    "cooldown_duration": 1.0, // 冷却持续时间(秒)
-    "max_user_speech": 30.0, // 最大用户语音时长(秒)
-    "debug": false, // 是否启用调试
-    "integrate_with_memory": true, // 是否与记忆集成
-    "show_in_chat": true, // 是否在聊天中显示
-    "use_api_server": true // 是否使用API服务器
-  },
-  "weather": {
-    "api_key": "your-weather-api-key-or-leave-empty" // 天气API密钥
   },
   "mqtt": {
     "enabled": false, // 是否启用MQTT
     "broker": "mqtt-broker-address", // MQTT代理地址
     "port": 1883, // MQTT端口
-    "topic": "naga/agent/topic", // MQTT主题
-    "client_id": "naga-agent-client", // MQTT客户端ID
+    "topic": "embla/agent/topic", // MQTT主题
+    "client_id": "embla-agent-client", // MQTT客户端ID
     "username": "mqtt-username", // MQTT用户名
     "password": "mqtt-password", // MQTT密码
     "keepalive": 60, // 保持连接时间(秒)
@@ -122,10 +270,10 @@
     "mac_btn_gap": 12, // Mac按钮间距
     "animation_duration": 600 // 动画持续时间(毫秒)
   },
-  "naga_portal": {
-    "portal_url": "https://naga.furina.chat/", // Naga门户URL
-    "username": "your-portal-username", // 门户用户名
-    "password": "your-portal-password" // 门户密码
+  "embla_portal": {
+    "portal_url": "https://portal.example.com/", // Embla门户URL
+    "username": "your-portal-username", // Embla门户用户名
+    "password": "your-portal-password" // Embla门户密码
   },
   "online_search": {
     "searxng_url": "https://searxng.pylindex.top", // SearXNG搜索URL
@@ -136,7 +284,7 @@
   },
   "computer_control": {
     "enabled": true, // 是否启用计算机控制
-    "model": "gemini-2.5-flash", // 视觉模型
+    "model": "gemini-2.5-flash", // 多模态理解模型（vision/image_qa 使用；设置页字段: Multimodal Vision Model）
     "model_url": "https://open.bigmodel.cn/api/paas/v4", // 模型API URL
     "api_key": "", // 模型API密钥
     "grounding_model": "gemini-2.5-flash", // 基础模型
@@ -148,55 +296,23 @@
     "dpi_awareness": true, // 是否启用DPI感知
     "safe_mode": true // 是否启用安全模式
   },
-  "guide_engine": {
-    "enabled": true, // 是否启用游戏攻略引擎
-    "gamedata_dir": "./data", // 游戏数据目录（存放各游戏的JSON数据文件）
-    "embedding_api_base_url": "", // OpenAI兼容Embedding API地址（如 https://api.openai.com/v1）
-    "embedding_api_key": "", // OpenAI兼容Embedding API密钥
-    "embedding_api_model": "text-embedding-3-small", // OpenAI兼容Embedding模型名
-    "game_guide_llm_api_base_url": "", // 攻略专用LLM API地址，需支持图片输入（留空回退到api.base_url）
-    "game_guide_llm_api_key": "", // 攻略专用LLM API密钥（留空回退到api.api_key）
-    "game_guide_llm_api_model": "", // 攻略专用LLM模型名，需支持图片输入（留空回退到api.model）
-    "game_guide_llm_api_type": "openai", // 攻略专用LLM API类型（openai/gemini）
-    "prompt_dir": "./guide_engine/game_prompts", // 游戏Prompt目录
-    "neo4j_uri": "neo4j://127.0.0.1:7687", // 攻略图谱Neo4j URI
-    "neo4j_user": "neo4j", // 攻略图谱Neo4j用户名
-    "neo4j_password": "your_password", // 攻略图谱Neo4j密码
-    "screenshot_monitor_index": 1, // 自动截图显示器索引
-    "auto_screenshot_on_guide": true // 攻略调用时默认自动截图
-  },
   "memory_server": {
-    "url": "http://localhost:8004", // NagaMemory 服务地址
+    "url": "http://localhost:8004", // 远程记忆服务地址
     "token": null // 认证Token（Bearer），登录后自动设置
   },
   "embedding": {
-    "model": "tongyi-embedding", // 嵌入模型名称
+    "model": "text-embedding-v4", // OpenAI兼容嵌入模型名称
     "api_base": "", // 嵌入模型API地址（留空回退到api.base_url）
-    "api_key": "" // 嵌入模型API密钥（留空回退到api.api_key）
-  },
-  "crawl4ai": {
-    "headless": true, // 是否无头模式
-    "timeout": 30000, // 超时时间(毫秒)
-    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36", // 用户代理
-    "viewport_width": 1280, // 视口宽度
-    "viewport_height": 720 // 视口高度
-  },
-  "live2d": {
-    "enabled": false, // 是否启用Live2D
-    "model_path": "ui/live2d_local/live2d_models/重音テト/重音テト.model3.json", // Live2D模型路径
-    "fallback_image": "ui/img/standby.png", // 备用图片
-    "auto_switch": true, // 是否自动切换
-    "animation_enabled": true, // 是否启用动画
-    "touch_interaction": true // 是否启用触摸交互
+    "api_key": "", // 嵌入模型API密钥（留空回退到api.api_key）
+    "dimensions": 1024, // 向量维度（0表示模型默认）
+    "encoding_format": "float", // 编码格式（推荐 float）
+    "max_input_tokens": 8192, // 单条输入最大Token预算
+    "request_timeout_seconds": 30 // 嵌入请求超时时间（秒）
   },
   "system_check": {
     "passed": false, // 系统检查是否通过
     "timestamp": "", // 检查时间戳
     "python_version": "", // Python版本
     "project_path": "" // 项目路径
-  },
-  "pypi": {
-    "token_name": "RTGS", // PyPI令牌名称
-    "api": "pypi-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" // PyPI API令牌
   }
 }

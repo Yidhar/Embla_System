@@ -1,22 +1,17 @@
 <div align="center">
 
-# NagaAgent
+# Embla System
 
-**四服务协同的 AI 桌面助手 — 流式工具调用 · 知识图谱记忆 · Live2D · 语音交互**
+**双服务主链的 AI 运行平台 — 流式工具调用 · 知识图谱记忆 · 运维看板**
 
 [简体中文](README.md)  | [English](README_en.md)
 
-![NagaAgent](https://img.shields.io/badge/NagaAgent-5.0.0-blue?style=for-the-badge&logo=python&logoColor=white)
+![Embla System](https://img.shields.io/badge/Embla_System-5.0.0-blue?style=for-the-badge&logo=python&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-green?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-AGPL%203.0%20%7C%20Proprietary-yellow?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)
 
-[![Stars](https://img.shields.io/github/stars/Xxiii8322766509/NagaAgent?style=social)](https://github.com/Xxiii8322766509/NagaAgent)
-[![Forks](https://img.shields.io/github/forks/Xxiii8322766509/NagaAgent?style=social)](https://github.com/Xxiii8322766509/NagaAgent)
-[![Issues](https://img.shields.io/github/issues/Xxiii8322766509/NagaAgent)](https://github.com/Xxiii8322766509/NagaAgent/issues)
-
  **[QQ 机器人联动：Undefined QQbot](https://github.com/69gg/Undefined/)**
-
 
 </div>
 
@@ -28,16 +23,15 @@
 
 ## 概述
 
-NagaAgent 由四个独立微服务组成：
+当前运行主链由两个后端服务组成（另有可选调试服务）：
 
 | 服务 | 端口 | 职责 |
 |------|------|------|
-| **API Server** | 8000 | 对话、流式工具调用、文档上传、认证代理、记忆 API、配置管理 |
-| **Agent Server** | 8001 | 后台意图分析、OpenClaw 集成、任务调度与压缩记忆 |
+| **API Server** | 8000 | 对话、流式工具调用、文档上传、系统配置、运行态聚合 |
 | **MCP Server** | 8003 | MCP 工具注册/发现/并行调度 |
-| **Voice Service** | 5048 | TTS (Edge-TTS) + ASR (FunASR) + 实时语音 (Qwen Omni) |
+| **LLM Service（可选调试）** | 8001 | `apiserver.llm_service` 独立调试入口（不在 `main.py` 默认启动链） |
 
-`main.py` 统一编排启动，所有服务以 daemon thread 运行。前端可选 Electron + Vue 3 桌面端或 PyQt5 原生 GUI。
+`main.py` 默认编排 `API + MCP`，并按配置启停 `autonomous` 后台循环。当前前端主链为 `Embla_core`（Next.js 运维面板）。
 
 ---
 
@@ -45,57 +39,50 @@ NagaAgent 由四个独立微服务组成：
 
 | 日期 | 内容 |
 |------|------|
-| **2026-02-16** | 5.0.0 发布：NagaModel 网关统一接入（TTS/Embeddings/WebSearch）、DeepSeek 推理思考过程实时展示、记忆云海 UI 自适应修复、BoxContainer noScroll 模式 |
-| **2026-02-15** | 统一附加知识块 + 消除历史污染、LLM 流式重试、配置热更新修复、技能工坊加载优化、config.json 写入截断修复、七天自动登录 + 开机自启动 |
-| **2026-02-14** | 远程记忆微服务（NagaMemory 云端 + 本地 GRAG 回退）、意识海 3D 重写、启动标题动画与粒子效果、进度条停滞检测与健康轮询、版本更新检查弹窗、用户使用协议 |
-| **2026-02-13** | 悬浮球模式（4 状态动画）、截屏多模态视觉模型自动切换、技能工坊重构 + Live2D 表情通道独立、登录注册流程完善 |
-| **2026-02-12** | NagaCAS 认证 + NagaModel 网关路由、Live2D 4 通道正交动画架构、Agentic Tool Loop、明日方舟风格启动界面、游戏攻略 MCP 接通 |
-| **2026-02-11** | 嵌入式 OpenClaw 打包、启动时自动从模板生成配置文件 |
-| **2026-02-10** | 后端打包优化、技能工坊 MCP 状态修复、终端设置页面空白修复、去除冗余 Agent/MCP 仅保留 OpenClaw 调度 |
-| **2026-02-09** | 前端重构、Live2D 禁用眼睛追踪、OpenClaw 更名为 AgentServer |
+| **2026-02-27** | 退役 Live2D 运行时链路：移除 `live2d_action` 工具分发、`/live2d/actions` API 与相关配置项，统一收敛为 `native/mcp` 工具执行 |
+| **2026-02-19** | 重构核心架构：引入基于 SDLC 的 Autonomous 自动化开发自治框架 (含 Lease/Fencing); 原生结构化 tool_calls 全面接管执行链路 |
+| **2026-02-14** | 5.0.0 发布：远程记忆微服务（Embla Memory Cloud + 本地 GRAG 回退）、意识海 3D 重写、启动标题动画与粒子效果、进度条停滞检测与健康轮询、版本更新检查弹窗、用户使用协议 |
+| **2026-02-14** | Captcha 验证码集成、注册流程（用户名 + 邮箱 + 验证码）、CAS 会话失效弹窗、语音输入按钮、文件解析按钮、IME 中文输入法回车误发修复 |
+| **2026-02-14** | 移除 ChromaDB 本地依赖（-1119 行），游戏攻略全云端化，攻略功能增加登录态门控 |
+| **2026-02-13** | 悬浮球模式（4 状态动画：classic / ball / compact / full）、截屏多模态视觉模型自动切换 |
+| **2026-02-13** | 技能工坊重构 + Live2D 表情通道独立 + embla-config 技能 |
+| **2026-02-12** | Embla CAS 认证 + Embla Model 网关路由 + 登录弹窗 + 用户菜单 |
+| **2026-02-12** | Live2D 4 通道正交动画架构（体态/动作/表情/追踪），窗口级视觉追踪与校准 |
+| **2026-02-12** | Agentic Tool Loop：流式工具提取 + 多轮自动执行 + 并行 MCP/Native/Live2D 调度 |
+| **2026-02-12** | 明日方舟风格启动界面 + 进度跟踪 + 视图预加载 + 鼠标视差浮动效果 |
+| **2026-02-12** | 游戏攻略 MCP 接通（自动截图 + 视觉模型 + Neo4j 导入 + 6 款游戏 RAG 处理器） |
+| **2026-02-11** | 后端打包优化、启动时自动从模板生成配置文件 |
+| **2026-02-10** | 后端打包优化、技能工坊 MCP 状态修复、前端 bug 修复 |
+| **2026-02-09** | 前端重构、Live2D 禁用眼睛追踪、AgentServer 命名统一 |
 
 ---
 
 ## 核心模块
 
-### 流式工具调用循环
+### 流式工具调用循环（结构化 tool_calls & Local-first Native）
 
-NagaAgent 的工具调用不依赖 OpenAI Function Calling API，而是让 LLM 在文本输出中以 ` ```tool``` ` 代码块内嵌 JSON 描述工具调用。这意味着**任何 OpenAI 兼容的 LLM 提供商都可以直接使用**，无需模型本身支持 function calling。
+Embla System 当前的主链路已经完全改造为 **结构化 `tool_calls` 通道**：
+LLM 不再通过生成 ` ```tool ` 代码块来触发工具，而是通过流式事件传递结构化的目标调用列表。AgenticLoop 会独立于普通会话文本对其进行消费，极大降低了格式漂移和解析失败的概率。
 
-**单轮流程**：
+**核心机制**：
 
-```
-LLM 流式输出 ──SSE──▶ 前端实时显示文本
-       │                    │
-       ▼                    ▼
-  完整文本拼接         TTS 分句播放
-       │
-       ▼
-parse_tool_calls_from_text()
-  ├─ Phase 1: 提取 ```tool``` 代码块内的 JSON
-  └─ Phase 2: 兜底提取裸 JSON（向后兼容）
-       │
-       ▼
-  按 agentType 分类
-  ├─ "mcp"     → MCPManager.unified_call()（进程内）
-  ├─ "openclaw" → HTTP POST → Agent Server /openclaw/send
-  └─ "live2d"  → asyncio.create_task() → UI 通知
-       │
-       ▼
-  asyncio.gather() 并行执行
-       │
-       ▼
-  工具结果注入 messages，进入下一轮 LLM 调用
+```text
+LLM 流式输出(content/reasoning) ──SSE──▶ 前端实时显示
+            │
+            ├─ delta.tool_calls 增量到达
+            ▼
+      LLMService 合并 tool_calls 增量，以 type=tool_calls 单独输出进入 Loop
+            │
+            ▼
+AgenticLoop 将 calls 转换为 actionable execution 并行派发（受限并发调度）
+    ├─ mcp      → MCPManager.unified_call()
+    ├─ native   → Local-first NativeToolExecutor (拦截如 cd 为 get_cwd，严守项目沙盒级安全边界)
+            │
+            ▼
+ 工具结果并入 message 列表触发下一轮推理
 ```
 
-**实现细节**：
-
-- **文本解析**：正则 `r"```tool\s*\n([\s\S]*?)(?:```|\Z)"` 提取代码块，`json5` 容错解析（兜底 `json`），全角字符（`｛｝：`）自动标准化
-- **循环控制**：最大 5 轮（`max_loop_stream` 可配），每轮 LLM 输出无 `agentType` JSON 则终止
-- **SSE 编码**：每个 chunk 为 `data: {"type":"content"|"reasoning","text":"..."}\n\n`，前端 `ReadableStream` + `TextDecoder` 实时拆分
-- **工具结果回注**：格式化为 `[工具结果 1/N - service: tool (status)]` 追加到 messages 中
-
-源码：[`apiserver/agentic_tool_loop.py`](apiserver/agentic_tool_loop.py)、[`apiserver/streaming_tool_extractor.py`](apiserver/streaming_tool_extractor.py)
+源码：[`apiserver/llm_service.py`](apiserver/llm_service.py)、[`agents/tool_loop.py`](agents/tool_loop.py)、[`apiserver/native_tools.py`](apiserver/native_tools.py)
 
 ---
 
@@ -128,11 +115,11 @@ GRAG（Graph-RAG）从对话中自动提取五元组 `(主体, 主体类型, 谓
 2. Cypher 查询：`MATCH (e1:Entity)-[r]->(e2:Entity) WHERE e1.name CONTAINS '{kw}' ... LIMIT 5`
 3. 格式化为 `主体(类型) —[谓词]→ 客体(类型)` 注入 LLM 上下文
 
-**远程记忆**（5.0.0 新增）：
+**记忆访问现状**：
 
-- `summer_memory/memory_client.py` 对接 NagaMemory 云端服务
-- 登录用户自动使用云端存储，退出登录或离线时自动回退本地 GRAG
-- API Server 新增 `/api/memory/*` 代理端点，前端通过 API Server 中转
+- `summer_memory/memory_client.py` 当前为 local-only shim（`get_remote_memory_client()` 恒为 `None`）
+- 对话链路默认走本地 GRAG 回退
+- API Server 暴露 `memory/stats`、`memory/quintuples`、`memory/quintuples/search` 等本地记忆查询端点
 
 源码：[`summer_memory/`](summer_memory/)
 
@@ -142,19 +129,18 @@ GRAG（Graph-RAG）从对话中自动提取五元组 `(主体, 主体类型, 谓
 
 基于 [Model Context Protocol](https://modelcontextprotocol.io/) 的可插拔工具架构，每个工具以独立 Agent 形式运行。
 
-**内置 Agent**：
+**内置 Agent**（仓库核验：2026-02-27）：
 
-| Agent | 目录 | 功能 |
-|-------|------|------|
-| `weather_time` | `mcpserver/agent_weather_time/` | 天气查询/预报、系统时间、自动城市/IP 检测 |
-| `open_launcher` | `mcpserver/agent_open_launcher/` | 扫描系统已安装应用，自然语言启动程序 |
-| `game_guide` | `mcpserver/agent_game_guide/` | 游戏策略问答、伤害计算、配队推荐、自动截图注入 |
-| `online_search` | `mcpserver/agent_online_search/` | 基于 SearXNG 的网络搜索 |
-| `crawl4ai` | `mcpserver/agent_crawl4ai/` | 基于 Crawl4AI 的网页内容提取 |
-| `playwright_master` | `mcpserver/agent_playwright_master/` | 基于 Playwright 的浏览器自动化 |
-| `vision` | `mcpserver/agent_vision/` | 截图分析与视觉问答 |
-| `mqtt_tool` | `mcpserver/agent_mqtt_tool/` | MQTT 协议 IoT 设备控制 |
-| `office_doc` | `mcpserver/agent_office_doc/` | docx/xlsx 内容提取 |
+| Agent | 目录 | 功能 | 状态 |
+|-------|------|------|------|
+| `weather_time` | `mcpserver/agent_weather_time/` | 天气查询/预报、系统时间、自动城市/IP 检测 | `available` |
+| `app_launcher` (`open_launcher` alias) | `mcpserver/agent_open_launcher/` | 扫描系统已安装应用，自然语言启动程序 | `available` |
+| `online_search` | `mcpserver/agent_online_search/` | 基于 SearXNG 的网络搜索 | `available` |
+| `crawl4ai` | `mcpserver/agent_crawl4ai/` | 网页抓取与正文提取 | `available` |
+| `playwright_master` | `mcpserver/agent_playwright_master/` | 基于 Playwright 的浏览器自动化 | `available` |
+| `vision` | `mcpserver/agent_vision/` | 截图分析与视觉问答 | `available` |
+| `mqtt_tool` | `mcpserver/agent_mqtt_tool/` | MQTT 协议 IoT 设备控制 | `missing`（目录缺失） |
+| `office_doc` | `mcpserver/agent_office_doc/` | docx/xlsx 内容提取 | `available` |
 
 **注册与发现**：
 
@@ -162,198 +148,135 @@ GRAG（Graph-RAG）从对话中自动提取五元组 `(主体, 主体类型, 谓
 mcpserver/
 ├── agent_weather_time/
 │   ├── agent-manifest.json    ← 声明 name, entryPoint.module/class, capabilities
-│   └── weather_time_agent.py
+│   └── agent_weather_time.py
+├── agent_open_launcher/
+│   ├── agent-manifest.json
+│   └── agent_app_launcher.py
 ├── agent_online_search/
 │   ├── agent-manifest.json
-│   └── ...
+│   └── agent_online_search.py
+├── agent_crawl4ai/
+│   ├── agent-manifest.json
+│   └── agent_crawl4ai.py
+├── agent_playwright_master/
+│   ├── agent-manifest.json
+│   └── agent_playwright_master.py
+├── agent_vision/
+│   ├── agent-manifest.json
+│   └── agent_vision.py
+├── agent_office_doc/
+│   ├── agent-manifest.json
+│   └── agent_office_doc.py
 └── mcp_registry.py            ← scan_and_register_mcp_agents() glob 扫描 **/agent-manifest.json
                                    importlib.import_module(module).ClassName() 动态实例化
 ```
 
 - `MCPManager.unified_call(service_name, tool_call)` 路由到对应 Agent 的 `handle_handoff()`
 - MCP Server `POST /schedule` 支持批量调用，`asyncio.gather()` 并行执行
-- **Skill Market**：前端技能工坊支持一键安装社区 Skill（Agent Browser、Brainstorming、Context7、Firecrawl Search 等），后端 `GET /openclaw/market/items` + `POST /openclaw/market/items/{id}/install`
+- **Skill Market**：前端技能工坊支持一键安装社区 Skill（Agent Browser、Brainstorming、Context7、Firecrawl Search 等），后端通过 `/skills/import` 导入自定义 Skill
 
 源码：[`mcpserver/`](mcpserver/)
 
 ---
 
-### Electron 桌面端
+### Legacy Desktop Lane (Retired)
 
-基于 Electron + Vue 3 + Vite + UnoCSS + PrimeVue 的桌面客户端。
-
-#### Live2D 渲染与动画
-
-使用 **pixi-live2d-display** + **PixiJS WebGL** 渲染 Cubism Live2D 模型。SSAA 超采样抗锯齿：Canvas 按 `width * ssaa` 渲染，CSS `transform: scale(1/ssaa)` 缩放。
-
-**4 通道正交动画系统**（`live2dController.ts`）：
-
-| 通道 | 说明 | 参数 |
-|------|------|------|
-| **体态 (State)** | 关键帧循环动画（idle/thinking/talking），hermite 平滑插值 | 从 `naga-actions.json` 加载 |
-| **动作 (Action)** | 队列式头部动作（点头/摇头），FIFO 单一执行 | AngleX/Y, EyeBallX/Y |
-| **表情 (Emotion)** | `.exp3.json` 表情文件，三种混合模式（Add/Multiply/Overwrite） | 指数衰减过渡 |
-| **追踪 (Tracking)** | 鼠标指针跟随视线，可配延迟启动（`tracking_hold_delay_ms`） | Angle ±30, EyeBall ±1, BodyAngle ±10 |
-
-合并顺序：体态 → 嘴形 → 动作 → 手动覆盖 → 表情混合 → 追踪混合。
-
-#### 意识海可视化（MindView）
-
-Canvas 2D + 手写 3D 投影（非 WebGL/SVG），球面坐标相机 `(theta, phi, distance)`，透视除法 `700 / depth`。
-
-**7 层渲染**：背景渐变 → 地面网格 → 水面平面 → 体积光（3 束光柱） → 粒子系统（3 层 125 颗） → 生物荧光浮游生物（10 个带拖尾） → 知识图谱节点与边（深度排序 painter's algorithm）。
-
-五元组到图的映射：`subject`/`object` → 节点，`predicate` → 有向边，度中心性 → 节点高度权重（高权节点上浮），100 节点上限。
-
-交互：单击拖拽旋转、中键/Shift+拖拽平移、滚轮缩放、节点拖拽/点选、关键词搜索过滤、触屏手势。
-
-#### 悬浮球模式
-
-4 状态动画窗口系统：`classic`（正常）→ `ball`（100×100 圆球）→ `compact`（420×100 折叠）→ `full`（420×N 展开）。
-
-easeOutCubic 缓动（`1 - (1 - t)^3`），160ms / 60FPS 过渡。智能定位：从球位置向右展开，自动贴合屏幕边界。
-
-#### 启动动画
-
-1. **标题阶段**：黑色遮罩 + 40 颗金色上升粒子 + 标题图片 2.4s CSS keyframe（渐入 → 停留 → 渐出）
-2. **进度阶段**：Neural Network 粒子背景 + Live2D 透出框 + 金色进度条（`requestAnimationFrame` 插值，最低速度 0.5 兜底）
-3. **停滞检测**：3 秒无进度变化显示重启提示，25% 后每秒轮询后端 `/health` 防止信号丢失
-4. **唤醒**：进度 100% 后显示"点击唤醒"脉冲提示
-
-源码：[`frontend/`](frontend/)
+旧 Electron + Vue 客户端已从仓库移除，不再参与发布与回归门禁。
 
 ---
 
-### 语音交互
+### 语音模块状态
 
-**TTS（语音合成）**：
-
-- Edge-TTS 引擎，OpenAI 兼容接口 `/v1/audio/speech`
-- 3 线程流水线：分句队列 → TTS API 调用（Semaphore(2) 并发控制）→ pygame 播放
-- Live2D 口型同步：`AdvancedLipSyncEngineV2` 60FPS 提取 5 个参数（mouth_open / mouth_form / mouth_smile / eye_brow_up / eye_wide）
-- 支持 mp3 / aac / wav / opus / flac 格式，FFmpeg 可选转码
-
-**ASR（语音识别）**：
-
-- FunASR 本地服务器，支持 VAD 端点检测和 WebSocket 实时流
-- 三模式自动切换：LOCAL（FunASR）→ END_TO_END（Qwen Omni）→ HYBRID（Qwen ASR + API Server）
-
-**实时语音对话**（需 DashScope API Key）：
-
-- 基于 Qwen Omni 的全双工 WebSocket 语音交互
-- 回声抑制、VAD 检测、音频分块（200ms）、会话冷却、最大语音时长控制
-
-源码：[`voice/`](voice/)
+历史 `voice/` 实现已从运行主链移除，当前仓库不再提供内建 TTS/ASR 服务。
 
 ---
 
-### Agent Server 与任务调度
+### Autonomous（自治系统主链）
 
-**OpenClaw 集成**：
+**现状**：
+Legacy `agentserver` 执行管线已从仓库移除，任务执行与治理统一收敛到 `apiserver` + `autonomous` + `mcpserver` 主链。
 
-- 对接 OpenClaw Gateway（端口 18789），通过自然语言调度 AI 编程助手执行电脑任务
-- 三级回退：打包内嵌 → 全局 `openclaw` 命令 → 自动 `npm install -g openclaw`
-- `POST /openclaw/send` 发送指令，最长等待 120 秒
+**Autonomous 自治模块**（位于 `autonomous/` 目录）：
+系统采用强一致、全自动化的自研 SDLC (Software Development Life Cycle) 架构，面向深度全栈工程执行：
 
-**任务调度器**（`TaskScheduler`）：
+- **Single Active Lease (选主协议)**：使用强一致 DB 锁(`workflow.db`)和 Fencing 时代纪元，确保全局有且仅有单个 Active Orchestrator 在操作仓库。
+- **阶段流转状态机**：拥有极强事务原子性(Idempotency-key 机制)，保证代码变更任务从 `GoalAccepted` -> `PlanDrafted` -> `Implementing`（SubAgent + NativeExecutionBridge） -> `Verifying` 的顺滑无双写推演。
+- **测评修复（Evaluator & Reworker）**：验证环节不过关时走内生治理闭环（contract gate / scaffold gate / risk gate / incident），而非外部黑盒代理降级重试。
+- **发布灰度监控（Release Controller）**：变更完成后不是立即 commit 到生产，而是先注入灰度池（Canary Deploy），依据 P95 延迟与 Error Rate 监控，由大模型判定发布 / 晋升 (Promote) / 或者硬回滚 (Auto-Rollback)。
 
-- 任务步骤记录（目的/内容/输出/分析/成功与否）
-- 自动提取关键事实和"关键发现"/"重要"标记
-- 内存压缩：步骤数超过阈值时调用 LLM 生成 `CompressedMemory`（key_findings / failed_attempts / current_status / next_steps），只保留最近 N 步
-- `schedule_parallel_execution()` 通过 `asyncio.gather()` 并行执行任务列表
+这使得 Embla System 真正演变成了一台能在无人干预下持续运转多日的智能研发服务器。
 
-源码：[`agentserver/`](agentserver/)
+源码：[`autonomous/`](autonomous/)
 
 ---
 
 ## 架构
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                   Electron / PyQt5 前端                    │
-│  Vue 3 + Vite + UnoCSS + PrimeVue + pixi-live2d-display  │
-└────────────┬────────────┬────────────┬───────────────────┘
-             │            │            │
-     ┌───────▼──────┐ ┌──▼──────┐ ┌──▼──────┐
-     │  API Server  │ │ Agent   │ │  Voice  │
-     │   :8000      │ │ Server  │ │ Service │
-     │              │ │  :8001  │ │  :5048  │
-     │ - 对话/SSE   │ │         │ │         │
-     │ - 工具调用   │ │ - 意图  │ │ - TTS   │
-     │ - 文档上传   │ │   分析  │ │ - ASR   │
-     │ - 认证代理   │ │ - 任务  │ │ - 实时  │
-     │ - 记忆API    │ │   调度  │ │   语音  │
-     │ - Skill市场  │ │ - Open  │ │         │
-     │ - 配置管理   │ │   Claw  │ │         │
-     └──────┬───────┘ └────┬────┘ └─────────┘
-            │              │
-     ┌──────▼──────┐  ┌───▼──────────┐
-     │ MCP Server  │  │   OpenClaw   │
-     │   :8003     │  │   Gateway    │
-     │             │  │   :18789     │
-     │ - 工具注册  │  └──────────────┘
-     │ - Agent发现 │
-     │ - 并行调度  │
-     └──────┬──────┘
-            │
-    ┌───────┴──────────────────────┐
-    │   MCP Agents (可插拔工具)     │
-    │ 天气 | 搜索 | 抓取 | 视觉    │
-    │ 启动器 | 攻略 | 文档 | MQTT  │
-    └──────────────────────────────┘
-            │
-     ┌──────▼──────┐
-     │   Neo4j     │
-     │   :7687     │
-     │  知识图谱   │
-     └─────────────┘
+┌──────────────────────────────────────────────────────┐
+│                Embla_core (Next.js 前端)            │
+└────────────┬─────────────────────────────────────────┘
+             │
+     ┌───────▼──────────┐      ┌─────────────────────┐
+     │   API Server     │─────►│ Autonomous Subsystem│
+     │      :8000       │      │       (SDLC)        │
+     │ - 对话/SSE       │      └─────────────────────┘
+     │ - Native调用     │
+     │ - 认证代理       │      ┌─────────────────────┐
+     │ - 配置管理       │─────►│     MCP Server      │
+     └──────────────────┘      │        :8003        │
+                                │ - 工具注册/调度     │
+                                └─────────┬───────────┘
+                                          │
+                                ┌─────────▼───────────┐
+                                │ MCP Agents (可插拔) │
+                                └─────────┬───────────┘
+                                          │
+                                ┌─────────▼───────────┐
+                                │   Neo4j :7687       │
+                                │     知识图谱         │
+                                └─────────────────────┘
 ```
 
 ### 目录结构
 
 ```
-NagaAgent/
+Embla_System/
 ├── apiserver/            # API Server — 对话、流式工具调用、认证、配置管理
-│   ├── api_server.py     #   FastAPI 主应用
-│   ├── agentic_tool_loop.py  #   多轮工具调用循环
-│   ├── llm_service.py    #   LiteLLM 统一 LLM 调用
-│   └── streaming_tool_extractor.py  #   流式分句 + TTS 分发
-├── agentserver/          # Agent Server — 意图分析、任务调度、OpenClaw
-│   ├── agent_server.py   #   FastAPI 主应用
-│   └── task_scheduler.py #   任务编排 + 压缩记忆
+│   ├── api_server.py     #   FastAPI 主应用 (265KB 单体，计划拆分)
+│   ├── native_tools.py   #   Local-First 拦截下放
+│   └── llm_service.py    #   LiteLLM 统一 LLM 和 tool_calls
+├── agents/               # Brain 层 — 多 Agent 运行时（生产主链）
+│   ├── tool_loop.py      #   **核心** Agentic Loop (162KB canonical 实现)
+│   ├── meta_agent.py     #   Meta-Agent：目标分解/调度/反思
+│   ├── router_engine.py  #   任务路由：角色/模型/工具选择
+│   ├── shell_agent.py    #   Shell Agent：意图分析与路由
+│   ├── memory/           #   记忆子系统 (Working/Episodic/Tool-Result Topology helpers)
+│   └── runtime/          #   Multi-Agent 运行时 (TaskBoard/Session/Mailbox)
+├── core/                 # Brainstem 层 — 控制面框架
+│   ├── event_bus/        #   事件总线 (topic_bus, event_store)
+│   ├── security/         #   安全核心 (budget_guard, killswitch, lease, DNA, firewall)
+│   ├── supervisor/       #   监管器 (watchdog, process_guard, brainstem_supervisor)
+│   └── mcp/              #   MCP Host (Phase 2 target)
+├── autonomous/           # 全新自治系统 (SDLC Agent)
+│   ├── system_agent.py   #   Single Active 编排守护态
+│   ├── planner.py        #   策略分解
+│   └── release/          #   降级与金丝雀放量
+├── system/               # 基础原语 — 配置/安全/执行沙盒
+│   ├── config.py         #   Pydantic 配置模型 + build_system_prompt()
+│   ├── native_executor.py #  沙盒命令执行
+│   ├── loop_cost_guard.py #  Token 成本原语
+│   └── killswitch_guard.py # KillSwitch plan builder
 ├── mcpserver/            # MCP Server — 工具注册与调度
 │   ├── mcp_server.py     #   FastAPI 主应用
 │   ├── mcp_registry.py   #   manifest 扫描 + 动态注册
 │   ├── mcp_manager.py    #   unified_call() 路由
-│   ├── agent_weather_time/
-│   ├── agent_open_launcher/
-│   ├── agent_game_guide/
-│   ├── agent_online_search/
-│   ├── agent_crawl4ai/
-│   ├── agent_playwright_master/
-│   ├── agent_vision/
-│   ├── agent_mqtt_tool/
-│   └── agent_office_doc/
-├── summer_memory/        # GRAG 知识图谱
+│   └── agent_*/           #   可插拔 MCP Agents
+├── summer_memory/        # Shell L2 Graph RAG（五元组图谱）
 │   ├── quintuple_extractor.py  #   五元组提取（结构化输出 + JSON 兜底）
 │   ├── quintuple_graph.py      #   Neo4j + 文件双重存储
-│   ├── quintuple_rag_query.py  #   Cypher 关键词 RAG 检索
-│   ├── task_manager.py         #   3 worker 异步任务管理器
-│   ├── memory_manager.py       #   GRAG 总管理器
-│   └── memory_client.py        #   NagaMemory 远程客户端
-├── voice/                # 语音服务
-│   ├── output/           #   TTS (Edge-TTS) + 口型同步
-│   └── input/            #   ASR (FunASR) + 实时语音 (Qwen Omni)
-├── guide_engine/         # 游戏攻略引擎 — 云端 RAG 服务
-├── frontend/             # Electron + Vue 3 前端
-│   ├── electron/         #   主进程（窗口管理、悬浮球、后端管理、热键）
-│   └── src/              #   Vue 3 应用
-│       ├── views/        #     MessageView / MindView / SkillView / ModelView / MemoryView / ConfigView
-│       ├── components/   #     Live2dModel / SplashScreen / LoginDialog / ...
-│       ├── composables/  #     useAuth / useStartupProgress / useVersionCheck / useToolStatus
-│       └── utils/        #     live2dController (4通道动画) / encoding / session
-├── ui/                   # PyQt5 GUI (MVC)
-├── system/               # 配置加载、环境检测、系统提示词、后台分析器
+│   └── memory_client.py        #   Embla Memory 远程客户端
+├── Embla_core/           # Next.js 运行态势面板（主链）
 ├── main.py               # 统一入口，编排所有服务
 ├── config.json           # 运行时配置（从 config.json.example 复制）
 └── pyproject.toml        # 项目元数据与依赖
@@ -372,19 +295,24 @@ NagaAgent/
 ### 安装
 
 ```bash
-git clone https://github.com/Xxiii8322766509/NagaAgent.git
-cd NagaAgent
+git clone <embla-system-repo-url> Embla_System
+cd Embla_System
 
-# 方式一：setup 脚本（自动检测环境、创建虚拟环境、安装依赖）
-python setup.py
-
-# 方式二：uv
+# 方式一：uv（推荐）
 uv sync
 
-# 方式三：手动
+# 方式二：手动 pip
 python -m venv .venv
 source .venv/bin/activate  # Windows: .\.venv\Scripts\activate
+python -m pip install --upgrade pip
 pip install -r requirements.txt
+
+# 可选：首次安装时预取 BoxLite runtime 资产
+python main.py --prepare-runtime
+# 可选：显式本地构建 Embla runtime 镜像
+python scripts/build_boxlite_runtime_image.py
+# 或预取所有已配置 profile
+python scripts/prepare_boxlite_runtime.py --prepare-runtime-all-profiles
 ```
 
 ### 配置
@@ -406,28 +334,27 @@ pip install -r requirements.txt
 ### 启动
 
 ```bash
-python main.py             # 完整启动（API + Agent + MCP + Voice + GUI）
+python main.py             # 完整启动（API + MCP + 可选自治后台）
 uv run main.py             # 使用 uv
-python main.py --headless  # 无 GUI 模式（配合 Electron 前端）
+python main.py --headless  # 无头模式（跳过交互提示，适配 Web/远程前端）
+python main.py --prepare-runtime --force-runtime-refresh  # 显式刷新 BoxLite runtime 资产后退出
 ```
 
 所有服务由 `main.py` 统一编排，也可单独启动：
 
 ```bash
 uvicorn apiserver.api_server:app --host 127.0.0.1 --port 8000 --reload
-uvicorn agentserver.agent_server:app --host 0.0.0.0 --port 8001
+uvicorn mcpserver.mcp_server:app --host 127.0.0.1 --port 8003 --reload
 ```
 
-### Electron 前端开发
+### Embla_core 前端开发（主链）
 
 ```bash
-cd frontend
+cd Embla_core
 npm install
-npm run dev    # 开发模式（Vite + Electron）
-npm run build  # 构建生产包
+npm run dev    # Next.js 开发模式
+npm run build  # Next.js 生产构建
 ```
-
----
 
 ## 可选配置
 
@@ -449,58 +376,21 @@ npm run build  # 构建生产包
 </details>
 
 <details>
-<summary><b>语音交互</b></summary>
+<summary><b>Vision 多模态理解模型</b></summary>
+
+`vision` MCP Agent 的 `image_qa` 会优先读取 `computer_control.model` 作为多模态理解模型：
 
 ```json
 {
-  "system": { "voice_enabled": true },
-  "tts": { "port": 5048, "default_voice": "zh-CN-XiaoxiaoNeural" }
-}
-```
-
-实时语音对话（需通义千问 DashScope API Key）：
-
-```json
-{
-  "voice_realtime": {
+  "computer_control": {
     "enabled": true,
-    "provider": "qwen",
-    "api_key": "your-dashscope-key",
-    "model": "qwen3-omni-flash-realtime"
-  }
-}
-```
-</details>
-
-<details>
-<summary><b>Live2D 虚拟形象</b></summary>
-
-```json
-{
-  "live2d": {
-    "enabled": true,
-    "model_path": "path/to/your/model.model3.json"
+    "model": "gemini-2.5-flash"
   }
 }
 ```
 
-Electron 前端 Live2D 配置：
-
-```json
-{
-  "web_live2d": {
-    "ssaa": 2,
-    "model": {
-      "source": "./models/your-model/model.model3.json",
-      "x": 0.5,
-      "y": 1.3,
-      "size": 6800
-    },
-    "face_y_ratio": 0.13,
-    "tracking_hold_delay_ms": 100
-  }
-}
-```
+设置页对应路径：`Settings -> API & Model -> Multimodal Vision Model`。  
+若该字段留空，运行时会回退到 `api.model`。
 </details>
 
 <details>
@@ -512,7 +402,7 @@ Electron 前端 Live2D 配置：
     "enabled": true,
     "broker": "mqtt-broker-address",
     "port": 1883,
-    "topic": "naga/agent/topic"
+    "topic": "embla/agent/topic"
   }
 }
 ```
@@ -525,18 +415,17 @@ Electron 前端 Live2D 配置：
 | 服务 | 端口 | 说明 |
 |------|------|------|
 | API Server | 8000 | 主接口：对话、配置、认证、Skill 市场 |
-| Agent Server | 8001 | 意图分析、任务调度、OpenClaw |
 | MCP Server | 8003 | MCP 工具注册与调度 |
-| Voice Service | 5048 | TTS / ASR |
+| LLM Service（可选调试） | 8001 | `apiserver.llm_service` 独立调试端口（默认不由 `main.py` 启动） |
 | Neo4j | 7687 | 知识图谱（可选） |
-| OpenClaw Gateway | 18789 | AI 编程助手（可选） |
 
 ---
 
 ## 更新
 
 ```bash
-python update.py  # 自动 git pull + 依赖同步
+git pull --ff-only
+uv sync
 ```
 
 ---
@@ -546,9 +435,9 @@ python update.py  # 自动 git pull + 依赖同步
 | 问题 | 解决方案 |
 |------|----------|
 | Python 版本不兼容 | 使用 Python 3.11；或使用 uv（自动管理 Python 版本） |
-| 端口被占用 | 检查 8000、8001、8003、5048 是否可用 |
+| 端口被占用 | 检查 8000、8003 是否可用（若单独启 `llm_service` 再检查 8001） |
 | Neo4j 连接失败 | 确认 Neo4j 服务已启动，检查 config.json 中的连接参数 |
-| 启动卡在进度条 | 检查 API Key 是否配置正确；3 秒后出现重启提示；Electron 会自动轮询后端健康状态 |
+| 启动卡在进度条 | 检查 API Key 是否配置正确；3 秒后出现重启提示；启动器会自动轮询后端健康状态 |
 
 ```bash
 python main.py --check-env --force-check  # 环境诊断
@@ -560,19 +449,17 @@ python main.py --quick-check              # 快速检查
 ## 构建
 
 ```bash
-python build.py  # 构建 Windows 一键运行整合包，输出到 dist/
+python scripts/build-win.py  # 构建 Windows 一键运行整合包，输出到 dist/
 ```
 
 ---
 
 ## 贡献
 
-欢迎提交 Issue 和 Pull Request。如有问题，可加入 QQ 频道 nagaagent1。
+欢迎提交 Issue 和 Pull Request。如有问题，请联系仓库维护者。
 
 ---
 
----
+## 许可证
 
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=RTGS2017/NagaAgent&type=date&legend=top-left)](https://www.star-history.com/#RTGS2017/NagaAgent&type=date&legend=top-left)
+参见 [LICENSE](LICENSE)。如需商业部署或合作，请通过仓库维护者联系方式或 bilibili 私信【柏斯阔落】。

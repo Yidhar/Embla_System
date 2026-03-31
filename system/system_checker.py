@@ -12,6 +12,7 @@ import importlib
 import importlib.util
 import platform
 import socket
+import locale
 import psutil
 from pathlib import Path
 from typing import Dict, Optional
@@ -34,9 +35,6 @@ class SystemChecker:
         all_ports = get_all_server_ports()
         self.required_ports = [
             all_ports["api_server"],
-            all_ports["agent_server"], 
-            all_ports["mcp_server"],
-            all_ports["tts_server"]
         ]
         
         # 镜像源配置
@@ -61,9 +59,6 @@ class SystemChecker:
         # 重要可选依赖
         self.optional_dependencies = [
             ("onnxruntime", "语音处理"),
-            ("sounddevice", "音频设备"),
-            ("pyaudio", "音频录制"),
-            ("edge_tts", "TTS语音合成"),
             ("playwright", "浏览器自动化"),
             ("crawl4ai", "网页爬取"),
             ("pyautogui", "屏幕控制"),
@@ -71,7 +66,6 @@ class SystemChecker:
             ("librosa", "音频分析"),
             ("torch", "深度学习框架"),
             ("pystray", "系统托盘"),
-            ("live2d", "Live2D虚拟形象"),
             #("paho_mqtt", "MQTT通信"),
             ("bilibili_api", "B站视频"),
             ("python_docx", "Word文档处理")
@@ -202,8 +196,6 @@ class SystemChecker:
                 module_name = "cv2"
             elif dep == "pydantic":
                 module_name = "pydantic"
-            elif dep == "edge_tts":
-                module_name = "edge_tts"
 
             try:
                 importlib.import_module(module_name)
@@ -228,10 +220,6 @@ class SystemChecker:
             module_name = dep
             if dep == "opencv_python":
                 module_name = "cv2"
-            elif dep == "edge_tts":
-                module_name = "edge_tts"
-            elif dep == "live2d":
-                module_name = "live2d"
             elif dep == "bilibili_api":
                 module_name = "bilibili_api"
             elif dep == "python_docx":
@@ -276,12 +264,10 @@ class SystemChecker:
     def check_directory_structure(self) -> bool:
         """检测目录结构"""
         required_dirs = [
-            ("frontend", "前端界面"),
             ("apiserver", "API服务器"),
-            ("agentserver", "Agent服务器"),
-            ("mcpserver", "MCP服务器"),
+            ("agents", "Agent运行时"),
+            ("core", "核心层"),
             ("summer_memory", "记忆系统"),
-            ("voice", "语音模块"),
             ("system", "系统核心")
         ]
 
@@ -391,7 +377,6 @@ class SystemChecker:
 
                     # 尝试导入neo4j包并连接
                     try:
-                        from neo4j import GraphDatabase
                         # 只测试连接，不进行实际查询
                         print(f"   Neo4j配置: {uri} (用户: {user})")
                         print("   ✅ Neo4j包已安装，配置已启用")
@@ -524,7 +509,14 @@ class SystemChecker:
             
             # 创建虚拟环境
             venv_cmd = [python_cmd, "-m", "venv", str(self.venv_path)]
-            result = subprocess.run(venv_cmd, capture_output=True, text=True)
+            process_encoding = locale.getpreferredencoding(False) or "utf-8"
+            result = subprocess.run(
+                venv_cmd,
+                capture_output=True,
+                text=True,
+                encoding=process_encoding,
+                errors="replace",
+            )
             
             if result.returncode == 0:
                 print(f"   ✅ 虚拟环境创建成功: {self.venv_path}")
@@ -575,7 +567,7 @@ class SystemChecker:
             memory = psutil.virtual_memory()
             info["总内存"] = f"{memory.total / (1024**3):.1f} GB"
             info["CPU核心数"] = str(psutil.cpu_count())
-        except:
+        except Exception:
             pass
 
         return info
@@ -645,7 +637,7 @@ class SystemChecker:
         if not self.results.get("Neo4j连接", True):
             print("7. 配置Neo4j数据库:")
             print("   # 使用Docker启动Neo4j:")
-            print("   docker run -d --name naga-neo4j -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j:latest")
+            print("   docker run -d --name embla-neo4j -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j:latest")
             print("   # 或安装Neo4j Desktop")
             print()
 
@@ -783,7 +775,7 @@ def run_quick_check() -> bool:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="NagaAgent 系统环境检测工具")
+    parser = argparse.ArgumentParser(description="Embla System 系统环境检测工具")
     parser.add_argument("--quick", action="store_true", help="快速检测（仅检测核心项）")
     parser.add_argument("--force", action="store_true", help="强制检测（忽略缓存）")
     parser.add_argument("--auto-setup", action="store_true", help="首次运行自动配置环境")

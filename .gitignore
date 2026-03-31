@@ -7,8 +7,6 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-!frontend/build/
-frontend/backend-dist/
 eggs/
 .eggs/
 lib/
@@ -24,7 +22,6 @@ wheels/
 venv/
 ENV/
 env/
-nagaagent-core/
 
 # IDE
 .vscode/
@@ -41,15 +38,7 @@ logs/**/*.log
 logs/knowledge_graph/quintuples.json
 logs/knowledge_graph/graph.html
 logs/.auth_session
-
-# Audio temporary files
-logs/audio_temp/*.mp3
-logs/audio_temp/*.wav
-logs/audio_temp/*.m4a
-logs/audio_temp/*.opus
-logs/audio_temp/*.ogg
-logs/audio_temp/*.flac
-!logs/audio_temp/README.md
+summer_memory/docker-compose.yml
 
 # Session and history
 sessions/
@@ -98,6 +87,9 @@ desktop.ini
 *.backup
 *.old
 ~$*
+.tmp*/
+tmp_ws15/
+zz_tmp_dir/
 
 # API Keys and Secrets (never commit these!)
 *api_key*
@@ -217,5 +209,21 @@ tmp/
 # Cursor
 .cursorrules
 
-# MAA 游戏脚本代理 MCP（用户私有配置，不提交）
-mcpserver/agent_auto_game/
+# codex
+AGENTS.md
+
+*.dat
+*.jsonl
+!doc/task/reports/role_executor_semantic_guard_change_ledger_ws28_021.jsonl
+*.json
+*.txt
+*.lock
+*.log
+scratch/
+config.json.bak.ws29_003.20260301T144042871202Z
+.next/
+.bin/
+.gitignore
+node_modules/
+Embla_core/tsconfig.tsbuildinfo
+memory/working/

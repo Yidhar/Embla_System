@@ -1,0 +1,4319 @@
+"""Ops (observability) route handlers extracted from api_server.py.
+
+Phase 1 of the api_server.py split. All endpoints are read-only aggregation
+queries that assemble runtime posture, MCP fabric, memory graph, workflow
+events, incident, and evidence payloads.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import datetime, timezone
+import re
+import sqlite3
+import time
+import traceback
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, HTTPException
+from ._shared import (
+    OPS_STATUS_RANK as _OPS_STATUS_RANK,
+    ops_max_status as _ops_max_status,
+    ops_metric_status as _ops_metric_status,
+    ops_parse_iso_datetime as _ops_parse_iso_datetime,
+    ops_read_json_file as _shared_ops_read_json_file,
+    ops_repo_root as _ops_repo_root,
+    ops_safe_int as _ops_safe_int,
+    ops_status_to_severity as _ops_status_to_severity,
+    ops_unix_path as _ops_unix_path,
+    ops_utc_iso_now as _ops_utc_iso_now,
+)
+
+from core.supervisor.watchdog_daemon import WatchdogDaemon
+
+try:
+    from system.config import get_config, get_embla_system_config
+except ImportError:
+    def get_config() -> dict:  # type: ignore[misc]
+        return {}
+    def get_embla_system_config() -> dict:  # type: ignore[misc]
+        return {}
+
+try:
+    from system.sandbox_context import normalize_execution_backend
+except ImportError:
+    def normalize_execution_backend(raw: Any) -> str:  # type: ignore[misc]
+        return str(raw or "native").strip() or "native"
+
+logger = logging.getLogger(__name__)
+_OPS_APP_CONTEXT: Dict[str, Any] = {"app": None}
+
+__all__ = [
+    "_OPS_AUDIT_LEDGER_RELATIVE_PATH",
+    "_OPS_BRAINSTEM_HEARTBEAT_RELATIVE_PATH",
+    "_OPS_BRAINSTEM_HEARTBEAT_STALE_CRITICAL_SECONDS",
+    "_OPS_BRAINSTEM_HEARTBEAT_STALE_WARNING_SECONDS",
+    "_OPS_BUDGET_GUARD_STALE_CRITICAL_SECONDS",
+    "_OPS_BUDGET_GUARD_STALE_WARNING_SECONDS",
+    "_OPS_BUDGET_GUARD_STATE_RELATIVE_PATH",
+    "_OPS_INCIDENT_EVENT_SEVERITY",
+    "_OPS_KILLSWITCH_GUARD_STATE_RELATIVE_PATH",
+    "_OPS_PROCESS_GUARD_STALE_CRITICAL_SECONDS",
+    "_OPS_PROCESS_GUARD_STALE_WARNING_SECONDS",
+    "_OPS_PROCESS_GUARD_STATE_RELATIVE_PATH",
+    "_OPS_REQUIRED_REPORT_DEFINITIONS",
+    "_OPS_STATUS_RANK",
+    "_OPS_WATCHDOG_DAEMON_STALE_CRITICAL_SECONDS",
+    "_OPS_WATCHDOG_DAEMON_STALE_WARNING_SECONDS",
+    "_OPS_WATCHDOG_DAEMON_STATE_RELATIVE_PATH",
+    "_ops_build_agentic_loop_completion_summary",
+    "_ops_build_audit_ledger_summary",
+    "_ops_build_brainstem_control_plane_summary",
+    "_ops_build_budget_guard_summary",
+    "_ops_build_core_child_spawn_deferred_summary",
+    "_ops_build_event_database_summary",
+    "_ops_build_evidence_index_payload",
+    "_ops_build_execution_bridge_governance_summary",
+    "_ops_build_immutable_dna_summary",
+    "_ops_build_incidents_latest_payload",
+    "_ops_build_killswitch_guard_summary",
+    "_ops_build_mcp_fabric_payload",
+    "_ops_build_process_guard_summary",
+    "_ops_build_response",
+    "_ops_build_route_quality_summary",
+    "_ops_build_route_quality_trend",
+    "_ops_build_runtime_posture_payload",
+    "_ops_build_vision_multimodal_summary",
+    "_ops_build_watchdog_daemon_summary",
+    "_bind_ops_app_context",
+    "_ops_build_workflow_events_payload",
+    "_ops_collect_required_reports",
+    "_ops_compact_event_payload",
+    "_ops_extract_execution_bridge_governance",
+    "_ops_extract_failed_checks",
+    "_ops_max_status",
+    "_ops_metric_status",
+    "_ops_parse_iso_datetime",
+    "_ops_read_event_rows",
+    "_ops_read_event_rows_from_db",
+    "_ops_read_json_file",
+    "_ops_repo_root",
+    "_ops_resolve_audit_ledger_path",
+    "_ops_resolve_control_plane_mode_summary",
+    "_ops_resolve_event_db_path",
+    "_ops_route_event_status",
+    "_ops_safe_int",
+    "_ops_status_to_severity",
+    "_ops_unix_path",
+    "_ops_utc_iso_now",
+]
+
+
+def _bind_ops_app_context(app: Any) -> None:
+    """Bind FastAPI app instance to routes_ops to avoid lazy import cycles."""
+    _OPS_APP_CONTEXT["app"] = app
+
+
+def _ops_read_json_file(path: Path) -> Dict[str, Any]:
+    """Compatibility wrapper: always return dict for existing ops call-sites."""
+    payload = _shared_ops_read_json_file(path)
+    return payload if isinstance(payload, dict) else {}
+
+
+router = APIRouter()
+
+
+
+def _ops_mcp_server_name(tool: Any) -> str:
+    if isinstance(tool, dict):
+        direct = str(tool.get("server_name") or tool.get("server") or "").strip()
+        if direct:
+            return direct
+        domain = str(tool.get("domain") or "").strip()
+    else:
+        direct = str(getattr(tool, "server_name", "") or getattr(tool, "server", "")).strip()
+        if direct:
+            return direct
+        domain = str(getattr(tool, "domain", "") or "").strip()
+    if domain.startswith("mcp_"):
+        return domain[4:]
+    return domain
+
+
+
+def _ops_mcp_tool_name(tool: Any) -> str:
+    if isinstance(tool, dict):
+        return str(tool.get("name") or tool.get("tool_name") or "").strip()
+    return str(getattr(tool, "name", "") or getattr(tool, "tool_name", "")).strip()
+
+
+
+def _ops_collect_mcp_registry_status() -> Dict[str, Any]:
+    try:
+        from agents.runtime.mcp_client import get_mcp_pool
+
+        pool = get_mcp_pool()
+        if not pool:
+            return {
+                "registered_services": 0,
+                "registered_tool_count": 0,
+                "isolated_worker_services": 0,
+                "rejected_plugin_manifests": 0,
+                "cached_manifests": 0,
+                "service_names": [],
+                "tool_names": [],
+                "isolated_worker_names": [],
+                "rejected_plugin_names": [],
+            }
+
+        tools = pool.get_all_tools()
+        service_names = sorted({name for item in tools if (name := _ops_mcp_server_name(item))})
+        tool_names = sorted({name for item in tools if (name := _ops_mcp_tool_name(item))})
+        return {
+            "registered_services": len(service_names),
+            "registered_tool_count": len(tool_names),
+            "isolated_worker_services": 0,
+            "rejected_plugin_manifests": 0,
+            "cached_manifests": 0,
+            "service_names": service_names,
+            "tool_names": tool_names,
+            "isolated_worker_names": [],
+            "rejected_plugin_names": [],
+        }
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning(f"获取 MCP registry 状态失败: {exc}")
+        raise
+
+
+
+def _ops_collect_local_tool_inventory(*, max_tools: int = 40) -> Dict[str, Any]:
+    memory_tool_names: List[str] = []
+    native_tool_names: List[str] = []
+    dynamic_tool_names: List[str] = []
+
+    try:
+        from agents.memory.memory_tools import get_memory_tool_definitions
+
+        memory_tool_names = sorted(
+            {
+                str(item.get("name") or "").strip()
+                for item in get_memory_tool_definitions()
+                if isinstance(item, dict) and str(item.get("name") or "").strip()
+            }
+        )
+    except Exception as exc:
+        logger.debug("统计 memory tools 失败: %s", exc)
+
+    try:
+        from agents.runtime.native_tools import get_native_tool_definitions
+
+        native_tool_names = sorted(
+            {
+                str(item.get("name") or "").strip()
+                for item in get_native_tool_definitions()
+                if isinstance(item, dict) and str(item.get("name") or "").strip()
+            }
+        )
+    except Exception as exc:
+        logger.debug("统计 native tools 失败: %s", exc)
+
+    try:
+        from agents.runtime.custom_tools import load_custom_tools
+
+        dynamic_tool_names = sorted(
+            {
+                str(item.get("name") or "").strip()
+                for item in load_custom_tools()
+                if isinstance(item, dict) and str(item.get("name") or "").strip()
+            }
+        )
+    except Exception as exc:
+        logger.debug("统计 dynamic tools 失败: %s", exc)
+
+    tool_names = sorted({*memory_tool_names, *native_tool_names, *dynamic_tool_names})
+    return {
+        "total_tools": len(tool_names),
+        "memory_tools": len(memory_tool_names),
+        "native_tools": len(native_tool_names),
+        "dynamic_tools": len(dynamic_tool_names),
+        "tool_names": tool_names[: max(1, int(max_tools))],
+    }
+
+
+
+def _ops_build_mcp_runtime_snapshot(*, registry_status: Optional[Dict[str, Any]] = None, external_services: Optional[List[str]] = None) -> Dict[str, Any]:
+    from datetime import datetime
+
+    if registry_status is None:
+        try:
+            registry_status = _ops_collect_mcp_registry_status()
+        except Exception:
+            registry_status = {
+                "registered_services": 0,
+                "registered_tool_count": 0,
+                "cached_manifests": 0,
+                "service_names": [],
+                "tool_names": [],
+            }
+
+    if external_services is None:
+        try:
+            from agents.runtime.mcp_client import load_mcp_config
+
+            external_services = [
+                str(cfg.name).strip()
+                for cfg in load_mcp_config()
+                if bool(getattr(cfg, "enabled", True)) and str(getattr(cfg, "name", "") or "").strip()
+            ]
+        except Exception:
+            external_services = []
+
+    connected_names = [str(item) for item in (registry_status.get("service_names") or []) if str(item).strip()]
+    configured_only = [str(item) for item in (external_services or []) if str(item).strip() and str(item) not in connected_names]
+    service_total = len(set(connected_names) | set(configured_only))
+    connected_count = len(connected_names)
+
+    return {
+        "server": "online" if connected_count > 0 else "offline",
+        "timestamp": datetime.now().isoformat(),
+        "tasks": {
+            "total": service_total,
+            "active": connected_count,
+            "completed": connected_count,
+            "failed": max(service_total - connected_count, 0),
+        },
+        "registry": {
+            "registered_services": int(registry_status.get("registered_services") or 0),
+            "registered_tool_count": int(registry_status.get("registered_tool_count") or 0),
+            "cached_manifests": int(registry_status.get("cached_manifests") or 0),
+            "service_names": connected_names,
+            "tool_names": list(registry_status.get("tool_names") or []),
+            "external_service_names": configured_only,
+        },
+        "scheduler": {
+            "source": "official_mcp_registry_snapshot",
+            "tracked_tasks": service_total,
+        },
+    }
+
+
+
+def _ops_build_mcp_task_snapshot(status: Optional[str] = None, *, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if snapshot is None:
+        snapshot = _ops_build_mcp_runtime_snapshot()
+    registry = snapshot.get("registry", {}) if isinstance(snapshot, dict) else {}
+
+    tasks: List[Dict[str, Any]] = []
+    for name in registry.get("service_names", []) or []:
+        tasks.append(
+            {
+                "task_id": f"official:{name}",
+                "service_name": str(name),
+                "status": "online",
+                "source": "official",
+            }
+        )
+    for name in registry.get("external_service_names", []) or []:
+        tasks.append(
+            {
+                "task_id": f"official:{name}",
+                "service_name": str(name),
+                "status": "configured",
+                "source": "official",
+            }
+        )
+
+    normalized_filter = str(status or "").strip().lower()
+    if normalized_filter:
+        tasks = [item for item in tasks if str(item.get("status", "")).lower() == normalized_filter]
+
+    return {"tasks": tasks, "total": len(tasks)}
+
+
+async def get_memory_stats() -> Dict[str, Any]:
+    from apiserver.api_server import get_memory_stats as _get_memory_stats
+
+    return await _get_memory_stats()
+
+
+async def get_quintuples() -> Dict[str, Any]:
+    from apiserver.api_server import get_quintuples as _get_quintuples
+
+    return await _get_quintuples()
+
+
+_OPS_CANONICAL_ROUTE_SEMANTICS = {"shell_readonly", "shell_clarify", "core_execution"}
+
+
+def _ops_has_canonical_route_semantic(payload: Dict[str, Any]) -> bool:
+    semantic = str(payload.get("route_semantic") or "").strip().lower()
+    return semantic in _OPS_CANONICAL_ROUTE_SEMANTICS
+
+
+def _ops_route_semantic(payload: Dict[str, Any]) -> str:
+    semantic = str(payload.get("route_semantic") or "").strip().lower()
+    if semantic in _OPS_CANONICAL_ROUTE_SEMANTICS:
+        return semantic
+    return "core_execution"
+
+
+def _ops_route_event_status(payload: Dict[str, Any]) -> str:
+    route_semantic = _ops_route_semantic(payload)
+    shell_readonly_raw = payload.get("shell_readonly_hit")
+    if isinstance(shell_readonly_raw, bool):
+        shell_readonly = shell_readonly_raw
+    else:
+        shell_readonly = bool(payload.get("shell_readonly_hit")) or route_semantic == "shell_readonly"
+    readonly_exposed = bool(payload.get("readonly_write_tool_exposed"))
+    readonly_selected_count = _ops_safe_int(payload.get("readonly_write_tool_selected_count"), default=0)
+    readonly_exposure_hit = shell_readonly and (readonly_exposed or readonly_selected_count > 0)
+    guard_status = _ops_status_to_severity(str(payload.get("route_quality_guard_status") or "unknown"))
+    shell_clarify_budget_escalated = bool(payload.get("shell_clarify_budget_escalated"))
+    core_execution_session_created = bool(payload.get("core_execution_session_created"))
+    if readonly_exposure_hit:
+        return "critical"
+    if guard_status == "critical":
+        return "critical"
+    if route_semantic == "shell_clarify" and shell_clarify_budget_escalated:
+        return "warning"
+    if guard_status == "warning" and bool(payload.get("route_quality_guard_applied")):
+        return "warning"
+    if route_semantic == "core_execution" and core_execution_session_created:
+        return "warning"
+    return "ok"
+
+
+def _ops_build_route_quality_trend(
+    events_file: Path,
+    *,
+    window_size: int = 20,
+    max_windows: int = 6,
+) -> Dict[str, Any]:
+    step = max(1, int(window_size))
+    max_window_count = max(1, int(max_windows))
+    rows = _ops_read_event_rows(events_file, limit=max(200, step * max_window_count * 8))
+    prompt_rows: List[Dict[str, Any]] = []
+    ignored_legacy_noncanonical_sample_count = 0
+    for row in rows:
+        if str(row.get("event_type") or "").strip() != "PromptInjectionComposed":
+            continue
+        payload = row.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if not _ops_has_canonical_route_semantic(payload):
+            ignored_legacy_noncanonical_sample_count += 1
+            continue
+        prompt_rows.append(
+            {
+                "timestamp": str(row.get("timestamp") or ""),
+                "payload": payload,
+            }
+        )
+
+    if not prompt_rows:
+        return {
+            "status": "unknown",
+            "direction": "unknown",
+            "volatility": None,
+            "windows": [],
+            "sample_count": 0,
+            "window_size": step,
+            "reason": "no_canonical_prompt_injection_events" if ignored_legacy_noncanonical_sample_count > 0 else "no_prompt_injection_events",
+            "ignored_legacy_noncanonical_sample_count": ignored_legacy_noncanonical_sample_count,
+        }
+
+    capped = prompt_rows[-step * max_window_count :]
+    windows: List[Dict[str, Any]] = []
+    for start in range(0, len(capped), step):
+        segment = capped[start : start + step]
+        if not segment:
+            continue
+        statuses = [_ops_route_event_status(item.get("payload") if isinstance(item.get("payload"), dict) else {}) for item in segment]
+        total = len(statuses)
+        critical_count = sum(1 for status in statuses if status == "critical")
+        warning_count = sum(1 for status in statuses if status == "warning")
+        ok_count = sum(1 for status in statuses if status == "ok")
+        window_status = _ops_max_status(statuses)
+        score = ((ok_count * 1.0) + (warning_count * 0.6) + (critical_count * 0.25)) / float(total)
+        windows.append(
+            {
+                "start_at": str(segment[0].get("timestamp") or ""),
+                "end_at": str(segment[-1].get("timestamp") or ""),
+                "sample_count": total,
+                "status": window_status,
+                "critical_ratio": critical_count / float(total),
+                "warning_ratio": warning_count / float(total),
+                "score": round(score, 4),
+            }
+        )
+
+    if not windows:
+        return {
+            "status": "unknown",
+            "direction": "unknown",
+            "volatility": None,
+            "windows": [],
+            "sample_count": 0,
+            "window_size": step,
+            "reason": "no_window_aggregates",
+            "ignored_legacy_noncanonical_sample_count": ignored_legacy_noncanonical_sample_count,
+        }
+
+    latest = windows[-1]
+    first = windows[0]
+    delta = float(latest.get("score") or 0.0) - float(first.get("score") or 0.0)
+    if delta >= 0.08:
+        direction = "improving"
+    elif delta <= -0.08:
+        direction = "degrading"
+    else:
+        direction = "stable"
+
+    transitions = 0
+    for idx in range(1, len(windows)):
+        prev_status = str(windows[idx - 1].get("status") or "unknown")
+        current_status = str(windows[idx].get("status") or "unknown")
+        if prev_status != current_status:
+            transitions += 1
+    volatility = (transitions / float(len(windows) - 1)) if len(windows) > 1 else 0.0
+
+    latest_status = _ops_status_to_severity(str(latest.get("status") or "unknown"))
+    trend_status = latest_status
+    if latest_status == "ok":
+        if direction == "degrading" and float(latest.get("score") or 0.0) < 0.7:
+            trend_status = "warning"
+        elif volatility >= 0.7:
+            trend_status = "warning"
+    elif latest_status == "warning" and direction == "degrading" and float(latest.get("score") or 0.0) < 0.5:
+        trend_status = "critical"
+
+    return {
+        "status": trend_status,
+        "direction": direction,
+        "volatility": round(volatility, 4),
+        "windows": windows,
+        "sample_count": len(capped),
+        "window_size": step,
+        "latest_window_status": latest_status,
+        "ignored_legacy_noncanonical_sample_count": ignored_legacy_noncanonical_sample_count,
+    }
+
+
+def _ops_build_route_quality_summary(
+    metrics: Dict[str, Any],
+    *,
+    trend: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    shell_readonly_metric = (
+        metrics.get("shell_readonly_hit_rate")
+        if isinstance(metrics.get("shell_readonly_hit_rate"), dict)
+        else {}
+    )
+    readonly_exposure = (
+        metrics.get("readonly_write_tool_exposure_rate")
+        if isinstance(metrics.get("readonly_write_tool_exposure_rate"), dict)
+        else {}
+    )
+    route_semantic_distribution = (
+        metrics.get("agent_route_semantic_distribution")
+        if isinstance(metrics.get("agent_route_semantic_distribution"), dict)
+        else {}
+    )
+    shell_to_core_dispatch = (
+        metrics.get("shell_to_core_dispatch_rate")
+        if isinstance(metrics.get("shell_to_core_dispatch_rate"), dict)
+        else {}
+    )
+    shell_clarify_budget = (
+        metrics.get("shell_clarify_budget_escalation_rate")
+        if isinstance(metrics.get("shell_clarify_budget_escalation_rate"), dict)
+        else {}
+    )
+    core_execution_session_creation = (
+        metrics.get("core_execution_session_creation_rate")
+        if isinstance(metrics.get("core_execution_session_creation_rate"), dict)
+        else {}
+    )
+
+    status_map = {
+        "shell_readonly_hit_rate": _ops_metric_status(shell_readonly_metric),
+        "readonly_write_tool_exposure_rate": _ops_metric_status(readonly_exposure),
+        "agent_route_semantic_distribution": _ops_metric_status(route_semantic_distribution),
+        "shell_to_core_dispatch_rate": _ops_metric_status(shell_to_core_dispatch),
+        "shell_clarify_budget_escalation_rate": _ops_metric_status(shell_clarify_budget),
+        "core_execution_session_creation_rate": _ops_metric_status(core_execution_session_creation),
+    }
+    trend_payload = trend if isinstance(trend, dict) else {}
+    trend_status = _ops_status_to_severity(str(trend_payload.get("status") or "unknown"))
+    overall_status = _ops_max_status([*list(status_map.values()), trend_status])
+
+    reason_codes: List[str] = []
+
+    def _append_reason(code: str) -> None:
+        if code not in reason_codes:
+            reason_codes.append(code)
+
+    if status_map["readonly_write_tool_exposure_rate"] == "critical":
+        _append_reason("READONLY_WRITE_EXPOSURE_CRITICAL")
+    elif status_map["readonly_write_tool_exposure_rate"] == "warning":
+        _append_reason("READONLY_WRITE_EXPOSURE_WARNING")
+
+    if status_map["shell_clarify_budget_escalation_rate"] == "critical":
+        _append_reason("SHELL_CLARIFY_BUDGET_ESCALATION_CRITICAL")
+    elif status_map["shell_clarify_budget_escalation_rate"] == "warning":
+        _append_reason("SHELL_CLARIFY_BUDGET_ESCALATION_WARNING")
+
+    if status_map["core_execution_session_creation_rate"] == "critical":
+        _append_reason("CORE_EXECUTION_SESSION_CREATION_CRITICAL")
+    elif status_map["core_execution_session_creation_rate"] == "warning":
+        _append_reason("CORE_EXECUTION_SESSION_CREATION_WARNING")
+
+    if status_map["shell_readonly_hit_rate"] == "critical":
+        _append_reason("SHELL_READONLY_HIT_CRITICAL")
+    elif status_map["shell_readonly_hit_rate"] == "warning":
+        _append_reason("SHELL_READONLY_HIT_WARNING")
+
+    if status_map["shell_to_core_dispatch_rate"] == "critical":
+        _append_reason("SHELL_TO_CORE_DISPATCH_CRITICAL")
+    elif status_map["shell_to_core_dispatch_rate"] == "warning":
+        _append_reason("SHELL_TO_CORE_DISPATCH_WARNING")
+
+    direction = str(trend_payload.get("direction") or "unknown")
+    if trend_status == "critical":
+        _append_reason("ROUTE_QUALITY_TREND_CRITICAL")
+    elif trend_status == "warning":
+        _append_reason("ROUTE_QUALITY_TREND_WARNING")
+    if direction == "degrading":
+        _append_reason("ROUTE_QUALITY_TREND_DEGRADING")
+
+    if not reason_codes and overall_status == "ok":
+        _append_reason("ROUTE_QUALITY_HEALTHY")
+    if not reason_codes and overall_status == "unknown":
+        _append_reason("ROUTE_QUALITY_SIGNAL_UNKNOWN")
+
+    reason_text = ""
+    if overall_status == "critical":
+        reason_text = "Route-quality guard is critical; investigate routing drift, exposure, and escalation pressure."
+    elif overall_status == "warning":
+        reason_text = "Route-quality guard is warning; monitor exposure, escalation, and core session churn."
+    elif overall_status == "ok":
+        reason_text = "Route-quality guard is healthy."
+    else:
+        reason_text = "Route-quality signals are insufficient."
+
+    route_semantic_ratios = (
+        route_semantic_distribution.get("route_semantic_ratios")
+        if isinstance(route_semantic_distribution.get("route_semantic_ratios"), dict)
+        else {}
+    )
+    dispatch_to_core_rate = (
+        shell_to_core_dispatch.get("value")
+        if isinstance(shell_to_core_dispatch.get("value"), (int, float))
+        else None
+    )
+
+    return {
+        "status": overall_status,
+        "reason_codes": reason_codes,
+        "reason_text": reason_text,
+        "signal_status": status_map,
+        "route_semantic_ratios": route_semantic_ratios if isinstance(route_semantic_ratios, dict) else {},
+        "dispatch_to_core_rate": dispatch_to_core_rate,
+        "trend": trend_payload,
+    }
+
+
+_OPS_REQUIRED_REPORT_DEFINITIONS: List[Dict[str, Any]] = [
+    {
+        "id": "full_chain_m0_m12",
+        "label": "Release Closure Chain M0-M12",
+        "relative_path": "scratch/reports/release_closure_chain_full_m0_m12_result.json",
+        "gate_level": "hard",
+    },
+    {
+        "id": "cutover_status_ws27_002",
+        "label": "WS27-002 Cutover Status",
+        "relative_path": "scratch/reports/ws27_subagent_cutover_status_ws27_002.json",
+        "gate_level": "hard",
+    },
+    {
+        "id": "oob_drill_ws27_003",
+        "label": "WS27-003 OOB Repair Drill",
+        "relative_path": "scratch/reports/ws27_oob_repair_drill_ws27_003.json",
+        "gate_level": "hard",
+    },
+    {
+        "id": "doc_consistency_ws27_005",
+        "label": "WS27-005 Doc Consistency",
+        "relative_path": "scratch/reports/ws27_m12_doc_consistency_ws27_005.json",
+        "gate_level": "hard",
+    },
+    {
+        "id": "wallclock_acceptance_ws27_001",
+        "label": "WS27-001 72h Wallclock Acceptance",
+        "relative_path": "scratch/reports/ws27_72h_wallclock_acceptance_ws27_001.json",
+        "gate_level": "soft",
+    },
+    {
+        "id": "release_report_ws27_006",
+        "label": "WS27-006 Release Report",
+        "relative_path": "scratch/reports/phase3_full_release_report_ws27_006.json",
+        "gate_level": "soft",
+    },
+    {
+        "id": "signoff_chain_ws27_006",
+        "label": "WS27-006 Signoff Chain",
+        "relative_path": "scratch/reports/release_phase3_full_signoff_chain_ws27_006_result.json",
+        "gate_level": "soft",
+    },
+]
+
+_OPS_INCIDENT_EVENT_SEVERITY: Dict[str, str] = {
+    "IncidentOpened": "critical",
+    "LeaseLost": "critical",
+    "RouteQualityGuardEscalatedCritical": "critical",
+    "RouteArbiterGuardEscalatedCritical": "critical",
+    "ProcessGuardZombieDetected": "critical",
+    "KillSwitchEngaged": "critical",
+    "BudgetGuardTriggered": "critical",
+    "ReleaseRollbackTriggered": "critical",
+    "ReleaseRollbackFailed": "critical",
+    "RuntimeFuseTriggeredCritical": "critical",
+    "AgenticLoopCompletionNotSubmitted": "critical",
+    "ImmutableDNATamperDetected": "critical",
+    "RouteQualityGuardEscalatedWarning": "warning",
+    "RouteArbiterGuardEscalatedWarning": "warning",
+    "ProcessGuardOrphanReaped": "warning",
+    "RuntimeFuseTriggeredWarning": "warning",
+    "VisionMultimodalQAError": "warning",
+    "CoreChildSpawnDeferred": "warning",
+}
+_OPS_ARCHIVED_LEGACY_EVENT_PREFIX = "SubAgentRuntime"
+_OPS_ARCHIVED_LEGACY_EVENT_NAMESPACE = "archived_legacy"
+_OPS_ARCHIVED_LEGACY_EVENT_NOTE = (
+    "SubAgentRuntime* telemetry is archived legacy evidence only and is excluded "
+    "from active single-control-plane incident severity."
+)
+
+_OPS_BRAINSTEM_HEARTBEAT_RELATIVE_PATH = Path("scratch/runtime/brainstem_control_plane_heartbeat_ws23_001.json")
+_OPS_BRAINSTEM_HEARTBEAT_STALE_WARNING_SECONDS = 120.0
+_OPS_BRAINSTEM_HEARTBEAT_STALE_CRITICAL_SECONDS = 300.0
+_OPS_WATCHDOG_DAEMON_STATE_RELATIVE_PATH = Path("scratch/runtime/watchdog_daemon_state_ws28_025.json")
+_OPS_WATCHDOG_DAEMON_STALE_WARNING_SECONDS = 120.0
+_OPS_WATCHDOG_DAEMON_STALE_CRITICAL_SECONDS = 300.0
+_OPS_PROCESS_GUARD_STATE_RELATIVE_PATH = Path("scratch/runtime/process_guard_state_ws28_028.json")
+_OPS_PROCESS_GUARD_STALE_WARNING_SECONDS = 120.0
+_OPS_PROCESS_GUARD_STALE_CRITICAL_SECONDS = 300.0
+_OPS_KILLSWITCH_GUARD_STATE_RELATIVE_PATH = Path("scratch/runtime/killswitch_guard_state_ws28_028.json")
+_OPS_BUDGET_GUARD_STATE_RELATIVE_PATH = Path("scratch/runtime/budget_guard_state_ws28_028.json")
+_OPS_BUDGET_GUARD_STALE_WARNING_SECONDS = 120.0
+_OPS_BUDGET_GUARD_STALE_CRITICAL_SECONDS = 300.0
+_OPS_AUDIT_LEDGER_RELATIVE_PATH = Path("scratch/runtime/audit_ledger.jsonl")
+
+
+def _ops_resolve_audit_ledger_path(repo_root: Path) -> Path:
+    try:
+        embla_system = get_embla_system_config()
+    except Exception:
+        embla_system = {}
+    security = embla_system.get("security") if isinstance(embla_system, dict) else {}
+    ledger_raw = str(security.get("audit_ledger_file") or "").strip() if isinstance(security, dict) else ""
+    if ledger_raw:
+        candidate = Path(ledger_raw)
+        if candidate.is_absolute():
+            return candidate
+        return repo_root / candidate
+    return repo_root / _OPS_AUDIT_LEDGER_RELATIVE_PATH
+
+
+def _ops_is_archived_legacy_event(event_type: str) -> bool:
+    return str(event_type or "").strip().startswith(_OPS_ARCHIVED_LEGACY_EVENT_PREFIX)
+
+
+def _ops_collect_archived_legacy_namespace(event_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    counters: Dict[str, int] = {}
+    latest_timestamp = ""
+    latest_event_type = ""
+    latest_ts = 0.0
+    for row in event_rows:
+        event_type = str(row.get("event_type") or "").strip()
+        if not _ops_is_archived_legacy_event(event_type):
+            continue
+        counters[event_type] = int(counters.get(event_type, 0)) + 1
+        row_ts = _ops_parse_iso_datetime(row.get("timestamp")) or 0.0
+        if row_ts >= latest_ts:
+            latest_ts = row_ts
+            latest_timestamp = str(row.get("timestamp") or "")
+            latest_event_type = event_type
+
+    legacy_event_total = sum(counters.values())
+    return {
+        "status": _OPS_ARCHIVED_LEGACY_EVENT_NAMESPACE,
+        "namespace": f"{_OPS_ARCHIVED_LEGACY_EVENT_PREFIX}*",
+        "legacy_event_total": legacy_event_total,
+        "event_counters": {name: int(counters[name]) for name in sorted(counters.keys())},
+        "latest_timestamp": latest_timestamp,
+        "latest_event_type": latest_event_type,
+        "included_in_incident_severity": False,
+        "included_in_workflow_critical_counters": False,
+        "note": _OPS_ARCHIVED_LEGACY_EVENT_NOTE,
+    }
+
+
+def _ops_resolve_control_plane_mode_summary() -> Dict[str, Any]:
+    """Resolve runtime control-plane mode."""
+    return {
+        "status": "ok",
+        "runtime_mode": "single_control_plane",
+        "single_control_plane": True,
+        "chat_pipeline_status": "enabled",
+        "reason_code": "SINGLE_CONTROL_PLANE_ENFORCED",
+        "reason_text": "chat pipeline is the single runtime control-plane.",
+        "source": "runtime.enforced",
+    }
+
+
+def _ops_extract_failed_checks(payload: Dict[str, Any]) -> List[str]:
+    checks = payload.get("checks")
+    if not isinstance(checks, dict):
+        return []
+    failed: List[str] = []
+    for key, value in checks.items():
+        if value is False:
+            failed.append(str(key))
+    return failed
+
+
+def _ops_build_brainstem_control_plane_summary(repo_root: Path) -> Dict[str, Any]:
+    heartbeat_file = repo_root / _OPS_BRAINSTEM_HEARTBEAT_RELATIVE_PATH
+    heartbeat_payload = _ops_read_json_file(heartbeat_file)
+    generated_at = str(heartbeat_payload.get("generated_at") or "")
+    generated_ts = _ops_parse_iso_datetime(generated_at)
+    now_ts = time.time()
+    heartbeat_age_seconds: Optional[float] = None
+    if generated_ts is not None:
+        heartbeat_age_seconds = max(0.0, round(now_ts - generated_ts, 3))
+
+    raw_unhealthy_services = heartbeat_payload.get("unhealthy_services")
+    unhealthy_services: List[str] = []
+    if isinstance(raw_unhealthy_services, list):
+        unhealthy_services = [str(item) for item in raw_unhealthy_services if str(item).strip()]
+
+    healthy_value = heartbeat_payload.get("healthy")
+    healthy: Optional[bool]
+    if isinstance(healthy_value, bool):
+        healthy = healthy_value
+    else:
+        healthy = None
+
+    status = "unknown"
+    reason_code = "BRAINSTEM_HEARTBEAT_MISSING"
+    reason_text = "Brainstem control-plane heartbeat file is missing."
+    if heartbeat_file.exists():
+        status = "unknown"
+        reason_code = "BRAINSTEM_HEARTBEAT_NO_SIGNAL"
+        reason_text = "Brainstem heartbeat file exists but lacks valid health signal."
+        if generated_ts is None:
+            status = "warning"
+            reason_code = "BRAINSTEM_HEARTBEAT_TIMESTAMP_INVALID"
+            reason_text = "Brainstem heartbeat timestamp is missing or invalid."
+        elif heartbeat_age_seconds is not None and heartbeat_age_seconds > float(_OPS_BRAINSTEM_HEARTBEAT_STALE_CRITICAL_SECONDS):
+            status = "critical"
+            reason_code = "BRAINSTEM_HEARTBEAT_STALE_CRITICAL"
+            reason_text = "Brainstem heartbeat is stale beyond critical threshold."
+        elif heartbeat_age_seconds is not None and heartbeat_age_seconds > float(_OPS_BRAINSTEM_HEARTBEAT_STALE_WARNING_SECONDS):
+            status = "warning"
+            reason_code = "BRAINSTEM_HEARTBEAT_STALE_WARNING"
+            reason_text = "Brainstem heartbeat is stale beyond warning threshold."
+        elif healthy is False or unhealthy_services:
+            status = "critical"
+            reason_code = "BRAINSTEM_HEALTH_UNHEALTHY"
+            reason_text = "Brainstem daemon reports unhealthy services."
+        elif healthy is True:
+            status = "ok"
+            reason_code = "OK"
+            reason_text = "Brainstem daemon heartbeat is healthy."
+        else:
+            status = "warning"
+            reason_code = "BRAINSTEM_HEALTH_UNKNOWN"
+            reason_text = "Brainstem heartbeat is fresh but healthy flag is missing."
+
+    return {
+        "status": _ops_status_to_severity(status),
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "heartbeat_file": _ops_unix_path(heartbeat_file),
+        "exists": heartbeat_file.exists(),
+        "generated_at": generated_at,
+        "heartbeat_age_seconds": heartbeat_age_seconds,
+        "stale_warning_seconds": float(_OPS_BRAINSTEM_HEARTBEAT_STALE_WARNING_SECONDS),
+        "stale_critical_seconds": float(_OPS_BRAINSTEM_HEARTBEAT_STALE_CRITICAL_SECONDS),
+        "healthy": healthy,
+        "service_count": _ops_safe_int(heartbeat_payload.get("service_count"), default=0),
+        "tick": _ops_safe_int(heartbeat_payload.get("tick"), default=0),
+        "mode": str(heartbeat_payload.get("mode") or ""),
+        "pid": _ops_safe_int(heartbeat_payload.get("pid"), default=0),
+        "state_file": str(heartbeat_payload.get("state_file") or ""),
+        "spec_file": str(heartbeat_payload.get("spec_file") or ""),
+        "unhealthy_services": unhealthy_services,
+    }
+
+
+def _ops_build_watchdog_daemon_summary(repo_root: Path) -> Dict[str, Any]:
+    state_file = repo_root / _OPS_WATCHDOG_DAEMON_STATE_RELATIVE_PATH
+    state = WatchdogDaemon.read_daemon_state(
+        state_file,
+        stale_warning_seconds=float(_OPS_WATCHDOG_DAEMON_STALE_WARNING_SECONDS),
+        stale_critical_seconds=float(_OPS_WATCHDOG_DAEMON_STALE_CRITICAL_SECONDS),
+    )
+    action_payload = state.get("action") if isinstance(state.get("action"), dict) else {}
+    snapshot = state.get("snapshot") if isinstance(state.get("snapshot"), dict) else {}
+    return {
+        "status": _ops_status_to_severity(str(state.get("status") or "unknown")),
+        "reason_code": str(state.get("reason_code") or ""),
+        "reason_text": str(state.get("reason_text") or ""),
+        "state_file": str(state.get("state_file") or _ops_unix_path(state_file)),
+        "exists": bool(state_file.exists()),
+        "generated_at": str(state.get("generated_at") or ""),
+        "heartbeat_age_seconds": state.get("heartbeat_age_seconds"),
+        "stale_warning_seconds": float(state.get("stale_warning_seconds") or _OPS_WATCHDOG_DAEMON_STALE_WARNING_SECONDS),
+        "stale_critical_seconds": float(
+            state.get("stale_critical_seconds") or _OPS_WATCHDOG_DAEMON_STALE_CRITICAL_SECONDS
+        ),
+        "state": str(state.get("state") or ""),
+        "tick": _ops_safe_int(state.get("tick"), default=0),
+        "pid": _ops_safe_int(state.get("pid"), default=0),
+        "mode": str(state.get("mode") or ""),
+        "warn_only": bool(state.get("warn_only")),
+        "threshold_hit": bool(state.get("threshold_hit")),
+        "action": action_payload,
+        "snapshot": snapshot,
+    }
+
+
+def _ops_build_process_guard_summary(repo_root: Path) -> Dict[str, Any]:
+    state_file = repo_root / _OPS_PROCESS_GUARD_STATE_RELATIVE_PATH
+    try:
+        from core.supervisor.process_guard import ProcessGuardDaemon
+
+        state = ProcessGuardDaemon.read_daemon_state(
+            state_file,
+            stale_warning_seconds=float(_OPS_PROCESS_GUARD_STALE_WARNING_SECONDS),
+            stale_critical_seconds=float(_OPS_PROCESS_GUARD_STALE_CRITICAL_SECONDS),
+        )
+    except Exception as exc:
+        state = {
+            "status": "critical",
+            "reason_code": "PROCESS_GUARD_READ_FAILED",
+            "reason_text": f"process guard state read failed: {exc}",
+            "state_file": _ops_unix_path(state_file),
+        }
+    return {
+        "status": _ops_status_to_severity(str(state.get("status") or "unknown")),
+        "reason_code": str(state.get("reason_code") or ""),
+        "reason_text": str(state.get("reason_text") or ""),
+        "state_file": str(state.get("state_file") or _ops_unix_path(state_file)),
+        "exists": bool(state_file.exists()),
+        "generated_at": str(state.get("generated_at") or ""),
+        "heartbeat_age_seconds": state.get("heartbeat_age_seconds"),
+        "stale_warning_seconds": float(
+            state.get("stale_warning_seconds") or _OPS_PROCESS_GUARD_STALE_WARNING_SECONDS
+        ),
+        "stale_critical_seconds": float(
+            state.get("stale_critical_seconds") or _OPS_PROCESS_GUARD_STALE_CRITICAL_SECONDS
+        ),
+        "running_jobs": _ops_safe_int(state.get("running_jobs"), default=0),
+        "orphan_jobs": _ops_safe_int(state.get("orphan_jobs"), default=0),
+        "stale_jobs": _ops_safe_int(state.get("stale_jobs"), default=0),
+        "orphan_reaped_count": _ops_safe_int(state.get("orphan_reaped_count"), default=0),
+    }
+
+
+def _ops_build_killswitch_guard_summary(repo_root: Path) -> Dict[str, Any]:
+    state_file = repo_root / _OPS_KILLSWITCH_GUARD_STATE_RELATIVE_PATH
+    try:
+        from core.security import KillSwitchController
+
+        state = KillSwitchController(state_file=state_file).read_state()
+    except Exception as exc:
+        state = {
+            "status": "critical",
+            "reason_code": "KILLSWITCH_STATE_READ_FAILED",
+            "reason_text": f"killswitch guard state read failed: {exc}",
+            "state_file": _ops_unix_path(state_file),
+            "active": False,
+        }
+    status = _ops_status_to_severity(str(state.get("status") or "unknown"))
+    active = bool(state.get("active"))
+    reason_code = str(state.get("reason_code") or "")
+    reason_text = str(state.get("reason_text") or "")
+    if active and status in {"ok", "unknown"}:
+        status = "critical"
+        reason_code = "KILLSWITCH_ENGAGED"
+        reason_text = "KillSwitch state is active."
+    return {
+        "status": status,
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "state_file": str(state.get("state_file") or _ops_unix_path(state_file)),
+        "exists": bool(state_file.exists()),
+        "generated_at": str(state.get("generated_at") or ""),
+        "active": active,
+        "execution_state": str(state.get("execution_state") or "unknown"),
+        "mode": str(state.get("mode") or ""),
+        "approval_ticket": str(state.get("approval_ticket") or ""),
+        "requested_by": str(state.get("requested_by") or ""),
+        "commands_count": _ops_safe_int(state.get("commands_count"), default=0),
+    }
+
+
+def _ops_build_budget_guard_summary(repo_root: Path) -> Dict[str, Any]:
+    state_file = repo_root / _OPS_BUDGET_GUARD_STATE_RELATIVE_PATH
+    try:
+        from core.security import BudgetGuardController
+
+        state = BudgetGuardController(state_file=state_file).read_state(
+            stale_warning_seconds=float(_OPS_BUDGET_GUARD_STALE_WARNING_SECONDS),
+            stale_critical_seconds=float(_OPS_BUDGET_GUARD_STALE_CRITICAL_SECONDS),
+        )
+    except Exception as exc:
+        state = {
+            "status": "critical",
+            "reason_code": "BUDGET_GUARD_STATE_READ_FAILED",
+            "reason_text": f"budget guard state read failed: {exc}",
+            "state_file": _ops_unix_path(state_file),
+        }
+    return {
+        "status": _ops_status_to_severity(str(state.get("status") or "unknown")),
+        "reason_code": str(state.get("reason_code") or ""),
+        "reason_text": str(state.get("reason_text") or ""),
+        "state_file": str(state.get("state_file") or _ops_unix_path(state_file)),
+        "exists": bool(state_file.exists()),
+        "generated_at": str(state.get("generated_at") or ""),
+        "heartbeat_age_seconds": state.get("heartbeat_age_seconds"),
+        "stale_warning_seconds": float(
+            state.get("stale_warning_seconds") or _OPS_BUDGET_GUARD_STALE_WARNING_SECONDS
+        ),
+        "stale_critical_seconds": float(
+            state.get("stale_critical_seconds") or _OPS_BUDGET_GUARD_STALE_CRITICAL_SECONDS
+        ),
+        "action": str(state.get("action") or ""),
+        "task_id": str(state.get("task_id") or ""),
+        "tool_name": str(state.get("tool_name") or ""),
+        "details": state.get("details") if isinstance(state.get("details"), dict) else {},
+    }
+
+
+def _ops_build_immutable_dna_summary() -> Dict[str, Any]:
+    app_obj = _OPS_APP_CONTEXT.get("app")
+    if app_obj is None:
+        # Fallback path for direct test imports before api_server binds app context.
+        try:
+            import apiserver.api_server as _api  # type: ignore
+
+            app_obj = getattr(_api, "app", None)
+        except Exception:
+            app_obj = None
+
+    app_state = getattr(app_obj, "state", None) if app_obj is not None else None
+    preflight = getattr(app_state, "immutable_dna_preflight", None)
+    monitor_state_file_raw = str(getattr(app_state, "immutable_dna_integrity_state_file", "") or "").strip()
+    if monitor_state_file_raw:
+        monitor_state_file = Path(monitor_state_file_raw)
+    else:
+        monitor_state_file = (_ops_repo_root() / Path("scratch/runtime/immutable_dna_integrity_state_ws30_001.json")).resolve()
+
+    monitor_state: Dict[str, Any]
+    try:
+        from core.security import ImmutableDNAIntegrityMonitor
+
+        monitor_state = ImmutableDNAIntegrityMonitor.read_state(monitor_state_file)
+    except Exception as exc:
+        monitor_state = {
+            "status": "warning",
+            "reason_code": "IMMUTABLE_DNA_MONITOR_STATE_READ_FAILED",
+            "reason_text": f"immutable DNA monitor state read failed: {exc}",
+            "state_file": str(monitor_state_file).replace("\\", "/"),
+        }
+    monitor_status = _ops_status_to_severity(str(monitor_state.get("status") or "unknown"))
+
+    if not isinstance(preflight, dict):
+        reason_code = "IMMUTABLE_DNA_PREFLIGHT_MISSING"
+        reason_text = "Immutable DNA startup preflight is missing."
+        status = "unknown"
+        if monitor_status == "critical":
+            status = "critical"
+            reason_code = str(monitor_state.get("reason_code") or "IMMUTABLE_DNA_MONITOR_CRITICAL")
+            reason_text = str(monitor_state.get("reason_text") or "Immutable DNA monitor detected integrity violation.")
+        elif monitor_status == "warning":
+            status = "warning"
+            reason_code = str(monitor_state.get("reason_code") or "IMMUTABLE_DNA_MONITOR_WARNING")
+            reason_text = str(monitor_state.get("reason_text") or "Immutable DNA monitor requires attention.")
+        return {
+            "status": _ops_status_to_severity(status),
+            "reason_code": reason_code,
+            "reason_text": reason_text,
+            "enabled": True,
+            "required": True,
+            "passed": False,
+            "exists": False,
+            "manifest_path": "",
+            "audit_file": "",
+            "manifest_hash": str(monitor_state.get("manifest_hash") or ""),
+            "verify": {},
+            "monitor_status": monitor_status,
+            "monitor": monitor_state,
+        }
+
+    enabled = bool(preflight.get("enabled", True))
+    required = bool(preflight.get("required", True))
+    passed = bool(preflight.get("passed", False))
+    reason = str(preflight.get("reason") or "")
+    manifest_path = str(preflight.get("manifest_path") or "")
+    audit_file = str(preflight.get("audit_file") or "")
+    verify = preflight.get("verify") if isinstance(preflight.get("verify"), dict) else {}
+    manifest_hash = str(
+        preflight.get("manifest_hash")
+        or verify.get("manifest_hash")
+        or monitor_state.get("manifest_hash")
+        or ""
+    )
+
+    if not enabled:
+        status = "warning"
+        reason_code = "IMMUTABLE_DNA_RUNTIME_DISABLED"
+        reason_text = "Immutable DNA runtime injection is disabled."
+    elif passed:
+        status = "ok"
+        reason_code = "OK"
+        reason_text = "Immutable DNA preflight passed."
+    elif required:
+        status = "critical"
+        reason_code = "IMMUTABLE_DNA_PREFLIGHT_FAILED"
+        reason_text = f"Immutable DNA preflight failed: {reason or 'unknown'}"
+    else:
+        status = "warning"
+        reason_code = "IMMUTABLE_DNA_PREFLIGHT_FAILED_OPTIONAL"
+        reason_text = f"Immutable DNA preflight failed (non-blocking): {reason or 'unknown'}"
+
+    if monitor_status == "critical":
+        status = "critical"
+        reason_code = str(monitor_state.get("reason_code") or "IMMUTABLE_DNA_MONITOR_CRITICAL")
+        reason_text = str(monitor_state.get("reason_text") or "Immutable DNA monitor detected integrity violation.")
+    elif monitor_status == "warning" and _ops_status_to_severity(status) == "ok":
+        status = "warning"
+        reason_code = str(monitor_state.get("reason_code") or "IMMUTABLE_DNA_MONITOR_WARNING")
+        reason_text = str(monitor_state.get("reason_text") or "Immutable DNA monitor requires attention.")
+
+    return {
+        "status": _ops_status_to_severity(status),
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "enabled": enabled,
+        "required": required,
+        "passed": passed,
+        "exists": bool(preflight),
+        "manifest_path": manifest_path,
+        "audit_file": audit_file,
+        "manifest_hash": manifest_hash,
+        "verify": verify,
+        "monitor_status": monitor_status,
+        "monitor": monitor_state,
+    }
+
+
+def _ops_build_audit_ledger_summary(repo_root: Path) -> Dict[str, Any]:
+    ledger_file = _ops_resolve_audit_ledger_path(repo_root)
+    if not ledger_file.exists():
+        return {
+            "status": "unknown",
+            "reason_code": "AUDIT_LEDGER_MISSING",
+            "reason_text": "Audit ledger file is missing.",
+            "ledger_file": _ops_unix_path(ledger_file),
+            "exists": False,
+            "checked_count": 0,
+            "error_count": 0,
+            "errors": [],
+            "latest_generated_at": "",
+            "latest_change_id": "",
+            "latest_record_type": "",
+        }
+
+    try:
+        from core.security import AuditLedger
+
+        ledger = AuditLedger(ledger_file=ledger_file)
+        records = ledger.read_records()
+        verify = ledger.verify_chain()
+    except Exception as exc:
+        return {
+            "status": "critical",
+            "reason_code": "AUDIT_LEDGER_READ_FAILED",
+            "reason_text": f"Audit ledger read/verify failed: {exc}",
+            "ledger_file": _ops_unix_path(ledger_file),
+            "exists": True,
+            "checked_count": 0,
+            "error_count": 1,
+            "errors": [str(exc)],
+            "latest_generated_at": "",
+            "latest_change_id": "",
+            "latest_record_type": "",
+        }
+
+    latest_generated_at = ""
+    latest_change_id = ""
+    latest_record_type = ""
+    if records:
+        latest = records[-1]
+        latest_generated_at = str(latest.generated_at or "")
+        latest_change_id = str(latest.change_id or "")
+        latest_record_type = str(latest.record_type or "")
+
+    if verify.passed and verify.checked_count >= 1:
+        status = "ok"
+        reason_code = "OK"
+        reason_text = "Audit ledger hash chain is valid."
+    elif verify.passed and verify.checked_count == 0:
+        status = "warning"
+        reason_code = "AUDIT_LEDGER_EMPTY"
+        reason_text = "Audit ledger exists but has no valid records."
+    else:
+        status = "critical"
+        reason_code = "AUDIT_LEDGER_CHAIN_INVALID"
+        reason_text = "Audit ledger hash chain verification failed."
+
+    return {
+        "status": _ops_status_to_severity(status),
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "ledger_file": _ops_unix_path(ledger_file),
+        "exists": True,
+        "checked_count": int(verify.checked_count),
+        "error_count": len(list(verify.errors or [])),
+        "errors": list(verify.errors or []),
+        "latest_generated_at": latest_generated_at,
+        "latest_change_id": latest_change_id,
+        "latest_record_type": latest_record_type,
+    }
+
+
+def _ops_collect_required_reports(repo_root: Path) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for spec in _OPS_REQUIRED_REPORT_DEFINITIONS:
+        relative_path = Path(str(spec["relative_path"]))
+        absolute_path = repo_root / relative_path
+        exists = absolute_path.exists()
+        payload = _ops_read_json_file(absolute_path) if exists else {}
+        passed_value = payload.get("passed")
+        passed: Optional[bool]
+        if isinstance(passed_value, bool):
+            passed = passed_value
+        else:
+            passed = None
+        failed_checks = _ops_extract_failed_checks(payload)
+        status = "missing"
+        if exists and passed is True:
+            status = "passed"
+        elif exists and passed is False:
+            status = "failed"
+        elif exists:
+            status = "unknown"
+
+        mtime_iso = ""
+        try:
+            if exists:
+                from datetime import datetime, timezone
+
+                mtime_iso = datetime.fromtimestamp(absolute_path.stat().st_mtime, tz=timezone.utc).isoformat()
+        except OSError:
+            mtime_iso = ""
+
+        rows.append(
+            {
+                "id": str(spec["id"]),
+                "label": str(spec["label"]),
+                "gate_level": str(spec["gate_level"]),
+                "path": _ops_unix_path(absolute_path),
+                "exists": exists,
+                "status": status,
+                "passed": passed,
+                "generated_at": str(payload.get("generated_at") or ""),
+                "modified_at": mtime_iso,
+                "scenario": str(payload.get("scenario") or payload.get("task_id") or ""),
+                "failed_checks": failed_checks,
+            }
+        )
+    return rows
+
+
+def _ops_build_response(
+    *,
+    data: Dict[str, Any],
+    severity: str,
+    source_reports: Optional[List[str]] = None,
+    source_endpoints: Optional[List[str]] = None,
+    reason_code: Optional[str] = None,
+    reason_text: Optional[str] = None,
+    status: str = "success",
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "status": str(status or "success"),
+        "generated_at": _ops_utc_iso_now(),
+        "data": data,
+        "severity": str(severity or "unknown"),
+        "source_reports": list(source_reports or []),
+        "source_endpoints": list(source_endpoints or []),
+    }
+    if reason_code:
+        payload["reason_code"] = str(reason_code)
+    if reason_text:
+        payload["reason_text"] = str(reason_text)
+    return payload
+
+
+def _ops_build_runtime_posture_payload(
+    events_limit: int = 5000,
+    *,
+    repo_root: Optional[Path] = None,
+) -> Dict[str, Any]:
+    try:
+        from scripts.export_slo_snapshot import build_snapshot
+
+        resolved_repo_root = Path(repo_root).resolve() if repo_root is not None else _ops_repo_root()
+        snapshot = build_snapshot(repo_root=resolved_repo_root, events_limit=max(1, int(events_limit)))
+    except Exception as exc:
+        logger.error(f"构建 runtime posture 聚合失败: {exc}")
+        raise
+
+    metrics = snapshot.get("metrics") if isinstance(snapshot.get("metrics"), dict) else {}
+    summary = snapshot.get("summary") if isinstance(snapshot.get("summary"), dict) else {}
+    threshold_profile = snapshot.get("threshold_profile") if isinstance(snapshot.get("threshold_profile"), dict) else {}
+    sources = snapshot.get("sources") if isinstance(snapshot.get("sources"), dict) else {}
+    events_file_raw = str(sources.get("events_file") or "").strip()
+    events_file = Path(events_file_raw) if events_file_raw else Path("__missing_events_file__.jsonl")
+    if events_file_raw and not events_file.is_absolute():
+        events_file = resolved_repo_root / events_file
+    legacy_namespace = _ops_collect_archived_legacy_namespace(
+        _ops_read_event_rows(events_file, limit=max(200, int(events_limit)))
+    )
+    route_quality_trend = _ops_build_route_quality_trend(events_file, window_size=20, max_windows=6)
+    execution_bridge_governance = _ops_build_execution_bridge_governance_summary(
+        events_file=events_file,
+        limit=max(200, int(events_limit)),
+        issues_limit=20,
+    )
+    execution_bridge_governance_status = _ops_status_to_severity(str(execution_bridge_governance.get("status") or "unknown"))
+    agentic_loop_completion = _ops_build_agentic_loop_completion_summary(
+        events_file=events_file,
+        limit=max(200, int(events_limit)),
+    )
+    agentic_loop_completion_status = _ops_status_to_severity(str(agentic_loop_completion.get("status") or "unknown"))
+    core_child_spawn_deferred = _ops_build_core_child_spawn_deferred_summary(
+        events_file=events_file,
+        limit=max(200, int(events_limit)),
+    )
+    core_child_spawn_deferred_status = _ops_status_to_severity(
+        str(core_child_spawn_deferred.get("status") or "unknown")
+    )
+    vision_multimodal = _ops_build_vision_multimodal_summary(
+        events_file=events_file,
+        limit=max(200, int(events_limit)),
+    )
+    vision_multimodal_status = _ops_status_to_severity(str(vision_multimodal.get("status") or "unknown"))
+
+    repo_root = resolved_repo_root
+    brainstem_control_plane = _ops_build_brainstem_control_plane_summary(repo_root)
+    brainstem_status = _ops_status_to_severity(str(brainstem_control_plane.get("status") or "unknown"))
+    control_plane_mode = _ops_resolve_control_plane_mode_summary()
+    control_plane_mode_status = _ops_status_to_severity(str(control_plane_mode.get("status") or "unknown"))
+    watchdog_daemon = _ops_build_watchdog_daemon_summary(repo_root)
+    watchdog_daemon_status = _ops_status_to_severity(str(watchdog_daemon.get("status") or "unknown"))
+    process_guard = _ops_build_process_guard_summary(repo_root)
+    process_guard_status = _ops_status_to_severity(str(process_guard.get("status") or "unknown"))
+    killswitch_guard = _ops_build_killswitch_guard_summary(repo_root)
+    killswitch_guard_status = _ops_status_to_severity(str(killswitch_guard.get("status") or "unknown"))
+    budget_guard = _ops_build_budget_guard_summary(repo_root)
+    budget_guard_status = _ops_status_to_severity(str(budget_guard.get("status") or "unknown"))
+    immutable_dna = _ops_build_immutable_dna_summary()
+    immutable_dna_status = _ops_status_to_severity(str(immutable_dna.get("status") or "unknown"))
+    audit_ledger = _ops_build_audit_ledger_summary(repo_root)
+    audit_ledger_status = _ops_status_to_severity(str(audit_ledger.get("status") or "unknown"))
+    os_sandbox_runtime = _ops_build_os_sandbox_runtime_summary()
+    os_sandbox_runtime_status = _ops_status_to_severity(str(os_sandbox_runtime.get("severity") or "unknown"))
+    try:
+        from system.boxlite.manager import get_boxlite_runtime_assets_summary
+
+        boxlite_runtime = get_boxlite_runtime_assets_summary(project_root=repo_root)
+    except Exception as exc:
+        boxlite_runtime = {
+            "enabled": False,
+            "status": "unknown",
+            "severity": "unknown",
+            "reason_code": "BOXLITE_RUNTIME_SUMMARY_FAILED",
+            "reason_text": str(exc),
+            "runtime_state_file": str((repo_root / "scratch" / "runtime" / "boxlite_runtime_assets.json").resolve()),
+            "profiles": [],
+        }
+    boxlite_runtime = dict(boxlite_runtime or {})
+    boxlite_runtime_status = _ops_status_to_severity(str(boxlite_runtime.get("severity") or "unknown"))
+    boxlite_optional_backend = (
+        str(os_sandbox_runtime.get("default_execution_backend") or "") == "os_sandbox"
+        and str(os_sandbox_runtime.get("self_repo_execution_backend") or "") == "os_sandbox"
+    )
+    if boxlite_optional_backend and boxlite_runtime_status == "critical":
+        boxlite_runtime["raw_status"] = str(boxlite_runtime.get("status") or "")
+        boxlite_runtime["raw_severity"] = str(boxlite_runtime.get("severity") or "")
+        boxlite_runtime["raw_reason_code"] = str(boxlite_runtime.get("reason_code") or "")
+        boxlite_runtime["raw_reason_text"] = str(boxlite_runtime.get("reason_text") or "")
+        boxlite_runtime["optional_backend"] = True
+        boxlite_runtime["severity"] = "warning"
+        boxlite_runtime["reason_code"] = "BOXLITE_RUNTIME_OPTIONAL_UNAVAILABLE"
+        boxlite_runtime["reason_text"] = "BoxLite runtime is unavailable, but the default writable backend remains os_sandbox."
+        boxlite_runtime_status = "warning"
+
+    metric_status = summary.get("metric_status") if isinstance(summary.get("metric_status"), dict) else {}
+    snapshot_overall_status = str(summary.get("overall_status") or "unknown")
+    overall_status = _ops_max_status(
+        [
+            snapshot_overall_status,
+            os_sandbox_runtime_status,
+            control_plane_mode_status,
+            brainstem_status,
+            watchdog_daemon_status,
+            process_guard_status,
+            killswitch_guard_status,
+            budget_guard_status,
+            immutable_dna_status,
+            audit_ledger_status,
+            boxlite_runtime_status,
+            execution_bridge_governance_status,
+            agentic_loop_completion_status,
+            core_child_spawn_deferred_status,
+            vision_multimodal_status,
+        ]
+    )
+    severity = _ops_status_to_severity(overall_status)
+
+    ws26_runtime_report = repo_root / "scratch" / "reports" / "ws26_runtime_snapshot_ws26_002.json"
+    source_reports: List[str] = []
+    ws26_runtime_report_payload: Dict[str, Any] = {}
+
+    if ws26_runtime_report.exists():
+        source_reports.append(_ops_unix_path(ws26_runtime_report))
+        try:
+            loaded_payload = json.loads(ws26_runtime_report.read_text(encoding="utf-8"))
+            if isinstance(loaded_payload, dict):
+                ws26_runtime_report_payload = loaded_payload
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    for key in ("events_file", "events_db", "workflow_db", "global_mutex_state", "autonomous_config"):
+        path_value = sources.get(key)
+        if isinstance(path_value, str) and path_value.strip():
+            source_reports.append(path_value.replace("\\", "/"))
+
+    if bool(brainstem_control_plane.get("exists")):
+        source_reports.append(str(brainstem_control_plane.get("heartbeat_file") or ""))
+    if bool(watchdog_daemon.get("exists")):
+        source_reports.append(str(watchdog_daemon.get("state_file") or ""))
+    if bool(process_guard.get("exists")):
+        source_reports.append(str(process_guard.get("state_file") or ""))
+    if bool(killswitch_guard.get("exists")):
+        source_reports.append(str(killswitch_guard.get("state_file") or ""))
+    if bool(budget_guard.get("exists")):
+        source_reports.append(str(budget_guard.get("state_file") or ""))
+    if str(immutable_dna.get("manifest_path") or "").strip():
+        source_reports.append(str(immutable_dna.get("manifest_path") or ""))
+    if str(immutable_dna.get("audit_file") or "").strip():
+        source_reports.append(str(immutable_dna.get("audit_file") or ""))
+    immutable_dna_monitor = immutable_dna.get("monitor") if isinstance(immutable_dna.get("monitor"), dict) else {}
+    if str(immutable_dna_monitor.get("state_file") or "").strip():
+        source_reports.append(str(immutable_dna_monitor.get("state_file") or ""))
+    if bool(audit_ledger.get("exists")) and str(audit_ledger.get("ledger_file") or "").strip():
+        source_reports.append(str(audit_ledger.get("ledger_file") or ""))
+    if str(boxlite_runtime.get("runtime_state_file") or "").strip():
+        source_reports.append(str(boxlite_runtime.get("runtime_state_file") or ""))
+
+    response_data: Dict[str, Any] = {
+        "summary": {
+            "overall_status": overall_status,
+            "metric_status": metric_status,
+            "route_quality": _ops_build_route_quality_summary(metrics, trend=route_quality_trend),
+            "legacy_event_namespace_status": str(legacy_namespace.get("status") or "unknown"),
+            "legacy_event_namespace": str(legacy_namespace.get("namespace") or ""),
+            "legacy_subagent_runtime_events_detected": _ops_safe_int(
+                legacy_namespace.get("legacy_event_total"),
+                default=0,
+            ),
+            "legacy_subagent_runtime_note": str(legacy_namespace.get("note") or ""),
+            "control_plane_mode_status": control_plane_mode_status,
+            "control_plane_mode": str(control_plane_mode.get("runtime_mode") or ""),
+            "single_control_plane": bool(control_plane_mode.get("single_control_plane")),
+            "runtime_lease": metrics.get("runtime_lease", {}),
+            "lock_status": metrics.get("lock_status", {}),
+            "brainstem_control_plane_status": brainstem_status,
+            "watchdog_daemon_status": watchdog_daemon_status,
+            "process_guard_status": process_guard_status,
+            "killswitch_guard_status": killswitch_guard_status,
+            "budget_guard_status": budget_guard_status,
+            "immutable_dna_status": immutable_dna_status,
+            "audit_ledger_status": audit_ledger_status,
+            "os_sandbox_runtime_status": os_sandbox_runtime_status,
+            "boxlite_runtime_status": boxlite_runtime_status,
+            "execution_bridge_governance_status": execution_bridge_governance_status,
+            "execution_bridge_governance_reason_codes": list(execution_bridge_governance.get("reason_codes") or []),
+            "agentic_loop_completion_status": agentic_loop_completion_status,
+            "core_child_spawn_deferred_status": core_child_spawn_deferred_status,
+            "vision_multimodal_status": vision_multimodal_status,
+        },
+        "metrics": {
+            "runtime_rollout": metrics.get("runtime_rollout", {}),
+            "runtime_fail_open": metrics.get("runtime_fail_open", {}),
+            "runtime_lease": metrics.get("runtime_lease", {}),
+            "queue_depth": metrics.get("queue_depth", {}),
+            "lock_status": metrics.get("lock_status", {}),
+            "disk_watermark_ratio": metrics.get("disk_watermark_ratio", {}),
+            "error_rate": metrics.get("error_rate", {}),
+            "latency_p95_ms": metrics.get("latency_p95_ms", {}),
+            "prompt_slice_count_by_layer": metrics.get("prompt_slice_count_by_layer", {}),
+            "injection_trigger_distribution": metrics.get("injection_trigger_distribution", {}),
+            "recovery_slice_hit_rate": metrics.get("recovery_slice_hit_rate", {}),
+            "prompt_conflict_drop_count": metrics.get("prompt_conflict_drop_count", {}),
+            "delegation_hit_rate": metrics.get("delegation_hit_rate", {}),
+            "shell_readonly_hit_rate": metrics.get("shell_readonly_hit_rate", {}),
+            "readonly_write_tool_exposure_rate": metrics.get("readonly_write_tool_exposure_rate", {}),
+            "agent_route_semantic_distribution": metrics.get("agent_route_semantic_distribution", {}),
+            "shell_to_core_dispatch_rate": metrics.get("shell_to_core_dispatch_rate", {}),
+            "shell_clarify_budget_escalation_rate": metrics.get("shell_clarify_budget_escalation_rate", {}),
+            "core_execution_session_creation_rate": metrics.get("core_execution_session_creation_rate", {}),
+            "core_execution_route_distribution": metrics.get("core_execution_route_distribution", {}),
+            "prompt_prefix_cache_hit_rate": metrics.get("prompt_prefix_cache_hit_rate", {}),
+            "prompt_tail_churn_rate": metrics.get("prompt_tail_churn_rate", {}),
+            "contract_upgrade_latency_ms": metrics.get("contract_upgrade_latency_ms", {}),
+            "recovery_context_survival_rate": metrics.get("recovery_context_survival_rate", {}),
+            "control_plane_mode": {
+                "status": control_plane_mode_status,
+                "value": 0 if bool(control_plane_mode.get("single_control_plane")) else 1,
+                "runtime_mode": str(control_plane_mode.get("runtime_mode") or ""),
+                "single_control_plane": bool(control_plane_mode.get("single_control_plane")),
+                            "reason_code": str(control_plane_mode.get("reason_code") or ""),
+            },
+            "brainstem_heartbeat": {
+                "status": brainstem_status,
+                "value": brainstem_control_plane.get("heartbeat_age_seconds"),
+                "healthy": brainstem_control_plane.get("healthy"),
+                "service_count": brainstem_control_plane.get("service_count"),
+                "stale_warning_seconds": brainstem_control_plane.get("stale_warning_seconds"),
+                "stale_critical_seconds": brainstem_control_plane.get("stale_critical_seconds"),
+                "tick": brainstem_control_plane.get("tick"),
+            },
+            "watchdog_daemon": {
+                "status": watchdog_daemon_status,
+                "value": watchdog_daemon.get("heartbeat_age_seconds"),
+                "tick": watchdog_daemon.get("tick"),
+                "threshold_hit": watchdog_daemon.get("threshold_hit"),
+                "warn_only": watchdog_daemon.get("warn_only"),
+                "stale_warning_seconds": watchdog_daemon.get("stale_warning_seconds"),
+                "stale_critical_seconds": watchdog_daemon.get("stale_critical_seconds"),
+                "reason_code": watchdog_daemon.get("reason_code"),
+            },
+            "process_guard_orphan_jobs": {
+                "status": process_guard_status,
+                "value": process_guard.get("orphan_jobs"),
+                "running_jobs": process_guard.get("running_jobs"),
+                "stale_jobs": process_guard.get("stale_jobs"),
+                "orphan_reaped_count": process_guard.get("orphan_reaped_count"),
+                "reason_code": process_guard.get("reason_code"),
+            },
+            "killswitch_guard": {
+                "status": killswitch_guard_status,
+                "active": killswitch_guard.get("active"),
+                "execution_state": killswitch_guard.get("execution_state"),
+                "mode": killswitch_guard.get("mode"),
+                "commands_count": killswitch_guard.get("commands_count"),
+                "reason_code": killswitch_guard.get("reason_code"),
+            },
+            "budget_guard": {
+                "status": budget_guard_status,
+                "value": budget_guard.get("heartbeat_age_seconds"),
+                "action": budget_guard.get("action"),
+                "task_id": budget_guard.get("task_id"),
+                "tool_name": budget_guard.get("tool_name"),
+                "reason_code": budget_guard.get("reason_code"),
+            },
+            "immutable_dna": {
+                "status": immutable_dna_status,
+                "enabled": immutable_dna.get("enabled"),
+                "required": immutable_dna.get("required"),
+                "passed": immutable_dna.get("passed"),
+                "reason_code": immutable_dna.get("reason_code"),
+                "manifest_hash": immutable_dna.get("manifest_hash"),
+            },
+            "audit_ledger": {
+                "status": audit_ledger_status,
+                "value": audit_ledger.get("checked_count"),
+                "error_count": audit_ledger.get("error_count"),
+                "reason_code": audit_ledger.get("reason_code"),
+                "latest_generated_at": audit_ledger.get("latest_generated_at"),
+                "latest_record_type": audit_ledger.get("latest_record_type"),
+            },
+            "os_sandbox_runtime": {
+                "status": os_sandbox_runtime_status,
+                "value": 1 if str(os_sandbox_runtime.get("status") or "") == "ok" else 0,
+                "default_execution_backend": os_sandbox_runtime.get("default_execution_backend"),
+                "self_repo_execution_backend": os_sandbox_runtime.get("self_repo_execution_backend"),
+                "default_profile": os_sandbox_runtime.get("default_profile"),
+                "enforce_network_guard": os_sandbox_runtime.get("enforce_network_guard"),
+                "profiles_count": len(os_sandbox_runtime.get("profiles") or []),
+                "reason_code": os_sandbox_runtime.get("reason_code"),
+            },
+            "boxlite_runtime": {
+                "status": boxlite_runtime_status,
+                "value": 1 if str(boxlite_runtime.get("status") or "") == "ready" else 0,
+                "profile": boxlite_runtime.get("active_profile"),
+                "asset_name": boxlite_runtime.get("asset_name"),
+                "image": boxlite_runtime.get("image"),
+                "requested_image": boxlite_runtime.get("requested_image"),
+                "resolved_image": boxlite_runtime.get("resolved_image"),
+                "reason_code": boxlite_runtime.get("reason_code"),
+                "auto_reconcile_enabled": boxlite_runtime.get("auto_reconcile_enabled"),
+                "local_image_build_enabled": boxlite_runtime.get("local_image_build_enabled"),
+                "local_image_builder": boxlite_runtime.get("local_image_builder"),
+                "reconcile_interval_seconds": boxlite_runtime.get("reconcile_interval_seconds"),
+            },
+            "execution_bridge_rejection_ratio": {
+                "status": execution_bridge_governance_status,
+                "value": execution_bridge_governance.get("rejection_ratio"),
+                "subtask_total": execution_bridge_governance.get("subtask_total"),
+                "subtask_rejected": execution_bridge_governance.get("subtask_rejected"),
+            },
+            "execution_bridge_governance_warning_ratio": {
+                "status": execution_bridge_governance_status,
+                "value": execution_bridge_governance.get("governed_warning_ratio"),
+                "governed_rows_count": execution_bridge_governance.get("governed_rows_count"),
+                "governed_warning_count": execution_bridge_governance.get("governed_warning_count"),
+                "governed_critical_count": execution_bridge_governance.get("governed_critical_count"),
+            },
+            "agentic_loop_completion_not_submitted_ratio": {
+                "status": agentic_loop_completion_status,
+                "value": agentic_loop_completion.get("not_submitted_ratio"),
+                "submitted_count": agentic_loop_completion.get("submitted_count"),
+                "not_submitted_count": agentic_loop_completion.get("not_submitted_count"),
+                "total_count": agentic_loop_completion.get("total_count"),
+                "reason_code": agentic_loop_completion.get("reason_code"),
+            },
+            "core_child_spawn_deferred_count": {
+                "status": core_child_spawn_deferred_status,
+                "value": core_child_spawn_deferred.get("deferred_count"),
+                "core_execution_session_count": core_child_spawn_deferred.get("core_execution_session_count"),
+                "latest_role": core_child_spawn_deferred.get("latest_role"),
+                "latest_reason": core_child_spawn_deferred.get("latest_reason"),
+                "reason_code": core_child_spawn_deferred.get("reason_code"),
+            },
+            "vision_multimodal_fallback_ratio": {
+                "status": vision_multimodal_status,
+                "value": vision_multimodal.get("fallback_ratio"),
+                "success_count": vision_multimodal.get("success_count"),
+                "fallback_count": vision_multimodal.get("fallback_count"),
+                "error_count": vision_multimodal.get("error_count"),
+                "total_count": vision_multimodal.get("total_count"),
+                "reason_code": vision_multimodal.get("reason_code"),
+            },
+        },
+        "threshold_profile": threshold_profile,
+        "sources": sources,
+        "control_plane_mode": control_plane_mode,
+        "brainstem_control_plane": brainstem_control_plane,
+        "watchdog_daemon": watchdog_daemon,
+        "process_guard": process_guard,
+        "killswitch_guard": killswitch_guard,
+        "budget_guard": budget_guard,
+        "immutable_dna": immutable_dna,
+        "audit_ledger": audit_ledger,
+        "os_sandbox_runtime": os_sandbox_runtime,
+        "boxlite_runtime": boxlite_runtime,
+        "legacy_event_namespace": legacy_namespace,
+        "execution_bridge_governance": execution_bridge_governance,
+        "agentic_loop_completion": agentic_loop_completion,
+        "core_child_spawn_deferred": core_child_spawn_deferred,
+        "vision_multimodal": vision_multimodal,
+    }
+    if ws26_runtime_report_payload:
+        response_data["ws26_runtime_snapshot_report"] = ws26_runtime_report_payload
+
+    reason_code: Optional[str] = None
+    reason_text: Optional[str] = None
+    if brainstem_status == "critical":
+        reason_code = "BRAINSTEM_CONTROL_PLANE_CRITICAL"
+        reason_text = str(brainstem_control_plane.get("reason_text") or "Brainstem control-plane is unhealthy.")
+    elif watchdog_daemon_status == "critical":
+        reason_code = "WATCHDOG_DAEMON_CRITICAL"
+        reason_text = str(watchdog_daemon.get("reason_text") or "Watchdog daemon reports critical state.")
+    elif process_guard_status == "critical":
+        reason_code = "PROCESS_GUARD_CRITICAL"
+        reason_text = str(process_guard.get("reason_text") or "Process guard reports zombie/orphan process risk.")
+    elif killswitch_guard_status == "critical":
+        reason_code = "KILLSWITCH_GUARD_CRITICAL"
+        reason_text = str(killswitch_guard.get("reason_text") or "KillSwitch guard is active.")
+    elif budget_guard_status == "critical":
+        reason_code = "BUDGET_GUARD_CRITICAL"
+        reason_text = str(budget_guard.get("reason_text") or "Budget guard reports critical stop signal.")
+    elif immutable_dna_status == "critical":
+        reason_code = "IMMUTABLE_DNA_CRITICAL"
+        reason_text = str(immutable_dna.get("reason_text") or "Immutable DNA preflight failed.")
+    elif audit_ledger_status == "critical":
+        reason_code = "AUDIT_LEDGER_CRITICAL"
+        reason_text = str(audit_ledger.get("reason_text") or "Audit ledger integrity check failed.")
+    elif os_sandbox_runtime_status == "critical":
+        reason_code = "OS_SANDBOX_RUNTIME_CRITICAL"
+        reason_text = str(os_sandbox_runtime.get("reason_text") or "OS sandbox runtime is unhealthy.")
+    elif boxlite_runtime_status == "critical":
+        reason_code = "BOXLITE_RUNTIME_CRITICAL"
+        reason_text = str(boxlite_runtime.get("reason_text") or "BoxLite runtime assets are unavailable.")
+    elif execution_bridge_governance_status == "critical":
+        reason_code = "EXECUTION_BRIDGE_GOVERNANCE_CRITICAL"
+        reason_text = "Execution bridge governance has critical rejections; check role guards and policy contracts."
+    elif agentic_loop_completion_status == "critical":
+        reason_code = "AGENTIC_LOOP_COMPLETION_CRITICAL"
+        reason_text = str(
+            agentic_loop_completion.get("reason_text")
+            or "Agentic loop completion gate contains completion_not_submitted events."
+        )
+    elif brainstem_status == "warning":
+        reason_code = "BRAINSTEM_CONTROL_PLANE_WARNING"
+        reason_text = str(brainstem_control_plane.get("reason_text") or "Brainstem control-plane requires attention.")
+    elif watchdog_daemon_status == "warning":
+        reason_code = "WATCHDOG_DAEMON_WARNING"
+        reason_text = str(watchdog_daemon.get("reason_text") or "Watchdog daemon requires attention.")
+    elif process_guard_status == "warning":
+        reason_code = "PROCESS_GUARD_WARNING"
+        reason_text = str(process_guard.get("reason_text") or "Process guard requires attention.")
+    elif killswitch_guard_status == "warning":
+        reason_code = "KILLSWITCH_GUARD_WARNING"
+        reason_text = str(killswitch_guard.get("reason_text") or "KillSwitch guard requires attention.")
+    elif budget_guard_status == "warning":
+        reason_code = "BUDGET_GUARD_WARNING"
+        reason_text = str(budget_guard.get("reason_text") or "Budget guard requires attention.")
+    elif immutable_dna_status == "warning":
+        reason_code = "IMMUTABLE_DNA_WARNING"
+        reason_text = str(immutable_dna.get("reason_text") or "Immutable DNA preflight requires attention.")
+    elif audit_ledger_status == "warning":
+        reason_code = "AUDIT_LEDGER_WARNING"
+        reason_text = str(audit_ledger.get("reason_text") or "Audit ledger requires attention.")
+    elif os_sandbox_runtime_status == "warning":
+        reason_code = "OS_SANDBOX_RUNTIME_WARNING"
+        reason_text = str(os_sandbox_runtime.get("reason_text") or "OS sandbox runtime requires attention.")
+    elif boxlite_runtime_status == "warning":
+        reason_code = "BOXLITE_RUNTIME_WARNING"
+        reason_text = str(boxlite_runtime.get("reason_text") or "BoxLite runtime assets require attention.")
+    elif execution_bridge_governance_status == "warning":
+        reason_code = "EXECUTION_BRIDGE_GOVERNANCE_WARNING"
+        reason_text = "Execution bridge governance has warning signals; review semantic/path guard drift."
+    elif agentic_loop_completion_status == "warning":
+        reason_code = "AGENTIC_LOOP_COMPLETION_WARNING"
+        reason_text = str(agentic_loop_completion.get("reason_text") or "Agentic loop completion signals require attention.")
+    elif control_plane_mode_status == "warning":
+        reason_code = "CONTROL_PLANE_MODE_WARNING"
+        reason_text = str(control_plane_mode.get("reason_text") or "Runtime is in dual control-plane mode.")
+    elif vision_multimodal_status == "warning":
+        reason_code = "VISION_MULTIMODAL_WARNING"
+        reason_text = str(
+            vision_multimodal.get("reason_text")
+            or "Vision multimodal QA fallback detected; verify endpoint availability."
+        )
+    elif reason_code is None and snapshot_overall_status == "critical":
+        critical_metrics = sorted(key for key, value in metric_status.items() if str(value) == "critical")
+        excerpt = ", ".join(critical_metrics[:3]) if critical_metrics else "runtime_snapshot"
+        reason_code = "RUNTIME_METRIC_SNAPSHOT_CRITICAL"
+        reason_text = f"Critical runtime posture metrics detected: {excerpt}."
+    elif reason_code is None and snapshot_overall_status == "warning":
+        warning_metrics = sorted(key for key, value in metric_status.items() if str(value) == "warning")
+        excerpt = ", ".join(warning_metrics[:3]) if warning_metrics else "runtime_snapshot"
+        reason_code = "RUNTIME_METRIC_SNAPSHOT_WARNING"
+        reason_text = f"Runtime posture metrics require attention: {excerpt}."
+    elif severity == "unknown":
+        reason_code = "RUNTIME_SIGNAL_UNKNOWN"
+        reason_text = "Runtime posture lacks enough signal coverage; verify events/workflow inputs."
+
+    return _ops_build_response(
+        data=response_data,
+        severity=severity,
+        source_reports=sorted(set(source_reports)),
+        source_endpoints=[],
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
+
+
+def _ops_collect_skill_inventory(*, max_skills: int = 24) -> Dict[str, Any]:
+    repo_root = _ops_repo_root()
+    skills_dir = repo_root / "skills"
+    bundled_skills: List[Dict[str, str]] = []
+
+    skill_paths: List[Path] = []
+    try:
+        if skills_dir.exists():
+            skill_paths = sorted(skills_dir.glob("*/SKILL.md"))
+    except Exception:
+        skill_paths = []
+
+    for skill_path in skill_paths[: max(1, int(max_skills))]:
+        bundled_skills.append(
+            {
+                "name": str(skill_path.parent.name or "").strip(),
+                "path": _ops_unix_path(skill_path),
+            }
+        )
+
+    return {
+        "total_skills": len(skill_paths),
+        "bundled_skills": bundled_skills,
+    }
+
+
+def _ops_build_os_sandbox_runtime_summary() -> Dict[str, Any]:
+    cfg = get_config()
+    sandbox_cfg = getattr(cfg, "sandbox", None)
+    default_backend = normalize_execution_backend(getattr(sandbox_cfg, "default_execution_backend", "native"))
+    self_repo_backend = normalize_execution_backend(getattr(sandbox_cfg, "self_repo_execution_backend", default_backend))
+    os_sandbox_cfg = getattr(sandbox_cfg, "os_sandbox", None)
+    default_profile = str(getattr(os_sandbox_cfg, "runtime_profile", "default") or "default").strip() or "default"
+    enforce_network_guard = bool(getattr(os_sandbox_cfg, "enforce_network_guard", True))
+    raw_profiles = getattr(os_sandbox_cfg, "runtime_profiles", None)
+
+    profiles: List[Dict[str, Any]] = []
+    if isinstance(raw_profiles, dict):
+        for name in sorted(raw_profiles.keys()):
+            profile = raw_profiles.get(name)
+            profiles.append(
+                {
+                    "profile": str(name or "").strip(),
+                    "resource_profile": str(getattr(profile, "resource_profile", "standard") or "standard").strip() or "standard",
+                    "network_enabled": bool(getattr(profile, "network_enabled", False)),
+                    "inject_offline_env": bool(getattr(profile, "inject_offline_env", True)),
+                    "default_command_timeout_seconds": int(getattr(profile, "default_command_timeout_seconds", 120) or 120),
+                    "max_command_timeout_seconds": int(getattr(profile, "max_command_timeout_seconds", 1200) or 1200),
+                    "default_python_timeout_seconds": int(getattr(profile, "default_python_timeout_seconds", 15) or 15),
+                    "max_python_timeout_seconds": int(getattr(profile, "max_python_timeout_seconds", 180) or 180),
+                }
+            )
+
+    status = "ok"
+    severity = "ok"
+    if self_repo_backend == "os_sandbox" or default_backend == "os_sandbox":
+        reason_code = "OS_SANDBOX_DEFAULT_ACTIVE"
+        reason_text = "OS sandbox is the default writable execution backend."
+        target_alignment = "canonical_default"
+    else:
+        reason_code = "OS_SANDBOX_AVAILABLE_NONDEFAULT"
+        reason_text = "OS sandbox runtime is available, but current config still uses a different default backend."
+        target_alignment = "legacy_default_backend"
+
+    return {
+        "enabled": True,
+        "status": status,
+        "severity": severity,
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "target_alignment": target_alignment,
+        "default_execution_backend": default_backend,
+        "self_repo_execution_backend": self_repo_backend,
+        "default_profile": default_profile,
+        "enforce_network_guard": enforce_network_guard,
+        "profiles": profiles,
+    }
+
+
+def _ops_normalize_mcp_service_row(item: Any) -> Dict[str, Any]:
+    row = item if isinstance(item, dict) else {}
+    name = str(row.get("name") or row.get("service_name") or row.get("id") or "").strip()
+    display_name = str(row.get("display_name") or row.get("displayName") or name).strip()
+    description = str(row.get("description") or row.get("summary") or "").strip()
+    source = str(row.get("source") or "unknown").strip().lower() or "unknown"
+    if source not in {"official", "builtin", "mcporter"}:
+        source = "unknown"
+    available = bool(row.get("available"))
+
+    status_label = str(row.get("status_label") or "").strip().lower()
+    if not status_label:
+        if source == "official":
+            status_label = "online" if available else "configured"
+        elif source == "builtin":
+            status_label = "online" if available else "offline"
+        elif source == "mcporter":
+            status_label = "configured" if available else "missing_command"
+        else:
+            status_label = "available" if available else "unknown"
+
+    status_reason = str(row.get("status_reason") or "").strip()
+    if not status_reason:
+        if source == "official":
+            status_reason = (
+                "Official MCP server is connected in current runtime."
+                if available
+                else "Official MCP server is configured but not currently connected."
+            )
+        elif source == "builtin":
+            status_reason = (
+                "Builtin MCP module is importable in current runtime."
+                if available
+                else "Builtin MCP module is not importable in current runtime."
+            )
+        elif source == "mcporter":
+            status_reason = (
+                "Mcporter command is available in current runtime."
+                if available
+                else "Mcporter command is missing in current runtime."
+            )
+        else:
+            status_reason = "Service metadata is incomplete."
+
+    return {
+        "name": name,
+        "display_name": display_name or name,
+        "description": description,
+        "source": source,
+        "available": available,
+        "status_label": status_label,
+        "status_reason": status_reason,
+    }
+
+
+def _ops_build_mcp_fabric_payload() -> Dict[str, Any]:
+    reason_code: Optional[str] = None
+    reason_text: Optional[str] = None
+
+    try:
+        registry_status = _ops_collect_mcp_registry_status()
+    except Exception as exc:
+        registry_status = {
+            "registered_services": 0,
+            "registered_tool_count": 0,
+            "isolated_worker_services": 0,
+            "rejected_plugin_manifests": 0,
+            "cached_manifests": 0,
+            "service_names": [],
+            "tool_names": [],
+            "isolated_worker_names": [],
+            "rejected_plugin_names": [],
+        }
+        reason_code = "MCP_REGISTRY_UNAVAILABLE"
+        reason_text = f"MCP registry status unavailable: {exc}"
+
+    runtime_snapshot = _ops_build_mcp_runtime_snapshot(registry_status=registry_status)
+    task_snapshot = _ops_build_mcp_task_snapshot(snapshot=runtime_snapshot)
+    services_payload = get_mcp_services()
+    raw_services = services_payload.get("services") if isinstance(services_payload, dict) else []
+    services = [
+        _ops_normalize_mcp_service_row(item)
+        for item in (raw_services if isinstance(raw_services, list) else [])
+        if isinstance(_ops_normalize_mcp_service_row(item), dict)
+    ]
+    services = [item for item in services if str(item.get("name") or "").strip()]
+    services.sort(key=lambda item: (str(item.get("source") or "unknown"), str(item.get("name") or "")))
+
+    skill_inventory = _ops_collect_skill_inventory()
+    tool_inventory = _ops_collect_local_tool_inventory()
+
+    total_services = len(services)
+    available_services = sum(1 for item in services if bool(item.get("available")))
+    builtin_services = sum(1 for item in services if str(item.get("source") or "") == "builtin")
+    mcporter_services = sum(1 for item in services if str(item.get("source") or "") == "mcporter")
+    isolated_worker_services = int(registry_status.get("isolated_worker_services") or 0)
+    rejected_plugin_manifests = int(registry_status.get("rejected_plugin_manifests") or 0)
+    registered_mcp_tools = int(registry_status.get("registered_tool_count") or 0)
+
+    if total_services <= 0 and int(registry_status.get("registered_services") or 0) <= 0:
+        severity = "unknown"
+        reason_code = reason_code or "MCP_FABRIC_EMPTY"
+        reason_text = reason_text or "No official MCP services discovered."
+    elif available_services <= 0:
+        severity = "critical"
+        reason_code = reason_code or "MCP_FABRIC_UNAVAILABLE"
+        reason_text = reason_text or "Services exist but none are currently available."
+    elif available_services < total_services or rejected_plugin_manifests > 0:
+        severity = "warning"
+        if rejected_plugin_manifests > 0 and not reason_code:
+            reason_code = "MCP_PLUGIN_REJECTED"
+            reason_text = "One or more plugin manifests were rejected by policy."
+    else:
+        severity = "ok"
+
+    source_reports: List[str] = []
+    skills_dir = _ops_repo_root() / "skills"
+    if skills_dir.exists():
+        source_reports.append(_ops_unix_path(skills_dir))
+    try:
+        from agents.runtime.mcp_client import get_mcp_config_path
+
+        mcp_config_path = get_mcp_config_path()
+    except Exception:
+        mcp_config_path = _ops_repo_root() / "mcp_servers.json"
+    if Path(mcp_config_path).exists():
+        source_reports.append(_ops_unix_path(Path(mcp_config_path)))
+    custom_tools_dir = _ops_repo_root() / "memory" / "custom_tools"
+    if custom_tools_dir.exists():
+        source_reports.append(_ops_unix_path(custom_tools_dir))
+
+    response_data = {
+        "summary": {
+            "total_services": total_services,
+            "available_services": available_services,
+            "builtin_services": builtin_services,
+            "mcporter_services": mcporter_services,
+            "isolated_worker_services": isolated_worker_services,
+            "rejected_plugin_manifests": rejected_plugin_manifests,
+            "local_tools": int(tool_inventory.get("total_tools") or 0),
+            "mcp_tools": registered_mcp_tools,
+            "skills": int(skill_inventory.get("total_skills") or 0),
+        },
+        "runtime_snapshot": runtime_snapshot,
+        "registry": registry_status,
+        "tasks": task_snapshot,
+        "services": services,
+        "skill_inventory": skill_inventory,
+        "tool_inventory": tool_inventory,
+    }
+
+    return _ops_build_response(
+        data=response_data,
+        severity=severity,
+        source_reports=source_reports,
+        source_endpoints=["/mcp/status", "/mcp/services", "/mcp/tasks"],
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
+
+
+def _ops_resolve_event_db_path(events_file: Path) -> Path:
+    from core.event_bus.topic_bus import resolve_topic_db_path_from_mirror
+
+    return resolve_topic_db_path_from_mirror(events_file)
+
+
+def _ops_read_event_rows_from_db(events_db: Path, *, limit: int) -> List[Dict[str, Any]]:
+    if not events_db.exists() or limit <= 0:
+        return []
+    import sqlite3
+
+    rows: List[Dict[str, Any]] = []
+    try:
+        conn = sqlite3.connect(str(events_db))
+        conn.row_factory = sqlite3.Row
+        query_rows = conn.execute(
+            """
+            SELECT envelope_json
+            FROM topic_event
+            ORDER BY seq DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        ).fetchall()
+        conn.close()
+    except Exception as exc:
+        logger.debug(f"读取事件数据库失败，降级文件读取: {exc}")
+        return []
+
+    for row in reversed(query_rows):
+        try:
+            payload = json.loads(str(row["envelope_json"] or "{}"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            rows.append({**payload, "payload": dict(payload.get("data") or {})})
+    return rows
+
+
+def _ops_read_event_rows(events_file: Path, *, limit: int) -> List[Dict[str, Any]]:
+    if limit <= 0:
+        return []
+
+    events_db = _ops_resolve_event_db_path(events_file)
+    db_rows = _ops_read_event_rows_from_db(events_db, limit=max(1, int(limit)))
+
+    file_rows: List[Dict[str, Any]] = []
+    if events_file.exists():
+        lines = events_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+        for line in lines[-max(1, int(limit)) :]:
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict):
+                file_rows.append(payload)
+
+    merged: List[Dict[str, Any]] = []
+    dedupe: set[str] = set()
+    for row in (db_rows + file_rows):
+        event_id = str(row.get("event_id") or "").strip()
+        event_type = str(row.get("event_type") or "").strip()
+        timestamp = str(row.get("timestamp") or "").strip()
+        dedupe_key = event_id or f"{event_type}|{timestamp}|{json.dumps(row.get('payload', {}), ensure_ascii=False, sort_keys=True)}"
+        if dedupe_key in dedupe:
+            continue
+        dedupe.add(dedupe_key)
+        merged.append(row)
+
+    merged.sort(key=lambda item: _ops_parse_iso_datetime(item.get("timestamp")) or 0.0)
+    if len(merged) > int(limit):
+        merged = merged[-int(limit) :]
+    return merged
+
+
+def _ops_build_event_database_summary(
+    events_file: Path,
+    *,
+    max_partition_rows: int = 12,
+    max_topic_rows: int = 12,
+) -> Dict[str, Any]:
+    try:
+        events_db = _ops_resolve_event_db_path(events_file)
+    except Exception as exc:
+        return {
+            "status": "unknown",
+            "reason_code": "EVENT_DB_PATH_RESOLVE_FAILED",
+            "reason_text": str(exc),
+            "db_path": str(events_file).replace("\\", "/"),
+            "exists": False,
+            "size_bytes": 0,
+            "total_rows": 0,
+            "latest_seq": None,
+            "latest_timestamp": "",
+            "latest_event_type": "",
+            "latest_topic": "",
+            "partition_count": 0,
+            "partitions": [],
+            "top_topics": [],
+        }
+
+    summary: Dict[str, Any] = {
+        "status": "unknown",
+        "reason_code": "EVENT_DB_MISSING",
+        "reason_text": "Event topic database file is missing.",
+        "db_path": _ops_unix_path(events_db),
+        "exists": bool(events_db.exists()),
+        "size_bytes": 0,
+        "total_rows": 0,
+        "latest_seq": None,
+        "latest_timestamp": "",
+        "latest_event_type": "",
+        "latest_topic": "",
+        "partition_count": 0,
+        "partitions": [],
+        "top_topics": [],
+    }
+
+    if not events_db.exists():
+        return summary
+
+    try:
+        summary["size_bytes"] = _ops_safe_int(events_db.stat().st_size, default=0)
+    except OSError:
+        summary["size_bytes"] = 0
+
+    import sqlite3
+
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        conn = sqlite3.connect(str(events_db))
+        conn.row_factory = sqlite3.Row
+
+        total_row = conn.execute("SELECT COUNT(1) AS total_rows FROM topic_event").fetchone()
+        latest_row = conn.execute(
+            """
+            SELECT seq, timestamp, event_type, topic
+            FROM topic_event
+            ORDER BY timestamp DESC, seq DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        partition_count_row = conn.execute(
+            "SELECT COUNT(DISTINCT coalesce(partition_ym, '')) AS partition_count FROM topic_event"
+        ).fetchone()
+        partition_rows = conn.execute(
+            """
+            SELECT coalesce(partition_ym, '') AS partition_ym, COUNT(1) AS row_count, MAX(timestamp) AS latest_timestamp
+            FROM topic_event
+            GROUP BY coalesce(partition_ym, '')
+            ORDER BY partition_ym DESC
+            LIMIT ?
+            """,
+            (max(1, int(max_partition_rows)),),
+        ).fetchall()
+        topic_rows = conn.execute(
+            """
+            SELECT topic, COUNT(1) AS row_count, MAX(timestamp) AS latest_timestamp
+            FROM topic_event
+            GROUP BY topic
+            ORDER BY row_count DESC, topic ASC
+            LIMIT ?
+            """,
+            (max(1, int(max_topic_rows)),),
+        ).fetchall()
+    except Exception as exc:
+        logger.debug(f"查询事件数据库统计失败: {exc}")
+        summary["reason_code"] = "EVENT_DB_QUERY_FAILED"
+        summary["reason_text"] = str(exc)
+        return summary
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    total_rows = _ops_safe_int(total_row["total_rows"] if total_row is not None else 0, default=0)
+    partition_count = _ops_safe_int(
+        partition_count_row["partition_count"] if partition_count_row is not None else 0,
+        default=0,
+    )
+    latest_seq = _ops_safe_int(latest_row["seq"] if latest_row is not None else None, default=0)
+    latest_timestamp = str(latest_row["timestamp"] or "") if latest_row is not None else ""
+    latest_event_type = str(latest_row["event_type"] or "") if latest_row is not None else ""
+    latest_topic = str(latest_row["topic"] or "") if latest_row is not None else ""
+
+    partitions: List[Dict[str, Any]] = []
+    for row in partition_rows:
+        partitions.append(
+            {
+                "partition_ym": str(row["partition_ym"] or ""),
+                "row_count": _ops_safe_int(row["row_count"], default=0),
+                "latest_timestamp": str(row["latest_timestamp"] or ""),
+            }
+        )
+
+    top_topics: List[Dict[str, Any]] = []
+    for row in topic_rows:
+        top_topics.append(
+            {
+                "topic": str(row["topic"] or ""),
+                "row_count": _ops_safe_int(row["row_count"], default=0),
+                "latest_timestamp": str(row["latest_timestamp"] or ""),
+            }
+        )
+
+    if total_rows <= 0:
+        status = "unknown"
+        reason_code = "EVENT_DB_EMPTY"
+        reason_text = "Event topic database exists but no events are stored."
+    else:
+        status = "ok"
+        reason_code = "OK"
+        reason_text = "Event topic database is online."
+
+    summary.update(
+        {
+            "status": status,
+            "reason_code": reason_code,
+            "reason_text": reason_text,
+            "total_rows": total_rows,
+            "latest_seq": latest_seq if latest_row is not None else None,
+            "latest_timestamp": latest_timestamp,
+            "latest_event_type": latest_event_type,
+            "latest_topic": latest_topic,
+            "partition_count": partition_count,
+            "partitions": partitions,
+            "top_topics": top_topics,
+        }
+    )
+    return summary
+
+
+def _ops_compact_event_payload(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    compact: Dict[str, Any] = {}
+    for key, value in payload.items():
+        if len(compact) >= 8:
+            break
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            compact[str(key)] = value
+            continue
+        if isinstance(value, dict):
+            for nested_key, nested_value in value.items():
+                if len(compact) >= 8:
+                    break
+                if isinstance(nested_value, (str, int, float, bool)) or nested_value is None:
+                    compact[f"{key}.{nested_key}"] = nested_value
+    return compact
+
+
+def _ops_extract_execution_bridge_governance(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    governance: Dict[str, Any] = {}
+    for candidate in (
+        payload.get("execution_bridge_governance"),
+        payload.get("bridge_receipt", {}).get("governance")
+        if isinstance(payload.get("bridge_receipt"), dict)
+        else {},
+        payload.get("execution_bridge_receipt", {}).get("governance")
+        if isinstance(payload.get("execution_bridge_receipt"), dict)
+        else {},
+    ):
+        if isinstance(candidate, dict) and candidate:
+            governance = dict(candidate)
+            break
+
+    if not governance:
+        raw_reason = str(payload.get("error") or payload.get("reason") or "").strip()
+        if raw_reason.startswith("execution_bridge_"):
+            reason_code = "EXECUTION_BRIDGE_REJECTED"
+            category = "execution_bridge"
+            if raw_reason.startswith("execution_bridge_role_path_violation"):
+                reason_code = "ROLE_PATH_VIOLATION"
+                category = "path_policy"
+            elif raw_reason.startswith("execution_bridge_semantic_toolchain_violation"):
+                reason_code = "SEMANTIC_TOOLCHAIN_VIOLATION"
+                category = "semantic_toolchain"
+            elif raw_reason == "execution_bridge_ops_ticket_required":
+                reason_code = "OPS_CHANGE_TICKET_REQUIRED"
+                category = "change_control"
+            elif raw_reason == "execution_bridge_missing_patch_intent":
+                reason_code = "MISSING_PATCH_INTENT"
+                category = "patch_intent"
+            governance = {
+                "status": "critical",
+                "severity": "critical",
+                "category": category,
+                "reason_code": reason_code,
+                "reason": raw_reason,
+                "executor": str(payload.get("role") or ""),
+                "policy_source": str(payload.get("role_executor_policy_source") or ""),
+                "violation_count": 0,
+                "violations": [],
+            }
+
+    if not governance:
+        return {}
+
+    violations: List[str] = []
+    raw_violations = governance.get("violations")
+    if isinstance(raw_violations, list):
+        violations = [str(item) for item in raw_violations if str(item).strip()]
+    violation_count = _ops_safe_int(governance.get("violation_count"), default=len(violations))
+    status = _ops_status_to_severity(str(governance.get("severity") or governance.get("status") or "unknown"))
+
+    return {
+        "status": status,
+        "severity": status,
+        "category": str(governance.get("category") or ""),
+        "reason_code": str(governance.get("reason_code") or ""),
+        "reason": str(governance.get("reason") or ""),
+        "executor": str(governance.get("executor") or ""),
+        "policy_source": str(
+            governance.get("policy_source") or payload.get("role_executor_policy_source") or ""
+        ),
+        "strict_role_paths": bool(governance.get("strict_role_paths", False)),
+        "strict_semantic_guard": bool(governance.get("strict_semantic_guard", False)),
+        "violation_count": max(0, int(violation_count)),
+        "violations": violations,
+    }
+
+
+def _ops_build_execution_bridge_governance_summary(
+    *,
+    events_file: Path,
+    limit: int = 5000,
+    issues_limit: int = 20,
+) -> Dict[str, Any]:
+    rows = _ops_read_event_rows(events_file, limit=max(200, int(limit)))
+    completed_total = 0
+    completed_rejected = 0
+    completed_governance_rows: List[Dict[str, Any]] = []
+    rejected_governance_rows: List[Dict[str, Any]] = []
+
+    for row in rows:
+        event_type = str(row.get("event_type") or "").strip()
+        payload = row.get("payload")
+        payload_dict = payload if isinstance(payload, dict) else {}
+
+        if event_type == "SubTaskExecutionCompleted":
+            completed_total += 1
+            if payload_dict.get("success") is False:
+                completed_rejected += 1
+            governance = _ops_extract_execution_bridge_governance(payload_dict)
+            if governance:
+                completed_governance_rows.append(
+                    {
+                        "timestamp": str(row.get("timestamp") or ""),
+                        "event_type": event_type,
+                        "subtask_id": str(payload_dict.get("subtask_id") or ""),
+                        "task_id": str(payload_dict.get("task_id") or ""),
+                        "role": str(payload_dict.get("role") or ""),
+                        "success": bool(payload_dict.get("success")),
+                        "governance": governance,
+                    }
+                )
+            continue
+
+        if event_type == "SubTaskRejected":
+            governance = _ops_extract_execution_bridge_governance(payload_dict)
+            if governance:
+                rejected_governance_rows.append(
+                    {
+                        "timestamp": str(row.get("timestamp") or ""),
+                        "event_type": event_type,
+                        "subtask_id": str(payload_dict.get("subtask_id") or ""),
+                        "task_id": str(payload_dict.get("task_id") or ""),
+                        "role": str(payload_dict.get("role") or ""),
+                        "error": str(payload_dict.get("error") or ""),
+                        "governance": governance,
+                    }
+                )
+
+    reference_rows = completed_governance_rows if completed_governance_rows else rejected_governance_rows
+    status_counts: Dict[str, int] = {"ok": 0, "warning": 0, "critical": 0, "unknown": 0}
+    reason_code_counts: Dict[str, int] = {}
+    category_counts: Dict[str, int] = {}
+    executor_counts: Dict[str, int] = {}
+    policy_source_counts: Dict[str, int] = {}
+    governance_warning_count = 0
+    governance_critical_count = 0
+    latest_issue_at = ""
+
+    for row in reference_rows:
+        governance = row.get("governance")
+        if not isinstance(governance, dict):
+            continue
+        status = _ops_status_to_severity(str(governance.get("status") or "unknown"))
+        status_counts[status] = int(status_counts.get(status, 0)) + 1
+        if status == "warning":
+            governance_warning_count += 1
+        elif status == "critical":
+            governance_critical_count += 1
+        if status in {"warning", "critical"}:
+            ts = str(row.get("timestamp") or "")
+            if (_ops_parse_iso_datetime(ts) or 0.0) >= (_ops_parse_iso_datetime(latest_issue_at) or 0.0):
+                latest_issue_at = ts
+
+        reason_code = str(governance.get("reason_code") or "")
+        if reason_code:
+            reason_code_counts[reason_code] = int(reason_code_counts.get(reason_code, 0)) + 1
+        category = str(governance.get("category") or "")
+        if category:
+            category_counts[category] = int(category_counts.get(category, 0)) + 1
+        executor = str(governance.get("executor") or "")
+        if executor:
+            executor_counts[executor] = int(executor_counts.get(executor, 0)) + 1
+        policy_source = str(governance.get("policy_source") or "")
+        if policy_source:
+            policy_source_counts[policy_source] = int(policy_source_counts.get(policy_source, 0)) + 1
+
+    if governance_critical_count > 0:
+        status = "critical"
+    elif governance_warning_count > 0:
+        status = "warning"
+    elif completed_total > 0 or bool(reference_rows):
+        status = "ok"
+    else:
+        status = "unknown"
+
+    rejection_ratio = (completed_rejected / float(completed_total)) if completed_total > 0 else None
+    governed_rows_count = len(reference_rows)
+    governed_warning_ratio = (
+        (governance_warning_count + governance_critical_count) / float(governed_rows_count)
+        if governed_rows_count > 0
+        else None
+    )
+
+    issue_rows = rejected_governance_rows if rejected_governance_rows else [
+        item
+        for item in completed_governance_rows
+        if _ops_status_to_severity(str(item.get("governance", {}).get("status") or "unknown")) in {"warning", "critical"}
+    ]
+    issue_rows.sort(key=lambda row: _ops_parse_iso_datetime(row.get("timestamp")) or 0.0, reverse=True)
+    recent_issues: List[Dict[str, Any]] = []
+    for row in issue_rows[: max(1, int(issues_limit))]:
+        governance = row.get("governance")
+        if not isinstance(governance, dict):
+            continue
+        recent_issues.append(
+            {
+                "timestamp": str(row.get("timestamp") or ""),
+                "event_type": str(row.get("event_type") or ""),
+                "task_id": str(row.get("task_id") or ""),
+                "subtask_id": str(row.get("subtask_id") or ""),
+                "role": str(row.get("role") or ""),
+                "severity": _ops_status_to_severity(str(governance.get("status") or "unknown")),
+                "reason_code": str(governance.get("reason_code") or ""),
+                "reason": str(governance.get("reason") or ""),
+                "category": str(governance.get("category") or ""),
+                "executor": str(governance.get("executor") or ""),
+                "policy_source": str(governance.get("policy_source") or ""),
+                "violation_count": _ops_safe_int(governance.get("violation_count"), default=0),
+                "violations": list(governance.get("violations") or []),
+                "error": str(row.get("error") or ""),
+            }
+        )
+
+    reason_codes_sorted = [
+        key
+        for key, _ in sorted(reason_code_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    if status == "ok" and not reason_codes_sorted:
+        reason_codes_sorted = ["EXECUTION_BRIDGE_GOVERNANCE_OK"]
+    elif status == "unknown" and not reason_codes_sorted:
+        reason_codes_sorted = ["EXECUTION_BRIDGE_GOVERNANCE_UNKNOWN"]
+
+    return {
+        "status": status,
+        "reason_codes": reason_codes_sorted,
+        "reason_code_counts": reason_code_counts,
+        "category_counts": category_counts,
+        "executor_counts": executor_counts,
+        "policy_source_counts": policy_source_counts,
+        "subtask_total": completed_total,
+        "subtask_rejected": completed_rejected,
+        "rejection_ratio": rejection_ratio,
+        "governed_rows_count": governed_rows_count,
+        "governed_warning_count": governance_warning_count,
+        "governed_critical_count": governance_critical_count,
+        "governed_warning_ratio": governed_warning_ratio,
+        "latest_issue_at": latest_issue_at,
+        "recent_issues": recent_issues,
+    }
+
+
+def _ops_build_agentic_loop_completion_summary(
+    *,
+    events_file: Path,
+    limit: int = 5000,
+) -> Dict[str, Any]:
+    rows = _ops_read_event_rows(events_file, limit=max(200, int(limit)))
+    events_db = _ops_resolve_event_db_path(events_file)
+    submitted_count = 0
+    not_submitted_count = 0
+    latest_timestamp = ""
+    latest_reason = ""
+
+    for row in rows:
+        event_type = str(row.get("event_type") or "").strip()
+        if event_type == "AgenticLoopCompletionSubmitted":
+            submitted_count += 1
+            if not latest_timestamp:
+                latest_timestamp = str(row.get("timestamp") or "")
+                latest_reason = "submitted_completion"
+        elif event_type == "AgenticLoopCompletionNotSubmitted":
+            not_submitted_count += 1
+            if not latest_timestamp:
+                latest_timestamp = str(row.get("timestamp") or "")
+                latest_reason = "completion_not_submitted"
+
+    total_count = submitted_count + not_submitted_count
+    not_submitted_ratio = float(not_submitted_count) / float(total_count) if total_count > 0 else None
+
+    if total_count <= 0:
+        status = "unknown"
+        reason_code = "AGENTIC_LOOP_COMPLETION_SIGNAL_EMPTY"
+        reason_text = "No agentic loop completion signal captured in runtime events."
+    elif not_submitted_count > 0:
+        status = "critical"
+        reason_code = "AGENTIC_LOOP_COMPLETION_NOT_SUBMITTED_PRESENT"
+        reason_text = "Detected completion_not_submitted stop reasons in recent agentic loop sessions."
+    else:
+        status = "ok"
+        reason_code = "OK"
+        reason_text = "All observed agentic loop sessions completed via submitted_completion."
+
+    return {
+        "status": _ops_status_to_severity(status),
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "submitted_count": submitted_count,
+        "not_submitted_count": not_submitted_count,
+        "total_count": total_count,
+        "not_submitted_ratio": not_submitted_ratio,
+        "latest_timestamp": latest_timestamp,
+        "latest_reason": latest_reason,
+        "events_file": _ops_unix_path(events_db if events_db.exists() else events_file),
+    }
+
+
+def _ops_build_core_child_spawn_deferred_summary(
+    *,
+    events_file: Path,
+    limit: int = 5000,
+) -> Dict[str, Any]:
+    rows = _ops_read_event_rows(events_file, limit=max(200, int(limit)))
+    events_db = _ops_resolve_event_db_path(events_file)
+
+    deferred_count = 0
+    latest_timestamp = ""
+    latest_agent_id = ""
+    latest_role = ""
+    latest_reason = ""
+    role_counts: Dict[str, int] = {}
+    reason_counts: Dict[str, int] = {}
+    source_counts: Dict[str, int] = {}
+    unique_execution_sessions: set[str] = set()
+
+    for row in rows:
+        event_type = str(row.get("event_type") or "").strip()
+        if event_type != "CoreChildSpawnDeferred":
+            continue
+        deferred_count += 1
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+
+        latest_timestamp = str(row.get("timestamp") or "")
+        latest_agent_id = str(payload.get("agent_id") or "")
+        latest_role = str(payload.get("role") or "")
+        latest_reason = str(payload.get("reason") or "")
+
+        role_key = latest_role or "unknown"
+        role_counts[role_key] = int(role_counts.get(role_key, 0)) + 1
+        reason_key = latest_reason or "unknown"
+        reason_counts[reason_key] = int(reason_counts.get(reason_key, 0)) + 1
+        source_key = str(payload.get("source") or "").strip() or "unknown"
+        source_counts[source_key] = int(source_counts.get(source_key, 0)) + 1
+
+        core_execution_session_id = str(payload.get("core_execution_session_id") or "").strip()
+        if core_execution_session_id:
+            unique_execution_sessions.add(core_execution_session_id)
+
+    if deferred_count <= 0:
+        status = "unknown"
+        reason_code = "CORE_CHILD_SPAWN_DEFERRED_SIGNAL_EMPTY"
+        reason_text = "No Core child spawn deferred signal captured in runtime events."
+    else:
+        status = "ok"
+        reason_code = "CORE_CHILD_SPAWN_DEFERRED_OBSERVED"
+        reason_text = "Observed deferred child spawns emitted by Core lifecycle orchestration."
+
+    return {
+        "status": _ops_status_to_severity(status),
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "deferred_count": deferred_count,
+        "core_execution_session_count": len(unique_execution_sessions),
+        "latest_timestamp": latest_timestamp,
+        "latest_agent_id": latest_agent_id,
+        "latest_role": latest_role,
+        "latest_reason": latest_reason,
+        "role_counts": role_counts,
+        "reason_counts": reason_counts,
+        "source_counts": source_counts,
+        "events_file": _ops_unix_path(events_db if events_db.exists() else events_file),
+    }
+
+
+def _ops_build_vision_multimodal_summary(
+    *,
+    events_file: Path,
+    limit: int = 5000,
+) -> Dict[str, Any]:
+    rows = _ops_read_event_rows(events_file, limit=max(200, int(limit)))
+    events_db = _ops_resolve_event_db_path(events_file)
+
+    success_count = 0
+    fallback_count = 0
+    error_count = 0
+    latest_timestamp = ""
+    latest_event_type = ""
+    latest_model = ""
+    latest_base_url = ""
+    latest_fallback_reason = ""
+
+    for row in rows:
+        event_type = str(row.get("event_type") or "").strip()
+        if event_type not in {
+            "VisionMultimodalQASucceeded",
+            "VisionMultimodalQAFallback",
+            "VisionMultimodalQAError",
+        }:
+            continue
+
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        if event_type == "VisionMultimodalQASucceeded":
+            success_count += 1
+        elif event_type == "VisionMultimodalQAFallback":
+            fallback_count += 1
+        else:
+            error_count += 1
+
+        if not latest_timestamp:
+            latest_timestamp = str(row.get("timestamp") or "")
+            latest_event_type = event_type
+            latest_model = str(payload.get("model") or "")
+            latest_base_url = str(payload.get("base_url") or "")
+            latest_fallback_reason = str(payload.get("fallback_reason") or "")
+
+    total_count = success_count + fallback_count + error_count
+    fallback_ratio = (float(fallback_count) / float(total_count)) if total_count > 0 else None
+    error_ratio = (float(error_count) / float(total_count)) if total_count > 0 else None
+
+    if total_count <= 0:
+        status = "unknown"
+        reason_code = "VISION_MULTIMODAL_SIGNAL_EMPTY"
+        reason_text = "No vision multimodal QA signal captured in runtime events."
+    elif error_count > 0:
+        status = "warning"
+        reason_code = "VISION_MULTIMODAL_ERROR_PRESENT"
+        reason_text = "Vision multimodal QA errors detected; fallback answer may be used."
+    elif fallback_count > 0:
+        status = "warning"
+        reason_code = "VISION_MULTIMODAL_FALLBACK_PRESENT"
+        reason_text = "Vision QA contains metadata fallback sessions; verify multimodal endpoint coverage."
+    else:
+        status = "ok"
+        reason_code = "OK"
+        reason_text = "Vision QA sessions are served by multimodal endpoint."
+
+    return {
+        "status": _ops_status_to_severity(status),
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "success_count": success_count,
+        "fallback_count": fallback_count,
+        "error_count": error_count,
+        "total_count": total_count,
+        "fallback_ratio": fallback_ratio,
+        "error_ratio": error_ratio,
+        "latest_timestamp": latest_timestamp,
+        "latest_event_type": latest_event_type,
+        "latest_model": latest_model,
+        "latest_base_url": latest_base_url,
+        "latest_fallback_reason": latest_fallback_reason,
+        "events_file": _ops_unix_path(events_db if events_db.exists() else events_file),
+    }
+
+
+def _ops_build_runtime_heartbeat_snapshot(*, sample_limit: int = 12) -> Dict[str, Any]:
+    try:
+        active_repo_root = _ops_repo_root().resolve()
+        module_repo_root = Path(__file__).resolve().parent.parent
+        if active_repo_root != module_repo_root:
+            return {"summary": {}, "sessions": [], "heartbeats": []}
+    except Exception:
+        return {"summary": {}, "sessions": [], "heartbeats": []}
+
+    try:
+        import apiserver.api_server as runtime_api
+
+        store, _, _ = runtime_api._get_pipeline_runtime_handles()
+    except Exception as exc:
+        logger.debug("构建 runtime heartbeat snapshot 失败: %s", exc)
+        return {"summary": {}, "sessions": [], "heartbeats": []}
+
+    if store is None or not hasattr(store, "get_runtime_heartbeat_snapshot"):
+        return {"summary": {}, "sessions": [], "heartbeats": []}
+
+    try:
+        snapshot = store.get_runtime_heartbeat_snapshot()
+    except Exception as exc:
+        logger.debug("读取 runtime heartbeat snapshot 失败: %s", exc)
+        return {"summary": {}, "sessions": [], "heartbeats": []}
+
+    return {
+        "summary": dict(snapshot.get("summary") or {}),
+        "sessions": list(snapshot.get("sessions") or [])[: max(1, int(sample_limit))],
+        "heartbeats": list(snapshot.get("heartbeats") or [])[: max(1, int(sample_limit))],
+    }
+
+
+def _ops_build_workflow_events_payload(
+    *,
+    events_limit: int = 5000,
+    context_days: int = 7,
+    recent_critical_limit: int = 50,
+) -> Dict[str, Any]:
+    try:
+        from scripts.export_slo_snapshot import build_snapshot
+
+        repo_root = _ops_repo_root()
+        snapshot = build_snapshot(repo_root=repo_root, events_limit=max(1, int(events_limit)))
+    except Exception as exc:
+        logger.error(f"构建 workflow/events 聚合失败: {exc}")
+        raise
+
+    metrics = snapshot.get("metrics") if isinstance(snapshot.get("metrics"), dict) else {}
+    summary = snapshot.get("summary") if isinstance(snapshot.get("summary"), dict) else {}
+    sources = snapshot.get("sources") if isinstance(snapshot.get("sources"), dict) else {}
+    threshold_profile = snapshot.get("threshold_profile") if isinstance(snapshot.get("threshold_profile"), dict) else {}
+    snapshot_overall_status = _ops_status_to_severity(str(summary.get("overall_status") or "unknown"))
+    critical_event_window_hours = max(
+        1.0,
+        float(threshold_profile.get("workflow_critical_event_window_hours") or 336.0),
+    )
+    alert_window_started_at = datetime.fromtimestamp(
+        time.time() - (critical_event_window_hours * 3600.0),
+        tz=timezone.utc,
+    ).isoformat()
+
+    events_file_raw = str(sources.get("events_file") or "").strip()
+    events_file = Path(events_file_raw) if events_file_raw else Path("")
+    event_rows = _ops_read_event_rows(events_file, limit=max(100, int(events_limit)))
+    legacy_namespace = _ops_collect_archived_legacy_namespace(event_rows)
+    event_database = _ops_build_event_database_summary(events_file)
+    heartbeat_supervision = _ops_build_runtime_heartbeat_snapshot(
+        sample_limit=max(6, int(recent_critical_limit))
+    )
+
+    critical_event_types = {
+        "LeaseLost",
+        "IncidentOpened",
+        "VisionMultimodalQAError",
+        "TaskHeartbeatStaleCritical",
+        "TaskHeartbeatEscalatedBlocked",
+    }
+    warning_event_types = {
+        "TaskHeartbeatStaleWarning",
+    }
+    tracked_event_types = critical_event_types | warning_event_types
+    event_counters_total = {name: 0 for name in sorted(tracked_event_types)}
+    event_counters = {name: 0 for name in sorted(tracked_event_types)}
+    recent_critical_events: List[Dict[str, Any]] = []
+    historical_critical_events_total = 0
+    alert_window_started_ts = time.time() - (critical_event_window_hours * 3600.0)
+    for row in event_rows:
+        event_type = str(row.get("event_type") or "").strip()
+        if event_type not in tracked_event_types:
+            continue
+        event_counters_total[event_type] = int(event_counters_total.get(event_type, 0)) + 1
+        row_ts = _ops_parse_iso_datetime(row.get("timestamp"))
+        in_alert_window = row_ts is not None and float(row_ts) >= float(alert_window_started_ts)
+        if not in_alert_window:
+            if event_type in critical_event_types:
+                historical_critical_events_total += 1
+            continue
+        event_counters[event_type] = int(event_counters.get(event_type, 0)) + 1
+        if event_type not in critical_event_types:
+            continue
+        recent_critical_events.append({
+            "timestamp": str(row.get("timestamp") or ""),
+            "event_type": event_type,
+            "payload_excerpt": _ops_compact_event_payload(row.get("payload")),
+        })
+    recent_critical_events = recent_critical_events[-max(1, int(recent_critical_limit)) :]
+
+    queue_depth = metrics.get("queue_depth") if isinstance(metrics.get("queue_depth"), dict) else {}
+    lock_status = metrics.get("lock_status") if isinstance(metrics.get("lock_status"), dict) else {}
+    runtime_lease = metrics.get("runtime_lease") if isinstance(metrics.get("runtime_lease"), dict) else {}
+    heartbeat_summary = heartbeat_supervision.get("summary") if isinstance(heartbeat_supervision.get("summary"), dict) else {}
+    active_heartbeat_tasks = _ops_safe_int(heartbeat_summary.get("task_count"), default=0)
+    stale_heartbeat_tasks = _ops_safe_int(heartbeat_summary.get("warning_count"), default=0) + _ops_safe_int(heartbeat_summary.get("critical_count"), default=0)
+    blocked_heartbeat_tasks = _ops_safe_int(heartbeat_summary.get("blocked_count"), default=0)
+
+    queue_status = _ops_status_to_severity(str(queue_depth.get("status") or "unknown"))
+    lock_signal_status = _ops_status_to_severity(str(lock_status.get("status") or "unknown"))
+    runtime_lease_status = _ops_status_to_severity(str(runtime_lease.get("status") or "unknown"))
+    severity = _ops_max_status([queue_status, lock_signal_status, runtime_lease_status])
+    if sum(event_counters.values()) > 0 and severity == "ok":
+        severity = "warning"
+
+    if blocked_heartbeat_tasks > 0 or int(event_counters.get("TaskHeartbeatEscalatedBlocked") or 0) > 0:
+        severity = "critical"
+    elif (
+        stale_heartbeat_tasks > 0
+        or int(event_counters.get("TaskHeartbeatStaleCritical") or 0) > 0
+        or int(event_counters.get("TaskHeartbeatStaleWarning") or 0) > 0
+    ) and severity != "critical":
+        severity = "warning"
+
+    # Lazy import to avoid circular dependency — these are api_server singletons
+    from apiserver.api_server import message_manager as _mm, _tool_status_store as _tss
+    context_stats = _mm.get_context_statistics(max(1, int(context_days)))
+    tool_status = _tss.get("current", {"message": "", "visible": False})
+
+    reason_code: Optional[str] = None
+    reason_text: Optional[str] = None
+    latest_critical_event = recent_critical_events[-1] if recent_critical_events else {}
+    if severity == "critical":
+        if blocked_heartbeat_tasks > 0 or int(event_counters.get("TaskHeartbeatEscalatedBlocked") or 0) > 0:
+            reason_code = "WORKFLOW_HEARTBEAT_BLOCKED"
+            reason_text = "One or more task heartbeats escalated to blocked state."
+        elif queue_status == "critical":
+            reason_code = "WORKFLOW_QUEUE_DEPTH_CRITICAL"
+            reason_text = "Workflow outbox queue depth exceeded the critical threshold."
+        elif lock_signal_status == "critical" or runtime_lease_status == "critical":
+            reason_code = "WORKFLOW_LEASE_CRITICAL"
+            reason_text = "Workflow lease or lock state entered a critical condition."
+        else:
+            reason_code = "WORKFLOW_RISK_CRITICAL"
+            reason_text = "Critical workflow pressure or high-risk runtime events detected."
+    elif severity == "warning":
+        if stale_heartbeat_tasks > 0 or int(event_counters.get("TaskHeartbeatStaleCritical") or 0) > 0 or int(event_counters.get("TaskHeartbeatStaleWarning") or 0) > 0:
+            reason_code = "WORKFLOW_HEARTBEAT_STALE_WARNING"
+            reason_text = "One or more task heartbeats are stale within the workflow alert window."
+        elif latest_critical_event:
+            reason_code = "WORKFLOW_RECENT_CRITICAL_EVENT_WARNING"
+            reason_text = (
+                f"Recent workflow critical event detected within the last {int(critical_event_window_hours)}h: "
+                f"{latest_critical_event.get('event_type') or 'unknown'} @ {latest_critical_event.get('timestamp') or 'unknown'}."
+            )
+        elif sum(event_counters.values()) > 0:
+            reason_code = "WORKFLOW_RECENT_EVENT_ACTIVITY_WARNING"
+            reason_text = (
+                f"Workflow runtime events were detected within the last {int(critical_event_window_hours)}h; review recent event activity."
+            )
+        elif queue_status == "warning":
+            reason_code = "WORKFLOW_QUEUE_DEPTH_WARNING"
+            reason_text = "Workflow outbox queue depth requires attention."
+        elif lock_signal_status == "warning" or runtime_lease_status == "warning":
+            reason_code = "WORKFLOW_LEASE_WARNING"
+            reason_text = "Workflow lease or lock state requires attention."
+    elif severity == "unknown":
+        reason_code = "WORKFLOW_SIGNAL_UNKNOWN"
+        reason_text = "Workflow signal coverage is insufficient; verify events/workflow data sources."
+
+    source_reports: List[str] = []
+    for key in ("events_file", "events_db", "workflow_db", "global_mutex_state"):
+        value = sources.get(key)
+        if isinstance(value, str) and value.strip():
+            source_reports.append(value.replace("\\", "/"))
+    db_path = str(event_database.get("db_path") or "").strip()
+    if db_path:
+        source_reports.append(db_path.replace("\\", "/"))
+
+    response_data = {
+        "summary": {
+            "overall_status": severity,
+            "snapshot_overall_status": snapshot_overall_status,
+            "events_scanned": _ops_safe_int(sources.get("events_scanned"), default=0),
+            "outbox_pending": queue_depth.get("value"),
+            "oldest_pending_age_seconds": queue_depth.get("oldest_pending_age_seconds"),
+            "critical_events_total": sum(int(event_counters.get(name) or 0) for name in critical_event_types),
+            "critical_events_total_all": sum(int(event_counters_total.get(name) or 0) for name in critical_event_types),
+            "historical_critical_events_total": historical_critical_events_total,
+            "event_alert_window_hours": critical_event_window_hours,
+            "alert_window_started_at": alert_window_started_at,
+            "latest_critical_event_type": str(recent_critical_events[-1].get("event_type") or "") if recent_critical_events else "",
+            "latest_critical_event_at": str(recent_critical_events[-1].get("timestamp") or "") if recent_critical_events else "",
+            "legacy_event_namespace_status": str(legacy_namespace.get("status") or "unknown"),
+            "legacy_event_namespace": str(legacy_namespace.get("namespace") or ""),
+            "legacy_subagent_runtime_events_detected": _ops_safe_int(
+                legacy_namespace.get("legacy_event_total"),
+                default=0,
+            ),
+            "legacy_subagent_runtime_note": str(legacy_namespace.get("note") or ""),
+            "event_db_rows": _ops_safe_int(event_database.get("total_rows"), default=0),
+            "event_db_partitions": _ops_safe_int(event_database.get("partition_count"), default=0),
+            "event_db_latest_at": str(event_database.get("latest_timestamp") or ""),
+            "event_db_status": str(event_database.get("status") or "unknown"),
+            "active_heartbeat_tasks": active_heartbeat_tasks,
+            "stale_heartbeat_tasks": stale_heartbeat_tasks,
+            "blocked_heartbeat_tasks": blocked_heartbeat_tasks,
+        },
+        "queue_depth": queue_depth,
+        "lock_status": lock_status,
+        "runtime_lease": runtime_lease,
+        "event_counters": event_counters,
+        "event_counters_total": event_counters_total,
+        "legacy_event_namespace": legacy_namespace,
+        "recent_critical_events": recent_critical_events,
+        "event_database": event_database,
+        "heartbeat_supervision": heartbeat_supervision,
+        "log_context_statistics": context_stats,
+        "tool_status": tool_status,
+    }
+
+    return _ops_build_response(
+        data=response_data,
+        severity=severity,
+        source_reports=sorted(set(source_reports)),
+        source_endpoints=["/logs/context/statistics", "/tool_status"],
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
+
+
+def _ops_normalize_memory_stats_payload(memory_stats: Any) -> Dict[str, Any]:
+    stats = dict(memory_stats) if isinstance(memory_stats, dict) else {}
+    task_manager = stats.get("task_manager") if isinstance(stats.get("task_manager"), dict) else {}
+    if not task_manager and isinstance(stats.get("tasks"), dict):
+        task_manager = dict(stats.get("tasks") or {})
+
+    vector_index = stats.get("vector_index") if isinstance(stats.get("vector_index"), dict) else {}
+    if not vector_index and isinstance(stats.get("vectorIndex"), dict):
+        vector_index = dict(stats.get("vectorIndex") or {})
+
+    pending_tasks = _ops_safe_int(task_manager.get("pending_tasks"), default=_ops_safe_int(stats.get("pending_tasks"), default=0))
+    running_tasks = _ops_safe_int(task_manager.get("running_tasks"), default=_ops_safe_int(stats.get("running_tasks"), default=0))
+    failed_tasks = _ops_safe_int(task_manager.get("failed_tasks"), default=_ops_safe_int(stats.get("failed_tasks"), default=0))
+    active_tasks = _ops_safe_int(stats.get("active_tasks"), default=0)
+    active_tasks = max(active_tasks, pending_tasks + running_tasks)
+    total_quintuples = _ops_safe_int(stats.get("total_quintuples"), default=0)
+
+    enabled_raw = stats.get("enabled")
+    enabled = bool(enabled_raw) if enabled_raw is not None else bool(total_quintuples > 0 or active_tasks > 0 or failed_tasks > 0 or task_manager or vector_index)
+
+    normalized_vector_index = dict(vector_index)
+    normalized_vector_index["state"] = str(vector_index.get("state") or vector_index.get("status") or "unknown")
+    normalized_vector_index["ready"] = bool(vector_index.get("ready", False))
+
+    normalized_task_manager = dict(task_manager)
+    normalized_task_manager["pending_tasks"] = pending_tasks
+    normalized_task_manager["running_tasks"] = running_tasks
+    normalized_task_manager["failed_tasks"] = failed_tasks
+
+    stats.update(
+        {
+            "enabled": enabled,
+            "total_quintuples": total_quintuples,
+            "active_tasks": active_tasks,
+            "task_manager": normalized_task_manager,
+            "vector_index": normalized_vector_index,
+        }
+    )
+    return stats
+
+
+def _ops_normalize_memory_quintuple_row(row: Any) -> Optional[Dict[str, str]]:
+    if isinstance(row, dict):
+        subject = str(row.get("subject") or row.get("entity") or "")
+        subject_type = str(row.get("subject_type") or row.get("entity_type") or "")
+        predicate = str(row.get("predicate") or row.get("relation") or "")
+        obj = str(row.get("object") or row.get("target") or "")
+        object_type = str(row.get("object_type") or row.get("target_type") or "")
+    elif isinstance(row, (list, tuple)) and len(row) >= 5:
+        subject = str(row[0] or "")
+        subject_type = str(row[1] or "")
+        predicate = str(row[2] or "")
+        obj = str(row[3] or "")
+        object_type = str(row[4] or "")
+    else:
+        return None
+
+    return {
+        "subject": subject,
+        "subject_type": subject_type,
+        "predicate": predicate,
+        "object": obj,
+        "object_type": object_type,
+    }
+
+
+async def _ops_query_memory_quintuples_by_keywords(keyword_list: List[str]) -> Dict[str, Any]:
+    try:
+        from summer_memory.memory_client import get_remote_memory_client
+
+        remote = get_remote_memory_client()
+        if remote is not None:
+            result = await remote.query_by_keywords(keyword_list)
+            return {
+                "rows": result.get("quintuples") or result.get("results") or result.get("data") or [],
+                "backend": "remote_memory",
+            }
+    except ImportError:
+        pass
+
+    try:
+        from summer_memory.quintuple_graph import query_graph_by_keywords
+
+        return {
+            "rows": list(query_graph_by_keywords(keyword_list)),
+            "backend": "local_quintuple_graph",
+        }
+    except ImportError:
+        return {
+            "rows": [],
+            "backend": "module_missing",
+            "reason_code": "MEMORY_MODULE_MISSING",
+            "reason_text": "记忆系统模块未找到",
+        }
+
+
+async def _ops_build_memory_search_payload(*, keywords: str, limit: int = 50) -> Dict[str, Any]:
+    keyword_list = [item.strip() for item in str(keywords or "").split(",") if item.strip()]
+    if not keyword_list:
+        raise HTTPException(status_code=400, detail="请提供搜索关键词")
+
+    query_result = await _ops_query_memory_quintuples_by_keywords(keyword_list)
+    raw_rows = query_result.get("rows") if isinstance(query_result, dict) else []
+    if not isinstance(raw_rows, list):
+        raw_rows = []
+
+    normalized_rows = [
+        normalized
+        for normalized in (_ops_normalize_memory_quintuple_row(row) for row in raw_rows)
+        if isinstance(normalized, dict)
+    ]
+
+    normalized_limit = max(1, min(200, int(limit)))
+    results = normalized_rows[:normalized_limit]
+    truncated = len(normalized_rows) > len(results)
+    severity = "ok" if normalized_rows else "unknown"
+    reason_code = None
+    reason_text = None
+
+    if not normalized_rows:
+        reason_code = str(query_result.get("reason_code") or "MEMORY_SEARCH_EMPTY") if isinstance(query_result, dict) else "MEMORY_SEARCH_EMPTY"
+        reason_text = str(query_result.get("reason_text") or "当前关键词未命中五元组。") if isinstance(query_result, dict) else "当前关键词未命中五元组。"
+
+    source_reports: List[str] = []
+    quintuples_file = _ops_repo_root() / "logs" / "knowledge_graph" / "quintuples.json"
+    if quintuples_file.exists():
+        source_reports.append(_ops_unix_path(quintuples_file))
+
+    backend = str(query_result.get("backend") or "unknown") if isinstance(query_result, dict) else "unknown"
+
+    return _ops_build_response(
+        data={
+            "summary": {
+                "keyword_count": len(keyword_list),
+                "result_count": len(normalized_rows),
+                "returned_count": len(results),
+                "truncated": truncated,
+                "backend": backend,
+            },
+            "keywords": keyword_list,
+            "results": results,
+        },
+        severity=severity,
+        source_reports=source_reports,
+        source_endpoints=["/memory/quintuples/search"],
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
+
+
+async def _ops_build_memory_graph_payload(*, sample_limit: int = 200) -> Dict[str, Any]:
+    stats_response = await get_memory_stats()
+    memory_stats_raw = stats_response.get("memory_stats") if isinstance(stats_response, dict) else {}
+    memory_stats = _ops_normalize_memory_stats_payload(memory_stats_raw)
+
+    quintuples_response = await get_quintuples()
+    raw_quintuples = quintuples_response.get("quintuples") if isinstance(quintuples_response, dict) else []
+    if not isinstance(raw_quintuples, list):
+        raw_quintuples = []
+
+    quintuples = [
+        normalized
+        for normalized in (_ops_normalize_memory_quintuple_row(row) for row in raw_quintuples)
+        if isinstance(normalized, dict)
+    ]
+
+    task_manager = memory_stats.get("task_manager") if isinstance(memory_stats.get("task_manager"), dict) else {}
+    pending_tasks = _ops_safe_int(task_manager.get("pending_tasks"), default=0)
+    running_tasks = _ops_safe_int(task_manager.get("running_tasks"), default=0)
+    failed_tasks = _ops_safe_int(task_manager.get("failed_tasks"), default=0)
+
+    from collections import Counter
+
+    relation_counter: Counter[str] = Counter()
+    entity_counter: Counter[str] = Counter()
+    graph_sample: List[Dict[str, str]] = []
+    for row in quintuples[: max(20, min(1000, int(sample_limit)))]:
+        subject = str(row.get("subject") or "")
+        subject_type = str(row.get("subject_type") or "")
+        predicate = str(row.get("predicate") or "")
+        obj = str(row.get("object") or "")
+        object_type = str(row.get("object_type") or "")
+        if subject:
+            entity_counter[subject] += 1
+        if obj:
+            entity_counter[obj] += 1
+        if predicate:
+            relation_counter[predicate] += 1
+        graph_sample.append(
+            {
+                "subject": subject,
+                "subject_type": subject_type,
+                "predicate": predicate,
+                "object": obj,
+                "object_type": object_type,
+            }
+        )
+
+    total_quintuples = _ops_safe_int(
+        memory_stats.get("total_quintuples"),
+        default=_ops_safe_int(quintuples_response.get("count") if isinstance(quintuples_response, dict) else 0, default=len(quintuples)),
+    )
+    active_tasks = max(
+        _ops_safe_int(memory_stats.get("active_tasks"), default=0),
+        pending_tasks + running_tasks,
+    )
+    vector_index = memory_stats.get("vector_index") if isinstance(memory_stats.get("vector_index"), dict) else {}
+    enabled = bool(memory_stats.get("enabled"))
+    error_text = str(memory_stats.get("error") or "").strip()
+
+    if error_text:
+        severity = "critical"
+        reason_code = "MEMORY_BACKEND_ERROR"
+        reason_text = error_text
+    elif not enabled:
+        severity = "unknown"
+        reason_code = "MEMORY_DISABLED"
+        reason_text = str(memory_stats.get("message") or "Memory subsystem is disabled.")
+    elif failed_tasks > 0:
+        severity = "warning"
+        reason_code = "MEMORY_TASK_FAILURE"
+        reason_text = "Memory extraction task failures detected."
+    elif total_quintuples <= 0:
+        severity = "unknown"
+        reason_code = "MEMORY_EMPTY_GRAPH"
+        reason_text = "Memory graph currently has no extracted quintuples."
+    else:
+        severity = "ok"
+        reason_code = None
+        reason_text = None
+
+    source_reports: List[str] = []
+    quintuples_file = _ops_repo_root() / "logs" / "knowledge_graph" / "quintuples.json"
+    if quintuples_file.exists():
+        source_reports.append(_ops_unix_path(quintuples_file))
+
+    response_data = {
+        "summary": {
+            "enabled": enabled,
+            "total_quintuples": total_quintuples,
+            "active_tasks": active_tasks,
+            "pending_tasks": pending_tasks,
+            "running_tasks": running_tasks,
+            "failed_tasks": failed_tasks,
+            "graph_sample_size": len(graph_sample),
+            "vector_index_state": str(vector_index.get("state") or "unknown"),
+            "vector_index_ready": bool(vector_index.get("ready", False)),
+        },
+        "task_manager": task_manager,
+        "vector_index": vector_index,
+        "relation_hotspots": [
+            {"relation": relation, "count": count} for relation, count in relation_counter.most_common(12)
+        ],
+        "entity_hotspots": [
+            {"entity": entity, "count": count} for entity, count in entity_counter.most_common(12)
+        ],
+        "graph_sample": graph_sample,
+    }
+
+    return _ops_build_response(
+        data=response_data,
+        severity=severity,
+        source_reports=source_reports,
+        source_endpoints=["/memory/stats", "/memory/quintuples"],
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
+
+
+def _ops_build_evidence_index_payload(*, max_reports: int = 100) -> Dict[str, Any]:
+    repo_root = _ops_repo_root()
+    reports_dir = repo_root / "scratch" / "reports"
+    required_reports = _ops_collect_required_reports(repo_root)
+
+    hard_missing = sum(1 for item in required_reports if item["gate_level"] == "hard" and item["status"] == "missing")
+    hard_failed = sum(1 for item in required_reports if item["gate_level"] == "hard" and item["status"] == "failed")
+    soft_missing = sum(1 for item in required_reports if item["gate_level"] == "soft" and item["status"] == "missing")
+    soft_failed = sum(1 for item in required_reports if item["gate_level"] == "soft" and item["status"] == "failed")
+    required_present = sum(1 for item in required_reports if bool(item["exists"]))
+    required_passed = sum(1 for item in required_reports if item["status"] == "passed")
+    required_unknown = sum(1 for item in required_reports if item["status"] == "unknown")
+
+    reason_code: Optional[str] = None
+    reason_text: Optional[str] = None
+    if hard_missing > 0:
+        severity = "critical"
+        reason_code = "EVIDENCE_HARD_REPORT_MISSING"
+        reason_text = "One or more hard-gate reports are missing."
+    elif hard_failed > 0:
+        severity = "critical"
+        reason_code = "EVIDENCE_HARD_REPORT_FAILED"
+        reason_text = "One or more hard-gate reports are in failed state."
+    elif soft_missing > 0 or soft_failed > 0 or required_unknown > 0:
+        severity = "warning"
+        reason_code = "EVIDENCE_SOFT_GATE_PENDING"
+        reason_text = "Soft-gate evidence is pending or not passed yet."
+    elif required_passed > 0:
+        severity = "ok"
+    else:
+        severity = "unknown"
+        reason_code = "EVIDENCE_REPORTS_UNAVAILABLE"
+        reason_text = "No required evidence report has been discovered."
+
+    recent_reports: List[Dict[str, Any]] = []
+    if reports_dir.exists():
+        all_reports = sorted(
+            reports_dir.glob("*.json"),
+            key=lambda path: path.stat().st_mtime if path.exists() else 0,
+            reverse=True,
+        )
+        from datetime import datetime, timezone
+
+        for path in all_reports[: max(1, int(max_reports))]:
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            recent_reports.append(
+                {
+                    "name": path.name,
+                    "path": _ops_unix_path(path),
+                    "size_bytes": int(stat.st_size),
+                    "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                }
+            )
+
+    source_reports = sorted(
+        {
+            item["path"]
+            for item in required_reports
+            if bool(item["exists"]) and isinstance(item.get("path"), str) and item["path"]
+        }
+    )
+
+    response_data = {
+        "summary": {
+            "required_total": len(required_reports),
+            "required_present": required_present,
+            "required_passed": required_passed,
+            "required_missing": len(required_reports) - required_present,
+            "required_failed": sum(1 for item in required_reports if item["status"] == "failed"),
+            "hard_missing": hard_missing,
+            "hard_failed": hard_failed,
+            "soft_missing": soft_missing,
+            "soft_failed": soft_failed,
+        },
+        "required_reports": required_reports,
+        "recent_reports": recent_reports,
+    }
+
+    return _ops_build_response(
+        data=response_data,
+        severity=severity,
+        source_reports=source_reports,
+        source_endpoints=[],
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
+
+
+def _ops_build_incidents_latest_payload(*, limit: int = 50) -> Dict[str, Any]:
+    repo_root = _ops_repo_root()
+    events_file = repo_root / "logs" / "autonomous" / "events.jsonl"
+    events_db = _ops_resolve_event_db_path(events_file)
+    event_rows = _ops_read_event_rows(events_file, limit=max(200, int(limit) * 10))
+    legacy_namespace = _ops_collect_archived_legacy_namespace(event_rows)
+    route_quality_trend = _ops_build_route_quality_trend(events_file, window_size=20, max_windows=6)
+    execution_bridge_governance = _ops_build_execution_bridge_governance_summary(
+        events_file=events_file,
+        limit=max(200, int(limit) * 10),
+        issues_limit=max(10, int(limit)),
+    )
+    process_guard = _ops_build_process_guard_summary(repo_root)
+    killswitch_guard = _ops_build_killswitch_guard_summary(repo_root)
+    budget_guard = _ops_build_budget_guard_summary(repo_root)
+    agentic_loop_completion = _ops_build_agentic_loop_completion_summary(
+        events_file=events_file,
+        limit=max(200, int(limit) * 10),
+    )
+    core_child_spawn_deferred = _ops_build_core_child_spawn_deferred_summary(
+        events_file=events_file,
+        limit=max(200, int(limit) * 10),
+    )
+    vision_multimodal = _ops_build_vision_multimodal_summary(
+        events_file=events_file,
+        limit=max(200, int(limit) * 10),
+    )
+    prompt_safety_summary: Dict[str, Any] = {}
+    try:
+        from scripts.export_slo_snapshot import build_snapshot
+
+        snapshot = build_snapshot(repo_root=repo_root, events_limit=max(200, int(limit) * 10))
+        snapshot_metrics = snapshot.get("metrics") if isinstance(snapshot.get("metrics"), dict) else {}
+        shell_readonly_hit = (
+            snapshot_metrics.get("shell_readonly_hit_rate")
+            if isinstance(snapshot_metrics.get("shell_readonly_hit_rate"), dict)
+            else {}
+        )
+        readonly_write_exposure = (
+            snapshot_metrics.get("readonly_write_tool_exposure_rate")
+            if isinstance(snapshot_metrics.get("readonly_write_tool_exposure_rate"), dict)
+            else {}
+        )
+        route_semantic_distribution = (
+            snapshot_metrics.get("agent_route_semantic_distribution")
+            if isinstance(snapshot_metrics.get("agent_route_semantic_distribution"), dict)
+            else {}
+        )
+        shell_to_core_dispatch = (
+            snapshot_metrics.get("shell_to_core_dispatch_rate")
+            if isinstance(snapshot_metrics.get("shell_to_core_dispatch_rate"), dict)
+            else {}
+        )
+        shell_clarify_budget_escalation = (
+            snapshot_metrics.get("shell_clarify_budget_escalation_rate")
+            if isinstance(snapshot_metrics.get("shell_clarify_budget_escalation_rate"), dict)
+            else {}
+        )
+        core_execution_session_creation = (
+            snapshot_metrics.get("core_execution_session_creation_rate")
+            if isinstance(snapshot_metrics.get("core_execution_session_creation_rate"), dict)
+            else {}
+        )
+        core_execution_route_distribution = (
+            snapshot_metrics.get("core_execution_route_distribution")
+            if isinstance(snapshot_metrics.get("core_execution_route_distribution"), dict)
+            else {}
+        )
+        prompt_safety_summary = {
+            "prompt_slice_count_by_layer": snapshot_metrics.get("prompt_slice_count_by_layer", {}),
+            "injection_trigger_distribution": snapshot_metrics.get("injection_trigger_distribution", {}),
+            "recovery_slice_hit_rate": snapshot_metrics.get("recovery_slice_hit_rate", {}),
+            "prompt_conflict_drop_count": snapshot_metrics.get("prompt_conflict_drop_count", {}),
+            "delegation_hit_rate": snapshot_metrics.get("delegation_hit_rate", {}),
+            "shell_readonly_hit_rate": shell_readonly_hit,
+            "readonly_write_tool_exposure_rate": readonly_write_exposure,
+            "agent_route_semantic_distribution": route_semantic_distribution,
+            "shell_to_core_dispatch_rate": shell_to_core_dispatch,
+            "shell_clarify_budget_escalation_rate": shell_clarify_budget_escalation,
+            "core_execution_session_creation_rate": core_execution_session_creation,
+            "core_execution_route_distribution": core_execution_route_distribution,
+            "prompt_prefix_cache_hit_rate": snapshot_metrics.get("prompt_prefix_cache_hit_rate", {}),
+            "prompt_tail_churn_rate": snapshot_metrics.get("prompt_tail_churn_rate", {}),
+            "contract_upgrade_latency_ms": snapshot_metrics.get("contract_upgrade_latency_ms", {}),
+            "recovery_context_survival_rate": snapshot_metrics.get("recovery_context_survival_rate", {}),
+            "route_quality": _ops_build_route_quality_summary(snapshot_metrics, trend=route_quality_trend),
+            "execution_bridge_governance": execution_bridge_governance,
+            "agentic_loop_completion": agentic_loop_completion,
+            "core_child_spawn_deferred": core_child_spawn_deferred,
+            "vision_multimodal": vision_multimodal,
+            "process_guard": process_guard,
+            "killswitch_guard": killswitch_guard,
+            "budget_guard": budget_guard,
+        }
+    except Exception as exc:
+        logger.warning(f"构建 incidents prompt safety 摘要失败（降级为空）: {exc}")
+    if "execution_bridge_governance" not in prompt_safety_summary:
+        prompt_safety_summary["execution_bridge_governance"] = execution_bridge_governance
+    if "agentic_loop_completion" not in prompt_safety_summary:
+        prompt_safety_summary["agentic_loop_completion"] = agentic_loop_completion
+    if "core_child_spawn_deferred" not in prompt_safety_summary:
+        prompt_safety_summary["core_child_spawn_deferred"] = core_child_spawn_deferred
+    if "vision_multimodal" not in prompt_safety_summary:
+        prompt_safety_summary["vision_multimodal"] = vision_multimodal
+    if "process_guard" not in prompt_safety_summary:
+        prompt_safety_summary["process_guard"] = process_guard
+    if "killswitch_guard" not in prompt_safety_summary:
+        prompt_safety_summary["killswitch_guard"] = killswitch_guard
+    if "budget_guard" not in prompt_safety_summary:
+        prompt_safety_summary["budget_guard"] = budget_guard
+
+    incidents: List[Dict[str, Any]] = []
+    event_counters: Dict[str, int] = {key: 0 for key in sorted(_OPS_INCIDENT_EVENT_SEVERITY.keys())}
+    event_counters["ExecutionBridgeGovernanceIssue"] = 0
+    event_counters["AuditLedgerChainInvalid"] = 0
+
+    for row in event_rows:
+        event_type = str(row.get("event_type") or "").strip()
+        if _ops_is_archived_legacy_event(event_type):
+            continue
+        severity = _OPS_INCIDENT_EVENT_SEVERITY.get(event_type)
+        if not severity:
+            continue
+        event_counters[event_type] = int(event_counters.get(event_type, 0)) + 1
+        incidents.append(
+            {
+                "source": "events",
+                "severity": severity,
+                "timestamp": str(row.get("timestamp") or ""),
+                "event_type": event_type,
+                "summary": f"{event_type} detected in runtime event stream",
+                "payload_excerpt": _ops_compact_event_payload(row.get("payload")),
+                "report_path": "",
+                "gate_level": "n/a",
+            }
+        )
+
+    required_reports = _ops_collect_required_reports(repo_root)
+    for report in required_reports:
+        status = str(report.get("status") or "")
+        gate_level = str(report.get("gate_level") or "soft")
+        if status not in {"missing", "failed"}:
+            continue
+        severity = "critical" if gate_level == "hard" else "warning"
+        summary = (
+            f"{report['label']} missing"
+            if status == "missing"
+            else f"{report['label']} failed checks: {', '.join(report.get('failed_checks') or ['unknown'])}"
+        )
+        incidents.append(
+            {
+                "source": "report",
+                "severity": severity,
+                "timestamp": str(report.get("generated_at") or report.get("modified_at") or ""),
+                "event_type": "EvidenceGateIssue",
+                "summary": summary,
+                "payload_excerpt": {"status": status, "report_id": report["id"]},
+                "report_path": str(report.get("path") or ""),
+                "gate_level": gate_level,
+            }
+        )
+
+    brainstem_summary = _ops_build_brainstem_control_plane_summary(repo_root)
+    brainstem_status = str(brainstem_summary.get("status") or "")
+    if brainstem_status in {"warning", "critical"}:
+        reason_code = str(brainstem_summary.get("reason_code") or "")
+        brainstem_event_type = "BrainstemControlPlaneIssue"
+        if reason_code == "BRAINSTEM_HEARTBEAT_MISSING":
+            brainstem_event_type = "BrainstemHeartbeatMissing"
+        elif reason_code in {"BRAINSTEM_HEARTBEAT_STALE_WARNING", "BRAINSTEM_HEARTBEAT_STALE_CRITICAL"}:
+            brainstem_event_type = "BrainstemHeartbeatStale"
+        elif reason_code == "BRAINSTEM_HEALTH_UNHEALTHY":
+            brainstem_event_type = "BrainstemDaemonUnhealthy"
+        elif reason_code in {"BRAINSTEM_HEARTBEAT_TIMESTAMP_INVALID", "BRAINSTEM_HEARTBEAT_NO_SIGNAL"}:
+            brainstem_event_type = "BrainstemHeartbeatInvalid"
+        incidents.append(
+            {
+                "source": "report",
+                "severity": brainstem_status,
+                "timestamp": str(brainstem_summary.get("generated_at") or ""),
+                "event_type": brainstem_event_type,
+                "summary": str(brainstem_summary.get("reason_text") or "Brainstem control-plane issue detected."),
+                "payload_excerpt": {
+                    "reason_code": reason_code,
+                    "healthy": brainstem_summary.get("healthy"),
+                    "heartbeat_age_seconds": brainstem_summary.get("heartbeat_age_seconds"),
+                    "stale_warning_seconds": brainstem_summary.get("stale_warning_seconds"),
+                    "stale_critical_seconds": brainstem_summary.get("stale_critical_seconds"),
+                    "unhealthy_services": list(brainstem_summary.get("unhealthy_services") or []),
+                    "tick": brainstem_summary.get("tick"),
+                },
+                "report_path": str(brainstem_summary.get("heartbeat_file") or ""),
+                "gate_level": "hard",
+            }
+        )
+
+    watchdog_summary = _ops_build_watchdog_daemon_summary(repo_root)
+    watchdog_status = str(watchdog_summary.get("status") or "")
+    if watchdog_status in {"warning", "critical"}:
+        reason_code = str(watchdog_summary.get("reason_code") or "")
+        watchdog_event_type = "WatchdogDaemonIssue"
+        if reason_code == "WATCHDOG_DAEMON_STATE_MISSING":
+            watchdog_event_type = "WatchdogDaemonStateMissing"
+        elif reason_code in {"WATCHDOG_DAEMON_STALE_WARNING", "WATCHDOG_DAEMON_STALE_CRITICAL"}:
+            watchdog_event_type = "WatchdogDaemonStateStale"
+        elif reason_code in {"WATCHDOG_DAEMON_THRESHOLD_WARNING", "WATCHDOG_DAEMON_THRESHOLD_CRITICAL"}:
+            watchdog_event_type = "WatchdogDaemonThresholdExceeded"
+        incidents.append(
+            {
+                "source": "report",
+                "severity": watchdog_status,
+                "timestamp": str(watchdog_summary.get("generated_at") or ""),
+                "event_type": watchdog_event_type,
+                "summary": str(watchdog_summary.get("reason_text") or "Watchdog daemon issue detected."),
+                "payload_excerpt": {
+                    "reason_code": reason_code,
+                    "heartbeat_age_seconds": watchdog_summary.get("heartbeat_age_seconds"),
+                    "stale_warning_seconds": watchdog_summary.get("stale_warning_seconds"),
+                    "stale_critical_seconds": watchdog_summary.get("stale_critical_seconds"),
+                    "tick": watchdog_summary.get("tick"),
+                    "threshold_hit": watchdog_summary.get("threshold_hit"),
+                    "action": watchdog_summary.get("action"),
+                },
+                "report_path": str(watchdog_summary.get("state_file") or ""),
+                "gate_level": "hard",
+            }
+        )
+
+    process_guard_status = str(process_guard.get("status") or "")
+    if process_guard_status in {"warning", "critical"}:
+        process_event_type = "ProcessGuardOrphanReaped"
+        reason_code = str(process_guard.get("reason_code") or "")
+        if process_guard_status == "critical":
+            process_event_type = "ProcessGuardZombieDetected"
+        event_counters[process_event_type] = int(event_counters.get(process_event_type, 0)) + 1
+        incidents.append(
+            {
+                "source": "report",
+                "severity": process_guard_status,
+                "timestamp": str(process_guard.get("generated_at") or ""),
+                "event_type": process_event_type,
+                "summary": str(process_guard.get("reason_text") or "Process guard detected runtime process risk."),
+                "payload_excerpt": {
+                    "reason_code": reason_code,
+                    "running_jobs": process_guard.get("running_jobs"),
+                    "orphan_jobs": process_guard.get("orphan_jobs"),
+                    "stale_jobs": process_guard.get("stale_jobs"),
+                    "orphan_reaped_count": process_guard.get("orphan_reaped_count"),
+                },
+                "report_path": str(process_guard.get("state_file") or ""),
+                "gate_level": "hard",
+            }
+        )
+
+    killswitch_status = str(killswitch_guard.get("status") or "")
+    if killswitch_status in {"warning", "critical"} and bool(killswitch_guard.get("active")):
+        event_counters["KillSwitchEngaged"] = int(event_counters.get("KillSwitchEngaged", 0)) + 1
+        incidents.append(
+            {
+                "source": "report",
+                "severity": "critical" if killswitch_status == "critical" else "warning",
+                "timestamp": str(killswitch_guard.get("generated_at") or ""),
+                "event_type": "KillSwitchEngaged",
+                "summary": str(killswitch_guard.get("reason_text") or "KillSwitch guard is active."),
+                "payload_excerpt": {
+                    "reason_code": str(killswitch_guard.get("reason_code") or ""),
+                    "mode": str(killswitch_guard.get("mode") or ""),
+                    "approval_ticket": str(killswitch_guard.get("approval_ticket") or ""),
+                    "requested_by": str(killswitch_guard.get("requested_by") or ""),
+                },
+                "report_path": str(killswitch_guard.get("state_file") or ""),
+                "gate_level": "hard",
+            }
+        )
+
+    budget_guard_status = str(budget_guard.get("status") or "")
+    if budget_guard_status in {"warning", "critical"}:
+        event_counters["BudgetGuardTriggered"] = int(event_counters.get("BudgetGuardTriggered", 0)) + 1
+        incidents.append(
+            {
+                "source": "report",
+                "severity": budget_guard_status,
+                "timestamp": str(budget_guard.get("generated_at") or ""),
+                "event_type": "BudgetGuardTriggered",
+                "summary": str(budget_guard.get("reason_text") or "Budget guard threshold triggered."),
+                "payload_excerpt": {
+                    "reason_code": str(budget_guard.get("reason_code") or ""),
+                    "action": str(budget_guard.get("action") or ""),
+                    "task_id": str(budget_guard.get("task_id") or ""),
+                    "tool_name": str(budget_guard.get("tool_name") or ""),
+                },
+                "report_path": str(budget_guard.get("state_file") or ""),
+                "gate_level": "hard",
+            }
+        )
+
+    immutable_dna_summary = _ops_build_immutable_dna_summary()
+    immutable_dna_status = str(immutable_dna_summary.get("status") or "")
+    immutable_dna_reason_code = str(immutable_dna_summary.get("reason_code") or "")
+    if immutable_dna_status in {"warning", "critical"}:
+        immutable_event_type = "ImmutableDNAIntegrityIssue"
+        if immutable_dna_reason_code in {
+            "IMMUTABLE_DNA_TAMPER_DETECTED",
+            "IMMUTABLE_DNA_MANIFEST_HASH_CHANGED",
+            "IMMUTABLE_DNA_MONITOR_CRITICAL",
+        }:
+            immutable_event_type = "ImmutableDNATamperDetected"
+        event_counters[immutable_event_type] = int(event_counters.get(immutable_event_type, 0)) + 1
+        immutable_monitor = (
+            immutable_dna_summary.get("monitor")
+            if isinstance(immutable_dna_summary.get("monitor"), dict)
+            else {}
+        )
+        incidents.append(
+            {
+                "source": "report",
+                "severity": immutable_dna_status,
+                "timestamp": str(
+                    immutable_monitor.get("generated_at")
+                    or immutable_dna_summary.get("generated_at")
+                    or ""
+                ),
+                "event_type": immutable_event_type,
+                "summary": str(
+                    immutable_dna_summary.get("reason_text")
+                    or "Immutable DNA integrity monitor reports issue."
+                ),
+                "payload_excerpt": {
+                    "reason_code": immutable_dna_reason_code,
+                    "monitor_reason_code": str(immutable_monitor.get("reason_code") or ""),
+                    "monitor_status": str(immutable_dna_summary.get("monitor_status") or ""),
+                    "manifest_hash": str(immutable_dna_summary.get("manifest_hash") or ""),
+                },
+                "report_path": str(immutable_monitor.get("state_file") or immutable_dna_summary.get("manifest_path") or ""),
+                "gate_level": "hard",
+            }
+        )
+
+    audit_ledger_summary = _ops_build_audit_ledger_summary(repo_root)
+    audit_ledger_status = str(audit_ledger_summary.get("status") or "")
+    audit_reason_code = str(audit_ledger_summary.get("reason_code") or "")
+    if audit_ledger_status == "critical" and audit_reason_code in {"AUDIT_LEDGER_CHAIN_INVALID", "AUDIT_LEDGER_READ_FAILED"}:
+        event_counters["AuditLedgerChainInvalid"] = int(event_counters.get("AuditLedgerChainInvalid", 0)) + 1
+        incidents.append(
+            {
+                "source": "report",
+                "severity": "critical",
+                "timestamp": str(audit_ledger_summary.get("latest_generated_at") or ""),
+                "event_type": "AuditLedgerChainInvalid",
+                "summary": str(audit_ledger_summary.get("reason_text") or "Audit ledger hash chain is invalid."),
+                "payload_excerpt": {
+                    "reason_code": audit_reason_code,
+                    "checked_count": audit_ledger_summary.get("checked_count"),
+                    "error_count": audit_ledger_summary.get("error_count"),
+                    "errors": list(audit_ledger_summary.get("errors") or []),
+                },
+                "report_path": str(audit_ledger_summary.get("ledger_file") or ""),
+                "gate_level": "hard",
+            }
+        )
+
+    governance_issues = execution_bridge_governance.get("recent_issues")
+    if isinstance(governance_issues, list):
+        for issue in governance_issues:
+            if not isinstance(issue, dict):
+                continue
+            issue_severity = _ops_status_to_severity(str(issue.get("severity") or "unknown"))
+            if issue_severity not in {"warning", "critical"}:
+                continue
+            event_counters["ExecutionBridgeGovernanceIssue"] = int(event_counters.get("ExecutionBridgeGovernanceIssue", 0)) + 1
+            reason_code = str(issue.get("reason_code") or "EXECUTION_BRIDGE_GOVERNANCE_ISSUE")
+            incidents.append(
+                {
+                    "source": "events",
+                    "severity": issue_severity,
+                    "timestamp": str(issue.get("timestamp") or ""),
+                    "event_type": "ExecutionBridgeGovernanceIssue",
+                    "summary": str(
+                        issue.get("reason")
+                        or f"Execution bridge governance issue detected: {reason_code}"
+                    ),
+                    "payload_excerpt": {
+                        "reason_code": reason_code,
+                        "category": str(issue.get("category") or ""),
+                        "executor": str(issue.get("executor") or ""),
+                        "policy_source": str(issue.get("policy_source") or ""),
+                        "violation_count": _ops_safe_int(issue.get("violation_count"), default=0),
+                        "task_id": str(issue.get("task_id") or ""),
+                        "subtask_id": str(issue.get("subtask_id") or ""),
+                    },
+                    "report_path": _ops_unix_path(events_db if events_db.exists() else events_file),
+                    "gate_level": "runtime",
+                }
+            )
+
+    incidents.sort(
+        key=lambda row: _ops_parse_iso_datetime(row.get("timestamp")) or 0.0,
+        reverse=True,
+    )
+    incidents = incidents[: max(1, int(limit))]
+
+    critical_count = sum(1 for item in incidents if str(item.get("severity")) == "critical")
+    warning_count = sum(1 for item in incidents if str(item.get("severity")) == "warning")
+    latest_incident_at = ""
+    if incidents:
+        latest_incident_at = str(incidents[0].get("timestamp") or "")
+
+    source_reports: List[str] = []
+    if events_db.exists():
+        source_reports.append(_ops_unix_path(events_db))
+    elif events_file.exists():
+        source_reports.append(_ops_unix_path(events_file))
+    for item in incidents:
+        report_path = str(item.get("report_path") or "")
+        if report_path:
+            source_reports.append(report_path)
+
+    reason_code: Optional[str] = None
+    reason_text: Optional[str] = None
+    if critical_count > 0:
+        severity = "critical"
+        reason_code = "INCIDENTS_CRITICAL_PRESENT"
+        reason_text = "Critical incidents are present in runtime signals."
+    elif warning_count > 0:
+        severity = "warning"
+        reason_code = "INCIDENTS_WARNING_PRESENT"
+        reason_text = "Warning-level incidents are present in runtime signals."
+    elif len(event_rows) > 0:
+        severity = "ok"
+    else:
+        severity = "unknown"
+        reason_code = "INCIDENTS_SIGNAL_EMPTY"
+        reason_text = "No incident signal source was discovered."
+
+    response_data = {
+        "summary": {
+            "total_incidents": len(incidents),
+            "critical_incidents": critical_count,
+            "warning_incidents": warning_count,
+            "latest_incident_at": latest_incident_at,
+            "legacy_event_namespace_status": str(legacy_namespace.get("status") or "unknown"),
+            "legacy_event_namespace": str(legacy_namespace.get("namespace") or ""),
+            "legacy_subagent_runtime_events_detected": _ops_safe_int(
+                legacy_namespace.get("legacy_event_total"),
+                default=0,
+            ),
+            "legacy_subagent_runtime_note": str(legacy_namespace.get("note") or ""),
+            "runtime_prompt_safety": prompt_safety_summary,
+            "execution_bridge_governance": execution_bridge_governance,
+        },
+        "event_counters": event_counters,
+        "legacy_event_namespace": legacy_namespace,
+        "events_scanned": len(event_rows),
+        "incidents": incidents,
+    }
+
+    return _ops_build_response(
+        data=response_data,
+        severity=severity,
+        source_reports=sorted(set(source_reports)),
+        source_endpoints=[],
+        reason_code=reason_code,
+        reason_text=reason_text,
+    )
+
+
+@router.get("/mcp/status")
+async def get_mcp_status_offline():
+    """返回 MCP 运行态快照，兼容前端 status/tasks 字段。"""
+    return _ops_build_mcp_runtime_snapshot()
+
+
+@router.get("/mcp/tasks")
+async def get_mcp_tasks_offline(status: Optional[str] = None):
+    """返回 MCP 任务（服务）快照，避免离线模式 503。"""
+    return _ops_build_mcp_task_snapshot(status)
+
+
+# ============ MCP 服务列表 & 导入 ============
+
+
+@router.get("/mcp/services")
+def get_mcp_services():
+    """List official MCP services from the canonical runtime config and live pool state."""
+    services: List[Dict[str, Any]] = []
+
+    try:
+        from agents.runtime import mcp_client
+    except Exception:
+        return {"status": "success", "services": services}
+
+    try:
+        configs = [cfg for cfg in mcp_client.load_mcp_config() if bool(getattr(cfg, "enabled", True))]
+    except Exception:
+        configs = []
+
+    pool = None
+    try:
+        pool = mcp_client.get_mcp_pool()
+    except Exception:
+        pool = None
+
+    config_map = {str(cfg.name).strip(): cfg for cfg in configs if str(getattr(cfg, "name", "") or "").strip()}
+    connection_map = dict(getattr(pool, "connections", {}) or {}) if pool else {}
+    all_names = sorted(set(config_map) | set(connection_map))
+
+    for name in all_names:
+        cfg = config_map.get(name)
+        conn = connection_map.get(name)
+        command = ""
+        if cfg is not None:
+            command = " ".join([str(getattr(cfg, "command", "") or "")] + [str(arg) for arg in getattr(cfg, "args", []) or []]).strip()
+        elif conn is not None:
+            command = " ".join([str(getattr(getattr(conn, "config", None), "command", "") or "")] + [str(arg) for arg in getattr(getattr(conn, "config", None), "args", []) or []]).strip()
+
+        if conn is not None and bool(getattr(conn, "connected", False)):
+            status_label = "online"
+            status_reason = f"Official MCP server connected; {len(getattr(conn, 'tools', []) or [])} tools discovered."
+            available = True
+        elif conn is not None and str(getattr(conn, "error", "") or "").strip():
+            status_label = "offline"
+            status_reason = str(getattr(conn, "error", "") or "").strip()
+            available = False
+        elif cfg is not None:
+            status_label = "configured"
+            status_reason = "Official MCP server is configured in mcp_servers.json but has not been connected yet."
+            available = False
+        else:
+            status_label = "unknown"
+            status_reason = "Service metadata is incomplete."
+            available = False
+
+        services.append(
+            _ops_normalize_mcp_service_row(
+                {
+                    "name": name,
+                    "display_name": name,
+                    "description": command,
+                    "source": "official",
+                    "available": available,
+                    "status_label": status_label,
+                    "status_reason": status_reason,
+                }
+            )
+        )
+
+    services.sort(key=lambda item: (str(item.get("source") or "unknown"), str(item.get("name") or "")))
+    return {"status": "success", "services": services}
+
+
+@router.get("/v1/ops/runtime/posture")
+async def get_ops_runtime_posture(events_limit: int = 5000):
+    """聚合运行态势：rollout/fail-open/lease/queue/lock/disk/error/latency。"""
+    try:
+        return _ops_build_runtime_posture_payload(events_limit=events_limit)
+    except Exception as exc:
+        logger.error(f"获取 /v1/ops/runtime/posture 失败: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取 runtime posture 失败: {str(exc)}")
+
+
+@router.get("/v1/ops/mcp/fabric")
+async def get_ops_mcp_fabric():
+    """聚合 MCP 织网状态：registry、services、task snapshot。"""
+    try:
+        return _ops_build_mcp_fabric_payload()
+    except Exception as exc:
+        logger.error(f"获取 /v1/ops/mcp/fabric 失败: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取 mcp fabric 失败: {str(exc)}")
+
+
+@router.get("/v1/ops/memory/graph")
+async def get_ops_memory_graph(sample_limit: int = 200):
+    """聚合记忆图谱运行态：统计、热点关系与样本图数据。"""
+    try:
+        return await _ops_build_memory_graph_payload(sample_limit=sample_limit)
+    except Exception as exc:
+        logger.error(f"获取 /v1/ops/memory/graph 失败: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取 memory graph 失败: {str(exc)}")
+
+
+@router.get("/v1/ops/memory/search")
+async def get_ops_memory_search(keywords: str = "", limit: int = 50):
+    """聚合记忆搜索结果：统一关键词检索结果的 schema。"""
+    try:
+        return await _ops_build_memory_search_payload(keywords=keywords, limit=limit)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"获取 /v1/ops/memory/search 失败: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取 memory search 失败: {str(exc)}")
+
+
+@router.get("/v1/ops/workflow/events")
+async def get_ops_workflow_events(events_limit: int = 5000, context_days: int = 7, recent_critical_limit: int = 50):
+    """聚合工作流与事件态势：队列、锁、关键事件与日志上下文。"""
+    try:
+        return _ops_build_workflow_events_payload(
+            events_limit=events_limit,
+            context_days=context_days,
+            recent_critical_limit=recent_critical_limit,
+        )
+    except Exception as exc:
+        logger.error(f"获取 /v1/ops/workflow/events 失败: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取 workflow events 失败: {str(exc)}")
+
+
+@router.get("/v1/ops/incidents/latest")
+async def get_ops_incidents_latest(limit: int = 50):
+    """聚合近期事故态势：关键事件 + 关键报告门禁异常。"""
+    try:
+        return _ops_build_incidents_latest_payload(limit=limit)
+    except Exception as exc:
+        logger.error(f"获取 /v1/ops/incidents/latest 失败: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取 incidents latest 失败: {str(exc)}")
+
+
+@router.get("/v1/ops/evidence/index")
+async def get_ops_evidence_index(max_reports: int = 100):
+    """聚合证据索引：M12 关键报告可见性与门禁状态。"""
+    try:
+        return _ops_build_evidence_index_payload(max_reports=max_reports)
+    except Exception as exc:
+        logger.error(f"获取 /v1/ops/evidence/index 失败: {exc}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"获取 evidence index 失败: {str(exc)}")
+
+
+# ── Dashboard panel endpoints ────────────────────────────────
+
+
+@router.get("/v1/ops/chronos/jobs")
+async def get_ops_chronos_jobs():
+    """Return scheduled Chronos jobs and scheduler status."""
+    try:
+        from core.scheduler.chronos import get_default_scheduler
+        scheduler = get_default_scheduler()
+        jobs = scheduler.list_jobs() if scheduler.is_running else []
+        return {"scheduler_running": scheduler.is_running, "job_count": len(jobs), "jobs": jobs}
+    except Exception as exc:
+        return {"scheduler_running": False, "job_count": 0, "jobs": [], "error": str(exc)}
+
+
+@router.get("/v1/ops/release/gates")
+async def get_ops_release_gates():
+    """Evaluate release gates and return their status."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        from core.release.gate_runner import GateRunner
+        runner = GateRunner(project_root=_ops_repo_root())
+        gates_list = []
+        for gate_name in runner.list_gates():
+            try:
+                evaluation = runner.evaluate_gate(gate_name)
+                d = evaluation.to_dict()
+                d["name"] = gate_name
+                gates_list.append(d)
+            except Exception as gate_exc:
+                gates_list.append({
+                    "name": gate_name,
+                    "passed": None,
+                    "reason": f"evaluation_error: {gate_exc}",
+                    "checks": [],
+                })
+        return {
+            "status": "success", "generated_at": now, "severity": "ok",
+            "data": {"gates": gates_list},
+            "source_reports": [], "source_endpoints": ["/v1/ops/release/gates"],
+        }
+    except Exception as exc:
+        return {
+            "status": "success", "generated_at": now, "severity": "unknown",
+            "data": {"gates": []}, "error": str(exc),
+            "source_reports": [], "source_endpoints": ["/v1/ops/release/gates"],
+        }
+
+
+@router.get("/v1/ops/agents/hierarchy")
+async def get_ops_agents_hierarchy():
+    """Return agent session hierarchy and role distribution."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        from agents.runtime.agent_session import AgentSessionStore
+        store = AgentSessionStore(db_path="scratch/runtime/agent_sessions.db")
+        sessions = []
+        for s in store.list_sessions():
+            sessions.append({
+                "session_id": s.session_id,
+                "role": s.role,
+                "status": s.status.value if hasattr(s.status, 'value') else str(s.status),
+                "parent_id": s.parent_id or "",
+                "task_description": str(s.task_description or "")[:100],
+                "created_at": str(getattr(s, 'created_at', '')),
+            })
+        store.close()
+        return {
+            "status": "success", "generated_at": now, "severity": "ok",
+            "data": {"sessions": sessions},
+            "source_reports": [], "source_endpoints": ["/v1/ops/agents/hierarchy"],
+        }
+    except Exception as exc:
+        return {
+            "status": "success", "generated_at": now, "severity": "unknown",
+            "data": {"sessions": []}, "error": str(exc),
+            "source_reports": [], "source_endpoints": ["/v1/ops/agents/hierarchy"],
+        }
+
+
+@router.get("/v1/ops/supervisor/health")
+async def get_ops_supervisor_health():
+    """Aggregate supervisor subsystem health: brainstem, process guard, watchdog, killswitch."""
+    now = datetime.now(timezone.utc).isoformat()
+    repo_root = _ops_repo_root()
+    brainstem = _ops_build_brainstem_control_plane_summary(repo_root)
+    process_guard = _ops_build_process_guard_summary(repo_root)
+    watchdog = _ops_build_watchdog_daemon_summary(repo_root)
+    killswitch = _ops_build_killswitch_guard_summary(repo_root)
+    services_list = [brainstem, process_guard, watchdog, killswitch]
+    healthy_count = sum(1 for s in services_list if str(s.get("severity", "")) == "ok")
+    severity = "ok" if healthy_count == len(services_list) else ("warning" if healthy_count > 0 else "critical")
+    return {
+        "status": "success", "generated_at": now, "severity": severity,
+        "data": {
+            "services": {
+                "brainstem": brainstem, "process_guard": process_guard,
+                "watchdog": watchdog, "killswitch": killswitch,
+            },
+        },
+        "source_reports": [], "source_endpoints": ["/v1/ops/supervisor/health"],
+    }
+
+
+@router.get("/v1/ops/security/dna-integrity")
+async def get_ops_dna_integrity():
+    """Return DNA prompt integrity verification and DNA prompt listing."""
+    immutable_dna = _ops_build_immutable_dna_summary()
+    dna_status = str(immutable_dna.get("status", "unknown"))
+    verification_status = "pass" if dna_status == "ok" else ("unknown" if dna_status == "unknown" else "fail")
+    manifest_hash = str(immutable_dna.get("manifest_hash", ""))
+    # Build prompt list from manifest
+    prompts = []
+    try:
+        manifest_path = _ops_repo_root() / "system" / "prompts" / "immutable_dna_manifest.spec"
+        if manifest_path.exists():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for path, sha in manifest.get("files", {}).items():
+                size = None
+                full = _ops_repo_root() / "system" / "prompts" / path
+                if full.exists():
+                    size = full.stat().st_size
+                prompts.append({"path": path, "immutable": True, "sha256": sha, "size_bytes": size})
+    except Exception:
+        pass
+    return {
+        "verification_status": verification_status,
+        "file_count": len(prompts),
+        "manifest_hash": manifest_hash,
+        "prompts": prompts,
+    }
+
+
+@router.get("/v1/ops/memory/overview")
+async def get_ops_memory_overview():
+    """Aggregate memory tier overview.
+
+    Target-state naming:
+      L1 = File Memory (working / episodic / domain)
+      L2 = Shell Quintuple Graph (summer_memory)
+      L3 = Hierarchical RAG (indexed + vector)
+    """
+    repo_root = _ops_repo_root()
+    memory_root = repo_root / "memory"
+    # L1 — file-based memory
+    l1_details = {"working": 0, "episodic": 0, "domain": 0}
+    for scope in l1_details:
+        scope_dir = memory_root / scope
+        if scope_dir.exists():
+            l1_details[scope] = sum(1 for f in scope_dir.rglob("*.md") if f.is_file())
+    l1_total = sum(l1_details.values())
+    # L2 — Shell quintuple graph
+    grag_count = 0
+    try:
+        from summer_memory.quintuple_graph import load_quintuples
+        grag_count = len(load_quintuples())
+    except Exception:
+        pass
+    # L3 — Hierarchical RAG (indexed + vector)
+    l3_indexed = 0
+    l3_vectors = 0
+    hier_dir = memory_root / "hierarchical"
+    if hier_dir.exists():
+        l3_indexed = sum(1 for f in hier_dir.glob("*_index.json"))
+    try:
+        from agents.memory.vector_store import L3VectorStore
+        vs = L3VectorStore(db_path=hier_dir / "vectors" / "l3_code_index.db")
+        l3_vectors = vs.count()
+        vs.close()
+    except Exception:
+        pass
+    return {
+        "l1": {"scope": "file_memory", "total": l1_total, "details": l1_details},
+        "l2": {"scope": "quintuple_graph", "total": grag_count},
+        "l3": {"scope": "hierarchical_rag", "total": l3_vectors, "indexed": l3_indexed},
+        # Backward compat: keep grag_quintuples for clients that still read it
+        "grag_quintuples": grag_count,
+    }
+
+
+@router.get("/v1/ops/event-bus/health")
+async def get_ops_event_bus_health():
+    """Event Bus health: topic count, DLQ depth, subscription count, partition stats."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        from core.event_bus.topic_bus import TopicEventBus
+
+        events_file = _ops_repo_root() / "logs" / "autonomous" / "events.jsonl"
+        events_db = _ops_resolve_event_db_path(events_file)
+        bus = TopicEventBus(db_path=events_db)
+
+        topics = bus.list_topics(limit=500)
+        dlq = bus.get_dead_letters(limit=500)
+        partitions = bus.list_time_partitions(limit=36)
+        subscriptions = list(bus.iter_subscriptions())
+        recent = bus.read_recent(limit=1)
+        latest_event = recent[0] if recent else None
+
+        return {
+            "status": "success", "generated_at": now, "severity": "ok" if not dlq else "warning",
+            "data": {
+                "topic_count": len(topics),
+                "dlq_depth": len(dlq),
+                "subscription_count": len(subscriptions),
+                "partition_count": len(partitions),
+                "partitions": partitions[:12],
+                "latest_event_at": (latest_event or {}).get("timestamp", ""),
+                "latest_event_type": (latest_event or {}).get("event_type", ""),
+                "subscriptions": [
+                    {"pattern": s.pattern, "timeout_ms": getattr(s, "timeout_ms", None)}
+                    for s in subscriptions[:50]
+                ],
+            },
+            "source_endpoints": ["/v1/ops/event-bus/health"],
+        }
+    except Exception as exc:
+        return {
+            "status": "success", "generated_at": now, "severity": "unknown",
+            "data": {"topic_count": 0, "dlq_depth": 0, "subscription_count": 0},
+            "error": str(exc),
+            "source_endpoints": ["/v1/ops/event-bus/health"],
+        }
+
+
+@router.get("/v1/ops/event-bus/dlq")
+async def get_ops_event_bus_dlq():
+    """List dead-letter queue entries."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        from core.event_bus.topic_bus import TopicEventBus
+
+        events_file = _ops_repo_root() / "logs" / "autonomous" / "events.jsonl"
+        events_db = _ops_resolve_event_db_path(events_file)
+        bus = TopicEventBus(db_path=events_db)
+
+        dlq_entries = bus.get_dead_letters(limit=100)
+        return {
+            "status": "success", "generated_at": now,
+            "data": {
+                "total": len(dlq_entries),
+                "entries": dlq_entries,
+            },
+            "source_endpoints": ["/v1/ops/event-bus/dlq"],
+        }
+    except Exception as exc:
+        return {
+            "status": "success", "generated_at": now, "severity": "unknown",
+            "data": {"total": 0, "entries": []},
+            "error": str(exc),
+            "source_endpoints": ["/v1/ops/event-bus/dlq"],
+        }
+
+
+@router.get("/v1/ops/event-bus/topics")
+async def get_ops_event_bus_topics():
+    """Topic catalog with recent activity."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        from core.event_bus.topic_bus import TopicEventBus
+
+        events_file = _ops_repo_root() / "logs" / "autonomous" / "events.jsonl"
+        events_db = _ops_resolve_event_db_path(events_file)
+        bus = TopicEventBus(db_path=events_db)
+
+        topics = bus.list_topics(limit=200)
+        return {
+            "status": "success", "generated_at": now,
+            "data": {
+                "total": len(topics),
+                "topics": topics,
+            },
+            "source_endpoints": ["/v1/ops/event-bus/topics"],
+        }
+    except Exception as exc:
+        return {
+            "status": "success", "generated_at": now, "severity": "unknown",
+            "data": {"total": 0, "topics": []},
+            "error": str(exc),
+            "source_endpoints": ["/v1/ops/event-bus/topics"],
+        }
+
+
+@router.get("/v1/ops/workspaces")
+async def get_ops_workspaces():
+    """List active agent worktrees with state and disk usage."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        from system.git_worktree_sandbox import list_worktree_dirs
+        from agents.runtime.agent_session import AgentSessionStore
+
+        worktrees = list_worktree_dirs()
+        store = AgentSessionStore(db_path="scratch/runtime/agent_sessions.db")
+        sessions = store.list_sessions()
+        active_ids = {s.session_id for s in sessions}
+
+        enriched = []
+        total_size = 0
+        for wt in worktrees:
+            owner = wt["owner_session_id"]
+            is_active = owner in active_ids
+            session = next((s for s in sessions if s.session_id == owner), None)
+            submission_state = ""
+            if session:
+                submission_state = str(session.metadata.get("workspace_submission_state", ""))
+            total_size += wt.get("size_bytes", 0)
+            enriched.append({
+                "owner_session_id": owner,
+                "path": wt["path"],
+                "size_bytes": wt["size_bytes"],
+                "created_at": wt["created_at"],
+                "session_active": is_active,
+                "submission_state": submission_state,
+                "orphaned": not is_active,
+            })
+
+        return {
+            "status": "success", "generated_at": now,
+            "data": {
+                "total_worktrees": len(enriched),
+                "total_size_bytes": total_size,
+                "orphaned_count": sum(1 for w in enriched if w["orphaned"]),
+                "worktrees": enriched,
+            },
+            "source_endpoints": ["/v1/ops/workspaces"],
+        }
+    except Exception as exc:
+        return {
+            "status": "success", "generated_at": now, "severity": "unknown",
+            "data": {"total_worktrees": 0, "worktrees": []},
+            "error": str(exc),
+            "source_endpoints": ["/v1/ops/workspaces"],
+        }
+
+
+@router.get("/v1/ops/evolution/status")
+async def get_ops_evolution_status():
+    """Return self-evolution trigger status and writable prompt count."""
+    try:
+        import yaml
+        config_path = _ops_repo_root() / "config" / "autonomous_runtime.yaml"
+        config = {}
+        if config_path.exists():
+            config = (yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}).get("autonomous", {}).get(
+                "self_evolution", {}
+            )
+        enabled = bool(config.get("enabled", False))
+        from agents.evolution.evolution_trigger import EvolutionTrigger
+        trigger = EvolutionTrigger(
+            episodic_dir=_ops_repo_root() / "memory" / "episodic",
+            trigger_threshold=int(config.get("trigger_threshold", 3)),
+            max_per_day=int(config.get("max_evolutions_per_day", 5)),
+        )
+        decision = trigger.evaluate()
+        from agents.evolution.self_tools import list_my_prompts
+        writable_prompts = list_my_prompts(scope="writable")
+        now = datetime.now(timezone.utc).isoformat()
+        return {
+            "status": "success", "generated_at": now,
+            "severity": "ok" if not decision.should_evolve else "warning",
+            "data": {
+                "enabled": enabled, "config": config,
+                "should_evolve": decision.should_evolve, "reason": decision.reason,
+                "failure_signals": [
+                    {"task_type": s.task_type, "failure_count": s.failure_count, "confidence": s.confidence}
+                    for s in decision.signals
+                ],
+                "writable_prompts": len(writable_prompts),
+            },
+            "source_reports": [], "source_endpoints": ["/v1/ops/evolution/status"],
+        }
+    except Exception as exc:
+        now = datetime.now(timezone.utc).isoformat()
+        return {
+            "status": "success", "generated_at": now, "severity": "unknown",
+            "data": {"enabled": False, "should_evolve": False, "failure_signals": [], "config": {}},
+            "error": str(exc),
+            "source_reports": [], "source_endpoints": ["/v1/ops/evolution/status"],
+        }
+
+
+# ── Backward-compat delegation (recursion-safe) ──────────────
+# Tests/scripts may `from apiserver import routes_ops as api_server`,
+# then access api_server.app, api_server.time, etc.
+# Use sys.modules to avoid triggering circular import.
+import sys as _sys
+_GETATTR_GUARD = False
+
+def __getattr__(name: str):  # noqa: N807
+    global _GETATTR_GUARD
+    if _GETATTR_GUARD:
+        raise AttributeError(f"module 'apiserver.routes_ops' has no attribute {name!r}")
+    _GETATTR_GUARD = True
+    try:
+        _real = _sys.modules.get("apiserver.api_server")
+        if _real is not None:
+            return getattr(_real, name)
+        raise AttributeError(f"module 'apiserver.routes_ops' has no attribute {name!r}")
+    except AttributeError:
+        raise AttributeError(f"module 'apiserver.routes_ops' has no attribute {name!r}") from None
+    finally:
+        _GETATTR_GUARD = False

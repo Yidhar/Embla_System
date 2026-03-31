@@ -1,4 +1,4 @@
-# NagaAgent 系统环境检测器
+# Embla System 系统环境检测器
 
 ## 🎯 功能概述
 
@@ -98,7 +98,7 @@ pip install -r requirements.txt
 ## 📁 目录结构
 
 ```
-NagaAgent3.1/
+Embla_System/
 ├── system/
 │   ├── system_checker.py    # 系统检测器
 │   └── README.md            # 使用说明

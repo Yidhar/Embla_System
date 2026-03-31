@@ -1,0 +1,164 @@
+# Sub-Agent 内生执行链路图谱（时序 + Gate 决策）
+
+> 状态标记：`archived_legacy`（`SubAgentRuntime*` 事件名仅保留为历史证据命名空间，不再作为当前单控制面的活跃健康判定信号）
+
+最后更新：2026-02-27  
+适用范围：`当前 Embla 开发分支实现`（WS22/WS28 增量）  
+目标：用于排障与 onboarding，快速回答“当前子代理是怎么跑的、在哪个 gate 被拒绝、为什么不会再回落到 CLI”。
+
+## 1. 代码锚点
+
+- 调度入口：`agents/pipeline.py:684`
+- 运行时编排：`agents/runtime/mini_loop.py:93`
+- 内生执行桥：`agents/tool_loop.py:48`
+- 运行模式决策：`agents/pipeline.py:1033`
+- fail-open 预算与阻断：`agents/pipeline.py:1083`
+- 当前配置（subagent-only）：`config/autonomous_runtime.yaml:54`
+
+## 2. 事件时序图（主链路）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SA as SystemAgent
+    participant WS as WorkflowStore
+    participant SR as SubAgentRuntime
+    participant EB as NativeExecutionBridge
+    participant SE as ScaffoldEngine
+    participant EV as EventStore(EventBus)
+
+    SA->>SA: _resolve_runtime_mode(task)
+    SA->>SR: run(task, worker=execution_bridge, emit_event, lease_guard)
+    SR->>EV: SubAgentRuntimeStarted
+    SR->>SR: build_subtasks + validate_specs
+    alt spec invalid
+        SR->>EV: SubAgentRuntimeRejected
+        SR-->>SA: SubAgentRuntimeResult(failed, gate=runtime)
+    else spec valid
+        SR->>SR: contract negotiation
+        alt contract gate failed
+            SR->>EV: SubAgentContractGateFailed
+            SR->>EV: SubAgentRuntimeCompleted(success=false, gate=contract)
+            SR-->>SA: failed + fail_open_recommended
+        else contract agreed
+            loop ready subtasks
+                SR->>EV: SubTaskDispatching
+                SR->>EB: execute_subtask(subtask)
+                EB->>EB: collect/normalize patch intents
+                alt patch intents missing
+                    EB-->>SR: RuntimeSubTaskResult(success=false, error=missing_patch_intent, receipt)
+                else patch intents valid
+                    EB-->>SR: RuntimeSubTaskResult(success=true, patches, receipt)
+                end
+                SR->>EV: SubTaskExecutionBridgeReceipt
+                SR->>EV: SubTaskExecutionCompleted
+                alt subtask success
+                    SR->>EV: SubTaskApproved
+                else subtask failed
+                    SR->>EV: SubTaskRejected
+                end
+            end
+
+            alt require_scaffold_patch and no patches
+                SR->>EV: SubAgentScaffoldGateFailed
+                SR->>EV: SubAgentRuntimeCompleted(success=false, gate=scaffold)
+                SR-->>SA: failed + fail_open_recommended
+            else patches present
+                SR->>SE: apply(patches, contract_id, checksum, trace_id)
+                alt scaffold commit failed
+                    SE-->>SR: committed=false
+                    SR->>EV: SubAgentScaffoldGateFailed
+                    SR->>EV: SubAgentRuntimeCompleted(success=false, gate=scaffold)
+                    SR-->>SA: failed + fail_open_recommended
+                else scaffold committed
+                    SE-->>SR: committed=true
+                    SR->>EV: SubAgentRuntimeCompleted(success=true)
+                    SR-->>SA: SubAgentRuntimeResult(success=true, approved=true)
+                end
+            end
+        end
+    end
+
+    alt runtime success + approved
+        SA->>WS: transition -> ReleaseCandidate
+        SA->>EV: TaskApproved
+    else runtime failed and fail_open_recommended and fail_open=true
+        SA->>EV: SubAgentRuntimeFailOpenBlocked
+        SA->>EV: ReleaseGateRejected(gate=execution_bridge|write_path)
+        SA->>EV: TaskRejected
+    else runtime failed without fail_open
+        SA->>EV: TaskRejected
+    end
+```
+
+## 3. Gate 决策图（运行模式 + 失败处理）
+
+```mermaid
+flowchart TD
+    A[run_task attempt] --> B{_resolve_runtime_mode}
+
+    B --> C[subagent-only\nreason=subagent_only_cutover/...]
+    C --> D[_execute_subagent_attempt]
+    D --> E{runtime success & approved?}
+    E -->|yes| F[TaskApproved]
+    E -->|no| G[record gate metric\ncontract/scaffold/runtime]
+    G --> H{fail_open_recommended && fail_open?}
+    H -->|no| I[TaskRejected]
+    H -->|yes| J{write path task?}
+    J -->|yes| K[SubAgentRuntimeFailOpenBlocked\nReleaseGateRejected gate=write_path]
+    J -->|no| L[SubAgentRuntimeFailOpenBlocked\nReleaseGateRejected gate=execution_bridge]
+    K --> M[record fail_open budget]
+    L --> M
+    M --> N{budget exhausted?}
+    N -->|yes| O[SubAgentFailOpenBudgetExceeded\nAlertRaised]
+    N -->|no| I
+    O --> I
+```
+
+## 4. 事件对照（排障优先看）
+
+| 事件 | 含义 | 常见定位结论 |
+| --- | --- | --- |
+| `SubTaskExecutionBridgeReceipt` | 子任务执行桥审计回执（bridge_id/changed_paths/patch_count） | 内生桥是否产出可审计证据 |
+| `SubTaskExecutionCompleted` | 子任务执行完成主事件 | 新主语义事件（报表应优先读这个） |
+| `TaskExecutionCompleted` | 任务级执行完成事件（含 `runtime_mode/executor`） | 报表错误率/延迟应统一读取该事件 |
+| `SubAgentScaffoldGateFailed` | Scaffold 提交失败或缺补丁 | 常见于 patch intent 缺失/冲突 |
+| `SubAgentRuntimeFailOpenBlocked` | fail-open 被策略阻断（archived_legacy） | 历史证据字段 当前活跃告警请优先看 `ReleaseGateRejected` |
+| `ReleaseGateRejected` | 发布门禁拒绝统一出口 | 看 `gate` 字段快速分类（contract/scaffold/runtime/write_path/execution_bridge） |
+
+## 5. 最小排障路径
+
+1. 先看近期事件是否出现关键链路：
+
+```bash
+rg -n "SubTaskExecutionBridgeReceipt|SubTaskExecutionCompleted|TaskExecutionCompleted|SubAgentScaffoldGateFailed|SubAgentRuntimeFailOpenBlocked|ReleaseGateRejected" logs/autonomous/events.jsonl
+```
+
+2. 若出现 `SubAgentRuntimeFailOpenBlocked`（archived_legacy 历史命名空间），检查是否因子任务缺补丁或执行桥策略拒绝：
+
+```bash
+rg -n "SubAgentRuntimeFailOpenBlocked|legacy_runtime_retired|subagent_fail_open_blocked|execution_bridge_missing_patch_intent" logs/autonomous/events.jsonl agents/pipeline.py
+```
+
+3. 若出现 `missing_scaffold_patch_intents` 或 `execution_bridge_missing_patch_intent`，检查任务 `metadata.subtasks[*].patches` 或 `metadata.patch_intents` 是否存在。
+
+4. 报表和告警链路应统一读取：
+- 子任务级：`SubTaskExecutionCompleted`
+- 任务级：`TaskExecutionCompleted`
+
+## 6. Onboarding 建议顺序（30 分钟）
+
+1. 阅读本文件两张图，先建立执行主链路模型。  
+2. 对照源码阅读 4 个函数：
+- `_resolve_runtime_mode`：`agents/pipeline.py:1033`
+- `_execute_subagent_attempt`：`agents/pipeline.py:684`
+- `SubAgentRuntime.run`：`agents/runtime/mini_loop.py:93`
+- `NativeExecutionBridge.execute_subtask`：`agents/tool_loop.py:55`
+3. 跑定向回归：
+
+```bash
+.venv/bin/pytest -q \
+  tests/test_run_ws28_execution_governance_gate_ws28_021.py \
+  tests/test_run_ws28_execution_governance_gate_ws28_021.py \
+  tests/test_core_event_bus_consumers_ws28_029.py
+```

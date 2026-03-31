@@ -51,7 +51,7 @@ def extract_message_with_reasoning(response: str) -> ExtractedResponse:
         # 如果解析出了内容或推理内容，返回结果
         if result.content or result.reasoning_content:
             return result
-    except:
+    except Exception:
         pass
 
     # 如果失败，尝试查找JSON子串
@@ -79,7 +79,7 @@ def extract_message_with_reasoning(response: str) -> ExtractedResponse:
             # 如果解析出了内容或推理内容，返回结果
             if result.content or result.reasoning_content:
                 return result
-    except:
+    except Exception:
         pass
 
     return ExtractedResponse(content=response)
@@ -128,7 +128,7 @@ def _recursive_extract_with_reasoning(data) -> ExtractedResponse:
                                 content=nested_result.content,
                                 reasoning_content=reasoning_content or nested_result.reasoning_content
                             )
-                    except:
+                    except Exception:
                         pass
                     content = value.strip()
                     break

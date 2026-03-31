@@ -1,0 +1,114 @@
+task_id,workstream,phase,priority,type,title,depends_on,related_docs,target_modules,dod_summary,status
+NGA-WS10-001,WS10,M0,P0,refactor,统一 Tool Contract 字段模型,,09|12,apiserver|mcpserver,native/mcp 回执字段一致,done
+NGA-WS10-002,WS10,M0,P0,feature,注入调用上下文元数据,NGA-WS10-001,09|12,agentic_tool_loop|dispatcher,trace/risk/scope 全链路可追溯,done
+NGA-WS10-003,WS10,M1,P0,hardening,建立输入输出 schema 强校验,NGA-WS10-001,09|10,validator|gateway,非法调用网关拦截并审计,done
+NGA-WS10-004,WS10,M1,P1,feature,统一工具回执模板与审计记录,NGA-WS10-002,09,event_log|receipt,关键工具回执模板全覆盖,done
+NGA-WS10-005,WS10,M1,P1,hardening,风险门禁与审批钩子收敛,NGA-WS10-003,10|13,policy_gate|approval,高风险动作按策略阻断/审批,done
+NGA-WS10-006,WS10,M2,P1,migration,兼容开关与灰度发布策略,NGA-WS10-001;NGA-WS10-003,07|09,feature_flags,新旧 contract 双栈灰度可回退,done
+NGA-WS11-001,WS11,M1,P0,feature,建立 Artifact 元数据模型,NGA-WS10-001,12|13,artifact_store,每个 ref 可查询元数据,review
+NGA-WS11-002,WS11,M1,P0,feature,实现 artifact_reader 工具,NGA-WS11-001,06|12,tool_registry|artifact_reader,ref 可按模式二次读取,review
+NGA-WS11-003,WS11,M1,P0,feature,os_bash 接入 fetch_hints,NGA-WS11-002,12,os_bash,超大结构化输出带检索提示,done
+NGA-WS11-004,WS11,M1,P0,hardening,实现 Artifact 配额与生命周期策略,NGA-WS11-001,09|12|13,artifact_store,72h 压测无 ENOSPC 雪崩,done
+NGA-WS11-005,WS11,M2,P1,hardening,高水位背压与关键路径保护,NGA-WS11-004,12|13,backpressure|storage_guard,高水位下核心数据库可写,done
+NGA-WS11-006,WS11,M2,P1,ops,证据链可观测性,NGA-WS11-002;NGA-WS11-004,11|13,metrics|logging,ref 命中率与回收统计可视化,done
+NGA-WS12-001,WS12,M1,P0,feature,实现 file_ast_skeleton 分层读取,NGA-WS10-001,09|12,file_ast,大文件默认不全量回读,review
+NGA-WS12-002,WS12,M1,P0,feature,实现定向 chunk 读取,NGA-WS12-001,12,file_ast_chunk_api,编辑只拉目标区域,review
+NGA-WS12-003,WS12,M2,P1,hardening,语义重基 semantic_rebase,NGA-WS12-002,12|13,file_ast_conflict,轻度冲突可自动重基,done
+NGA-WS12-004,WS12,M2,P1,hardening,冲突票据与退避机制,NGA-WS12-003,09|12,conflict_coordinator,无无界重试活锁,done
+NGA-WS12-005,WS12,M2,P1,feature,Router 仲裁升级路径,NGA-WS12-004,09|11,router_arbiter,冲突超限自动升级仲裁,done
+NGA-WS12-006,WS12,M2,P1,qa,大文件与并发压测基线,NGA-WS12-001;NGA-WS12-004,13,benchmark_suite,30k 行与并发冲突指标达标,done
+NGA-WS13-001,WS13,M2,P0,feature,设计 Contract Gate 契约模型,NGA-WS10-001,12|13,subagent_runtime,contract_id+checksum 生效,done
+NGA-WS13-002,WS13,M2,P0,hardening,并行前契约协商门禁,NGA-WS13-001,12,subagent_runtime,契约不一致 fail-fast,done
+NGA-WS13-003,WS13,M2,P1,feature,Scaffold contract-aware 生成,NGA-WS13-002,12,scaffold_engine,补丁绑定 contract_id,done
+NGA-WS13-004,WS13,M2,P0,hardening,Workspace Transaction 管理器,NGA-WS13-003,12|13,execution_bridge,多文件提交原子化,done
+NGA-WS13-005,WS13,M2,P1,hardening,clean_state 保证与恢复票据,NGA-WS13-004,12,rollback_manager,失败后 clean_state=true,done
+NGA-WS13-006,WS13,M3,P1,qa,跨文件事务回归与联调,NGA-WS13-004;NGA-WS13-005,13,e2e_suite,事务失败自动回滚通过,done
+NGA-WS14-001,WS14,M1,P0,hardening,Policy Firewall 能力白名单校验,NGA-WS10-003,10|13,policy_firewall,混淆命令被拦截,review
+NGA-WS14-002,WS14,M1,P0,hardening,解释器入口硬门禁,NGA-WS14-001,10|13,interpreter_gate,python/sh encoded 入口阻断,review
+NGA-WS14-003,WS14,M2,P0,hardening,Global Mutex TTL Heartbeat Fencing,NGA-WS10-002,09|10|13,global_mutex,kill-9 注入后锁自动回收,done
+NGA-WS14-004,WS14,M2,P1,hardening,Orphan Lock 清道夫,NGA-WS14-003,13,lock_scavenger,无永久悬挂锁,done
+NGA-WS14-005,WS14,M2,P0,hardening,Process Lineage 绑定与回收,NGA-WS14-003,09|13,executor_runtime,按 lineage 递归清理,done
+NGA-WS14-006,WS14,M2,P0,hardening,Double-Fork 幽灵进程清理,NGA-WS14-005,13,detached_reaper,切主后无幽灵写入,done
+NGA-WS14-007,WS14,M1,P0,hardening,Sleep Watch ReDoS 防护,NGA-WS10-003,10|13,sleep_watch_daemon,灾难正则不拖垮宿主,done
+NGA-WS14-008,WS14,M1,P1,hardening,Logrotate 容错,NGA-WS14-007,12|13,watcher_reopen,rotate 后可唤醒,done
+NGA-WS14-009,WS14,M1,P0,hardening,KillSwitch OOB 出口策略,NGA-WS14-001,10|13,kill_switch,熔断时 OOB 通道可用,done
+NGA-WS14-010,WS14,M1,P1,ops,OOB 健康探测与恢复 runbook,NGA-WS14-009,10|13,oob_probe|runbook,OOB 可完成 disarm/recover,done
+NGA-WS15-001,WS15,M3,P1,feature,关键证据字段抽取器,NGA-WS11-001,11|13,gc_extractor,关键字段召回可测,done
+NGA-WS15-002,WS15,M3,P1,feature,叙事摘要与证据引用分离,NGA-WS15-001,11|13,summarizer|archiver,摘要不改写原证据,done
+NGA-WS15-003,WS15,M3,P1,refactor,GC 注入策略改造,NGA-WS15-002,11,memory_injector,注入索引卡片+ref,done
+NGA-WS15-004,WS15,M3,P1,hardening,GC 预算守门与回路防抖,NGA-WS15-003,09|11,token_guard,避免误判重试循环,done
+NGA-WS15-005,WS15,M3,P1,feature,证据回读自动化链路,NGA-WS11-002;NGA-WS15-003,11|12,gc_reader_bridge,中段根因可自动定位,done
+NGA-WS15-006,WS15,M3,P2,qa,GC 质量评测与回归基线,NGA-WS15-001;NGA-WS15-005,13,eval_suite,召回误删时延指标达标,done
+NGA-WS16-001,WS16,M0,P0,migration,迁移资产清单与依赖盘点,,01|07,migration_inventory,核心调用链覆盖盘点,done
+NGA-WS16-002,WS16,M4,P1,migration,AgentServer 弃用路径设计,NGA-WS16-001,01,agentserver_deprecation,不新增 agentserver 依赖,done
+NGA-WS16-003,WS16,M4,P1,migration,MCP 状态占位接口收敛,NGA-WS10-001,01,mcp_status_api,前端状态与真实状态一致,done
+NGA-WS16-004,WS16,M4,P1,migration,配置迁移脚本与版本化,NGA-WS16-001,05|07,config_migration,旧配置可无损升级,done
+NGA-WS16-005,WS16,M4,P1,ops,兼容双栈灰度与下线开关,NGA-WS16-003;NGA-WS16-004,07|09,feature_flags,灰度可回退,done
+NGA-WS16-006,WS16,M4,P2,migration,文档与 runbook 同步收口,NGA-WS16-005,README|all_docs,docs_runbook,迁移后口径一致,done
+NGA-WS17-001,WS17,M1,P0,qa,测试基线只读隔离,,13,test_governance,golden suite 只读可执行,done
+NGA-WS17-002,WS17,M1,P0,hardening,Anti-Test-Poisoning 检查器,NGA-WS17-001,13,ci_guard,毒化样例可拦截,review
+NGA-WS17-003,WS17,M2,P1,qa,Clean Checkout 双轨验证,NGA-WS17-001,13,ci_pipeline,双轨一致才可合并,done
+NGA-WS17-004,WS17,M5,P1,qa,混沌演练 锁泄漏与切主,NGA-WS14-003;NGA-WS14-004,13,chaos_lock,TTL 回收验证通过,done
+NGA-WS17-005,WS17,M5,P1,qa,混沌演练 ReDoS 与 logrotate,NGA-WS14-007;NGA-WS14-008,13,chaos_sleepwatch,不假死不打爆 CPU,done
+NGA-WS17-006,WS17,M5,P1,qa,混沌演练 double-fork 与磁盘压力,NGA-WS14-006;NGA-WS11-004,13,chaos_runtime_storage,幽灵回收且数据库不损坏,done
+NGA-WS17-007,WS17,M5,P1,ops,Canary 与自动回滚收敛,NGA-WS17-003,07,release_controller,canary 异常自动回滚,done
+NGA-WS17-008,WS17,M5,P2,ops,SLO 告警看板上线,NGA-WS11-006;NGA-WS14-010,10|11|12,observability,值班告警链路完整,done
+NGA-WS18-001,WS18,M2,P1,feature,Event Bus 事件模型收敛,NGA-WS10-001,10,event_schema,关键事件可统一消费重放,done
+NGA-WS18-002,WS18,M2,P1,hardening,Outbox Inbox 可靠投递整合,NGA-WS18-001,07|10,workflow_store|event_bus,事件不丢不重,done
+NGA-WS18-003,WS18,M2,P1,ops,Event Replay 与恢复路径,NGA-WS18-002,10,replay_tool,可按 trace 重放恢复,done
+NGA-WS18-004,WS18,M2,P1,feature,Watchdog 资源监控器落地,NGA-WS10-002,10,watchdog_daemon,超阈值可告警干预,done
+NGA-WS18-005,WS18,M2,P1,hardening,Loop Detector 与成本熔断联动,NGA-WS18-004,09|10,loop_cost_guard,死循环场景自动中断,done
+NGA-WS18-006,WS18,M2,P1,hardening,Immutable DNA 注入与校验,NGA-WS10-003,10,dna_loader,非授权变更被拒绝,done
+NGA-WS18-007,WS18,M3,P2,ops,DNA 变更审计与审批流程,NGA-WS18-006,10,dna_audit,变更责任可追溯,done
+NGA-WS18-008,WS18,M4,P2,ops,Brainstem 守护进程打包与托管,NGA-WS18-004;NGA-WS18-006,10|05,service_supervision,异常退出可自恢复,done
+NGA-WS19-001,WS19,M3,P1,feature,Meta-Agent 服务骨架落地,NGA-WS18-001,11,meta_agent_runtime,任务可拆解分发,done
+NGA-WS19-002,WS19,M3,P1,feature,Router 规则引擎与角色路由,NGA-WS19-001,11,router_engine,路由决策可解释可回放,done
+NGA-WS19-003,WS19,M3,P1,refactor,LLM Gateway 分层路由与缓存,NGA-WS10-003,11|09,llm_gateway,成本与时延指标达标,done
+NGA-WS19-004,WS19,M3,P1,feature,Working Memory 窗口管理器,NGA-WS19-003,11,memory_manager,token 峰值受控,done
+NGA-WS19-005,WS19,M3,P1,feature,Episodic Memory 写入与检索链路,NGA-WS15-002,11,long_term_memory,历史经验稳定召回,done
+NGA-WS19-006,WS19,M3,P2,feature,工具结果拓扑扫描与更新,NGA-WS19-005,11,semantic_graph,依赖链查询准确,done
+NGA-WS19-007,WS19,M4,P2,ops,Daily Checkpoint 日结归档,NGA-WS19-004;NGA-WS19-005,11,checkpoint_cron,日结稳定可审计,done
+NGA-WS19-008,WS19,M3,P1,hardening,Router 仲裁熔断联动,NGA-WS19-002;NGA-WS12-005,11|09,router_arbiter,超限冲突不无限循环,done
+NGA-WS20-001,WS20,M1,P1,migration,API 契约冻结与版本策略,NGA-WS10-001,04|08,apiserver_contract,兼容窗口明确,archived
+NGA-WS20-002,WS20,M2,P1,feature,SSE 事件协议统一,NGA-WS10-004,01|04,sse_protocol,前端消费无需多分支,archived
+NGA-WS20-003,WS20,M3,P2,refactor,前端模块按域解耦,NGA-WS20-001,08,frontend_modules,模块边界清晰可测,archived
+NGA-WS20-004,WS20,M4,P1,migration,MCP 状态展示与真实后端对齐,NGA-WS16-003,01|08,mcp_status_ui,UI 与后台状态一致,archived
+NGA-WS20-005,WS20,M4,P1,qa,前后端联调回归套件,NGA-WS20-002;NGA-WS20-004,05|08,e2e_front_back,核心链路回归全通过,archived
+NGA-WS20-006,WS20,M5,P2,qa,桌面端发布兼容性验证,NGA-WS20-005,05|08,electron_release_checks,关键平台稳定运行,archived
+NGA-WS23-001,WS23,M8,P0,feature,Brainstem Supervisor 独立启动入口与健康探针,,23,lane_bs,守护进程异常后可自动恢复，恢复事件可审计,done
+NGA-WS23-002,WS23,M8,P0,hardening,Watchdog 动作桥接到 SystemAgent 调度拒绝链,NGA-WS23-001,23,lane_bs,超阈值动作能阻断任务并记录原因,done
+NGA-WS23-003,WS23,M8,P0,hardening,Immutable DNA 校验接入发布门禁链,,23,lane_bs,缺审批票据时发布门禁必拒绝,done
+NGA-WS23-004,WS23,M8,P0,hardening,KillSwitch OOB 通道模板 + 回收脚本,,23,lane_bs,冻结策略不导致云主机失联，且可带外恢复,done
+NGA-WS23-005,WS23,M8,P1,feature,Workflow outbox 到 Brainstem 事件桥接适配器,NGA-WS23-001,23,lane_evt,关键事件不丢失且可回放,done
+NGA-WS23-006,WS23,M8,P1,qa,M8 门禁脚本 + Runbook,NGA-WS23-002;NGA-WS23-003;NGA-WS23-004;NGA-WS23-005,23,lane_rel,M8 回归脚本一次通过并产出报告,done
+NGA-WS24-001,WS24,M9,P0,feature,插件隔离 worker（独立进程） + IPC 协议,NGA-WS23-006,24,lane_plg,插件代码无法直接调用宿主危险能力,done
+NGA-WS24-002,WS24,M9,P0,hardening,register_new_tool 签名/清单/schema 校验,NGA-WS24-001,24,lane_plg,非签名或超权限插件注册失败,done
+NGA-WS24-003,WS24,M9,P0,hardening,插件资源限制（CPU/MEM/时限）与超时熔断,NGA-WS24-001,24,lane_plg,恶意插件不会拖垮宿主,done
+NGA-WS24-004,WS24,M9,P1,hardening,Plugin worker 生命周期与僵尸回收,NGA-WS24-001,24,lane_bs,worker 崩溃后可回收且不留幽灵进程,done
+NGA-WS24-005,WS24,M9,P1,qa,宿主劫持/逃逸混沌演练集,NGA-WS24-002;NGA-WS24-003;NGA-WS24-004,24,lane_obs,攻击样例均被拦截且有审计日志,done
+NGA-WS24-006,WS24,M9,P1,qa,M9 发布门禁接入（插件隔离）,NGA-WS24-005,24,lane_rel,发布前必须通过插件安全门禁,done
+NGA-WS25-001,WS25,M10,P0,feature,Topic 化 Event Bus 抽象层（替代纯日志模式）,NGA-WS24-006,25,lane_evt,事件可按 topic 订阅并持久化,done
+NGA-WS25-002,WS25,M10,P1,feature,Cron/Alert 事件生产者接入 Event Bus,NGA-WS25-001,25,lane_evt,定时与告警事件可进入统一总线,done
+NGA-WS25-003,WS25,M10,P0,hardening,Replay 幂等锚点与去重策略强化,NGA-WS25-001,25,lane_evt,重放不会导致重复副作用,done
+NGA-WS25-004,WS25,M10,P1,hardening,关键证据字段保真策略（TraceID/ErrorCode/路径）,NGA-WS25-001,25,lane_rt,GC 后硬字段召回率达标,done
+NGA-WS25-005,WS25,M10,P1,qa,Event/GC 质量评测基线脚本,NGA-WS25-003;NGA-WS25-004,25,lane_obs,回放与证据链指标稳定可回归,done
+NGA-WS25-006,WS25,M10,P1,qa,M10 综合门禁脚本链,NGA-WS25-002;NGA-WS25-005,25,lane_rel,M10 脚本链通过且报告完整,done
+NGA-WS26-001,WS26,M11,P0,hardening,SystemAgent 写路径强制收敛到 Scaffold/Txn,NGA-WS25-006,26,lane_rt,禁止绕过原子提交的默认路径,done
+NGA-WS26-002,WS26,M11,P0,feature,rollout/fail-open/lease 统一指标与导出,NGA-WS25-006,26,lane_obs,可看见灰度命中率与失败预算并标记 SubAgentRuntime 命名空间 archived_legacy,done
+NGA-WS26-003,WS26,M11,P0,hardening,fail-open 预算超限自动降级策略,NGA-WS26-002,26,lane_bs,超阈值自动切回 legacy 并告警且 SubAgentRuntimeAutoDegraded 仅作 archived_legacy 历史信号,done
+NGA-WS26-004,WS26,M11,P1,hardening,锁泄漏清道夫与 fencing 联动,NGA-WS26-001,26,lane_bs,orphan 锁可自动回收且无误杀,done
+NGA-WS26-005,WS26,M11,P1,hardening,double-fork/脱离进程树回收链,NGA-WS24-004;NGA-WS26-004,26,lane_bs,幽灵进程可识别并回收,done
+NGA-WS26-006,WS26,M11,P1,qa,M11 混沌门禁（锁泄漏/logrotate/double-fork）,NGA-WS26-003;NGA-WS26-004;NGA-WS26-005,26,lane_rel,三类场景回归稳定通过,done
+NGA-WS27-001,WS27,M12,P0,qa,72h 长稳耐久脚本与磁盘配额压测,NGA-WS26-006,27,lane_obs,无 ENOSPC/无未捕获异常/无事件丢失,done
+NGA-WS27-002,WS27,M12,P0,ops,Legacy -> SubAgent Full cutover 方案与回滚窗,NGA-WS26-006,27,lane_rel,可灰度放量并可一键回退且 SubAgentRuntime* 统一 archived_legacy,done
+NGA-WS27-003,WS27,M12,P1,qa,OOB 抢修 Runbook + 演练记录,NGA-WS27-002,27,lane_rel,云主机场景下可恢复可验证,done
+NGA-WS27-004,WS27,M12,P0,qa,release_closure_chain_full_m0_m12.py,NGA-WS27-001;NGA-WS27-002;NGA-WS27-003,27,lane_rel,M0-M12 统一收口脚本一键执行成功,done
+NGA-WS27-005,WS27,M12,P1,qa,文档一致性收口（00/10/11/12/13 + task）,NGA-WS27-004,27,lane_rel,文档状态与实现证据一致无冲突,done
+NGA-WS27-006,WS27,M12,P0,ops,Phase3 Full 放行报告与签署模板,NGA-WS27-005,27,lane_rel,放行报告可追踪到代码、测试、runbook,done
+NGA-WS28-019,WS28,M13,P0,hardening,脑干守护进程真实存活探测与自愈重启,NGA-WS28-018,25,brainstem_supervisor,stale pid 可识别并自动自愈重启,done
+NGA-WS28-020,WS28,M13,P0,ops,脑干控制面托管入口标准化（start/status/stop 同源）,NGA-WS28-017;NGA-WS28-019,25,brainstem_control_plane,托管链路报告与全链验收字段统一,done
+NGA-WS28-021,WS28,M13,P1,feature,FE/BE/Ops 角色执行器语义治理闭环 + signoff 策略分层,NGA-WS28-020,25,execution_bridge|release_signoff,reason_code hard/soft 分层生效且 spec 变更受 acl+ticket+ledger 管控,done
+NGA-WS28-022,WS28,M13,P0,hardening,Immutable DNA 运行时注入（每次 LLM 调用前强校验）,NGA-WS23-003,24|25,llm_service|immutable_dna,manifest 不一致时调用 fail-closed 并审计,done
+NGA-WS28-023,WS28,M13,P0,qa,Plugin Worker 隔离真实 MCP agent 联调,NGA-WS24-006,24,mcp_registry|plugin_worker,真实 MCP manifest 可在 isolated_worker 路径执行并产出报告,done
+NGA-WS28-024,WS28,M13,P1,refactor,Brainstem Supervisor 接入 main.py 主启动链,NGA-WS28-020,10|25,main|api_server,主启动链托管脑干控制面且避免重复 bootstrap,done
+NGA-WS28-025,WS28,M13,P1,feature,Watchdog Daemon 常驻化与状态采集,NGA-WS28-024,18|25,watchdog_daemon|system_agent,watchdog 由 run_once 升级为可托管常驻循环,done
