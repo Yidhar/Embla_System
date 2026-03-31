@@ -1868,15 +1868,21 @@ def _build_core_loop_initial_task(
     if not roster_lines:
         roster_lines.append("- no_active_children")
 
-    return _PIPELINE_PROMPT_ASSEMBLER.render_block(
-        "agents/core_exec/blocks/core_lifecycle_orchestrator.md",
-        variables={
-            "pipeline_id": str(pipeline_id or "").strip(),
-            "core_execution_session_id": str(core_execution_session_id or "").strip(),
-            "goal": str(message or "").strip(),
-            "children_roster": "\n".join(roster_lines),
-        },
-    ).strip()
+    try:
+        return _PIPELINE_PROMPT_ASSEMBLER.render_block(
+            "agents/core_exec/blocks/core_lifecycle_orchestrator.md",
+            variables={
+                "pipeline_id": str(pipeline_id or "").strip(),
+                "core_execution_session_id": str(core_execution_session_id or "").strip(),
+                "goal": str(message or "").strip(),
+                "children_roster": "\n".join(roster_lines),
+            },
+        ).strip()
+    except FileNotFoundError:
+        # Fallback: prompt block may be missing if branch switch removed it
+        goal = str(message or "").strip()
+        roster = "\n".join(roster_lines)
+        return f"[Pipeline {pipeline_id}] Goal: {goal}\nChildren:\n{roster}"
 
 
 def _new_scheduler_metrics(layer: str) -> Dict[str, Any]:
