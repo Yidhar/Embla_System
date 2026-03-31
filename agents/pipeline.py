@@ -1045,7 +1045,7 @@ def _collect_workspace_submission_summaries(reports: List[Dict[str, Any]]) -> Li
         audit_report_path = str(metadata.get("workspace_audit_report_path") or "").strip()
         audit_diff_path = str(metadata.get("workspace_audit_diff_path") or "").strip()
         has_submission_artifacts = bool(change_id or changed_files or audit_report_path or audit_diff_path)
-        promote_pending = submission_state not in {"promoted", "teardown_complete"} and (
+        promote_pending = submission_state not in {"promoted", "teardown_complete", "auto_promoted"} and (
             submission_state != "sandboxed" or has_submission_artifacts
         )
 
@@ -1590,6 +1590,71 @@ def _collect_descendant_session_ids(
             if child_id and child_id not in visited:
                 queue.append(child_id)
     return collected
+
+
+def _auto_promote_fast_track_worktree(
+    *,
+    store: AgentSessionStore,
+    session_id: str,
+    touched_files: List[str],
+) -> Dict[str, Any]:
+    """Copy changed files from fast-track worktree back to host repo.
+
+    Unlike the full promote_child_workspace flow (which requires approval_ticket
+    and formal audit), this lightweight promote is suitable for fast-track agents
+    whose output must be visible in the host working tree before teardown.
+    """
+    summary: Dict[str, Any] = {"promoted": False, "files_copied": 0, "errors": []}
+    if not touched_files:
+        return summary
+    try:
+        session = store.get(session_id) if session_id else None
+        if session is None:
+            return summary
+        meta = session.metadata if isinstance(session.metadata, dict) else {}
+        ws_mode = str(meta.get("workspace_mode") or "").strip()
+        ws_root = str(meta.get("workspace_root") or "").strip()
+        ws_origin = str(meta.get("workspace_origin_root") or "").strip()
+        if ws_mode != "worktree" or not ws_root:
+            return summary
+
+        from pathlib import Path as _Path
+        import shutil as _shutil
+
+        worktree = _Path(ws_root)
+        repo_root = _Path(ws_origin) if ws_origin else worktree.parent.parent
+        if not worktree.is_dir():
+            summary["errors"].append(f"worktree not found: {ws_root}")
+            return summary
+
+        copied = 0
+        for rel_path in touched_files:
+            src = worktree / rel_path
+            dst = repo_root / rel_path
+            if not src.exists():
+                continue
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                _shutil.copy2(str(src), str(dst))
+                copied += 1
+            except Exception as copy_exc:
+                summary["errors"].append(f"{rel_path}: {copy_exc}")
+
+        summary["promoted"] = copied > 0
+        summary["files_copied"] = copied
+        if copied:
+            store.update_metadata(session_id, {
+                "workspace_submission_state": "auto_promoted",
+                "workspace_submission_changed_files": list(touched_files),
+            })
+            logger.info(
+                "[Pipeline] Fast-track auto-promote: session=%s copied=%d/%d",
+                session_id, copied, len(touched_files),
+            )
+    except Exception as exc:
+        summary["errors"].append(str(exc))
+        logger.debug("Fast-track auto-promote failed: %s", exc, exc_info=True)
+    return summary
 
 
 def _teardown_fast_track_worktree(
@@ -4968,12 +5033,20 @@ async def run_multi_agent_pipeline(
                     changed_files=sorted(touched_files),
                 )
 
+                # ── Auto-promote: copy changed files from worktree to host ──
+                if not _ft_has_pending_promotion and successful_touched_files:
+                    _auto_promote_fast_track_worktree(
+                        store=_store,
+                        session_id=fast_track_agent_id,
+                        touched_files=sorted(successful_touched_files),
+                    )
+
                 # ── Worktree teardown: auto-cleanup unless promote is pending ──
                 if not _ft_has_pending_promotion:
                     wt_teardown = _teardown_fast_track_worktree(
                         store=_store,
                         session_id=fast_track_agent_id,
-                        reason="fast_track_no_promote" if successful_touched_files else "fast_track_readonly",
+                        reason="fast_track_auto_promoted" if successful_touched_files else "fast_track_readonly",
                     )
                 else:
                     wt_teardown = {"attempted": False, "reason": "promote_pending"}
