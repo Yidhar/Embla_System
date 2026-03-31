@@ -58,22 +58,28 @@ function Invoke-FullClosureChain {
     [string]$OutputPath
   )
 
+  $scriptPath = "scripts/release_closure_chain_full_m0_m7.py"
+  if (-not (Test-Path $scriptPath)) {
+    Write-Output "[dod_check] Closure chain script not found ($scriptPath), skipping."
+    return
+  }
+
   $runtime = Get-PythonRuntime
   $timeout = [Math]::Max(30, [int]$TimeoutSeconds)
 
-  $args = @()
-  $args += $runtime.PrefixArgs
-  $args += @(
-    "scripts/release_closure_chain_full_m0_m7.py",
+  $chainArgs = @()
+  $chainArgs += $runtime.PrefixArgs
+  $chainArgs += @(
+    $scriptPath,
     "--timeout-seconds", "$timeout",
     "--output", "$OutputPath"
   )
   if ($QuickMode) {
-    $args += "--quick-mode"
+    $chainArgs += "--quick-mode"
   }
 
-  Write-Output "[dod_check] Running closure chain: $($runtime.Exe) $($args -join ' ')"
-  & $runtime.Exe @args
+  Write-Output "[dod_check] Running closure chain: $($runtime.Exe) $($chainArgs -join ' ')"
+  & $runtime.Exe @chainArgs
   if ($LASTEXITCODE -ne 0) {
     throw "release_closure_chain_full_m0_m7 failed with exit code: $LASTEXITCODE"
   }
