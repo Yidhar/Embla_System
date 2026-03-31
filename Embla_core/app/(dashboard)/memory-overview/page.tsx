@@ -15,11 +15,10 @@ export default async function MemoryOverviewPage() {
   const data = await getMemoryOverview();
 
   const l1Total = data.l1.total ?? 0;
-  const l2Indexed = data.l2.indexed ?? 0;
+  const l2Total = data.l2.total ?? data.l2.indexed ?? data.grag_quintuples ?? 0;
   const l3Total = data.l3.total ?? 0;
-  const gragQuintuples = data.grag_quintuples ?? 0;
 
-  const overallSeverity = gragQuintuples > 0 || l1Total > 0 || l2Indexed > 0 || l3Total > 0
+  const overallSeverity = l1Total > 0 || l2Total > 0 || l3Total > 0
     ? "ok"
     : "unknown";
 
@@ -43,9 +42,9 @@ export default async function MemoryOverviewPage() {
         />
         <MetricCard
           title={t("memoryOverview.metrics.l2Indexed.title")}
-          value={formatNumber(l2Indexed, 0, locale)}
+          value={formatNumber(l2Total, 0, locale)}
           description={t("memoryOverview.metrics.l2Indexed.description")}
-          severity={l2Indexed > 0 ? "ok" : "unknown"}
+          severity={l2Total > 0 ? "ok" : "unknown"}
           locale={locale}
         />
         <MetricCard
@@ -53,13 +52,6 @@ export default async function MemoryOverviewPage() {
           value={formatNumber(l3Total, 0, locale)}
           description={t("memoryOverview.metrics.l3Vectors.description")}
           severity={l3Total > 0 ? "ok" : "unknown"}
-          locale={locale}
-        />
-        <MetricCard
-          title={t("memoryOverview.metrics.gragQuintuples.title")}
-          value={formatNumber(gragQuintuples, 0, locale)}
-          description={t("memoryOverview.metrics.gragQuintuples.description")}
-          severity={gragQuintuples > 0 ? "ok" : "unknown"}
           locale={locale}
         />
       </MetricGrid>
@@ -104,7 +96,7 @@ export default async function MemoryOverviewPage() {
             </div>
             <div className="flex items-center justify-between rounded-[20px] border border-white/70 bg-white/75 px-4 py-3">
               <span className="text-sm text-slate-500">{t("memoryOverview.layers.l2.indexed")}</span>
-              <span className="text-sm font-semibold text-slate-900">{formatNumber(l2Indexed, 0, locale)}</span>
+              <span className="text-sm font-semibold text-slate-900">{formatNumber(l2Total, 0, locale)}</span>
             </div>
             {data.l2.details ? (
               <div className="soft-inset p-4">

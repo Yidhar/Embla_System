@@ -3926,38 +3926,54 @@ async def get_ops_chronos_jobs():
         from core.scheduler.chronos import get_default_scheduler
         scheduler = get_default_scheduler()
         jobs = scheduler.list_jobs() if scheduler.is_running else []
-        return {"status": "success", "severity": "ok", "running": scheduler.is_running, "jobs": jobs, "total": len(jobs)}
+        return {"scheduler_running": scheduler.is_running, "job_count": len(jobs), "jobs": jobs}
     except Exception as exc:
-        return {"status": "success", "severity": "unknown", "running": False, "jobs": [], "total": 0, "error": str(exc)}
+        return {"scheduler_running": False, "job_count": 0, "jobs": [], "error": str(exc)}
 
 
 @router.get("/v1/ops/release/gates")
 async def get_ops_release_gates():
     """Evaluate release gates and return their status."""
+    now = datetime.now(timezone.utc).isoformat()
     try:
         from core.release.gate_runner import GateRunner
         runner = GateRunner(project_root=_ops_repo_root())
-        gates = {}
+        gates_list = []
         for gate_name in runner.list_gates():
-            # Only evaluate lightweight gates, skip deploy (too expensive)
-            if gate_name in ("read_only",):
+            try:
                 evaluation = runner.evaluate_gate(gate_name)
-                gates[gate_name] = evaluation.to_dict()
-            else:
-                gates[gate_name] = {"gate_name": gate_name, "passed": None, "reason": "not_evaluated", "checks": []}
-        return {"status": "success", "severity": "ok", "gates": gates, "total": len(gates)}
+                d = evaluation.to_dict()
+                d["name"] = gate_name
+                gates_list.append(d)
+            except Exception as gate_exc:
+                gates_list.append({
+                    "name": gate_name,
+                    "passed": None,
+                    "reason": f"evaluation_error: {gate_exc}",
+                    "checks": [],
+                })
+        return {
+            "status": "success", "generated_at": now, "severity": "ok",
+            "data": {"gates": gates_list},
+            "source_reports": [], "source_endpoints": ["/v1/ops/release/gates"],
+        }
     except Exception as exc:
-        return {"status": "success", "severity": "unknown", "gates": {}, "error": str(exc)}
+        return {
+            "status": "success", "generated_at": now, "severity": "unknown",
+            "data": {"gates": []}, "error": str(exc),
+            "source_reports": [], "source_endpoints": ["/v1/ops/release/gates"],
+        }
 
 
 @router.get("/v1/ops/agents/hierarchy")
 async def get_ops_agents_hierarchy():
     """Return agent session hierarchy and role distribution."""
+    now = datetime.now(timezone.utc).isoformat()
     try:
         from agents.runtime.agent_session import AgentSessionStore
-        store = AgentSessionStore()
+        store = AgentSessionStore(db_path="scratch/runtime/agent_sessions.db")
         sessions = []
-        for s in store.list_all():
+        for s in store.list_sessions():
             sessions.append({
                 "session_id": s.session_id,
                 "role": s.role,
@@ -3967,33 +3983,40 @@ async def get_ops_agents_hierarchy():
                 "created_at": str(getattr(s, 'created_at', '')),
             })
         store.close()
-        roles = {}
-        for s in sessions:
-            roles[s["role"]] = roles.get(s["role"], 0) + 1
         return {
-            "status": "success", "severity": "ok",
-            "sessions": sessions, "total": len(sessions), "role_distribution": roles,
+            "status": "success", "generated_at": now, "severity": "ok",
+            "data": {"sessions": sessions},
+            "source_reports": [], "source_endpoints": ["/v1/ops/agents/hierarchy"],
         }
     except Exception as exc:
-        return {"status": "success", "severity": "unknown", "sessions": [], "total": 0, "error": str(exc)}
+        return {
+            "status": "success", "generated_at": now, "severity": "unknown",
+            "data": {"sessions": []}, "error": str(exc),
+            "source_reports": [], "source_endpoints": ["/v1/ops/agents/hierarchy"],
+        }
 
 
 @router.get("/v1/ops/supervisor/health")
 async def get_ops_supervisor_health():
     """Aggregate supervisor subsystem health: brainstem, process guard, watchdog, killswitch."""
+    now = datetime.now(timezone.utc).isoformat()
     repo_root = _ops_repo_root()
     brainstem = _ops_build_brainstem_control_plane_summary(repo_root)
     process_guard = _ops_build_process_guard_summary(repo_root)
     watchdog = _ops_build_watchdog_daemon_summary(repo_root)
     killswitch = _ops_build_killswitch_guard_summary(repo_root)
-    services = [brainstem, process_guard, watchdog, killswitch]
-    healthy_count = sum(1 for s in services if str(s.get("severity", "")) == "ok")
-    severity = "ok" if healthy_count == len(services) else ("warning" if healthy_count > 0 else "critical")
+    services_list = [brainstem, process_guard, watchdog, killswitch]
+    healthy_count = sum(1 for s in services_list if str(s.get("severity", "")) == "ok")
+    severity = "ok" if healthy_count == len(services_list) else ("warning" if healthy_count > 0 else "critical")
     return {
-        "status": "success", "severity": severity,
-        "brainstem": brainstem, "process_guard": process_guard,
-        "watchdog": watchdog, "killswitch": killswitch,
-        "healthy_count": healthy_count, "total_services": len(services),
+        "status": "success", "generated_at": now, "severity": severity,
+        "data": {
+            "services": {
+                "brainstem": brainstem, "process_guard": process_guard,
+                "watchdog": watchdog, "killswitch": killswitch,
+            },
+        },
+        "source_reports": [], "source_endpoints": ["/v1/ops/supervisor/health"],
     }
 
 
@@ -4001,59 +4024,230 @@ async def get_ops_supervisor_health():
 async def get_ops_dna_integrity():
     """Return DNA prompt integrity verification and DNA prompt listing."""
     immutable_dna = _ops_build_immutable_dna_summary()
+    dna_status = str(immutable_dna.get("status", "unknown"))
+    verification_status = "pass" if dna_status == "ok" else ("unknown" if dna_status == "unknown" else "fail")
+    manifest_hash = str(immutable_dna.get("manifest_hash", ""))
+    # Build prompt list from manifest
+    prompts = []
     try:
-        from agents.evolution.self_tools import list_my_prompts
-        dna_prompts = list_my_prompts(scope="dna")
+        manifest_path = _ops_repo_root() / "system" / "prompts" / "immutable_dna_manifest.spec"
+        if manifest_path.exists():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for path, sha in manifest.get("files", {}).items():
+                size = None
+                full = _ops_repo_root() / "system" / "prompts" / path
+                if full.exists():
+                    size = full.stat().st_size
+                prompts.append({"path": path, "immutable": True, "sha256": sha, "size_bytes": size})
     except Exception:
-        dna_prompts = []
+        pass
     return {
-        "status": "success",
-        "severity": str(immutable_dna.get("severity", "unknown")),
-        "immutable_dna": immutable_dna,
-        "dna_prompts": dna_prompts,
-        "dna_count": len(dna_prompts),
+        "verification_status": verification_status,
+        "file_count": len(prompts),
+        "manifest_hash": manifest_hash,
+        "prompts": prompts,
     }
 
 
 @router.get("/v1/ops/memory/overview")
 async def get_ops_memory_overview():
-    """Aggregate memory tier overview: L1 scopes, L2 hierarchical, L3 vector, GRAG quintuples."""
+    """Aggregate memory tier overview.
+
+    Target-state naming:
+      L1 = File Memory (working / episodic / domain)
+      L2 = Shell Quintuple Graph (summer_memory)
+      L3 = Hierarchical RAG (indexed + vector)
+    """
     repo_root = _ops_repo_root()
     memory_root = repo_root / "memory"
-    # L1 counts
-    l1 = {"working": 0, "episodic": 0, "domain": 0}
-    for scope in l1:
+    # L1 — file-based memory
+    l1_details = {"working": 0, "episodic": 0, "domain": 0}
+    for scope in l1_details:
         scope_dir = memory_root / scope
         if scope_dir.exists():
-            l1[scope] = sum(1 for f in scope_dir.rglob("*.md") if f.is_file())
-    # L2 hierarchical index
-    l2_indexed = 0
-    hier_dir = memory_root / "hierarchical"
-    if hier_dir.exists():
-        l2_indexed = sum(1 for f in hier_dir.glob("*_index.json"))
-    # L3 vector
-    l3_count = 0
-    try:
-        from agents.memory.vector_store import L3VectorStore
-        vs = L3VectorStore(db_path=hier_dir / "vectors" / "l3_code_index.db")
-        l3_count = vs.count()
-        vs.close()
-    except Exception:
-        pass
-    # GRAG quintuples
+            l1_details[scope] = sum(1 for f in scope_dir.rglob("*.md") if f.is_file())
+    l1_total = sum(l1_details.values())
+    # L2 — Shell quintuple graph
     grag_count = 0
     try:
         from summer_memory.quintuple_graph import load_quintuples
         grag_count = len(load_quintuples())
     except Exception:
         pass
+    # L3 — Hierarchical RAG (indexed + vector)
+    l3_indexed = 0
+    l3_vectors = 0
+    hier_dir = memory_root / "hierarchical"
+    if hier_dir.exists():
+        l3_indexed = sum(1 for f in hier_dir.glob("*_index.json"))
+    try:
+        from agents.memory.vector_store import L3VectorStore
+        vs = L3VectorStore(db_path=hier_dir / "vectors" / "l3_code_index.db")
+        l3_vectors = vs.count()
+        vs.close()
+    except Exception:
+        pass
     return {
-        "status": "success", "severity": "ok",
-        "l1": l1, "l1_total": sum(l1.values()),
-        "l2_indexed_files": l2_indexed,
-        "l3_vector_chunks": l3_count,
+        "l1": {"scope": "file_memory", "total": l1_total, "details": l1_details},
+        "l2": {"scope": "quintuple_graph", "total": grag_count},
+        "l3": {"scope": "hierarchical_rag", "total": l3_vectors, "indexed": l3_indexed},
+        # Backward compat: keep grag_quintuples for clients that still read it
         "grag_quintuples": grag_count,
     }
+
+
+@router.get("/v1/ops/event-bus/health")
+async def get_ops_event_bus_health():
+    """Event Bus health: topic count, DLQ depth, subscription count, partition stats."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        from core.event_bus.topic_bus import TopicEventBus
+
+        events_file = _ops_repo_root() / "logs" / "autonomous" / "events.jsonl"
+        events_db = _ops_resolve_event_db_path(events_file)
+        bus = TopicEventBus(db_path=events_db)
+
+        topics = bus.list_topics(limit=500)
+        dlq = bus.get_dead_letters(limit=500)
+        partitions = bus.list_time_partitions(limit=36)
+        subscriptions = list(bus.iter_subscriptions())
+        recent = bus.read_recent(limit=1)
+        latest_event = recent[0] if recent else None
+
+        return {
+            "status": "success", "generated_at": now, "severity": "ok" if not dlq else "warning",
+            "data": {
+                "topic_count": len(topics),
+                "dlq_depth": len(dlq),
+                "subscription_count": len(subscriptions),
+                "partition_count": len(partitions),
+                "partitions": partitions[:12],
+                "latest_event_at": (latest_event or {}).get("timestamp", ""),
+                "latest_event_type": (latest_event or {}).get("event_type", ""),
+                "subscriptions": [
+                    {"pattern": s.pattern, "timeout_ms": getattr(s, "timeout_ms", None)}
+                    for s in subscriptions[:50]
+                ],
+            },
+            "source_endpoints": ["/v1/ops/event-bus/health"],
+        }
+    except Exception as exc:
+        return {
+            "status": "success", "generated_at": now, "severity": "unknown",
+            "data": {"topic_count": 0, "dlq_depth": 0, "subscription_count": 0},
+            "error": str(exc),
+            "source_endpoints": ["/v1/ops/event-bus/health"],
+        }
+
+
+@router.get("/v1/ops/event-bus/dlq")
+async def get_ops_event_bus_dlq():
+    """List dead-letter queue entries."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        from core.event_bus.topic_bus import TopicEventBus
+
+        events_file = _ops_repo_root() / "logs" / "autonomous" / "events.jsonl"
+        events_db = _ops_resolve_event_db_path(events_file)
+        bus = TopicEventBus(db_path=events_db)
+
+        dlq_entries = bus.get_dead_letters(limit=100)
+        return {
+            "status": "success", "generated_at": now,
+            "data": {
+                "total": len(dlq_entries),
+                "entries": dlq_entries,
+            },
+            "source_endpoints": ["/v1/ops/event-bus/dlq"],
+        }
+    except Exception as exc:
+        return {
+            "status": "success", "generated_at": now, "severity": "unknown",
+            "data": {"total": 0, "entries": []},
+            "error": str(exc),
+            "source_endpoints": ["/v1/ops/event-bus/dlq"],
+        }
+
+
+@router.get("/v1/ops/event-bus/topics")
+async def get_ops_event_bus_topics():
+    """Topic catalog with recent activity."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        from core.event_bus.topic_bus import TopicEventBus
+
+        events_file = _ops_repo_root() / "logs" / "autonomous" / "events.jsonl"
+        events_db = _ops_resolve_event_db_path(events_file)
+        bus = TopicEventBus(db_path=events_db)
+
+        topics = bus.list_topics(limit=200)
+        return {
+            "status": "success", "generated_at": now,
+            "data": {
+                "total": len(topics),
+                "topics": topics,
+            },
+            "source_endpoints": ["/v1/ops/event-bus/topics"],
+        }
+    except Exception as exc:
+        return {
+            "status": "success", "generated_at": now, "severity": "unknown",
+            "data": {"total": 0, "topics": []},
+            "error": str(exc),
+            "source_endpoints": ["/v1/ops/event-bus/topics"],
+        }
+
+
+@router.get("/v1/ops/workspaces")
+async def get_ops_workspaces():
+    """List active agent worktrees with state and disk usage."""
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        from system.git_worktree_sandbox import list_worktree_dirs
+        from agents.runtime.agent_session import AgentSessionStore
+
+        worktrees = list_worktree_dirs()
+        store = AgentSessionStore(db_path="scratch/runtime/agent_sessions.db")
+        sessions = store.list_sessions()
+        active_ids = {s.session_id for s in sessions}
+
+        enriched = []
+        total_size = 0
+        for wt in worktrees:
+            owner = wt["owner_session_id"]
+            is_active = owner in active_ids
+            session = next((s for s in sessions if s.session_id == owner), None)
+            submission_state = ""
+            if session:
+                submission_state = str(session.metadata.get("workspace_submission_state", ""))
+            total_size += wt.get("size_bytes", 0)
+            enriched.append({
+                "owner_session_id": owner,
+                "path": wt["path"],
+                "size_bytes": wt["size_bytes"],
+                "created_at": wt["created_at"],
+                "session_active": is_active,
+                "submission_state": submission_state,
+                "orphaned": not is_active,
+            })
+
+        return {
+            "status": "success", "generated_at": now,
+            "data": {
+                "total_worktrees": len(enriched),
+                "total_size_bytes": total_size,
+                "orphaned_count": sum(1 for w in enriched if w["orphaned"]),
+                "worktrees": enriched,
+            },
+            "source_endpoints": ["/v1/ops/workspaces"],
+        }
+    except Exception as exc:
+        return {
+            "status": "success", "generated_at": now, "severity": "unknown",
+            "data": {"total_worktrees": 0, "worktrees": []},
+            "error": str(exc),
+            "source_endpoints": ["/v1/ops/workspaces"],
+        }
 
 
 @router.get("/v1/ops/evolution/status")
@@ -4077,21 +4271,29 @@ async def get_ops_evolution_status():
         decision = trigger.evaluate()
         from agents.evolution.self_tools import list_my_prompts
         writable_prompts = list_my_prompts(scope="writable")
+        now = datetime.now(timezone.utc).isoformat()
         return {
-            "status": "success", "severity": "ok" if not decision.should_evolve else "info",
-            "enabled": enabled, "config": config,
-            "should_evolve": decision.should_evolve, "reason": decision.reason,
-            "signals": [
-                {
-                    "trigger_type": s.trigger_type, "task_type": s.task_type,
-                    "failure_count": s.failure_count, "confidence": s.confidence,
-                }
-                for s in decision.signals
-            ],
-            "writable_prompts": len(writable_prompts),
+            "status": "success", "generated_at": now,
+            "severity": "ok" if not decision.should_evolve else "warning",
+            "data": {
+                "enabled": enabled, "config": config,
+                "should_evolve": decision.should_evolve, "reason": decision.reason,
+                "failure_signals": [
+                    {"task_type": s.task_type, "failure_count": s.failure_count, "confidence": s.confidence}
+                    for s in decision.signals
+                ],
+                "writable_prompts": len(writable_prompts),
+            },
+            "source_reports": [], "source_endpoints": ["/v1/ops/evolution/status"],
         }
     except Exception as exc:
-        return {"status": "success", "severity": "unknown", "enabled": False, "error": str(exc)}
+        now = datetime.now(timezone.utc).isoformat()
+        return {
+            "status": "success", "generated_at": now, "severity": "unknown",
+            "data": {"enabled": False, "should_evolve": False, "failure_signals": [], "config": {}},
+            "error": str(exc),
+            "source_reports": [], "source_endpoints": ["/v1/ops/evolution/status"],
+        }
 
 
 # ── Backward-compat delegation (recursion-safe) ──────────────

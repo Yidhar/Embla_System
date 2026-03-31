@@ -198,6 +198,108 @@ def cleanup_git_worktree_sandbox(
     return False, error
 
 
+def list_worktree_dirs(repo_root: Optional[str | Path] = None) -> List[Dict[str, Any]]:
+    """List all agent worktree directories on disk with metadata.
+
+    Returns a list of dicts with keys: path, owner_session_id, size_bytes, created_at, exists.
+    """
+    root = Path(repo_root).resolve() if repo_root else Path(__file__).resolve().parents[1]
+    worktree_base = root / "scratch" / "agent_worktrees"
+    if not worktree_base.exists():
+        return []
+
+    results: List[Dict[str, Any]] = []
+    for entry in sorted(worktree_base.iterdir()):
+        if not entry.is_dir():
+            continue
+        # Estimate size (top-level only to avoid slow recursion)
+        try:
+            size = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+        except Exception:
+            size = 0
+        try:
+            created_at = datetime.fromtimestamp(entry.stat().st_ctime, tz=timezone.utc).isoformat()
+        except Exception:
+            created_at = ""
+        results.append({
+            "path": str(entry),
+            "owner_session_id": entry.name,
+            "size_bytes": size,
+            "created_at": created_at,
+            "exists": True,
+        })
+    return results
+
+
+def gc_sweep_stale_worktrees(
+    *,
+    repo_root: Optional[str | Path] = None,
+    active_session_ids: Optional[set] = None,
+    max_age_hours: float = 48.0,
+    dry_run: bool = True,
+    git_runner: GitRunner = run_git_command,
+) -> Dict[str, Any]:
+    """Garbage-collect orphaned or stale worktree directories.
+
+    A worktree is considered stale if:
+      - Its owner session_id is not in active_session_ids, OR
+      - It was created more than max_age_hours ago
+
+    Returns a summary dict with cleaned/skipped counts and details.
+    """
+    root = Path(repo_root).resolve() if repo_root else Path(__file__).resolve().parents[1]
+    active_ids = active_session_ids or set()
+    cutoff_ts = time.time() - (max_age_hours * 3600)
+
+    worktrees = list_worktree_dirs(repo_root=root)
+    cleaned: List[str] = []
+    skipped: List[str] = []
+    errors: List[Dict[str, str]] = []
+
+    for wt in worktrees:
+        owner = wt["owner_session_id"]
+        wt_path = Path(wt["path"])
+
+        # Skip if session is still active
+        if owner in active_ids:
+            skipped.append(owner)
+            continue
+
+        # Skip if not old enough
+        try:
+            ctime = wt_path.stat().st_ctime
+        except Exception:
+            ctime = 0.0
+        if ctime > cutoff_ts:
+            skipped.append(owner)
+            continue
+
+        # Stale — clean up
+        if dry_run:
+            cleaned.append(owner)
+            continue
+
+        success, error = cleanup_git_worktree_sandbox(
+            worktree_root=wt_path,
+            repo_root=root,
+            git_runner=git_runner,
+        )
+        if success:
+            cleaned.append(owner)
+            logger.info("GC: cleaned stale worktree %s", owner)
+        else:
+            errors.append({"owner": owner, "error": error})
+            logger.warning("GC: failed to clean worktree %s: %s", owner, error)
+
+    return {
+        "total_scanned": len(worktrees),
+        "cleaned": cleaned,
+        "skipped": skipped,
+        "errors": errors,
+        "dry_run": dry_run,
+    }
+
+
 def inherit_workspace_metadata(parent_metadata: Mapping[str, Any]) -> Dict[str, Any]:
     inherited: Dict[str, Any] = {}
     for key in (

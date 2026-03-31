@@ -646,6 +646,7 @@ class EmblaRuntime:
         self._process_guard_thread: threading.Thread | None = None
         self._sdlc_orchestrator: object | None = None
         self._chronos_scheduler: object | None = None
+        self._stop_config_watcher: Callable | None = None
 
     def run_diagnostic(self) -> int | None:
         return _run_diagnostic(self.options)
@@ -748,6 +749,8 @@ class EmblaRuntime:
             ("evolution_eval", "0 * * * *", self._run_evolution_eval),
             # agent 自唤醒 每30分钟检查待处理任务
             ("agent_wakeup", "*/30 * * * *", self._run_agent_wakeup),
+            # worktree GC 每6小时清理孤儿/过期 worktree
+            ("worktree_gc", "30 */6 * * *", self._run_worktree_gc),
         ]
         for job_id, cron_expr, func in jobs:
             try:
@@ -820,40 +823,88 @@ class EmblaRuntime:
         logger.info(f"巡检完成: {output}")
 
     def _run_evolution_eval(self) -> None:
-        """Hourly evolution evaluation — check for failure patterns and trigger self-improvement."""
+        """Hourly evolution evaluation — perceive → attribute → propose → execute → verify."""
         try:
             from agents.evolution.evolution_trigger import EvolutionTrigger
+            from agents.evolution.evolution_orchestrator import EvolutionOrchestrator
             from core.event_bus.event_store import EventStore
+
             store = EventStore(file_path=Path("logs/autonomous/events.jsonl"))
+
+            # Load self_evolution config
+            evo_config: dict = {}
+            try:
+                from system.config import get_embla_system_config
+                sys_cfg = get_embla_system_config()
+                evo_config = dict(
+                    (sys_cfg.get("autonomous", {}) or {}).get("self_evolution", {}) or {}
+                )
+            except Exception:
+                pass
+
+            if not evo_config.get("enabled", True):
+                logger.debug("进化评估: disabled in config")
+                return
+
+            trigger_threshold = int(evo_config.get("trigger_threshold", 3))
+            max_per_day = int(evo_config.get("max_evolutions_per_day", 5))
+
             trigger = EvolutionTrigger(
                 episodic_dir=Path("memory/episodic"),
-                trigger_threshold=3,
-                max_per_day=5,
+                trigger_threshold=trigger_threshold,
+                max_per_day=max_per_day,
                 event_emitter=store,
             )
             decision = trigger.evaluate()
-            if decision.should_evolve:
-                logger.info(f"进化触发: {decision.reason}")
-                store.emit("EvolutionEvalTriggered", {
-                    "reason": decision.reason,
-                    "signal_count": len(decision.signals),
-                    "top_task_type": decision.signals[0].task_type if decision.signals else "",
-                }, source="chronos.evolution_eval", severity="info")
-            else:
+
+            if not decision.should_evolve:
                 logger.debug(f"进化评估: {decision.reason}")
+                return
+
+            logger.info(f"进化触发: {decision.reason}")
+            store.emit("EvolutionEvalTriggered", {
+                "reason": decision.reason,
+                "signal_count": len(decision.signals),
+                "top_task_type": decision.signals[0].task_type if decision.signals else "",
+            }, source="chronos.evolution_eval", severity="info")
+
+            # Run the full evolution cycle: attribute → propose → execute/queue → verify
+            orchestrator = EvolutionOrchestrator(
+                episodic_dir=Path("memory/episodic"),
+                project_root=Path("."),
+                config=evo_config,
+                event_emitter=store,
+            )
+            cycle_result = orchestrator.run_cycle(decision.signals)
+
+            if cycle_result.acted:
+                logger.info(
+                    "进化周期完成: applied=%d, queued=%d, skipped=%d, errors=%d",
+                    cycle_result.applied_count, cycle_result.queued_count,
+                    cycle_result.skipped_count, len(cycle_result.errors),
+                )
+            elif cycle_result.queued_count > 0:
+                logger.info(
+                    "进化提案已排队: queued=%d (auto_approve=false)",
+                    cycle_result.queued_count,
+                )
+            else:
+                reasons = [a.category for a in cycle_result.attributions]
+                logger.info("进化评估完成但未操作: attributions=%s", reasons or "none")
+
         except Exception as exc:
-            logger.debug(f"进化评估失败: {exc}")
+            logger.debug(f"进化评估失败: {exc}", exc_info=True)
 
     def _run_agent_wakeup(self) -> None:
-        """30-minute agent wakeup — check for pending tasks and wake agent if needed."""
+        """30-minute agent wakeup — check for pending/blocked tasks and trigger recovery."""
         try:
             from agents.runtime.agent_session import AgentSessionStore, AgentStatus
-            store = AgentSessionStore()
-            # Check for sessions in WAITING status that might need attention
+            store = AgentSessionStore(db_path="scratch/runtime/agent_sessions.db")
             waiting_sessions = []
-            for session in store.list_all():
+            blocked_sessions = []
+            for session in store.list_sessions():
+                metadata = session.metadata or {}
                 if session.status == AgentStatus.WAITING:
-                    metadata = session.metadata or {}
                     pending_jobs = metadata.get("core_job_recovery_state", {}).get("pending_job_ids", [])
                     if pending_jobs:
                         waiting_sessions.append({
@@ -861,20 +912,89 @@ class EmblaRuntime:
                             "role": session.role,
                             "pending_jobs": len(pending_jobs),
                         })
+                # Detect blocked Core sessions eligible for recovery
+                heartbeat_level = str(metadata.get("heartbeat_last_stale_level") or "").strip()
+                if heartbeat_level == "blocked" and str(session.role or "").strip().lower() == "core":
+                    blocked_sessions.append({
+                        "session_id": session.session_id,
+                        "role": session.role,
+                        "blocked_task": str(metadata.get("heartbeat_blocked_task_id") or ""),
+                    })
+
+            signal_payload = {}
             if waiting_sessions:
                 logger.info(f"Agent 唤醒检查: {len(waiting_sessions)} 个会话有待处理任务")
+                signal_payload["waiting_count"] = len(waiting_sessions)
+                signal_payload["sessions"] = waiting_sessions[:5]
+            if blocked_sessions:
+                logger.info(f"Agent 唤醒检查: {len(blocked_sessions)} 个 Core 会话处于 blocked 状态，触发恢复")
+                signal_payload["blocked_count"] = len(blocked_sessions)
+                signal_payload["blocked_sessions"] = blocked_sessions[:5]
+
+            if signal_payload:
                 try:
                     from core.event_bus.event_store import EventStore
                     evt_store = EventStore(file_path=Path("logs/autonomous/events.jsonl"))
-                    evt_store.emit("AgentWakeupSignal", {
-                        "waiting_count": len(waiting_sessions),
-                        "sessions": waiting_sessions[:5],
-                    }, source="chronos.agent_wakeup", severity="info")
+                    evt_store.emit("AgentWakeupSignal", signal_payload, source="chronos.agent_wakeup", severity="info")
                 except Exception:
                     pass
+
+            # Trigger Core job manager recovery for blocked sessions
+            if blocked_sessions:
+                try:
+                    from apiserver.api_server import _get_core_job_manager
+                    job_manager = _get_core_job_manager()
+                    for bs in blocked_sessions:
+                        job_manager._recover_shell_state(str(bs.get("session_id") or ""))
+                except Exception:
+                    logger.debug("Core blocked session recovery trigger failed", exc_info=True)
+
             store.close()
         except Exception as exc:
             logger.debug(f"Agent 唤醒检查失败: {exc}")
+
+    def _run_worktree_gc(self) -> None:
+        """6-hour worktree garbage collection — remove orphaned/stale agent worktrees."""
+        try:
+            from agents.runtime.agent_session import AgentSessionStore
+            from system.git_worktree_sandbox import gc_sweep_stale_worktrees
+
+            store = AgentSessionStore(db_path="scratch/runtime/agent_sessions.db")
+            active_ids = {s.session_id for s in store.list_sessions()}
+            store.close()
+
+            result = gc_sweep_stale_worktrees(
+                active_session_ids=active_ids,
+                max_age_hours=2.0,
+                dry_run=False,
+            )
+
+            cleaned = result.get("cleaned", [])
+            errors = result.get("errors", [])
+            logger.info(
+                "Worktree GC 完成: cleaned=%d skipped=%d errors=%d",
+                len(cleaned),
+                len(result.get("skipped", [])),
+                len(errors),
+            )
+
+            try:
+                from core.event_bus.event_store import EventStore
+                evt_store = EventStore(file_path=Path("logs/autonomous/events.jsonl"))
+                evt_store.emit(
+                    "WorktreeGCCompleted",
+                    {
+                        "cleaned_count": len(cleaned),
+                        "error_count": len(errors),
+                        "cleaned_owners": cleaned[:10],
+                    },
+                    source="chronos.worktree_gc",
+                    severity="info" if not errors else "warning",
+                )
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.debug(f"Worktree GC 失败: {exc}", exc_info=True)
 
     def _init_sdlc_orchestrator(self) -> None:
         """Initialise the SDLC orchestrator if autonomous_runtime.yaml enables it."""
@@ -884,12 +1004,14 @@ class EmblaRuntime:
             from core.sdlc.orchestrator import SDLCOrchestrator
 
             config_path = Path("config/autonomous_runtime.yaml")
+            sdlc_cfg: dict = {}
             sdlc_enabled = False
             if config_path.exists():
                 try:
                     cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
                     autonomous = cfg.get("autonomous") or {}
-                    sdlc_enabled = bool(autonomous.get("sdlc", {}).get("enabled", False))
+                    sdlc_cfg = autonomous.get("sdlc") or {}
+                    sdlc_enabled = bool(sdlc_cfg.get("enabled", False))
                 except Exception:
                     pass
 
@@ -906,12 +1028,25 @@ class EmblaRuntime:
                 project_root=project_root,
                 event_emitter=event_emitter,
                 enabled=sdlc_enabled,
+                stages=sdlc_cfg.get("stages"),
+                auto_advance=bool(sdlc_cfg.get("auto_advance", False)),
             )
             orchestrator.start()
             self._sdlc_orchestrator = orchestrator
             logger.info("SDLC 编排器初始化完成 (enabled=%s)", sdlc_enabled)
         except Exception as exc:
             logger.warning("SDLC 编排器初始化失败: %s", exc)
+
+    def _start_config_watcher(self) -> None:
+        """Start the config file watcher daemon thread."""
+        try:
+            from system.config_manager import start_config_watcher, stop_config_watcher
+
+            start_config_watcher()
+            self._stop_config_watcher = stop_config_watcher
+            logger.info("配置文件监控已启动")
+        except Exception as exc:
+            logger.warning("配置文件监控启动失败: %s", exc)
 
     def initialize_services(self) -> None:
         _init_boxlite_runtime()
@@ -922,6 +1057,7 @@ class EmblaRuntime:
         self._init_chronos_scheduler()
         self._register_scheduled_jobs()
         self._init_sdlc_orchestrator()
+        self._start_config_watcher()
         self.services.api_server = _start_api_server(runtime_config=self.runtime_config)
         self.services.api_started = bool(self.services.api_server and self.services.api_server.startup_complete)
         if self.services.api_server and self.services.api_server.startup_failed:
@@ -1005,6 +1141,14 @@ class EmblaRuntime:
             except Exception as exc:
                 logger.warning("SDLC 编排器关闭异常: %s", exc)
             self._sdlc_orchestrator = None
+
+        # Cleanup config watcher
+        if self._stop_config_watcher is not None:
+            try:
+                self._stop_config_watcher()
+            except Exception as exc:
+                logger.warning("配置文件监控关闭异常: %s", exc)
+            self._stop_config_watcher = None
 
         cleanup_report = close_runtime_network_clients_sync()
         litellm_error = str(((cleanup_report.get("litellm") or {}).get("error")) or "").strip()

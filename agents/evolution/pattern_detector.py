@@ -81,24 +81,69 @@ class PatternDetector:
         return signals
 
     def _parse_frontmatter(self, content: str) -> Dict[str, Any]:
-        """Parse YAML-like frontmatter from markdown."""
+        """Parse metadata from markdown — supports both YAML frontmatter and bare metadata lines.
+
+        Format A (YAML frontmatter):
+            ---
+            outcome: failure
+            tags: [backend, api]
+            ---
+
+        Format B (bare metadata lines written by L1MemoryManager.write_experience):
+            # 经验：Title
+
+            tags: #backend #api
+            task: t-001
+            outcome: failure
+            date: 20260327
+        """
         lines = content.split("\n")
-        if not lines or lines[0].strip() != "---":
+        if not lines:
             return {}
+
         metadata: Dict[str, Any] = {}
-        for line in lines[1:]:
-            if line.strip() == "---":
+
+        # Detect format: YAML frontmatter starts with ---
+        if lines[0].strip() == "---":
+            for line in lines[1:]:
+                if line.strip() == "---":
+                    break
+                if ":" in line:
+                    key, _, value = line.partition(":")
+                    key = key.strip()
+                    value = value.strip()
+                    if value.startswith("[") and value.endswith("]"):
+                        items = [item.strip().strip("'\"") for item in value[1:-1].split(",") if item.strip()]
+                        metadata[key] = items
+                    else:
+                        metadata[key] = value
+            return metadata
+
+        # Format B: bare metadata lines — scan first 15 lines for key: value pairs
+        for line in lines[:15]:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if ":" not in stripped:
+                continue
+            # Skip markdown section headers like "## 问题"
+            if stripped.startswith("##"):
                 break
-            if ":" in line:
-                key, _, value = line.partition(":")
-                key = key.strip()
-                value = value.strip()
-                if value.startswith("[") and value.endswith("]"):
-                    # Simple list parsing
-                    items = [item.strip().strip("'\"") for item in value[1:-1].split(",") if item.strip()]
-                    metadata[key] = items
-                else:
-                    metadata[key] = value
+            key, _, value = stripped.partition(":")
+            key = key.strip()
+            value = value.strip()
+            if not key:
+                continue
+            # Parse "tags: #backend #api" → ["backend", "api"]
+            if key == "tags" and "#" in value:
+                items = [t.strip().lstrip("#") for t in value.split() if t.strip().startswith("#")]
+                metadata[key] = items if items else value
+            elif value.startswith("[") and value.endswith("]"):
+                items = [item.strip().strip("'\"") for item in value[1:-1].split(",") if item.strip()]
+                metadata[key] = items
+            else:
+                metadata[key] = value
+
         return metadata
 
     def _suggest_targets(self, cluster_key: str) -> List[str]:

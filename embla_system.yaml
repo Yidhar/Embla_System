@@ -3,10 +3,15 @@ profile: pythonic-secure
 runtime:
   heartbeat_interval_seconds: 5
   max_rounds_default: 500
-  max_task_cost_usd: 5.0
+  max_task_cost_usd: 5
+  core_loop:
+    soft_max_rounds: 12
+    hard_max_rounds: 0
+    poll_parent_every_n: 3
+    quiescent_cycles_before_stop: 2
   child_session_cleanup:
-    mode: retain
-    ttl_seconds: 86400
+    mode: ttl
+    ttl_seconds: 3600
 security:
   enforce_dual_lane: true
   approval_required_scopes:
@@ -17,8 +22,8 @@ security:
   audit_ledger_file: scratch/runtime/audit_ledger.jsonl
   audit_signing_key_env: EMBLA_AUDIT_SIGNING_KEY
   immutable_dna_runtime_prompts:
-  - dna/core_values
-  - dna/evolution_drive
+  - core_values
+  - evolution_drive
   immutable_agent_identity_prompts:
   - shell_persona
   evolvable_runtime_prompts:

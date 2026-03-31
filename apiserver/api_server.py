@@ -133,7 +133,7 @@ def _configure_core_job_manager_runtime(manager: Optional[CoreDispatchJobManager
         child_tool_executor=_default_pipeline_child_tool_executor,
         enable_child_execution=True,
         child_max_rounds=child_max_rounds,
-        child_session_cleanup_mode=str(child_session_cleanup_policy.get("mode") or "retain"),
+        child_session_cleanup_mode=str(child_session_cleanup_policy.get("mode") or "ttl"),
         child_session_cleanup_ttl_seconds=int(child_session_cleanup_policy.get("ttl_seconds") or 0),
         heartbeat_interval_seconds=_PIPELINE_STREAM_HEARTBEAT_INTERVAL_SECONDS,
     )
@@ -1040,6 +1040,56 @@ def _should_force_core_dispatch_after_shell_budget(
     return False
 
 
+def _persist_shell_context_to_pipeline_store(
+    session_id: str,
+    shell_messages: List[Dict[str, Any]],
+) -> None:
+    """Extract Shell tool results from conversation and write to pipeline context store.
+
+    This is the WRITE side of the pull-model context sharing. Downstream pipeline
+    stages (Expert/Dev) read from the store by session_id when building prompts.
+    """
+    try:
+        from agents.runtime.pipeline_context import get_pipeline_context_store
+
+        # Build tool_call_id → tool_name index from assistant messages
+        call_id_to_name: Dict[str, str] = {}
+        for msg in shell_messages:
+            if msg.get("role") == "assistant":
+                for tc in msg.get("tool_calls") or []:
+                    cid = str(tc.get("id") or "").strip()
+                    if cid:
+                        call_id_to_name[cid] = str(tc.get("name") or tc.get("function", {}).get("name") or "")
+
+        entries: List[Dict[str, Any]] = []
+        for msg in shell_messages:
+            if msg.get("role") != "tool":
+                continue
+            call_id = str(msg.get("tool_call_id") or "").strip()
+            tool_name = call_id_to_name.get(call_id, "")
+            if not tool_name or tool_name == "dispatch_to_core":
+                continue
+            raw_content = msg.get("content", "{}")
+            try:
+                parsed = json.loads(raw_content) if isinstance(raw_content, str) else raw_content
+            except (json.JSONDecodeError, TypeError):
+                parsed = {"raw": str(raw_content)}
+            entries.append({
+                "source_role": "shell",
+                "entry_type": "tool_result",
+                "tool_name": tool_name,
+                "content": parsed,
+            })
+
+        if entries:
+            store = get_pipeline_context_store()
+            store.clear(session_id)  # Replace stale context from prior dispatches
+            written = store.write_batch(session_id=session_id, entries=entries)
+            logger.debug("[PipelineContext] Wrote %d Shell tool entries for session %s", written, session_id)
+    except Exception:
+        logger.debug("Failed to persist Shell context to pipeline store", exc_info=True)
+
+
 # 历史流式文本切分器已移除，流式处理统一由 chat_stream 主循环管理
 
 
@@ -1079,6 +1129,15 @@ async def lifespan(app: FastAPI):
         if bool(brainstem_bootstrap.get("enabled")) and not bool(brainstem_bootstrap.get("passed", True)):
             print("[WARN] Brainstem 控制面自动托管未通过，运行态势可能显示 unknown/missing")
         app.state.core_job_manager = _get_core_job_manager()
+        # Start SerialActionQueue worker for high-risk write serialization
+        try:
+            from core.event_bus.serial_queue import get_serial_action_queue
+            _serial_queue = get_serial_action_queue()
+            await _serial_queue.start_worker()
+            app.state.serial_action_queue = _serial_queue
+            logger.info("SerialActionQueue worker 已启动")
+        except Exception as saq_exc:
+            logger.warning("SerialActionQueue 启动失败（降级为直接执行）: %s", saq_exc)
         print("[SUCCESS] API服务器初始化完成")
         yield
     except Exception as e:
@@ -1091,6 +1150,13 @@ async def lifespan(app: FastAPI):
             await _get_core_job_manager().shutdown()
         except Exception as exc:
             logger.warning("Core dispatch job manager 关闭失败: %s", exc)
+        # Shut down serial action queue
+        try:
+            _saq = getattr(app.state, "serial_action_queue", None)
+            if _saq is not None:
+                await _saq.stop_worker()
+        except Exception:
+            pass
         app.state.immutable_dna_monitor_shutdown = _bootstrap_immutable_dna_monitor_shutdown()
         app.state.brainstem_shutdown = _bootstrap_brainstem_control_plane_shutdown()
         try:
@@ -2394,6 +2460,13 @@ async def chat_stream(request: ChatRequest):
 
             # ── Core handoff only happens when Shell explicitly dispatches. ──
             if dispatch_payload:
+                # Tag dispatch with Shell session for downstream context lookup
+                dispatch_payload["shell_session_id"] = session_id
+
+                # Write Shell tool results to pipeline context store (pull model).
+                # Downstream agents (Expert/Dev) read from this store by session_id.
+                _persist_shell_context_to_pipeline_store(session_id, shell_messages)
+
                 route_decision = dict(dispatch_payload.get("router_decision") or {})
                 dispatched_goal = str(dispatch_payload.get("goal") or "").strip() or effective_message
                 route_semantic = "core_execution"
@@ -2422,7 +2495,7 @@ async def chat_stream(request: ChatRequest):
                     child_tool_executor=_pipeline_child_tool_executor,
                     enable_child_execution=True,
                     child_max_rounds=child_max_rounds,
-                    child_session_cleanup_mode=str(child_session_cleanup_policy.get("mode") or "retain"),
+                    child_session_cleanup_mode=str(child_session_cleanup_policy.get("mode") or "ttl"),
                     child_session_cleanup_ttl_seconds=int(child_session_cleanup_policy.get("ttl_seconds") or 0),
                     mailbox=agent_mailbox,
                     task_board_engine=task_board_engine,

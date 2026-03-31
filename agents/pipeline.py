@@ -48,9 +48,176 @@ logger = logging.getLogger(__name__)
 _PIPELINE_PROMPT_ASSEMBLER = get_default_assembler()
 _CANONICAL_PROMPTS_ROOT = str(get_system_prompts_root())
 
-# ── L1 Memory singleton + L2 sync hook wiring ───────────────
+# ── L1 Memory singleton + Tool-Result Topology sync hook ────
 _l1_mgr = get_default_l1_manager()
 register_l1_to_l2_hooks(_l1_mgr)
+
+
+# ── Experience recording — perception layer for evolution ────
+def _record_dev_experience(result: Dict[str, Any], *, goal: str = "") -> None:
+    """Write a Dev task outcome to L1 episodic memory for evolution consumption."""
+    try:
+        status = str(result.get("status") or "").strip().lower()
+        task_id = str(result.get("task_id") or "").strip()
+        agent_id = str(result.get("agent_id") or "").strip()
+        completion_report = str(result.get("completion_report") or "").strip()
+        changed_files = list(result.get("changed_files") or [])
+        metadata = dict(result.get("metadata") or {})
+        stop_reason = str(metadata.get("loop_stop_reason") or "").strip()
+        blocked_reason = str(metadata.get("blocked_reason") or "").strip()
+
+        # Determine outcome
+        if status == "waiting" and not blocked_reason:
+            outcome = "success"
+        elif blocked_reason or stop_reason in ("llm_error", "max_rounds_reached"):
+            outcome = "failure"
+        else:
+            outcome = "partial"
+
+        # Build problem/solution from available data
+        if outcome == "failure":
+            problem = blocked_reason or stop_reason or "Dev agent did not complete task"
+            solution = ""
+        else:
+            problem = goal[:300] if goal else task_id
+            solution = completion_report[:500] if completion_report else ""
+
+        # Infer tags from stop_reason and goal
+        tags = []
+        if "llm_error" in stop_reason or "timeout" in stop_reason.lower():
+            tags.append("upstream_error")
+        if "max_rounds" in stop_reason:
+            tags.append("max_rounds")
+        if blocked_reason:
+            tags.append("blocked")
+        # Infer domain from goal keywords
+        goal_lower = (goal or "").lower()
+        for keyword, tag in [("frontend", "frontend"), ("backend", "backend"), ("test", "testing"),
+                             ("api", "api"), ("config", "config"), ("deploy", "ops"), ("docker", "ops")]:
+            if keyword in goal_lower:
+                tags.append(tag)
+                break
+        if not tags:
+            tags.append("backend")
+
+        slug = f"dev_{task_id}_{agent_id[-8:]}" if agent_id else f"dev_{task_id}"
+        _l1_mgr.write_experience(
+            name=slug,
+            task_id=task_id,
+            title=f"Dev task {task_id}: {outcome}",
+            outcome=outcome,
+            problem=problem,
+            solution=solution,
+            files=changed_files[:20],
+            tags=tags,
+        )
+    except Exception:
+        logger.debug("Failed to record dev experience", exc_info=True)
+
+
+def _record_pipeline_experience(
+    *,
+    pipeline_id: str,
+    task_completed: bool,
+    stop_reason: str,
+    goal: str = "",
+    expert_count: int = 0,
+    review_results: Optional[List[Dict[str, Any]]] = None,
+    blocked_reasons: Optional[List[str]] = None,
+    changed_files: Optional[List[str]] = None,
+) -> None:
+    """Write a pipeline-level outcome summary to L1 episodic memory."""
+    try:
+        outcome = "success" if task_completed else "failure"
+        problem = ""
+        solution = ""
+
+        if not task_completed:
+            reasons = [r for r in (blocked_reasons or []) if r]
+            problem = f"Pipeline stopped: {stop_reason}. " + ("; ".join(reasons[:3]) if reasons else "")
+        else:
+            review_verdicts = [str(r.get("review_result", {}).get("verdict", "")) for r in (review_results or [])]
+            solution = f"Completed with {expert_count} expert(s). Reviews: {', '.join(review_verdicts) or 'none'}"
+
+        tags = []
+        if "timeout" in stop_reason.lower() or "llm_error" in stop_reason.lower():
+            tags.append("upstream_error")
+        if "review_rejected" in stop_reason:
+            tags.append("review_rejected")
+        if "pending_descendant" in stop_reason:
+            tags.append("incomplete")
+        if "blocked" in stop_reason:
+            tags.append("blocked")
+        goal_lower = (goal or "").lower()
+        for keyword, tag in [("frontend", "frontend"), ("backend", "backend"), ("test", "testing"),
+                             ("api", "api"), ("config", "config")]:
+            if keyword in goal_lower:
+                tags.append(tag)
+                break
+        if not tags:
+            tags.append("backend")
+
+        _l1_mgr.write_experience(
+            name=f"pipeline_{pipeline_id[-12:]}",
+            task_id=pipeline_id,
+            title=f"Pipeline {pipeline_id}: {outcome}",
+            outcome=outcome,
+            problem=problem[:500],
+            solution=solution[:500],
+            files=list(changed_files or [])[:20],
+            tags=tags,
+        )
+        # ── Synchronous friction check: detect patterns in real-time ──
+        if not task_completed:
+            _check_inline_friction(tags=tags, pipeline_id=pipeline_id)
+    except Exception:
+        logger.debug("Failed to record pipeline experience", exc_info=True)
+
+
+def _check_inline_friction(*, tags: List[str], pipeline_id: str) -> None:
+    """Lightweight synchronous pattern check after failure recording.
+
+    Instead of waiting for the hourly Chronos evolution_eval, this runs a
+    fast scan of recent episodic memory. If a failure cluster reaches the
+    trigger threshold, it writes a friction report that the evolution system
+    can pick up immediately.
+    """
+    try:
+        from pathlib import Path as _Path
+        from agents.evolution.pattern_detector import PatternDetector
+
+        episodic_dir = _Path("memory/episodic")
+        if not episodic_dir.exists():
+            return
+
+        detector = PatternDetector(episodic_dir=episodic_dir, trigger_threshold=3)
+        signals = detector.check_recent(limit=20)
+
+        if not signals:
+            return
+
+        # Found pattern(s) — write friction report for immediate pickup
+        from agents.evolution.metacognition import report_framework_friction
+
+        for signal in signals:
+            report_framework_friction(
+                friction_type="prompt_gap",
+                description=(
+                    f"Repeated failure pattern detected during pipeline {pipeline_id}: "
+                    f"{signal.task_type} ({signal.failure_count} failures). "
+                    f"Suggested targets: {', '.join(signal.suggested_targets) or 'none'}"
+                ),
+                affected_component=signal.suggested_targets[0] if signal.suggested_targets else "",
+                severity="high" if signal.failure_count >= 5 else "medium",
+                suggested_fix=f"Review and improve prompt: {', '.join(signal.suggested_targets)}",
+            )
+        logger.info(
+            "[Pipeline] Inline friction check found %d pattern(s) for pipeline %s",
+            len(signals),
+            pipeline_id,
+        )
+    except Exception:
+        logger.debug("Inline friction check failed", exc_info=True)
 
 
 ChildLLMCallFn = Callable[[List[Dict[str, Any]], List[Dict[str, Any]], str], Awaitable[Dict[str, Any]]]
@@ -83,7 +250,7 @@ _FAST_TRACK_PROTECTED_EXACT = {
 }
 _MAX_REVIEW_REMEDIATION_CYCLES = 3
 _MAX_REVIEW_REJECT_RESPAWNS = 1
-_MAX_HEARTBEAT_BLOCKED_RESPAWNS = 1
+_MAX_HEARTBEAT_BLOCKED_RESPAWNS = 3
 _MAX_CHILD_LOOP_MAX_ROUNDS_RESUMES = 1
 _MAX_CHILD_LOOP_MAX_ROUNDS_RESPAWNS = 1
 _HEARTBEAT_MONITOR_POLL_SECONDS = 0.05
@@ -196,6 +363,55 @@ def _build_execution_runtime_summary(reports: List[Dict[str, Any]]) -> Dict[str,
     if len(summary["resource_profiles"]) == 1:
         summary["resource_profile"] = summary["resource_profiles"][0]
     return summary
+
+
+def _lookup_shell_session_id_from_chain(store: "AgentSessionStore", expert_id: str) -> str:
+    """Walk the session chain expert → core to find shell_session_id in metadata."""
+    try:
+        expert_session = store.get(str(expert_id or "").strip()) if expert_id else None
+        if expert_session is None:
+            return ""
+        core_id = str(expert_session.parent_id or "").strip()
+        if not core_id:
+            return ""
+        core_session = store.get(core_id)
+        if core_session is None or not isinstance(core_session.metadata, dict):
+            return ""
+        return str(core_session.metadata.get("shell_session_id") or "").strip()
+    except Exception:
+        return ""
+
+
+def _build_upstream_context_section(shell_session_id: str) -> str:
+    """Read upstream Shell tool results from pipeline context store (pull model).
+
+    Returns a formatted text section, or empty string if nothing found.
+    """
+    if not shell_session_id:
+        return ""
+    try:
+        from agents.runtime.pipeline_context import get_pipeline_context_store
+
+        entries = get_pipeline_context_store().read(shell_session_id, entry_type="tool_result")
+        if not entries:
+            return ""
+        lines = ["[Upstream Shell Findings]"]
+        for entry in entries:
+            tool_name = entry.get("tool_name", "unknown")
+            content = entry.get("content", {})
+            if isinstance(content, dict):
+                serialized = json.dumps(content, ensure_ascii=False, default=str)
+            else:
+                serialized = str(content)
+            # Truncate overly large results to prevent prompt bloat
+            if len(serialized) > 2000:
+                serialized = serialized[:2000] + "...(truncated)"
+            lines.append(f"[{tool_name}] {serialized}")
+        lines.append("以上为 Shell 层在派发前收集的工具结果，可直接作为上下文使用，无需重新调用。")
+        return "\n".join(lines)
+    except Exception:
+        logger.debug("Failed to read upstream context from pipeline store", exc_info=True)
+        return ""
 
 
 def _normalize_dispatch_string_list(raw_items: Any) -> List[str]:
@@ -1374,6 +1590,53 @@ def _collect_descendant_session_ids(
             if child_id and child_id not in visited:
                 queue.append(child_id)
     return collected
+
+
+def _teardown_fast_track_worktree(
+    *,
+    store: AgentSessionStore,
+    session_id: str,
+    reason: str = "fast_track_complete",
+) -> Dict[str, Any]:
+    """Teardown a fast-track agent's worktree if it owns one.
+
+    Called in the fast-track finally block to prevent worktree leaks.
+    Safe to call even if no worktree exists (returns a no-op summary).
+    """
+    summary: Dict[str, Any] = {"attempted": False, "success": False, "reason": reason}
+    try:
+        session = store.get(session_id) if session_id else None
+        if session is None:
+            return summary
+        meta = session.metadata if isinstance(session.metadata, dict) else {}
+        ws_mode = str(meta.get("workspace_mode") or "").strip()
+        ws_root = str(meta.get("workspace_root") or "").strip()
+        ws_owner = str(meta.get("workspace_owner_session_id") or "").strip()
+        if ws_mode != "worktree" or not ws_root or ws_owner != session_id:
+            return summary
+
+        from system.git_worktree_sandbox import cleanup_git_worktree_sandbox
+        from pathlib import Path as _Path
+
+        summary["attempted"] = True
+        success, error = cleanup_git_worktree_sandbox(worktree_root=_Path(ws_root))
+        summary["success"] = success
+        if error:
+            summary["error"] = error
+
+        # Update session metadata to reflect teardown
+        store.update_metadata(session_id, {
+            "workspace_submission_state": "teardown_complete",
+            "workspace_cleanup_on_destroy": False,
+        })
+        logger.info(
+            "[Pipeline] Fast-track worktree teardown: session=%s success=%s reason=%s",
+            session_id, success, reason,
+        )
+    except Exception as exc:
+        summary["error"] = str(exc)
+        logger.debug("Fast-track worktree teardown failed: %s", exc, exc_info=True)
+    return summary
 
 
 def _apply_child_session_cleanup(
@@ -2859,6 +3122,13 @@ async def _run_dev_mini_loop(
     )
     runtime_tool_defs = _build_runtime_tool_definitions(resolved_tool_subset)
     dev_initial_task = str(session.task_description or fallback_task_description or "").strip()
+
+    # Pull upstream Shell context via session chain: dev → expert → core → metadata.shell_session_id
+    _dev_shell_session_id = _lookup_shell_session_id_from_chain(store, expert_id)
+    upstream_section = _build_upstream_context_section(_dev_shell_session_id)
+    if upstream_section:
+        dev_initial_task += "\n\n" + upstream_section
+
     loop_config = MiniLoopConfig(max_rounds=max(1, int(child_max_rounds)), poll_parent_every_n=3)
 
     async def _execute_dev_tool(
@@ -2916,6 +3186,8 @@ async def _run_dev_mini_loop(
         result=result,
         log_context=board_log_context,
     )
+    # ── Perception: record dev experience for evolution ──
+    _record_dev_experience(result, goal=dev_initial_task[:300] if dev_initial_task else "")
     await emit({
         "type": end_event_type,
         **event_fields,
@@ -4125,8 +4397,8 @@ async def run_multi_agent_pipeline(
     child_tool_executor: Optional[ChildToolExecutorFn] = None,
     enable_child_execution: bool = False,
     child_max_rounds: int = 12,
-    child_session_cleanup_mode: str = "retain",
-    child_session_cleanup_ttl_seconds: int = 86400,
+    child_session_cleanup_mode: str = "ttl",
+    child_session_cleanup_ttl_seconds: int = 3600,
     store: Optional[AgentSessionStore] = None,
     mailbox: Optional[AgentMailbox] = None,
     task_board_engine: Optional[TaskBoardEngine] = None,
@@ -4316,6 +4588,13 @@ async def run_multi_agent_pipeline(
         goal=message,
         pipeline_id=pipeline_id,
     )
+    # Persist shell_session_id in core session metadata for downstream context lookup
+    _shell_session_id = str(dispatch.get("shell_session_id") or "").strip()
+    if _shell_session_id:
+        try:
+            _store.update_metadata(resolved_core_execution_session_id, {"shell_session_id": _shell_session_id})
+        except Exception:
+            logger.debug("Failed to persist shell_session_id in core session metadata", exc_info=True)
     runtime_child_execution_enabled = bool(
         enable_child_execution and child_llm_call is not None and child_tool_executor is not None
     )
@@ -4333,6 +4612,10 @@ async def run_multi_agent_pipeline(
             max_files = max(1, int(core_route_plan.get("max_files") or 1))
             max_changed_lines = max(1, int(core_route_plan.get("max_changed_lines") or 10))
             fast_track_task_description = _build_fast_track_task_description(dispatch, message)
+            # Pull upstream Shell context (pull model)
+            upstream_section = _build_upstream_context_section(_shell_session_id)
+            if upstream_section:
+                fast_track_task_description += "\n\n" + upstream_section
 
             fast_track_spawn_args = {
                 "role": "dev",
@@ -4375,6 +4658,7 @@ async def run_multi_agent_pipeline(
                 guard_blocked_details: List[Dict[str, Any]] = []
                 fast_track_last_content = ""
                 fast_track_loop_end_reason = ""
+                _ft_has_pending_promotion = False
 
                 async def _execute_fast_track_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
                     normalized_tool = _normalize_fast_track_tool_name(tool_name)
@@ -4621,6 +4905,7 @@ async def run_multi_agent_pipeline(
                     )
                     if pending_workspace_submission:
                         stop_reason = "awaiting_workspace_promotion"
+                        _ft_has_pending_promotion = True
                 receipt_event = _build_fast_track_execution_receipt(
                     pipeline_id=pipeline_id,
                     goal=str(dispatch.get("goal") or message),
@@ -4667,6 +4952,26 @@ async def run_multi_agent_pipeline(
                     "touched_files": sorted(touched_files),
                 }
 
+                # ── Perception: record fast-track experience for evolution ──
+                _record_pipeline_experience(
+                    pipeline_id=pipeline_id,
+                    task_completed=fast_track_completed,
+                    stop_reason=stop_reason,
+                    goal=str(dispatch.get("goal") or message or ""),
+                    expert_count=1,
+                    changed_files=sorted(touched_files),
+                )
+
+                # ── Worktree teardown: auto-cleanup unless promote is pending ──
+                if not _ft_has_pending_promotion:
+                    wt_teardown = _teardown_fast_track_worktree(
+                        store=_store,
+                        session_id=fast_track_agent_id,
+                        reason="fast_track_no_promote" if successful_touched_files else "fast_track_readonly",
+                    )
+                else:
+                    wt_teardown = {"attempted": False, "reason": "promote_pending"}
+
                 cleanup_summary = _apply_child_session_cleanup(
                     store=_store,
                     mailbox=_mailbox,
@@ -4675,6 +4980,7 @@ async def run_multi_agent_pipeline(
                     mode=child_session_cleanup_mode,
                     ttl_seconds=int(child_session_cleanup_ttl_seconds),
                 )
+                cleanup_summary["worktree_teardown"] = wt_teardown
                 yield {
                     "type": "pipeline_cleanup",
                     "pipeline_id": pipeline_id,
@@ -4823,6 +5129,18 @@ async def run_multi_agent_pipeline(
             if isinstance(gather_item, Exception):
                 expert_run_errors.append(gather_item)
         if expert_run_errors:
+            # Cleanup worktrees from spawned children before propagating exception
+            try:
+                _apply_child_session_cleanup(
+                    store=_store,
+                    mailbox=_mailbox,
+                    core_execution_session_id=resolved_core_execution_session_id,
+                    pipeline_id=pipeline_id,
+                    mode="destroy",
+                    ttl_seconds=0,
+                )
+            except Exception:
+                logger.debug("Emergency cleanup after expert error failed", exc_info=True)
             raise expert_run_errors[0]
 
         for expert_index in range(len(expert_results)):
@@ -5545,6 +5863,22 @@ async def run_multi_agent_pipeline(
         "pipeline_id": pipeline_id,
         "cleanup": cleanup_summary,
     }
+
+    # ── Perception: record pipeline-level experience for evolution ──
+    _pipeline_goal = str(dispatch.get("goal") or message or "").strip()
+    _all_changed_files: List[str] = []
+    for _er in expert_results:
+        _all_changed_files.extend(list(_er.get("changed_files") or []))
+    _record_pipeline_experience(
+        pipeline_id=pipeline_id,
+        task_completed=task_completed,
+        stop_reason=stop_reason,
+        goal=_pipeline_goal,
+        expert_count=len(expert_results),
+        review_results=review_results,
+        blocked_reasons=list(blocked_expert_reasons),
+        changed_files=_all_changed_files,
+    )
 
     # ── Done ───────────────────────────────────────────────────
 

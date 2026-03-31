@@ -130,9 +130,23 @@ class SerialActionQueue:
                 self._queue.task_done()
 
 
+# ---- module-level singleton ----
+
+_DEFAULT_QUEUE: Optional[SerialActionQueue] = None
+
+
+def get_serial_action_queue() -> SerialActionQueue:
+    """Return (and lazily create) the process-wide serial action queue."""
+    global _DEFAULT_QUEUE
+    if _DEFAULT_QUEUE is None:
+        _DEFAULT_QUEUE = SerialActionQueue()
+    return _DEFAULT_QUEUE
+
+
 __all__ = [
     "ActionExecutor",
     "QueueTicket",
     "SerialAction",
     "SerialActionQueue",
+    "get_serial_action_queue",
 ]

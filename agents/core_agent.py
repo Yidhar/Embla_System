@@ -337,6 +337,13 @@ class CoreAgent:
             )
             if runtime_body.strip():
                 parts.append(runtime_body.strip())
+            # Meta-cognition block — gives Core self-awareness and agency
+            metacog_body = self._runtime_assembler.assemble(
+                blocks=["agents/core_exec/blocks/core_metacognition.md"],
+            )
+            if metacog_body.strip():
+                parts.append(metacog_body.strip())
+
             tool_contract = self._runtime_assembler.render_block(
                 "core/dna/agentic_tool_prompt.md",
                 variables={"available_mcp_tools": get_available_mcp_tools_summary()},

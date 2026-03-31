@@ -567,6 +567,34 @@ def _handle_promote_workspace(
     approval_ticket = str(args.get("approval_ticket") or "").strip()
     approved_by = str(args.get("approved_by") or parent_session_id).strip() or parent_session_id
     notes = str(args.get("notes") or "").strip()
+
+    # ── Release Gate: evaluate write_repo gate before promotion ──
+    # Gate enforcement is opt-in via args: enforce_gate=True triggers synchronous
+    # check execution (pytest/ruff — can take minutes). Default: record-only.
+    enforce_gate = bool(args.get("enforce_gate", False))
+    try:
+        from core.release.gate_runner import GateRunner
+
+        gate_runner = GateRunner()
+        gate_eval = gate_runner.evaluate_gate("write_repo")
+        if not gate_eval.passed and enforce_gate:
+            return {
+                "status": "blocked",
+                "reason": f"write_repo gate failed: {gate_eval.reason}",
+                "gate_checks": [c.to_dict() for c in (gate_eval.checks or [])],
+                "agent_id": owner_session.session_id,
+            }
+        if not gate_eval.passed:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "write_repo gate did not pass (non-blocking): %s", gate_eval.reason
+            )
+    except ImportError:
+        pass  # GateRunner not available
+    except Exception as gate_exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("write_repo gate evaluation failed: %s", gate_exc)
+
     result = promote_git_worktree_sandbox(
         owner_session_id=owner_session.session_id,
         worktree_root=str(owner_metadata.get("workspace_root") or ""),

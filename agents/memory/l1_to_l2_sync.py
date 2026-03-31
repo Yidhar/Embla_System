@@ -1,8 +1,13 @@
-"""L1 → tool-result topology sync pipeline.
+"""L1 → Tool-Result Topology sync pipeline.
 
 This module projects L1 episodic markdown into the execution topology store
-(`agents.memory.semantic_graph`), which is separate from Shell L2 Graph RAG in
-`summer_memory/quintuple_graph.py`.
+(`agents.memory.semantic_graph`).  This is **not** the Shell L2 Graph —
+Shell-exclusive L2 lives in `summer_memory/quintuple_graph.py`.
+
+Naming convention:
+  - L1  = file-based episodic / working / domain memory
+  - L2  = Shell quintuple graph (summer_memory)
+  - This module = Tool-Result Topology (execution artefact index)
 
 Lightweight local implementation: regex-based extraction (no LLM required),
 syncing to the existing local JSON topology store.
@@ -82,9 +87,10 @@ def sync_experience_to_graph(
     session_id: str = "l1_sync",
     graph: Optional[SemanticGraphStore] = None,
 ) -> Dict[str, Any]:
-    """Sync a single L1 experience MD file into the L2 graph.
+    """Sync a single L1 experience MD file into the Tool-Result Topology.
 
     Creates EpisodicRecord(s) and feeds them into SemanticGraphStore.
+    Note: this is the execution-artefact topology, not Shell L2 graph.
 
     Returns sync summary dict.
     """
@@ -120,7 +126,7 @@ def sync_all_experiences(
     session_id: str = "l1_sync",
     graph: Optional[SemanticGraphStore] = None,
 ) -> Dict[str, Any]:
-    """Sync all L1 experience MD files from a directory into L2.
+    """Sync all L1 experience MD files into the Tool-Result Topology.
 
     Returns summary dict with counts.
     """
@@ -152,7 +158,7 @@ def sync_all_experiences(
 
 
 def register_l1_to_l2_hooks(manager: L1MemoryManager) -> None:
-    """Register the L1->L2 sync as a post-write hook on the given manager."""
+    """Register the L1 → Tool-Result Topology sync as a post-write hook."""
 
     def _on_write(episodic_dir: Path, tags: list) -> None:
         try:

@@ -77,13 +77,14 @@ def test_register_scheduled_jobs_registers_five_jobs() -> None:
 
     runtime._register_scheduled_jobs()
 
-    assert mock_scheduler.add_cron_job.call_count == 5
+    assert mock_scheduler.add_cron_job.call_count == 6
     registered_ids = [call.kwargs.get("job_id") or call.args[0] for call in mock_scheduler.add_cron_job.call_args_list]
     assert "health_check" in registered_ids
     assert "patrol" in registered_ids
     assert "daily_checkpoint" in registered_ids
     assert "evolution_eval" in registered_ids
     assert "agent_wakeup" in registered_ids
+    assert "worktree_gc" in registered_ids
 
 
 def test_register_scheduled_jobs_noop_without_scheduler() -> None:

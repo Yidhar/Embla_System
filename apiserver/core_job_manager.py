@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CORE_RUNTIME_ID = "core-main"
 _QUEUEABLE_JOB_STATUSES = {"accepted", "running"}
-_RECOVERABLE_JOB_STATUSES = {"accepted", "running", "waiting_descendants"}
+_RECOVERABLE_JOB_STATUSES = {"accepted", "running", "waiting_descendants", "blocked"}
 _VISIBLE_ACTIVE_JOB_STATUSES = set(_RECOVERABLE_JOB_STATUSES)
 _RECENT_EVENT_LIMIT = 40
 _RECOVERY_TERMINAL_JOB_LIMIT = 20
@@ -284,8 +284,8 @@ class CoreDispatchRuntimeDefaults:
     child_tool_executor: Optional[Callable[..., Any]] = None
     enable_child_execution: bool = False
     child_max_rounds: int = 12
-    child_session_cleanup_mode: str = "retain"
-    child_session_cleanup_ttl_seconds: int = 86400
+    child_session_cleanup_mode: str = "ttl"
+    child_session_cleanup_ttl_seconds: int = 3600
     heartbeat_interval_seconds: float = 15.0
 
 
@@ -344,7 +344,7 @@ class CoreDispatchJobManager:
         if child_max_rounds is not None:
             defaults.child_max_rounds = max(1, int(child_max_rounds or 0))
         if child_session_cleanup_mode is not None:
-            defaults.child_session_cleanup_mode = str(child_session_cleanup_mode or "retain")
+            defaults.child_session_cleanup_mode = str(child_session_cleanup_mode or "ttl")
         if child_session_cleanup_ttl_seconds is not None:
             defaults.child_session_cleanup_ttl_seconds = max(0, int(child_session_cleanup_ttl_seconds or 0))
         if heartbeat_interval_seconds is not None:
@@ -397,7 +397,7 @@ class CoreDispatchJobManager:
             "last_execution_receipt": dict(payload.get("last_execution_receipt") or {}),
             "enable_child_execution": bool(payload.get("enable_child_execution")),
             "child_max_rounds": max(1, int(payload.get("child_max_rounds") or 12)),
-            "child_session_cleanup_mode": str(payload.get("child_session_cleanup_mode") or "retain"),
+            "child_session_cleanup_mode": str(payload.get("child_session_cleanup_mode") or "ttl"),
             "child_session_cleanup_ttl_seconds": max(0, int(payload.get("child_session_cleanup_ttl_seconds") or 0)),
             "recovery_restart_count": max(0, int(payload.get("recovery_restart_count") or 0)),
         }
@@ -618,7 +618,7 @@ class CoreDispatchJobManager:
                 or 12
             ),
         )
-        cleanup_mode = str(spec.child_session_cleanup_mode if spec is not None else self._runtime_defaults.child_session_cleanup_mode or "retain")
+        cleanup_mode = str(spec.child_session_cleanup_mode if spec is not None else self._runtime_defaults.child_session_cleanup_mode or "ttl")
         cleanup_ttl = max(
             0,
             int(
@@ -780,7 +780,7 @@ class CoreDispatchJobManager:
                             1,
                             int(envelope.get("child_max_rounds") or defaults.child_max_rounds or 12),
                         ),
-                        child_session_cleanup_mode=str(envelope.get("child_session_cleanup_mode") or defaults.child_session_cleanup_mode or "retain"),
+                        child_session_cleanup_mode=str(envelope.get("child_session_cleanup_mode") or defaults.child_session_cleanup_mode or "ttl"),
                         child_session_cleanup_ttl_seconds=max(
                             0,
                             int(envelope.get("child_session_cleanup_ttl_seconds") or defaults.child_session_cleanup_ttl_seconds or 0),
@@ -1469,8 +1469,8 @@ class CoreDispatchJobManager:
         child_tool_executor: Optional[Callable[..., Any]] = None,
         enable_child_execution: bool = False,
         child_max_rounds: int = 12,
-        child_session_cleanup_mode: str = "retain",
-        child_session_cleanup_ttl_seconds: int = 86400,
+        child_session_cleanup_mode: str = "ttl",
+        child_session_cleanup_ttl_seconds: int = 3600,
         mailbox: Any = None,
         task_board_engine: Any = None,
         heartbeat_interval_seconds: float = 15.0,
@@ -1559,7 +1559,7 @@ class CoreDispatchJobManager:
                 child_tool_executor=child_tool_executor,
                 enable_child_execution=enable_child_execution,
                 child_max_rounds=max(1, int(child_max_rounds or 0)),
-                child_session_cleanup_mode=str(child_session_cleanup_mode or "retain"),
+                child_session_cleanup_mode=str(child_session_cleanup_mode or "ttl"),
                 child_session_cleanup_ttl_seconds=max(0, int(child_session_cleanup_ttl_seconds or 0)),
             )
             if mailbox is not None:
@@ -1711,7 +1711,7 @@ class CoreDispatchJobManager:
                 child_tool_executor=child_tool_executor,
                 enable_child_execution=enable_child_execution,
                 child_max_rounds=max(1, int(child_max_rounds or 0)),
-                child_session_cleanup_mode=str(child_session_cleanup_mode or "retain"),
+                child_session_cleanup_mode=str(child_session_cleanup_mode or "ttl"),
                 child_session_cleanup_ttl_seconds=max(0, int(child_session_cleanup_ttl_seconds or 0)),
                 store=store,
                 mailbox=mailbox,

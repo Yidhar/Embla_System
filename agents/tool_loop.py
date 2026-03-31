@@ -988,6 +988,8 @@ _NATIVE_TOOL_ALIASES = {
     "read_artifact": "artifact_reader",
     "file_ast_chunk": "file_ast_chunk_read",
     "readchunkbyrange": "file_ast_chunk_read",
+    "ast_edit": "file_ast_edit",
+    "file_ast_replace": "file_ast_edit",
     "sleep_watch": "sleep_and_watch",
     "watch_log": "sleep_and_watch",
     "txn_apply": "workspace_txn_apply",
@@ -1015,9 +1017,13 @@ _SUPPORTED_NATIVE_TOOL_NAMES = {
     "artifact_reader",
     "file_ast_skeleton",
     "file_ast_chunk_read",
+    "file_ast_edit",
     "workspace_txn_apply",
     "sleep_and_watch",
     "killswitch_plan",
+    "report_framework_friction",
+    "trigger_self_improvement",
+    "schedule_cron",
 }
 _NATIVE_TOOL_ALLOWED_INPUT_ARGS: Dict[str, Set[str]] = {
     "read_file": {
@@ -1212,6 +1218,7 @@ _NATIVE_TOOL_ALLOWED_INPUT_ARGS: Dict[str, Set[str]] = {
         "context_before",
         "context_after",
     },
+    "file_ast_edit": {"tool_name", "path", "file_path", "symbol", "new_body"},
     "workspace_txn_apply": {
         "tool_name",
         "changes",
@@ -1236,6 +1243,15 @@ _NATIVE_TOOL_ALLOWED_INPUT_ARGS: Dict[str, Set[str]] = {
         "max_line_chars",
     },
     "killswitch_plan": {"tool_name", "mode", "oob_allowlist", "dns_allow"},
+    "report_framework_friction": {
+        "tool_name", "friction_type", "description", "affected_component", "severity", "suggested_fix",
+    },
+    "trigger_self_improvement": {
+        "tool_name", "target_prompt", "improvement_type", "rationale", "draft_content",
+    },
+    "schedule_cron": {
+        "tool_name", "action", "job_id", "cron_expr", "description",
+    },
 }
 _VALID_RESULT_STATUS = {"success", "ok", "error", "timeout", "blocked"}
 _SSE_PROTOCOL_VERSION = "ws20-002-v1"
@@ -1314,13 +1330,17 @@ def _validate_native_call_schema(call_id: str, args: Dict[str, Any]) -> Tuple[st
         errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, "native_call 缺少 tool_name"))
         return "", errors
     if normalized_tool not in _SUPPORTED_NATIVE_TOOL_NAMES:
+        available = ", ".join(sorted(_SUPPORTED_NATIVE_TOOL_NAMES))
         errors.append(
-            _schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, f"native_call tool_name 不支持: {normalized_tool}")
+            _schema_error(
+                _SCHEMA_ERR_INPUT_INVALID, call_id,
+                f"native_call tool_name 不支持: {normalized_tool}。当前可用: {available}",
+            )
         )
         return normalized_tool, errors
 
     has_path = bool(_as_nonempty_text(args.get("path")) or _as_nonempty_text(args.get("file_path")))
-    if normalized_tool in {"read_file", "write_file", "file_ast_skeleton", "file_ast_chunk_read", "git_checkout_file"}:
+    if normalized_tool in {"read_file", "write_file", "file_ast_skeleton", "file_ast_chunk_read", "file_ast_edit", "git_checkout_file"}:
         if not has_path:
             errors.append(
                 _schema_error(
@@ -1681,6 +1701,8 @@ def _build_l1_5_prompt_slice_context(
     contract_state: Optional[Dict[str, Any]],
     agent_state: Optional[Dict[str, Any]],
     submit_result_called: bool,
+    runtime: Optional[AgenticLoopRuntimeState] = None,
+    max_rounds: int = 0,
 ) -> str:
     normalized_episodic = str(episodic_context or "").strip()
     if normalized_episodic.startswith("[Episodic Memory Reinjection]"):
@@ -1724,6 +1746,37 @@ def _build_l1_5_prompt_slice_context(
             )
     else:
         lines.append("contract_stage: unknown")
+
+    lines.append("[AvailableNativeTools]")
+    lines.append(", ".join(sorted(_SUPPORTED_NATIVE_TOOL_NAMES)))
+    lines.append("以上为当前会话可用的全部 native 工具。Shell 层专属工具（如 get_system_status）在此层不可用，请使用上述工具组合获取等效信息。")
+
+    # ── FrameworkFriction: real-time metacognition signals ──
+    if runtime is not None:
+        effective_max = max_rounds if max_rounds > 0 else 20
+        tool_total = runtime.total_tool_calls
+        tool_success_rate = (
+            round(runtime.total_tool_success / tool_total * 100, 1) if tool_total > 0 else 100.0
+        )
+        progress_pct = round(runtime.round_num / effective_max * 100, 1)
+        friction_signals: List[str] = []
+        if runtime.consecutive_tool_failures >= 2:
+            friction_signals.append(f"连续工具失败: {runtime.consecutive_tool_failures}")
+        if runtime.consecutive_validation_failures >= 2:
+            friction_signals.append(f"连续验证失败: {runtime.consecutive_validation_failures}")
+        if runtime.gc_guard_hit_total >= 1:
+            friction_signals.append(f"GC守护触发: {runtime.gc_guard_hit_total}次")
+        if tool_success_rate < 70.0 and tool_total >= 3:
+            friction_signals.append(f"工具成功率低: {tool_success_rate}%")
+
+        lines.append("[FrameworkFriction]")
+        lines.append(f"round: {runtime.round_num}/{effective_max} ({progress_pct}%)")
+        lines.append(f"tool_calls: {tool_total} (success_rate: {tool_success_rate}%)")
+        lines.append(f"consecutive_tool_failures: {runtime.consecutive_tool_failures}")
+        lines.append(f"gc_guard_hits: {runtime.gc_guard_hit_total}")
+        if friction_signals:
+            lines.append(f"⚠ friction_alerts: {'; '.join(friction_signals)}")
+            lines.append("如果你判断这是系统性问题而非偶发错误，可使用 report_framework_friction 工具报告。")
 
     if normalized_episodic:
         lines.append("[Episodic Memory Reinjection]")
@@ -2899,7 +2952,10 @@ def _convert_structured_tool_calls(
             actionable_calls.append(submit_call)
             continue
 
-        validation_errors.append(_schema_error(_SCHEMA_ERR_INPUT_INVALID, call_id, f"未知函数调用: name={tool_name}"))
+        validation_errors.append(_schema_error(
+            _SCHEMA_ERR_INPUT_INVALID, call_id,
+            f"未知函数调用: name={tool_name}。当前可用: native_call, mcp_call, submit_result",
+        ))
 
     return actionable_calls, validation_errors
 
@@ -3136,6 +3192,8 @@ async def run_agentic_loop(
             contract_state=contract_state,
             agent_state=runtime.agent_state,
             submit_result_called=runtime.submit_result_called,
+            runtime=runtime,
+            max_rounds=policy.max_rounds,
         )
         if atomic_context and _inject_ephemeral_system_context(messages, atomic_context):
             logger.info("[AgenticLoop] upserted atomic prompt control plane for session=%s round=%s", session_id, round_num)
@@ -3353,6 +3411,8 @@ async def run_agentic_loop(
                         contract_state=contract_state,
                         agent_state=runtime.agent_state,
                         submit_result_called=runtime.submit_result_called,
+                        runtime=runtime,
+                        max_rounds=policy.max_rounds,
                     )
                     if execution_l1_5:
                         _inject_ephemeral_system_context(messages, execution_l1_5)

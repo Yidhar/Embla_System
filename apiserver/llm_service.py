@@ -931,7 +931,7 @@ class LLMService:
                 return
 
         cfg = get_config()
-        max_attempts = 3
+        max_attempts = 5
 
         if model_override:
             final_model = model_override.get("model") or cfg.api.model
@@ -1070,7 +1070,7 @@ class LLMService:
                         safe_error,
                         detailed_error,
                     )
-                    await asyncio.sleep(1 + attempt)
+                    await asyncio.sleep(min(2 ** attempt, 30))
                     continue
 
                 if is_retryable:

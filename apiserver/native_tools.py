@@ -119,6 +119,7 @@ _TOOL_RESULT_NONE_MARKERS = {"", "(none)", "none", "null", "nil", "n/a", "undefi
 
 # ── Approval-gate scope mapping ─────────────────────────────────
 _APPROVAL_REQUIRED_SCOPES: set[str] = {"core", "policy", "prompt_dna", "tools_registry"}
+_SERIAL_QUEUE_SCOPES: set[str] = {"core", "policy", "prompt_dna", "tools_registry", "self_modify"}
 
 _SCOPE_PATH_PREFIXES: list[tuple[str, str]] = [
     ("system/prompts/dna/", "prompt_dna"),
@@ -143,6 +144,10 @@ def _infer_tool_scope(tool_name: str, call: Dict[str, Any]) -> str:
     # Tool-name heuristics for non-path tools
     if tool_name in ("killswitch_plan",):
         return "security"  # security tools bypass ApprovalGate
+    if tool_name == "trigger_self_improvement":
+        return "self_modify"
+    if tool_name == "report_framework_friction":
+        return "general"  # read-like: just records an observation
     return "general"
 _TOOL_RESULT_TAG_LINE_RE = re.compile(r"^\[([A-Za-z0-9_]+)\](?:\s*(.*))?$")
 _TOOL_NAME_ALIASES = {
@@ -176,6 +181,8 @@ _TOOL_NAME_ALIASES = {
     "read_artifact": "artifact_reader",
     "file_ast_chunk": "file_ast_chunk_read",
     "readchunkbyrange": "file_ast_chunk_read",
+    "ast_edit": "file_ast_edit",
+    "file_ast_replace": "file_ast_edit",
     "sleep_watch": "sleep_and_watch",
     "watch_log": "sleep_and_watch",
     "txn_apply": "workspace_txn_apply",
@@ -699,6 +706,15 @@ class NativeToolExecutor:
 
         fallback_reason = ""
         execution_backend_name = getattr(backend, "name", "native")
+
+        # ── Serial queue gate for high-risk write operations ──
+        if scope in _SERIAL_QUEUE_SCOPES and tool_name not in _READ_ONLY_TOOLS:
+            serial_result = await self._execute_via_serial_queue(
+                tool_name, effective_call, context=context, backend=backend, scope=scope, session_id=session_id,
+            )
+            if serial_result is not None:
+                return serial_result
+
         try:
             result = await backend.execute_tool(tool_name, effective_call, context=context, native_tool_executor=self)
             service_name = getattr(backend, "service_name", "native")
@@ -1285,6 +1301,107 @@ class NativeToolExecutor:
             marker = ">>" if start_line <= idx <= end_line else "  "
             rendered.append(f"{marker} {idx:4}: {line}")
         return "\n".join(rendered)
+
+    async def _file_ast_edit(self, call: Dict[str, Any]) -> str:
+        """AST-aware symbol replacement for Python files.
+
+        Params:
+            path: file path
+            symbol: dotted symbol name (e.g. "MyClass.my_method" or "my_function")
+            new_body: the complete new source for the symbol (including def/class line)
+        """
+        path = str(call.get("path") or call.get("file_path") or "").strip()
+        symbol = str(call.get("symbol") or "").strip()
+        new_body = str(call.get("new_body") or "").strip()
+        if not path:
+            raise ValueError("file_ast_edit 缺少 path")
+        if not symbol:
+            raise ValueError("file_ast_edit 缺少 symbol")
+        if not new_body:
+            raise ValueError("file_ast_edit 缺少 new_body")
+
+        text = await self.executor.read_file(path)
+        lines = text.splitlines(keepends=True)
+        ext = Path(path).suffix.lower()
+        if ext != ".py":
+            raise ValueError("file_ast_edit 目前仅支持 Python 文件")
+
+        # Parse AST to find symbol location
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as exc:
+            raise ValueError(f"AST 解析失败: {exc}") from exc
+
+        parts = symbol.split(".")
+        target_node = self._find_ast_node(tree, parts)
+        if target_node is None:
+            raise ValueError(f"未找到符号: {symbol}")
+
+        start_line = target_node.lineno  # 1-based
+        end_line = getattr(target_node, "end_lineno", None)
+        if end_line is None:
+            raise ValueError(f"无法确定符号 {symbol} 的结束行")
+
+        # Build replacement: preserve indentation of original first line
+        original_first = lines[start_line - 1] if start_line <= len(lines) else ""
+        indent = len(original_first) - len(original_first.lstrip())
+        indent_str = original_first[:indent]
+
+        new_lines_raw = new_body.splitlines(keepends=True)
+        # Re-indent new_body to match original indentation
+        new_lines: list[str] = []
+        for i, nl in enumerate(new_lines_raw):
+            stripped = nl.lstrip()
+            if i == 0:
+                new_lines.append(indent_str + stripped)
+            else:
+                # Preserve relative indentation from new_body
+                orig_indent = len(nl) - len(stripped)
+                base_indent = len(new_lines_raw[0]) - len(new_lines_raw[0].lstrip())
+                relative = max(0, orig_indent - base_indent)
+                new_lines.append(indent_str + " " * relative + stripped)
+        # Ensure trailing newline
+        if new_lines and not new_lines[-1].endswith("\n"):
+            new_lines[-1] += "\n"
+
+        # Splice
+        result_lines = lines[: start_line - 1] + new_lines + lines[end_line:]
+        new_text = "".join(result_lines)
+
+        # Validate new AST parses
+        try:
+            ast.parse(new_text)
+        except SyntaxError as exc:
+            raise ValueError(f"编辑后 AST 验证失败: {exc}") from exc
+
+        await self.executor.write_file(path, new_text)
+        return (
+            f"[file_ast_edit] {symbol} replaced in {path}\n"
+            f"[original_range] L{start_line}-{end_line}\n"
+            f"[new_lines] {len(new_lines)}\n"
+            f"[status] success — AST validated"
+        )
+
+    @staticmethod
+    def _find_ast_node(tree: ast.Module, parts: List[str]) -> Optional[ast.AST]:
+        """Walk AST to find a node matching dotted symbol path like 'Class.method'."""
+        if not parts:
+            return None
+
+        def _search_body(body: List[ast.stmt], remaining: List[str]) -> Optional[ast.AST]:
+            target = remaining[0]
+            for node in body:
+                name = getattr(node, "name", None)
+                if name == target:
+                    if len(remaining) == 1:
+                        return node
+                    # Recurse into class body
+                    if isinstance(node, ast.ClassDef):
+                        return _search_body(node.body, remaining[1:])
+                    return None
+            return None
+
+        return _search_body(tree.body, parts)
 
     async def _workspace_txn_apply(self, call: Dict[str, Any]) -> str:
         changes_raw = call.get("changes")
@@ -2113,6 +2230,8 @@ class NativeToolExecutor:
             return await self._file_ast_skeleton(call)
         if tool_name == "file_ast_chunk_read":
             return await self._file_ast_chunk_read(call)
+        if tool_name == "file_ast_edit":
+            return await self._file_ast_edit(call)
         if tool_name == "workspace_txn_apply":
             return await self._workspace_txn_apply(call)
         if tool_name == "sleep_and_watch":
@@ -2123,7 +2242,150 @@ class NativeToolExecutor:
             return await self._web_scraper(call)
         if tool_name == "search_engine":
             return await self._search_engine(call)
+        if tool_name == "report_framework_friction":
+            return await self._report_framework_friction(call)
+        if tool_name == "trigger_self_improvement":
+            return await self._trigger_self_improvement(call)
+        if tool_name == "schedule_cron":
+            return await self._schedule_cron(call)
         raise ValueError(f"不支持的native工具: {tool_name}")
+
+    async def _execute_via_serial_queue(
+        self, tool_name: str, call: Dict[str, Any], *, context, backend, scope: str, session_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Route a high-risk write through the SerialActionQueue for strict FIFO ordering.
+
+        Returns the final tool result dict, or None to fall through to direct execution.
+        """
+        try:
+            from core.event_bus.serial_queue import SerialAction, get_serial_action_queue
+
+            queue = get_serial_action_queue()
+            if queue.pending_count > 20:
+                import logging as _logging
+                _logging.getLogger(__name__).warning("SerialActionQueue backpressure (%d pending), falling through", queue.pending_count)
+                return None
+
+            action = SerialAction(
+                action_id=f"tool_{tool_name}_{id(call):x}",
+                actor=session_id or "unknown",
+                scope="global" if scope in ("core", "policy", "prompt_dna") else "local",
+                action_type=tool_name,
+                requires_global_mutex=True,
+                payload={"tool_name": tool_name, "call_id": str(call.get("_tool_call_id") or "")},
+            )
+            ticket = await queue.enqueue(action)
+
+            # Wait for ticket to complete (the queue worker serializes execution)
+            import asyncio
+            for _ in range(600):  # up to 60s
+                if ticket.status in ("done", "failed"):
+                    break
+                await asyncio.sleep(0.1)
+
+            if ticket.status == "failed":
+                return self._error(call, f"Serial queue execution failed: {ticket.error}", tool_name=tool_name)
+
+            # Action was serialized — now execute the actual tool
+            result = await backend.execute_tool(tool_name, call, context=context, native_tool_executor=self)
+            service_name = getattr(backend, "service_name", "native")
+            contract_fields = _build_result_contract_fields(result)
+            response = {
+                "tool_call": call,
+                "result": result,
+                "status": "success",
+                "service_name": service_name,
+                "tool_name": tool_name,
+                "serial_queue_ticket": ticket.ticket_id,
+                **contract_fields,
+            }
+            return response
+        except ImportError:
+            return None  # serial queue not available, fall through
+        except Exception:
+            return None
+
+    async def _report_framework_friction(self, call: Dict[str, Any]) -> str:
+        """Meta-cognition: agent reports perceived framework friction."""
+        import json as _json
+
+        from agents.evolution.metacognition import report_framework_friction
+
+        result = report_framework_friction(
+            friction_type=str(call.get("friction_type") or "").strip(),
+            description=str(call.get("description") or "").strip(),
+            affected_component=str(call.get("affected_component") or "").strip(),
+            severity=str(call.get("severity") or "medium").strip(),
+            suggested_fix=str(call.get("suggested_fix") or "").strip(),
+            session_id=str(call.get("_session_id") or "").strip(),
+        )
+        return _json.dumps(result, ensure_ascii=False)
+
+    async def _trigger_self_improvement(self, call: Dict[str, Any]) -> str:
+        """Meta-cognition: agent triggers immediate self-improvement on a prompt."""
+        import json as _json
+
+        from agents.evolution.metacognition import trigger_self_improvement
+
+        result = trigger_self_improvement(
+            target_prompt=str(call.get("target_prompt") or "").strip(),
+            improvement_type=str(call.get("improvement_type") or "refine").strip(),
+            rationale=str(call.get("rationale") or "").strip(),
+            draft_content=str(call.get("draft_content") or "").strip(),
+            session_id=str(call.get("_session_id") or "").strip(),
+        )
+        return _json.dumps(result, ensure_ascii=False)
+
+    async def _schedule_cron(self, call: Dict[str, Any]) -> str:
+        """Schedule/list/remove Chronos cron jobs from Agent context."""
+        import json as _json
+
+        from core.scheduler.chronos import get_default_scheduler
+
+        action = str(call.get("action") or "list").strip().lower()
+        scheduler = get_default_scheduler()
+
+        if action == "list":
+            jobs = scheduler.list_jobs()
+            return _json.dumps({"status": "success", "jobs": jobs}, ensure_ascii=False)
+
+        job_id = str(call.get("job_id") or "").strip()
+        if not job_id:
+            return _json.dumps({"status": "error", "message": "job_id is required"}, ensure_ascii=False)
+
+        if action == "remove":
+            scheduler.remove_job(job_id)
+            return _json.dumps({"status": "success", "message": f"Job {job_id} removed"}, ensure_ascii=False)
+
+        if action == "add":
+            cron_expr = str(call.get("cron_expr") or "").strip()
+            if not cron_expr:
+                return _json.dumps({"status": "error", "message": "cron_expr is required for add"}, ensure_ascii=False)
+
+            description = str(call.get("description") or "").strip()
+
+            # Agent-created jobs emit an event instead of running arbitrary code
+            from core.event_bus.topic_bus import get_default_event_store
+
+            def _agent_cron_handler() -> None:
+                try:
+                    store = get_default_event_store()
+                    store.emit("AgentCronFired", {
+                        "job_id": job_id,
+                        "description": description,
+                        "cron_expr": cron_expr,
+                    })
+                except Exception:
+                    pass
+
+            scheduler.add_cron_job(job_id, _agent_cron_handler, cron_expr=cron_expr)
+            return _json.dumps({
+                "status": "success",
+                "message": f"Cron job {job_id} added: {cron_expr}",
+                "job_id": job_id,
+            }, ensure_ascii=False)
+
+        return _json.dumps({"status": "error", "message": f"Unknown action: {action}"}, ensure_ascii=False)
 
     @staticmethod
     def _error(call: Dict[str, Any], message: str, *, tool_name: Optional[str] = None) -> Dict[str, Any]:

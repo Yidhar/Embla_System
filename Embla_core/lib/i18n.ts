@@ -532,7 +532,8 @@ const zhCNMessages = {
         healthyServices: { title: "健康服务", description: "状态为正常的服务数。" },
         totalServices: { title: "服务总数", description: "监管的服务总数。" }
       },
-      labels: { status: "状态", severity: "严重性", noData: "暂无数据", noDataDescription: "无法获取监管服务状态。" }
+      labels: { status: "状态", severity: "严重性", noData: "暂无数据", noDataDescription: "无法获取监管服务状态。" },
+      services: { brainstem: "脑干监管", process_guard: "进程守卫", watchdog: "看门狗", killswitch: "熔断器" }
     },
     chronos: {
       header: {
@@ -580,33 +581,33 @@ const zhCNMessages = {
       header: {
         eyebrow: "Memory Layers",
         title: "多层记忆概览",
-        description: "分层查看 L1 会话记忆、L2 索引记忆与 L3 向量存储的统计信息，帮助判断各层记忆健康度。"
+        description: "分层查看 L1 文件记忆、L2 Shell 五元组图谱与 L3 Hierarchical RAG 的统计信息，帮助判断各层记忆健康度。"
       },
       metrics: {
-        l1Total: { title: "L1 会话总量", description: "L1 短期会话记忆中的条目总数。" },
-        l2Indexed: { title: "L2 已索引", description: "L2 中已完成索引的记忆条目数。" },
-        l3Vectors: { title: "L3 向量数", description: "L3 向量存储中的向量总数。" },
-        gragQuintuples: { title: "GRAG 五元组", description: "GRAG 知识图谱中已写入的五元组总量。" }
+        l1Total: { title: "L1 文件记忆", description: "L1 文件记忆中的条目总数（working / episodic / domain）。" },
+        l2Indexed: { title: "L2 五元组图谱", description: "Shell 五元组知识图谱中的关系总量。" },
+        l3Vectors: { title: "L3 RAG 向量", description: "Hierarchical RAG 中的向量总数。" },
+        gragQuintuples: { title: "L2 五元组", description: "Shell 五元组知识图谱中已写入的五元组总量。" }
       },
       layers: {
         l1: {
           eyebrow: "L1",
-          title: "会话记忆",
-          description: "短期会话级别的上下文记忆，作用域为当前会话。",
+          title: "文件记忆",
+          description: "基于文件的多作用域记忆（working / episodic / domain）。",
           scope: "作用域",
           total: "总条目"
         },
         l2: {
           eyebrow: "L2",
-          title: "索引记忆",
-          description: "经过结构化索引的中期记忆，支持跨会话检索。",
+          title: "Shell 五元组图谱",
+          description: "Shell 专属的五元组知识图谱，基于 GRAG 语义抽取。",
           scope: "作用域",
-          indexed: "已索引"
+          indexed: "五元组数"
         },
         l3: {
           eyebrow: "L3",
-          title: "向量存储",
-          description: "向量化的长期记忆，服务于语义召回。",
+          title: "Hierarchical RAG",
+          description: "层次化 RAG 检索，包含索引和向量两层。",
           scope: "作用域",
           total: "向量数"
         }
@@ -1233,7 +1234,8 @@ const enUSMessages: typeof zhCNMessages = {
         healthyServices: { title: "Healthy Services", description: "Number of services in healthy state." },
         totalServices: { title: "Total Services", description: "Total number of supervised services." }
       },
-      labels: { status: "Status", severity: "Severity", noData: "No data", noDataDescription: "Unable to retrieve supervisor service status." }
+      labels: { status: "Status", severity: "Severity", noData: "No data", noDataDescription: "Unable to retrieve supervisor service status." },
+      services: { brainstem: "Brainstem Supervisor", process_guard: "Process Guard", watchdog: "Watchdog", killswitch: "Kill Switch" }
     },
     chronos: {
       header: {
@@ -1281,33 +1283,33 @@ const enUSMessages: typeof zhCNMessages = {
       header: {
         eyebrow: "Memory Layers",
         title: "Multi-layer memory overview",
-        description: "View L1 session memory, L2 indexed memory, and L3 vector store statistics to judge the health of each memory layer."
+        description: "View L1 file memory, L2 Shell quintuple graph, and L3 hierarchical RAG statistics to judge the health of each memory layer."
       },
       metrics: {
-        l1Total: { title: "L1 Session Total", description: "Total entries in L1 short-term session memory." },
-        l2Indexed: { title: "L2 Indexed", description: "Number of memory entries that have been indexed in L2." },
-        l3Vectors: { title: "L3 Vectors", description: "Total vectors in the L3 vector store." },
-        gragQuintuples: { title: "GRAG Quintuples", description: "Total quintuples written into the GRAG knowledge graph." }
+        l1Total: { title: "L1 File Memory", description: "Total entries in L1 file-based memory (working / episodic / domain)." },
+        l2Indexed: { title: "L2 Quintuple Graph", description: "Total relations in the Shell quintuple knowledge graph." },
+        l3Vectors: { title: "L3 RAG Vectors", description: "Total vectors in the hierarchical RAG store." },
+        gragQuintuples: { title: "L2 Quintuples", description: "Total quintuples written into the Shell quintuple graph." }
       },
       layers: {
         l1: {
           eyebrow: "L1",
-          title: "Session memory",
-          description: "Short-term session-scoped context memory.",
+          title: "File memory",
+          description: "File-based multi-scope memory (working / episodic / domain).",
           scope: "Scope",
           total: "Total entries"
         },
         l2: {
           eyebrow: "L2",
-          title: "Indexed memory",
-          description: "Structured indexed mid-term memory supporting cross-session retrieval.",
+          title: "Shell quintuple graph",
+          description: "Shell-exclusive quintuple knowledge graph via GRAG semantic extraction.",
           scope: "Scope",
-          indexed: "Indexed"
+          indexed: "Quintuples"
         },
         l3: {
           eyebrow: "L3",
-          title: "Vector store",
-          description: "Vectorized long-term memory serving semantic recall.",
+          title: "Hierarchical RAG",
+          description: "Hierarchical RAG retrieval with indexed and vector layers.",
           scope: "Scope",
           total: "Vectors"
         }

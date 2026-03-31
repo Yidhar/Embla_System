@@ -1,13 +1,16 @@
 """Core MCP isolated worker primitives + runtime snapshot helper.
 
-The old mcpserver.plugin_worker dependency has been removed.
-Stub classes are provided for backward compatibility.
+Backed by the MCPClientPool in agents/runtime/mcp_client.py.
+Legacy stubs retained for import compat.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 # ── Backward-compatible stubs for removed mcpserver.plugin_worker ──
@@ -23,8 +26,32 @@ class PluginWorkerProxy:
 
 
 def get_plugin_worker_runtime_metrics() -> Dict[str, Any]:
-    """Stub — returns empty metrics since mcpserver has been removed."""
-    return {"services": {}}
+    """Return per-server runtime metrics from the live MCPClientPool.
+
+    Falls back to empty dict if the pool is not initialised.
+    """
+    try:
+        from agents.runtime.mcp_client import get_mcp_pool
+
+        pool = get_mcp_pool()
+        if pool is None:
+            return {"services": {}}
+
+        services: Dict[str, Any] = {}
+        for name, conn in pool.connections.items():
+            services[name] = {
+                "connected": conn.connected,
+                "tools_count": len(conn.tools),
+                "error": conn.error,
+                "timeout_total": 0,
+                "circuit_open_total": 1 if (conn.error and not conn.connected) else 0,
+                "payload_reject_total": 0,
+                "output_budget_reject_total": 0,
+            }
+        return {"services": services}
+    except Exception as exc:
+        logger.debug("get_plugin_worker_runtime_metrics fallback: %s", exc)
+        return {"services": {}}
 
 
 # ── Dataclasses ──

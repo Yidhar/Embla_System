@@ -430,5 +430,6 @@ export interface MemoryOverviewData {
   l1: MemoryLayerStats;
   l2: MemoryLayerStats;
   l3: MemoryLayerStats;
-  grag_quintuples: number;
+  /** @deprecated Merged into l2.total — kept for backward compat */
+  grag_quintuples?: number;
 }

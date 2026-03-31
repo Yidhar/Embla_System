@@ -38,6 +38,8 @@ class WatchdogThresholds:
     disk_percent: float = 90.0
     io_read_bps: float = 50 * 1024 * 1024
     io_write_bps: float = 50 * 1024 * 1024
+    net_sent_bps: float = 100 * 1024 * 1024  # 100 MB/s
+    net_recv_bps: float = 100 * 1024 * 1024  # 100 MB/s
     cost_per_hour: float = 5.0
 
 
@@ -49,7 +51,9 @@ class WatchdogSnapshot:
     disk_percent: float
     io_read_bps: float
     io_write_bps: float
-    cost_per_hour: float
+    net_sent_bps: float = 0.0
+    net_recv_bps: float = 0.0
+    cost_per_hour: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -86,6 +90,7 @@ class WatchdogDaemon:
         self.loop_cost_guard = loop_cost_guard
         self._actuator_callback = actuator_callback
         self._last_io = psutil.disk_io_counters()
+        self._last_net = psutil.net_io_counters()
         self._last_ts = time.time()
         self._last_observation: Dict[str, Any] = {}
 
@@ -98,6 +103,8 @@ class WatchdogDaemon:
             disk_percent=float(metrics.get("disk_percent", 0.0)),
             io_read_bps=float(metrics.get("io_read_bps", 0.0)),
             io_write_bps=float(metrics.get("io_write_bps", 0.0)),
+            net_sent_bps=float(metrics.get("net_sent_bps", 0.0)),
+            net_recv_bps=float(metrics.get("net_recv_bps", 0.0)),
             cost_per_hour=float(metrics.get("cost_per_hour", 0.0)),
         )
 
@@ -125,6 +132,12 @@ class WatchdogDaemon:
 
         if snapshot.io_write_bps >= self.thresholds.io_write_bps:
             reasons.append(f"io_write_bps={snapshot.io_write_bps:.0f}>={self.thresholds.io_write_bps:.0f}")
+
+        if snapshot.net_sent_bps >= self.thresholds.net_sent_bps:
+            reasons.append(f"net_sent_bps={snapshot.net_sent_bps:.0f}>={self.thresholds.net_sent_bps:.0f}")
+
+        if snapshot.net_recv_bps >= self.thresholds.net_recv_bps:
+            reasons.append(f"net_recv_bps={snapshot.net_recv_bps:.0f}>={self.thresholds.net_recv_bps:.0f}")
 
         if snapshot.cost_per_hour >= self.thresholds.cost_per_hour:
             reasons.append(f"cost_per_hour={snapshot.cost_per_hour:.2f}>={self.thresholds.cost_per_hour:.2f}")
@@ -397,6 +410,16 @@ class WatchdogDaemon:
             read_bps = max(0.0, float(io_now.read_bytes - self._last_io.read_bytes) / elapsed)
             write_bps = max(0.0, float(io_now.write_bytes - self._last_io.write_bytes) / elapsed)
         self._last_io = io_now
+
+        # Network I/O
+        net_now = psutil.net_io_counters()
+        net_sent_bps = 0.0
+        net_recv_bps = 0.0
+        if net_now is not None and self._last_net is not None:
+            net_sent_bps = max(0.0, float(net_now.bytes_sent - self._last_net.bytes_sent) / elapsed)
+            net_recv_bps = max(0.0, float(net_now.bytes_recv - self._last_net.bytes_recv) / elapsed)
+        self._last_net = net_now
+
         self._last_ts = now
 
         cpu_percent = float(psutil.cpu_percent(interval=0.0))
@@ -410,5 +433,7 @@ class WatchdogDaemon:
             "disk_percent": disk_percent,
             "io_read_bps": read_bps,
             "io_write_bps": write_bps,
+            "net_sent_bps": net_sent_bps,
+            "net_recv_bps": net_recv_bps,
             "cost_per_hour": cost_per_hour,
         }
